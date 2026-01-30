@@ -151,18 +151,7 @@ public class Parser(List<Token> tokens) {
 			var token = Advance();
 			Advance(); // consume '('
 			Expect(TokenType.RightParen);
-
-			// Determine return type of callee
-			var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == token.Value);
-			MaxonValueKind? resultKind = callee?.ReturnType switch {
-				{ } t when t == MlirType.I64 => MaxonValueKind.Integer,
-				{ } t when t == MlirType.F64 => MaxonValueKind.Float,
-				{ } t when t == MlirType.I1 => MaxonValueKind.Bool,
-				_ => null
-			};
-
-			var callOp = new MaxonCallOp(token.Value, [], resultKind);
-			_currentBlock!.AddOp(callOp);
+			var callOp = CreateFunctionCall(token);
 			return callOp.Result!;
 		}
 
@@ -174,8 +163,7 @@ public class Parser(List<Token> tokens) {
 		var nameToken = Expect(TokenType.Identifier);
 		var name = nameToken.Value;
 		Expect(TokenType.Equals);
-		var initValue = ResolveExprValue(ParseExpression());
-
+		var initValue = ResolveExprValue(ParseExpression()) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
 		var kind = initValue switch {
 			MaxonInteger => MaxonValueKind.Integer,
 			MaxonFloat => MaxonValueKind.Float,
@@ -321,8 +309,7 @@ public class Parser(List<Token> tokens) {
 			if (Check(TokenType.LeftParen)) {
 				Advance(); // consume '('
 				Expect(TokenType.RightParen);
-				var callOp = new MaxonCallOp(token.Value, []);
-				_currentBlock!.AddOp(callOp);
+				var callOp = CreateFunctionCall(token);
 				return new ExprResult.Direct(callOp.Result!);
 			}
 			// Variable reference
@@ -367,6 +354,26 @@ public class Parser(List<Token> tokens) {
 				$"Cannot operate on {lhs.GetType().Name} and {rhs.GetType().Name}",
 				Current().Line, Current().Column)
 		};
+	}
+
+	/// <summary>
+	/// Creates a function call operation, validating the function exists and determining the result type.
+	/// </summary>
+	private MaxonCallOp CreateFunctionCall(Token functionNameToken) {
+		var functionName = functionNameToken.Value;
+
+		var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{functionName}'", functionNameToken.Line, functionNameToken.Column);
+		MaxonValueKind? resultKind = callee.ReturnType switch {
+				{ } t when t == MlirType.I64 => MaxonValueKind.Integer,
+				{ } t when t == MlirType.F64 => MaxonValueKind.Float,
+				{ } t when t == MlirType.I1 => MaxonValueKind.Bool,
+			null => null, // void function
+			_ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{functionName}'", functionNameToken.Line, functionNameToken.Column)
+		};
+
+		var callOp = new MaxonCallOp(functionName, [], resultKind);
+		_currentBlock!.AddOp(callOp);
+		return callOp;
 	}
 
 	// ============================================================================

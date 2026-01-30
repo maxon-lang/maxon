@@ -1,0 +1,153 @@
+// Test: int-interleaved-lifetimes
+function main() returns int
+    var a = 10
+    var b = 20
+    var ab = a + b
+    var c = 30
+    var d = 40
+    var cd = c + d
+    var e = 50
+    var f = 60
+    var ef = e + f
+    var result = ab + cd + ef
+    return result mod 256
+end 'main'
+---
+ExitCode: 210
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 20 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.assign %2 {var = ab} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 30 : i64}
+    maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 40 : i64}
+    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.binop %3, %4 {op = add} {kind = i64}
+    maxon.assign %5 {var = cd} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 50 : i64}
+    maxon.assign %6 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 60 : i64}
+    maxon.assign %7 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %8 = maxon.binop %6, %7 {op = add} {kind = i64}
+    maxon.assign %8 {var = ef} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %9 = maxon.binop %2, %5 {op = add} {kind = i64}
+    %10 = maxon.binop %9, %8 {op = add} {kind = i64}
+    maxon.assign %10 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %11 = maxon.literal {value = 256 : i64}
+    %12 = maxon.binop %10, %11 {op = mod} {kind = i64}
+    maxon.return %12
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %13 = arith.constant {value = 10 : i64}
+    memref.store %13, a
+    %14 = arith.constant {value = 20 : i64}
+    memref.store %14, b
+    %15 = arith.addi %13, %14
+    memref.store %15, ab
+    %16 = arith.constant {value = 30 : i64}
+    memref.store %16, c
+    %17 = arith.constant {value = 40 : i64}
+    memref.store %17, d
+    %18 = arith.addi %16, %17
+    memref.store %18, cd
+    %19 = arith.constant {value = 50 : i64}
+    memref.store %19, e
+    %20 = arith.constant {value = 60 : i64}
+    memref.store %20, f
+    %21 = arith.addi %19, %20
+    memref.store %21, ef
+    %22 = arith.addi %15, %18
+    %23 = arith.addi %22, %21
+    memref.store %23, result
+    %24 = arith.constant {value = 256 : i64}
+    %25 = arith.remsi %23, %24
+    func.return %25
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 80
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 20
+    x86.mov [rbp-16], ecx
+    x86.add eax, ecx
+    x86.mov [rbp-24], eax
+    x86.mov edx, 30
+    x86.mov [rbp-32], edx
+    x86.mov ebx, 40
+    x86.mov [rbp-40], ebx
+    x86.add edx, ebx
+    x86.mov [rbp-48], edx
+    x86.mov esi, 50
+    x86.mov [rbp-56], esi
+    x86.mov edi, 60
+    x86.mov [rbp-64], edi
+    x86.add esi, edi
+    x86.mov [rbp-72], esi
+    x86.add eax, edx
+    x86.add eax, esi
+    x86.mov [rbp-80], eax
+    x86.mov ecx, 256
+    x86.cqo
+    x86.idiv ecx
+    x86.mov eax, edx
+    x86.add rsp, 80
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 80
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 20
+    x86.mov [rbp-16], ecx
+    x86.add eax, ecx
+    x86.mov [rbp-24], eax
+    x86.mov edx, 30
+    x86.mov [rbp-32], edx
+    x86.mov ebx, 40
+    x86.mov [rbp-40], ebx
+    x86.add edx, ebx
+    x86.mov [rbp-48], edx
+    x86.mov esi, 50
+    x86.mov [rbp-56], esi
+    x86.mov edi, 60
+    x86.mov [rbp-64], edi
+    x86.add esi, edi
+    x86.mov [rbp-72], esi
+    x86.add eax, edx
+    x86.add eax, esi
+    x86.mov [rbp-80], eax
+    x86.mov ecx, 256
+    x86.cqo
+    x86.idiv ecx
+    x86.mov eax, edx
+    x86.add rsp, 80
+    x86.pop rbp
+    x86.ret
+  }
+}
+---

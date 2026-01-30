@@ -130,7 +130,7 @@ public static class FragmentGenerator {
 					var absolutePath = Path.GetFullPath(fragmentPath);
 					var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
 					if (error != null) {
-						errors.Add(error);
+						errors.Add($"Error compiling '{specName}/{test.Name}.test':\n{error}");
 					}
 					File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
 					Interlocked.Increment(ref generated);

@@ -42,7 +42,7 @@ public class RegisterManager {
 	/// Allocate a physical register for a new value.
 	/// May evict an existing value if all registers are occupied.
 	/// </summary>
-	public X86Register AllocateRegister(StdValue value, MlirBlock<X86Op> block) {
+	private X86Register AllocateRegister(StdValue value, MlirBlock<X86Op> block) {
 		// 1. Try the next sequential slot (preserves existing test output)
 		if (_nextFreshIndex < GprPool.Length) {
 			var candidate = GprPool[_nextFreshIndex];
@@ -78,7 +78,7 @@ public class RegisterManager {
 	/// <summary>
 	/// Ensure a value is in a physical register, reloading from stack if needed.
 	/// </summary>
-	public X86Register EnsureInRegister(StdValue value, MlirBlock<X86Op> block) {
+	private X86Register EnsureInRegister(StdValue value, MlirBlock<X86Op> block) {
 		// Already in a register
 		if (_valueToRegister.TryGetValue(value, out var reg)) {
 			_lastUsed[reg] = _currentOpIndex;
@@ -176,6 +176,14 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Allocate an XMM register and load a float constant from rdata.
+	/// </summary>
+	public void EmitXmmLoadFromRipRelative(StdValue result, string rdataLabel, MlirBlock<X86Op> block) {
+		var xmmReg = AllocateXmmRegister(result, block);
+		block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, rdataLabel));
+	}
+
+	/// <summary>
 	/// Ensure both XMM operands are in registers and emit ucomisd.
 	/// </summary>
 	public void EmitXmmCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
@@ -195,11 +203,42 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Emit a function call, invalidate caller-saved registers, and
+	/// record the result (if any) in Eax.
+	/// </summary>
+	public void EmitCall(string callee, StdValue? result, MlirBlock<X86Op> block) {
+		block.AddOp(new X86CallDirectOp(callee));
+
+		// Caller-saved registers are clobbered by the call.
+		// Remove register mappings but preserve stack homes so values can be reloaded.
+		InvalidateCallerSavedRegisters();
+
+		if (result != null) {
+			Assign(X86Register.Eax, result);
+		}
+	}
+
+	/// <summary>
+	/// After a call, EAX/ECX/EDX are clobbered. Remove any value mappings
+	/// for those registers so stale values are never used.
+	/// </summary>
+	private void InvalidateCallerSavedRegisters() {
+		X86Register[] callerSaved = [X86Register.Eax, X86Register.Ecx, X86Register.Edx];
+		foreach (var reg in callerSaved) {
+			if (_registerContents.TryGetValue(reg, out var value)) {
+				_valueToRegister.Remove(value);
+				_registerContents.Remove(reg);
+				_lastUsed.Remove(reg);
+			}
+		}
+	}
+
+	/// <summary>
 	/// Record that a value is already in a specific physical register
 	/// (e.g. function call result in Eax).
 	/// Evicts any existing occupant of that register.
 	/// </summary>
-	public void NoteValueInRegister(StdValue value, X86Register reg) {
+	private void NoteValueInRegister(StdValue value, X86Register reg) {
 		// Evict existing occupant if any
 		if (_registerContents.TryGetValue(reg, out var existing)) {
 			_valueToRegister.Remove(existing);
@@ -212,14 +251,14 @@ public class RegisterManager {
 	/// <summary>
 	/// Record that a value has been stored to stack at the given displacement.
 	/// </summary>
-	public void NoteStoreToStack(StdValue value, int displacement) {
+	private void NoteStoreToStack(StdValue value, int displacement) {
 		_valueStackHome[value] = displacement;
 	}
 
 	/// <summary>
 	/// Allocate an XMM register for a new float value.
 	/// </summary>
-	public X86XmmRegister AllocateXmmRegister(StdValue value, MlirBlock<X86Op> block) {
+	private X86XmmRegister AllocateXmmRegister(StdValue value, MlirBlock<X86Op> block) {
 		if (_nextFreshXmmIndex < XmmPool.Length) {
 			var candidate = XmmPool[_nextFreshXmmIndex];
 			if (!_xmmContents.ContainsKey(candidate)) {
@@ -242,7 +281,7 @@ public class RegisterManager {
 	/// <summary>
 	/// Ensure a float value is in an XMM register, reloading from stack if needed.
 	/// </summary>
-	public X86XmmRegister EnsureInXmmRegister(StdValue value, MlirBlock<X86Op> block) {
+	private X86XmmRegister EnsureInXmmRegister(StdValue value, MlirBlock<X86Op> block) {
 		if (_valueToXmm.TryGetValue(value, out var reg)) {
 			_xmmLastUsed[reg] = _currentOpIndex;
 			return reg;
@@ -260,7 +299,7 @@ public class RegisterManager {
 	/// <summary>
 	/// Record that a float value is already in a specific XMM register.
 	/// </summary>
-	public void NoteValueInXmmRegister(StdValue value, X86XmmRegister reg) {
+	private void NoteValueInXmmRegister(StdValue value, X86XmmRegister reg) {
 		if (_xmmContents.TryGetValue(reg, out var existing)) {
 			_valueToXmm.Remove(existing);
 			_xmmContents.Remove(reg);
@@ -272,7 +311,7 @@ public class RegisterManager {
 	/// <summary>
 	/// Record that a float value has been stored to stack at the given displacement.
 	/// </summary>
-	public void NoteXmmStoreToStack(StdValue value, int displacement) {
+	private void NoteXmmStoreToStack(StdValue value, int displacement) {
 		_valueXmmStackHome[value] = displacement;
 	}
 
@@ -297,7 +336,7 @@ public class RegisterManager {
 	/// After an add/sub, the destination register now holds a new result value.
 	/// The old value is replaced.
 	/// </summary>
-	public void TransferValue(StdValue oldValue, X86Register reg, StdValue newValue) {
+	private void TransferValue(StdValue oldValue, X86Register reg, StdValue newValue) {
 		// Remove old value mapping if it points to this register
 		if (_valueToRegister.TryGetValue(oldValue, out var oldReg) && oldReg == reg) {
 			_valueToRegister.Remove(oldValue);

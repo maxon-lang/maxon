@@ -96,8 +96,7 @@ public static class StandardToX86Conversion {
 
 					case StdConstF64Op floatOp: {
 							var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
-							var xmmReg = regManager.AllocateXmmRegister(floatOp.Result, x86Block);
-							x86Block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, label));
+							regManager.EmitXmmLoadFromRipRelative(floatOp.Result, label, x86Block);
 							break;
 						}
 
@@ -129,10 +128,7 @@ public static class StandardToX86Conversion {
 						}
 
 					case StdCallOp callOp:
-						x86Block.AddOp(new X86CallDirectOp(callOp.Callee));
-						if (callOp.Result != null) {
-							regManager.NoteValueInRegister(callOp.Result, X86Register.Eax);
-						}
+						regManager.EmitCall(callOp.Callee, callOp.Result, x86Block);
 						break;
 
 					case StdReturnOp retOp: {
