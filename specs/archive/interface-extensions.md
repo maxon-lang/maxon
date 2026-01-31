@@ -17,13 +17,13 @@ Extensions are declared with the `extension` keyword followed by an interface na
 
 ```maxon
 extension Iterable
-    function count() returns int
-        var n = 0
-        for _ in self 'loop'
-            n = n + 1
-        end 'loop'
-        return n
-    end 'count'
+  function count() returns int
+    var n = 0
+    for _ in self 'loop'
+      n = n + 1
+    end 'loop'
+    return n
+  end 'count'
 end 'Iterable'
 ```
 
@@ -41,13 +41,13 @@ Extensions can use the interface's associated types. These are automatically sub
 
 ```maxon
 interface Container uses Element
-    function get(index int) returns Element
+  function get(index int) returns Element
 end 'Container'
 
 extension Container
-    function first() returns Element
-        return self.get(0)
-    end 'first'
+  function first() returns Element
+    return self.get(0)
+  end 'first'
 end 'Container'
 ```
 
@@ -65,15 +65,15 @@ Extensions from interfaces are also applied transitively. If interface `B` exten
 
 ```maxon
 extension Iterable
-    typealias ElementArray is Array with Element
+  typealias ElementArray is Array with Element
 
-    function map(transform (Element) returns Element) returns ElementArray
-        var result = ElementArray{}
-        for item in self 'loop'
-            result.push(transform(item))
-        end 'loop'
-        return result
-    end 'map'
+  function map(transform (Element) returns Element) returns ElementArray
+    var result = ElementArray{}
+    for item in self 'loop'
+      result.push(transform(item))
+    end 'loop'
+    return result
+  end 'map'
 end 'Iterable'
 ```
 
@@ -84,26 +84,26 @@ This `map` extension works on any `Iterable` type (Array, Set, Map, etc.) and re
 <!-- test: basic-extension-on-array -->
 ```maxon
 interface Countable
-    function value() returns int
+  function value() returns int
 end 'Countable'
 
 extension Countable
-    function count() returns int
-        return 42
-    end 'count'
+  function count() returns int
+    return 42
+  end 'count'
 end 'Countable'
 
 type IntList is Countable
-    var data int
+  var data int
 
-    function Countable.value() returns int
-        return data
-    end 'value'
+  function Countable.value() returns int
+    return data
+  end 'value'
 end 'IntList'
 
 function main() returns int
-    var list = IntList{data: 5}
-    return list.count()
+  var list = IntList{data: 5}
+  return list.count()
 end 'main'
 ```
 ```exitcode
@@ -114,26 +114,26 @@ end 'main'
 <!-- test: extension-with-self -->
 ```maxon
 interface Summable
-    function value() returns int
+  function value() returns int
 end 'Summable'
 
 extension Summable
-    function doubled() returns int
-        return self.value() * 2
-    end 'doubled'
+  function doubled() returns int
+    return self.value() * 2
+  end 'doubled'
 end 'Summable'
 
 type Number is Summable
-    var n int
+  var n int
 
-    function Summable.value() returns int
-        return n
-    end 'value'
+  function Summable.value() returns int
+    return n
+  end 'value'
 end 'Number'
 
 function main() returns int
-    var num = Number{n: 21}
-    return num.doubled()
+  var num = Number{n: 21}
+  return num.doubled()
 end 'main'
 ```
 ```exitcode
@@ -144,33 +144,33 @@ end 'main'
 <!-- test: extension-multiple-types -->
 ```maxon
 interface Valued
-    function val() returns int
+  function val() returns int
 end 'Valued'
 
 extension Valued
-    function valPlusTen() returns int
-        return self.val() + 10
-    end 'valPlusTen'
+  function valPlusTen() returns int
+    return self.val() + 10
+  end 'valPlusTen'
 end 'Valued'
 
 type TypeA is Valued
-    var a int
-    function Valued.val() returns int
-        return a
-    end 'val'
+  var a int
+  function Valued.val() returns int
+    return a
+  end 'val'
 end 'TypeA'
 
 type TypeB is Valued
-    var b int
-    function Valued.val() returns int
-        return b * 2
-    end 'val'
+  var b int
+  function Valued.val() returns int
+    return b * 2
+  end 'val'
 end 'TypeB'
 
 function main() returns int
-    var ta = TypeA{a: 5}
-    var tb = TypeB{b: 10}
-    return ta.valPlusTen() + tb.valPlusTen()
+  var ta = TypeA{a: 5}
+  var tb = TypeB{b: 10}
+  return ta.valPlusTen() + tb.valPlusTen()
 end 'main'
 ```
 ```exitcode
@@ -181,26 +181,26 @@ end 'main'
 <!-- test: extension-with-params -->
 ```maxon
 interface Scalable
-    function base() returns int
+  function base() returns int
 end 'Scalable'
 
 extension Scalable
-    function scale(factor int) returns int
-        return self.base() * factor
-    end 'scale'
+  function scale(factor int) returns int
+    return self.base() * factor
+  end 'scale'
 end 'Scalable'
 
 type Amount is Scalable
-    var amount int
+  var amount int
 
-    function Scalable.base() returns int
-        return amount
-    end 'base'
+  function Scalable.base() returns int
+    return amount
+  end 'base'
 end 'Amount'
 
 function main() returns int
-    var a = Amount{amount: 7}
-    return a.scale(6)
+  var a = Amount{amount: 7}
+  return a.scale(6)
 end 'main'
 ```
 ```exitcode
@@ -211,38 +211,38 @@ end 'main'
 <!-- test: extension-returns-struct -->
 ```maxon
 interface Pointlike
-    function getX() returns int
-    function getY() returns int
+  function getX() returns int
+  function getY() returns int
 end 'Pointlike'
 
 type SimplePoint
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'SimplePoint'
 
 extension Pointlike
-    function asSimple() returns SimplePoint
-        return {x: self.getX(), y: self.getY()}
-    end 'asSimple'
+  function asSimple() returns SimplePoint
+    return {x: self.getX(), y: self.getY()}
+  end 'asSimple'
 end 'Pointlike'
 
 type Coord is Pointlike
-    var cx int
-    var cy int
+  var cx int
+  var cy int
 
-    function Pointlike.getX() returns int
-        return cx
-    end 'getX'
+  function Pointlike.getX() returns int
+    return cx
+  end 'getX'
 
-    function Pointlike.getY() returns int
-        return cy
-    end 'getY'
+  function Pointlike.getY() returns int
+    return cy
+  end 'getY'
 end 'Coord'
 
 function main() returns int
-    var c = Coord{cx: 10, cy: 32}
-    var p = c.asSimple()
-    return p.x + p.y
+  var c = Coord{cx: 10, cy: 32}
+  var p = c.asSimple()
+  return p.x + p.y
 end 'main'
 ```
 ```exitcode
@@ -253,16 +253,16 @@ end 'main'
 <!-- test: stdlib-map-on-array -->
 ```maxon
 function main() returns int
-    var nums = [1, 2, 3, 4, 5]
-    var doubled = nums.map((x int) gives x * 2)
-    
-    var sum = 0
-    for n in doubled 'loop'
-        sum = sum + n
-    end 'loop'
-    
-    // 2 + 4 + 6 + 8 + 10 = 30
-    return sum
+  var nums = [1, 2, 3, 4, 5]
+  var doubled = nums.map((x int) gives x * 2)
+  
+  var sum = 0
+  for n in doubled 'loop'
+    sum = sum + n
+  end 'loop'
+  
+  // 2 + 4 + 6 + 8 + 10 = 30
+  return sum
 end 'main'
 ```
 ```exitcode
@@ -275,19 +275,19 @@ end 'main'
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(10)
-    s.insert(20)
-    s.insert(30)
-    var mapped = s.map((x int) gives x + 1)
+  var s = IntSet{}
+  s.insert(10)
+  s.insert(20)
+  s.insert(30)
+  var mapped = s.map((x int) gives x + 1)
 
-    var sum = 0
-    for n in mapped 'loop'
-        sum = sum + n
-    end 'loop'
+  var sum = 0
+  for n in mapped 'loop'
+    sum = sum + n
+  end 'loop'
 
-    // 11 + 21 + 31 = 63 (order may vary but sum is same)
-    return sum
+  // 11 + 21 + 31 = 63 (order may vary but sum is same)
+  return sum
 end 'main'
 ```
 ```exitcode
@@ -299,16 +299,16 @@ end 'main'
 typealias StringIntPair is Pair with (String, int)
 
 function main() returns int
-    var m = ["a": 1, "b": 2, "c": 3]
-    var mapped = m.map((p) gives {key: p.key, value: p.value * 10})
+  var m = ["a": 1, "b": 2, "c": 3]
+  var mapped = m.map((p) gives {key: p.key, value: p.value * 10})
 
-    var sum = 0
-    for pair in mapped 'loop'
-        sum = sum + pair.value
-    end 'loop'
+  var sum = 0
+  for pair in mapped 'loop'
+    sum = sum + pair.value
+  end 'loop'
 
-    // 10 + 20 + 30 = 60
-    return sum
+  // 10 + 20 + 30 = 60
+  return sum
 end 'main'
 ```
 ```exitcode
@@ -320,20 +320,20 @@ end 'main'
 typealias StringIntPair is Pair with (String, int)
 
 function multiplyValue(p StringIntPair) returns StringIntPair
-    return {key: p.key, value: p.value * 10}
+  return {key: p.key, value: p.value * 10}
 end 'multiplyValue'
 
 function main() returns int
-    var m = ["a": 1, "b": 2, "c": 3]
-    var mapped = m.map(multiplyValue)
+  var m = ["a": 1, "b": 2, "c": 3]
+  var mapped = m.map(multiplyValue)
 
-    var sum = 0
-    for pair in mapped 'loop'
-        sum = sum + pair.value
-    end 'loop'
+  var sum = 0
+  for pair in mapped 'loop'
+    sum = sum + pair.value
+  end 'loop'
 
-    // 10 + 20 + 30 = 60
-    return sum
+  // 10 + 20 + 30 = 60
+  return sum
 end 'main'
 ```
 ```exitcode

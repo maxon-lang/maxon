@@ -17,15 +17,15 @@ Instance methods automatically receive `self` as the current instance:
 
 ```text
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        count = count + 1
-    end 'increment'
+  function increment()
+    count = count + 1
+  end 'increment'
 
-    function get() returns int
-        return count
-    end 'get'
+  function get() returns int
+    return count
+  end 'get'
 end 'Counter'
 ```
 
@@ -42,9 +42,9 @@ Static methods don't have access to `self`:
 
 ```text
 type Math
-    static function square(x int) returns int
-        return x * x
-    end 'square'
+  static function square(x int) returns int
+    return x * x
+  end 'square'
 end 'Math'
 
 var result = Math.square(5)  // 25
@@ -56,9 +56,9 @@ Use `export` to make methods visible outside the module:
 
 ```text
 type PublicAPI
-    export function doSomething() returns int
-        return 42
-    end 'doSomething'
+  export function doSomething() returns int
+    return 42
+  end 'doSomething'
 end 'PublicAPI'
 ```
 
@@ -68,12 +68,12 @@ Methods can access fields directly without `self.` prefix:
 
 ```text
 type Point
-    var x int
-    var y int
+  var x int
+  var y int
 
-    function magnitude() returns int
-        return x * x + y * y
-    end 'magnitude'
+  function magnitude() returns int
+    return x * x + y * y
+  end 'magnitude'
 end 'Point'
 ```
 
@@ -82,21 +82,21 @@ end 'Point'
 <!-- test: type-method-basic -->
 ```maxon
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        count = count + 1
-    end 'increment'
+  function increment()
+    count = count + 1
+  end 'increment'
 
-    function get() returns int
-        return count
-    end 'get'
+  function get() returns int
+    return count
+  end 'get'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{count: 0}
-    c.increment()
-    return c.get()
+  var c = Counter{count: 0}
+  c.increment()
+  return c.get()
 end 'main'
 ```
 ```exitcode
@@ -106,22 +106,22 @@ end 'main'
 <!-- test: type-method-with-params -->
 ```maxon
 type Adder
-    var total int
+  var total int
 
-    function add(value int)
-        total = total + value
-    end 'add'
+  function add(value int)
+    total = total + value
+  end 'add'
 
-    function getTotal() returns int
-        return total
-    end 'getTotal'
+  function getTotal() returns int
+    return total
+  end 'getTotal'
 end 'Adder'
 
 function main() returns int
-    var a = Adder{total: 0}
-    a.add(10)
-    a.add(32)
-    return a.getTotal()
+  var a = Adder{total: 0}
+  a.add(10)
+  a.add(32)
+  return a.getTotal()
 end 'main'
 ```
 ```exitcode
@@ -131,16 +131,16 @@ end 'main'
 <!-- test: type-method-returning-value -->
 ```maxon
 type Calculator
-    var value int
+  var value int
 
-    function double() returns int
-        return value * 2
-    end 'double'
+  function double() returns int
+    return value * 2
+  end 'double'
 end 'Calculator'
 
 function main() returns int
-    var c = Calculator{value: 21}
-    return c.double()
+  var c = Calculator{value: 21}
+  return c.double()
 end 'main'
 ```
 ```exitcode
@@ -150,31 +150,31 @@ end 'main'
 <!-- test: type-multiple-methods -->
 ```maxon
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        count = count + 1
-    end 'increment'
+  function increment()
+    count = count + 1
+  end 'increment'
 
-    function decrement()
-        count = count - 1
-    end 'decrement'
+  function decrement()
+    count = count - 1
+  end 'decrement'
 
-    function reset()
-        count = 0
-    end 'reset'
+  function reset()
+    count = 0
+  end 'reset'
 
-    function get() returns int
-        return count
-    end 'get'
+  function get() returns int
+    return count
+  end 'get'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{count: 10}
-    c.increment()
-    c.increment()
-    c.decrement()
-    return c.get()
+  var c = Counter{count: 10}
+  c.increment()
+  c.increment()
+  c.decrement()
+  return c.get()
 end 'main'
 ```
 ```exitcode
@@ -184,23 +184,23 @@ end 'main'
 <!-- test: type-method-chain -->
 ```maxon
 type Value
-    var n int
+  var n int
 
-    function add(x int)
-        n = n + x
-    end 'add'
+  function add(x int)
+    n = n + x
+  end 'add'
 
-    function get() returns int
-        return n
-    end 'get'
+  function get() returns int
+    return n
+  end 'get'
 end 'Value'
 
 function main() returns int
-    var v = Value{n: 0}
-    v.add(10)
-    v.add(20)
-    v.add(12)
-    return v.get()
+  var v = Value{n: 0}
+  v.add(10)
+  v.add(20)
+  v.add(12)
+  return v.get()
 end 'main'
 ```
 ```exitcode

@@ -24,8 +24,8 @@ This creates an Array containing the elements 1, 2, and 3.
 <!-- test: array-from-literal -->
 ```maxon
 function main() returns int
-    var arr = [10, 20, 30]
-    return arr.count()
+  var arr = [10, 20, 30]
+  return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -35,9 +35,9 @@ end 'main'
 <!-- test: array-from-literal-access -->
 ```maxon
 function main() returns int
-    var arr = [10, 20, 30]
-    var val = try arr.get(1) otherwise 0
-    return val
+  var arr = [10, 20, 30]
+  var val = try arr.get(1) otherwise 0
+  return val
 end 'main'
 ```
 ```exitcode
@@ -47,9 +47,9 @@ end 'main'
 <!-- test: array-from-literal-first -->
 ```maxon
 function main() returns int
-    var arr = [42, 2, 3]
-    var val = try arr.first() otherwise 0
-    return val
+  var arr = [42, 2, 3]
+  var val = try arr.first() otherwise 0
+  return val
 end 'main'
 ```
 ```exitcode
@@ -59,9 +59,9 @@ end 'main'
 <!-- test: array-from-literal-last -->
 ```maxon
 function main() returns int
-    var arr = [1, 2, 99]
-    var val = try arr.last() otherwise 0
-    return val
+  var arr = [1, 2, 99]
+  var val = try arr.last() otherwise 0
+  return val
 end 'main'
 ```
 ```exitcode

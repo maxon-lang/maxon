@@ -41,10 +41,10 @@ var k = trunc(abs(-3.7))   // 3
 <!-- test: abs.float -->
 ```maxon
 function main() returns int
-    var neg = 0.0 - 5.5
-    var x = abs(neg)
-    var y = trunc(x)
-    return y
+  var neg = 0.0 - 5.5
+  var x = abs(neg)
+  var y = trunc(x)
+  return y
 end 'main'
 ```
 ```exitcode
@@ -54,9 +54,9 @@ end 'main'
 <!-- test: abs.negative-int-as-float -->
 ```maxon
 function main() returns int
-    var neg = 0.0 - 42.0
-    var x = abs(neg)
-    return trunc(x)
+  var neg = 0.0 - 42.0
+  var x = abs(neg)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -66,11 +66,11 @@ end 'main'
 <!-- test: abs.zero -->
 ```maxon
 function main() returns int
-    var x = abs(0.0)
-    if x == 0.0 'check'
-        return 0
-    end 'check'
-    return 1
+  var x = abs(0.0)
+  if x == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode

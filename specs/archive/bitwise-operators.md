@@ -64,9 +64,9 @@ var b = a >> 2  // 0100 = 4
 <!-- test: bitwise-and -->
 ```maxon
 function main() returns int
-    var a = 12
-    var b = 10
-    return a & b
+  var a = 12
+  var b = 10
+  return a & b
 end 'main'
 ```
 ```exitcode
@@ -76,9 +76,9 @@ end 'main'
 <!-- test: bitwise-or -->
 ```maxon
 function main() returns int
-    var a = 12
-    var b = 10
-    return a | b
+  var a = 12
+  var b = 10
+  return a | b
 end 'main'
 ```
 ```exitcode
@@ -88,9 +88,9 @@ end 'main'
 <!-- test: bitwise-xor -->
 ```maxon
 function main() returns int
-    var a = 12
-    var b = 10
-    return a ^ b
+  var a = 12
+  var b = 10
+  return a ^ b
 end 'main'
 ```
 ```exitcode
@@ -100,8 +100,8 @@ end 'main'
 <!-- test: left-shift -->
 ```maxon
 function main() returns int
-    var a = 1
-    return a << 3
+  var a = 1
+  return a << 3
 end 'main'
 ```
 ```exitcode
@@ -111,8 +111,8 @@ end 'main'
 <!-- test: right-shift -->
 ```maxon
 function main() returns int
-    var a = 16
-    return a >> 2
+  var a = 16
+  return a >> 2
 end 'main'
 ```
 ```exitcode
@@ -122,8 +122,8 @@ end 'main'
 <!-- test: shift-chained -->
 ```maxon
 function main() returns int
-    var a = 1
-    return a << 4 >> 2
+  var a = 1
+  return a << 4 >> 2
 end 'main'
 ```
 ```exitcode
@@ -133,9 +133,9 @@ end 'main'
 <!-- test: bitwise-and-or-precedence -->
 ```maxon
 function main() returns int
-    // & has higher precedence than |
-    // 12 & 10 = 8, then 8 | 1 = 9
-    return 12 & 10 | 1
+  // & has higher precedence than |
+  // 12 & 10 = 8, then 8 | 1 = 9
+  return 12 & 10 | 1
 end 'main'
 ```
 ```exitcode
@@ -145,9 +145,9 @@ end 'main'
 <!-- test: bitwise-xor-precedence -->
 ```maxon
 function main() returns int
-    // & has higher precedence than ^
-    // 12 & 10 = 8, then 8 ^ 3 = 11
-    return 12 & 10 ^ 3
+  // & has higher precedence than ^
+  // 12 & 10 = 8, then 8 ^ 3 = 11
+  return 12 & 10 ^ 3
 end 'main'
 ```
 ```exitcode
@@ -157,12 +157,12 @@ end 'main'
 <!-- test: shift-vs-comparison -->
 ```maxon
 function main() returns int
-    // Shift has higher precedence than comparison
-    // 1 << 3 = 8, then 8 > 5 = true
-    if 1 << 3 > 5 'check'
-        return 1
-    end 'check'
-    return 0
+  // Shift has higher precedence than comparison
+  // 1 << 3 = 8, then 8 > 5 = true
+  if 1 << 3 > 5 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -172,12 +172,12 @@ end 'main'
 <!-- test: bitwise-with-logical -->
 ```maxon
 function main() returns int
-    // Logical operators have lower precedence than bitwise
-    var a = 5 & 3        // 1
-    if a > 0 'check'
-        return 1
-    end 'check'
-    return 0
+  // Logical operators have lower precedence than bitwise
+  var a = 5 & 3        // 1
+  if a > 0 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -187,8 +187,8 @@ end 'main'
 <!-- test: bit-masking -->
 ```maxon
 function main() returns int
-    var flags = 5    // binary 101 (bit 0 and bit 2 set)
-    return flags & 4 // returns 4 (bit 2 is set)
+  var flags = 5    // binary 101 (bit 0 and bit 2 set)
+  return flags & 4 // returns 4 (bit 2 is set)
 end 'main'
 ```
 ```exitcode
@@ -198,10 +198,10 @@ end 'main'
 <!-- test: bit-clear -->
 ```maxon
 function main() returns int
-    var flags = 7        // binary 111
-    // Clear bit 1 using XOR
-    flags = flags ^ 2
-    return flags         // 5 (binary 101)
+  var flags = 7        // binary 111
+  // Clear bit 1 using XOR
+  flags = flags ^ 2
+  return flags         // 5 (binary 101)
 end 'main'
 ```
 ```exitcode
@@ -211,9 +211,9 @@ end 'main'
 <!-- test: power-of-two -->
 ```maxon
 function main() returns int
-    // Calculate 2^n using shift
-    var n = 5
-    return 1 << n        // 32
+  // Calculate 2^n using shift
+  var n = 5
+  return 1 << n        // 32
 end 'main'
 ```
 ```exitcode
@@ -223,9 +223,9 @@ end 'main'
 <!-- test: divide-by-power-of-two -->
 ```maxon
 function main() returns int
-    // Divide by 4 using shift
-    var value = 100
-    return value >> 2    // 25
+  // Divide by 4 using shift
+  var value = 100
+  return value >> 2    // 25
 end 'main'
 ```
 ```exitcode
@@ -235,9 +235,9 @@ end 'main'
 <!-- test: multiply-by-power-of-two -->
 ```maxon
 function main() returns int
-    // Multiply by 8 using shift
-    var value = 25
-    return value << 3    // 200
+  // Multiply by 8 using shift
+  var value = 25
+  return value << 3    // 200
 end 'main'
 ```
 ```exitcode

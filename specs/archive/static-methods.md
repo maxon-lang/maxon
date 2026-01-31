@@ -15,15 +15,15 @@ Use the `static` keyword to declare a method that doesn't operate on an instance
 
 ```text
 type Counter
-    var value int
+  var value int
 
-    static function create() returns Counter
-        return {value: 0}
-    end 'create'
+  static function create() returns Counter
+    return {value: 0}
+  end 'create'
 
-    function increment()
-        self.value = self.value + 1
-    end 'increment'
+  function increment()
+    self.value = self.value + 1
+  end 'increment'
 end 'Counter'
 
 var c = Counter.create()
@@ -40,16 +40,16 @@ Static methods are commonly used for:
 <!-- test: static-method-basic -->
 ```maxon
 type Box
-    export var value int
+  export var value int
 
-    static function make(v int) returns Box
-        return {value: v}
-    end 'make'
+  static function make(v int) returns Box
+    return {value: v}
+  end 'make'
 end 'Box'
 
 function main() returns int
-    var b = Box.make(42)
-    return b.value
+  var b = Box.make(42)
+  return b.value
 end 'main'
 ```
 ```exitcode
@@ -59,15 +59,15 @@ end 'main'
 <!-- test: static-method-no-self -->
 ```maxon
 type Math
-    var unused int
+  var unused int
 
-    static function add(a int, b int) returns int
-        return a + b
-    end 'add'
+  static function add(a int, b int) returns int
+    return a + b
+  end 'add'
 end 'Math'
 
 function main() returns int
-    return Math.add(20, b: 22)
+  return Math.add(20, b: 22)
 end 'main'
 ```
 ```exitcode
@@ -77,21 +77,21 @@ end 'main'
 <!-- test: export-static-method -->
 ```maxon
 type Factory
-    export var id int
+  export var id int
 
-    export static function create(val int) returns Factory
-        return {id: val}
-    end 'create'
+  export static function create(val int) returns Factory
+    return {id: val}
+  end 'create'
 
-    export static function zero() returns Factory
-        return Factory.create(0)
-    end 'zero'
+  export static function zero() returns Factory
+    return Factory.create(0)
+  end 'zero'
 end 'Factory'
 
 function main() returns int
-    var f1 = Factory.create(100)
-    var f2 = Factory.zero()
-    return f1.id + f2.id
+  var f1 = Factory.create(100)
+  var f2 = Factory.zero()
+  return f1.id + f2.id
 end 'main'
 ```
 ```exitcode

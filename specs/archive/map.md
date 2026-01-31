@@ -97,8 +97,8 @@ The map automatically grows when the load factor (count/capacity) exceeds 75%. W
 <!-- test: literal.basic -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20, 3: 30]
-    return m.count()
+  var m = [1: 10, 2: 20, 3: 30]
+  return m.count()
 end 'main'
 ```
 ```exitcode
@@ -108,9 +108,9 @@ end 'main'
 <!-- test: literal.int-keys -->
 ```maxon
 function main() returns int
-    var m = [1: 100, 2: 200, 3: 300]
-    var result = try m.get(2) otherwise 0
-    return result
+  var m = [1: 100, 2: 200, 3: 300]
+  var result = try m.get(2) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -120,11 +120,11 @@ end 'main'
 <!-- test: contains.true -->
 ```maxon
 function main() returns int
-    var m = [10: 100, 20: 200, 30: 300]
-    if m.contains(20) 'check'
-        return 1
-    end 'check'
-    return 0
+  var m = [10: 100, 20: 200, 30: 300]
+  if m.contains(20) 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -134,11 +134,11 @@ end 'main'
 <!-- test: contains.false -->
 ```maxon
 function main() returns int
-    var m = [10: 100, 20: 200, 30: 300]
-    if m.contains(40) 'check'
-        return 1
-    end 'check'
-    return 0
+  var m = [10: 100, 20: 200, 30: 300]
+  if m.contains(40) 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -148,9 +148,9 @@ end 'main'
 <!-- test: get.existing -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20, 3: 30]
-    var result = try m.get(2) otherwise 0
-    return result
+  var m = [1: 10, 2: 20, 3: 30]
+  var result = try m.get(2) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -160,9 +160,9 @@ end 'main'
 <!-- test: get.missing -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20]
-    var result = try m.get(0) otherwise 0
-    return result
+  var m = [1: 10, 2: 20]
+  var result = try m.get(0) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -172,9 +172,9 @@ end 'main'
 <!-- test: insert.new -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20]
-    m.insert(3, 30)
-    return m.count()
+  var m = [1: 10, 2: 20]
+  m.insert(3, 30)
+  return m.count()
 end 'main'
 ```
 ```exitcode
@@ -184,10 +184,10 @@ end 'main'
 <!-- test: insert.update -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20]
-    m.insert(1, 100)
-    var result = try m.get(1) otherwise 0
-    return result
+  var m = [1: 10, 2: 20]
+  m.insert(1, 100)
+  var result = try m.get(1) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -197,12 +197,12 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns int
-    var m = [10: 1]
-    m.insert(20, 2)
-    if m.contains(20) 'check'
-        return 1
-    end 'check'
-    return 0
+  var m = [10: 1]
+  m.insert(20, 2)
+  if m.contains(20) 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -212,12 +212,12 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20, 3: 30]
-    var removed = m.remove(2)
-    if removed 'check'
-        return m.count()
-    end 'check'
-    return 0 - 1
+  var m = [1: 10, 2: 20, 3: 30]
+  var removed = m.remove(2)
+  if removed 'check'
+    return m.count()
+  end 'check'
+  return 0 - 1
 end 'main'
 ```
 ```exitcode
@@ -227,12 +227,12 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20]
-    var removed = m.remove(99)
-    if removed 'check'
-        return 1
-    end 'check'
-    return 0
+  var m = [1: 10, 2: 20]
+  var removed = m.remove(99)
+  if removed 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -242,12 +242,12 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20, 3: 30]
-    m.remove(2)
-    if m.contains(2) 'check'
-        return 1
-    end 'check'
-    return 0
+  var m = [1: 10, 2: 20, 3: 30]
+  m.remove(2)
+  if m.contains(2) 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -259,10 +259,10 @@ end 'main'
 typealias IntIntMap is Map with (int, int)
 
 function main() returns int
-    var m = IntIntMap{}
-    m.insert(1, 100)
-    var result = try m.get(1) otherwise 0
-    return result
+  var m = IntIntMap{}
+  m.insert(1, 100)
+  var result = try m.get(1) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -272,9 +272,9 @@ end 'main'
 <!-- test: single-entry -->
 ```maxon
 function main() returns int
-    var m = [42: 99]
-    var result = try m.get(42) otherwise 0
-    return result
+  var m = [42: 99]
+  var result = try m.get(42) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -284,9 +284,9 @@ end 'main'
 <!-- test: negative-keys -->
 ```maxon
 function main() returns int
-    var m = [0 - 5: 50, 0 - 3: 30, 0 - 1: 10]
-    var result = try m.get(0 - 3) otherwise 0
-    return result
+  var m = [0 - 5: 50, 0 - 3: 30, 0 - 1: 10]
+  var result = try m.get(0 - 3) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -296,11 +296,11 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns int
-    var m = [1: 10, 2: 20, 3: 30]
-    m.remove(2)
-    m.insert(2, 200)
-    var result = try m.get(2) otherwise 0
-    return result
+  var m = [1: 10, 2: 20, 3: 30]
+  m.remove(2)
+  m.insert(2, 200)
+  var result = try m.get(2) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -312,15 +312,15 @@ end 'main'
 typealias IntIntMap is Map with (int, int)
 
 type Container
-    export var data IntIntMap
+  export var data IntIntMap
 end 'Container'
 
 function main() returns int
-    var m = IntIntMap{}
-    m.insert(1, 42)
-    var c = Container{data: m}
-    var result = try c.data.get(1) otherwise 0
-    return result
+  var m = IntIntMap{}
+  m.insert(1, 42)
+  var c = Container{data: m}
+  var result = try c.data.get(1) otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -330,9 +330,9 @@ end 'main'
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var m = ["a": 1, "b": 2]
-    var result = try m.get("a") otherwise 0
-    return result
+  var m = ["a": 1, "b": 2]
+  var result = try m.get("a") otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -385,10 +385,10 @@ Cleanups:  7
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var m = ["hello": 10, "world": 20, "foo": 30]
-    var a = try m.get("hello") otherwise 0
-    var b = try m.get("world") otherwise 0
-    return a + b
+  var m = ["hello": 10, "world": 20, "foo": 30]
+  var a = try m.get("hello") otherwise 0
+  var b = try m.get("world") otherwise 0
+  return a + b
 end 'main'
 ```
 ```exitcode
@@ -446,11 +446,11 @@ Cleanups:  10
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var m = ["key1": 100, "key2": 200]
-    if m.contains("key1") 'check'
-        return 1
-    end 'check'
-    return 0
+  var m = ["key1": 100, "key2": 200]
+  if m.contains("key1") 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -503,10 +503,10 @@ Cleanups:  7
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var m = ["x": 10]
-    m.insert("x", 99)
-    var result = try m.get("x") otherwise 0
-    return result
+  var m = ["x": 10]
+  m.insert("x", 99)
+  var result = try m.get("x") otherwise 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -559,12 +559,12 @@ Cleanups:  7
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var m = ["alpha": 1, "beta": 2, "gamma": 3]
-    m.remove("beta")
-    if m.contains("beta") 'check'
-        return 1
-    end 'check'
-    return m.count()
+  var m = ["alpha": 1, "beta": 2, "gamma": 3]
+  m.remove("beta")
+  if m.contains("beta") 'check'
+    return 1
+  end 'check'
+  return m.count()
 end 'main'
 ```
 ```exitcode
@@ -620,9 +620,9 @@ Cleanups:  8
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var m = ["test": 42]
-    var v = try m.get("test") otherwise 0
-    return v
+  var m = ["test": 42]
+  var v = try m.get("test") otherwise 0
+  return v
 end 'main'
 ```
 ```exitcode
@@ -632,12 +632,12 @@ end 'main'
 <!-- test: multiline-map-literal -->
 ```maxon
 function main() returns int
-    var m = [
-        1: 100,
-        2: 200,
-        3: 300
-    ]
-    return m.count()
+  var m = [
+    1: 100,
+    2: 200,
+    3: 300
+  ]
+  return m.count()
 end 'main'
 ```
 ```exitcode

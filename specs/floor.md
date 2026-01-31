@@ -41,9 +41,9 @@ var i = trunc(floor(x))   // 3
 <!-- test: floor.positive -->
 ```maxon
 function main() returns int
-    var x = 3.9
-    var y = trunc(floor(x))
-    return y
+  var x = 3.9
+  var y = trunc(floor(x))
+  return y
 end 'main'
 ```
 ```exitcode
@@ -53,9 +53,9 @@ end 'main'
 <!-- test: floor.negative -->
 ```maxon
 function main() returns int
-    var neg = 0.0 - 3.2
-    var y = trunc(floor(neg))
-    return y + 10
+  var neg = 0.0 - 3.2
+  var y = trunc(floor(neg))
+  return y + 10
 end 'main'
 ```
 ```exitcode
@@ -65,10 +65,10 @@ end 'main'
 <!-- test: floor.with-ceil -->
 ```maxon
 function main() returns int
-    var x = 3.7
-    var a = trunc(floor(x))
-    var b = trunc(ceil(x))
-    return a + b
+  var x = 3.7
+  var a = trunc(floor(x))
+  var b = trunc(ceil(x))
+  return a + b
 end 'main'
 ```
 ```exitcode

@@ -29,24 +29,24 @@ Multiplication, division, and modulo have higher precedence than addition and su
 
 ```maxon
 function main() returns int
-    var a = 10
-    var b = 3
-    var sum = a + b          // 13
-    var diff = a - b         // 7
-    var prod = a * b         // 30
-    var div = a / b          // 3.333... (float)
-    var quot = trunc(a / b)  // 3 (integer division)
-    var rem = a mod b        // 1
+  var a = 10
+  var b = 3
+  var sum = a + b          // 13
+  var diff = a - b         // 7
+  var prod = a * b         // 30
+  var div = a / b          // 3.333... (float)
+  var quot = trunc(a / b)  // 3 (integer division)
+  var rem = a mod b        // 1
 
-    // Use the values
-    print("{sum}\n")
-    print("{diff}\n")
-    print("{prod}\n")
-    print("{div}\n")
-    print("{quot}\n")
-    print("{rem}\n")
+  // Use the values
+  print("{sum}\n")
+  print("{diff}\n")
+  print("{prod}\n")
+  print("{div}\n")
+  print("{quot}\n")
+  print("{rem}\n")
 
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -67,7 +67,7 @@ end 'main'
 <!-- test: addition -->
 ```maxon
 function main() returns int
-    return 5 + 3
+  return 5 + 3
 end 'main'
 ```
 ```exitcode
@@ -78,7 +78,7 @@ end 'main'
 <!-- test: multiplication -->
 ```maxon
 function main() returns int
-    return 6 * 7
+  return 6 * 7
 end 'main'
 ```
 ```exitcode
@@ -89,7 +89,7 @@ end 'main'
 <!-- test: precedence -->
 ```maxon
 function main() returns int
-    return 2 + 3 * 4
+  return 2 + 3 * 4
 end 'main'
 ```
 ```exitcode
@@ -100,8 +100,8 @@ end 'main'
 <!-- test: division-returns-float -->
 ```maxon
 function main() returns int
-    var result = 20 / 3      // 6.666...
-    return trunc(result * 10.0)  // 66.666... * 10 = 66.666..., trunc = 66
+  var result = 20 / 3      // 6.666...
+  return trunc(result * 10.0)  // 66.666... * 10 = 66.666..., trunc = 66
 end 'main'
 ```
 ```exitcode
@@ -112,7 +112,7 @@ end 'main'
 <!-- test: trunc-division-optimizes -->
 ```maxon
 function main() returns int
-    return trunc(20 / 3)     // Optimized to sdiv, returns 6
+  return trunc(20 / 3)     // Optimized to sdiv, returns 6
 end 'main'
 ```
 ```exitcode
@@ -123,9 +123,9 @@ end 'main'
 <!-- test: variable-division-optimizes -->
 ```maxon
 function main() returns int
-    var a = 7
-    var b = 2
-    return trunc(a / b)      // Should optimize to sdiv after Mem2Reg
+  var a = 7
+  var b = 2
+  return trunc(a / b)      // Should optimize to sdiv after Mem2Reg
 end 'main'
 ```
 ```exitcode
@@ -136,12 +136,12 @@ end 'main'
 <!-- test: negative-division -->
 ```maxon
 function main() returns int
-    var neg = -7
-    let a = trunc(neg / 2)    // -7/2 = -3.5, trunc = -3 (toward zero)
-    if a == -3 'pass'
+  var neg = -7
+  let a = trunc(neg / 2)    // -7/2 = -3.5, trunc = -3 (toward zero)
+  if a == -3 'pass'
       return 0
-    end 'pass'
-    return 1
+  end 'pass'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -152,7 +152,7 @@ end 'main'
 <!-- test: modulo -->
 ```maxon
 function main() returns int
-    return 17 mod 5
+  return 17 mod 5
 end 'main'
 ```
 ```exitcode
@@ -163,10 +163,10 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns int
-    var a = 10
-    var b = 3
-    var result = (a + b) * 2 - trunc(a / b)
-    return result
+  var a = 10
+  var b = 3
+  var result = (a + b) * 2 - trunc(a / b)
+  return result
 end 'main'
 ```
 ```exitcode

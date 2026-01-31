@@ -6,165 +6,165 @@ typealias StringArray is Array with String
 let VERSION = "0.3.0"
 
 function main() returns int
-	var args = CommandLine.args()
+  var args = CommandLine.args()
 
-	if args.count() < 1 'noCommand'
-		printUsage()
-		return 1
-	end 'noCommand'
+  if args.count() < 1 'noCommand'
+    printUsage()
+    return 1
+  end 'noCommand'
 
-	let command = try args.get(0) otherwise ""
+  let command = try args.get(0) otherwise ""
 
-	return match command 'dispatch'
-		"compile" gives compileCommand(args)
-		"run" gives runCommand(args)
-		"version" gives versionCommand()
-		"help" gives helpCommand()
-		default gives unknownCommand(command)
-	end 'dispatch'
+  return match command 'dispatch'
+    "compile" gives compileCommand(args)
+    "run" gives runCommand(args)
+    "version" gives versionCommand()
+    "help" gives helpCommand()
+    default gives unknownCommand(command)
+  end 'dispatch'
 end 'main'
 
 function compileCommand(args StringArray) returns int
-	if args.count() < 2 'noFile'
-		print("Usage: maxon compile <file.maxon> [options]\n")
-		print("\n")
-		print("Options:\n")
-		print("  --emit-ir              Output IR representation\n")
-		print("  --log=LEVEL            Enable logging for all categories\n")
-		print("  --log=CATEGORY:LEVEL   Enable logging for one category\n")
-		return 1
-	end 'noFile'
+  if args.count() < 2 'noFile'
+    print("Usage: maxon compile <file.maxon> [options]\n")
+    print("\n")
+    print("Options:\n")
+    print("  --emit-ir              Output IR representation\n")
+    print("  --log=LEVEL            Enable logging for all categories\n")
+    print("  --log=CATEGORY:LEVEL   Enable logging for one category\n")
+    return 1
+  end 'noFile'
 
-	let sourceFile = try args.get(1) otherwise ""
+  let sourceFile = try args.get(1) otherwise ""
 
-	// Parse options
-	var emitIr = false
+  // Parse options
+  var emitIr = false
 
-	var i = 2
-	while i < args.count() 'parseOpts'
-		let arg = try args.get(i) otherwise ""
+  var i = 2
+  while i < args.count() 'parseOpts'
+    let arg = try args.get(i) otherwise ""
 
-		if arg == "--emit-ir" 'isEmitIr'
-			emitIr = true
-		end 'isEmitIr'
+    if arg == "--emit-ir" 'isEmitIr'
+      emitIr = true
+    end 'isEmitIr'
 
-		if arg.startsWith("--log=") 'isLog'
-			if not parseLogOption(arg) 'logFailed'
-				return 1
-			end 'logFailed'
-		end 'isLog'
+    if arg.startsWith("--log=") 'isLog'
+      if not parseLogOption(arg) 'logFailed'
+        return 1
+      end 'logFailed'
+    end 'isLog'
 
-		i = i + 1
-	end 'parseOpts'
+    i = i + 1
+  end 'parseOpts'
 
-	// TODO: Use emitIr option once compiler supports it
-	let _ = emitIr
-	let result = compile(sourceFile)
-	return result
+  // TODO: Use emitIr option once compiler supports it
+  let _ = emitIr
+  let result = compile(sourceFile)
+  return result
 end 'compileCommand'
 
 function parseLogOption(arg String) returns bool
-	// Format: --log=LEVEL or --log=CATEGORY:LEVEL
-	let eqIdx = try arg.find("=") otherwise arg.startIndex()
-	let afterEq = try arg.indexAfter(eqIdx) otherwise eqIdx
-	let logArg = arg.slice(afterEq, endIndex: arg.endIndex())
+  // Format: --log=LEVEL or --log=CATEGORY:LEVEL
+  let eqIdx = try arg.find("=") otherwise arg.startIndex()
+  let afterEq = try arg.indexAfter(eqIdx) otherwise eqIdx
+  let logArg = arg.slice(afterEq, endIndex: arg.endIndex())
 
-	if let colonIdx = try logArg.find(":") 'hasColon'
-		// --log=CATEGORY:LEVEL
-		let categoryStr = logArg.slice(logArg.startIndex(), endIndex: colonIdx)
-		let afterColon = try logArg.indexAfter(colonIdx) otherwise colonIdx
-		let levelStr = logArg.slice(afterColon, endIndex: logArg.endIndex())
+  if let colonIdx = try logArg.find(":") 'hasColon'
+    // --log=CATEGORY:LEVEL
+    let categoryStr = logArg.slice(logArg.startIndex(), endIndex: colonIdx)
+    let afterColon = try logArg.indexAfter(colonIdx) otherwise colonIdx
+    let levelStr = logArg.slice(afterColon, endIndex: logArg.endIndex())
 
-		if let category = try LogCategory.fromName(categoryStr) 'hasCategory'
-			if let level = try LogLevel.fromName(levelStr) 'hasLevel'
-				Logger.setLevel(category, level: level)
-				return true
-			end 'hasLevel' else 'badLevel'
-				print("Error: Invalid log level '{levelStr}'\n")
-				return false
-			end 'badLevel'
-		end 'hasCategory' else 'badCategory'
-			print("Error: Invalid log category '{categoryStr}'\n")
-			return false
-		end 'badCategory'
-	end 'hasColon' else 'noColon'
-		// --log=LEVEL (set all categories)
-		if let level = try LogLevel.fromName(logArg) 'hasLevel'
-			Logger.setAllLevels(level)
-			return true
-		end 'hasLevel' else 'badLevel'
-			print("Error: Invalid log level '{logArg}'\n")
-			return false
-		end 'badLevel'
-	end 'noColon'
+    if let category = try LogCategory.fromName(categoryStr) 'hasCategory'
+      if let level = try LogLevel.fromName(levelStr) 'hasLevel'
+        Logger.setLevel(category, level: level)
+        return true
+      end 'hasLevel' else 'badLevel'
+        print("Error: Invalid log level '{levelStr}'\n")
+        return false
+      end 'badLevel'
+    end 'hasCategory' else 'badCategory'
+      print("Error: Invalid log category '{categoryStr}'\n")
+      return false
+    end 'badCategory'
+  end 'hasColon' else 'noColon'
+    // --log=LEVEL (set all categories)
+    if let level = try LogLevel.fromName(logArg) 'hasLevel'
+      Logger.setAllLevels(level)
+      return true
+    end 'hasLevel' else 'badLevel'
+      print("Error: Invalid log level '{logArg}'\n")
+      return false
+    end 'badLevel'
+  end 'noColon'
 end 'parseLogOption'
 
 function helpCommand() returns int
-	printUsage()
-	return 0
+  printUsage()
+  return 0
 end 'helpCommand'
 
 function unknownCommand(command String) returns int
-	print("Unknown command: {command}\n")
-	print("\n")
-	printUsage()
-	return 1
+  print("Unknown command: {command}\n")
+  print("\n")
+  printUsage()
+  return 1
 end 'unknownCommand'
 
 function printUsage() returns int
-	print("Maxon {VERSION}\n")
-	print("\n")
-	print("Usage: maxon <command> [options]\n")
-	print("\n")
-	print("Commands:\n")
-	print("  compile <file.maxon>  Compile a Maxon source file\n")
-	print("  run <file.maxon>      Compile and run a Maxon program\n")
-	print("  version               Print version information\n")
-	print("  help                  Show this help message\n")
-	print("\n")
-	print("Compile Options:\n")
-	print("  --emit-ir              Output IR representation (.ir file)\n")
-	print("  --log=LEVEL            Enable logging for all categories\n")
-	print("  --log=CATEGORY:LEVEL   Enable logging for one category\n")
-	print("\n")
-	print("Examples:\n")
-	print("  maxon compile basic.maxon\n")
-	print("  maxon compile basic.maxon --emit-ir\n")
-	print("  maxon compile basic.maxon --log=debug\n")
-	print("  maxon compile basic.maxon --log=lexer:trace\n")
-	print("  maxon run basic.maxon\n")
-	return 0
+  print("Maxon {VERSION}\n")
+  print("\n")
+  print("Usage: maxon <command> [options]\n")
+  print("\n")
+  print("Commands:\n")
+  print("  compile <file.maxon>  Compile a Maxon source file\n")
+  print("  run <file.maxon>      Compile and run a Maxon program\n")
+  print("  version               Print version information\n")
+  print("  help                  Show this help message\n")
+  print("\n")
+  print("Compile Options:\n")
+  print("  --emit-ir              Output IR representation (.ir file)\n")
+  print("  --log=LEVEL            Enable logging for all categories\n")
+  print("  --log=CATEGORY:LEVEL   Enable logging for one category\n")
+  print("\n")
+  print("Examples:\n")
+  print("  maxon compile basic.maxon\n")
+  print("  maxon compile basic.maxon --emit-ir\n")
+  print("  maxon compile basic.maxon --log=debug\n")
+  print("  maxon compile basic.maxon --log=lexer:trace\n")
+  print("  maxon run basic.maxon\n")
+  return 0
 end 'printUsage'
 
 function versionCommand() returns int
-	print("Maxon {VERSION}\n")
-	print("Self-hosted compiler for Windows x86-64\n")
-	return 0
+  print("Maxon {VERSION}\n")
+  print("Self-hosted compiler for Windows x86-64\n")
+  return 0
 end 'versionCommand'
 
 function runCommand(args StringArray) returns int
-	if args.count() < 2 'noFile'
-		print("Usage: maxon run <file.maxon>\n")
-		return 1
-	end 'noFile'
+  if args.count() < 2 'noFile'
+    print("Usage: maxon run <file.maxon>\n")
+    return 1
+  end 'noFile'
 
-	if let sourceFile = try args.get(1) 'hasFile'
-		let result = compile(sourceFile)
-		if result != 0 'compileFailed'
-			return result
-		end 'compileFailed'
+  if let sourceFile = try args.get(1) 'hasFile'
+    let result = compile(sourceFile)
+    if result != 0 'compileFailed'
+      return result
+    end 'compileFailed'
 
-		// Note: Running the executable is not yet implemented
-		let exeFile = sourceFile.replace(".maxon", ".exe")
-		print("\n")
-		print("Compiled: {exeFile}\n")
-		print("Run the executable manually\n")
+    // Note: Running the executable is not yet implemented
+    let exeFile = sourceFile.replace(".maxon", ".exe")
+    print("\n")
+    print("Compiled: {exeFile}\n")
+    print("Run the executable manually\n")
 
-		return 0
-	end 'hasFile' else 'noFile2'
-		print("Usage: maxon run <file.maxon>\n")
-		return 1
-	end 'noFile2'
+    return 0
+  end 'hasFile' else 'noFile2'
+    print("Usage: maxon run <file.maxon>\n")
+    return 1
+  end 'noFile2'
 end 'runCommand'
 
 

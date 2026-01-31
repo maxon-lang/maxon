@@ -44,7 +44,7 @@ String literals are stored in `.rdata` with null termination. The compiler handl
      See docs/SPECS.md documentation section on stack probing. -->
 ```maxon
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -56,10 +56,10 @@ end 'main'
 typealias IntArray is Array with int
 
 function main() returns int
-    var arr = IntArray{}
-    arr.push(1)
-    arr.push(2)
-    return arr.count()
+  var arr = IntArray{}
+  arr.push(1)
+  arr.push(2)
+  return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -72,15 +72,15 @@ end 'main'
 typealias IntArray is Array with int
 
 function main() returns int
-    if true 'outer'
-        var outer_arr = IntArray{}
-        outer_arr.push(100)
-        if true 'inner'
-            var inner_arr = IntArray{}
-            inner_arr.push(200)
-        end 'inner'
-    end 'outer'
-    return 0
+  if true 'outer'
+    var outer_arr = IntArray{}
+    outer_arr.push(100)
+    if true 'inner'
+      var inner_arr = IntArray{}
+      inner_arr.push(200)
+    end 'inner'
+  end 'outer'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -93,13 +93,13 @@ end 'main'
 typealias IntArray is Array with int
 
 function main() returns int
-    var arr = IntArray{}
-    var i = 0
-    while i < 10 'loop'
-        arr.push(i)
-        i = i + 1
-    end 'loop'
-    return arr.count()
+  var arr = IntArray{}
+  var i = 0
+  while i < 10 'loop'
+    arr.push(i)
+    i = i + 1
+  end 'loop'
+  return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -110,8 +110,8 @@ end 'main'
 <!-- test: managed-memory-fixed-size-array-literal-cleanup -->
 ```maxon
 function main() returns int
-    var arr = [10, 20, 30]
-    return try arr.get(1) otherwise 0
+  var arr = [10, 20, 30]
+  return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -122,8 +122,8 @@ end 'main'
 <!-- test: rdata-constant-array-uses-rdata -->
 ```maxon
 function main() returns int
-    let arr = [10, 20, 30]
-    return try arr.get(1) otherwise 0
+  let arr = [10, 20, 30]
+  return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -137,9 +137,9 @@ i64[] 10, 20, 30
 <!-- test: rdata-cow-mutation-copies-to-heap -->
 ```maxon
 function main() returns int
-    var arr = [42]
-    arr.set(0, value: 77)
-    return try arr.get(0) otherwise 0
+  var arr = [42]
+  arr.set(0, value: 77)
+  return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -153,15 +153,15 @@ i64 42
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns int
-    var arr = [1, 2, 3]
-    arr.set(0, value: 10)
-    arr.set(1, value: 20)
-    arr.set(2, value: 30)
-    var sum = 0
-    sum = sum + (try arr.get(0) otherwise 0)
-    sum = sum + (try arr.get(1) otherwise 0)
-    sum = sum + (try arr.get(2) otherwise 0)
-    return sum
+  var arr = [1, 2, 3]
+  arr.set(0, value: 10)
+  arr.set(1, value: 20)
+  arr.set(2, value: 30)
+  var sum = 0
+  sum = sum + (try arr.get(0) otherwise 0)
+  sum = sum + (try arr.get(1) otherwise 0)
+  sum = sum + (try arr.get(2) otherwise 0)
+  return sum
 end 'main'
 ```
 ```exitcode
@@ -175,9 +175,9 @@ i64[] 1, 2, 3
 <!-- test: rdata-non-constant-array-uses-heap -->
 ```maxon
 function main() returns int
-    var x = 5
-    var arr = [1, x, 3]
-    return try arr.get(1) otherwise 0
+  var x = 5
+  var arr = [1, x, 3]
+  return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -188,8 +188,8 @@ end 'main'
 <!-- test: managed-string-heap-string-generates-cleanup -->
 ```maxon
 function main() returns int
-    var s = "this is a heap allocated string!"
-    return s.byteLength()
+  var s = "this is a heap allocated string!"
+  return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -203,9 +203,9 @@ utf8 "this is a heap allocated string!\0"
 <!-- test: managed-string-reassignment-handles-old-value -->
 ```maxon
 function main() returns int
-    var s = "first heap allocated value!!"
-    s = "second heap allocated here!!"
-    return s.byteLength()
+  var s = "first heap allocated value!!"
+  s = "second heap allocated here!!"
+  return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -220,9 +220,9 @@ utf8 "second heap allocated here!!\0"
 <!-- test: managed-string-substring-retains-parent -->
 ```maxon
 function main() returns int
-    var s = "hello world from heap!!"
-    var subManaged = __managed_memory_slice(s._managed, 0, 5)
-    return __managed_memory_len(subManaged)
+  var s = "hello world from heap!!"
+  var subManaged = __managed_memory_slice(s._managed, 0, 5)
+  return __managed_memory_len(subManaged)
 end 'main'
 ```
 ```exitcode
@@ -233,8 +233,8 @@ end 'main'
 <!-- test: managed-string-print-heap-string -->
 ```maxon
 function main() returns int
-    var s = "heap allocated string here!!"
-    return s.byteLength()
+  var s = "heap allocated string here!!"
+  return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -248,8 +248,8 @@ utf8 "heap allocated string here!!\0"
 <!-- test: managed-string-short-string-sso -->
 ```maxon
 function main() returns int
-    var s = "short"
-    return s.byteLength()
+  var s = "short"
+  return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -263,14 +263,14 @@ utf8 "short\0"
 <!-- test: managed-string-loop-concatenation-cleanup -->
 ```maxon
 function main() returns int
-    var s = ""
-    var a = "a"
-    var i = 0
-    while i < 5 'loop'
-        s = s.concat(a)
-        i = i + 1
-    end 'loop'
-    return s.byteLength()
+  var s = ""
+  var a = "a"
+  var i = 0
+  while i < 5 'loop'
+    s = s.concat(a)
+    i = i + 1
+  end 'loop'
+  return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -281,10 +281,10 @@ end 'main'
 <!-- test: managed-string-literal-deduplication -->
 ```maxon
 function main() returns int
-    var a = "hello world"
-    var b = "hello world"
-    var c = "hello world"
-    return a.byteLength() + b.byteLength() + c.byteLength()
+  var a = "hello world"
+  var b = "hello world"
+  var c = "hello world"
+  return a.byteLength() + b.byteLength() + c.byteLength()
 end 'main'
 ```
 ```exitcode

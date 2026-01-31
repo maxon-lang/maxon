@@ -17,19 +17,19 @@ Structs can contain other structs as fields. The compiler must correctly compute
 <!-- test: nested-struct-simple -->
 ```maxon
 type Inner
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Inner'
 
 type Outer
-    export var inner Inner
-    export var z int
+  export var inner Inner
+  export var z int
 end 'Outer'
 
 function main() returns int
-    var inner = Inner{x: 10, y: 20}
-    var outer = Outer{inner: inner, z: 30}
-    return outer.inner.x + outer.inner.y + outer.z
+  var inner = Inner{x: 10, y: 20}
+  var outer = Outer{inner: inner, z: 30}
+  return outer.inner.x + outer.inner.y + outer.z
 end 'main'
 ```
 ```exitcode
@@ -39,21 +39,21 @@ end 'main'
 <!-- test: nested-struct-returned -->
 ```maxon
 type Inner
-    export var value int
+  export var value int
 end 'Inner'
 
 type Outer
-    export var inner Inner
+  export var inner Inner
 end 'Outer'
 
 function makeOuter() returns Outer
-    var i = Inner{value: 42}
-    return {inner: i}
+  var i = Inner{value: 42}
+  return {inner: i}
 end 'makeOuter'
 
 function main() returns int
-    var o = makeOuter()
-    return o.inner.value
+  var o = makeOuter()
+  return o.inner.value
 end 'main'
 ```
 ```exitcode
@@ -63,22 +63,22 @@ end 'main'
 <!-- test: deeply-nested-struct -->
 ```maxon
 type Level1
-    export var value int
+  export var value int
 end 'Level1'
 
 type Level2
-    export var inner Level1
+  export var inner Level1
 end 'Level2'
 
 type Level3
-    export var inner Level2
+  export var inner Level2
 end 'Level3'
 
 function main() returns int
-    var l1 = Level1{value: 42}
-    var l2 = Level2{inner: l1}
-    var l3 = Level3{inner: l2}
-    return l3.inner.inner.value
+  var l1 = Level1{value: 42}
+  var l2 = Level2{inner: l1}
+  var l3 = Level3{inner: l2}
+  return l3.inner.inner.value
 end 'main'
 ```
 ```exitcode
@@ -88,20 +88,20 @@ end 'main'
 <!-- test: struct-with-multiple-nested-fields -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 type Line
-    export var start Point
-    export var finish Point
+  export var start Point
+  export var finish Point
 end 'Line'
 
 function main() returns int
-    var p1 = Point{x: 1, y: 2}
-    var p2 = Point{x: 10, y: 20}
-    var line = Line{start: p1, finish: p2}
-    return line.start.x + line.start.y + line.finish.x + line.finish.y
+  var p1 = Point{x: 1, y: 2}
+  var p2 = Point{x: 10, y: 20}
+  var line = Line{start: p1, finish: p2}
+  return line.start.x + line.start.y + line.finish.x + line.finish.y
 end 'main'
 ```
 ```exitcode

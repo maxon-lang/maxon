@@ -24,14 +24,14 @@ Comparison operators compare two values and return `true` or `false`.
 
 ```maxon
 function main() returns int
-    var x = 10
-    var y = 20
-    
-    if x < y 'check'
-        return 1
-    end 'check'
-    
-    return 0
+  var x = 10
+  var y = 20
+  
+  if x < y 'check'
+    return 1
+  end 'check'
+  
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -44,11 +44,11 @@ end 'main'
 <!-- test: equality -->
 ```maxon
 function main() returns int
-    var x = 42
-    if x == 42 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = 42
+  if x == 42 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -59,11 +59,11 @@ end 'main'
 <!-- test: not-equal -->
 ```maxon
 function main() returns int
-    var x = 10
-    if x != 20 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = 10
+  if x != 20 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -74,10 +74,10 @@ end 'main'
 <!-- test: greater-than -->
 ```maxon
 function main() returns int
-    if 5 > 3 'check'
-        return 42
-    end 'check'
-    return 0
+  if 5 > 3 'check'
+    return 42
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -88,12 +88,12 @@ end 'main'
 <!-- test: less-than-or-equal -->
 ```maxon
 function main() returns int
-    var a = 5
-    var b = 10
-    if a <= b 'check'
-        return 1
-    end 'check'
-    return 0
+  var a = 5
+  var b = 10
+  if a <= b 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -104,12 +104,12 @@ end 'main'
 <!-- test: float-comparison -->
 ```maxon
 function main() returns int
-    var x = 3.5
-    var y = 2.1
-    if x > y 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = 3.5
+  var y = 2.1
+  if x > y 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode

@@ -77,7 +77,7 @@ arr.set(1, value: 200)
 <!-- test: literal-first -->
 ```maxon
 function main() returns int
-    return try [10, 20, 30].get(0) otherwise 0
+  return try [10, 20, 30].get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -87,8 +87,8 @@ end 'main'
 <!-- test: literal-middle -->
 ```maxon
 function main() returns int
-    var arr = [10, 20, 30]
-    return try arr.get(1) otherwise 0
+  var arr = [10, 20, 30]
+  return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -98,8 +98,8 @@ end 'main'
 <!-- test: literal-last -->
 ```maxon
 function main() returns int
-    var arr = [10, 20, 30]
-    return try arr.get(2) otherwise 0
+  var arr = [10, 20, 30]
+  return try arr.get(2) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -109,8 +109,8 @@ end 'main'
 <!-- test: five-elements -->
 ```maxon
 function main() returns int
-    var arr = [5, 10, 15, 20, 25]
-    return try arr.get(4) otherwise 0
+  var arr = [5, 10, 15, 20, 25]
+  return try arr.get(4) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -120,9 +120,9 @@ end 'main'
 <!-- test: index-assignment -->
 ```maxon
 function main() returns int
-    var arr = [10, 20, 30]
-    arr.set(0, value: 100)
-    return try arr.get(0) otherwise 0
+  var arr = [10, 20, 30]
+  arr.set(0, value: 100)
+  return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -132,9 +132,9 @@ end 'main'
 <!-- test: assignment-middle -->
 ```maxon
 function main() returns int
-    var arr = [1, 2, 3]
-    arr.set(1, value: 42)
-    return try arr.get(1) otherwise 0
+  var arr = [1, 2, 3]
+  arr.set(1, value: 42)
+  return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -144,9 +144,9 @@ end 'main'
 <!-- test: assignment-last -->
 ```maxon
 function main() returns int
-    var arr = [1, 2, 3, 4, 5]
-    arr.set(4, value: 99)
-    return try arr.get(4) otherwise 0
+  var arr = [1, 2, 3, 4, 5]
+  arr.set(4, value: 99)
+  return try arr.get(4) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -156,10 +156,10 @@ end 'main'
 <!-- test: multiple-access -->
 ```maxon
 function main() returns int
-    var arr = [5, 10, 15, 20, 25]
-    var a = try arr.get(2) otherwise 0
-    var b = try arr.get(4) otherwise 0
-    return a + b
+  var arr = [5, 10, 15, 20, 25]
+  var a = try arr.get(2) otherwise 0
+  var b = try arr.get(4) otherwise 0
+  return a + b
 end 'main'
 ```
 ```exitcode
@@ -169,9 +169,9 @@ end 'main'
 <!-- test: assignment-preserves-others -->
 ```maxon
 function main() returns int
-    var arr = [10, 20, 30]
-    arr.set(0, value: 100)
-    return try arr.get(1) otherwise 0
+  var arr = [10, 20, 30]
+  arr.set(0, value: 100)
+  return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -181,14 +181,14 @@ end 'main'
 <!-- test: multiple-assignments -->
 ```maxon
 function main() returns int
-    var arr = [0, 0, 0]
-    arr.set(0, value: 1)
-    arr.set(1, value: 2)
-    arr.set(2, value: 3)
-    var a = try arr.get(0) otherwise 0
-    var b = try arr.get(1) otherwise 0
-    var c = try arr.get(2) otherwise 0
-    return a + b + c
+  var arr = [0, 0, 0]
+  arr.set(0, value: 1)
+  arr.set(1, value: 2)
+  arr.set(2, value: 3)
+  var a = try arr.get(0) otherwise 0
+  var b = try arr.get(1) otherwise 0
+  var c = try arr.get(2) otherwise 0
+  return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -198,8 +198,8 @@ end 'main'
 <!-- test: let-array-first -->
 ```maxon
 function main() returns int
-    let arr = [10, 20, 30]
-    return try arr.get(0) otherwise 0
+  let arr = [10, 20, 30]
+  return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -209,8 +209,8 @@ end 'main'
 <!-- test: let-array-middle -->
 ```maxon
 function main() returns int
-    let arr = [10, 20, 30]
-    return try arr.get(1) otherwise 0
+  let arr = [10, 20, 30]
+  return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -220,8 +220,8 @@ end 'main'
 <!-- test: let-array-last -->
 ```maxon
 function main() returns int
-    let arr = [10, 20, 30]
-    return try arr.get(2) otherwise 0
+  let arr = [10, 20, 30]
+  return try arr.get(2) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -231,10 +231,10 @@ end 'main'
 <!-- test: let-array-multiple-access -->
 ```maxon
 function main() returns int
-    let arr = [5, 10, 15, 20]
-    var a = try arr.get(0) otherwise 0
-    var b = try arr.get(3) otherwise 0
-    return a + b
+  let arr = [5, 10, 15, 20]
+  var a = try arr.get(0) otherwise 0
+  var b = try arr.get(3) otherwise 0
+  return a + b
 end 'main'
 ```
 ```exitcode
@@ -247,10 +247,10 @@ Test that arrays can be created with `.reserve()` for preallocated capacity.
 typealias IntArray is Array with int
 
 function main() returns int
-    var arr = IntArray{}
-    arr.reserve(5)
-    arr.push(42)
-    return try arr.get(0) otherwise 0
+  var arr = IntArray{}
+  arr.reserve(5)
+  arr.push(42)
+  return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode

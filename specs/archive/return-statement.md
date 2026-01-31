@@ -20,10 +20,10 @@ return expression
 
 ```maxon
 function isPositive(x int) returns bool
-    if x > 0 'check'
-        return true
-    end 'check'
-    return false
+  if x > 0 'check'
+    return true
+  end 'check'
+  return false
 end 'isPositive'
 ```
 ## Tests
@@ -31,7 +31,7 @@ end 'isPositive'
 <!-- test: simple-return -->
 ```maxon
 function main() returns int
-    return 42
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -42,7 +42,7 @@ end 'main'
 <!-- test: expression-return -->
 ```maxon
 function main() returns int
-    return 2 + 3 * 4
+  return 2 + 3 * 4
 end 'main'
 ```
 ```exitcode
@@ -53,11 +53,11 @@ end 'main'
 <!-- test: conditional-return -->
 ```maxon
 function main() returns int
-    var x = 5
-    if x > 3 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = 5
+  if x > 3 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode

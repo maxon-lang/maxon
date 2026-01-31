@@ -17,9 +17,9 @@ The compiler validates that function and method arguments match the expected par
 typealias StringArray is Array with String
 
 function main() returns int
-	var arr = StringArray{}
-	arr.append("hello")
-	return 0
+  var arr = StringArray{}
+  arr.append("hello")
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -31,9 +31,9 @@ error E022: specs/fragments/type-checking.method-call-wrong-self-type.1.test:6:6
 typealias IntArray is Array with int
 
 function main() returns int
-	var arr = IntArray{}
-	arr.push("hello")
-	return 0
+  var arr = IntArray{}
+  arr.push("hello")
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -43,12 +43,12 @@ error E022: specs/fragments/type-checking.method-call-wrong-element-type.1.test:
 <!-- test: function-call-string-where-int-expected -->
 ```maxon
 function takeInt(n int) returns int
-	return n
+  return n
 end 'takeInt'
 
 function main() returns int
-	takeInt("hello")
-	return 0
+  takeInt("hello")
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -60,12 +60,12 @@ error E022: specs/fragments/type-checking.function-call-string-where-int-expecte
 typealias IntArray is Array with int
 
 function takeArray(arr IntArray) returns int
-	return arr.count()
+  return arr.count()
 end 'takeArray'
 
 function main() returns int
-	takeArray(42)
-	return 0
+  takeArray(42)
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -75,23 +75,23 @@ error E022: specs/fragments/type-checking.function-call-primitive-where-struct-e
 <!-- test: function-call-wrong-struct-type -->
 ```maxon
 type Point
-	export var x int
-	export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 type Size
-	export var w int
-	export var h int
+  export var w int
+  export var h int
 end 'Size'
 
 function takePoint(p Point) returns int
-	return p.x
+  return p.x
 end 'takePoint'
 
 function main() returns int
-	var s = Size{}
-	takePoint(s)
-	return 0
+  var s = Size{}
+  takePoint(s)
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -101,8 +101,8 @@ error E022: specs/fragments/type-checking.function-call-wrong-struct-type.1.test
 <!-- test: stdlib-function-call-wrong-type -->
 ```maxon
 function main() returns int
-	print(42)
-	return 0
+  print(42)
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -114,15 +114,15 @@ error E022: specs/fragments/type-checking.stdlib-function-call-wrong-type.1.test
 typealias IntArray is Array with int
 
 type Container
-	var items IntArray
+  var items IntArray
 
-	function addWrong(s String)
-		items.push(s)
-	end 'addWrong'
+  function addWrong(s String)
+  items.push(s)
+  end 'addWrong'
 end 'Container'
 
 function main() returns int
-	return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -135,10 +135,10 @@ typealias IntArray is Array with int
 typealias StringArray is Array with String
 
 function main() returns int
-	var ints = IntArray{}
-	var strings = StringArray{}
-	ints.append(strings)
-	return 0
+  var ints = IntArray{}
+  var strings = StringArray{}
+  ints.append(strings)
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -150,13 +150,13 @@ error E022: specs/fragments/type-checking.array-of-different-element-types.1.tes
 typealias FooArray is Array with Foo
 
 type Foo
-	let value int
+  let value int
 end 'Foo'
 
 function main() returns int
-	var arr = FooArray{}
-	arr.push({value: 42})
-	return arr.count() - 1
+  var arr = FooArray{}
+  arr.push({value: 42})
+  return arr.count() - 1
 end 'main'
 ```
 ```exitcode

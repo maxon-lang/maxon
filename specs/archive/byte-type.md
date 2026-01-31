@@ -38,8 +38,8 @@ Note: The `character` type is NOT the same as `byte`. See the character-type spe
 <!-- test: byte-cast -->
 ```maxon
 function main() returns int
-    var b = 42 as byte
-    return b as int
+  var b = 42 as byte
+  return b as int
 end 'main'
 ```
 ```exitcode
@@ -51,8 +51,8 @@ end 'main'
 <!-- test: byte-max -->
 ```maxon
 function main() returns int
-    var b = 255 as byte
-    return b as int
+  var b = 255 as byte
+  return b as int
 end 'main'
 ```
 ```exitcode
@@ -64,8 +64,8 @@ end 'main'
 <!-- test: byte-zero -->
 ```maxon
 function main() returns int
-    var b = 0 as byte
-    return b as int
+  var b = 0 as byte
+  return b as int
 end 'main'
 ```
 ```exitcode
@@ -77,8 +77,8 @@ end 'main'
 <!-- test: byte-from-hex -->
 ```maxon
 function main() returns int
-    var b = 0xff as byte
-    return b as int
+  var b = 0xff as byte
+  return b as int
 end 'main'
 ```
 ```exitcode
@@ -92,16 +92,16 @@ end 'main'
 typealias ByteArray is Array with byte
 
 function main() returns int
-    var arr = ByteArray{}
-    arr.push(10 as byte)
-    arr.push(20 as byte)
-    arr.push(30 as byte)
+  var arr = ByteArray{}
+  arr.push(10 as byte)
+  arr.push(20 as byte)
+  arr.push(30 as byte)
 
-    var v0 = try arr.get(0) otherwise 0 as byte
-    var v1 = try arr.get(1) otherwise 0 as byte
-    var v2 = try arr.get(2) otherwise 0 as byte
+  var v0 = try arr.get(0) otherwise 0 as byte
+  var v1 = try arr.get(1) otherwise 0 as byte
+  var v2 = try arr.get(2) otherwise 0 as byte
 
-    return (v0 as int) + (v1 as int) + (v2 as int)
+  return (v0 as int) + (v1 as int) + (v2 as int)
 end 'main'
 ```
 ```exitcode
@@ -115,16 +115,16 @@ end 'main'
 typealias ByteArray is Array with byte
 
 function main() returns int
-    var arr = ByteArray{}
-    arr.push(1 as byte)
-    arr.push(2 as byte)
-    arr.push(3 as byte)
+  var arr = ByteArray{}
+  arr.push(1 as byte)
+  arr.push(2 as byte)
+  arr.push(3 as byte)
 
-    var v0 = try arr.get(0) otherwise 0 as byte
-    var v1 = try arr.get(1) otherwise 0 as byte
-    var v2 = try arr.get(2) otherwise 0 as byte
+  var v0 = try arr.get(0) otherwise 0 as byte
+  var v1 = try arr.get(1) otherwise 0 as byte
+  var v2 = try arr.get(2) otherwise 0 as byte
 
-    return (v0 as int) + (v1 as int) + (v2 as int)
+  return (v0 as int) + (v1 as int) + (v2 as int)
 end 'main'
 ```
 ```exitcode
@@ -138,15 +138,15 @@ end 'main'
 typealias ByteArray is Array with byte
 
 function main() returns int
-    var arr = ByteArray{}
-    arr.push(10 as byte)
-    arr.push(20 as byte)
-    arr.push(30 as byte)
+  var arr = ByteArray{}
+  arr.push(10 as byte)
+  arr.push(20 as byte)
+  arr.push(30 as byte)
 
-    arr.set(1, value: 99 as byte)
+  arr.set(1, value: 99 as byte)
 
-    var val = try arr.get(1) otherwise 0 as byte
-    return val as int
+  var val = try arr.get(1) otherwise 0 as byte
+  return val as int
 end 'main'
 ```
 ```exitcode
@@ -160,26 +160,26 @@ end 'main'
 typealias ByteArray is Array with byte
 
 function main() returns int
-    var arr = ByteArray{}
-    arr.push(255 as byte)
-    arr.push(0 as byte)
-    arr.push(128 as byte)
+  var arr = ByteArray{}
+  arr.push(255 as byte)
+  arr.push(0 as byte)
+  arr.push(128 as byte)
 
-    var v0 = try arr.get(0) otherwise 0 as byte
-    var v1 = try arr.get(1) otherwise 99 as byte
-    var v2 = try arr.get(2) otherwise 0 as byte
+  var v0 = try arr.get(0) otherwise 0 as byte
+  var v1 = try arr.get(1) otherwise 99 as byte
+  var v2 = try arr.get(2) otherwise 0 as byte
 
-    if (v0 as int) != 255 'c0'
-        return 1
-    end 'c0'
-    if (v1 as int) != 0 'c1'
-        return 2
-    end 'c1'
-    if (v2 as int) != 128 'c2'
-        return 3
-    end 'c2'
+  if (v0 as int) != 255 'c0'
+    return 1
+  end 'c0'
+  if (v1 as int) != 0 'c1'
+    return 2
+  end 'c1'
+  if (v2 as int) != 128 'c2'
+    return 3
+  end 'c2'
 
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -193,14 +193,14 @@ end 'main'
 typealias ByteArray is Array with byte
 
 function main() returns int
-    var arr = ByteArray{}
-    arr.push(1 as byte)
-    arr.push(2 as byte)
-    arr.push(3 as byte)
-    arr.push(4 as byte)
-    arr.push(5 as byte)
+  var arr = ByteArray{}
+  arr.push(1 as byte)
+  arr.push(2 as byte)
+  arr.push(3 as byte)
+  arr.push(4 as byte)
+  arr.push(5 as byte)
 
-    return arr.count()
+  return arr.count()
 end 'main'
 ```
 ```exitcode

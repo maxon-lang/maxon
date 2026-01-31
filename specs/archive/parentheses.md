@@ -20,10 +20,10 @@ Parentheses group expressions and control evaluation order.
 
 ```maxon
 function main() returns int
-    var a = 2 + 3 * 4      // 14 (multiply first)
-    var b = (2 + 3) * 4    // 20 (add first)
-    print("{a}\n")
-    return b
+  var a = 2 + 3 * 4      // 14 (multiply first)
+  var b = (2 + 3) * 4    // 20 (add first)
+  print("{a}\n")
+  return b
 end 'main'
 ```
 ```exitcode
@@ -39,7 +39,7 @@ end 'main'
 <!-- test: override-precedence -->
 ```maxon
 function main() returns int
-    return (2 + 3) * 4
+  return (2 + 3) * 4
 end 'main'
 ```
 ```exitcode
@@ -50,7 +50,7 @@ end 'main'
 <!-- test: nested-parentheses -->
 ```maxon
 function main() returns int
-    return ((5 + 3) * 2) - 6
+  return ((5 + 3) * 2) - 6
 end 'main'
 ```
 ```exitcode
@@ -61,8 +61,8 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns int
-    var result = trunc((10 + (2 * 3)) / (4 - 2))
-    return result
+  var result = trunc((10 + (2 * 3)) / (4 - 2))
+  return result
 end 'main'
 ```
 ```exitcode

@@ -8,103 +8,103 @@ export typealias StringArray is Array with String
 // ============================================================================
 
 export type IrBuilder
-	var errors ErrorCollector
-	var sourceFile String
-	var output String
-	var nextValue int
-	var currentBlockName String
-	var program Program    // Reference to program for expression pool access
+  var errors ErrorCollector
+  var sourceFile String
+  var output String
+  var nextValue int
+  var currentBlockName String
+  var program Program    // Reference to program for expression pool access
 
-	/// Initialize the IR builder
-	export static function init(sourceFile String) returns IrBuilder
-		return {errors: ErrorCollector.create(), sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: "", program: Program.create(sourceFile)}
-	end 'init'
+  /// Initialize the IR builder
+  export static function init(sourceFile String) returns IrBuilder
+    return {errors: ErrorCollector.create(), sourceFile: sourceFile, output: "", nextValue: 0, currentBlockName: "", program: Program.create(sourceFile)}
+  end 'init'
 
-	/// Check if IR generation produced any errors
-	export function hasErrors() returns bool
-		return errors.hasAnyErrors()
-	end 'hasErrors'
+  /// Check if IR generation produced any errors
+  export function hasErrors() returns bool
+    return errors.hasAnyErrors()
+  end 'hasErrors'
 
-	/// Print all errors to output
-	export function printErrors()
-		errors.printAll()
-	end 'printErrors'
+  /// Print all errors to output
+  export function printErrors()
+    errors.printAll()
+  end 'printErrors'
 
-	/// Convert a program to IR text
-	export function convert(prog Program) returns String
-		program = prog
-		output = ""
-		var i = 0
-		while i < program.functions.count() 'funcLoop'
-			if let fn = try program.functions.get(i) 'gotFn'
-				convertFunction(fn)
-			end 'gotFn'
-			i = i + 1
-		end 'funcLoop'
-		return output
-	end 'convert'
+  /// Convert a program to IR text
+  export function convert(prog Program) returns String
+    program = prog
+    output = ""
+    var i = 0
+    while i < program.functions.count() 'funcLoop'
+      if let fn = try program.functions.get(i) 'gotFn'
+        convertFunction(fn)
+      end 'gotFn'
+      i = i + 1
+    end 'funcLoop'
+    return output
+  end 'convert'
 
-	/// Convert a function
-	function convertFunction(fn FunctionDecl)
-		nextValue = 0
-		var returnTypeName = "void"
-		if fn.returnType >= 0 'hasRetType'
-			let returnTypeRef = try program.typeRefs.get(fn.returnType) otherwise TypeRef{kind: TypeKind.typeVoid, name: "", elementType: -1, line: 0, column: 0}
-			returnTypeName = mapTypeName(returnTypeRef.kind)
-		end 'hasRetType'
+  /// Convert a function
+  function convertFunction(fn FunctionDecl)
+    nextValue = 0
+    var returnTypeName = "void"
+    if fn.returnType >= 0 'hasRetType'
+      let returnTypeRef = try program.typeRefs.get(fn.returnType) otherwise TypeRef{kind: TypeKind.typeVoid, name: "", elementType: -1, line: 0, column: 0}
+      returnTypeName = mapTypeName(returnTypeRef.kind)
+    end 'hasRetType'
 
-		// Function header
-		output = "{output}function {fn.name}() -> {returnTypeName} \{\n"
+    // Function header
+    output = "{output}function {fn.name}() -> {returnTypeName} \{\n"
 
-		// Entry block
-		currentBlockName = "entry"
-		output = "{output}{currentBlockName}_0:\n"
+    // Entry block
+    currentBlockName = "entry"
+    output = "{output}{currentBlockName}_0:\n"
 
-		// Convert body
-		var i = 0
-		while i < fn.bodyCount 'stmtLoop'
-			let stmtIdx = fn.bodyStart + i
-			let stmt = try program.statements.get(stmtIdx) otherwise Stmt{kind: StmtKind.exprStmt, exprIndex: -1, varName: "", typeRef: -1, thenStart: -1, thenCount: 0, elseStart: -1, elseCount: 0, label: "", line: 0, column: 0, hasError: true}
-			convertStatement(stmt)
-			i = i + 1
-		end 'stmtLoop'
+    // Convert body
+    var i = 0
+    while i < fn.bodyCount 'stmtLoop'
+      let stmtIdx = fn.bodyStart + i
+      let stmt = try program.statements.get(stmtIdx) otherwise Stmt{kind: StmtKind.exprStmt, exprIndex: -1, varName: "", typeRef: -1, thenStart: -1, thenCount: 0, elseStart: -1, elseCount: 0, label: "", line: 0, column: 0, hasError: true}
+      convertStatement(stmt)
+      i = i + 1
+    end 'stmtLoop'
 
-		output = "{output}}\n"
-	end 'convertFunction'
+    output = "{output}}\n"
+  end 'convertFunction'
 
-	/// Convert a statement
-	function convertStatement(stmt Stmt)
-		if stmt.kind == StmtKind.returnStmt 'isReturn'
-			convertReturn(stmt)
-		end 'isReturn'
-	end 'convertStatement'
+  /// Convert a statement
+  function convertStatement(stmt Stmt)
+    if stmt.kind == StmtKind.returnStmt 'isReturn'
+      convertReturn(stmt)
+    end 'isReturn'
+  end 'convertStatement'
 
-	/// Convert a return statement
-	function convertReturn(stmt Stmt)
-		let expr = program.getExpr(stmt.exprIndex)
-		let value = convertExpression(expr)
-		output = "{output}    ret %{value}\n"
-	end 'convertReturn'
+  /// Convert a return statement
+  function convertReturn(stmt Stmt)
+    let expr = program.getExpr(stmt.exprIndex)
+    let value = convertExpression(expr)
+    output = "{output}    ret %{value}\n"
+  end 'convertReturn'
 
-	/// Convert an expression and return the value number
-	function convertExpression(expr Expr) returns int
-		if expr.kind == ExprKind.intLiteral 'isInt'
-			let result = nextValue
-			nextValue = nextValue + 1
-			output = "{output}    %{result} = const.i64 i64 {expr.intValue}\n"
-			return result
-		end 'isInt'
-		return 0
-	end 'convertExpression'
+  /// Convert an expression and return the value number
+  function convertExpression(expr Expr) returns int
+    if expr.kind == ExprKind.intLiteral 'isInt'
+      let result = nextValue
+      nextValue = nextValue + 1
+      output = "{output}    %{result} = const.i64 i64 {expr.intValue}\n"
+      return result
+    end 'isInt'
+    return 0
+  end 'convertExpression'
 
-	/// Map AST type to IR type name
-	function mapTypeName(astType TypeKind) returns String
-		if astType == TypeKind.typeInt 'isInt'
-			return "i64"
-		end 'isInt'
-		if astType == TypeKind.typeVoid 'isVoid'
-			return "void"
-		end 'isVoid'
-		return "void"
-	end 'mapTypeName'
+  /// Map AST type to IR type name
+  function mapTypeName(astType TypeKind) returns String
+    if astType == TypeKind.typeInt 'isInt'
+      return "i64"
+    end 'isInt'
+    if astType == TypeKind.typeVoid 'isVoid'
+      return "void"
+    end 'isVoid'
+    return "void"
+  end 'mapTypeName'
 end 'IrBuilder'

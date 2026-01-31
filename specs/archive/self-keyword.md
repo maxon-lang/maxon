@@ -15,11 +15,11 @@ Inside instance methods, `self` refers to the current instance:
 
 ```text
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        self.count = self.count + 1
-    end 'increment'
+  function increment()
+    self.count = self.count + 1
+  end 'increment'
 end 'Counter'
 ```
 
@@ -27,11 +27,11 @@ Field access can omit `self.` when unambiguous:
 
 ```text
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        count = count + 1
-    end 'increment'
+  function increment()
+    count = count + 1
+  end 'increment'
 end 'Counter'
 ```
 
@@ -41,12 +41,12 @@ end 'Counter'
 
 ```text
 type Point
-    var x int
-    var y int
+  var x int
+  var y int
 
-    function origin() returns Self
-        return {x: 0, y: 0}
-    end 'origin'
+  function origin() returns Self
+    return {x: 0, y: 0}
+  end 'origin'
 end 'Point'
 ```
 
@@ -55,22 +55,22 @@ end 'Point'
 <!-- test: self-explicit-access -->
 ```maxon
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        self.count = self.count + 1
-    end 'increment'
+  function increment()
+    self.count = self.count + 1
+  end 'increment'
 
-    function get() returns int
-        return self.count
-    end 'get'
+  function get() returns int
+    return self.count
+  end 'get'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{count: 0}
-    c.increment()
-    c.increment()
-    return c.get()
+  var c = Counter{count: 0}
+  c.increment()
+  c.increment()
+  return c.get()
 end 'main'
 ```
 ```exitcode
@@ -80,23 +80,23 @@ end 'main'
 <!-- test: self-implicit-access -->
 ```maxon
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        count = count + 1
-    end 'increment'
+  function increment()
+    count = count + 1
+  end 'increment'
 
-    function get() returns int
-        return count
-    end 'get'
+  function get() returns int
+    return count
+  end 'get'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{count: 0}
-    c.increment()
-    c.increment()
-    c.increment()
-    return c.get()
+  var c = Counter{count: 0}
+  c.increment()
+  c.increment()
+  c.increment()
+  return c.get()
 end 'main'
 ```
 ```exitcode
@@ -106,23 +106,23 @@ end 'main'
 <!-- test: self-with-params -->
 ```maxon
 type Accumulator
-    var total int
+  var total int
 
-    function add(value int)
-        self.total = self.total + value
-    end 'add'
+  function add(value int)
+    self.total = self.total + value
+  end 'add'
 
-    function getTotal() returns int
-        return self.total
-    end 'getTotal'
+  function getTotal() returns int
+    return self.total
+  end 'getTotal'
 end 'Accumulator'
 
 function main() returns int
-    var acc = Accumulator{total: 0}
-    acc.add(10)
-    acc.add(20)
-    acc.add(12)
-    return acc.getTotal()
+  var acc = Accumulator{total: 0}
+  acc.add(10)
+  acc.add(20)
+  acc.add(12)
+  return acc.getTotal()
 end 'main'
 ```
 ```exitcode
@@ -132,21 +132,21 @@ end 'main'
 <!-- test: self-multiple-fields -->
 ```maxon
 type Point
-    var x int
-    var y int
+  var x int
+  var y int
 
-    function sum() returns int
-        return self.x + self.y
-    end 'sum'
+  function sum() returns int
+    return self.x + self.y
+  end 'sum'
 
-    function setX(newX int)
-        self.x = newX
-    end 'setX'
+  function setX(newX int)
+    self.x = newX
+  end 'setX'
 end 'Point'
 
 function main() returns int
-    var p = Point{x: 10, y: 32}
-    return p.sum()
+  var p = Point{x: 10, y: 32}
+  return p.sum()
 end 'main'
 ```
 ```exitcode
@@ -156,21 +156,21 @@ end 'main'
 <!-- test: self-modify-and-return -->
 ```maxon
 type Value
-    var n int
+  var n int
 
-    function double()
-        self.n = self.n * 2
-    end 'double'
+  function double()
+    self.n = self.n * 2
+  end 'double'
 
-    function get() returns int
-        return self.n
-    end 'get'
+  function get() returns int
+    return self.n
+  end 'get'
 end 'Value'
 
 function main() returns int
-    var v = Value{n: 21}
-    v.double()
-    return v.get()
+  var v = Value{n: 21}
+  v.double()
+  return v.get()
 end 'main'
 ```
 ```exitcode
@@ -180,17 +180,17 @@ end 'main'
 <!-- test: self-implicit-multiple-fields -->
 ```maxon
 type Rectangle
-    var width int
-    var height int
+  var width int
+  var height int
 
-    function area() returns int
-        return width * height
-    end 'area'
+  function area() returns int
+    return width * height
+  end 'area'
 end 'Rectangle'
 
 function main() returns int
-    var r = Rectangle{width: 6, height: 7}
-    return r.area()
+  var r = Rectangle{width: 6, height: 7}
+  return r.area()
 end 'main'
 ```
 ```exitcode

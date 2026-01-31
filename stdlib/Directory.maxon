@@ -3,47 +3,47 @@
 
 /// Error for directory list operations
 export enum DirectoryListError is Error
-	notFound
+  notFound
 end 'DirectoryListError'
 
 export type Directory
-	typealias StringArray is Array with String
+  typealias StringArray is Array with String
 
-	/// List files and directories in a path
-	export static function list(path String) returns StringArray throws DirectoryListError
-		var pattern = "{path}\\*"
-		var cs = pattern.cstr()
-		var handle = __find_first_file(cs)
-		if handle == 0 'notFound'
-			throw DirectoryListError.notFound
-		end 'notFound'
-		var result = StringArray{}
-		var filename = __find_filename(handle)
-		var name = String.fromCString(filename)
-		if name != "." and name != ".." 'notDot1'
-			result.push(name)
-		end 'notDot1'
-		var nextResult = __find_next_file(handle)
-		while nextResult != 0 'loop'
-			filename = __find_filename(handle)
-			name = String.fromCString(filename)
-			if name != "." and name != ".." 'notDot2'
-				result.push(name)
-			end 'notDot2'
-			nextResult = __find_next_file(handle)
-		end 'loop'
-		__find_close(handle)
-		return result
-	end 'list'
+  /// List files and directories in a path
+  export static function list(path String) returns StringArray throws DirectoryListError
+    var pattern = "{path}\\*"
+    var cs = pattern.cstr()
+    var handle = __find_first_file(cs)
+    if handle == 0 'notFound'
+      throw DirectoryListError.notFound
+    end 'notFound'
+    var result = StringArray{}
+    var filename = __find_filename(handle)
+    var name = String.fromCString(filename)
+    if name != "." and name != ".." 'notDot1'
+      result.push(name)
+    end 'notDot1'
+    var nextResult = __find_next_file(handle)
+    while nextResult != 0 'loop'
+      filename = __find_filename(handle)
+      name = String.fromCString(filename)
+      if name != "." and name != ".." 'notDot2'
+        result.push(name)
+      end 'notDot2'
+      nextResult = __find_next_file(handle)
+    end 'loop'
+    __find_close(handle)
+    return result
+  end 'list'
 
-	/// Check if a path exists and is a directory
-	export static function exists(path String) returns bool
-		var cs = path.cstr()
-		return __directory_exists(cs)
-	end 'exists'
+  /// Check if a path exists and is a directory
+  export static function exists(path String) returns bool
+    var cs = path.cstr()
+    return __directory_exists(cs)
+  end 'exists'
 
-	/// Alias for exists
-	export static function isDirectory(path String) returns bool
-		return Directory.exists(path)
-	end 'isDirectory'
+  /// Alias for exists
+  export static function isDirectory(path String) returns bool
+    return Directory.exists(path)
+  end 'isDirectory'
 end 'Directory'

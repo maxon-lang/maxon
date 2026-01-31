@@ -14,7 +14,7 @@ Execute code conditionally based on a boolean expression.
 
 ```maxon
 if <condition> 'identifier'
-    <statements>
+  <statements>
 end 'identifier'
 ```
 
@@ -24,9 +24,9 @@ The `else` keyword comes after the closing `end` of the if-block, on the same li
 
 ```maxon
 if <condition> 'if_id'
-    <statements>
+  <statements>
 end 'if_id' else 'else_id'
-    <statements>
+  <statements>
 end 'else_id'
 ```
 
@@ -34,11 +34,11 @@ end 'else_id'
 
 ```maxon
 if <condition1> 'case1'
-    <statements>
+  <statements>
 end 'case1' else if <condition2> 'case2'
-    <statements>
+  <statements>
 end 'case2' else 'default'
-    <statements>
+  <statements>
 end 'default'
 ```
 
@@ -46,11 +46,11 @@ end 'default'
 
 ```maxon
 function main() returns int
-    var x = 10
-    if x > 5 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = 10
+  if x > 5 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -62,12 +62,12 @@ end 'main'
 
 ```maxon
 function main() returns int
-    var x = 3
-    if x > 5 'gt5'
-        return 1
-    end 'gt5' else 'not_gt5'
-        return 0
-    end 'not_gt5'
+  var x = 3
+  if x > 5 'gt5'
+    return 1
+  end 'gt5' else 'not_gt5'
+    return 0
+  end 'not_gt5'
 end 'main'
 ```
 ```exitcode
@@ -79,14 +79,14 @@ end 'main'
 
 ```maxon
 function main() returns int
-    var x = 2
-    if x == 1 'case1'
-        return 1
-    end 'case1' else if x == 2 'case2'
-        return 2
-    end 'case2' else 'default'
-        return 0
-    end 'default'
+  var x = 2
+  if x == 1 'case1'
+    return 1
+  end 'case1' else if x == 2 'case2'
+    return 2
+  end 'case2' else 'default'
+    return 0
+  end 'default'
 end 'main'
 ```
 ```exitcode
@@ -107,11 +107,11 @@ end 'main'
 <!-- test: if-statements.simple -->
 ```maxon
 function main() returns int
-    var x = 10
-    if x > 5 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = 10
+  if x > 5 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -121,12 +121,12 @@ end 'main'
 <!-- test: if-statements.else -->
 ```maxon
 function main() returns int
-    var x = 5
-    if x == 5 'is5'
-        return 1
-    end 'is5' else 'not5'
-        return 0
-    end 'not5'
+  var x = 5
+  if x == 5 'is5'
+    return 1
+  end 'is5' else 'not5'
+    return 0
+  end 'not5'
 end 'main'
 ```
 ```exitcode
@@ -136,12 +136,12 @@ end 'main'
 <!-- test: if-statements.else-false -->
 ```maxon
 function main() returns int
-    var x = 3
-    if x > 5 'gt5'
-        return 1
-    end 'gt5' else 'not_gt5'
-        return 0
-    end 'not_gt5'
+  var x = 3
+  if x > 5 'gt5'
+    return 1
+  end 'gt5' else 'not_gt5'
+    return 0
+  end 'not_gt5'
 end 'main'
 ```
 ```exitcode
@@ -151,14 +151,14 @@ end 'main'
 <!-- test: if-statements.else-if-chain -->
 ```maxon
 function main() returns int
-    var x = 2
-    if x == 1 'case1'
-        return 1
-    end 'case1' else if x == 2 'case2'
-        return 2
-    end 'case2' else 'default'
-        return 0
-    end 'default'
+  var x = 2
+  if x == 1 'case1'
+    return 1
+  end 'case1' else if x == 2 'case2'
+    return 2
+  end 'case2' else 'default'
+    return 0
+  end 'default'
 end 'main'
 ```
 ```exitcode
@@ -168,16 +168,16 @@ end 'main'
 <!-- test: if-statements.nested -->
 ```maxon
 function main() returns int
-    var x = 3
-    if x == 1 'outer'
-        return 1
-    end 'outer' else 'else_outer'
-        if x == 2 'inner'
-            return 2
-        end 'inner' else 'else_inner'
-            return 3
-        end 'else_inner'
-    end 'else_outer'
+  var x = 3
+  if x == 1 'outer'
+    return 1
+  end 'outer' else 'else_outer'
+    if x == 2 'inner'
+      return 2
+    end 'inner' else 'else_inner'
+      return 3
+    end 'else_inner'
+  end 'else_outer'
 end 'main'
 ```
 ```exitcode
@@ -189,17 +189,17 @@ Variables declared inside if blocks go out of scope at the end of the block.
 Return after the if should not attempt to clean up those variables.
 ```maxon
 function test(x int) returns int
-    if x == 0 'outer'
-        let inner = "hello"
-        if inner == "hello" 'checkInner'
-            return 1
-        end 'checkInner'
-    end 'outer'
-    return 42
+  if x == 0 'outer'
+    let inner = "hello"
+    if inner == "hello" 'checkInner'
+      return 1
+    end 'checkInner'
+  end 'outer'
+  return 42
 end 'test'
 
 function main() returns int
-    return test(5)
+  return test(5)
 end 'main'
 ```
 ```exitcode
@@ -211,19 +211,19 @@ Nested if statements with returns inside should work correctly.
 The outer if creates a variable that shouldn't be accessed after the if.
 ```maxon
 function test(c int, next int) returns int
-    if c == 0 'maybePrefix'
-        if next == 1 'isHex'
-            return 1
-        end 'isHex'
-        if next == 2 'isBinary'
-            return 2
-        end 'isBinary'
-    end 'maybePrefix'
-    return 42
+  if c == 0 'maybePrefix'
+    if next == 1 'isHex'
+      return 1
+    end 'isHex'
+    if next == 2 'isBinary'
+      return 2
+    end 'isBinary'
+  end 'maybePrefix'
+  return 42
 end 'test'
 
 function main() returns int
-    return test(5, next: 0)
+  return test(5, next: 0)
 end 'main'
 ```
 ```exitcode

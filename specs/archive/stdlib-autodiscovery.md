@@ -25,9 +25,9 @@ No imports or includes needed!
 
 ```maxon
 function main() returns int
-    // pow() is automatically found in stdlib/math/
-    var result = Math.pow(2.0, exponent: 3.0)
-    return trunc(result)
+  // pow() is automatically found in stdlib/math/
+  var result = Math.pow(2.0, exponent: 3.0)
+  return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -44,7 +44,7 @@ If a stdlib function depends on other stdlib functions, they're also discovered 
 <!-- test: basic-autodiscovery -->
 ```maxon
 function main() returns int
-    return trunc(sqrt(16.0))
+  return trunc(sqrt(16.0))
 end 'main'
 ```
 ```exitcode
@@ -56,11 +56,11 @@ end 'main'
 ```maxon
 // pow -> log, exp
 function main() returns int
-    var result = Math.pow(2.0, exponent: 3.0)
-    if result > 7.5 'check'
-        return 8
-    end 'check'
-    return 0
+  var result = Math.pow(2.0, exponent: 3.0)
+  if result > 7.5 'check'
+    return 8
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -71,8 +71,8 @@ end 'main'
 <!-- test: unqualified-call -->
 ```maxon
 function main() returns int
-    var result = sqrt(16.0)
-    return trunc(result)
+  var result = sqrt(16.0)
+  return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: qualified-call -->
 ```maxon
 function main() returns int
-    return trunc(Math.pow(2.0, exponent: 4.0))
+  return trunc(Math.pow(2.0, exponent: 4.0))
 end 'main'
 ```
 ```exitcode
@@ -94,7 +94,7 @@ end 'main'
 <!-- test: wrong-arg-count -->
 ```maxon
 function main() returns int
-    return trunc(Math.pow(2.0))
+  return trunc(Math.pow(2.0))
 end 'main'
 ```
 ```maxoncstderr

@@ -17,8 +17,8 @@ Use the `uses` keyword after the interface name to declare associated types:
 
 ```maxon
 interface Container uses Element
-    function get(index int) returns Element
-    function set(index int, value Element) returns Self
+  function get(index int) returns Element
+  function set(index int, value Element) returns Self
 end 'Container'
 ```
 
@@ -33,17 +33,17 @@ Types bind concrete types to associated types using `with` after the interface n
 
 ```maxon
 type IntArray is Container with int
-    var data array of 100 int
-    var len int
+  var data array of 100 int
+  var len int
 
-    function Container.get(index int) returns int
-        return data[index]
-    end 'get'
+  function Container.get(index int) returns int
+    return data[index]
+  end 'get'
 
-    function Container.set(index int, value int) returns IntArray
-        data[index] = value
-        return {data: data, len: len}
-    end 'set'
+  function Container.set(index int, value int) returns IntArray
+    data[index] = value
+    return {data: data, len: len}
+  end 'set'
 end 'IntArray'
 ```
 
@@ -55,21 +55,21 @@ For interfaces with multiple associated types, list them in order:
 
 ```maxon
 interface Pair uses First, Second
-    function getFirst() returns First
-    function getSecond() returns Second
+  function getFirst() returns First
+  function getSecond() returns Second
 end 'Pair'
 
 type IntFloat is Pair with int, float
-    var a int
-    var b float
+  var a int
+  var b float
 
-    function Pair.getFirst() returns int
-        return a
-    end 'getFirst'
-    
-    function Pair.getSecond() returns float
-        return b
-    end 'getSecond'
+  function Pair.getFirst() returns int
+    return a
+  end 'getFirst'
+  
+  function Pair.getSecond() returns float
+    return b
+  end 'getSecond'
 end 'IntFloat'
 ```
 
@@ -79,7 +79,7 @@ The standard library `Iterable` interface uses associated types:
 
 ```maxon
 interface Iterable uses Element
-    function next() returns Element throws IterationError
+  function next() returns Element throws IterationError
 end 'Iterable'
 ```
 
@@ -97,12 +97,12 @@ When iterating with `for`, the loop variable's type is inferred from the iterato
 
 ```maxon
 function main() returns int
-    var s = "Hi"
-    for ch in s 'chars'
-        // ch has type 'character' (inferred from string's Element type - grapheme cluster)
-        print("{ch}\n")
-    end 'chars'
-    return 0
+  var s = "Hi"
+  for ch in s 'chars'
+    // ch has type 'character' (inferred from string's Element type - grapheme cluster)
+    print("{ch}\n")
+  end 'chars'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -123,21 +123,21 @@ A type conforming to an interface with associated types must:
 
 ```maxon
 interface Summable uses Element
-    function sum() returns Element
+  function sum() returns Element
 end 'Summable'
 
 type IntPair is Summable with int
-    var a int
-    var b int
+  var a int
+  var b int
 
-    function Summable.sum() returns int
-        return a + b
-    end 'sum'
+  function Summable.sum() returns int
+    return a + b
+  end 'sum'
 end 'IntPair'
 
 function main() returns int
-    var p = IntPair{a: 10, b: 32}
-    return p.sum()
+  var p = IntPair{a: 10, b: 32}
+  return p.sum()
 end 'main'
 ```
 ```exitcode
@@ -159,19 +159,19 @@ If a type doesn't bind required associated types:
 
 ```maxon
 interface HasElement uses Element
-    function get() returns Element
+  function get() returns Element
 end 'HasElement'
 
 type Broken is HasElement
-    var value int
+  var value int
 
-    function HasElement.get() returns int
-        return value
-    end 'get'
+  function HasElement.get() returns int
+    return value
+  end 'get'
 end 'Broken'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -184,20 +184,20 @@ If a type doesn't implement all interface methods:
 
 ```maxon
 interface TwoMethods uses Element
-    function first() returns Element
-    function second() returns Element
+  function first() returns Element
+  function second() returns Element
 end 'TwoMethods'
 
 type Partial is TwoMethods with int
-    var value int
+  var value int
 
-    function TwoMethods.first() returns int
-        return value
-    end 'first'
+  function TwoMethods.first() returns int
+    return value
+  end 'first'
 end 'Partial'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -211,19 +211,19 @@ If a method's signature doesn't match the resolved associated type:
 
 ```maxon
 interface Producer uses Output
-    function produce() returns Output
+  function produce() returns Output
 end 'Producer'
 
 type WrongReturn is Producer with float
-    var value int
+  var value int
 
-    function Producer.produce() returns int
-        return value
-    end 'produce'
+  function Producer.produce() returns int
+    return value
+  end 'produce'
 end 'WrongReturn'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -236,20 +236,20 @@ error E015: specs/fragments/associated-types.doc-example-5.1.test:1:1: Method 'W
 <!-- test: basic-associated-type -->
 ```maxon
 interface Wrapper uses Inner
-    function unwrap() returns Inner
+  function unwrap() returns Inner
 end 'Wrapper'
 
 type IntBox is Wrapper with int
-    var value int
+  var value int
 
-    function Wrapper.unwrap() returns int
-        return value
-    end 'unwrap'
+  function Wrapper.unwrap() returns int
+    return value
+  end 'unwrap'
 end 'IntBox'
 
 function main() returns int
-    var box = IntBox{value: 42}
-    return box.unwrap()
+  var box = IntBox{value: 42}
+  return box.unwrap()
 end 'main'
 ```
 ```exitcode
@@ -260,27 +260,27 @@ end 'main'
 <!-- test: associated-type-in-param -->
 ```maxon
 interface Accumulator uses Item
-    function add(item Item) returns Self
-    function total() returns int
+  function add(item Item) returns Self
+  function total() returns int
 end 'Accumulator'
 
 type IntSum is Accumulator with int
-    var sum int
+  var sum int
 
-    function Accumulator.add(item int) returns IntSum
-        return {sum: sum + item}
-    end 'add'
+  function Accumulator.add(item int) returns IntSum
+    return {sum: sum + item}
+  end 'add'
 
-    function Accumulator.total() returns int
-        return sum
-    end 'total'
+  function Accumulator.total() returns int
+    return sum
+  end 'total'
 end 'IntSum'
 
 function main() returns int
-    var acc = IntSum{sum: 0}
-    acc = acc.add(10)
-    acc = acc.add(32)
-    return acc.total()
+  var acc = IntSum{sum: 0}
+  acc = acc.add(10)
+  acc = acc.add(32)
+  return acc.total()
 end 'main'
 ```
 ```exitcode
@@ -291,28 +291,28 @@ end 'main'
 <!-- test: multiple-associated-types -->
 ```maxon
 interface Pair uses First, Second
-    function getFirst() returns First
-    function getSecond() returns Second
+  function getFirst() returns First
+  function getSecond() returns Second
 end 'Pair'
 
 type IntFloat is Pair with int, float
-    var a int
-    var b float
+  var a int
+  var b float
 
-    function Pair.getFirst() returns int
-        return a
-    end 'getFirst'
+  function Pair.getFirst() returns int
+    return a
+  end 'getFirst'
 
-    function Pair.getSecond() returns float
-        return b
-    end 'getSecond'
+  function Pair.getSecond() returns float
+    return b
+  end 'getSecond'
 end 'IntFloat'
 
 function main() returns int
-    var p = IntFloat{a: 40, b: 2.5}
-    var x = p.getFirst()
-    var y = trunc(p.getSecond())
-    return x + y
+  var p = IntFloat{a: 40, b: 2.5}
+  var x = p.getFirst()
+  var y = trunc(p.getSecond())
+  return x + y
 end 'main'
 ```
 ```exitcode
@@ -324,24 +324,24 @@ end 'main'
 ```maxon
 // character is a grapheme cluster type, use codepoints() to access codepoint values
 interface CharSource uses Element
-    function getChar() returns Element
+  function getChar() returns Element
 end 'CharSource'
 
 type SingleChar is CharSource with Character
-    var ch Character
+  var ch Character
 
-    function CharSource.getChar() returns Character
-        return ch
-    end 'getChar'
+  function CharSource.getChar() returns Character
+    return ch
+  end 'getChar'
 end 'SingleChar'
 
 function main() returns int
-    var s = SingleChar{ch: 'A'}
-    var c = s.getChar()
-    for cp in c.codepoints() 'loop'
-        return cp
-    end 'loop'
-    return 0
+  var s = SingleChar{ch: 'A'}
+  var c = s.getChar()
+  for cp in c.codepoints() 'loop'
+    return cp
+  end 'loop'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -352,21 +352,21 @@ end 'main'
 <!-- test: byte-element-type -->
 ```maxon
 interface ByteSource uses Element
-    function getByte() returns Element
+  function getByte() returns Element
 end 'ByteSource'
 
 type SingleByte is ByteSource with byte
-    var b byte
+  var b byte
 
-    function ByteSource.getByte() returns byte
-        return b
-    end 'getByte'
+  function ByteSource.getByte() returns byte
+    return b
+  end 'getByte'
 end 'SingleByte'
 
 function main() returns int
-    var s = SingleByte{b: 42 as byte}
-    var b = s.getByte()
-    return b as int
+  var s = SingleByte{b: 42 as byte}
+  var b = s.getByte()
+  return b as int
 end 'main'
 ```
 ```exitcode
@@ -377,19 +377,19 @@ end 'main'
 <!-- test: missing-type-binding-error -->
 ```maxon
 interface NeedsElement uses Element
-    function get() returns Element
+  function get() returns Element
 end 'NeedsElement'
 
 type Missing is NeedsElement
-    var value int
+  var value int
 
-    function NeedsElement.get() returns int
-        return value
-    end 'get'
+  function NeedsElement.get() returns int
+    return value
+  end 'get'
 end 'Missing'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -400,20 +400,20 @@ error E015: specs/fragments/associated-types.missing-type-binding-error.1.test:1
 <!-- test: partial-implementation-error -->
 ```maxon
 interface TwoMethods uses Element
-    function first() returns Element
-    function second() returns Element
+  function first() returns Element
+  function second() returns Element
 end 'TwoMethods'
 
 type Partial is TwoMethods with int
-    var value int
+  var value int
 
-    function TwoMethods.first() returns int
-        return value
-    end 'first'
+  function TwoMethods.first() returns int
+    return value
+  end 'first'
 end 'Partial'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -425,19 +425,19 @@ error E015: specs/fragments/associated-types.partial-implementation-error.1.test
 <!-- test: wrong-return-type-error -->
 ```maxon
 interface Typed uses Output
-    function make() returns Output
+  function make() returns Output
 end 'Typed'
 
 type WrongType is Typed with float
-    var value int
+  var value int
 
-    function Typed.make() returns int
-        return value
-    end 'make'
+  function Typed.make() returns int
+    return value
+  end 'make'
 end 'WrongType'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -448,19 +448,19 @@ error E015: specs/fragments/associated-types.wrong-return-type-error.1.test:1:1:
 <!-- test: wrong-param-type-error -->
 ```maxon
 interface Acceptor uses Input
-    function accept(val Input) returns int
+  function accept(val Input) returns int
 end 'Acceptor'
 
 type WrongParam is Acceptor with float
-    var value int
+  var value int
 
-    function Acceptor.accept(val int) returns int
-        return value + val
-    end 'accept'
+  function Acceptor.accept(val int) returns int
+    return value + val
+  end 'accept'
 end 'WrongParam'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -471,20 +471,20 @@ error E015: specs/fragments/associated-types.wrong-param-type-error.1.test:1:1: 
 <!-- test: implicit-self-field-access -->
 ```maxon
 interface Countable
-    function getCount() returns int
+  function getCount() returns int
 end 'Countable'
 
 type Counter is Countable
-    var count int
+  var count int
 
-    function Countable.getCount() returns int
-        return count
-    end 'getCount'
+  function Countable.getCount() returns int
+    return count
+  end 'getCount'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{count: 42}
-    return c.getCount()
+  var c = Counter{count: 42}
+  return c.getCount()
 end 'main'
 ```
 ```exitcode
@@ -495,20 +495,20 @@ end 'main'
 <!-- test: method-call-syntax -->
 ```maxon
 interface Addable
-    function addOne() returns int
+  function addOne() returns int
 end 'Addable'
 
 type Number is Addable
-    var value int
+  var value int
 
-    function Addable.addOne() returns int
-        return value + 1
-    end 'addOne'
+  function Addable.addOne() returns int
+    return value + 1
+  end 'addOne'
 end 'Number'
 
 function main() returns int
-    var n = Number{value: 41}
-    return n.addOne()
+  var n = Number{value: 41}
+  return n.addOne()
 end 'main'
 ```
 ```exitcode

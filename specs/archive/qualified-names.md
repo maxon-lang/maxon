@@ -22,11 +22,11 @@ functionName(arguments)  // if unambiguous
 
 ```maxon
 export function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(10, b: 20)  // Unqualified call within same namespace
+  return add(10, b: 20)  // Unqualified call within same namespace
 end 'main'
 ```
 ```exitcode

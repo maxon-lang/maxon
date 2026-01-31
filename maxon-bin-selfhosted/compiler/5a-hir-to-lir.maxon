@@ -7,421 +7,421 @@
 
 /// HIR to LIR lowering context
 export type HirToLir
-	let hirModule HirModule
-	var lirModule LirModule
-	var currentFunction LirFunction
-	var currentBlock LirBlock
-	var valueMap IntArray            // maps HIR value IDs to LIR vreg IDs
-	var blockMap IntArray            // maps HIR block IDs to LIR block IDs
-
-	/// Initialize the lowering context
-	export static function init(hirModule HirModule) returns HirToLir
-		var lirModule = LirModule.create(hirModule.sourceFile)
-		var currentFunction = LirFunction.create("", isExport: false)
-		var currentBlock = LirBlock.create(0, name: "entry")
-		let result = HirToLir{hirModule: hirModule, lirModule: lirModule, currentFunction: currentFunction, currentBlock: currentBlock, valueMap: IntArray{}, blockMap: IntArray{}}
-		return result
-	end 'init'
-
-	/// Convert HIR module to LIR module
-	export function lower() returns LirModule
-		let numFuncs = hirModule.functions.count()
-		var fi = 0
-		while fi < numFuncs 'funcLoop'
-			let fn = try hirModule.functions.get(fi) otherwise HirFunction.create("error", returnTypeIdx: 0, isExport: false, line: 0, column: 0)
-			if not fn.hasError 'noError'
-				lowerFunction(fn)
-			end 'noError'
-			fi = fi + 1
-		end 'funcLoop'
-
-		return lirModule
-	end 'lower'
-
-	/// Lower a HIR function to LIR
-	function lowerFunction(fn HirFunction)
-		currentFunction = LirFunction.create(fn.name, isExport: fn.isExport)
-		currentFunction.numParams = fn.params.count()
-
-		// Initialize value mapping
-		valueMap = IntArray{}
-
-		// Initialize block mapping (use while-loop with get instead of for-loop)
-		blockMap = IntArray{}
-		let numBlocks = fn.blocks.count()
-		var bi = 0
-		while bi < numBlocks 'mapBlocks'
-			if let block = try fn.blocks.get(bi) 'gotBlock'
-				blockMap.push(block.id)
-			end 'gotBlock'
-			bi = bi + 1
-		end 'mapBlocks'
-
-		// Lower each block (use while-loop with get instead of for-loop)
-		bi = 0
-		while bi < numBlocks 'blockLoop'
-			if let block = try fn.blocks.get(bi) 'gotBlock2'
-				lowerBlock(block)
-			end 'gotBlock2'
-			bi = bi + 1
-		end 'blockLoop'
-
-		lirModule.functions.push(currentFunction)
-	end 'lowerFunction'
-
-	/// Lower a HIR block
-	function lowerBlock(block HirBlock)
-		currentBlock = LirBlock.create(block.id, name: block.name)
-
-		// Add label for block
-		let labelInstr = LirInstr.createLabel(block.id, line: 0, column: 0)
-		currentBlock.addInstr(labelInstr)
-
-		// Lower each instruction
-		let numInstrs = block.instructions.count()
-		var i = 0
-		while i < numInstrs 'instrLoop'
-			if let instr = try block.instructions.get(i) 'hasInstr'
-				lowerInstruction(instr)
-			end 'hasInstr'
-			i = i + 1
-		end 'instrLoop'
-
-		currentFunction.addBlock(currentBlock)
-	end 'lowerBlock'
-
-	/// Lower a HIR instruction
-	function lowerInstruction(instr HirInstr)
-		match instr.opcode 'dispatch'
-		HirOpcode.constInt then lowerConstInt(instr)
-		HirOpcode.constFloat then lowerConstFloat(instr)
-		HirOpcode.constBool then lowerConstBool(instr)
-		HirOpcode.constString then lowerConstString(instr)
-		HirOpcode.add then lowerBinaryOp(instr, lirOp: LirOpcode.add)
-		HirOpcode.sub then lowerBinaryOp(instr, lirOp: LirOpcode.sub)
-		HirOpcode.mul then lowerBinaryOp(instr, lirOp: LirOpcode.imul)
-		HirOpcode.div then lowerDiv(instr)
-		HirOpcode.mod_ then lowerMod(instr)
-		HirOpcode.neg then lowerNeg(instr)
-		HirOpcode.eq then lowerComparison(instr, jumpOp: LirOpcode.je)
-		HirOpcode.ne then lowerComparison(instr, jumpOp: LirOpcode.jne)
-		HirOpcode.lt then lowerComparison(instr, jumpOp: LirOpcode.jl)
-		HirOpcode.le then lowerComparison(instr, jumpOp: LirOpcode.jle)
-		HirOpcode.gt then lowerComparison(instr, jumpOp: LirOpcode.jg)
-		HirOpcode.ge then lowerComparison(instr, jumpOp: LirOpcode.jge)
-		HirOpcode.logicalAnd then lowerLogicalAnd(instr)
-		HirOpcode.logicalOr then lowerLogicalOr(instr)
-		HirOpcode.logicalNot then lowerLogicalNot(instr)
-		HirOpcode.alloca then lowerAlloca(instr)
-		HirOpcode.load then lowerLoad(instr)
-		HirOpcode.store then lowerStore(instr)
-		HirOpcode.br then lowerBranch(instr)
-		HirOpcode.condBr then lowerCondBranch(instr)
-		HirOpcode.ret then lowerReturn(instr)
-		HirOpcode.retVoid then lowerReturnVoid(instr)
-		HirOpcode.call then lowerCall(instr)
-		default then return
-		end 'dispatch'
-	end 'lowerInstruction'
-
-	/// Lower integer constant
-	function lowerConstInt(instr HirInstr)
-		let dst = currentFunction.freshVreg(LirType.i64)
-		let src = LirValue.createImm(instr.intValue, type_: LirType.i64)
-		let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerConstInt'
-
-	/// Lower float constant
-	function lowerConstFloat(instr HirInstr)
-		// Store float in data section and load from there
-		let dst = currentFunction.freshVreg(LirType.f64)
-		// For now, just move 0 - proper float handling needs data section
-		let src = LirValue.createImm(0, type_: LirType.i64)
-		let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerConstFloat'
-
-	/// Lower boolean constant
-	function lowerConstBool(instr HirInstr)
-		let dst = currentFunction.freshVreg(LirType.i64)
-		var value = 0
-		if instr.boolValue 'isTrue'
-			value = 1
-		end 'isTrue'
-		let src = LirValue.createImm(value, type_: LirType.i64)
-		let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerConstBool'
-
-	/// Lower string constant
-	function lowerConstString(instr HirInstr)
-		// Add string to data section and load address
-		let label = lirModule.dataSection.addString(instr.stringValue)
-		let dst = currentFunction.freshVreg(LirType.ptr)
-		let src = LirValue.createGlobal(label, type_: LirType.ptr)
-		let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerConstString'
-
-	/// Lower binary arithmetic operation
-	function lowerBinaryOp(instr HirInstr, lirOp LirOpcode)
-		let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-
-		let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
-		let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
-
-		let lirInstr = LirInstr.createBinary(lirOp, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerBinaryOp'
-
-	/// Lower division (requires special handling for idiv)
-	function lowerDiv(instr HirInstr)
-		let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-
-		let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
-		let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
-
-		let lirInstr = LirInstr.createBinary(LirOpcode.idiv, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerDiv'
-
-	/// Lower modulo (remainder from idiv)
-	function lowerMod(instr HirInstr)
-		let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-
-		let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
-		let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
-
-		// idiv puts remainder in rdx - codegen will handle this specially
-		let lirInstr = LirInstr.createBinary(LirOpcode.idiv, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerMod'
-
-	/// Lower negation
-	function lowerNeg(instr HirInstr)
-		let operandVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-		let src = LirValue.createVreg(operandVreg, type_: LirType.i64)
-
-		let lirInstr = LirInstr.createUnary(LirOpcode.neg, dst: dst, src: src, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerNeg'
-
-	/// Lower comparison to set result (1 or 0)
-	function lowerComparison(instr HirInstr, jumpOp LirOpcode)
-		// TODO: Use jumpOp to generate proper setcc instruction
-		let _ = jumpOp
-		let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
-
-		let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
-		let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
-
-		// Compare
-		let cmpInstr = LirInstr.createCmp(left, src2: right, line: instr.line, column: instr.column)
-		currentBlock.addInstr(cmpInstr)
-
-		// Set result based on flags (will be lowered to setcc in codegen)
-		let dst = currentFunction.freshVreg(LirType.i64)
-
-		// Move 0 to result
-		let zeroInstr = LirInstr.createMov(dst, src: LirValue.createImm(0, type_: LirType.i64), line: instr.line, column: instr.column)
-		currentBlock.addInstr(zeroInstr)
-
-		// Conditional set will be handled specially in codegen
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerComparison'
-
-	/// Lower logical AND (short-circuit evaluation)
-	function lowerLogicalAnd(instr HirInstr)
-		let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-
-		let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
-		let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
-
-		// For now, simple bitwise AND (proper short-circuit needs control flow)
-		let lirInstr = LirInstr.createBinary(LirOpcode.and_, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerLogicalAnd'
-
-	/// Lower logical OR (short-circuit evaluation)
-	function lowerLogicalOr(instr HirInstr)
-		let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-
-		let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
-		let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
-
-		// For now, simple bitwise OR
-		let lirInstr = LirInstr.createBinary(LirOpcode.or_, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerLogicalOr'
-
-	/// Lower logical NOT
-	function lowerLogicalNot(instr HirInstr)
-		let operandVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-		let src = LirValue.createVreg(operandVreg, type_: LirType.i64)
-
-		// XOR with 1 to flip boolean
-		let one = LirValue.createImm(1, type_: LirType.i64)
-		let lirInstr = LirInstr.createBinary(LirOpcode.xor_, dst: dst, src1: src, src2: one, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerLogicalNot'
-
-	/// Lower stack allocation
-	function lowerAlloca(instr HirInstr)
-		let slot = currentFunction.allocStackSlot(8)  // 8 bytes for now
-		var dst = currentFunction.freshVreg(LirType.ptr)
-		let dstId = dst.id
-
-		// LEA to get address of stack slot
-		var stackBase = LirValue.createStack(slot, type_: LirType.ptr)
-		let leaInstr = LirInstr{opcode: LirOpcode.lea, dst: dst, src1: stackBase, src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: instr.line, column: instr.column}
-		currentBlock.addInstr(leaInstr)
-		mapValue(instr.result.id, lirId: dstId)
-	end 'lowerAlloca'
-
-	/// Lower memory load
-	function lowerLoad(instr HirInstr)
-		let ptrVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let dst = currentFunction.freshVreg(LirType.i64)
-		let base = LirValue.createVreg(ptrVreg, type_: LirType.ptr)
-
-		let lirInstr = LirInstr.createLoad(dst, base: base, offset: 0, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-		mapValue(instr.result.id, lirId: dst.id)
-	end 'lowerLoad'
-
-	/// Lower memory store
-	function lowerStore(instr HirInstr)
-		let ptrVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let valueVreg = lookupValue(try instr.operands.get(1) otherwise -1)
-
-		let base = LirValue.createVreg(ptrVreg, type_: LirType.ptr)
-		let value = LirValue.createVreg(valueVreg, type_: LirType.i64)
-
-		let lirInstr = LirInstr.createStore(base, src: value, offset: 0, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-	end 'lowerStore'
-
-	/// Lower unconditional branch
-	function lowerBranch(instr HirInstr)
-		let target = LirValue.createLabel(instr.targetBlock)
-		let lirInstr = LirInstr.createJump(LirOpcode.jmp, target: target, line: instr.line, column: instr.column)
-		currentBlock.addInstr(lirInstr)
-	end 'lowerBranch'
-
-	/// Lower conditional branch
-	function lowerCondBranch(instr HirInstr)
-		let condVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		var cond = LirValue.createVreg(condVreg, type_: LirType.i64)
-
-		// Test condition
-		let testInstr = LirInstr{opcode: LirOpcode.test, dst: LirValue.createImm(0, type_: LirType.void_), src1: cond, src2: cond, offset: 0, callTarget: "", line: instr.line, column: instr.column}
-		currentBlock.addInstr(testInstr)
-
-		// Jump if not zero (true branch)
-		let trueTarget = LirValue.createLabel(instr.targetBlock)
-		let jneInstr = LirInstr.createJump(LirOpcode.jne, target: trueTarget, line: instr.line, column: instr.column)
-		currentBlock.addInstr(jneInstr)
-
-		// Jump to false branch
-		let falseTarget = LirValue.createLabel(instr.falseBlock)
-		let jmpInstr = LirInstr.createJump(LirOpcode.jmp, target: falseTarget, line: instr.line, column: instr.column)
-		currentBlock.addInstr(jmpInstr)
-	end 'lowerCondBranch'
-
-	/// Lower return with value
-	function lowerReturn(instr HirInstr)
-		let valueVreg = lookupValue(try instr.operands.get(0) otherwise -1)
-		let value = LirValue.createVreg(valueVreg, type_: LirType.i64)
-
-		// Create ret instruction with return value in src1
-		// The codegen will move src1 to RAX before epilogue
-		let retInstr = LirInstr.createRetWithValue(value, line: instr.line, column: instr.column)
-		currentBlock.addInstr(retInstr)
-	end 'lowerReturn'
-
-	/// Lower void return
-	function lowerReturnVoid(instr HirInstr)
-		let retInstr = LirInstr.createRet(instr.line, column: instr.column)
-		currentBlock.addInstr(retInstr)
-	end 'lowerReturnVoid'
-
-	/// Lower function call
-	function lowerCall(instr HirInstr)
-		// Push arguments (in reverse order for cdecl)
-		var i = instr.operands.count() - 1
-		while i >= 0 'pushArgs'
-			let argVreg = lookupValue(try instr.operands.get(i) otherwise -1)
-			let arg = LirValue.createVreg(argVreg, type_: LirType.i64)
-			let pushInstr = LirInstr.createPush(arg, line: instr.line, column: instr.column)
-			currentBlock.addInstr(pushInstr)
-			i = i - 1
-		end 'pushArgs'
-
-		// Call instruction
-		let callInstr = LirInstr.createCall(instr.callTarget, line: instr.line, column: instr.column)
-		currentBlock.addInstr(callInstr)
-
-		// Clean up stack (for cdecl)
-		let argBytes = instr.operands.count() * 8
-		if argBytes > 0 'cleanStack'
-			// Add to RSP
-			let rsp = LirValue.createVreg(-1, type_: LirType.ptr)  // Special marker for RSP
-			let imm = LirValue.createImm(argBytes, type_: LirType.i64)
-			let addInstr = LirInstr.createBinary(LirOpcode.add, dst: rsp, src1: rsp, src2: imm, line: instr.line, column: instr.column)
-			currentBlock.addInstr(addInstr)
-		end 'cleanStack'
-
-		// Move result from RAX to destination
-		if instr.result.id >= 0 'hasResult'
-			let dst = currentFunction.freshVreg(LirType.i64)
-			let rax = LirValue.createVreg(0, type_: LirType.i64)
-			let movInstr = LirInstr.createMov(dst, src: rax, line: instr.line, column: instr.column)
-			currentBlock.addInstr(movInstr)
-			mapValue(instr.result.id, lirId: dst.id)
-		end 'hasResult'
-	end 'lowerCall'
-
-	// ========================================================================
-	// Value Mapping
-	// ========================================================================
-
-	function mapValue(hirId int, lirId int)
-		// Grow array if needed
-		while valueMap.count() <= hirId 'grow'
-			valueMap.push(-1)
-		end 'grow'
-		valueMap.set(hirId, value: lirId)
-	end 'mapValue'
-
-	function lookupValue(hirId int) returns int
-		if hirId < 0 or hirId >= valueMap.count() 'invalid'
-			return -1
-		end 'invalid'
-		return try valueMap.get(hirId) otherwise -1
-	end 'lookupValue'
+  let hirModule HirModule
+  var lirModule LirModule
+  var currentFunction LirFunction
+  var currentBlock LirBlock
+  var valueMap IntArray            // maps HIR value IDs to LIR vreg IDs
+  var blockMap IntArray            // maps HIR block IDs to LIR block IDs
+
+  /// Initialize the lowering context
+  export static function init(hirModule HirModule) returns HirToLir
+    var lirModule = LirModule.create(hirModule.sourceFile)
+    var currentFunction = LirFunction.create("", isExport: false)
+    var currentBlock = LirBlock.create(0, name: "entry")
+    let result = HirToLir{hirModule: hirModule, lirModule: lirModule, currentFunction: currentFunction, currentBlock: currentBlock, valueMap: IntArray{}, blockMap: IntArray{}}
+    return result
+  end 'init'
+
+  /// Convert HIR module to LIR module
+  export function lower() returns LirModule
+    let numFuncs = hirModule.functions.count()
+    var fi = 0
+    while fi < numFuncs 'funcLoop'
+      let fn = try hirModule.functions.get(fi) otherwise HirFunction.create("error", returnTypeIdx: 0, isExport: false, line: 0, column: 0)
+      if not fn.hasError 'noError'
+        lowerFunction(fn)
+      end 'noError'
+      fi = fi + 1
+    end 'funcLoop'
+
+    return lirModule
+  end 'lower'
+
+  /// Lower a HIR function to LIR
+  function lowerFunction(fn HirFunction)
+    currentFunction = LirFunction.create(fn.name, isExport: fn.isExport)
+    currentFunction.numParams = fn.params.count()
+
+    // Initialize value mapping
+    valueMap = IntArray{}
+
+    // Initialize block mapping (use while-loop with get instead of for-loop)
+    blockMap = IntArray{}
+    let numBlocks = fn.blocks.count()
+    var bi = 0
+    while bi < numBlocks 'mapBlocks'
+      if let block = try fn.blocks.get(bi) 'gotBlock'
+        blockMap.push(block.id)
+      end 'gotBlock'
+      bi = bi + 1
+    end 'mapBlocks'
+
+    // Lower each block (use while-loop with get instead of for-loop)
+    bi = 0
+    while bi < numBlocks 'blockLoop'
+      if let block = try fn.blocks.get(bi) 'gotBlock2'
+        lowerBlock(block)
+      end 'gotBlock2'
+      bi = bi + 1
+    end 'blockLoop'
+
+    lirModule.functions.push(currentFunction)
+  end 'lowerFunction'
+
+  /// Lower a HIR block
+  function lowerBlock(block HirBlock)
+    currentBlock = LirBlock.create(block.id, name: block.name)
+
+    // Add label for block
+    let labelInstr = LirInstr.createLabel(block.id, line: 0, column: 0)
+    currentBlock.addInstr(labelInstr)
+
+    // Lower each instruction
+    let numInstrs = block.instructions.count()
+    var i = 0
+    while i < numInstrs 'instrLoop'
+      if let instr = try block.instructions.get(i) 'hasInstr'
+        lowerInstruction(instr)
+      end 'hasInstr'
+      i = i + 1
+    end 'instrLoop'
+
+    currentFunction.addBlock(currentBlock)
+  end 'lowerBlock'
+
+  /// Lower a HIR instruction
+  function lowerInstruction(instr HirInstr)
+    match instr.opcode 'dispatch'
+    HirOpcode.constInt then lowerConstInt(instr)
+    HirOpcode.constFloat then lowerConstFloat(instr)
+    HirOpcode.constBool then lowerConstBool(instr)
+    HirOpcode.constString then lowerConstString(instr)
+    HirOpcode.add then lowerBinaryOp(instr, lirOp: LirOpcode.add)
+    HirOpcode.sub then lowerBinaryOp(instr, lirOp: LirOpcode.sub)
+    HirOpcode.mul then lowerBinaryOp(instr, lirOp: LirOpcode.imul)
+    HirOpcode.div then lowerDiv(instr)
+    HirOpcode.mod_ then lowerMod(instr)
+    HirOpcode.neg then lowerNeg(instr)
+    HirOpcode.eq then lowerComparison(instr, jumpOp: LirOpcode.je)
+    HirOpcode.ne then lowerComparison(instr, jumpOp: LirOpcode.jne)
+    HirOpcode.lt then lowerComparison(instr, jumpOp: LirOpcode.jl)
+    HirOpcode.le then lowerComparison(instr, jumpOp: LirOpcode.jle)
+    HirOpcode.gt then lowerComparison(instr, jumpOp: LirOpcode.jg)
+    HirOpcode.ge then lowerComparison(instr, jumpOp: LirOpcode.jge)
+    HirOpcode.logicalAnd then lowerLogicalAnd(instr)
+    HirOpcode.logicalOr then lowerLogicalOr(instr)
+    HirOpcode.logicalNot then lowerLogicalNot(instr)
+    HirOpcode.alloca then lowerAlloca(instr)
+    HirOpcode.load then lowerLoad(instr)
+    HirOpcode.store then lowerStore(instr)
+    HirOpcode.br then lowerBranch(instr)
+    HirOpcode.condBr then lowerCondBranch(instr)
+    HirOpcode.ret then lowerReturn(instr)
+    HirOpcode.retVoid then lowerReturnVoid(instr)
+    HirOpcode.call then lowerCall(instr)
+    default then return
+    end 'dispatch'
+  end 'lowerInstruction'
+
+  /// Lower integer constant
+  function lowerConstInt(instr HirInstr)
+    let dst = currentFunction.freshVreg(LirType.i64)
+    let src = LirValue.createImm(instr.intValue, type_: LirType.i64)
+    let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerConstInt'
+
+  /// Lower float constant
+  function lowerConstFloat(instr HirInstr)
+    // Store float in data section and load from there
+    let dst = currentFunction.freshVreg(LirType.f64)
+    // For now, just move 0 - proper float handling needs data section
+    let src = LirValue.createImm(0, type_: LirType.i64)
+    let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerConstFloat'
+
+  /// Lower boolean constant
+  function lowerConstBool(instr HirInstr)
+    let dst = currentFunction.freshVreg(LirType.i64)
+    var value = 0
+    if instr.boolValue 'isTrue'
+      value = 1
+    end 'isTrue'
+    let src = LirValue.createImm(value, type_: LirType.i64)
+    let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerConstBool'
+
+  /// Lower string constant
+  function lowerConstString(instr HirInstr)
+    // Add string to data section and load address
+    let label = lirModule.dataSection.addString(instr.stringValue)
+    let dst = currentFunction.freshVreg(LirType.ptr)
+    let src = LirValue.createGlobal(label, type_: LirType.ptr)
+    let lirInstr = LirInstr.createMov(dst, src: src, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerConstString'
+
+  /// Lower binary arithmetic operation
+  function lowerBinaryOp(instr HirInstr, lirOp LirOpcode)
+    let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+
+    let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
+    let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
+
+    let lirInstr = LirInstr.createBinary(lirOp, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerBinaryOp'
+
+  /// Lower division (requires special handling for idiv)
+  function lowerDiv(instr HirInstr)
+    let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+
+    let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
+    let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
+
+    let lirInstr = LirInstr.createBinary(LirOpcode.idiv, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerDiv'
+
+  /// Lower modulo (remainder from idiv)
+  function lowerMod(instr HirInstr)
+    let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+
+    let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
+    let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
+
+    // idiv puts remainder in rdx - codegen will handle this specially
+    let lirInstr = LirInstr.createBinary(LirOpcode.idiv, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerMod'
+
+  /// Lower negation
+  function lowerNeg(instr HirInstr)
+    let operandVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+    let src = LirValue.createVreg(operandVreg, type_: LirType.i64)
+
+    let lirInstr = LirInstr.createUnary(LirOpcode.neg, dst: dst, src: src, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerNeg'
+
+  /// Lower comparison to set result (1 or 0)
+  function lowerComparison(instr HirInstr, jumpOp LirOpcode)
+    // TODO: Use jumpOp to generate proper setcc instruction
+    let _ = jumpOp
+    let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
+
+    let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
+    let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
+
+    // Compare
+    let cmpInstr = LirInstr.createCmp(left, src2: right, line: instr.line, column: instr.column)
+    currentBlock.addInstr(cmpInstr)
+
+    // Set result based on flags (will be lowered to setcc in codegen)
+    let dst = currentFunction.freshVreg(LirType.i64)
+
+    // Move 0 to result
+    let zeroInstr = LirInstr.createMov(dst, src: LirValue.createImm(0, type_: LirType.i64), line: instr.line, column: instr.column)
+    currentBlock.addInstr(zeroInstr)
+
+    // Conditional set will be handled specially in codegen
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerComparison'
+
+  /// Lower logical AND (short-circuit evaluation)
+  function lowerLogicalAnd(instr HirInstr)
+    let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+
+    let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
+    let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
+
+    // For now, simple bitwise AND (proper short-circuit needs control flow)
+    let lirInstr = LirInstr.createBinary(LirOpcode.and_, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerLogicalAnd'
+
+  /// Lower logical OR (short-circuit evaluation)
+  function lowerLogicalOr(instr HirInstr)
+    let leftVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let rightVreg = lookupValue(try instr.operands.get(1) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+
+    let left = LirValue.createVreg(leftVreg, type_: LirType.i64)
+    let right = LirValue.createVreg(rightVreg, type_: LirType.i64)
+
+    // For now, simple bitwise OR
+    let lirInstr = LirInstr.createBinary(LirOpcode.or_, dst: dst, src1: left, src2: right, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerLogicalOr'
+
+  /// Lower logical NOT
+  function lowerLogicalNot(instr HirInstr)
+    let operandVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+    let src = LirValue.createVreg(operandVreg, type_: LirType.i64)
+
+    // XOR with 1 to flip boolean
+    let one = LirValue.createImm(1, type_: LirType.i64)
+    let lirInstr = LirInstr.createBinary(LirOpcode.xor_, dst: dst, src1: src, src2: one, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerLogicalNot'
+
+  /// Lower stack allocation
+  function lowerAlloca(instr HirInstr)
+    let slot = currentFunction.allocStackSlot(8)  // 8 bytes for now
+    var dst = currentFunction.freshVreg(LirType.ptr)
+    let dstId = dst.id
+
+    // LEA to get address of stack slot
+    var stackBase = LirValue.createStack(slot, type_: LirType.ptr)
+    let leaInstr = LirInstr{opcode: LirOpcode.lea, dst: dst, src1: stackBase, src2: LirValue.createImm(0, type_: LirType.void_), offset: 0, callTarget: "", line: instr.line, column: instr.column}
+    currentBlock.addInstr(leaInstr)
+    mapValue(instr.result.id, lirId: dstId)
+  end 'lowerAlloca'
+
+  /// Lower memory load
+  function lowerLoad(instr HirInstr)
+    let ptrVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let dst = currentFunction.freshVreg(LirType.i64)
+    let base = LirValue.createVreg(ptrVreg, type_: LirType.ptr)
+
+    let lirInstr = LirInstr.createLoad(dst, base: base, offset: 0, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+    mapValue(instr.result.id, lirId: dst.id)
+  end 'lowerLoad'
+
+  /// Lower memory store
+  function lowerStore(instr HirInstr)
+    let ptrVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let valueVreg = lookupValue(try instr.operands.get(1) otherwise -1)
+
+    let base = LirValue.createVreg(ptrVreg, type_: LirType.ptr)
+    let value = LirValue.createVreg(valueVreg, type_: LirType.i64)
+
+    let lirInstr = LirInstr.createStore(base, src: value, offset: 0, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+  end 'lowerStore'
+
+  /// Lower unconditional branch
+  function lowerBranch(instr HirInstr)
+    let target = LirValue.createLabel(instr.targetBlock)
+    let lirInstr = LirInstr.createJump(LirOpcode.jmp, target: target, line: instr.line, column: instr.column)
+    currentBlock.addInstr(lirInstr)
+  end 'lowerBranch'
+
+  /// Lower conditional branch
+  function lowerCondBranch(instr HirInstr)
+    let condVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    var cond = LirValue.createVreg(condVreg, type_: LirType.i64)
+
+    // Test condition
+    let testInstr = LirInstr{opcode: LirOpcode.test, dst: LirValue.createImm(0, type_: LirType.void_), src1: cond, src2: cond, offset: 0, callTarget: "", line: instr.line, column: instr.column}
+    currentBlock.addInstr(testInstr)
+
+    // Jump if not zero (true branch)
+    let trueTarget = LirValue.createLabel(instr.targetBlock)
+    let jneInstr = LirInstr.createJump(LirOpcode.jne, target: trueTarget, line: instr.line, column: instr.column)
+    currentBlock.addInstr(jneInstr)
+
+    // Jump to false branch
+    let falseTarget = LirValue.createLabel(instr.falseBlock)
+    let jmpInstr = LirInstr.createJump(LirOpcode.jmp, target: falseTarget, line: instr.line, column: instr.column)
+    currentBlock.addInstr(jmpInstr)
+  end 'lowerCondBranch'
+
+  /// Lower return with value
+  function lowerReturn(instr HirInstr)
+    let valueVreg = lookupValue(try instr.operands.get(0) otherwise -1)
+    let value = LirValue.createVreg(valueVreg, type_: LirType.i64)
+
+    // Create ret instruction with return value in src1
+    // The codegen will move src1 to RAX before epilogue
+    let retInstr = LirInstr.createRetWithValue(value, line: instr.line, column: instr.column)
+    currentBlock.addInstr(retInstr)
+  end 'lowerReturn'
+
+  /// Lower void return
+  function lowerReturnVoid(instr HirInstr)
+    let retInstr = LirInstr.createRet(instr.line, column: instr.column)
+    currentBlock.addInstr(retInstr)
+  end 'lowerReturnVoid'
+
+  /// Lower function call
+  function lowerCall(instr HirInstr)
+    // Push arguments (in reverse order for cdecl)
+    var i = instr.operands.count() - 1
+    while i >= 0 'pushArgs'
+      let argVreg = lookupValue(try instr.operands.get(i) otherwise -1)
+      let arg = LirValue.createVreg(argVreg, type_: LirType.i64)
+      let pushInstr = LirInstr.createPush(arg, line: instr.line, column: instr.column)
+      currentBlock.addInstr(pushInstr)
+      i = i - 1
+    end 'pushArgs'
+
+    // Call instruction
+    let callInstr = LirInstr.createCall(instr.callTarget, line: instr.line, column: instr.column)
+    currentBlock.addInstr(callInstr)
+
+    // Clean up stack (for cdecl)
+    let argBytes = instr.operands.count() * 8
+    if argBytes > 0 'cleanStack'
+      // Add to RSP
+      let rsp = LirValue.createVreg(-1, type_: LirType.ptr)  // Special marker for RSP
+      let imm = LirValue.createImm(argBytes, type_: LirType.i64)
+      let addInstr = LirInstr.createBinary(LirOpcode.add, dst: rsp, src1: rsp, src2: imm, line: instr.line, column: instr.column)
+      currentBlock.addInstr(addInstr)
+    end 'cleanStack'
+
+    // Move result from RAX to destination
+    if instr.result.id >= 0 'hasResult'
+      let dst = currentFunction.freshVreg(LirType.i64)
+      let rax = LirValue.createVreg(0, type_: LirType.i64)
+      let movInstr = LirInstr.createMov(dst, src: rax, line: instr.line, column: instr.column)
+      currentBlock.addInstr(movInstr)
+      mapValue(instr.result.id, lirId: dst.id)
+    end 'hasResult'
+  end 'lowerCall'
+
+  // ========================================================================
+  // Value Mapping
+  // ========================================================================
+
+  function mapValue(hirId int, lirId int)
+    // Grow array if needed
+    while valueMap.count() <= hirId 'grow'
+      valueMap.push(-1)
+    end 'grow'
+    valueMap.set(hirId, value: lirId)
+  end 'mapValue'
+
+  function lookupValue(hirId int) returns int
+    if hirId < 0 or hirId >= valueMap.count() 'invalid'
+      return -1
+    end 'invalid'
+    return try valueMap.get(hirId) otherwise -1
+  end 'lookupValue'
 end 'HirToLir'

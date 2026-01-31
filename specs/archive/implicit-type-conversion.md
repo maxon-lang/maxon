@@ -27,12 +27,12 @@ Function arguments are implicitly converted to match parameter types:
 
 ```maxon
 function takeFloat(x float) returns int
-    return trunc(x)
+  return trunc(x)
 end 'takeFloat'
 
 function main() returns int
-    print("{takeFloat(42)}")  // int literal -> float (implicit)
-    return 0
+  print("{takeFloat(42)}")  // int literal -> float (implicit)
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -47,12 +47,12 @@ end 'main'
 <!-- test: int-literal-to-float-param -->
 ```maxon
 function takeFloat(x float) returns int
-    return trunc(x)
+  return trunc(x)
 end 'takeFloat'
 
 function main() returns int
-    print("{takeFloat(42)}")
-    return 0
+  print("{takeFloat(42)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -65,13 +65,13 @@ end 'main'
 <!-- test: int-var-to-float-param -->
 ```maxon
 function takeFloat(x float) returns int
-    return trunc(x)
+  return trunc(x)
 end 'takeFloat'
 
 function main() returns int
-    var i = 42
-    print("{takeFloat(i)}")
-    return 0
+  var i = 42
+  print("{takeFloat(i)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -84,13 +84,13 @@ end 'main'
 <!-- test: byte-to-int-param -->
 ```maxon
 function takeInt(x int) returns int
-    return x
+  return x
 end 'takeInt'
 
 function main() returns int
-    var b = 42 as byte
-    print("{takeInt(b)}")
-    return 0
+  var b = 42 as byte
+  print("{takeInt(b)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -103,12 +103,12 @@ end 'main'
 <!-- test: int-to-byte-param-truncates -->
 ```maxon
 function takeByte(x byte) returns int
-    return x as int
+  return x as int
 end 'takeByte'
 
 function main() returns int
-    print("{takeByte(300)}")
-    return 0
+  print("{takeByte(300)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -121,13 +121,13 @@ end 'main'
 <!-- test: int-var-to-byte-param -->
 ```maxon
 function takeByte(x byte) returns int
-    return x as int
+  return x as int
 end 'takeByte'
 
 function main() returns int
-    var i = 300
-    print("{takeByte(i)}")
-    return 0
+  var i = 300
+  print("{takeByte(i)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -140,13 +140,13 @@ end 'main'
 <!-- test: float-to-int-param-truncates -->
 ```maxon
 function takeInt(x int) returns int
-    return x
+  return x
 end 'takeInt'
 
 function main() returns int
-    var f = 3.7
-    print("{takeInt(f)}")
-    return 0
+  var f = 3.7
+  print("{takeInt(f)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -159,13 +159,13 @@ end 'main'
 <!-- test: float-to-byte-param -->
 ```maxon
 function takeByte(x byte) returns int
-    return x as int
+  return x as int
 end 'takeByte'
 
 function main() returns int
-    var f = 300.9
-    print("{takeByte(f)}")
-    return 0
+  var f = 300.9
+  print("{takeByte(f)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -178,16 +178,16 @@ end 'main'
 <!-- test: function-return-to-byte-param -->
 ```maxon
 function getInt() returns int
-    return 300
+  return 300
 end 'getInt'
 
 function takeByte(x byte) returns int
-    return x as int
+  return x as int
 end 'takeByte'
 
 function main() returns int
-    print("{takeByte(getInt())}")
-    return 0
+  print("{takeByte(getInt())}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -200,14 +200,14 @@ end 'main'
 <!-- test: expression-to-float-param -->
 ```maxon
 function takeFloat(x float) returns int
-    return trunc(x)
+  return trunc(x)
 end 'takeFloat'
 
 function main() returns int
-    var a = 20
-    var b = 22
-    print("{takeFloat(a + b)}")
-    return 0
+  var a = 20
+  var b = 22
+  print("{takeFloat(a + b)}")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -220,8 +220,8 @@ end 'main'
 <!-- test: math-intrinsic-int-promotion -->
 ```maxon
 function main() returns int
-    var result = Math.exp(3)
-    return trunc(result)
+  var result = Math.exp(3)
+  return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -230,12 +230,12 @@ end 'main'
 <!-- test: no-string-to-int -->
 ```maxon
 function takeInt(x int) returns int
-    return x
+  return x
 end 'takeInt'
 
 function main() returns int
-    var s = "hello"
-    return takeInt(s)
+  var s = "hello"
+  return takeInt(s)
 end 'main'
 ```
 ```maxoncstderr
@@ -245,13 +245,13 @@ error E022: specs/fragments/implicit-type-conversion.no-string-to-int.1.test:8:5
 <!-- test: no-int-to-string -->
 ```maxon
 function takeString(x String) returns int
-    print(x)
-    return 0
+  print(x)
+  return 0
 end 'takeString'
 
 function main() returns int
-    var i = 42
-    return takeString(i)
+  var i = 42
+  return takeString(i)
 end 'main'
 ```
 ```maxoncstderr
@@ -261,12 +261,12 @@ error E022: specs/fragments/implicit-type-conversion.no-int-to-string.1.test:9:5
 <!-- test: no-bool-to-int -->
 ```maxon
 function takeInt(x int) returns int
-    return x
+  return x
 end 'takeInt'
 
 function main() returns int
-    var b = true
-    return takeInt(b)
+  var b = true
+  return takeInt(b)
 end 'main'
 ```
 ```maxoncstderr
@@ -276,15 +276,15 @@ error E022: specs/fragments/implicit-type-conversion.no-bool-to-int.1.test:8:5: 
 <!-- test: no-int-to-bool -->
 ```maxon
 function takeBool(x bool) returns int
-    if x 'check'
-        return 1
-    end 'check'
-    return 0
+  if x 'check'
+    return 1
+  end 'check'
+  return 0
 end 'takeBool'
 
 function main() returns int
-    var i = 1
-    return takeBool(i)
+  var i = 1
+  return takeBool(i)
 end 'main'
 ```
 ```maxoncstderr

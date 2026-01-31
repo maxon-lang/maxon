@@ -74,9 +74,9 @@ Enum values can be interpolated directly. For int-backed or simple enums, the nu
 ```maxon
 // Int-backed enum (type inferred from values)
 enum Color
-    red = 1
-    green = 2
-    blue = 3
+  red = 1
+  green = 2
+  blue = 3
 end 'Color'
 
 var c = Color.green
@@ -84,8 +84,8 @@ print("Color value: {c}\n")  // "Color value: 2"
 
 // String-backed enum (type inferred from values)
 enum Status
-    active = "Active"
-    inactive = "Inactive"
+  active = "Active"
+  inactive = "Inactive"
 end 'Status'
 
 var s = Status.active
@@ -98,12 +98,12 @@ Custom types can be interpolated by implementing the `Stringable` interface:
 
 ```maxon
 type Point is Stringable
-    var x int
-    var y int
+  var x int
+  var y int
 
-    function Stringable.toString(format String) returns String
-        return {self.y})"
-    end 'toString'
+  function Stringable.toString(format String) returns String
+    return {self.y})"
+  end 'toString'
 end 'Point'
 
 var p = Point{x: 1, y: 2}
@@ -129,9 +129,9 @@ var msg = "Hello, {name}!"
 <!-- test: basic-variable -->
 ```maxon
 function main() returns int
-    var name = "World"
-    print("Hello, {name}!")
-    return 0
+  var name = "World"
+  print("Hello, {name}!")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -146,10 +146,10 @@ Hello, World!
 <!-- test: multiple-variables -->
 ```maxon
 function main() returns int
-    var first = "Hello"
-    var second = "World"
-    print("{first}, {second}!")
-    return 0
+  var first = "Hello"
+  var second = "World"
+  print("{first}, {second}!")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -164,9 +164,9 @@ Hello, World!
 <!-- test: integer-interpolation -->
 ```maxon
 function main() returns int
-    var x = 42
-    print("Value: {x}\n")
-    return 0
+  var x = 42
+  print("Value: {x}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -181,8 +181,8 @@ Value: 42
 <!-- test: integer-literal -->
 ```maxon
 function main() returns int
-    print("Answer: {42}\n")
-    return 0
+  print("Answer: {42}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -197,9 +197,9 @@ Answer: 42
 <!-- test: negative-integer -->
 ```maxon
 function main() returns int
-    var x = 0 - 5
-    print("Negative: {x}\n")
-    return 0
+  var x = 0 - 5
+  print("Negative: {x}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -214,8 +214,8 @@ Negative: -5
 <!-- test: negative-unary -->
 ```maxon
 function main() returns int
-    print("Value: {0-10}\n")
-    return 0
+  print("Value: {0-10}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -230,9 +230,9 @@ Value: -10
 <!-- test: float-interpolation -->
 ```maxon
 function main() returns int
-    var pi = 3.14159
-    print("Pi: {pi}\n")
-    return 0
+  var pi = 3.14159
+  print("Pi: {pi}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -247,8 +247,8 @@ Pi: 3.141589
 <!-- test: float-literal -->
 ```maxon
 function main() returns int
-    print("Value: {2.5}\n")
-    return 0
+  print("Value: {2.5}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -263,9 +263,9 @@ Value: 2.5
 <!-- test: negative-float -->
 ```maxon
 function main() returns int
-    var temp = 0.0 - 3.5
-    print("Temp: {temp}\n")
-    return 0
+  var temp = 0.0 - 3.5
+  print("Temp: {temp}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -280,9 +280,9 @@ Temp: -3.5
 <!-- test: bool-true -->
 ```maxon
 function main() returns int
-    var flag = true
-    print("Active: {flag}\n")
-    return 0
+  var flag = true
+  print("Active: {flag}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -297,9 +297,9 @@ Active: true
 <!-- test: bool-false -->
 ```maxon
 function main() returns int
-    var flag = false
-    print("Active: {flag}\n")
-    return 0
+  var flag = false
+  print("Active: {flag}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -314,8 +314,8 @@ Active: false
 <!-- test: bool-literal -->
 ```maxon
 function main() returns int
-    print("Yes: {true}, No: {false}\n")
-    return 0
+  print("Yes: {true}, No: {false}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -330,10 +330,10 @@ Yes: true, No: false
 <!-- test: expression-interpolation -->
 ```maxon
 function main() returns int
-    var a = 5
-    var b = 3
-    print("{a} + {b} = {a + b}\n")
-    return 0
+  var a = 5
+  var b = 3
+  print("{a} + {b} = {a + b}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -348,9 +348,9 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns int
-    var x = 10
-    print("Double: {x * 2}, Triple: {x * 3}\n")
-    return 0
+  var x = 10
+  print("Double: {x * 2}, Triple: {x * 3}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -365,10 +365,10 @@ Double: 20, Triple: 30
 <!-- test: parenthesized-expression -->
 ```maxon
 function main() returns int
-    var a = 2
-    var b = 3
-    print("Result: {(a + b) * 2}\n")
-    return 0
+  var a = 2
+  var b = 3
+  print("Result: {(a + b) * 2}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -383,9 +383,9 @@ Result: 10
 <!-- test: empty-parts -->
 ```maxon
 function main() returns int
-    var x = 42
-    print("{x}\n")
-    return 0
+  var x = 42
+  print("{x}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -400,10 +400,10 @@ end 'main'
 <!-- test: adjacent-interpolations -->
 ```maxon
 function main() returns int
-    var a = "Hello"
-    var b = "World"
-    print("{a}{b}\n")
-    return 0
+  var a = "Hello"
+  var b = "World"
+  print("{a}{b}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -418,11 +418,11 @@ HelloWorld
 <!-- test: three-adjacent -->
 ```maxon
 function main() returns int
-    var a = "A"
-    var b = "B"
-    var c = "C"
-    print("{a}{b}{c}\n")
-    return 0
+  var a = "A"
+  var b = "B"
+  var c = "C"
+  print("{a}{b}{c}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -437,11 +437,11 @@ ABC
 <!-- test: string-variable -->
 ```maxon
 function main() returns int
-    var greeting = "Hello"
-    var target = "World"
-    var msg = "{greeting}, {target}!"
-    print(msg)
-    return 0
+  var greeting = "Hello"
+  var target = "World"
+  var msg = "{greeting}, {target}!"
+  print(msg)
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -456,8 +456,8 @@ Hello, World!
 <!-- test: escaped-braces -->
 ```maxon
 function main() returns int
-    print("Use \{expr\} for interpolation")
-    return 0
+  print("Use \{expr\} for interpolation")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -472,9 +472,9 @@ Use {expr} for interpolation
 <!-- test: mixed-escaped -->
 ```maxon
 function main() returns int
-    var x = 42
-    print("Value \{x\} is {x}\n")
-    return 0
+  var x = 42
+  print("Value \{x\} is {x}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -489,12 +489,12 @@ Value {x} is 42
 <!-- test: interpolation-loop -->
 ```maxon
 function main() returns int
-    var i = 0
-    while i < 3 'loop'
-        print("Count: {i}\n")
-        i = i + 1
-    end 'loop'
-    return 0
+  var i = 0
+  while i < 3 'loop'
+    print("Count: {i}\n")
+    i = i + 1
+  end 'loop'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -511,12 +511,12 @@ Count: 2
 <!-- test: function-call -->
 ```maxon
 function double(x int) returns int
-    return x * 2
+  return x * 2
 end 'double'
 
 function main() returns int
-    print("Double of 5: {double(5)}\n")
-    return 0
+  print("Double of 5: {double(5)}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -531,9 +531,9 @@ Double of 5: 10
 <!-- test: method-call -->
 ```maxon
 function main() returns int
-    var s = "hello"
-    print("Length: {s.count()}\n")
-    return 0
+  var s = "hello"
+  print("Length: {s.count()}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -548,10 +548,10 @@ Length: 5
 <!-- test: comparison-interpolation -->
 ```maxon
 function main() returns int
-    var a = 5
-    var b = 3
-    print("a > b: {a > b}\n")
-    return 0
+  var a = 5
+  var b = 3
+  print("a > b: {a > b}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -566,10 +566,10 @@ a > b: true
 <!-- test: logical-expression -->
 ```maxon
 function main() returns int
-    var x = true
-    var y = false
-    print("x and y: {x and y}\n")
-    return 0
+  var x = true
+  var y = false
+  print("x and y: {x and y}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -584,9 +584,9 @@ x and y: false
 <!-- test: float-arithmetic -->
 ```maxon
 function main() returns int
-    var r = 2.0
-    print("Area: {3.14159 * r * r}\n")
-    return 0
+  var r = 2.0
+  print("Area: {3.14159 * r * r}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -601,11 +601,11 @@ Area: 12.566359
 <!-- test: mixed-types -->
 ```maxon
 function main() returns int
-    var name = "test"
-    var count = 5
-    var active = true
-    print("Name: {name}, Count: {count}, Active: {active}\n")
-    return 0
+  var name = "test"
+  var count = 5
+  var active = true
+  print("Name: {name}, Count: {count}, Active: {active}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -620,9 +620,9 @@ Name: test, Count: 5, Active: true
 <!-- test: large-integer -->
 ```maxon
 function main() returns int
-    var big = 2147483647
-    print("Max int: {big}\n")
-    return 0
+  var big = 2147483647
+  print("Max int: {big}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -637,10 +637,10 @@ Max int: 2147483647
 <!-- test: zero-values -->
 ```maxon
 function main() returns int
-    var i = 0
-    var f = 0.0
-    print("Int: {i}, Float: {f}\n")
-    return 0
+  var i = 0
+  var f = 0.0
+  print("Int: {i}, Float: {f}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -655,9 +655,9 @@ Int: 0, Float: 0.0
 <!-- test: newline-interpolation -->
 ```maxon
 function main() returns int
-    var x = 42
-    print("Line1: {x}\nLine2: done")
-    return 0
+  var x = 42
+  print("Line1: {x}\nLine2: done")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -673,17 +673,17 @@ Line2: done
 <!-- test: tab-interpolation -->
 ```maxon
 function main() returns int
-    var a = 1
-    var b = 2
-    print("{a}\t{b}\n")
-    return 0
+  var a = 1
+  var b = 2
+  print("{a}\t{b}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
 0
 ```
 ```stdout
-1	2
+1 2
 ```
 
 ### Custom Type with Stringable
@@ -691,18 +691,18 @@ end 'main'
 <!-- test: custom-stringable -->
 ```maxon
 type Pair is Stringable
-    var first int
-    var second int
+  var first int
+  var second int
 
-    function Stringable.toString(_ String) returns String
-        return "[{first}, {second}]"
-    end 'toString'
+  function Stringable.toString(_ String) returns String
+    return "[{first}, {second}]"
+  end 'toString'
 end 'Pair'
 
 function main() returns int
-    var p = Pair{first: 1, second: 2}
-    print("{p}\n")
-    return 0
+  var p = Pair{first: 1, second: 2}
+  print("{p}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -717,21 +717,21 @@ end 'main'
 <!-- test: stringable-format-spec -->
 ```maxon
 type Counter is Stringable
-    var value int
+  var value int
 
-    function Stringable.toString(format String) returns String
-        if format == "verbose" 'verbose'
-            return "Counter(value={value})"
-        end 'verbose'
-        return "{value}"
-    end 'toString'
+  function Stringable.toString(format String) returns String
+    if format == "verbose" 'verbose'
+      return "Counter(value={value})"
+    end 'verbose'
+    return "{value}"
+  end 'toString'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{value: 42}
-    print("{c}\n")
-    print("{c:verbose}\n")
-    return 0
+  var c = Counter{value: 42}
+  print("{c}\n")
+  print("{c:verbose}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -747,27 +747,27 @@ Counter(value=42)
 <!-- test: multiple-stringable -->
 ```maxon
 type Name is Stringable
-    var first String
-    var last String
+  var first String
+  var last String
 
-    function Stringable.toString(_ String) returns String
-        return "{first} {last}"
-    end 'toString'
+  function Stringable.toString(_ String) returns String
+    return "{first} {last}"
+  end 'toString'
 end 'Name'
 
 type Age is Stringable
-    var years int
+  var years int
 
-    function Stringable.toString(_ String) returns String
-        return "{years} years old"
-    end 'toString'
+  function Stringable.toString(_ String) returns String
+    return "{years} years old"
+  end 'toString'
 end 'Age'
 
 function main() returns int
-    var name = Name{first: "John", last: "Doe"}
-    var age = Age{years: 30}
-    print("{name}, {age}\n")
-    return 0
+  var name = Name{first: "John", last: "Doe"}
+  var age = Age{years: 30}
+  print("{name}, {age}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -782,15 +782,15 @@ John Doe, 30 years old
 <!-- test: int-enum-interpolation -->
 ```maxon
 enum Color
-    red = 1
-    green = 2
-    blue = 3
+  red = 1
+  green = 2
+  blue = 3
 end 'Color'
 
 function main() returns int
-    var c = Color.green
-    print("Color value: {c}\n")
-    return 0
+  var c = Color.green
+  print("Color value: {c}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -805,16 +805,16 @@ Color value: 2
 <!-- test: simple-enum-interpolation -->
 ```maxon
 enum Direction
-    north
-    south
-    east
-    west
+  north
+  south
+  east
+  west
 end 'Direction'
 
 function main() returns int
-    var d = Direction.east
-    print("Direction: {d}\n")
-    return 0
+  var d = Direction.east
+  print("Direction: {d}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -829,15 +829,15 @@ Direction: 2
 <!-- test: string-enum-interpolation -->
 ```maxon
 enum Status
-    active = "Active"
-    inactive = "Inactive"
-    pending = "Pending"
+  active = "Active"
+  inactive = "Inactive"
+  pending = "Pending"
 end 'Status'
 
 function main() returns int
-    var s = Status.active
-    print("Status: {s}\n")
-    return 0
+  var s = Status.active
+  print("Status: {s}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -852,16 +852,16 @@ Status: Active
 <!-- test: multiple-enum-interpolation -->
 ```maxon
 enum Priority
-    low = 1
-    medium = 2
-    high = 3
+  low = 1
+  medium = 2
+  high = 3
 end 'Priority'
 
 function main() returns int
-    var p1 = Priority.low
-    var p2 = Priority.high
-    print("Priorities: {p1} and {p2}\n")
-    return 0
+  var p1 = Priority.low
+  var p2 = Priority.high
+  print("Priorities: {p1} and {p2}\n")
+  return 0
 end 'main'
 ```
 ```exitcode

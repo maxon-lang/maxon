@@ -41,9 +41,9 @@ var i = trunc(round(x))   // 4
 <!-- test: round.basic -->
 ```maxon
 function main() returns int
-    var x = 3.7
-    var y = trunc(round(x))
-    return y
+  var x = 3.7
+  var y = trunc(round(x))
+  return y
 end 'main'
 ```
 ```exitcode
@@ -53,9 +53,9 @@ end 'main'
 <!-- test: round.negative -->
 ```maxon
 function main() returns int
-    var neg = 0.0 - 2.3
-    var y = trunc(round(neg))
-    return y + 10
+  var neg = 0.0 - 2.3
+  var y = trunc(round(neg))
+  return y + 10
 end 'main'
 ```
 ```exitcode
@@ -65,9 +65,9 @@ end 'main'
 <!-- test: round.halfway -->
 ```maxon
 function main() returns int
-    var x = 2.5
-    var y = trunc(round(x))
-    return y
+  var x = 2.5
+  var y = trunc(round(x))
+  return y
 end 'main'
 ```
 ```exitcode

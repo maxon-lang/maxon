@@ -28,19 +28,19 @@ Structs with String fields stored in arrays must have proper refcount management
 <!-- TrackMemory: true -->
 ```maxon
 type Item
-    export var name String
-    export var value int
+  export var name String
+  export var value int
 end 'Item'
 
 typealias ItemArray is Array with Item
 
 function main() returns int
-    var items = ItemArray{}
-    items.push({name: "hello world that needs heap allocation", value: 1})
-    items.push({name: "another long string for heap allocation", value: 2})
-    let first = try items.get(0) otherwise Item{name: "", value: 0}
-    print("{first.name}\n")
-    return first.value
+  var items = ItemArray{}
+  items.push({name: "hello world that needs heap allocation", value: 1})
+  items.push({name: "another long string for heap allocation", value: 2})
+  let first = try items.get(0) otherwise Item{name: "", value: 0}
+  print("{first.name}\n")
+  return first.value
 end 'main'
 ```
 ```exitcode
@@ -89,16 +89,16 @@ When an array is cleaned up, each element's managed fields must be decremented.
 <!-- TrackMemory: true -->
 ```maxon
 type Pair
-    export var first String
-    export var second String
+  export var first String
+  export var second String
 end 'Pair'
 
 typealias PairArray is Array with Pair
 
 function main() returns int
-    var pairs = PairArray{}
-    pairs.push({first: "alpha string that is long for heap", second: "beta string that is long for heap"})
-    return 0
+  var pairs = PairArray{}
+  pairs.push({first: "alpha string that is long for heap", second: "beta string that is long for heap"})
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -135,19 +135,19 @@ Each managed field in a struct needs its own refcount tracking.
 <!-- TrackMemory: true -->
 ```maxon
 type MultiField
-    export var a String
-    export var b int
-    export var c String
-    export var d int
-    export var e String
+  export var a String
+  export var b int
+  export var c String
+  export var d int
+  export var e String
 end 'MultiField'
 
 typealias MultiArray is Array with MultiField
 
 function main() returns int
-    var items = MultiArray{}
-    items.push({a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
-    return 0
+  var items = MultiArray{}
+  items.push({a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
+  return 0
 end 'main'
 ```
 ```exitcode

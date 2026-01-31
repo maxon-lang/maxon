@@ -23,7 +23,7 @@ Type inference works in:
 
 ```text
 function makePoint() returns Point
-    return Point{x: 1, y: 2}  // Error E059: 'Point' can be inferred
+  return Point{x: 1, y: 2}  // Error E059: 'Point' can be inferred
 end 'makePoint'
 ```
 
@@ -40,7 +40,7 @@ Omit redundant type annotations when the type can be inferred:
 
 ```maxon
 function makePoint() returns Point
-    return {x: 1, y: 2}
+  return {x: 1, y: 2}
 end 'makePoint'
 ```
 ```exitcode
@@ -52,16 +52,16 @@ end 'makePoint'
 <!-- test: error.exact-match-return -->
 ```maxon
 type Point
-    var x int
-    var y int
+  var x int
+  var y int
 end 'Point'
 
 function makePoint() returns Point
-    return Point{x: 1, y: 2}
+  return Point{x: 1, y: 2}
 end 'makePoint'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -71,17 +71,17 @@ error E059: specs/fragments/redundant-type-annotation.error.exact-match-return.1
 <!-- test: error.closure-return -->
 ```maxon
 type Point
-    var x int
-    var y int
+  var x int
+  var y int
 end 'Point'
 
 function transform(f (int) returns Point, n int) returns Point
-    return f(n)
+  return f(n)
 end 'transform'
 
 function main() returns int
-    var p = transform((x int) gives Point{x: x, y: x * 2}, n: 5)
-    return p.x
+  var p = transform((x int) gives Point{x: x, y: x * 2}, n: 5)
+  return p.x
 end 'main'
 ```
 ```maxoncstderr
@@ -91,13 +91,13 @@ error E059: specs/fragments/redundant-type-annotation.error.closure-return.1.tes
 <!-- test: ok.no-context -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function main() returns int
-    var p = Point{x: 1, y: 2}
-    return p.x
+  var p = Point{x: 1, y: 2}
+  return p.x
 end 'main'
 ```
 ```exitcode
@@ -107,17 +107,17 @@ end 'main'
 <!-- test: ok.anonymous-literal -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function makePoint() returns Point
-    return {x: 1, y: 2}
+  return {x: 1, y: 2}
 end 'makePoint'
 
 function main() returns int
-    var p = makePoint()
-    return p.x + p.y
+  var p = makePoint()
+  return p.x + p.y
 end 'main'
 ```
 ```exitcode
@@ -127,16 +127,16 @@ end 'main'
 <!-- test: error.closure-param -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function transform(f (Point) returns int) returns int
-    return f(Point{x: 5, y: 10})
+  return f(Point{x: 5, y: 10})
 end 'transform'
 
 function main() returns int
-    return transform((p Point) gives p.x + p.y)
+  return transform((p Point) gives p.x + p.y)
 end 'main'
 ```
 ```maxoncstderr
@@ -146,13 +146,13 @@ error E059: specs/fragments/redundant-type-annotation.error.closure-param.1.test
 <!-- test: ok.closure-param-no-context -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function main() returns int
-    var f = (p Point) gives p.x + p.y
-    return f(Point{x: 3, y: 4})
+  var f = (p Point) gives p.x + p.y
+  return f(Point{x: 3, y: 4})
 end 'main'
 ```
 ```exitcode
@@ -162,16 +162,16 @@ end 'main'
 <!-- test: ok.closure-param-inferred -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function transform(f (Point) returns int) returns int
-    return f(Point{x: 5, y: 10})
+  return f(Point{x: 5, y: 10})
 end 'transform'
 
 function main() returns int
-    return transform((p) gives p.x + p.y)
+  return transform((p) gives p.x + p.y)
 end 'main'
 ```
 ```exitcode

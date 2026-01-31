@@ -15,13 +15,13 @@ Types declare interface conformance using the `is` keyword. Methods implementing
 
 ```text
 interface Printable
-    function toString() returns int
+  function toString() returns int
 end 'Printable'
 
 type MyType is Printable
-    function Printable.toString() returns int
-        return 42
-    end 'toString'
+  function Printable.toString() returns int
+    return 42
+  end 'toString'
 end 'MyType'
 ```
 
@@ -31,7 +31,7 @@ Types can conform to multiple interfaces:
 
 ```text
 type MyType is Interface1, Interface2
-    // must implement all methods from both interfaces
+  // must implement all methods from both interfaces
 end 'MyType'
 ```
 
@@ -41,15 +41,15 @@ If a type declares conformance but doesn't implement all required methods (or do
 
 ```text
 interface Counter
-    function get() returns int
-    function increment()
+  function get() returns int
+  function increment()
 end 'Counter'
 
 type BadCounter is Counter
-    function Counter.get() returns int
-        return 0
-    end 'get'
-    // ERROR: missing 'Counter.increment' method
+  function Counter.get() returns int
+    return 0
+  end 'get'
+  // ERROR: missing 'Counter.increment' method
 end 'BadCounter'
 ```
 
@@ -58,27 +58,27 @@ end 'BadCounter'
 <!-- test: conformance-basic -->
 ```maxon
 interface Counter
-    function get() returns int
-    function increment()
+  function get() returns int
+  function increment()
 end 'Counter'
 
 type SimpleCounter is Counter
-    var value int
+  var value int
 
-    function Counter.get() returns int
-        return value
-    end 'get'
+  function Counter.get() returns int
+    return value
+  end 'get'
 
-    function Counter.increment()
-        value = value + 1
-    end 'increment'
+  function Counter.increment()
+    value = value + 1
+  end 'increment'
 end 'SimpleCounter'
 
 function main() returns int
-    var c = SimpleCounter{value: 40}
-    c.increment()
-    c.increment()
-    return c.get()
+  var c = SimpleCounter{value: 40}
+  c.increment()
+  c.increment()
+  return c.get()
 end 'main'
 ```
 ```exitcode
@@ -88,29 +88,29 @@ end 'main'
 <!-- test: conformance-multiple-interfaces -->
 ```maxon
 interface Readable
-    function read() returns int
+  function read() returns int
 end 'Readable'
 
 interface Writable
-    function write(value int)
+  function write(value int)
 end 'Writable'
 
 type Buffer is Readable, Writable
-    var data int
+  var data int
 
-    function Readable.read() returns int
-        return data
-    end 'read'
+  function Readable.read() returns int
+    return data
+  end 'read'
 
-    function Writable.write(value int)
-        data = value
-    end 'write'
+  function Writable.write(value int)
+    data = value
+  end 'write'
 end 'Buffer'
 
 function main() returns int
-    var buf = Buffer{data: 0}
-    buf.write(42)
-    return buf.read()
+  var buf = Buffer{data: 0}
+  buf.write(42)
+  return buf.read()
 end 'main'
 ```
 ```exitcode
@@ -120,20 +120,20 @@ end 'main'
 <!-- test: conformance-missing-method -->
 ```maxon
 interface Counter
-    function get() returns int
-    function increment()
+  function get() returns int
+  function increment()
 end 'Counter'
 
 type BadCounter is Counter
-    var value int
+  var value int
 
-    function Counter.get() returns int
-        return value
-    end 'get'
+  function Counter.get() returns int
+    return value
+  end 'get'
 end 'BadCounter'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -144,24 +144,24 @@ error E015: specs/fragments/interface-conformance.conformance-missing-method.1.t
 <!-- test: conformance-extra-methods-ok -->
 ```maxon
 interface Simple
-    function getValue() returns int
+  function getValue() returns int
 end 'Simple'
 
 type Extended is Simple
-    var value int
+  var value int
 
-    function Simple.getValue() returns int
-        return value
-    end 'getValue'
+  function Simple.getValue() returns int
+    return value
+  end 'getValue'
 
-    function extraMethod() returns int
-        return 100
-    end 'extraMethod'
+  function extraMethod() returns int
+    return 100
+  end 'extraMethod'
 end 'Extended'
 
 function main() returns int
-    var e = Extended{value: 42}
-    return e.getValue()
+  var e = Extended{value: 42}
+  return e.getValue()
 end 'main'
 ```
 ```exitcode
@@ -171,20 +171,20 @@ end 'main'
 <!-- test: conformance-unqualified-method-error -->
 ```maxon
 interface Counter
-    function get() returns int
+  function get() returns int
 end 'Counter'
 
 type BadCounter is Counter
-    var value int
+  var value int
 
-    // ERROR: method must be declared as Counter.get
-    function get() returns int
-        return value
-    end 'get'
+  // ERROR: method must be declared as Counter.get
+  function get() returns int
+    return value
+  end 'get'
 end 'BadCounter'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -195,16 +195,16 @@ error E015: specs/fragments/interface-conformance.conformance-unqualified-method
 <!-- test: conformance-no-interface -->
 ```maxon
 type Standalone
-    var value int
+  var value int
 
-    function get() returns int
-        return value
-    end 'get'
+  function get() returns int
+    return value
+  end 'get'
 end 'Standalone'
 
 function main() returns int
-    var s = Standalone{value: 42}
-    return s.get()
+  var s = Standalone{value: 42}
+  return s.get()
 end 'main'
 ```
 ```exitcode

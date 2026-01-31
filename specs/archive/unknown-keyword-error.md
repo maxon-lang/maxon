@@ -15,11 +15,11 @@ Using an undefined keyword or bare identifier as a statement causes a parse erro
 
 ```maxon
 function main() returns int
-    var x = 0
-    foo
-        x = 5
-    end 'foo'
-    return x
+  var x = 0
+  foo
+    x = 5
+  end 'foo'
+  return x
 end 'main'
 ```
 ```maxoncstderr
@@ -39,11 +39,11 @@ When you see this error, consider:
 <!-- test: bare-identifier -->
 ```maxon
 function main() returns int
-    var x = 0
-    foo
-        x = 5
-    end 'foo'
-    return x
+  var x = 0
+  foo
+    x = 5
+  end 'foo'
+  return x
 end 'main'
 ```
 ```maxoncstderr
@@ -53,8 +53,8 @@ error E002: specs/fragments/unknown-keyword-error.bare-identifier.1.test:4:5: un
 <!-- test: typo-keyword -->
 ```maxon
 function main() returns int
-    var x = 5
-    retur x
+  var x = 5
+  retur x
 end 'main'
 ```
 ```maxoncstderr
@@ -64,12 +64,12 @@ error E002: specs/fragments/unknown-keyword-error.typo-keyword.1.test:4:5: unexp
 <!-- test: missing-call-parens -->
 ```maxon
 function test() returns int
-    return 42
+  return 42
 end 'test'
 
 function main() returns int
-    test
-    return 0
+  test
+  return 0
 end 'main'
 ```
 ```maxoncstderr

@@ -41,12 +41,12 @@ When a slice goes out of scope, its parent's reference count must be decremented
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var s = "hello world that is long enough to require heap allocation and more text to be sure"
-    var start = s.startIndex()
-    var idx = try s.find(" ") otherwise s.endIndex()
-    var sub = s.slice(start, endIndex: idx)
-    print("{sub}\n")
-    return 0
+  var s = "hello world that is long enough to require heap allocation and more text to be sure"
+  var start = s.startIndex()
+  var idx = try s.find(" ") otherwise s.endIndex()
+  var sub = s.slice(start, endIndex: idx)
+  print("{sub}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -85,12 +85,12 @@ Slicing a static string literal (mode=3) should create a static slice without at
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var s = "hello world"
-    var start = s.startIndex()
-    var idx = try s.find(" ") otherwise s.endIndex()
-    var sub = s.slice(start, endIndex: idx)
-    print("{sub}\n")
-    return 0
+  var s = "hello world"
+  var start = s.startIndex()
+  var idx = try s.find(" ") otherwise s.endIndex()
+  var sub = s.slice(start, endIndex: idx)
+  print("{sub}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -129,14 +129,14 @@ When a slice is copied, the parent's reference count must be incremented.
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var s = "hello world that is long enough to require heap allocation and more text to be sure"
-    var start = s.startIndex()
-    var idx = try s.find(" ") otherwise s.endIndex()
-    var sub1 = s.slice(start, endIndex: idx)
-    var sub2 = sub1
-    print("{sub1}\n")
-    print("{sub2}\n")
-    return 0
+  var s = "hello world that is long enough to require heap allocation and more text to be sure"
+  var start = s.startIndex()
+  var idx = try s.find(" ") otherwise s.endIndex()
+  var sub1 = s.slice(start, endIndex: idx)
+  var sub2 = sub1
+  print("{sub1}\n")
+  print("{sub2}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -186,16 +186,16 @@ A slice of a slice should reference the original parent buffer, not the intermed
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    var s = "hello world that is long enough to require heap allocation and more text to be sure"
-    var start = s.startIndex()
-    var idx = try s.find(" ") otherwise s.endIndex()
-    var sub1 = s.slice(start, endIndex: idx)
-    // Create a slice of the slice
-    var sub1Start = sub1.startIndex()
-    var sub1End = try sub1.find("l") otherwise sub1.endIndex()
-    var sub2 = sub1.slice(sub1Start, endIndex: sub1End)
-    print("{sub2}\n")
-    return 0
+  var s = "hello world that is long enough to require heap allocation and more text to be sure"
+  var start = s.startIndex()
+  var idx = try s.find(" ") otherwise s.endIndex()
+  var sub1 = s.slice(start, endIndex: idx)
+  // Create a slice of the slice
+  var sub1Start = sub1.startIndex()
+  var sub1End = try sub1.find("l") otherwise sub1.endIndex()
+  var sub2 = sub1.slice(sub1Start, endIndex: sub1End)
+  print("{sub2}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -237,16 +237,16 @@ When the original string goes out of scope but a slice still exists, the buffer 
 <!-- TrackMemory: true -->
 ```maxon
 function getSlice() returns String
-    var s = "hello world that is long enough to require heap allocation and more text to be sure"
-    var start = s.startIndex()
-    var idx = try s.find(" ") otherwise s.endIndex()
-    return s.slice(start, endIndex: idx)
+  var s = "hello world that is long enough to require heap allocation and more text to be sure"
+  var start = s.startIndex()
+  var idx = try s.find(" ") otherwise s.endIndex()
+  return s.slice(start, endIndex: idx)
 end 'getSlice'
 
 function main() returns int
-    var sub = getSlice()
-    print("{sub}\n")
-    return 0
+  var sub = getSlice()
+  print("{sub}\n")
+  return 0
 end 'main'
 ```
 ```exitcode

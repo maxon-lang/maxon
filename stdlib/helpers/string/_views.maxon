@@ -5,22 +5,22 @@
 // ============================================
 
 export type ByteView is Iterable with byte
-	var _managed __ManagedMemory
-	var _pos int
+  var _managed __ManagedMemory
+  var _pos int
 
-	function Iterable.next() returns byte throws IterationError
-		if _pos >= __managed_memory_len(_managed) 'at_end'
-			throw IterationError.exhausted
-		end 'at_end'
-		var b = __managed_memory_byte_at(_managed, _pos)
-		_pos = _pos + 1
-		return b
-	end 'next'
+  function Iterable.next() returns byte throws IterationError
+    if _pos >= __managed_memory_len(_managed) 'at_end'
+      throw IterationError.exhausted
+    end 'at_end'
+    var b = __managed_memory_byte_at(_managed, _pos)
+    _pos = _pos + 1
+    return b
+  end 'next'
 
-	/// Get the number of bytes
-	export function count() returns int
-		return __managed_memory_len(_managed)
-	end 'count'
+  /// Get the number of bytes
+  export function count() returns int
+    return __managed_memory_len(_managed)
+  end 'count'
 end 'ByteView'
 
 // ============================================
@@ -28,31 +28,31 @@ end 'ByteView'
 // ============================================
 
 export type CodepointView is Iterable with int
-	var _managed __ManagedMemory
-	var _pos int
+  var _managed __ManagedMemory
+  var _pos int
 
-	function Iterable.next() returns int throws IterationError
-		if _pos >= __managed_memory_len(_managed) 'at_end'
-			throw IterationError.exhausted
-		end 'at_end'
-		var cp = utf8DecodeAt(_managed, pos: _pos)
-		var len = utf8ByteLengthAt(_managed, pos: _pos)
-		_pos = _pos + len
-		return cp
-	end 'next'
+  function Iterable.next() returns int throws IterationError
+    if _pos >= __managed_memory_len(_managed) 'at_end'
+      throw IterationError.exhausted
+    end 'at_end'
+    var cp = utf8DecodeAt(_managed, pos: _pos)
+    var len = utf8ByteLengthAt(_managed, pos: _pos)
+    _pos = _pos + len
+    return cp
+  end 'next'
 
-	/// Get the number of codepoints
-	export function count() returns int
-		var count = 0
-		var pos = 0
-		var len = __managed_memory_len(_managed)
-		while pos < len 'count_loop'
-			var bytes = utf8ByteLengthAt(_managed, pos: pos)
-			pos = pos + bytes
-			count = count + 1
-		end 'count_loop'
-		return count
-	end 'count'
+  /// Get the number of codepoints
+  export function count() returns int
+    var count = 0
+    var pos = 0
+    var len = __managed_memory_len(_managed)
+    while pos < len 'count_loop'
+      var bytes = utf8ByteLengthAt(_managed, pos: pos)
+      pos = pos + bytes
+      count = count + 1
+    end 'count_loop'
+    return count
+  end 'count'
 end 'CodepointView'
 
 // ============================================
@@ -60,52 +60,52 @@ end 'CodepointView'
 // ============================================
 
 export type UTF16View is Iterable with int
-	var _managed __ManagedMemory
-	var _bytePos int
-	var _pendingCodepoint int  // Codepoint pending its low surrogate (0 if none)
+  var _managed __ManagedMemory
+  var _bytePos int
+  var _pendingCodepoint int  // Codepoint pending its low surrogate (0 if none)
 
-	function Iterable.next() returns int throws IterationError
-		// If we have a pending codepoint, return its low surrogate
-		if _pendingCodepoint != 0 'has_pending'
-			var low = utf16TrailSurrogate(_pendingCodepoint)
-			_pendingCodepoint = 0
-			return low
-		end 'has_pending'
+  function Iterable.next() returns int throws IterationError
+    // If we have a pending codepoint, return its low surrogate
+    if _pendingCodepoint != 0 'has_pending'
+      var low = utf16TrailSurrogate(_pendingCodepoint)
+      _pendingCodepoint = 0
+      return low
+    end 'has_pending'
 
-		if _bytePos >= __managed_memory_len(_managed) 'at_end'
-			throw IterationError.exhausted
-		end 'at_end'
+    if _bytePos >= __managed_memory_len(_managed) 'at_end'
+      throw IterationError.exhausted
+    end 'at_end'
 
-		var cp = utf8DecodeAt(_managed, pos: _bytePos)
-		var len = utf8ByteLengthAt(_managed, pos: _bytePos)
-		_bytePos = _bytePos + len
+    var cp = utf8DecodeAt(_managed, pos: _bytePos)
+    var len = utf8ByteLengthAt(_managed, pos: _bytePos)
+    _bytePos = _bytePos + len
 
-		// BMP codepoint (single code unit)
-		if cp < 65536 'bmp'
-			return cp
-		end 'bmp'
+    // BMP codepoint (single code unit)
+    if cp < 65536 'bmp'
+      return cp
+    end 'bmp'
 
-		// Supplementary codepoint (surrogate pair)
-		// Store the codepoint so we can return the low surrogate next iteration
-		_pendingCodepoint = cp
-		return utf16LeadSurrogate(cp)
-	end 'next'
+    // Supplementary codepoint (surrogate pair)
+    // Store the codepoint so we can return the low surrogate next iteration
+    _pendingCodepoint = cp
+    return utf16LeadSurrogate(cp)
+  end 'next'
 
-	/// Get the number of UTF-16 code units
-	export function count() returns int
-		var count = 0
-		var pos = 0
-		var len = __managed_memory_len(_managed)
-		while pos < len 'count_loop'
-			var cp = utf8DecodeAt(_managed, pos: pos)
-			var bytes = utf8ByteLengthAt(_managed, pos: pos)
-			pos = pos + bytes
-			if cp < 65536 'bmp'
-				count = count + 1
-			end 'bmp' else 'supplementary'
-				count = count + 2
-			end 'supplementary'
-		end 'count_loop'
-		return count
-	end 'count'
+  /// Get the number of UTF-16 code units
+  export function count() returns int
+    var count = 0
+    var pos = 0
+    var len = __managed_memory_len(_managed)
+    while pos < len 'count_loop'
+      var cp = utf8DecodeAt(_managed, pos: pos)
+      var bytes = utf8ByteLengthAt(_managed, pos: pos)
+      pos = pos + bytes
+      if cp < 65536 'bmp'
+        count = count + 1
+      end 'bmp' else 'supplementary'
+        count = count + 2
+      end 'supplementary'
+    end 'count_loop'
+    return count
+  end 'count'
 end 'UTF16View'

@@ -44,10 +44,10 @@ Types can have static fields that are shared across all instances. Static fields
 
 ```maxon
 type Counter
-    static var count = 0       // Mutable static field
-    static let MAX = 100       // Compile-time static constant
+  static var count = 0       // Mutable static field
+  static let MAX = 100       // Compile-time static constant
 
-    export var value int       // Instance field
+  export var value int       // Instance field
 end 'Counter'
 ```
 
@@ -73,8 +73,8 @@ c.value = 20                        // Access instance field
 var counter = 0
 
 function main() returns int
-    counter = 42
-    return counter
+  counter = 42
+  return counter
 end 'main'
 ```
 ```exitcode
@@ -86,13 +86,13 @@ end 'main'
 var total = 10
 
 function add(n int)
-    total = total + n
+  total = total + n
 end 'add'
 
 function main() returns int
-    add(5)
-    add(27)
-    return total
+  add(5)
+  add(27)
+  return total
 end 'main'
 ```
 ```exitcode
@@ -106,10 +106,10 @@ var b = 2
 var c = 3
 
 function main() returns int
-    a = a * 10
-    b = b * 10
-    c = c * 10
-    return a + b + c
+  a = a * 10
+  b = b * 10
+  c = c * 10
+  return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -122,8 +122,8 @@ let BASE = 40
 var offset = 0
 
 function main() returns int
-    offset = 2
-    return BASE + offset
+  offset = 2
+  return BASE + offset
 end 'main'
 ```
 ```exitcode
@@ -133,12 +133,12 @@ end 'main'
 <!-- test: static-var-basic -->
 ```maxon
 type Counter
-    static var count = 0
+  static var count = 0
 end 'Counter'
 
 function main() returns int
-    Counter.count = 42
-    return Counter.count
+  Counter.count = 42
+  return Counter.count
 end 'main'
 ```
 ```exitcode
@@ -148,18 +148,18 @@ end 'main'
 <!-- test: static-var-increment -->
 ```maxon
 type Counter
-    static var count = 0
+  static var count = 0
 
-    static function increment()
-        Counter.count = Counter.count + 1
-    end 'increment'
+  static function increment()
+    Counter.count = Counter.count + 1
+  end 'increment'
 end 'Counter'
 
 function main() returns int
-    Counter.increment()
-    Counter.increment()
-    Counter.increment()
-    return Counter.count
+  Counter.increment()
+  Counter.increment()
+  Counter.increment()
+  return Counter.count
 end 'main'
 ```
 ```exitcode
@@ -169,11 +169,11 @@ end 'main'
 <!-- test: static-let-basic -->
 ```maxon
 type Config
-    static let MAX_SIZE = 42
+  static let MAX_SIZE = 42
 end 'Config'
 
 function main() returns int
-    return Config.MAX_SIZE
+  return Config.MAX_SIZE
 end 'main'
 ```
 ```exitcode
@@ -183,17 +183,17 @@ end 'main'
 <!-- test: static-var-multiple-types -->
 ```maxon
 type TypeA
-    static var value = 10
+  static var value = 10
 end 'TypeA'
 
 type TypeB
-    static var value = 20
+  static var value = 20
 end 'TypeB'
 
 function main() returns int
-    TypeA.value = TypeA.value + 2
-    TypeB.value = TypeB.value + 10
-    return TypeA.value + TypeB.value
+  TypeA.value = TypeA.value + 2
+  TypeB.value = TypeB.value + 10
+  return TypeA.value + TypeB.value
 end 'main'
 ```
 ```exitcode
@@ -203,19 +203,19 @@ end 'main'
 <!-- test: static-and-instance-fields -->
 ```maxon
 type Thing
-    static var created = 0
-    export var id int
+  static var created = 0
+  export var id int
 
-    static function make(n int) returns Thing
-        Thing.created = Thing.created + 1
-        return {id: n}
-    end 'make'
+  static function make(n int) returns Thing
+    Thing.created = Thing.created + 1
+    return {id: n}
+  end 'make'
 end 'Thing'
 
 function main() returns int
-    var a = Thing.make(10)
-    var b = Thing.make(20)
-    return Thing.created + a.id + b.id
+  var a = Thing.make(10)
+  var b = Thing.make(20)
+  return Thing.created + a.id + b.id
 end 'main'
 ```
 ```exitcode
@@ -227,18 +227,18 @@ end 'main'
 var initialized = false
 
 function init()
-    initialized = true
+  initialized = true
 end 'init'
 
 function main() returns int
-    if initialized 'check1'
-        return 1
-    end 'check1'
-    init()
-    if initialized 'check2'
-        return 42
-    end 'check2'
-    return 0
+  if initialized 'check1'
+    return 1
+  end 'check1'
+  init()
+  if initialized 'check2'
+    return 42
+  end 'check2'
+  return 0
 end 'main'
 ```
 ```exitcode

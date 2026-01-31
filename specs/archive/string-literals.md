@@ -26,6 +26,6 @@ var message = "Hello, World!"
 ### Example
 
 ```maxon
-    var msg = "Hello!\n"
+  var msg = "Hello!\n"
 ```
 ## Tests

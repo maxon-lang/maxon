@@ -21,20 +21,20 @@ This is determined automatically by analyzing what each function does with its p
 
 ```maxon
 function main() returns int
-    var a = 42
-    var b = foo(a)  // foo only reads a -> borrow, a still usable
-    a = a + 1       // OK, we still own a
-    bar(a)          // bar modifies its param -> ownership transfers
-    // a = a + 1    // ERROR: a was moved to bar
-    return b
+  var a = 42
+  var b = foo(a)  // foo only reads a -> borrow, a still usable
+  a = a + 1       // OK, we still own a
+  bar(a)          // bar modifies its param -> ownership transfers
+  // a = a + 1    // ERROR: a was moved to bar
+  return b
 end 'main'
 
 function foo(z int) returns int
-    return z + 4    // z is only read -> borrow
+  return z + 4    // z is only read -> borrow
 end 'foo'
 
 function bar(z int)
-    z = z + 1       // z is modified -> takes ownership
+  z = z + 1       // z is modified -> takes ownership
 end 'bar'
 ```
 
@@ -44,13 +44,13 @@ end 'bar'
 Variable used after being moved to a function.
 ```maxon
 function consume(x int)
-    x = x + 1
+  x = x + 1
 end 'consume'
 
 function main() returns int
-    var a = 42
-    consume(a)
-    return a
+  var a = 42
+  consume(a)
+  return a
 end 'main'
 ```
 ```maxoncstderr
@@ -61,14 +61,14 @@ error E4010: use after move: 'a'
 When a function only reads its parameter, the caller can reuse the variable.
 ```maxon
 function readOnly(x int) returns int
-    return x + 1
+  return x + 1
 end 'readOnly'
 
 function main() returns int
-    var a = 10
-    var b = readOnly(a)
-    var c = readOnly(a)
-    return b + c + a
+  var a = 10
+  var b = readOnly(a)
+  var c = readOnly(a)
+  return b + c + a
 end 'main'
 ```
 ```exitcode
@@ -80,10 +80,10 @@ Variables can be reassigned as long as they haven't been moved.
 
 ```maxon
 function main() returns int
-    var a = 10
-    a = 20
-    a = 30
-    return a
+  var a = 10
+  a = 20
+  a = 30
+  return a
 end 'main'
 ```
 ```exitcode
@@ -95,11 +95,11 @@ Multiple assignments in sequence work correctly.
 
 ```maxon
 function main() returns int
-    var a = 1
-    var b = 2
-    a = a + b
-    b = a + b
-    return b
+  var a = 1
+  var b = 2
+  a = a + b
+  b = a + b
+  return b
 end 'main'
 ```
 ```exitcode
@@ -111,10 +111,10 @@ Assignment with complex expression on the right side.
 
 ```maxon
 function main() returns int
-    var a = 5
-    var b = 3
-    a = a * b + 2
-    return a
+  var a = 5
+  var b = 3
+  a = a * b + 2
+  return a
 end 'main'
 ```
 ```exitcode
@@ -126,10 +126,10 @@ Reassigning a variable to itself plus something.
 
 ```maxon
 function main() returns int
-    var x = 10
-    x = x + 5
-    x = x + 5
-    return x
+  var x = 10
+  x = x + 5
+  x = x + 5
+  return x
 end 'main'
 ```
 ```exitcode
@@ -141,13 +141,13 @@ Chain of assignments between variables.
 
 ```maxon
 function main() returns int
-    var a = 1
-    var b = 2
-    var c = 3
-    a = b
-    b = c
-    c = a + b + c
-    return c
+  var a = 1
+  var b = 2
+  var c = 3
+  a = b
+  b = c
+  c = a + b + c
+  return c
 end 'main'
 ```
 ```exitcode
@@ -159,10 +159,10 @@ Mutable variable can be reassigned after immutable declaration.
 
 ```maxon
 function main() returns int
-    let x = 10
-    var y = x
-    y = y + 5
-    return y
+  let x = 10
+  var y = x
+  y = y + 5
+  return y
 end 'main'
 ```
 ```exitcode
@@ -174,13 +174,13 @@ Multiple variables can each be reassigned.
 
 ```maxon
 function main() returns int
-    var a = 1
-    var b = 2
-    var c = 3
-    a = 10
-    b = 20
-    c = 30
-    return a + b + c
+  var a = 1
+  var b = 2
+  var c = 3
+  a = 10
+  b = 20
+  c = 30
+  return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -192,10 +192,10 @@ Reassignment with various arithmetic operations.
 
 ```maxon
 function main() returns int
-    var x = 100
-    x = x - 50
-    x = x * 2
-    return x
+  var x = 100
+  x = x - 50
+  x = x * 2
+  return x
 end 'main'
 ```
 ```exitcode
@@ -207,15 +207,15 @@ end 'main'
 typealias IntArray is Array with int
 
 type Container
-    var data IntArray
+  var data IntArray
 end 'Container'
 
 function main() returns int
-    var arr = [10, 20, 30]
-    var c = Container{data: arr}
-    arr.set(0, value: 999)
-    var val = try c.data.get(0) otherwise 0
-    return val
+  var arr = [10, 20, 30]
+  var c = Container{data: arr}
+  arr.set(0, value: 999)
+  var val = try c.data.get(0) otherwise 0
+  return val
 end 'main'
 ```
 ```maxoncstderr
@@ -227,14 +227,14 @@ Ownership transfers are deferred until after all struct literal fields are evalu
 allowing a variable to be used multiple times within the same struct initialization.
 ```maxon
 type Wrapper
-    var data String
-    export var len int
+  var data String
+  export var len int
 end 'Wrapper'
 
 function main() returns int
-    var s = "hello"
-    var w = Wrapper{data: s, len: s.byteLength()}
-    return w.len
+  var s = "hello"
+  var w = Wrapper{data: s, len: s.byteLength()}
+  return w.len
 end 'main'
 ```
 ```exitcode
@@ -245,14 +245,14 @@ end 'main'
 After a struct literal completes, moved variables cannot be used.
 ```maxon
 type Wrapper
-    var data String
-    export var len int
+  var data String
+  export var len int
 end 'Wrapper'
 
 function main() returns int
-    var s = "hello"
-    var w = Wrapper{data: s, len: s.byteLength()}
-    return s.byteLength()
+  var s = "hello"
+  var w = Wrapper{data: s, len: s.byteLength()}
+  return s.byteLength()
 end 'main'
 ```
 ```maxoncstderr
@@ -263,13 +263,13 @@ error E4010: use after move: 's'
 Moving an immutable value into an immutable field is allowed.
 ```maxon
 type Token
-    export let text String
+  export let text String
 end 'Token'
 
 function main() returns int
-    let s = "hello"
-    let t = Token{text: s}
-    return t.text.byteLength()
+  let s = "hello"
+  let t = Token{text: s}
+  return t.text.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -280,13 +280,13 @@ end 'main'
 Moving a mutable value into an immutable field is allowed.
 ```maxon
 type Token
-    export let text String
+  export let text String
 end 'Token'
 
 function main() returns int
-    var s = "hello"
-    let t = Token{text: s}
-    return t.text.byteLength()
+  var s = "hello"
+  let t = Token{text: s}
+  return t.text.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -297,13 +297,13 @@ end 'main'
 Moving a mutable value into a mutable field is allowed.
 ```maxon
 type Wrapper
-    export var data String
+  export var data String
 end 'Wrapper'
 
 function main() returns int
-    var s = "hello"
-    let w = Wrapper{data: s}
-    return w.data.byteLength()
+  var s = "hello"
+  let w = Wrapper{data: s}
+  return w.data.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -314,13 +314,13 @@ end 'main'
 Moving an immutable value into a mutable field is not allowed.
 ```maxon
 type Wrapper
-    var data String
+  var data String
 end 'Wrapper'
 
 function main() returns int
-    let s = "hello"
-    var w = Wrapper{data: s}
-    return 0
+  let s = "hello"
+  var w = Wrapper{data: s}
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -331,18 +331,18 @@ error E4011: cannot move from immutable variable: 's'
 When a parameter is used in a `var` struct field, the caller's variable should be moved.
 ```maxon
 type Wrapper
-    var data String
+  var data String
 end 'Wrapper'
 
 function wrap(s String) returns Wrapper
-    return {data: s}
+  return {data: s}
 end 'wrap'
 
 function main() returns int
-    var text = "hello"
-    var w1 = wrap(text)
-    var w2 = wrap(text)
-    return 0
+  var text = "hello"
+  var w1 = wrap(text)
+  var w2 = wrap(text)
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -353,18 +353,18 @@ error E4010: use after move: 'text'
 When a parameter is used in a `let` struct field, the caller's variable should be borrowed (no move).
 ```maxon
 type Token
-    export let text String
+  export let text String
 end 'Token'
 
 function tokenize(s String) returns Token
-    return {text: s}
+  return {text: s}
 end 'tokenize'
 
 function main() returns int
-    var text = "hello"
-    var t1 = tokenize(text)
-    var t2 = tokenize(text)
-    return t1.text.byteLength() + t2.text.byteLength()
+  var text = "hello"
+  var t1 = tokenize(text)
+  var t2 = tokenize(text)
+  return t1.text.byteLength() + t2.text.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -375,17 +375,17 @@ end 'main'
 A single use of parameter in `var` field should work.
 ```maxon
 type Wrapper
-    export var data String
+  export var data String
 end 'Wrapper'
 
 function wrap(s String) returns Wrapper
-    return {data: s}
+  return {data: s}
 end 'wrap'
 
 function main() returns int
-    var text = "hello"
-    var w = wrap(text)
-    return w.data.byteLength()
+  var text = "hello"
+  var w = wrap(text)
+  return w.data.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -396,13 +396,13 @@ end 'main'
 Cannot use a moved variable in an expression.
 ```maxon
 function consume(x int)
-    x = x + 1
+  x = x + 1
 end 'consume'
 
 function main() returns int
-    var a = 42
-    consume(a)
-    return a + 10
+  var a = 42
+  consume(a)
+  return a + 10
 end 'main'
 ```
 ```maxoncstderr
@@ -419,15 +419,15 @@ These tests verify that the borrow checker prevents use-after-free and double-fr
 Moving a variable in an if branch makes it unavailable after the if statement.
 ```maxon
 function consume(x int)
-    x = x + 1
+  x = x + 1
 end 'consume'
 
 function main() returns int
-    var a = 42
-    if true 'cond'
-        consume(a)
-    end 'cond'
-    return a
+  var a = 42
+  if true 'cond'
+    consume(a)
+  end 'cond'
+  return a
 end 'main'
 ```
 ```maxoncstderr
@@ -438,17 +438,17 @@ error E4010: use after move: 'a'
 Using a moved variable on the next loop iteration is an error.
 ```maxon
 function consume(x int)
-    x = x + 1
+  x = x + 1
 end 'consume'
 
 function main() returns int
-    var a = 42
-    var i = 0
-    while i < 3 'loop'
-        consume(a)
-        i = i + 1
-    end 'loop'
-    return 0
+  var a = 42
+  var i = 0
+  while i < 3 'loop'
+    consume(a)
+    i = i + 1
+  end 'loop'
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -459,14 +459,14 @@ error E4010: use after move: 'a'
 Reassignment after move restores ownership for primitives.
 ```maxon
 function consume(x int)
-    x = x + 1
+  x = x + 1
 end 'consume'
 
 function main() returns int
-    var a = 10
-    consume(a)
-    a = 20
-    return a
+  var a = 10
+  consume(a)
+  a = 20
+  return a
 end 'main'
 ```
 ```exitcode
@@ -483,16 +483,16 @@ The caller allocates, the callee (mutateFirst) takes ownership and frees.
 typealias IntArray is Array with int
 
 function mutateFirst(arr IntArray) returns int
-    arr.set(0, value: 100)
-    return try arr.get(0) otherwise 0
+  arr.set(0, value: 100)
+  return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
 function main() returns int
-    let size = 3
-    var arr = IntArray{}
-    arr.resize(size)
-    arr.set(0, value: 42)
-    return mutateFirst(arr)
+  let size = 3
+  var arr = IntArray{}
+  arr.resize(size)
+  arr.set(0, value: 42)
+  return mutateFirst(arr)
 end 'main'
 ```
 ```exitcode
@@ -524,28 +524,28 @@ Moves in mutually exclusive if branches with returns should not conflict.
 When an if branch terminates with a return, the move only affects that branch.
 ```maxon
 type Position
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Position'
 
 function testMutuallyExclusiveMoves(choice int) returns int
-    var pos = Position{x: 10, y: 20}
+  var pos = Position{x: 10, y: 20}
 
-    if choice == 1 'first'
-        var temp = pos
-        return temp.x
-    end 'first'
+  if choice == 1 'first'
+    var temp = pos
+    return temp.x
+  end 'first'
 
-    if choice == 2 'second'
-        var temp = pos
-        return temp.y
-    end 'second'
+  if choice == 2 'second'
+    var temp = pos
+    return temp.y
+  end 'second'
 
-    return pos.x + pos.y
+  return pos.x + pos.y
 end 'testMutuallyExclusiveMoves'
 
 function main() returns int
-    return testMutuallyExclusiveMoves(1)
+  return testMutuallyExclusiveMoves(1)
 end 'main'
 ```
 ```exitcode
@@ -556,28 +556,28 @@ end 'main'
 Same test, but taking the second branch.
 ```maxon
 type Position
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Position'
 
 function testMutuallyExclusiveMoves(choice int) returns int
-    var pos = Position{x: 10, y: 20}
+  var pos = Position{x: 10, y: 20}
 
-    if choice == 1 'first'
-        var temp = pos
-        return temp.x
-    end 'first'
+  if choice == 1 'first'
+    var temp = pos
+    return temp.x
+  end 'first'
 
-    if choice == 2 'second'
-        var temp = pos
-        return temp.y
-    end 'second'
+  if choice == 2 'second'
+    var temp = pos
+    return temp.y
+  end 'second'
 
-    return pos.x + pos.y
+  return pos.x + pos.y
 end 'testMutuallyExclusiveMoves'
 
 function main() returns int
-    return testMutuallyExclusiveMoves(2)
+  return testMutuallyExclusiveMoves(2)
 end 'main'
 ```
 ```exitcode
@@ -588,28 +588,28 @@ end 'main'
 When neither branch is taken, the variable is still usable.
 ```maxon
 type Position
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Position'
 
 function testMutuallyExclusiveMoves(choice int) returns int
-    var pos = Position{x: 10, y: 20}
+  var pos = Position{x: 10, y: 20}
 
-    if choice == 1 'first'
-        var temp = pos
-        return temp.x
-    end 'first'
+  if choice == 1 'first'
+    var temp = pos
+    return temp.x
+  end 'first'
 
-    if choice == 2 'second'
-        var temp = pos
-        return temp.y
-    end 'second'
+  if choice == 2 'second'
+    var temp = pos
+    return temp.y
+  end 'second'
 
-    return pos.x + pos.y
+  return pos.x + pos.y
 end 'testMutuallyExclusiveMoves'
 
 function main() returns int
-    return testMutuallyExclusiveMoves(3)
+  return testMutuallyExclusiveMoves(3)
 end 'main'
 ```
 ```exitcode
@@ -620,24 +620,24 @@ end 'main'
 When the then branch terminates with return, else branch sees original ownership.
 ```maxon
 type Position
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Position'
 
 function test(take_first bool) returns int
-    var pos = Position{x: 10, y: 20}
+  var pos = Position{x: 10, y: 20}
 
-    if take_first 'branch'
-        var temp = pos  // Move pos
-        return temp.x
-    end 'branch' else 'other'
-        // pos should still be owned here since then returned
-        return pos.y
-    end 'other'
+  if take_first 'branch'
+    var temp = pos  // Move pos
+    return temp.x
+  end 'branch' else 'other'
+    // pos should still be owned here since then returned
+    return pos.y
+  end 'other'
 end 'test'
 
 function main() returns int
-    return test(false)
+  return test(false)
 end 'main'
 ```
 ```exitcode
@@ -648,20 +648,20 @@ end 'main'
 When the else branch terminates with return, code after if-else sees then branch state.
 ```maxon
 function test(take_first bool) returns int
-    var x = 10
+  var x = 10
 
-    if take_first 'branch'
-        x = x + 5
-    end 'branch' else 'other'
-        return 99
-    end 'other'
+  if take_first 'branch'
+    x = x + 5
+  end 'branch' else 'other'
+    return 99
+  end 'other'
 
-    // Only reachable if take_first was true
-    return x
+  // Only reachable if take_first was true
+  return x
 end 'test'
 
 function main() returns int
-    return test(true)
+  return test(true)
 end 'main'
 ```
 ```exitcode
@@ -672,17 +672,17 @@ end 'main'
 Match cases are mutually exclusive, returning from one case doesn't affect others.
 ```maxon
 function test(choice int) returns int
-    var x = 10
+  var x = 10
 
-    match choice 'select'
-        1 then return x + 1
-        2 then return x + 2
-        default then return x
-    end 'select'
+  match choice 'select'
+    1 then return x + 1
+    2 then return x + 2
+    default then return x
+  end 'select'
 end 'test'
 
 function main() returns int
-    return test(1)
+  return test(1)
 end 'main'
 ```
 ```exitcode
@@ -693,17 +693,17 @@ end 'main'
 Match default case executes when no other cases match.
 ```maxon
 function test(choice int) returns int
-    var x = 10
+  var x = 10
 
-    match choice 'select'
-        1 then return x + 1
-        2 then return x + 2
-        default then return x
-    end 'select'
+  match choice 'select'
+    1 then return x + 1
+    2 then return x + 2
+    default then return x
+  end 'select'
 end 'test'
 
 function main() returns int
-    return test(99)
+  return test(99)
 end 'main'
 ```
 ```exitcode
@@ -714,28 +714,28 @@ end 'main'
 Nested if statements with returns restore ownership correctly.
 ```maxon
 type Position
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Position'
 
 function test(a int, b int) returns int
-    var pos = Position{x: 10, y: 20}
+  var pos = Position{x: 10, y: 20}
 
-    if a == 1 'outer'
-        if b == 1 'inner'
-            var temp = pos
-            return temp.x
-        end 'inner'
-        // pos still owned here if inner didn't match
-        return pos.y
-    end 'outer'
+  if a == 1 'outer'
+    if b == 1 'inner'
+      var temp = pos
+      return temp.x
+    end 'inner'
+    // pos still owned here if inner didn't match
+    return pos.y
+  end 'outer'
 
-    // pos still owned here if outer didn't match
-    return pos.x + pos.y
+  // pos still owned here if outer didn't match
+  return pos.x + pos.y
 end 'test'
 
 function main() returns int
-    return test(2, b: 2)
+  return test(2, b: 2)
 end 'main'
 ```
 ```exitcode

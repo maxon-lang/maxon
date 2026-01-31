@@ -36,8 +36,8 @@ var z = min(-1.0, 1.0)   // -1.0
 <!-- test: min.basic -->
 ```maxon
 function main() returns int
-    var x = min(3.0, 5.0)
-    return trunc(x)
+  var x = min(3.0, 5.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -47,8 +47,8 @@ end 'main'
 <!-- test: min.second-smaller -->
 ```maxon
 function main() returns int
-    var x = min(10.0, 2.0)
-    return trunc(x)
+  var x = min(10.0, 2.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -58,8 +58,8 @@ end 'main'
 <!-- test: min.negative -->
 ```maxon
 function main() returns int
-    var x = min(-5.0, 3.0)
-    return trunc(x)
+  var x = min(-5.0, 3.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -69,8 +69,8 @@ end 'main'
 <!-- test: min.both-negative -->
 ```maxon
 function main() returns int
-    var x = min(-2.0, -8.0)
-    return trunc(x)
+  var x = min(-2.0, -8.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -80,8 +80,8 @@ end 'main'
 <!-- test: min.equal-values -->
 ```maxon
 function main() returns int
-    var x = min(7.0, 7.0)
-    return trunc(x)
+  var x = min(7.0, 7.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -91,9 +91,9 @@ end 'main'
 <!-- test: min.fractional -->
 ```maxon
 function main() returns int
-    var x = min(3.5, 5.2)
-    // min of 3.5 and 5.2 is 3.5, trunc gives 3
-    return trunc(x)
+  var x = min(3.5, 5.2)
+  // min of 3.5 and 5.2 is 3.5, trunc gives 3
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -103,11 +103,11 @@ end 'main'
 <!-- test: min.zero -->
 ```maxon
 function main() returns int
-    var x = min(0.0, 5.0)
-    if x == 0.0 'check'
-        return 0
-    end 'check'
-    return 1
+  var x = min(0.0, 5.0)
+  if x == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode

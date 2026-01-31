@@ -2,351 +2,351 @@
 // Tokenizes source code into a stream of tokens
 
 export enum TokenType
-	// Keywords
-	function
-	returns
-	return
-	end
-	int
-	float
-	bool
-	byte
-	let
-	var
-	if
-	else
-	while
-	for
-	break
-	continue
-	true
-	false
-	and
-	or
-	not
-	mod
-	in
-	export
+  // Keywords
+  function
+  returns
+  return
+  end
+  int
+  float
+  bool
+  byte
+  let
+  var
+  if
+  else
+  while
+  for
+  break
+  continue
+  true
+  false
+  and
+  or
+  not
+  mod
+  in
+  export
 
-	// Literals
-	identifier
-	integerLiteral
-	floatLiteral
-	stringLiteral
-	characterLiteral
+  // Literals
+  identifier
+  integerLiteral
+  floatLiteral
+  stringLiteral
+  characterLiteral
 
-	// Operators
-	plus
-	minus
-	star
-	slash
-	assign
-	equalEqual
-	notEqual
-	less
-	lessEqual
-	greater
-	greaterEqual
-	comma
-	colon
-	dot
+  // Operators
+  plus
+  minus
+  star
+  slash
+  assign
+  equalEqual
+  notEqual
+  less
+  lessEqual
+  greater
+  greaterEqual
+  comma
+  colon
+  dot
 
-	// Delimiters
-	lparen
-	rparen
-	lbrace
-	rbrace
-	lbracket
-	rbracket
+  // Delimiters
+  lparen
+  rparen
+  lbrace
+  rbrace
+  lbracket
+  rbracket
 
-	// Special
-	newline
-	eof
-	errorToken    // For error-tolerant lexing
+  // Special
+  newline
+  eof
+  errorToken    // For error-tolerant lexing
 end 'TokenType'
 
 export enum KeywordCategory
-	control
-	other
-	logical
-	constant
-	type_keyword
+  control
+  other
+  logical
+  constant
+  type_keyword
 end 'KeywordCategory'
 
 export type KeywordInfo
-	export var text String
-	export var category KeywordCategory
-	export var description String
-	export var requiresLabel bool
+  export var text String
+  export var category KeywordCategory
+  export var description String
+  export var requiresLabel bool
 end 'KeywordInfo'
 
 typealias TokenTypeMap is Map with (TokenType, KeywordInfo)
 
 export let keyword_map = [
-	TokenType.function: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function.", requiresLabel: false},
-	TokenType.returns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
-	TokenType.return: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function.", requiresLabel: false},
-	TokenType.end: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block.", requiresLabel: true},
-	TokenType.let: KeywordInfo{text: "let", category: KeywordCategory.other, description: "Declares an immutable variable.", requiresLabel: false},
-	TokenType.var: KeywordInfo{text: "var", category: KeywordCategory.other, description: "Declares a mutable variable.", requiresLabel: false},
-	TokenType.if: KeywordInfo{text: "if", category: KeywordCategory.control, description: "Conditional statement.", requiresLabel: true},
-	TokenType.else: KeywordInfo{text: "else", category: KeywordCategory.control, description: "Alternative branch.", requiresLabel: false},
-	TokenType.while: KeywordInfo{text: "while", category: KeywordCategory.control, description: "Loop statement.", requiresLabel: true},
-	TokenType.for: KeywordInfo{text: "for", category: KeywordCategory.control, description: "Iterator loop.", requiresLabel: true},
-	TokenType.break: KeywordInfo{text: "break", category: KeywordCategory.control, description: "Exit a loop.", requiresLabel: false},
-	TokenType.continue: KeywordInfo{text: "continue", category: KeywordCategory.control, description: "Skip to next iteration.", requiresLabel: false}
+  TokenType.function: KeywordInfo{text: "function", category: KeywordCategory.other, description: "Declares a function.", requiresLabel: false},
+  TokenType.returns: KeywordInfo{text: "returns", category: KeywordCategory.other, description: "Specifies the return type of a function.", requiresLabel: false},
+  TokenType.return: KeywordInfo{text: "return", category: KeywordCategory.control, description: "Returns a value from a function.", requiresLabel: false},
+  TokenType.end: KeywordInfo{text: "end", category: KeywordCategory.control, description: "Ends a block.", requiresLabel: true},
+  TokenType.let: KeywordInfo{text: "let", category: KeywordCategory.other, description: "Declares an immutable variable.", requiresLabel: false},
+  TokenType.var: KeywordInfo{text: "var", category: KeywordCategory.other, description: "Declares a mutable variable.", requiresLabel: false},
+  TokenType.if: KeywordInfo{text: "if", category: KeywordCategory.control, description: "Conditional statement.", requiresLabel: true},
+  TokenType.else: KeywordInfo{text: "else", category: KeywordCategory.control, description: "Alternative branch.", requiresLabel: false},
+  TokenType.while: KeywordInfo{text: "while", category: KeywordCategory.control, description: "Loop statement.", requiresLabel: true},
+  TokenType.for: KeywordInfo{text: "for", category: KeywordCategory.control, description: "Iterator loop.", requiresLabel: true},
+  TokenType.break: KeywordInfo{text: "break", category: KeywordCategory.control, description: "Exit a loop.", requiresLabel: false},
+  TokenType.continue: KeywordInfo{text: "continue", category: KeywordCategory.control, description: "Skip to next iteration.", requiresLabel: false}
 ]
 
 /// A single token with type, text, and position
 export type Token
-	export let tokenType TokenType
-	export let text String
-	export let line int
-	export let column int
+  export let tokenType TokenType
+  export let text String
+  export let line int
+  export let column int
 
-	export static function create(tokenType TokenType, text String, line int, column int) returns Token
-		return {tokenType: tokenType, text: text, line: line, column: column}
-	end 'create'
+  export static function create(tokenType TokenType, text String, line int, column int) returns Token
+    return {tokenType: tokenType, text: text, line: line, column: column}
+  end 'create'
 end 'Token'
 
 export typealias TokenArray is Array with Token
 
 /// Lexer state for tokenizing source code
 export type Lexer
-	let source String
-	let sourceFile String
-	var pos int
-	var line int
-	var column int
-	export var errors ErrorCollector
+  let source String
+  let sourceFile String
+  var pos int
+  var line int
+  var column int
+  export var errors ErrorCollector
 
-	export static function init(source String, sourceFile String) returns Lexer
-		return {source: source, sourceFile: sourceFile, pos: 0, line: 1, column: 1, errors: ErrorCollector.create()}
-	end 'init'
+  export static function init(source String, sourceFile String) returns Lexer
+    return {source: source, sourceFile: sourceFile, pos: 0, line: 1, column: 1, errors: ErrorCollector.create()}
+  end 'init'
 
-	export function tokenize() returns TokenArray
-		var tokens = TokenArray{}
+  export function tokenize() returns TokenArray
+    var tokens = TokenArray{}
 
-		while not isAtEnd() 'mainLoop'
-			skipWhitespaceExceptNewline()
+    while not isAtEnd() 'mainLoop'
+      skipWhitespaceExceptNewline()
 
-			if isAtEnd() 'checkEnd'
-				break 'mainLoop'
-			end 'checkEnd'
+      if isAtEnd() 'checkEnd'
+        break 'mainLoop'
+      end 'checkEnd'
 
-			let c = peek()
+      let c = peek()
 
-			match c 'dispatch'
-			'\n' then tokens.push(scanNewline())
-			'(' then tokens.push(scanSingleChar(TokenType.lparen, text: "("))
-			')' then tokens.push(scanSingleChar(TokenType.rparen, text: ")"))
-			'{' then tokens.push(scanSingleChar(TokenType.lbrace, text: "\{"))
-			'}' then tokens.push(scanSingleChar(TokenType.rbrace, text: "}"))
-			'[' then tokens.push(scanSingleChar(TokenType.lbracket, text: "["))
-			']' then tokens.push(scanSingleChar(TokenType.rbracket, text: "]"))
-			',' then tokens.push(scanSingleChar(TokenType.comma, text: ","))
-			':' then tokens.push(scanSingleChar(TokenType.colon, text: ":"))
-			'.' then tokens.push(scanSingleChar(TokenType.dot, text: "."))
-			'+' then tokens.push(scanSingleChar(TokenType.plus, text: "+"))
-			'-' then tokens.push(scanSingleChar(TokenType.minus, text: "-"))
-			'*' then tokens.push(scanSingleChar(TokenType.star, text: "*"))
-			'/' then scanSlashOrComment(tokens)
-			'=' then tokens.push(scanTwoCharOp(singleType: TokenType.assign, singleText: "=", nextChar: '=', doubleType: TokenType.equalEqual, doubleText: "=="))
-			'!' then scanBang(tokens)
-			'<' then tokens.push(scanTwoCharOp(singleType: TokenType.less, singleText: "<", nextChar: '=', doubleType: TokenType.lessEqual, doubleText: "<="))
-			'>' then tokens.push(scanTwoCharOp(singleType: TokenType.greater, singleText: ">", nextChar: '=', doubleType: TokenType.greaterEqual, doubleText: ">="))
-			'\'' then tokens.push(scanDelimitedLiteral(delimiter: '\'', tokenType: TokenType.characterLiteral, errorMsg: "unterminated character literal", handleEscapes: false))
-			'"' then tokens.push(scanDelimitedLiteral(delimiter: '"', tokenType: TokenType.stringLiteral, errorMsg: "unterminated string literal", handleEscapes: true))
-			'0'..='9' then tokens.push(scanNumber())
-			'a'..='z' or 'A'..='Z' or '_' then tokens.push(scanIdentifierOrKeyword())
-			default then tokens.push(scanErrorToken())
-			end 'dispatch'
-		end 'mainLoop'
+      match c 'dispatch'
+      '\n' then tokens.push(scanNewline())
+      '(' then tokens.push(scanSingleChar(TokenType.lparen, text: "("))
+      ')' then tokens.push(scanSingleChar(TokenType.rparen, text: ")"))
+      '{' then tokens.push(scanSingleChar(TokenType.lbrace, text: "\{"))
+      '}' then tokens.push(scanSingleChar(TokenType.rbrace, text: "}"))
+      '[' then tokens.push(scanSingleChar(TokenType.lbracket, text: "["))
+      ']' then tokens.push(scanSingleChar(TokenType.rbracket, text: "]"))
+      ',' then tokens.push(scanSingleChar(TokenType.comma, text: ","))
+      ':' then tokens.push(scanSingleChar(TokenType.colon, text: ":"))
+      '.' then tokens.push(scanSingleChar(TokenType.dot, text: "."))
+      '+' then tokens.push(scanSingleChar(TokenType.plus, text: "+"))
+      '-' then tokens.push(scanSingleChar(TokenType.minus, text: "-"))
+      '*' then tokens.push(scanSingleChar(TokenType.star, text: "*"))
+      '/' then scanSlashOrComment(tokens)
+      '=' then tokens.push(scanTwoCharOp(singleType: TokenType.assign, singleText: "=", nextChar: '=', doubleType: TokenType.equalEqual, doubleText: "=="))
+      '!' then scanBang(tokens)
+      '<' then tokens.push(scanTwoCharOp(singleType: TokenType.less, singleText: "<", nextChar: '=', doubleType: TokenType.lessEqual, doubleText: "<="))
+      '>' then tokens.push(scanTwoCharOp(singleType: TokenType.greater, singleText: ">", nextChar: '=', doubleType: TokenType.greaterEqual, doubleText: ">="))
+      '\'' then tokens.push(scanDelimitedLiteral(delimiter: '\'', tokenType: TokenType.characterLiteral, errorMsg: "unterminated character literal", handleEscapes: false))
+      '"' then tokens.push(scanDelimitedLiteral(delimiter: '"', tokenType: TokenType.stringLiteral, errorMsg: "unterminated string literal", handleEscapes: true))
+      '0'..='9' then tokens.push(scanNumber())
+      'a'..='z' or 'A'..='Z' or '_' then tokens.push(scanIdentifierOrKeyword())
+      default then tokens.push(scanErrorToken())
+      end 'dispatch'
+    end 'mainLoop'
 
-		tokens.push(makeToken(TokenType.eof, text: ""))
+    tokens.push(makeToken(TokenType.eof, text: ""))
 
-		return tokens
-	end 'tokenize'
+    return tokens
+  end 'tokenize'
 
-	function scanErrorToken() returns Token
-		let tok = makeToken(TokenType.errorToken, text: "")
-		errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
-		advance()
-		return tok
-	end 'scanErrorToken'
+  function scanErrorToken() returns Token
+    let tok = makeToken(TokenType.errorToken, text: "")
+    errors.addErrorAt(ErrorCode.E1001, message: "invalid character", file: sourceFile, line: line, column: column)
+    advance()
+    return tok
+  end 'scanErrorToken'
 
-	function scanNewline() returns Token
-		let tok = makeToken(TokenType.newline, text: "\n")
-		advance()
-		line = line + 1
-		column = 1
-		return tok
-	end 'scanNewline'
+  function scanNewline() returns Token
+    let tok = makeToken(TokenType.newline, text: "\n")
+    advance()
+    line = line + 1
+    column = 1
+    return tok
+  end 'scanNewline'
 
-	function scanSingleChar(tokenType TokenType, text String) returns Token
-		let tok = makeToken(tokenType, text: text)
-		advance()
-		return tok
-	end 'scanSingleChar'
+  function scanSingleChar(tokenType TokenType, text String) returns Token
+    let tok = makeToken(tokenType, text: text)
+    advance()
+    return tok
+  end 'scanSingleChar'
 
-	function scanTwoCharOp(singleType TokenType, singleText String, nextChar Character, doubleType TokenType, doubleText String) returns Token
-		if peekNext() == nextChar 'isDouble'
-			let tok = makeToken(doubleType, text: doubleText)
-			advance()
-			advance()
-			return tok
-		end 'isDouble'
-		return scanSingleChar(singleType, text: singleText)
-	end 'scanTwoCharOp'
+  function scanTwoCharOp(singleType TokenType, singleText String, nextChar Character, doubleType TokenType, doubleText String) returns Token
+    if peekNext() == nextChar 'isDouble'
+      let tok = makeToken(doubleType, text: doubleText)
+      advance()
+      advance()
+      return tok
+    end 'isDouble'
+    return scanSingleChar(singleType, text: singleText)
+  end 'scanTwoCharOp'
 
-	function scanSlashOrComment(tokens TokenArray)
-		if peekNext() == '/' 'isComment'
-			skipToEndOfLine()
-		end 'isComment' else 'notComment'
-			tokens.push(scanSingleChar(TokenType.slash, text: "/"))
-		end 'notComment'
-	end 'scanSlashOrComment'
+  function scanSlashOrComment(tokens TokenArray)
+    if peekNext() == '/' 'isComment'
+      skipToEndOfLine()
+    end 'isComment' else 'notComment'
+      tokens.push(scanSingleChar(TokenType.slash, text: "/"))
+    end 'notComment'
+  end 'scanSlashOrComment'
 
-	function scanBang(tokens TokenArray)
-		if peekNext() == '=' 'isNotEqual'
-			let tok = makeToken(TokenType.notEqual, text: "!=")
-			advance()
-			advance()
-			tokens.push(tok)
-		end 'isNotEqual' else 'error'
-			// Bare ! is not valid - 'not' is the keyword
-			tokens.push(scanErrorToken())
-		end 'error'
-	end 'scanBang'
+  function scanBang(tokens TokenArray)
+    if peekNext() == '=' 'isNotEqual'
+      let tok = makeToken(TokenType.notEqual, text: "!=")
+      advance()
+      advance()
+      tokens.push(tok)
+    end 'isNotEqual' else 'error'
+      // Bare ! is not valid - 'not' is the keyword
+      tokens.push(scanErrorToken())
+    end 'error'
+  end 'scanBang'
 
-	function scanDelimitedLiteral(delimiter Character, tokenType TokenType, errorMsg String, handleEscapes bool) returns Token
-		let startCol = column
-		let startLine = line
-		advance()  // skip opening delimiter
-		let textStart = pos
-		while not isAtEnd() and peek() != delimiter and peek() != '\n' 'collectChars'
-			if handleEscapes and peek() == '\\' 'isEscape'
-				advance()
-				if not isAtEnd() 'hasEscaped'
-					advance()
-				end 'hasEscaped'
-			end 'isEscape' else 'normalChar'
-				advance()
-			end 'normalChar'
-		end 'collectChars'
-		let text = extractSubstring(textStart, endPos: pos)
-		if not isAtEnd() and peek() == delimiter 'hasClose'
-			advance()
-		end 'hasClose' else 'noClose'
-			errors.addErrorAt(ErrorCode.E1002, message: errorMsg, file: sourceFile, line: startLine, column: startCol)
-		end 'noClose'
-		return Token.create(tokenType, text: text, line: startLine, column: startCol)
-	end 'scanDelimitedLiteral'
+  function scanDelimitedLiteral(delimiter Character, tokenType TokenType, errorMsg String, handleEscapes bool) returns Token
+    let startCol = column
+    let startLine = line
+    advance()  // skip opening delimiter
+    let textStart = pos
+    while not isAtEnd() and peek() != delimiter and peek() != '\n' 'collectChars'
+      if handleEscapes and peek() == '\\' 'isEscape'
+        advance()
+        if not isAtEnd() 'hasEscaped'
+          advance()
+        end 'hasEscaped'
+      end 'isEscape' else 'normalChar'
+        advance()
+      end 'normalChar'
+    end 'collectChars'
+    let text = extractSubstring(textStart, endPos: pos)
+    if not isAtEnd() and peek() == delimiter 'hasClose'
+      advance()
+    end 'hasClose' else 'noClose'
+      errors.addErrorAt(ErrorCode.E1002, message: errorMsg, file: sourceFile, line: startLine, column: startCol)
+    end 'noClose'
+    return Token.create(tokenType, text: text, line: startLine, column: startCol)
+  end 'scanDelimitedLiteral'
 
-	function isAtEnd() returns bool
-		return pos >= source.byteLength()
-	end 'isAtEnd'
+  function isAtEnd() returns bool
+    return pos >= source.byteLength()
+  end 'isAtEnd'
 
-	function peek() returns Character
-		if isAtEnd() 'atEnd'
-			return '\0'
-		end 'atEnd'
-		return source.charAt(byteIndexToStringIndex(pos))
-	end 'peek'
+  function peek() returns Character
+    if isAtEnd() 'atEnd'
+      return '\0'
+    end 'atEnd'
+    return source.charAt(byteIndexToStringIndex(pos))
+  end 'peek'
 
-	function peekNext() returns Character
-		let nextPos = pos + 1
-		if nextPos >= source.byteLength() 'atEnd'
-			return '\0'
-		end 'atEnd'
-		return source.charAt(byteIndexToStringIndex(nextPos))
-	end 'peekNext'
+  function peekNext() returns Character
+    let nextPos = pos + 1
+    if nextPos >= source.byteLength() 'atEnd'
+      return '\0'
+    end 'atEnd'
+    return source.charAt(byteIndexToStringIndex(nextPos))
+  end 'peekNext'
 
-	function byteIndexToStringIndex(byteIdx int) returns StringIndex
-		var idx = source.startIndex()
-		var i = 0
-		while i < byteIdx 'walk'
-			if let nextIdx = try source.indexAfter(idx) 'getNext'
-				idx = nextIdx
-			end 'getNext' else 'noMore'
-				break 'walk'
-			end 'noMore'
-			i = i + 1
-		end 'walk'
-		return idx
-	end 'byteIndexToStringIndex'
+  function byteIndexToStringIndex(byteIdx int) returns StringIndex
+    var idx = source.startIndex()
+    var i = 0
+    while i < byteIdx 'walk'
+      if let nextIdx = try source.indexAfter(idx) 'getNext'
+        idx = nextIdx
+      end 'getNext' else 'noMore'
+        break 'walk'
+      end 'noMore'
+      i = i + 1
+    end 'walk'
+    return idx
+  end 'byteIndexToStringIndex'
 
-	function advance() returns Character
-		if isAtEnd() 'atEnd'
-			return '\0'
-		end 'atEnd'
-		let c = peek()
-		pos = pos + 1
-		column = column + 1
-		return c
-	end 'advance'
+  function advance() returns Character
+    if isAtEnd() 'atEnd'
+      return '\0'
+    end 'atEnd'
+    let c = peek()
+    pos = pos + 1
+    column = column + 1
+    return c
+  end 'advance'
 
-	function skipWhitespaceExceptNewline()
-		while not isAtEnd() 'skipLoop'
-			let c = peek()
-			if c == ' ' or c == '\t' or c == '\r' 'isWhitespace'
-				advance()
-			end 'isWhitespace' else 'notWhitespace'
-				break 'skipLoop'
-			end 'notWhitespace'
-		end 'skipLoop'
-	end 'skipWhitespaceExceptNewline'
+  function skipWhitespaceExceptNewline()
+    while not isAtEnd() 'skipLoop'
+      let c = peek()
+      if c == ' ' or c == '\t' or c == '\r' 'isWhitespace'
+        advance()
+      end 'isWhitespace' else 'notWhitespace'
+        break 'skipLoop'
+      end 'notWhitespace'
+    end 'skipLoop'
+  end 'skipWhitespaceExceptNewline'
 
-	function skipToEndOfLine()
-		while not isAtEnd() and peek() != '\n' 'skipLoop'
-			advance()
-		end 'skipLoop'
-	end 'skipToEndOfLine'
+  function skipToEndOfLine()
+    while not isAtEnd() and peek() != '\n' 'skipLoop'
+      advance()
+    end 'skipLoop'
+  end 'skipToEndOfLine'
 
-	function makeToken(tokenType TokenType, text String) returns Token
-		return Token.create(tokenType, text: text, line: line, column: column)
-	end 'makeToken'
+  function makeToken(tokenType TokenType, text String) returns Token
+    return Token.create(tokenType, text: text, line: line, column: column)
+  end 'makeToken'
 
-	function scanNumber() returns Token
-		let startCol = column
-		let startPos = pos
-		while not isAtEnd() and Ascii.isDigit(peek()) 'digits'
-			advance()
-		end 'digits'
+  function scanNumber() returns Token
+    let startCol = column
+    let startPos = pos
+    while not isAtEnd() and Ascii.isDigit(peek()) 'digits'
+      advance()
+    end 'digits'
 
-		// Check for decimal point (float)
-		if peek() == '.' and Ascii.isDigit(peekNext()) 'isFloat'
-			advance()  // consume the dot
-			while not isAtEnd() and Ascii.isDigit(peek()) 'fracDigits'
-				advance()
-			end 'fracDigits'
-			let text = extractSubstring(startPos, endPos: pos)
-			return Token.create(TokenType.floatLiteral, text: text, line: line, column: startCol)
-		end 'isFloat'
+    // Check for decimal point (float)
+    if peek() == '.' and Ascii.isDigit(peekNext()) 'isFloat'
+      advance()  // consume the dot
+      while not isAtEnd() and Ascii.isDigit(peek()) 'fracDigits'
+        advance()
+      end 'fracDigits'
+      let text = extractSubstring(startPos, endPos: pos)
+      return Token.create(TokenType.floatLiteral, text: text, line: line, column: startCol)
+    end 'isFloat'
 
-		let text = extractSubstring(startPos, endPos: pos)
-		return Token.create(TokenType.integerLiteral, text: text, line: line, column: startCol)
-	end 'scanNumber'
+    let text = extractSubstring(startPos, endPos: pos)
+    return Token.create(TokenType.integerLiteral, text: text, line: line, column: startCol)
+  end 'scanNumber'
 
-	function scanIdentifierOrKeyword() returns Token
-		let startCol = column
-		let startPos = pos
-		advance()
-		while not isAtEnd() and isIdentifierContinue(peek()) 'identChars'
-			advance()
-		end 'identChars'
-		let text = extractSubstring(startPos, endPos: pos)
-		let tokType = try TokenType.fromName(text) otherwise TokenType.identifier
-		return Token.create(tokType, text: text, line: line, column: startCol)
-	end 'scanIdentifierOrKeyword'
+  function scanIdentifierOrKeyword() returns Token
+    let startCol = column
+    let startPos = pos
+    advance()
+    while not isAtEnd() and isIdentifierContinue(peek()) 'identChars'
+      advance()
+    end 'identChars'
+    let text = extractSubstring(startPos, endPos: pos)
+    let tokType = try TokenType.fromName(text) otherwise TokenType.identifier
+    return Token.create(tokType, text: text, line: line, column: startCol)
+  end 'scanIdentifierOrKeyword'
 
-	function extractSubstring(startPos int, endPos int) returns String
-		let startIdx = byteIndexToStringIndex(startPos)
-		let endIdx = byteIndexToStringIndex(endPos)
-		return source.slice(startIdx, endIndex: endIdx)
-	end 'extractSubstring'
+  function extractSubstring(startPos int, endPos int) returns String
+    let startIdx = byteIndexToStringIndex(startPos)
+    let endIdx = byteIndexToStringIndex(endPos)
+    return source.slice(startIdx, endIndex: endIdx)
+  end 'extractSubstring'
 
-	function isIdentifierContinue(c Character) returns bool
-		return Ascii.isAlpha(c) or Ascii.isDigit(c) or c == '_'
-	end 'isIdentifierContinue'
+  function isIdentifierContinue(c Character) returns bool
+    return Ascii.isAlpha(c) or Ascii.isDigit(c) or c == '_'
+  end 'isIdentifierContinue'
 end 'Lexer'

@@ -17,11 +17,11 @@ All arguments must be named using `name: value` syntax:
 
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(a: 3, b: 4)
+  return add(a: 3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -35,11 +35,11 @@ Named arguments can appear in any order:
 
 ```maxon
 function subtract(a int, b int) returns int
-    return a - b
+  return a - b
 end 'subtract'
 
 function main() returns int
-    return subtract(b: 3, a: 10)
+  return subtract(b: 3, a: 10)
 end 'main'
 ```
 ```exitcode
@@ -53,11 +53,11 @@ Parameters with default values can be omitted:
 
 ```maxon
 function repeat(value int, times int = 1) returns int
-    return value * times
+  return value * times
 end 'repeat'
 
 function main() returns int
-    return repeat(value: 7, times: 6)
+  return repeat(value: 7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -70,11 +70,11 @@ end 'main'
 <!-- test: named-args -->
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(a: 3, b: 4)
+  return add(a: 3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -84,11 +84,11 @@ end 'main'
 <!-- test: named-args-multiply -->
 ```maxon
 function multiply(x int, y int) returns int
-    return x * y
+  return x * y
 end 'multiply'
 
 function main() returns int
-    return multiply(x: 6, y: 7)
+  return multiply(x: 6, y: 7)
 end 'main'
 ```
 ```exitcode
@@ -98,11 +98,11 @@ end 'main'
 <!-- test: named-args-any-order -->
 ```maxon
 function subtract(a int, b int) returns int
-    return a - b
+  return a - b
 end 'subtract'
 
 function main() returns int
-    return subtract(b: 3, a: 10)
+  return subtract(b: 3, a: 10)
 end 'main'
 ```
 ```exitcode
@@ -112,11 +112,11 @@ end 'main'
 <!-- test: default-param-named -->
 ```maxon
 function repeat(value int, times int = 1) returns int
-    return value * times
+  return value * times
 end 'repeat'
 
 function main() returns int
-    return repeat(value: 7, times: 6)
+  return repeat(value: 7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -126,11 +126,11 @@ end 'main'
 <!-- test: default-param-omitted -->
 ```maxon
 function repeat(value int, times int = 2) returns int
-    return value * times
+  return value * times
 end 'repeat'
 
 function main() returns int
-    return repeat(value: 21)
+  return repeat(value: 21)
 end 'main'
 ```
 ```exitcode
@@ -140,11 +140,11 @@ end 'main'
 <!-- test: error-missing-param-name -->
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(3, 4)
+  return add(3, 4)
 end 'main'
 ```
 ```maxoncstderr
@@ -154,11 +154,11 @@ error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:7:12
 <!-- test: error-unknown-param-name -->
 ```maxon
 function greet(name int) returns int
-    return name
+  return name
 end 'greet'
 
 function main() returns int
-    return greet(person: 42)
+  return greet(person: 42)
 end 'main'
 ```
 ```maxoncstderr

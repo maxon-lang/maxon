@@ -20,10 +20,10 @@ variable = expression
 
 ```maxon
 function main() returns int
-    var x = 10
-    x = 20          // Update x
-    x = x + 5       // x is now 25
-    return x
+  var x = 10
+  x = 20          // Update x
+  x = x + 5       // x is now 25
+  return x
 end 'main'
 ```
 ```exitcode
@@ -42,9 +42,9 @@ end 'main'
 <!-- test: basic-assignment -->
 ```maxon
 function main() returns int
-    var x = 3
-    x = x + 2
-    return x
+  var x = 3
+  x = x + 2
+  return x
 end 'main'
 ```
 ```exitcode
@@ -55,11 +55,11 @@ end 'main'
 <!-- test: multiple-assignments -->
 ```maxon
 function main() returns int
-    var x = 10
-    var y = 20
-    x = y
-    y = 30
-    return x + y
+  var x = 10
+  var y = 20
+  x = y
+  y = 30
+  return x + y
 end 'main'
 ```
 ```exitcode
@@ -70,13 +70,13 @@ end 'main'
 <!-- test: assignment-in-loop -->
 ```maxon
 function main() returns int
-    var sum = 0
-    var i = 1
-    while i <= 5 'loop'
-        sum = sum + i
-        i = i + 1
-    end 'loop'
-    return sum
+  var sum = 0
+  var i = 1
+  while i <= 5 'loop'
+    sum = sum + i
+    i = i + 1
+  end 'loop'
+  return sum
 end 'main'
 ```
 ```exitcode

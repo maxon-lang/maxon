@@ -21,14 +21,14 @@ let total = 100
 
 ```maxon
 function factorial(n int) returns int
-    if n <= 1 'base'
-        return 1
-    end 'base'
-    return n * factorial(n - 1)
+  if n <= 1 'base'
+    return 1
+  end 'base'
+  return n * factorial(n - 1)
 end 'factorial'
 
 function main() returns int
-    return factorial(5)  // Returns 120
+  return factorial(5)  // Returns 120
 end 'main'
 ```
 ```exitcode
@@ -41,8 +41,8 @@ end 'main'
 <!-- test: basic-int -->
 ```maxon
 function main() returns int
-    var x = 42
-    return x
+  var x = 42
+  return x
 end 'main'
 ```
 ```exitcode
@@ -53,10 +53,10 @@ end 'main'
 <!-- test: int-arithmetic -->
 ```maxon
 function main() returns int
-    var a = 10
-    var b = 20
-    var sum = a + b
-    return sum
+  var a = 10
+  var b = 20
+  var sum = a + b
+  return sum
 end 'main'
 ```
 ```exitcode
@@ -67,12 +67,12 @@ end 'main'
 <!-- test: negative-int -->
 ```maxon
 function main() returns int
-    var x = -42
-    var y = -x
-    if y == 42 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = -42
+  var y = -x
+  if y == 42 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: int-expression -->
 ```maxon
 function main() returns int
-    return 2 + 3 * 4
+  return 2 + 3 * 4
 end 'main'
 ```
 ```exitcode

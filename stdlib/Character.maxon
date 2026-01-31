@@ -3,103 +3,103 @@
 
 // Character receives __ManagedMemory directly for literal initialization via BuiltinCharLiteral.
 export type Character is BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable
-	var _managed __ManagedMemory
+  var _managed __ManagedMemory
 
-	// Default type for character literals - compiler discovers this via BuiltinCharLiteral interface
-	static function BuiltinCharLiteral.init(managed __ManagedMemory) returns Character
-		return {_managed: managed}
-	end 'init'
+  // Default type for character literals - compiler discovers this via BuiltinCharLiteral interface
+  static function BuiltinCharLiteral.init(managed __ManagedMemory) returns Character
+    return {_managed: managed}
+  end 'init'
 
-	// Basic properties
-	export function byteLength() returns int
-		return __managed_memory_len(_managed)
-	end 'byteLength'
+  // Basic properties
+  export function byteLength() returns int
+    return __managed_memory_len(_managed)
+  end 'byteLength'
 
-	// View methods - returns ByteView for iterating over raw UTF-8 bytes
-	export function bytes() returns ByteView
-		return {_managed: _managed, _pos: 0}
-	end 'bytes'
+  // View methods - returns ByteView for iterating over raw UTF-8 bytes
+  export function bytes() returns ByteView
+    return {_managed: _managed, _pos: 0}
+  end 'bytes'
 
-	// View method - returns CodepointView for iterating over Unicode codepoints
-	export function codepoints() returns CodepointView
-		return {_managed: _managed, _pos: 0}
-	end 'codepoints'
+  // View method - returns CodepointView for iterating over Unicode codepoints
+  export function codepoints() returns CodepointView
+    return {_managed: _managed, _pos: 0}
+  end 'codepoints'
 
-	// Equatable conformance
-	function Equatable.equals(other Character) returns bool
-		var len1 = __managed_memory_len(_managed)
-		var len2 = __managed_memory_len(other._managed)
-		if len1 != len2 'length_check'
-			return false
-		end 'length_check'
-		var i = 0
-		while i < len1 'compare_loop'
-			if __managed_memory_byte_at(_managed, i) != __managed_memory_byte_at(other._managed, i) 'byte_check'
-				return false
-			end 'byte_check'
-			i = i + 1
-		end 'compare_loop'
-		return true
-	end 'equals'
+  // Equatable conformance
+  function Equatable.equals(other Character) returns bool
+    var len1 = __managed_memory_len(_managed)
+    var len2 = __managed_memory_len(other._managed)
+    if len1 != len2 'length_check'
+      return false
+    end 'length_check'
+    var i = 0
+    while i < len1 'compare_loop'
+      if __managed_memory_byte_at(_managed, i) != __managed_memory_byte_at(other._managed, i) 'byte_check'
+        return false
+      end 'byte_check'
+      i = i + 1
+    end 'compare_loop'
+    return true
+  end 'equals'
 
-	// Comparable conformance
-	// Compares characters byte-by-byte (lexicographic comparison)
-	function Comparable.compare(other Character) returns int
-		var len1 = __managed_memory_len(_managed)
-		var len2 = __managed_memory_len(other._managed)
-		var minLen = len1
-		if len2 < len1 'min_check'
-			minLen = len2
-		end 'min_check'
-		var i = 0
-		while i < minLen 'compare_loop'
-			var b1 = __managed_memory_byte_at(_managed, i)
-			var b2 = __managed_memory_byte_at(other._managed, i)
-			if b1 < b2 'byte_lt'
-				return 0 - 1
-			end 'byte_lt'
-			if b1 > b2 'byte_gt'
-				return 1
-			end 'byte_gt'
-			i = i + 1
-		end 'compare_loop'
-		if len1 < len2 'len_lt'
-			return 0 - 1
-		end 'len_lt'
-		if len1 > len2 'len_gt'
-			return 1
-		end 'len_gt'
-		return 0
-	end 'compare'
+  // Comparable conformance
+  // Compares characters byte-by-byte (lexicographic comparison)
+  function Comparable.compare(other Character) returns int
+    var len1 = __managed_memory_len(_managed)
+    var len2 = __managed_memory_len(other._managed)
+    var minLen = len1
+    if len2 < len1 'min_check'
+      minLen = len2
+    end 'min_check'
+    var i = 0
+    while i < minLen 'compare_loop'
+      var b1 = __managed_memory_byte_at(_managed, i)
+      var b2 = __managed_memory_byte_at(other._managed, i)
+      if b1 < b2 'byte_lt'
+        return 0 - 1
+      end 'byte_lt'
+      if b1 > b2 'byte_gt'
+        return 1
+      end 'byte_gt'
+      i = i + 1
+    end 'compare_loop'
+    if len1 < len2 'len_lt'
+      return 0 - 1
+    end 'len_lt'
+    if len1 > len2 'len_gt'
+      return 1
+    end 'len_gt'
+    return 0
+  end 'compare'
 
-	// Hashable conformance (djb2 hash algorithm)
-	function Hashable.hash() returns int
-		var h = 5381
-		var len = __managed_memory_len(_managed)
-		var i = 0
-		while i < len 'hash_loop'
-			var b = __managed_memory_byte_at(_managed, i)
-			h = h * 33 + b
-			i = i + 1
-		end 'hash_loop'
-		return h
-	end 'hash'
+  // Hashable conformance (djb2 hash algorithm)
+  function Hashable.hash() returns int
+    var h = 5381
+    var len = __managed_memory_len(_managed)
+    var i = 0
+    while i < len 'hash_loop'
+      var b = __managed_memory_byte_at(_managed, i)
+      h = h * 33 + b
+      i = i + 1
+    end 'hash_loop'
+    return h
+  end 'hash'
 
-	// Stringable conformance - convert Character to String
-	function Stringable.toString(_format String) returns String
-		return {_managed: _managed, _iterPos: 0}
-	end 'toString'
+  // Stringable conformance - convert Character to String
+  function Stringable.toString(_format String) returns String
+    return {_managed: _managed, _iterPos: 0}
+  end 'toString'
 
-	// Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
-	export function asciiValue() returns int throws CharacterError
-		var len = __managed_memory_len(_managed)
-		if len != 1 'check_len'
-			throw CharacterError.notAscii
-		end 'check_len'
-		var b = __managed_memory_byte_at(_managed, 0)
-		if b >= 128 'check_ascii'
-			throw CharacterError.notAscii
-		end 'check_ascii'
-		return b
-	end 'asciiValue'
+  // Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
+  export function asciiValue() returns int throws CharacterError
+    var len = __managed_memory_len(_managed)
+    if len != 1 'check_len'
+      throw CharacterError.notAscii
+    end 'check_len'
+    var b = __managed_memory_byte_at(_managed, 0)
+    if b >= 128 'check_ascii'
+      throw CharacterError.notAscii
+    end 'check_ascii'
+    return b
+  end 'asciiValue'
 end 'Character'

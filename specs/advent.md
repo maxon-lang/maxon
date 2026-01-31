@@ -26,24 +26,24 @@ end 'main'
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 0 : i64}
-    maxon.return %0
+  %0 = maxon.literal {value = 0 : i64}
+  maxon.return %0
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %1 = arith.constant {value = 0 : i64}
-    func.return %1
+  %1 = arith.constant {value = 0 : i64}
+  func.return %1
   }
 }
 === x86
 module {
   func @main() -> i64 {
   entry:
-    x86.xor eax, eax
-    x86.ret
+  x86.xor eax, eax
+  x86.ret
   }
 }
 ```

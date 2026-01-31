@@ -9,625 +9,625 @@ export typealias VarMap is Map with (String, int)  // name -> value ID
 
 /// Scope for tracking local variables during lowering
 export type LocalScope
-	export var variables VarMap
-	export var parent int                   // index of parent scope (-1 if none)
+  export var variables VarMap
+  export var parent int                   // index of parent scope (-1 if none)
 
-	static function create(parent int) returns LocalScope
-		return {variables: VarMap{}, parent: parent}
-	end 'create'
+  static function create(parent int) returns LocalScope
+    return {variables: VarMap{}, parent: parent}
+  end 'create'
 end 'LocalScope'
 
 export typealias ScopeArray is Array with LocalScope
 
 /// AST to HIR lowering context
 export type AstToHir
-	let program Program
-	var module HirModule
-	export var errors ErrorCollector
-	var currentFunction HirFunction
-	var currentBlock HirBlock
-	var nextValueId int
-	var nextBlockId int
-	var scopes ScopeArray
-	var currentScopeIdx int
-
-	/// Initialize the lowering context
-	export static function init(program Program) returns AstToHir
-		var module = HirModule.create(program.sourceFile)
-		var errors = ErrorCollector.create()
-		var currentFunction = HirFunction.create("", returnTypeIdx: -1, isExport: false, line: 0, column: 0)
-		var currentBlock = HirBlock.create(0, name: "entry")
-		return {program: program, module: module, errors: errors, currentFunction: currentFunction, currentBlock: currentBlock, nextValueId: 0, nextBlockId: 0, scopes: ScopeArray{}, currentScopeIdx: -1}
-	end 'init'
-
-	/// Convert the entire AST to HIR
-	export function lower() returns HirModule
-		// Test 4: + lowerFunction
-		collectTypeDeclarations()
-
-		for fn in program.functions 'funcLoop'
-			if not fn.hasError 'noError'
-				lowerFunction(fn)
-			end 'noError'
-		end 'funcLoop'
-
-		return module
-	end 'lower'
-
-	/// Collect type declarations from AST (for forward references)
-	function collectTypeDeclarations()
-		// Register struct types
-		for td in program.types 'typeLoop'
-			let structType = HirType.createStruct(td.name)
-			let typeIdx = module.addType(structType)
-
-			let sym = HirSymbol{name: td.name, kind: "type", typeIdx: typeIdx, definitionLine: td.line, definitionColumn: td.column, isExport: td.isExport}
-			module.addSymbol(sym)
-		end 'typeLoop'
-
-		// Register enum types
-		for ed in program.enums 'enumLoop'
-			let enumType = HirType.createEnum(ed.name)
-			let typeIdx = module.addType(enumType)
-
-			let sym = HirSymbol{name: ed.name, kind: "enum", typeIdx: typeIdx, definitionLine: ed.line, definitionColumn: ed.column, isExport: ed.isExport}
-			module.addSymbol(sym)
-		end 'enumLoop'
-
-		// Register function signatures
-		for fn in program.functions 'funcLoop'
-			registerFunctionSymbol(fn)
-		end 'funcLoop'
-	end 'collectTypeDeclarations'
-
-	/// Register a function in the symbol table
-	function registerFunctionSymbol(fn FunctionDecl)
-		let retTypeIdx = resolveTypeRef(fn.returnType)
-		let sym = HirSymbol{name: fn.name, kind: "function", typeIdx: retTypeIdx, definitionLine: fn.line, definitionColumn: fn.column, isExport: fn.isExport}
-		module.addSymbol(sym)
-	end 'registerFunctionSymbol'
-
-	/// Lower a function declaration
-	function lowerFunction(fn FunctionDecl)
-		let retTypeIdx = resolveTypeRef(fn.returnType)
-		currentFunction = HirFunction.create(fn.name, returnTypeIdx: retTypeIdx, isExport: fn.isExport, line: fn.line, column: fn.column)
-
-		// Reset per-function state
-		nextValueId = 0
-		nextBlockId = 0
-		scopes = ScopeArray{}
-		currentScopeIdx = -1
-		pushScope()
-
-		// Entry block
-		currentBlock = HirBlock.create(freshBlockId(), name: "entry")
-
-		// Lower body statements
-		var i = fn.bodyStart
-		let endIdx = fn.bodyStart + fn.bodyCount
-		while i < endIdx 'bodyLoop'
-			let stmt = program.getStmt(i)
-			if not stmt.hasError 'noError'
-				lowerStatement(stmt)
-			end 'noError'
-			i = i + 1
-		end 'bodyLoop'
-
-		// Add the final block (control-flow lowering may have already added earlier blocks)
-		currentFunction.addBlock(currentBlock)
-		module.functions.push(currentFunction)
-
-		popScope()
-	end 'lowerFunction'
-
-	/// Lower a statement
-	function lowerStatement(stmt Stmt)
-		match stmt.kind 'dispatch'
-		StmtKind.returnStmt then lowerReturnStmt(stmt)
-		StmtKind.letStmt then lowerLetStmt(stmt)
-		StmtKind.varStmt then lowerVarStmt(stmt)
-		StmtKind.assignStmt then lowerAssignStmt(stmt)
-		StmtKind.ifStmt then lowerIfStmt(stmt)
-		StmtKind.whileStmt then lowerWhileStmt(stmt)
-		StmtKind.exprStmt then lowerExprStmt(stmt)
-		StmtKind.breakStmt then lowerBreakStmt(stmt)
-		StmtKind.continueStmt then lowerContinueStmt(stmt)
-		default then return
-		end 'dispatch'
-	end 'lowerStatement'
-
-	/// Lower a return statement
-	function lowerReturnStmt(stmt Stmt)
-		if stmt.exprIndex >= 0 'hasExpr'
-			let expr = program.getExpr(stmt.exprIndex)
-			let valueId = lowerExpression(expr)
-			let typeIdx = inferExprType(expr)
-			let instr = HirInstr.createReturn(valueId, typeIdx: typeIdx, line: stmt.line, column: stmt.column)
-			currentBlock.addInstr(instr)
-		end 'hasExpr' else 'noExpr'
-			let instr = HirInstr.createReturnVoid(stmt.line, column: stmt.column)
-			currentBlock.addInstr(instr)
-		end 'noExpr'
-	end 'lowerReturnStmt'
-
-	/// Lower a let statement
-	function lowerLetStmt(stmt Stmt)
-		let expr = program.getExpr(stmt.exprIndex)
-		let valueId = lowerExpression(expr)
-		let typeIdx = inferExprType(expr)
-
-		// Add to scope
-		addLocal(stmt.varName, valueId: valueId)
-
-		// Add symbol for LSP
-		let sym = HirSymbol{name: stmt.varName, kind: "variable", typeIdx: typeIdx, definitionLine: stmt.line, definitionColumn: stmt.column, isExport: false}
-		module.addSymbol(sym)
-	end 'lowerLetStmt'
-
-	/// Lower a var statement
-	function lowerVarStmt(stmt Stmt)
-		let expr = program.getExpr(stmt.exprIndex)
-		let initValueId = lowerExpression(expr)
-		let typeIdx = inferExprType(expr)
-
-		// Allocate storage for mutable variable
-		let resultId = freshValue()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let allocaInstr = HirInstr.createAlloca(result, typeIdx: typeIdx, name: stmt.varName, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(allocaInstr)
-
-		// Store initial value
-		let storeInstr = HirInstr.createStore(resultId, value: initValueId, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(storeInstr)
-
-		// Add to scope (store the alloca result which is the pointer)
-		addLocal(stmt.varName, valueId: resultId)
-
-		// Add symbol for LSP
-		let sym = HirSymbol{name: stmt.varName, kind: "variable", typeIdx: typeIdx, definitionLine: stmt.line, definitionColumn: stmt.column, isExport: false}
-		module.addSymbol(sym)
-	end 'lowerVarStmt'
-
-	/// Lower an assignment statement
-	function lowerAssignStmt(stmt Stmt)
-		let expr = program.getExpr(stmt.exprIndex)
-		let valueId = lowerExpression(expr)
-
-		// Look up variable
-		let ptrId = lookupLocal(stmt.varName)
-		if ptrId >= 0 'found'
-			let storeInstr = HirInstr.createStore(ptrId, value: valueId, line: stmt.line, column: stmt.column)
-			currentBlock.addInstr(storeInstr)
-		end 'found' else 'notFound'
-			errors.addErrorAt(ErrorCode.E3001, message: "undefined variable '{stmt.varName}'", file: program.sourceFile, line: stmt.line, column: stmt.column)
-		end 'notFound'
-	end 'lowerAssignStmt'
-
-	/// Lower an if statement
-	function lowerIfStmt(stmt Stmt)
-		let condExpr = program.getExpr(stmt.exprIndex)
-		let condValueId = lowerExpression(condExpr)
-
-		// Create blocks
-		let thenBlockId = freshBlockId()
-		let elseBlockId = freshBlockId()
-		let mergeBlockId = freshBlockId()
-
-		// Conditional branch
-		let condBr = HirInstr.createCondBranch(condValueId, trueBlock: thenBlockId, falseBlock: elseBlockId, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(condBr)
-		currentFunction.addBlock(currentBlock)
-
-		// Then block
-		currentBlock = HirBlock.create(thenBlockId, name: "if.then")
-		var i = stmt.thenStart
-		let thenEnd = stmt.thenStart + stmt.thenCount
-		while i < thenEnd 'thenLoop'
-			let thenStmt = program.getStmt(i)
-			if not thenStmt.hasError 'noError'
-				lowerStatement(thenStmt)
-			end 'noError'
-			i = i + 1
-		end 'thenLoop'
-		let brToMerge = HirInstr.createBranch(mergeBlockId, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(brToMerge)
-		currentFunction.addBlock(currentBlock)
-
-		// Else block
-		currentBlock = HirBlock.create(elseBlockId, name: "if.else")
-		if stmt.elseStart >= 0 'hasElse'
-			var j = stmt.elseStart
-			let elseEnd = stmt.elseStart + stmt.elseCount
-			while j < elseEnd 'elseLoop'
-				let elseStmt = program.getStmt(j)
-				if not elseStmt.hasError 'noError'
-					lowerStatement(elseStmt)
-				end 'noError'
-				j = j + 1
-			end 'elseLoop'
-		end 'hasElse'
-		let brToMerge2 = HirInstr.createBranch(mergeBlockId, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(brToMerge2)
-		currentFunction.addBlock(currentBlock)
-
-		// Merge block
-		currentBlock = HirBlock.create(mergeBlockId, name: "if.merge")
-	end 'lowerIfStmt'
-
-	/// Lower a while statement
-	function lowerWhileStmt(stmt Stmt)
-		let condBlockId = freshBlockId()
-		let bodyBlockId = freshBlockId()
-		let exitBlockId = freshBlockId()
-
-		// Branch to condition block
-		let brToCond = HirInstr.createBranch(condBlockId, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(brToCond)
-		currentFunction.addBlock(currentBlock)
-
-		// Condition block
-		currentBlock = HirBlock.create(condBlockId, name: "while.cond")
-		let condExpr = program.getExpr(stmt.exprIndex)
-		let condValueId = lowerExpression(condExpr)
-		let condBr = HirInstr.createCondBranch(condValueId, trueBlock: bodyBlockId, falseBlock: exitBlockId, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(condBr)
-		currentFunction.addBlock(currentBlock)
-
-		// Body block
-		currentBlock = HirBlock.create(bodyBlockId, name: "while.body")
-		var i = stmt.thenStart
-		let bodyEnd = stmt.thenStart + stmt.thenCount
-		while i < bodyEnd 'bodyLoop'
-			let bodyStmt = program.getStmt(i)
-			if not bodyStmt.hasError 'noError'
-				lowerStatement(bodyStmt)
-			end 'noError'
-			i = i + 1
-		end 'bodyLoop'
-		let brToCond2 = HirInstr.createBranch(condBlockId, line: stmt.line, column: stmt.column)
-		currentBlock.addInstr(brToCond2)
-		currentFunction.addBlock(currentBlock)
-
-		// Exit block
-		currentBlock = HirBlock.create(exitBlockId, name: "while.exit")
-	end 'lowerWhileStmt'
-
-	/// Lower an expression statement
-	function lowerExprStmt(stmt Stmt)
-		let expr = program.getExpr(stmt.exprIndex)
-		lowerExpression(expr)
-	end 'lowerExprStmt'
-
-	/// Lower a break statement (placeholder - needs loop tracking)
-	function lowerBreakStmt(_ Stmt)
-		// TODO: implement break with loop tracking
-	end 'lowerBreakStmt'
-
-	/// Lower a continue statement (placeholder - needs loop tracking)
-	function lowerContinueStmt(_ Stmt)
-		// TODO: implement continue with loop tracking
-	end 'lowerContinueStmt'
-
-	/// Lower an expression and return its value ID
-	function lowerExpression(expr Expr) returns int
-		if expr.hasError 'hasError'
-			return -1
-		end 'hasError'
-
-		match expr.kind 'dispatch'
-		ExprKind.intLiteral then return lowerIntLiteral(expr)
-		ExprKind.floatLiteral then return lowerFloatLiteral(expr)
-		ExprKind.boolLiteral then return lowerBoolLiteral(expr)
-		ExprKind.stringLiteral then return lowerStringLiteral(expr)
-		ExprKind.identifier then return lowerIdentifier(expr)
-		ExprKind.binaryOp then return lowerBinaryOp(expr)
-		ExprKind.unaryOp then return lowerUnaryOp(expr)
-		ExprKind.call then return lowerCall(expr)
-		ExprKind.fieldAccess then return lowerFieldAccess(expr)
-		default then return -1
-		end 'dispatch'
-	end 'lowerExpression'
-
-	/// Lower an integer literal
-	function lowerIntLiteral(expr Expr) returns int
-		let resultId = freshValue()
-		let typeIdx = module.intTypeIdx()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let instr = HirInstr.createConstInt(result, value: expr.intValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
-		currentBlock.addInstr(instr)
-		return resultId
-	end 'lowerIntLiteral'
-
-	/// Lower a float literal
-	function lowerFloatLiteral(expr Expr) returns int
-		let resultId = freshValue()
-		let typeIdx = module.floatTypeIdx()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let instr = HirInstr.createConstFloat(result, value: expr.floatValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
-		currentBlock.addInstr(instr)
-		return resultId
-	end 'lowerFloatLiteral'
-
-	/// Lower a boolean literal
-	function lowerBoolLiteral(expr Expr) returns int
-		let resultId = freshValue()
-		let typeIdx = module.boolTypeIdx()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let instr = HirInstr.createConstBool(result, value: expr.boolValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
-		currentBlock.addInstr(instr)
-		return resultId
-	end 'lowerBoolLiteral'
-
-	/// Lower a string literal
-	function lowerStringLiteral(expr Expr) returns int
-		let resultId = freshValue()
-		let typeIdx = module.stringTypeIdx()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let instr = HirInstr.createConstString(result, value: expr.stringValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
-		currentBlock.addInstr(instr)
-		return resultId
-	end 'lowerStringLiteral'
-
-	/// Lower an identifier reference
-	function lowerIdentifier(expr Expr) returns int
-		let valueId = lookupLocal(expr.stringValue)
-		if valueId >= 0 'found'
-			return valueId
-		end 'found'
-		errors.addErrorAt(ErrorCode.E3001, message: "undefined variable '{expr.stringValue}'", file: program.sourceFile, line: expr.line, column: expr.column)
-		return -1
-	end 'lowerIdentifier'
-
-	/// Lower a binary operation
-	function lowerBinaryOp(expr Expr) returns int
-		let leftId = lowerExpression(program.getExpr(expr.leftIndex))
-		let rightId = lowerExpression(program.getExpr(expr.rightIndex))
-
-		if leftId < 0 or rightId < 0 'hasError'
-			return -1
-		end 'hasError'
-
-		let opcode = mapBinaryOp(expr.binaryOp)
-		let typeIdx = inferBinaryOpType(expr)
-		let resultId = freshValue()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let instr = HirInstr.createBinary(opcode, result: result, left: leftId, right: rightId, typeIdx: typeIdx, line: expr.line, column: expr.column)
-		currentBlock.addInstr(instr)
-		return resultId
-	end 'lowerBinaryOp'
-
-	/// Lower a unary operation
-	function lowerUnaryOp(expr Expr) returns int
-		let operandId = lowerExpression(program.getExpr(expr.leftIndex))
-
-		if operandId < 0 'hasError'
-			return -1
-		end 'hasError'
-
-		let opcode = mapUnaryOp(expr.unaryOp)
-		let typeIdx = inferExprType(program.getExpr(expr.leftIndex))
-		let resultId = freshValue()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let instr = HirInstr.createUnary(opcode, result: result, operand: operandId, typeIdx: typeIdx, line: expr.line, column: expr.column)
-		currentBlock.addInstr(instr)
-		return resultId
-	end 'lowerUnaryOp'
-
-	/// Lower a function call
-	function lowerCall(expr Expr) returns int
-		// Get callee name
-		let calleeExpr = program.getExpr(expr.leftIndex)
-		if calleeExpr.kind != ExprKind.identifier 'notIdent'
-			errors.addErrorAt(ErrorCode.E3005, message: "callee must be an identifier", file: program.sourceFile, line: expr.line, column: expr.column)
-			return -1
-		end 'notIdent'
-
-		let calleeName = calleeExpr.stringValue
-
-		// Lower arguments
-		var args = IntArray{}
-		var i = expr.argsStart
-		let argsEnd = expr.argsStart + expr.argsCount
-		while i < argsEnd 'argsLoop'
-			let argExpr = program.getExpr(i)
-			let argId = lowerExpression(argExpr)
-			args.push(argId)
-			i = i + 1
-		end 'argsLoop'
-
-		// Look up function type
-		let sym = module.findSymbolByName(calleeName)
-		let typeIdx = sym.typeIdx
-
-		let resultId = freshValue()
-		let result = HirValue.create(resultId, typeIdx: typeIdx)
-		let instr = HirInstr.createCall(result, target: calleeName, args: args, typeIdx: typeIdx, line: expr.line, column: expr.column)
-		currentBlock.addInstr(instr)
-		return resultId
-	end 'lowerCall'
-
-	/// Lower a field access
-	function lowerFieldAccess(expr Expr) returns int
-		let objectId = lowerExpression(program.getExpr(expr.leftIndex))
-
-		if objectId < 0 'hasError'
-			return -1
-		end 'hasError'
-
-		// TODO: implement proper field access with type checking
-		let resultId = freshValue()
-		return resultId
-	end 'lowerFieldAccess'
-
-	// ========================================================================
-	// Type Resolution
-	// ========================================================================
-
-	/// Resolve a type reference to a HIR type index
-	function resolveTypeRef(typeRefIdx int) returns int
-		if typeRefIdx < 0 'noType'
-			return module.voidTypeIdx()
-		end 'noType'
-
-		let typeRef = program.getTypeRef(typeRefIdx)
-
-		return match typeRef.kind 'dispatch'
-			TypeKind.typeInt gives module.intTypeIdx()
-			TypeKind.typeFloat gives module.floatTypeIdx()
-			TypeKind.typeBool gives module.boolTypeIdx()
-			TypeKind.typeByte gives module.byteTypeIdx()
-			TypeKind.typeString gives module.stringTypeIdx()
-			TypeKind.typeVoid gives module.voidTypeIdx()
-			TypeKind.typeNamed gives resolveNamedType(typeRef.name)
-			default gives module.voidTypeIdx()
-		end 'dispatch'
-	end 'resolveTypeRef'
-
-	/// Resolve a named type
-	function resolveNamedType(name String) returns int
-		// Look up in symbol table
-		let sym = module.findSymbolByName(name)
-		if sym.typeIdx >= 0 'found'
-			return sym.typeIdx
-		end 'found'
-
-		// Unknown type
-		let unknownType = HirType.createUnknown()
-		return module.addType(unknownType)
-	end 'resolveNamedType'
-
-	/// Infer the type of an expression
-	function inferExprType(expr Expr) returns int
-		return match expr.kind 'dispatch'
-			ExprKind.intLiteral gives module.intTypeIdx()
-			ExprKind.floatLiteral gives module.floatTypeIdx()
-			ExprKind.boolLiteral gives module.boolTypeIdx()
-			ExprKind.stringLiteral gives module.stringTypeIdx()
-			ExprKind.identifier gives inferIdentifierType(expr)
-			ExprKind.binaryOp gives inferBinaryOpType(expr)
-			ExprKind.unaryOp gives inferExprType(program.getExpr(expr.leftIndex))
-			ExprKind.call gives inferCallType(expr)
-			default gives module.voidTypeIdx()
-		end 'dispatch'
-	end 'inferExprType'
-
-	/// Infer identifier type from scope
-	function inferIdentifierType(expr Expr) returns int
-		let sym = module.findSymbolByName(expr.stringValue)
-		if sym.typeIdx >= 0 'found'
-			return sym.typeIdx
-		end 'found'
-		return module.voidTypeIdx()
-	end 'inferIdentifierType'
-
-	/// Infer binary operation result type
-	function inferBinaryOpType(expr Expr) returns int
-		// Comparison operators always return bool
-		if expr.binaryOp == BinaryOp.equal or expr.binaryOp == BinaryOp.notEqual or expr.binaryOp == BinaryOp.less or expr.binaryOp == BinaryOp.lessEqual or expr.binaryOp == BinaryOp.greater or expr.binaryOp == BinaryOp.greaterEqual 'isCmp'
-			return module.boolTypeIdx()
-		end 'isCmp'
-
-		// Logical operators return bool
-		if expr.binaryOp == BinaryOp.logicalAnd or expr.binaryOp == BinaryOp.logicalOr 'isLogical'
-			return module.boolTypeIdx()
-		end 'isLogical'
-
-		// Arithmetic: inherit from left operand
-		return inferExprType(program.getExpr(expr.leftIndex))
-	end 'inferBinaryOpType'
-
-	/// Infer call return type
-	function inferCallType(expr Expr) returns int
-		let calleeExpr = program.getExpr(expr.leftIndex)
-		if calleeExpr.kind == ExprKind.identifier 'isIdent'
-			let sym = module.findSymbolByName(calleeExpr.stringValue)
-			return sym.typeIdx
-		end 'isIdent'
-		return module.voidTypeIdx()
-	end 'inferCallType'
-
-	// ========================================================================
-	// Opcode Mapping
-	// ========================================================================
-
-	function mapBinaryOp(op BinaryOp) returns HirOpcode
-		return match op 'map'
-			BinaryOp.add gives HirOpcode.add
-			BinaryOp.subtract gives HirOpcode.sub
-			BinaryOp.multiply gives HirOpcode.mul
-			BinaryOp.divide gives HirOpcode.div
-			BinaryOp.modulo gives HirOpcode.mod_
-			BinaryOp.equal gives HirOpcode.eq
-			BinaryOp.notEqual gives HirOpcode.ne
-			BinaryOp.less gives HirOpcode.lt
-			BinaryOp.lessEqual gives HirOpcode.le
-			BinaryOp.greater gives HirOpcode.gt
-			BinaryOp.greaterEqual gives HirOpcode.ge
-			BinaryOp.logicalAnd gives HirOpcode.logicalAnd
-			BinaryOp.logicalOr gives HirOpcode.logicalOr
-			default gives HirOpcode.add
-		end 'map'
-	end 'mapBinaryOp'
-
-	function mapUnaryOp(op UnaryOp) returns HirOpcode
-		return match op 'map'
-			UnaryOp.negate gives HirOpcode.neg
-			UnaryOp.logicalNot gives HirOpcode.logicalNot
-			default gives HirOpcode.neg
-		end 'map'
-	end 'mapUnaryOp'
-
-	// ========================================================================
-	// Scope Management
-	// ========================================================================
-
-	function pushScope()
-		let scope = LocalScope.create(currentScopeIdx)
-		scopes.push(scope)
-		currentScopeIdx = scopes.count() - 1
-	end 'pushScope'
-
-	function popScope()
-		if currentScopeIdx >= 0 'hasScope'
-			let scope = try scopes.get(currentScopeIdx) otherwise LocalScope.create(-1)
-			currentScopeIdx = scope.parent
-		end 'hasScope'
-	end 'popScope'
-
-	function addLocal(name String, valueId int)
-		if currentScopeIdx >= 0 'hasScope'
-			var scope = try scopes.get(currentScopeIdx) otherwise LocalScope.create(-1)
-			scope.variables.insert(key: name, value: valueId)
-			scopes.set(currentScopeIdx, value: scope)
-		end 'hasScope'
-	end 'addLocal'
-
-	function lookupLocal(name String) returns int
-		var scopeIdx = currentScopeIdx
-		while scopeIdx >= 0 'searchLoop'
-			let scope = try scopes.get(scopeIdx) otherwise LocalScope.create(-1)
-			let valueId = try scope.variables.get(name) otherwise -1
-			if valueId >= 0 'found'
-				return valueId
-			end 'found'
-			scopeIdx = scope.parent
-		end 'searchLoop'
-		return -1
-	end 'lookupLocal'
-
-	// ========================================================================
-	// Value and Block ID Generation
-	// ========================================================================
-
-	function freshValue() returns int
-		let id = nextValueId
-		nextValueId = nextValueId + 1
-		return id
-	end 'freshValue'
-
-	function freshBlockId() returns int
-		let id = nextBlockId
-		nextBlockId = nextBlockId + 1
-		return id
-	end 'freshBlockId'
+  let program Program
+  var module HirModule
+  export var errors ErrorCollector
+  var currentFunction HirFunction
+  var currentBlock HirBlock
+  var nextValueId int
+  var nextBlockId int
+  var scopes ScopeArray
+  var currentScopeIdx int
+
+  /// Initialize the lowering context
+  export static function init(program Program) returns AstToHir
+    var module = HirModule.create(program.sourceFile)
+    var errors = ErrorCollector.create()
+    var currentFunction = HirFunction.create("", returnTypeIdx: -1, isExport: false, line: 0, column: 0)
+    var currentBlock = HirBlock.create(0, name: "entry")
+    return {program: program, module: module, errors: errors, currentFunction: currentFunction, currentBlock: currentBlock, nextValueId: 0, nextBlockId: 0, scopes: ScopeArray{}, currentScopeIdx: -1}
+  end 'init'
+
+  /// Convert the entire AST to HIR
+  export function lower() returns HirModule
+    // Test 4: + lowerFunction
+    collectTypeDeclarations()
+
+    for fn in program.functions 'funcLoop'
+      if not fn.hasError 'noError'
+        lowerFunction(fn)
+      end 'noError'
+    end 'funcLoop'
+
+    return module
+  end 'lower'
+
+  /// Collect type declarations from AST (for forward references)
+  function collectTypeDeclarations()
+    // Register struct types
+    for td in program.types 'typeLoop'
+      let structType = HirType.createStruct(td.name)
+      let typeIdx = module.addType(structType)
+
+      let sym = HirSymbol{name: td.name, kind: "type", typeIdx: typeIdx, definitionLine: td.line, definitionColumn: td.column, isExport: td.isExport}
+      module.addSymbol(sym)
+    end 'typeLoop'
+
+    // Register enum types
+    for ed in program.enums 'enumLoop'
+      let enumType = HirType.createEnum(ed.name)
+      let typeIdx = module.addType(enumType)
+
+      let sym = HirSymbol{name: ed.name, kind: "enum", typeIdx: typeIdx, definitionLine: ed.line, definitionColumn: ed.column, isExport: ed.isExport}
+      module.addSymbol(sym)
+    end 'enumLoop'
+
+    // Register function signatures
+    for fn in program.functions 'funcLoop'
+      registerFunctionSymbol(fn)
+    end 'funcLoop'
+  end 'collectTypeDeclarations'
+
+  /// Register a function in the symbol table
+  function registerFunctionSymbol(fn FunctionDecl)
+    let retTypeIdx = resolveTypeRef(fn.returnType)
+    let sym = HirSymbol{name: fn.name, kind: "function", typeIdx: retTypeIdx, definitionLine: fn.line, definitionColumn: fn.column, isExport: fn.isExport}
+    module.addSymbol(sym)
+  end 'registerFunctionSymbol'
+
+  /// Lower a function declaration
+  function lowerFunction(fn FunctionDecl)
+    let retTypeIdx = resolveTypeRef(fn.returnType)
+    currentFunction = HirFunction.create(fn.name, returnTypeIdx: retTypeIdx, isExport: fn.isExport, line: fn.line, column: fn.column)
+
+    // Reset per-function state
+    nextValueId = 0
+    nextBlockId = 0
+    scopes = ScopeArray{}
+    currentScopeIdx = -1
+    pushScope()
+
+    // Entry block
+    currentBlock = HirBlock.create(freshBlockId(), name: "entry")
+
+    // Lower body statements
+    var i = fn.bodyStart
+    let endIdx = fn.bodyStart + fn.bodyCount
+    while i < endIdx 'bodyLoop'
+      let stmt = program.getStmt(i)
+      if not stmt.hasError 'noError'
+        lowerStatement(stmt)
+      end 'noError'
+      i = i + 1
+    end 'bodyLoop'
+
+    // Add the final block (control-flow lowering may have already added earlier blocks)
+    currentFunction.addBlock(currentBlock)
+    module.functions.push(currentFunction)
+
+    popScope()
+  end 'lowerFunction'
+
+  /// Lower a statement
+  function lowerStatement(stmt Stmt)
+    match stmt.kind 'dispatch'
+    StmtKind.returnStmt then lowerReturnStmt(stmt)
+    StmtKind.letStmt then lowerLetStmt(stmt)
+    StmtKind.varStmt then lowerVarStmt(stmt)
+    StmtKind.assignStmt then lowerAssignStmt(stmt)
+    StmtKind.ifStmt then lowerIfStmt(stmt)
+    StmtKind.whileStmt then lowerWhileStmt(stmt)
+    StmtKind.exprStmt then lowerExprStmt(stmt)
+    StmtKind.breakStmt then lowerBreakStmt(stmt)
+    StmtKind.continueStmt then lowerContinueStmt(stmt)
+    default then return
+    end 'dispatch'
+  end 'lowerStatement'
+
+  /// Lower a return statement
+  function lowerReturnStmt(stmt Stmt)
+    if stmt.exprIndex >= 0 'hasExpr'
+      let expr = program.getExpr(stmt.exprIndex)
+      let valueId = lowerExpression(expr)
+      let typeIdx = inferExprType(expr)
+      let instr = HirInstr.createReturn(valueId, typeIdx: typeIdx, line: stmt.line, column: stmt.column)
+      currentBlock.addInstr(instr)
+    end 'hasExpr' else 'noExpr'
+      let instr = HirInstr.createReturnVoid(stmt.line, column: stmt.column)
+      currentBlock.addInstr(instr)
+    end 'noExpr'
+  end 'lowerReturnStmt'
+
+  /// Lower a let statement
+  function lowerLetStmt(stmt Stmt)
+    let expr = program.getExpr(stmt.exprIndex)
+    let valueId = lowerExpression(expr)
+    let typeIdx = inferExprType(expr)
+
+    // Add to scope
+    addLocal(stmt.varName, valueId: valueId)
+
+    // Add symbol for LSP
+    let sym = HirSymbol{name: stmt.varName, kind: "variable", typeIdx: typeIdx, definitionLine: stmt.line, definitionColumn: stmt.column, isExport: false}
+    module.addSymbol(sym)
+  end 'lowerLetStmt'
+
+  /// Lower a var statement
+  function lowerVarStmt(stmt Stmt)
+    let expr = program.getExpr(stmt.exprIndex)
+    let initValueId = lowerExpression(expr)
+    let typeIdx = inferExprType(expr)
+
+    // Allocate storage for mutable variable
+    let resultId = freshValue()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let allocaInstr = HirInstr.createAlloca(result, typeIdx: typeIdx, name: stmt.varName, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(allocaInstr)
+
+    // Store initial value
+    let storeInstr = HirInstr.createStore(resultId, value: initValueId, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(storeInstr)
+
+    // Add to scope (store the alloca result which is the pointer)
+    addLocal(stmt.varName, valueId: resultId)
+
+    // Add symbol for LSP
+    let sym = HirSymbol{name: stmt.varName, kind: "variable", typeIdx: typeIdx, definitionLine: stmt.line, definitionColumn: stmt.column, isExport: false}
+    module.addSymbol(sym)
+  end 'lowerVarStmt'
+
+  /// Lower an assignment statement
+  function lowerAssignStmt(stmt Stmt)
+    let expr = program.getExpr(stmt.exprIndex)
+    let valueId = lowerExpression(expr)
+
+    // Look up variable
+    let ptrId = lookupLocal(stmt.varName)
+    if ptrId >= 0 'found'
+      let storeInstr = HirInstr.createStore(ptrId, value: valueId, line: stmt.line, column: stmt.column)
+      currentBlock.addInstr(storeInstr)
+    end 'found' else 'notFound'
+      errors.addErrorAt(ErrorCode.E3001, message: "undefined variable '{stmt.varName}'", file: program.sourceFile, line: stmt.line, column: stmt.column)
+    end 'notFound'
+  end 'lowerAssignStmt'
+
+  /// Lower an if statement
+  function lowerIfStmt(stmt Stmt)
+    let condExpr = program.getExpr(stmt.exprIndex)
+    let condValueId = lowerExpression(condExpr)
+
+    // Create blocks
+    let thenBlockId = freshBlockId()
+    let elseBlockId = freshBlockId()
+    let mergeBlockId = freshBlockId()
+
+    // Conditional branch
+    let condBr = HirInstr.createCondBranch(condValueId, trueBlock: thenBlockId, falseBlock: elseBlockId, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(condBr)
+    currentFunction.addBlock(currentBlock)
+
+    // Then block
+    currentBlock = HirBlock.create(thenBlockId, name: "if.then")
+    var i = stmt.thenStart
+    let thenEnd = stmt.thenStart + stmt.thenCount
+    while i < thenEnd 'thenLoop'
+      let thenStmt = program.getStmt(i)
+      if not thenStmt.hasError 'noError'
+        lowerStatement(thenStmt)
+      end 'noError'
+      i = i + 1
+    end 'thenLoop'
+    let brToMerge = HirInstr.createBranch(mergeBlockId, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(brToMerge)
+    currentFunction.addBlock(currentBlock)
+
+    // Else block
+    currentBlock = HirBlock.create(elseBlockId, name: "if.else")
+    if stmt.elseStart >= 0 'hasElse'
+      var j = stmt.elseStart
+      let elseEnd = stmt.elseStart + stmt.elseCount
+      while j < elseEnd 'elseLoop'
+        let elseStmt = program.getStmt(j)
+        if not elseStmt.hasError 'noError'
+          lowerStatement(elseStmt)
+        end 'noError'
+        j = j + 1
+      end 'elseLoop'
+    end 'hasElse'
+    let brToMerge2 = HirInstr.createBranch(mergeBlockId, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(brToMerge2)
+    currentFunction.addBlock(currentBlock)
+
+    // Merge block
+    currentBlock = HirBlock.create(mergeBlockId, name: "if.merge")
+  end 'lowerIfStmt'
+
+  /// Lower a while statement
+  function lowerWhileStmt(stmt Stmt)
+    let condBlockId = freshBlockId()
+    let bodyBlockId = freshBlockId()
+    let exitBlockId = freshBlockId()
+
+    // Branch to condition block
+    let brToCond = HirInstr.createBranch(condBlockId, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(brToCond)
+    currentFunction.addBlock(currentBlock)
+
+    // Condition block
+    currentBlock = HirBlock.create(condBlockId, name: "while.cond")
+    let condExpr = program.getExpr(stmt.exprIndex)
+    let condValueId = lowerExpression(condExpr)
+    let condBr = HirInstr.createCondBranch(condValueId, trueBlock: bodyBlockId, falseBlock: exitBlockId, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(condBr)
+    currentFunction.addBlock(currentBlock)
+
+    // Body block
+    currentBlock = HirBlock.create(bodyBlockId, name: "while.body")
+    var i = stmt.thenStart
+    let bodyEnd = stmt.thenStart + stmt.thenCount
+    while i < bodyEnd 'bodyLoop'
+      let bodyStmt = program.getStmt(i)
+      if not bodyStmt.hasError 'noError'
+        lowerStatement(bodyStmt)
+      end 'noError'
+      i = i + 1
+    end 'bodyLoop'
+    let brToCond2 = HirInstr.createBranch(condBlockId, line: stmt.line, column: stmt.column)
+    currentBlock.addInstr(brToCond2)
+    currentFunction.addBlock(currentBlock)
+
+    // Exit block
+    currentBlock = HirBlock.create(exitBlockId, name: "while.exit")
+  end 'lowerWhileStmt'
+
+  /// Lower an expression statement
+  function lowerExprStmt(stmt Stmt)
+    let expr = program.getExpr(stmt.exprIndex)
+    lowerExpression(expr)
+  end 'lowerExprStmt'
+
+  /// Lower a break statement (placeholder - needs loop tracking)
+  function lowerBreakStmt(_ Stmt)
+    // TODO: implement break with loop tracking
+  end 'lowerBreakStmt'
+
+  /// Lower a continue statement (placeholder - needs loop tracking)
+  function lowerContinueStmt(_ Stmt)
+    // TODO: implement continue with loop tracking
+  end 'lowerContinueStmt'
+
+  /// Lower an expression and return its value ID
+  function lowerExpression(expr Expr) returns int
+    if expr.hasError 'hasError'
+      return -1
+    end 'hasError'
+
+    match expr.kind 'dispatch'
+    ExprKind.intLiteral then return lowerIntLiteral(expr)
+    ExprKind.floatLiteral then return lowerFloatLiteral(expr)
+    ExprKind.boolLiteral then return lowerBoolLiteral(expr)
+    ExprKind.stringLiteral then return lowerStringLiteral(expr)
+    ExprKind.identifier then return lowerIdentifier(expr)
+    ExprKind.binaryOp then return lowerBinaryOp(expr)
+    ExprKind.unaryOp then return lowerUnaryOp(expr)
+    ExprKind.call then return lowerCall(expr)
+    ExprKind.fieldAccess then return lowerFieldAccess(expr)
+    default then return -1
+    end 'dispatch'
+  end 'lowerExpression'
+
+  /// Lower an integer literal
+  function lowerIntLiteral(expr Expr) returns int
+    let resultId = freshValue()
+    let typeIdx = module.intTypeIdx()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let instr = HirInstr.createConstInt(result, value: expr.intValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
+    currentBlock.addInstr(instr)
+    return resultId
+  end 'lowerIntLiteral'
+
+  /// Lower a float literal
+  function lowerFloatLiteral(expr Expr) returns int
+    let resultId = freshValue()
+    let typeIdx = module.floatTypeIdx()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let instr = HirInstr.createConstFloat(result, value: expr.floatValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
+    currentBlock.addInstr(instr)
+    return resultId
+  end 'lowerFloatLiteral'
+
+  /// Lower a boolean literal
+  function lowerBoolLiteral(expr Expr) returns int
+    let resultId = freshValue()
+    let typeIdx = module.boolTypeIdx()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let instr = HirInstr.createConstBool(result, value: expr.boolValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
+    currentBlock.addInstr(instr)
+    return resultId
+  end 'lowerBoolLiteral'
+
+  /// Lower a string literal
+  function lowerStringLiteral(expr Expr) returns int
+    let resultId = freshValue()
+    let typeIdx = module.stringTypeIdx()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let instr = HirInstr.createConstString(result, value: expr.stringValue, typeIdx: typeIdx, line: expr.line, column: expr.column)
+    currentBlock.addInstr(instr)
+    return resultId
+  end 'lowerStringLiteral'
+
+  /// Lower an identifier reference
+  function lowerIdentifier(expr Expr) returns int
+    let valueId = lookupLocal(expr.stringValue)
+    if valueId >= 0 'found'
+      return valueId
+    end 'found'
+    errors.addErrorAt(ErrorCode.E3001, message: "undefined variable '{expr.stringValue}'", file: program.sourceFile, line: expr.line, column: expr.column)
+    return -1
+  end 'lowerIdentifier'
+
+  /// Lower a binary operation
+  function lowerBinaryOp(expr Expr) returns int
+    let leftId = lowerExpression(program.getExpr(expr.leftIndex))
+    let rightId = lowerExpression(program.getExpr(expr.rightIndex))
+
+    if leftId < 0 or rightId < 0 'hasError'
+      return -1
+    end 'hasError'
+
+    let opcode = mapBinaryOp(expr.binaryOp)
+    let typeIdx = inferBinaryOpType(expr)
+    let resultId = freshValue()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let instr = HirInstr.createBinary(opcode, result: result, left: leftId, right: rightId, typeIdx: typeIdx, line: expr.line, column: expr.column)
+    currentBlock.addInstr(instr)
+    return resultId
+  end 'lowerBinaryOp'
+
+  /// Lower a unary operation
+  function lowerUnaryOp(expr Expr) returns int
+    let operandId = lowerExpression(program.getExpr(expr.leftIndex))
+
+    if operandId < 0 'hasError'
+      return -1
+    end 'hasError'
+
+    let opcode = mapUnaryOp(expr.unaryOp)
+    let typeIdx = inferExprType(program.getExpr(expr.leftIndex))
+    let resultId = freshValue()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let instr = HirInstr.createUnary(opcode, result: result, operand: operandId, typeIdx: typeIdx, line: expr.line, column: expr.column)
+    currentBlock.addInstr(instr)
+    return resultId
+  end 'lowerUnaryOp'
+
+  /// Lower a function call
+  function lowerCall(expr Expr) returns int
+    // Get callee name
+    let calleeExpr = program.getExpr(expr.leftIndex)
+    if calleeExpr.kind != ExprKind.identifier 'notIdent'
+      errors.addErrorAt(ErrorCode.E3005, message: "callee must be an identifier", file: program.sourceFile, line: expr.line, column: expr.column)
+      return -1
+    end 'notIdent'
+
+    let calleeName = calleeExpr.stringValue
+
+    // Lower arguments
+    var args = IntArray{}
+    var i = expr.argsStart
+    let argsEnd = expr.argsStart + expr.argsCount
+    while i < argsEnd 'argsLoop'
+      let argExpr = program.getExpr(i)
+      let argId = lowerExpression(argExpr)
+      args.push(argId)
+      i = i + 1
+    end 'argsLoop'
+
+    // Look up function type
+    let sym = module.findSymbolByName(calleeName)
+    let typeIdx = sym.typeIdx
+
+    let resultId = freshValue()
+    let result = HirValue.create(resultId, typeIdx: typeIdx)
+    let instr = HirInstr.createCall(result, target: calleeName, args: args, typeIdx: typeIdx, line: expr.line, column: expr.column)
+    currentBlock.addInstr(instr)
+    return resultId
+  end 'lowerCall'
+
+  /// Lower a field access
+  function lowerFieldAccess(expr Expr) returns int
+    let objectId = lowerExpression(program.getExpr(expr.leftIndex))
+
+    if objectId < 0 'hasError'
+      return -1
+    end 'hasError'
+
+    // TODO: implement proper field access with type checking
+    let resultId = freshValue()
+    return resultId
+  end 'lowerFieldAccess'
+
+  // ========================================================================
+  // Type Resolution
+  // ========================================================================
+
+  /// Resolve a type reference to a HIR type index
+  function resolveTypeRef(typeRefIdx int) returns int
+    if typeRefIdx < 0 'noType'
+      return module.voidTypeIdx()
+    end 'noType'
+
+    let typeRef = program.getTypeRef(typeRefIdx)
+
+    return match typeRef.kind 'dispatch'
+      TypeKind.typeInt gives module.intTypeIdx()
+      TypeKind.typeFloat gives module.floatTypeIdx()
+      TypeKind.typeBool gives module.boolTypeIdx()
+      TypeKind.typeByte gives module.byteTypeIdx()
+      TypeKind.typeString gives module.stringTypeIdx()
+      TypeKind.typeVoid gives module.voidTypeIdx()
+      TypeKind.typeNamed gives resolveNamedType(typeRef.name)
+      default gives module.voidTypeIdx()
+    end 'dispatch'
+  end 'resolveTypeRef'
+
+  /// Resolve a named type
+  function resolveNamedType(name String) returns int
+    // Look up in symbol table
+    let sym = module.findSymbolByName(name)
+    if sym.typeIdx >= 0 'found'
+      return sym.typeIdx
+    end 'found'
+
+    // Unknown type
+    let unknownType = HirType.createUnknown()
+    return module.addType(unknownType)
+  end 'resolveNamedType'
+
+  /// Infer the type of an expression
+  function inferExprType(expr Expr) returns int
+    return match expr.kind 'dispatch'
+      ExprKind.intLiteral gives module.intTypeIdx()
+      ExprKind.floatLiteral gives module.floatTypeIdx()
+      ExprKind.boolLiteral gives module.boolTypeIdx()
+      ExprKind.stringLiteral gives module.stringTypeIdx()
+      ExprKind.identifier gives inferIdentifierType(expr)
+      ExprKind.binaryOp gives inferBinaryOpType(expr)
+      ExprKind.unaryOp gives inferExprType(program.getExpr(expr.leftIndex))
+      ExprKind.call gives inferCallType(expr)
+      default gives module.voidTypeIdx()
+    end 'dispatch'
+  end 'inferExprType'
+
+  /// Infer identifier type from scope
+  function inferIdentifierType(expr Expr) returns int
+    let sym = module.findSymbolByName(expr.stringValue)
+    if sym.typeIdx >= 0 'found'
+      return sym.typeIdx
+    end 'found'
+    return module.voidTypeIdx()
+  end 'inferIdentifierType'
+
+  /// Infer binary operation result type
+  function inferBinaryOpType(expr Expr) returns int
+    // Comparison operators always return bool
+    if expr.binaryOp == BinaryOp.equal or expr.binaryOp == BinaryOp.notEqual or expr.binaryOp == BinaryOp.less or expr.binaryOp == BinaryOp.lessEqual or expr.binaryOp == BinaryOp.greater or expr.binaryOp == BinaryOp.greaterEqual 'isCmp'
+      return module.boolTypeIdx()
+    end 'isCmp'
+
+    // Logical operators return bool
+    if expr.binaryOp == BinaryOp.logicalAnd or expr.binaryOp == BinaryOp.logicalOr 'isLogical'
+      return module.boolTypeIdx()
+    end 'isLogical'
+
+    // Arithmetic: inherit from left operand
+    return inferExprType(program.getExpr(expr.leftIndex))
+  end 'inferBinaryOpType'
+
+  /// Infer call return type
+  function inferCallType(expr Expr) returns int
+    let calleeExpr = program.getExpr(expr.leftIndex)
+    if calleeExpr.kind == ExprKind.identifier 'isIdent'
+      let sym = module.findSymbolByName(calleeExpr.stringValue)
+      return sym.typeIdx
+    end 'isIdent'
+    return module.voidTypeIdx()
+  end 'inferCallType'
+
+  // ========================================================================
+  // Opcode Mapping
+  // ========================================================================
+
+  function mapBinaryOp(op BinaryOp) returns HirOpcode
+    return match op 'map'
+      BinaryOp.add gives HirOpcode.add
+      BinaryOp.subtract gives HirOpcode.sub
+      BinaryOp.multiply gives HirOpcode.mul
+      BinaryOp.divide gives HirOpcode.div
+      BinaryOp.modulo gives HirOpcode.mod_
+      BinaryOp.equal gives HirOpcode.eq
+      BinaryOp.notEqual gives HirOpcode.ne
+      BinaryOp.less gives HirOpcode.lt
+      BinaryOp.lessEqual gives HirOpcode.le
+      BinaryOp.greater gives HirOpcode.gt
+      BinaryOp.greaterEqual gives HirOpcode.ge
+      BinaryOp.logicalAnd gives HirOpcode.logicalAnd
+      BinaryOp.logicalOr gives HirOpcode.logicalOr
+      default gives HirOpcode.add
+    end 'map'
+  end 'mapBinaryOp'
+
+  function mapUnaryOp(op UnaryOp) returns HirOpcode
+    return match op 'map'
+      UnaryOp.negate gives HirOpcode.neg
+      UnaryOp.logicalNot gives HirOpcode.logicalNot
+      default gives HirOpcode.neg
+    end 'map'
+  end 'mapUnaryOp'
+
+  // ========================================================================
+  // Scope Management
+  // ========================================================================
+
+  function pushScope()
+    let scope = LocalScope.create(currentScopeIdx)
+    scopes.push(scope)
+    currentScopeIdx = scopes.count() - 1
+  end 'pushScope'
+
+  function popScope()
+    if currentScopeIdx >= 0 'hasScope'
+      let scope = try scopes.get(currentScopeIdx) otherwise LocalScope.create(-1)
+      currentScopeIdx = scope.parent
+    end 'hasScope'
+  end 'popScope'
+
+  function addLocal(name String, valueId int)
+    if currentScopeIdx >= 0 'hasScope'
+      var scope = try scopes.get(currentScopeIdx) otherwise LocalScope.create(-1)
+      scope.variables.insert(key: name, value: valueId)
+      scopes.set(currentScopeIdx, value: scope)
+    end 'hasScope'
+  end 'addLocal'
+
+  function lookupLocal(name String) returns int
+    var scopeIdx = currentScopeIdx
+    while scopeIdx >= 0 'searchLoop'
+      let scope = try scopes.get(scopeIdx) otherwise LocalScope.create(-1)
+      let valueId = try scope.variables.get(name) otherwise -1
+      if valueId >= 0 'found'
+        return valueId
+      end 'found'
+      scopeIdx = scope.parent
+    end 'searchLoop'
+    return -1
+  end 'lookupLocal'
+
+  // ========================================================================
+  // Value and Block ID Generation
+  // ========================================================================
+
+  function freshValue() returns int
+    let id = nextValueId
+    nextValueId = nextValueId + 1
+    return id
+  end 'freshValue'
+
+  function freshBlockId() returns int
+    let id = nextBlockId
+    nextBlockId = nextBlockId + 1
+    return id
+  end 'freshBlockId'
 end 'AstToHir'

@@ -15,17 +15,17 @@ Types define custom data types with named fields.
 
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 ```
 
 Fields must use `let` (immutable) or `var` (mutable), and can be `export` for external access:
 ```maxon
 type Config
-    export let version int    // Cannot be changed after initialization, accessible externally
-    export var count int      // Can be modified, accessible externally
-    var internal int          // Private - only accessible in methods
+  export let version int    // Cannot be changed after initialization, accessible externally
+  export var count int      // Can be modified, accessible externally
+  var internal int          // Private - only accessible in methods
 end 'Config'
 ```
 
@@ -67,14 +67,14 @@ c.count = 5     // OK: field is var
 <!-- test: var-struct-field-assign -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function main() returns int
-    var p = Point{x: 10, y: 20}
-    p.x = 30
-    return p.x
+  var p = Point{x: 10, y: 20}
+  p.x = 30
+  return p.x
 end 'main'
 ```
 ```exitcode
@@ -84,14 +84,14 @@ end 'main'
 <!-- test: var-field-assign -->
 ```maxon
 type Config
-    export let version int
-    export var count int
+  export let version int
+  export var count int
 end 'Config'
 
 function main() returns int
-    var c = Config{version: 1, count: 0}
-    c.count = 5
-    return c.count
+  var c = Config{version: 1, count: 0}
+  c.count = 5
+  return c.count
 end 'main'
 ```
 ```exitcode
@@ -101,14 +101,14 @@ end 'main'
 <!-- test: error.let-struct-field-assign -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function main() returns int
-    let p = Point{x: 10, y: 20}
-    p.x = 30
-    return p.x
+  let p = Point{x: 10, y: 20}
+  p.x = 30
+  return p.x
 end 'main'
 ```
 ```maxoncstderr
@@ -118,14 +118,14 @@ error E4009: specs/fragments/structs/error.let-struct-field-assign.test:9:5: can
 <!-- test: error.let-field-assign -->
 ```maxon
 type Config
-    export let version int
-    export var count int
+  export let version int
+  export var count int
 end 'Config'
 
 function main() returns int
-    var c = Config{version: 1, count: 0}
-    c.version = 2
-    return c.version
+  var c = Config{version: 1, count: 0}
+  c.version = 2
+  return c.version
 end 'main'
 ```
 ```maxoncstderr
@@ -135,13 +135,13 @@ error E4009: specs/fragments/structs/error.let-field-assign.test:9:5: cannot ass
 <!-- test: simple-type -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function main() returns int
-    var p = Point { x: 3, y: 4 }
-    return p.x + p.y
+  var p = Point { x: 3, y: 4 }
+  return p.x + p.y
 end 'main'
 ```
 ```exitcode
@@ -151,13 +151,13 @@ end 'main'
 <!-- test: struct-field-access -->
 ```maxon
 type Rect
-    export var width int
-    export var height int
+  export var width int
+  export var height int
 end 'Rect'
 
 function main() returns int
-    var r = Rect { width: 5, height: 10 }
-    return r.width * r.height
+  var r = Rect { width: 5, height: 10 }
+  return r.width * r.height
 end 'main'
 ```
 ```exitcode
@@ -167,18 +167,18 @@ end 'main'
 <!-- test: struct-param -->
 ```maxon
 type Vec2
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Vec2'
 
 function dot(a Vec2, b Vec2) returns int
-    return a.x * b.x + a.y * b.y
+  return a.x * b.x + a.y * b.y
 end 'dot'
 
 function main() returns int
-    var v1 = Vec2 { x: 3, y: 4 }
-    var v2 = Vec2 { x: 2, y: 1 }
-    return dot(v1, b: v2)
+  var v1 = Vec2 { x: 3, y: 4 }
+  var v2 = Vec2 { x: 2, y: 1 }
+  return dot(v1, b: v2)
 end 'main'
 ```
 ```exitcode
@@ -188,17 +188,17 @@ end 'main'
 <!-- test: struct-return -->
 ```maxon
 type Pair
-    export var first int
-    export var second int
+  export var first int
+  export var second int
 end 'Pair'
 
 function makePair(a int, b int) returns Pair
-    return { first: a, second: b }
+  return { first: a, second: b }
 end 'makePair'
 
 function main() returns int
-    var p = makePair(5, b: 7)
-    return p.first + p.second
+  var p = makePair(5, b: 7)
+  return p.first + p.second
 end 'main'
 ```
 ```exitcode
@@ -208,16 +208,16 @@ end 'main'
 <!-- test: struct-literal-as-arg -->
 ```maxon
 type Point
-    export var x int
-    export var y int
+  export var x int
+  export var y int
 end 'Point'
 
 function acceptPoint(p Point) returns int
-    return p.x + p.y
+  return p.x + p.y
 end 'acceptPoint'
 
 function main() returns int
-    return acceptPoint({x: 3, y: 4})
+  return acceptPoint({x: 3, y: 4})
 end 'main'
 ```
 ```exitcode
@@ -227,15 +227,15 @@ end 'main'
 <!-- test: struct-field-default -->
 ```maxon
 type Counter
-	export var value = 0
-	export var step = 1
+  export var value = 0
+  export var step = 1
 end 'Counter'
 
 function main() returns int
-	var c1 = Counter{}
-	var c2 = Counter{value: 40}
-	var c3 = Counter{value: 10, step: 2}
-	return c1.value + c2.value + c3.step
+  var c1 = Counter{}
+  var c2 = Counter{value: 40}
+  var c3 = Counter{value: 10, step: 2}
+  return c1.value + c2.value + c3.step
 end 'main'
 ```
 ```exitcode
@@ -245,13 +245,13 @@ end 'main'
 <!-- test: struct-field-inferred-type -->
 ```maxon
 type Settings
-	export let maxRetries = 5
-	export var timeout = 50.0
+  export let maxRetries = 5
+  export var timeout = 50.0
 end 'Settings'
 
 function main() returns int
-	var s = Settings{}
-	return s.maxRetries + trunc(s.timeout)
+  var s = Settings{}
+  return s.maxRetries + trunc(s.timeout)
 end 'main'
 ```
 ```exitcode

@@ -21,19 +21,19 @@ Functions in Maxon are declared using the `function` keyword. Each function has:
 ```maxon
 // Function with return value
 function name(param1 type1, param2 type2) returns returnType
-    // statements
-    return value
+  // statements
+  return value
 end 'name'
 
 // Function with no return value (implicit void)
 function name(param1 type1, param2 type2)
-    // statements
+  // statements
 end 'name'
 
 // Function with discard parameter (unused parameter)
 function name(_ type1, param2 type2) returns returnType
-    // param2 is usable, _ is discarded
-    return value
+  // param2 is usable, _ is discarded
+  return value
 end 'name'
 ```
 
@@ -48,7 +48,7 @@ Multiple discard parameters can be declared using names that start with `_`:
 
 ```maxon
 function callback(_a int, _b String, value float) returns float
-    return value * 2.0
+  return value * 2.0
 end 'callback'
 ```
 
@@ -61,11 +61,11 @@ Discard parameters:
 
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(3, b: 4)
+  return add(3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -78,11 +78,11 @@ end 'main'
 <!-- test: simple-function -->
 ```maxon
 function add() returns int
-    return 3 + 4
+  return 3 + 4
 end 'add'
 
 function main() returns int
-    return add()
+  return add()
 end 'main'
 ```
 ```exitcode
@@ -93,11 +93,11 @@ end 'main'
 <!-- test: with-parameters -->
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(10, b: 20)
+  return add(10, b: 20)
 end 'main'
 ```
 ```exitcode
@@ -108,15 +108,15 @@ end 'main'
 <!-- test: nested-calls -->
 ```maxon
 function double(x int) returns int
-    return x * 2
+  return x * 2
 end 'double'
 
 function quadruple(x int) returns int
-    return double(double(x))
+  return double(double(x))
 end 'quadruple'
 
 function main() returns int
-    return quadruple(3)
+  return quadruple(3)
 end 'main'
 ```
 ```exitcode
@@ -127,12 +127,12 @@ end 'main'
 <!-- test: void-return-type -->
 ```maxon
 function doNothing()
-    var x = 1
+  var x = 1
 end 'doNothing'
 
 function main() returns int
-    doNothing()
-    return 0
+  doNothing()
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -143,11 +143,11 @@ end 'main'
 <!-- test: missing-returns-keyword-error -->
 ```maxon
 function foo() int
-    return 0
+  return 0
 end 'foo'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -158,11 +158,11 @@ error E2004: specs/fragments/function-declaration/missing-returns-keyword-error.
 <!-- test: discard-single-parameter -->
 ```maxon
 function useSecond(_ int, b int) returns int
-    return b
+  return b
 end 'useSecond'
 
 function main() returns int
-    return useSecond(10, b: 42)
+  return useSecond(10, b: 42)
 end 'main'
 ```
 ```exitcode

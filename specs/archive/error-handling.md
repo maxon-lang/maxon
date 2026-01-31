@@ -16,22 +16,22 @@ Error types must be enums that conform to the `Error` interface:
 ```maxon
 // Simple enum error
 enum FileError is Error
-    notFound
-    permissionDenied
-    alreadyExists
+  notFound
+  permissionDenied
+  alreadyExists
 end 'FileError'
 
 // Int-backed enum error (for error codes)
 enum HttpError is Error
-    badRequest = 400
-    notFound = 404
-    serverError = 500
+  badRequest = 400
+  notFound = 404
+  serverError = 500
 end 'HttpError'
 
 // String-backed enum error (for messages)
 enum ValidationError is Error
-    emptyField = "Field cannot be empty"
-    invalidFormat = "Invalid format"
+  emptyField = "Field cannot be empty"
+  invalidFormat = "Invalid format"
 end 'ValidationError'
 ```
 
@@ -41,10 +41,10 @@ Annotate functions that can throw with `throws ErrorType`:
 
 ```maxon
 function readFile(path string) returns string throws FileError
-    if not exists(path) 'check'
-        throw FileError.notFound
-    end 'check'
-    return contents
+  if not exists(path) 'check'
+    throw FileError.notFound
+  end 'check'
+  return contents
 end 'readFile'
 ```
 
@@ -78,8 +78,8 @@ Execute a block of code when an error occurs:
 
 ```maxon
 try readFile("config.json") otherwise 'handler'
-    print("File not found, using defaults")
-    useDefaults()
+  print("File not found, using defaults")
+  useDefaults()
 end 'handler'
 ```
 
@@ -91,8 +91,8 @@ Capture the error for inspection:
 
 ```maxon
 try readFile("config.json") otherwise (e) 'handler'
-    print("Error: ")
-    logError(e)
+  print("Error: ")
+  logError(e)
 end 'handler'
 ```
 
@@ -104,8 +104,8 @@ Use `try` without `otherwise` to propagate errors to the caller (only valid in f
 
 ```maxon
 function loadConfig() returns Config throws FileError
-    let contents = try readFile("config.json")
-    return parse(contents)
+  let contents = try readFile("config.json")
+  return parse(contents)
 end 'loadConfig'
 ```
 
@@ -115,12 +115,12 @@ end 'loadConfig'
 ```maxon
 // Simple enum error type
 enum MyError is Error
-    invalidInput
-    notFound
+  invalidInput
+  notFound
 end 'MyError'
 
 function main() returns int
-    return 42
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -131,12 +131,12 @@ end 'main'
 ```maxon
 // Int-backed enum error type (type inferred from values)
 enum MyError is Error
-    invalidInput = 1
-    notFound = 404
+  invalidInput = 1
+  notFound = 404
 end 'MyError'
 
 function main() returns int
-    return 42
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -147,12 +147,12 @@ end 'main'
 ```maxon
 // String-backed enum error type (type inferred from values)
 enum MyError is Error
-    invalidInput = "Invalid input"
-    notFound = "Not found"
+  invalidInput = "Invalid input"
+  notFound = "Not found"
 end 'MyError'
 
 function main() returns int
-    return 42
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -163,16 +163,16 @@ end 'main'
 ```maxon
 // Functions can declare they throw a specific error type
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 // This function signature declares it throws MyError
 function mayFail() returns int throws MyError
-    return 10
+  return 10
 end 'mayFail'
 
 function main() returns int
-    return 42
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -183,18 +183,18 @@ end 'main'
 ```maxon
 // Test that throwing function can return success value
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail(shouldFail bool) returns int throws MyError
-    if shouldFail 'check'
-        throw MyError.failed
-    end 'check'
-    return 42
+  if shouldFail 'check'
+    throw MyError.failed
+  end 'check'
+  return 42
 end 'mayFail'
 
 function main() returns int
-    return 42
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -205,21 +205,21 @@ end 'main'
 ```maxon
 // Test error propagation: inner function throws, middle propagates, outer handles with otherwise
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function inner() returns int throws MyError
-    throw MyError.failed
+  throw MyError.failed
 end 'inner'
 
 function middle() returns int throws MyError
-    let x = try inner()
-    return x
+  let x = try inner()
+  return x
 end 'middle'
 
 function main() returns int
-    let x = try middle() otherwise 99
-    return x
+  let x = try middle() otherwise 99
+  return x
 end 'main'
 ```
 ```exitcode
@@ -230,16 +230,16 @@ end 'main'
 ```maxon
 // Test try otherwise with default value
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail() returns int throws MyError
-    throw MyError.failed
+  throw MyError.failed
 end 'mayFail'
 
 function main() returns int
-    let val = try mayFail() otherwise 42
-    return val
+  let val = try mayFail() otherwise 42
+  return val
 end 'main'
 ```
 ```exitcode
@@ -250,19 +250,19 @@ end 'main'
 ```maxon
 // Test try otherwise when no error occurs
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail(shouldFail bool) returns int throws MyError
-    if shouldFail 'check'
-        throw MyError.failed
-    end 'check'
-    return 100
+  if shouldFail 'check'
+    throw MyError.failed
+  end 'check'
+  return 100
 end 'mayFail'
 
 function main() returns int
-    let val = try mayFail(false) otherwise 42
-    return val
+  let val = try mayFail(false) otherwise 42
+  return val
 end 'main'
 ```
 ```exitcode
@@ -273,16 +273,16 @@ end 'main'
 ```maxon
 // Test try otherwise ignore
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail() returns int throws MyError
-    throw MyError.failed
+  throw MyError.failed
 end 'mayFail'
 
 function main() returns int
-    try mayFail() otherwise ignore
-    return 42
+  try mayFail() otherwise ignore
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -293,19 +293,19 @@ end 'main'
 ```maxon
 // Test try otherwise block handler
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail() returns int throws MyError
-    throw MyError.failed
+  throw MyError.failed
 end 'mayFail'
 
 function main() returns int
-    var result = 0
-    try mayFail() otherwise 'err'
-        result = 42
-    end 'err'
-    return result
+  var result = 0
+  try mayFail() otherwise 'err'
+    result = 42
+  end 'err'
+  return result
 end 'main'
 ```
 ```exitcode
@@ -316,22 +316,22 @@ end 'main'
 ```maxon
 // Test try otherwise block when no error
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail(shouldFail bool) returns int throws MyError
-    if shouldFail 'check'
-        throw MyError.failed
-    end 'check'
-    return 100
+  if shouldFail 'check'
+    throw MyError.failed
+  end 'check'
+  return 100
 end 'mayFail'
 
 function main() returns int
-    var result = 0
-    try mayFail(false) otherwise 'err'
-        result = 42
-    end 'err'
-    return result
+  var result = 0
+  try mayFail(false) otherwise 'err'
+    result = 42
+  end 'err'
+  return result
 end 'main'
 ```
 ```exitcode
@@ -342,19 +342,19 @@ end 'main'
 ```maxon
 // Test try otherwise block with error binding
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail() returns int throws MyError
-    throw MyError.failed
+  throw MyError.failed
 end 'mayFail'
 
 function main() returns int
-    var caught = 0
-    try mayFail() otherwise 'handler'
-        caught = 42
-    end 'handler'
-    return caught
+  var caught = 0
+  try mayFail() otherwise 'handler'
+    caught = 42
+  end 'handler'
+  return caught
 end 'main'
 ```
 ```exitcode
@@ -365,11 +365,11 @@ end 'main'
 ```maxon
 // main cannot be declared with throws
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function main() returns int throws MyError
-    return 42
+  return 42
 end 'main'
 ```
 ```maxoncstderr
@@ -380,16 +380,16 @@ error E054: specs/fragments/error-handling.error.main-cannot-throw.1.test:7:10: 
 ```maxon
 // otherwise expression type must match the success type
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail() returns int throws MyError
-    throw MyError.failed
+  throw MyError.failed
 end 'mayFail'
 
 function main() returns int
-    let val = try mayFail() otherwise "wrong type"
-    return val
+  let val = try mayFail() otherwise "wrong type"
+  return val
 end 'main'
 ```
 ```maxoncstderr
@@ -400,16 +400,16 @@ error E022: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:
 ```maxon
 // Calling a throwing function without try is an error
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail() returns int throws MyError
-    return 42
+  return 42
 end 'mayFail'
 
 function main() returns int
-    let val = mayFail()
-    return val
+  let val = mayFail()
+  return val
 end 'main'
 ```
 ```maxoncstderr
@@ -422,9 +422,9 @@ typealias IntArray is Array with int
 
 // Calling a throwing method without try is an error
 function main() returns int
-    let arr = IntArray{}
-    let val = arr.get(0)
-    return 0
+  let arr = IntArray{}
+  let val = arr.get(0)
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -435,12 +435,12 @@ error E057: specs/fragments/error-handling.error.throwing-method-requires-try.1.
 ```maxon
 // Using try on a non-throwing function is an error
 function noFail() returns int
-    return 42
+  return 42
 end 'noFail'
 
 function main() returns int
-    let val = try noFail() otherwise 0
-    return val
+  let val = try noFail() otherwise 0
+  return val
 end 'main'
 ```
 ```maxoncstderr
@@ -453,9 +453,9 @@ typealias IntArray is Array with int
 
 // Using try on a non-throwing method is an error
 function main() returns int
-    let arr = IntArray{}
-    let val = try arr.count() otherwise 0
-    return val
+  let arr = IntArray{}
+  let val = try arr.count() otherwise 0
+  return val
 end 'main'
 ```
 ```maxoncstderr
@@ -468,9 +468,9 @@ typealias IntArray is Array with int
 
 // Using otherwise without try is an error
 function main() returns int
-    let arr = IntArray{}
-    let val = arr.get(0) otherwise 0
-    return val
+  let arr = IntArray{}
+  let val = arr.get(0) otherwise 0
+  return val
 end 'main'
 ```
 ```maxoncstderr
@@ -481,16 +481,16 @@ error E058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7:
 ```maxon
 // Using 'otherwise ignore' in an assignment is an error
 enum MyError is Error
-    failed
+  failed
 end 'MyError'
 
 function mayFail() returns int throws MyError
-    throw MyError.failed
+  throw MyError.failed
 end 'mayFail'
 
 function main() returns int
-    let val = try mayFail() otherwise ignore
-    return val
+  let val = try mayFail() otherwise ignore
+  return val
 end 'main'
 ```
 ```maxoncstderr

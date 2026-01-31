@@ -82,8 +82,8 @@ var x = crash_now()  ' Program exits with FFI error, not segfault
 extern function add_numbers(a int, b int) returns int "ffi_test_lib"
 
 function main() returns int
-    var result = add_numbers(5, 3)
-    return result
+  var result = add_numbers(5, 3)
+  return result
 end 'main'
 ```
 ```exitcode
@@ -95,7 +95,7 @@ end 'main'
 extern function add_numbers(a int, b int) returns int "ffi_test_lib"
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -107,7 +107,7 @@ end 'main'
 extern function get_constant() returns int "ffi_test_lib"
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -119,7 +119,7 @@ end 'main'
 extern function get_pi() returns float "ffi_test_lib"
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -131,7 +131,7 @@ end 'main'
 extern function do_nothing() "ffi_test_lib"
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -143,7 +143,7 @@ end 'main'
 extern function process_ptr(p ptr) returns int "ffi_test_lib"
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -155,8 +155,8 @@ end 'main'
 extern function some_function(x int) returns int "nonexistent_dll"
 
 function main() returns int
-    var result = some_function(42)
-    return result
+  var result = some_function(42)
+  return result
 end 'main'
 ```
 ```exitcode
@@ -171,8 +171,8 @@ FFI Error: Failed to load DLL 'nonexistent_dll.dll'
 extern function nonexistent_function(a int, b int) returns int "ffi_test_lib"
 
 function main() returns int
-    var result = nonexistent_function(5, 3)
-    return result
+  var result = nonexistent_function(5, 3)
+  return result
 end 'main'
 ```
 ```exitcode
@@ -187,8 +187,8 @@ FFI Error: Function 'nonexistent_function' not found in 'ffi_test_lib.dll'
 extern function crash_null_deref() returns int "ffi_test_lib"
 
 function main() returns int
-    var result = crash_null_deref()
-    return result
+  var result = crash_null_deref()
+  return result
 end 'main'
 ```
 ```exitcode
@@ -203,8 +203,8 @@ FFI Error: Worker process crashed
 extern function crash_divide_by_zero(x int) returns int "ffi_test_lib"
 
 function main() returns int
-    var result = crash_divide_by_zero(42)
-    return result
+  var result = crash_divide_by_zero(42)
+  return result
 end 'main'
 ```
 ```exitcode
@@ -219,7 +219,7 @@ FFI Error: Worker process crashed
 extern function GetCurrentProcessId() returns int "kernel32"
 
 function main() returns int
-    return GetCurrentProcessId() - GetCurrentProcessId()
+  return GetCurrentProcessId() - GetCurrentProcessId()
 end 'main'
 ```
 ```exitcode

@@ -2,323 +2,323 @@
 /// @category Math
 
 export type Math
-	/// Calculate the sine of an angle (in radians)
-	/// Uses Taylor series: sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
-	export static function sin(x float) returns float
-		// Handle zero case
-		if x == 0.0 'zero'
-			return 0.0
-		end 'zero'
+  /// Calculate the sine of an angle (in radians)
+  /// Uses Taylor series: sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
+  export static function sin(x float) returns float
+    // Handle zero case
+    if x == 0.0 'zero'
+      return 0.0
+    end 'zero'
 
-		// Reduce x to range [-π, π] for better convergence
-		// π ≈ 3.14159265358979323846
-		var pi = 3.14159265358979323846
-		var two_pi = 6.28318530717958647692
+    // Reduce x to range [-π, π] for better convergence
+    // π ≈ 3.14159265358979323846
+    var pi = 3.14159265358979323846
+    var two_pi = 6.28318530717958647692
 
-		// Normalize to [-π, π] using local variable
-		var angle = x
-		while angle > pi 'reduce_pos'
-			angle = angle - two_pi
-		end 'reduce_pos'
-		while angle < -pi 'reduce_neg'
-			angle = angle + two_pi
-		end 'reduce_neg'
+    // Normalize to [-π, π] using local variable
+    var angle = x
+    while angle > pi 'reduce_pos'
+      angle = angle - two_pi
+    end 'reduce_pos'
+    while angle < -pi 'reduce_neg'
+      angle = angle + two_pi
+    end 'reduce_neg'
 
-		// Taylor series for sin(x):
-		// sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
-		// Term n: (-1)^n * x^(2n+1) / (2n+1)!
+    // Taylor series for sin(x):
+    // sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
+    // Term n: (-1)^n * x^(2n+1) / (2n+1)!
 
-		var x_squared = angle * angle
-		var term = angle  // First term is angle
-		var sum = angle
-		var n = 1.0
+    var x_squared = angle * angle
+    var term = angle  // First term is angle
+    var sum = angle
+    var n = 1.0
 
-		// Compute terms until convergence (about 12 terms is enough for double precision)
-		while n < 12.0 'series'
-			// Next term: multiply by -x^2 / ((2n)(2n+1))
-			var two_n = 2.0 * n
-			term = term * (-x_squared) / (two_n * (two_n + 1.0))
-			sum = sum + term
-			n = n + 1.0
-		end 'series'
+    // Compute terms until convergence (about 12 terms is enough for double precision)
+    while n < 12.0 'series'
+      // Next term: multiply by -x^2 / ((2n)(2n+1))
+      var two_n = 2.0 * n
+      term = term * (-x_squared) / (two_n * (two_n + 1.0))
+      sum = sum + term
+      n = n + 1.0
+    end 'series'
 
-		return sum
-	end 'sin'
+    return sum
+  end 'sin'
 
-	/// Calculate the cosine of an angle (in radians)
-	/// Uses Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
-	export static function cos(x float) returns float
-		// Handle zero case
-		if x == 0.0 'zero'
-			return 1.0
-		end 'zero'
+  /// Calculate the cosine of an angle (in radians)
+  /// Uses Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
+  export static function cos(x float) returns float
+    // Handle zero case
+    if x == 0.0 'zero'
+      return 1.0
+    end 'zero'
 
-		// Reduce x to range [-π, π] for better convergence
-		// π ≈ 3.14159265358979323846
-		var pi = 3.14159265358979323846
-		var two_pi = 6.28318530717958647692
+    // Reduce x to range [-π, π] for better convergence
+    // π ≈ 3.14159265358979323846
+    var pi = 3.14159265358979323846
+    var two_pi = 6.28318530717958647692
 
-		// Normalize to [-π, π] using local variable
-		var angle = x
-		while angle > pi 'reduce_pos'
-			angle = angle - two_pi
-		end 'reduce_pos'
-		while angle < -pi 'reduce_neg'
-			angle = angle + two_pi
-		end 'reduce_neg'
+    // Normalize to [-π, π] using local variable
+    var angle = x
+    while angle > pi 'reduce_pos'
+      angle = angle - two_pi
+    end 'reduce_pos'
+    while angle < -pi 'reduce_neg'
+      angle = angle + two_pi
+    end 'reduce_neg'
 
-		// Taylor series for cos(x):
-		// cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
-		// Term n: (-1)^n * x^(2n) / (2n)!
+    // Taylor series for cos(x):
+    // cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
+    // Term n: (-1)^n * x^(2n) / (2n)!
 
-		var x_squared = angle * angle
-		var term = 1.0  // First term is 1
-		var sum = 1.0
-		var n = 1.0
+    var x_squared = angle * angle
+    var term = 1.0  // First term is 1
+    var sum = 1.0
+    var n = 1.0
 
-		// Compute terms until convergence (about 12 terms is enough for double precision)
-		while n < 12.0 'series'
-			// Next term: multiply by -x^2 / ((2n-1)(2n))
-			var two_n = 2.0 * n
-			term = term * (-x_squared) / ((two_n - 1.0) * two_n)
-			sum = sum + term
-			n = n + 1.0
-		end 'series'
+    // Compute terms until convergence (about 12 terms is enough for double precision)
+    while n < 12.0 'series'
+      // Next term: multiply by -x^2 / ((2n-1)(2n))
+      var two_n = 2.0 * n
+      term = term * (-x_squared) / ((two_n - 1.0) * two_n)
+      sum = sum + term
+      n = n + 1.0
+    end 'series'
 
-		return sum
-	end 'cos'
+    return sum
+  end 'cos'
 
-	/// Calculate e^x where e is Euler's number
-	/// Uses Taylor series: e^x = 1 + x + x^2/2! + x^3/3! + ...
-	export static function exp(x float) returns float
-		// Handle special cases
-		if x == 0.0 'zero'
-			return 1.0
-		end 'zero'
+  /// Calculate e^x where e is Euler's number
+  /// Uses Taylor series: e^x = 1 + x + x^2/2! + x^3/3! + ...
+  export static function exp(x float) returns float
+    // Handle special cases
+    if x == 0.0 'zero'
+      return 1.0
+    end 'zero'
 
-		// For large positive x, use exp(x) = exp(x/2)^2 repeatedly
-		// For large negative x, use exp(x) = 1/exp(-x)
-		var is_negative = x < 0.0
-		if is_negative 'neg'
-			x = -x
-		end 'neg'
+    // For large positive x, use exp(x) = exp(x/2)^2 repeatedly
+    // For large negative x, use exp(x) = 1/exp(-x)
+    var is_negative = x < 0.0
+    if is_negative 'neg'
+      x = -x
+    end 'neg'
 
-		// Reduce x to a smaller range using exp(x) = exp(x/2)^2
-		var reduction_count = 0
-		while x > 1.0 'reduce'
-			x = x / 2.0
-			reduction_count = reduction_count + 1
-		end 'reduce'
+    // Reduce x to a smaller range using exp(x) = exp(x/2)^2
+    var reduction_count = 0
+    while x > 1.0 'reduce'
+      x = x / 2.0
+      reduction_count = reduction_count + 1
+    end 'reduce'
 
-		// Compute exp(x) using Taylor series for small x
-		var term = 1.0
-		var sum = 1.0
-		var k = 1.0
+    // Compute exp(x) using Taylor series for small x
+    var term = 1.0
+    var sum = 1.0
+    var k = 1.0
 
-		// Compute first 20 terms
-		while k < 20.0 'series'
-			term = term * x
-			var k_float = k
-			term = term / k_float
-			sum = sum + term
-			k = k + 1
-		end 'series'
+    // Compute first 20 terms
+    while k < 20.0 'series'
+      term = term * x
+      var k_float = k
+      term = term / k_float
+      sum = sum + term
+      k = k + 1
+    end 'series'
 
-		// Square the result reduction_count times to get exp(original_x)
-		var result = sum
-		var i = 0
-		while i < reduction_count 'square'
-			result = result * result
-			i = i + 1
-		end 'square'
+    // Square the result reduction_count times to get exp(original_x)
+    var result = sum
+    var i = 0
+    while i < reduction_count 'square'
+      result = result * result
+      i = i + 1
+    end 'square'
 
-		// Handle negative input
-		if is_negative 'invert'
-			result = 1.0 / result
-		end 'invert'
+    // Handle negative input
+    if is_negative 'invert'
+      result = 1.0 / result
+    end 'invert'
 
-		return result
-	end 'exp'
+    return result
+  end 'exp'
 
-	/// Calculate natural logarithm (ln) of x
-	/// Uses Taylor series approximation around x=1
-	export static function log(x float) returns float
-		// Handle special cases
-		if x <= 0.0 'invalid'
-			return 0.0  // undefined for non-positive values
-		end 'invalid'
+  /// Calculate natural logarithm (ln) of x
+  /// Uses Taylor series approximation around x=1
+  export static function log(x float) returns float
+    // Handle special cases
+    if x <= 0.0 'invalid'
+      return 0.0  // undefined for non-positive values
+    end 'invalid'
 
-		if x == 1.0 'one'
-			return 0.0
-		end 'one'
+    if x == 1.0 'one'
+      return 0.0
+    end 'one'
 
-		// For values far from 1, use log(x) = log(x/2^n) + n*log(2)
-		// to bring x closer to 1 where Taylor series converges faster
-		var n = 0
-		var y = x
+    // For values far from 1, use log(x) = log(x/2^n) + n*log(2)
+    // to bring x closer to 1 where Taylor series converges faster
+    var n = 0
+    var y = x
 
-		// Normalize to range [0.5, 1.0)
-		while y >= 1.0 'normalize_down'
-			y = y / 2.0
-			n = n + 1
-		end 'normalize_down'
+    // Normalize to range [0.5, 1.0)
+    while y >= 1.0 'normalize_down'
+      y = y / 2.0
+      n = n + 1
+    end 'normalize_down'
 
-		while y < 0.5 'normalize_up'
-			y = y * 2.0
-			n = n - 1
-		end 'normalize_up'
+    while y < 0.5 'normalize_up'
+      y = y * 2.0
+      n = n - 1
+    end 'normalize_up'
 
-		// Now compute log(y) using Taylor series: log(y) = 2 * sum((z^(2k+1))/(2k+1))
-		// where z = (y-1)/(y+1), converges for all y > 0
-		var num = y - 1.0
-		var den = y + 1.0
-		var z = num / den
-		var z_squared = z * z
-		var term = z
-		var sum = term
-		var k = 1
+    // Now compute log(y) using Taylor series: log(y) = 2 * sum((z^(2k+1))/(2k+1))
+    // where z = (y-1)/(y+1), converges for all y > 0
+    var num = y - 1.0
+    var den = y + 1.0
+    var z = num / den
+    var z_squared = z * z
+    var term = z
+    var sum = term
+    var k = 1
 
-		// Compute first 20 terms for good precision
-		while k < 20 'series'
-			term = term * z_squared
-			var divisor = 2.0 * k + 1.0
-			sum = sum + term / divisor
-			k = k + 1
-		end 'series'
+    // Compute first 20 terms for good precision
+    while k < 20 'series'
+      term = term * z_squared
+      var divisor = 2.0 * k + 1.0
+      sum = sum + term / divisor
+      k = k + 1
+    end 'series'
 
-		var result = 2.0 * sum
+    var result = 2.0 * sum
 
-		// Add back the normalization: log(x) = log(y) + n*log(2)
-		// log(2) ≈ 0.693147180559945
-		var log2 = 0.693147180559945
-		result = result + n * log2
+    // Add back the normalization: log(x) = log(y) + n*log(2)
+    // log(2) ≈ 0.693147180559945
+    var log2 = 0.693147180559945
+    result = result + n * log2
 
-		return result
-	end 'log'
+    return result
+  end 'log'
 
-	/// Calculate base-10 logarithm of x
-	/// Uses the identity: log10(x) = log(x) / log(10)
-	export static function log10(x float) returns float
-		// Handle special cases
-		if x <= 0.0 'invalid'
-			return 0.0  // undefined for non-positive values
-		end 'invalid'
+  /// Calculate base-10 logarithm of x
+  /// Uses the identity: log10(x) = log(x) / log(10)
+  export static function log10(x float) returns float
+    // Handle special cases
+    if x <= 0.0 'invalid'
+      return 0.0  // undefined for non-positive values
+    end 'invalid'
 
-		if x == 1.0 'one'
-			return 0.0
-		end 'one'
+    if x == 1.0 'one'
+      return 0.0
+    end 'one'
 
-		// log10(x) = log(x) / log(10)
-		// log(10) is approximately 2.302585092994046
-		var ln_x = Math.log(x)
-		var ln_10 = 2.302585092994046
-		var result = ln_x / ln_10
-		return result
-	end 'log10'
+    // log10(x) = log(x) / log(10)
+    // log(10) is approximately 2.302585092994046
+    var ln_x = Math.log(x)
+    var ln_10 = 2.302585092994046
+    var result = ln_x / ln_10
+    return result
+  end 'log10'
 
-	/// Calculate base-2 logarithm of x
-	/// Uses the identity: log2(x) = log(x) / log(2)
-	export static function log2(x float) returns float
-		// Handle special cases
-		if x <= 0.0 'invalid'
-			return 0.0  // undefined for non-positive values
-		end 'invalid'
+  /// Calculate base-2 logarithm of x
+  /// Uses the identity: log2(x) = log(x) / log(2)
+  export static function log2(x float) returns float
+    // Handle special cases
+    if x <= 0.0 'invalid'
+      return 0.0  // undefined for non-positive values
+    end 'invalid'
 
-		if x == 1.0 'one'
-			return 0.0
-		end 'one'
+    if x == 1.0 'one'
+      return 0.0
+    end 'one'
 
-		// log2(x) = log(x) / log(2)
-		var ln_x = Math.log(x)
-		var ln_2 = 0.693147180559945309417232121458
-		var result = ln_x / ln_2
-		return result
-	end 'log2'
+    // log2(x) = log(x) / log(2)
+    var ln_x = Math.log(x)
+    var ln_2 = 0.693147180559945309417232121458
+    var result = ln_x / ln_2
+    return result
+  end 'log2'
 
-	/// Calculate the tangent of an angle (in radians)
-	/// Uses the identity: tan(x) = sin(x) / cos(x)
-	export static function tan(x float) returns float
-		// Handle zero case
-		if x == 0.0 'zero'
-			return 0.0
-		end 'zero'
+  /// Calculate the tangent of an angle (in radians)
+  /// Uses the identity: tan(x) = sin(x) / cos(x)
+  export static function tan(x float) returns float
+    // Handle zero case
+    if x == 0.0 'zero'
+      return 0.0
+    end 'zero'
 
-		// tan(x) = sin(x) / cos(x)
-		var s = Math.sin(x)
-		var c = Math.cos(x)
+    // tan(x) = sin(x) / cos(x)
+    var s = Math.sin(x)
+    var c = Math.cos(x)
 
-		// Avoid division by zero near π/2, 3π/2, etc.
-		// cos(x) is very small near these points
-		if c == 0.0 'div_zero'
-			// Return a large value with correct sign
-			if s > 0.0 'positive'
-				return 1000000000.0
-			end 'positive'
-			return -1000000000.0
-		end 'div_zero'
+    // Avoid division by zero near π/2, 3π/2, etc.
+    // cos(x) is very small near these points
+    if c == 0.0 'div_zero'
+      // Return a large value with correct sign
+      if s > 0.0 'positive'
+        return 1000000000.0
+      end 'positive'
+      return -1000000000.0
+    end 'div_zero'
 
-		return s / c
-	end 'tan'
+    return s / c
+  end 'tan'
 
-	/// Calculate base^exponent for float values
-	/// Uses simple multiplication for small positive integers, exp/log otherwise
-	export static function pow(base float, exponent float) returns float
-		// Handle special cases
-		if exponent == 0.0 'exp_zero'
-			return 1.0
-		end 'exp_zero'
+  /// Calculate base^exponent for float values
+  /// Uses simple multiplication for small positive integers, exp/log otherwise
+  export static function pow(base float, exponent float) returns float
+    // Handle special cases
+    if exponent == 0.0 'exp_zero'
+      return 1.0
+    end 'exp_zero'
 
-		if base == 0.0 'base_zero'
-			if exponent > 0.0 'exp_positive'
-				return 0.0
-			end 'exp_positive'
-			return 0.0
-		end 'base_zero'
+    if base == 0.0 'base_zero'
+      if exponent > 0.0 'exp_positive'
+        return 0.0
+      end 'exp_positive'
+      return 0.0
+    end 'base_zero'
 
-		if base == 1.0 'base_one'
-			return 1.0
-		end 'base_one'
+    if base == 1.0 'base_one'
+      return 1.0
+    end 'base_one'
 
-		// Handle negative base (only works for integer exponents in real domain)
-		if base < 0.0 'negative_base'
-			return 0.0  // Simplified: return 0 for negative base
-		end 'negative_base'
+    // Handle negative base (only works for integer exponents in real domain)
+    if base < 0.0 'negative_base'
+      return 0.0  // Simplified: return 0 for negative base
+    end 'negative_base'
 
-		// Check if exponent is a small positive integer (optimize common case)
-		// Use floor to check if it's an integer
-		var exp_floor = floor(exponent)
-		if (exponent - exp_floor) == 0.0 'is_int'
-			if exponent > 0.0 'positive_int'
-				if exponent <= 20.0 'small_int'
-					// Simple multiplication for small positive integers
-					var result = 1.0
-					var i = 0.0
-					while i < exponent 'mult_loop'
-						result = result * base
-						i = i + 1.0
-					end 'mult_loop'
-					return result
-				end 'small_int'
-			end 'positive_int'
+    // Check if exponent is a small positive integer (optimize common case)
+    // Use floor to check if it's an integer
+    var exp_floor = floor(exponent)
+    if (exponent - exp_floor) == 0.0 'is_int'
+      if exponent > 0.0 'positive_int'
+        if exponent <= 20.0 'small_int'
+          // Simple multiplication for small positive integers
+          var result = 1.0
+          var i = 0.0
+          while i < exponent 'mult_loop'
+            result = result * base
+            i = i + 1.0
+          end 'mult_loop'
+          return result
+        end 'small_int'
+      end 'positive_int'
 
-			// Handle small negative integer exponents: base^(-n) = 1 / base^n
-			if exponent < 0.0 'negative_int'
-				var neg_exp = -exponent
-				if neg_exp <= 20.0 'small_neg'
-					var result = 1.0
-					var i = 0.0
-					while i < neg_exp 'div_loop'
-						result = result / base
-						i = i + 1.0
-					end 'div_loop'
-					return result
-				end 'small_neg'
-			end 'negative_int'
-		end 'is_int'
+      // Handle small negative integer exponents: base^(-n) = 1 / base^n
+      if exponent < 0.0 'negative_int'
+        var neg_exp = -exponent
+        if neg_exp <= 20.0 'small_neg'
+          var result = 1.0
+          var i = 0.0
+          while i < neg_exp 'div_loop'
+            result = result / base
+            i = i + 1.0
+          end 'div_loop'
+          return result
+        end 'small_neg'
+      end 'negative_int'
+    end 'is_int'
 
-		// For other cases, use formula: base^exp = exp(exp * log(base))
-		var log_base = Math.log(base)
-		var exp_times_log = exponent * log_base
-		return Math.exp(exp_times_log)
-	end 'pow'
+    // For other cases, use formula: base^exp = exp(exp * log(base))
+    var log_base = Math.log(base)
+    var exp_times_log = exponent * log_base
+    return Math.exp(exp_times_log)
+  end 'pow'
 end 'Math'

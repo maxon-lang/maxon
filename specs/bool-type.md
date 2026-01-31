@@ -21,17 +21,17 @@ let condition = false
 
 ```maxon
 function isPositive(x int) returns bool
-    if x > 0 'check'
-        return true
-    end 'check'
-    return false
+  if x > 0 'check'
+    return true
+  end 'check'
+  return false
 end 'isPositive'
 
 function main() returns int
-    if isPositive(5) 'test'
-        return 1
-    end 'test'
-    return 0
+  if isPositive(5) 'test'
+    return 1
+  end 'test'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -44,13 +44,13 @@ end 'main'
 <!-- test: basic-bool -->
 ```maxon
 function main() returns int
-    var x = true
+  var x = true
 
-    if x 'check'
-        return 1
-    end 'check' else 'else_check'
-        return 0
-    end 'else_check'
+  if x 'check'
+    return 1
+  end 'check' else 'else_check'
+    return 0
+  end 'else_check'
 end 'main'
 ```
 ```exitcode
@@ -61,15 +61,15 @@ end 'main'
 <!-- test: bool-parameter -->
 ```maxon
 function test_bool_param(flag bool) returns int
-    if flag 'check'
-        return 1
-    end 'check' else 'else_check'
-        return 0
-    end 'else_check'
+  if flag 'check'
+    return 1
+  end 'check' else 'else_check'
+    return 0
+  end 'else_check'
 end 'test_bool_param'
 
 function main() returns int
-    return test_bool_param(true)
+  return test_bool_param(true)
 end 'main'
 ```
 ```exitcode
@@ -80,11 +80,11 @@ end 'main'
 <!-- test: bool-from-comparison -->
 ```maxon
 function main() returns int
-    var result = 5 > 3
-    if result 'check'
-        return 42
-    end 'check'
-    return 0
+  var result = 5 > 3
+  if result 'check'
+    return 42
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode

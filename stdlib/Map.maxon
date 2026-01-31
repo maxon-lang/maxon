@@ -2,342 +2,342 @@
 /// @category Collections
 
 enum SlotState
-	Empty
-	Occupied
-	Deleted
+  Empty
+  Occupied
+  Deleted
 end 'SlotState'
 
 // Map receives __ManagedMemorys directly for literal initialization via BuiltinDictionaryLiteral.
 export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary with (Key, Value), Iterable with Entry
-	typealias KeyArray is Array with Key
-	typealias ValueArray is Array with Value
-	typealias StateArray is Array with SlotState
-	typealias Entry is Pair with (Key, Value)
+  typealias KeyArray is Array with Key
+  typealias ValueArray is Array with Value
+  typealias StateArray is Array with SlotState
+  typealias Entry is Pair with (Key, Value)
 
-	var keys KeyArray              // Key storage
-	var values ValueArray          // Value storage
-	var states StateArray      // Slot states
-	var count int                      // Number of occupied entries
-	var capacity int                   // Total slots
-	var iterIndex int                  // Iteration state
+  var keys KeyArray              // Key storage
+  var values ValueArray          // Value storage
+  var states StateArray      // Slot states
+  var count int                      // Number of occupied entries
+  var capacity int                   // Total slots
+  var iterIndex int                  // Iteration state
 
-	// Default type for dictionary literals - compiler discovers this via BuiltinDictionaryLiteral interface
-	static function BuiltinDictionaryLiteral.init(initKeys __ManagedMemory, initValues __ManagedMemory) returns Self
-		// Get number of elements in the managed memorys
-		var numElements = __managed_memory_len(initKeys)
+  // Default type for dictionary literals - compiler discovers this via BuiltinDictionaryLiteral interface
+  static function BuiltinDictionaryLiteral.init(initKeys __ManagedMemory, initValues __ManagedMemory) returns Self
+    // Get number of elements in the managed memorys
+    var numElements = __managed_memory_len(initKeys)
 
-		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
-		var cap = 16
-		while cap < numElements * 2 'calc_cap'
-			cap = cap * 2
-		end 'calc_cap'
+    // Calculate capacity: at least 16, or next power of 2 above numElements * 2
+    var cap = 16
+    while cap < numElements * 2 'calc_cap'
+      cap = cap * 2
+    end 'calc_cap'
 
-		// Allocate internal arrays with preallocated capacity
-		var ks = KeyArray{}
-		ks.resize(cap)
-		var vs = ValueArray{}
-		vs.resize(cap)
-		var sts = StateArray{}
-		sts.resize(cap)
+    // Allocate internal arrays with preallocated capacity
+    var ks = KeyArray{}
+    ks.resize(cap)
+    var vs = ValueArray{}
+    vs.resize(cap)
+    var sts = StateArray{}
+    sts.resize(cap)
 
-		// Create the map with arrays but zero count
-		var result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap, iterIndex: 0}
+    // Create the map with arrays but zero count
+    var result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap, iterIndex: 0}
 
-		// Insert each key-value pair from the init arrays
-		// Use __map_get_init_key/value which look up "Key"/"Value" generic params
-		var i = 0
-		while i < numElements 'insert_loop'
-			var k = __map_get_init_key(initKeys, i)
-			var v = __map_get_init_value(initValues, i)
-			result.insert(key: k, value: v)
-			i = i + 1
-		end 'insert_loop'
+    // Insert each key-value pair from the init arrays
+    // Use __map_get_init_key/value which look up "Key"/"Value" generic params
+    var i = 0
+    while i < numElements 'insert_loop'
+      var k = __map_get_init_key(initKeys, i)
+      var v = __map_get_init_value(initValues, i)
+      result.insert(key: k, value: v)
+      i = i + 1
+    end 'insert_loop'
 
-		return result
-	end 'init'
+    return result
+  end 'init'
 
-	/// Insert a key-value pair into the map
-	/// If the key already exists, updates the value
-	/// Automatically resizes the map when load factor exceeds 75%
-	export function Dictionary.insert(key Key, value Value)
-		// Initialize if empty struct was created with zero capacity
-		if capacity == 0 'init_empty'
-			var newKeys = KeyArray{}
-			newKeys.resize(16)
-			var newValues = ValueArray{}
-			newValues.resize(16)
-			var newStates = StateArray{}
-			newStates.resize(16)
-			keys = newKeys
-			values = newValues
-			states = newStates
-			capacity = 16
-		end 'init_empty'
+  /// Insert a key-value pair into the map
+  /// If the key already exists, updates the value
+  /// Automatically resizes the map when load factor exceeds 75%
+  export function Dictionary.insert(key Key, value Value)
+    // Initialize if empty struct was created with zero capacity
+    if capacity == 0 'init_empty'
+      var newKeys = KeyArray{}
+      newKeys.resize(16)
+      var newValues = ValueArray{}
+      newValues.resize(16)
+      var newStates = StateArray{}
+      newStates.resize(16)
+      keys = newKeys
+      values = newValues
+      states = newStates
+      capacity = 16
+    end 'init_empty'
 
-		// Check load factor and grow if needed (75% threshold)
-		var loadLimit = trunc((capacity * 3) / 4)
-		if count >= loadLimit 'do_grow'
-			grow()
-		end 'do_grow'
+    // Check load factor and grow if needed (75% threshold)
+    var loadLimit = trunc((capacity * 3) / 4)
+    if count >= loadLimit 'do_grow'
+      grow()
+    end 'do_grow'
 
-		var hash = key.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+    var hash = key.hash()
+    var index = hash mod capacity
+    if index < 0 'fix_negative'
+      index = index + capacity
+    end 'fix_negative'
 
-		var firstDeleted = -1
-		var probes = 0
+    var firstDeleted = -1
+    var probes = 0
 
-		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SlotState.Empty
+    while probes < capacity 'probe'
+      var state = try states.get(index) otherwise SlotState.Empty
 
-			if state == SlotState.Empty 'empty'
-				// Empty slot - insert here or at first deleted
-				var insertIndex = index
-				if firstDeleted >= 0 'use_deleted'
-					insertIndex = firstDeleted
-				end 'use_deleted'
+      if state == SlotState.Empty 'empty'
+        // Empty slot - insert here or at first deleted
+        var insertIndex = index
+        if firstDeleted >= 0 'use_deleted'
+          insertIndex = firstDeleted
+        end 'use_deleted'
 
-				keys.set(insertIndex, value: key)
-				values.set(insertIndex, value: value)
-				states.set(insertIndex, value: SlotState.Occupied)
-				count = count + 1
-				return
-			end 'empty'
+        keys.set(insertIndex, value: key)
+        values.set(insertIndex, value: value)
+        states.set(insertIndex, value: SlotState.Occupied)
+        count = count + 1
+        return
+      end 'empty'
 
-			if state == SlotState.Deleted and firstDeleted < 0 'mark_deleted'
-				firstDeleted = index
-			end 'mark_deleted'
+      if state == SlotState.Deleted and firstDeleted < 0 'mark_deleted'
+        firstDeleted = index
+      end 'mark_deleted'
 
-			if state == SlotState.Occupied 'check_key'
-				if let existing = try keys.get(index) 'get_existing'
-					if existing == key 'exists'
-						// Key already exists - update value
-						values.set(index, value: value)
-						return
-					end 'exists'
-				end 'get_existing'
-			end 'check_key'
+      if state == SlotState.Occupied 'check_key'
+        if let existing = try keys.get(index) 'get_existing'
+          if existing == key 'exists'
+            // Key already exists - update value
+            values.set(index, value: value)
+            return
+          end 'exists'
+        end 'get_existing'
+      end 'check_key'
 
-			// Linear probing
-			index = (index + 1) mod capacity
-			probes = probes + 1
-		end 'probe'
+      // Linear probing
+      index = (index + 1) mod capacity
+      probes = probes + 1
+    end 'probe'
 
-		// Should never reach here if load factor is maintained
-		// But if we do, insert at first deleted slot
-		if firstDeleted >= 0 'fallback'
-			keys.set(firstDeleted, value: key)
-			values.set(firstDeleted, value: value)
-			states.set(firstDeleted, value: SlotState.Occupied)
-			count = count + 1
-		end 'fallback'
-	end 'insert'
+    // Should never reach here if load factor is maintained
+    // But if we do, insert at first deleted slot
+    if firstDeleted >= 0 'fallback'
+      keys.set(firstDeleted, value: key)
+      values.set(firstDeleted, value: value)
+      states.set(firstDeleted, value: SlotState.Occupied)
+      count = count + 1
+    end 'fallback'
+  end 'insert'
 
-	/// Get the value for a key, throws if not found
-	export function Dictionary.get(key Key) returns Value throws MapError
-		// Empty map contains nothing
-		if capacity == 0 'empty_check'
-			throw MapError.keyNotFound
-		end 'empty_check'
+  /// Get the value for a key, throws if not found
+  export function Dictionary.get(key Key) returns Value throws MapError
+    // Empty map contains nothing
+    if capacity == 0 'empty_check'
+      throw MapError.keyNotFound
+    end 'empty_check'
 
-		var hash = key.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+    var hash = key.hash()
+    var index = hash mod capacity
+    if index < 0 'fix_negative'
+      index = index + capacity
+    end 'fix_negative'
 
-		var probes = 0
-		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SlotState.Empty
+    var probes = 0
+    while probes < capacity 'probe'
+      var state = try states.get(index) otherwise SlotState.Empty
 
-			if state == SlotState.Empty 'empty'
-				throw MapError.keyNotFound
-			end 'empty'
+      if state == SlotState.Empty 'empty'
+        throw MapError.keyNotFound
+      end 'empty'
 
-			if state == SlotState.Occupied 'check_key'
-				if let existing = try keys.get(index) 'get_existing'
-					if existing == key 'found'
-						if let v = try values.get(index) 'get_value'
-							return v
-						end 'get_value'
-					end 'found'
-				end 'get_existing'
-			end 'check_key'
+      if state == SlotState.Occupied 'check_key'
+        if let existing = try keys.get(index) 'get_existing'
+          if existing == key 'found'
+            if let v = try values.get(index) 'get_value'
+              return v
+            end 'get_value'
+          end 'found'
+        end 'get_existing'
+      end 'check_key'
 
-			index = (index + 1) mod capacity
-			probes = probes + 1
-		end 'probe'
+      index = (index + 1) mod capacity
+      probes = probes + 1
+    end 'probe'
 
-		throw MapError.keyNotFound
-	end 'get'
+    throw MapError.keyNotFound
+  end 'get'
 
-	/// Check if key exists in the map
-	export function Dictionary.contains(key Key) returns bool
-		// Empty map contains nothing
-		if capacity == 0 'empty_check'
-			return false
-		end 'empty_check'
+  /// Check if key exists in the map
+  export function Dictionary.contains(key Key) returns bool
+    // Empty map contains nothing
+    if capacity == 0 'empty_check'
+      return false
+    end 'empty_check'
 
-		var hash = key.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+    var hash = key.hash()
+    var index = hash mod capacity
+    if index < 0 'fix_negative'
+      index = index + capacity
+    end 'fix_negative'
 
-		var probes = 0
-		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SlotState.Empty
+    var probes = 0
+    while probes < capacity 'probe'
+      var state = try states.get(index) otherwise SlotState.Empty
 
-			if state == SlotState.Empty 'empty'
-				return false
-			end 'empty'
+      if state == SlotState.Empty 'empty'
+        return false
+      end 'empty'
 
-			if state == SlotState.Occupied 'check_key'
-				if let existing = try keys.get(index) 'get_existing'
-					if existing == key 'found'
-						return true
-					end 'found'
-				end 'get_existing'
-			end 'check_key'
+      if state == SlotState.Occupied 'check_key'
+        if let existing = try keys.get(index) 'get_existing'
+          if existing == key 'found'
+            return true
+          end 'found'
+        end 'get_existing'
+      end 'check_key'
 
-			index = (index + 1) mod capacity
-			probes = probes + 1
-		end 'probe'
+      index = (index + 1) mod capacity
+      probes = probes + 1
+    end 'probe'
 
-		return false
-	end 'contains'
+    return false
+  end 'contains'
 
-	/// Remove key from map, returns true if key was present
-	export function Dictionary.remove(key Key) returns bool
-		// Empty map has nothing to remove
-		if capacity == 0 'empty_check'
-			return false
-		end 'empty_check'
+  /// Remove key from map, returns true if key was present
+  export function Dictionary.remove(key Key) returns bool
+    // Empty map has nothing to remove
+    if capacity == 0 'empty_check'
+      return false
+    end 'empty_check'
 
-		var hash = key.hash()
-		var index = hash mod capacity
-		if index < 0 'fix_negative'
-			index = index + capacity
-		end 'fix_negative'
+    var hash = key.hash()
+    var index = hash mod capacity
+    if index < 0 'fix_negative'
+      index = index + capacity
+    end 'fix_negative'
 
-		var probes = 0
-		while probes < capacity 'probe'
-			var state = try states.get(index) otherwise SlotState.Empty
+    var probes = 0
+    while probes < capacity 'probe'
+      var state = try states.get(index) otherwise SlotState.Empty
 
-			if state == SlotState.Empty 'empty'
-				return false
-			end 'empty'
+      if state == SlotState.Empty 'empty'
+        return false
+      end 'empty'
 
-			if state == SlotState.Occupied 'check_key'
-				if let existing = try keys.get(index) 'get_existing'
-					if existing == key 'found'
-						states.set(index, value: SlotState.Deleted)
-						count = count - 1
-						return true
-					end 'found'
-				end 'get_existing'
-			end 'check_key'
+      if state == SlotState.Occupied 'check_key'
+        if let existing = try keys.get(index) 'get_existing'
+          if existing == key 'found'
+            states.set(index, value: SlotState.Deleted)
+            count = count - 1
+            return true
+          end 'found'
+        end 'get_existing'
+      end 'check_key'
 
-			index = (index + 1) mod capacity
-			probes = probes + 1
-		end 'probe'
+      index = (index + 1) mod capacity
+      probes = probes + 1
+    end 'probe'
 
-		return false
-	end 'remove'
+    return false
+  end 'remove'
 
-	/// Get number of entries in the map
-	export function Sized.count() returns int
-		return count
-	end 'count'
+  /// Get number of entries in the map
+  export function Sized.count() returns int
+    return count
+  end 'count'
 
-	/// Iterate through map entries, returning key-value pairs
-	function Iterable.next() returns Entry throws IterationError
-		while iterIndex < capacity 'scan'
-			var state = try states.get(iterIndex) otherwise SlotState.Empty
-			var idx = iterIndex
-			iterIndex = iterIndex + 1
-			if state == SlotState.Occupied 'occupied'
-				var k = try keys.get(idx) otherwise 'get_k'
-				throw IterationError.exhausted
-				end 'get_k'
-				var v = try values.get(idx) otherwise 'get_v'
-				throw IterationError.exhausted
-				end 'get_v'
-				return {key: k, value: v}
-			end 'occupied'
-		end 'scan'
-		throw IterationError.exhausted
-	end 'next'
+  /// Iterate through map entries, returning key-value pairs
+  function Iterable.next() returns Entry throws IterationError
+    while iterIndex < capacity 'scan'
+      var state = try states.get(iterIndex) otherwise SlotState.Empty
+      var idx = iterIndex
+      iterIndex = iterIndex + 1
+      if state == SlotState.Occupied 'occupied'
+        var k = try keys.get(idx) otherwise 'get_k'
+        throw IterationError.exhausted
+        end 'get_k'
+        var v = try values.get(idx) otherwise 'get_v'
+        throw IterationError.exhausted
+        end 'get_v'
+        return {key: k, value: v}
+      end 'occupied'
+    end 'scan'
+    throw IterationError.exhausted
+  end 'next'
 
-	/// Get current capacity (total number of slots)
-	export function getCapacity() returns int
-		return capacity
-	end 'getCapacity'
+  /// Get current capacity (total number of slots)
+  export function getCapacity() returns int
+    return capacity
+  end 'getCapacity'
 
-	// Internal: grow the table when load factor exceeds threshold
-	function grow()
-		var oldCapacity = capacity
-		var newCapacity = oldCapacity * 2
-		if newCapacity == 0 'handle_zero'
-			newCapacity = 16
-		end 'handle_zero'
+  // Internal: grow the table when load factor exceeds threshold
+  function grow()
+    var oldCapacity = capacity
+    var newCapacity = oldCapacity * 2
+    if newCapacity == 0 'handle_zero'
+      newCapacity = 16
+    end 'handle_zero'
 
-		// Save references to old arrays
-		var oldKeys = keys
-		var oldValues = values
-		var oldStates = states
+    // Save references to old arrays
+    var oldKeys = keys
+    var oldValues = values
+    var oldStates = states
 
-		// Allocate new arrays with preallocated capacity
-		var newKeys = KeyArray{}
-		newKeys.resize(newCapacity)
-		var newValues = ValueArray{}
-		newValues.resize(newCapacity)
-		var newStates = StateArray{}
-		newStates.resize(newCapacity)
+    // Allocate new arrays with preallocated capacity
+    var newKeys = KeyArray{}
+    newKeys.resize(newCapacity)
+    var newValues = ValueArray{}
+    newValues.resize(newCapacity)
+    var newStates = StateArray{}
+    newStates.resize(newCapacity)
 
-		// Update type to use new arrays
-		keys = newKeys
-		values = newValues
-		states = newStates
-		capacity = newCapacity
-		count = 0
+    // Update type to use new arrays
+    keys = newKeys
+    values = newValues
+    states = newStates
+    capacity = newCapacity
+    count = 0
 
-		// Rehash all occupied entries from old arrays
-		var i = 0
-		while i < oldCapacity 'rehash'
-			var state = try oldStates.get(i) otherwise SlotState.Empty
+    // Rehash all occupied entries from old arrays
+    var i = 0
+    while i < oldCapacity 'rehash'
+      var state = try oldStates.get(i) otherwise SlotState.Empty
 
-			if state == SlotState.Occupied 'occupied'
-				// Re-insert into new arrays using insert logic
-				var key = try oldKeys.get(i) otherwise 'skip_key'
-				i = i + 1
-				continue 'rehash'
-				end 'skip_key'
-				var value = try oldValues.get(i) otherwise 'skip_val'
-				i = i + 1
-				continue 'rehash'
-				end 'skip_val'
-				var hash = key.hash()
-				var index = hash mod newCapacity
-				if index < 0 'fix_negative'
-					index = index + newCapacity
-				end 'fix_negative'
+      if state == SlotState.Occupied 'occupied'
+        // Re-insert into new arrays using insert logic
+        var key = try oldKeys.get(i) otherwise 'skip_key'
+        i = i + 1
+        continue 'rehash'
+        end 'skip_key'
+        var value = try oldValues.get(i) otherwise 'skip_val'
+        i = i + 1
+        continue 'rehash'
+        end 'skip_val'
+        var hash = key.hash()
+        var index = hash mod newCapacity
+        if index < 0 'fix_negative'
+          index = index + newCapacity
+        end 'fix_negative'
 
-				// Find empty slot (no deleted slots in fresh array)
-				var currentState = try states.get(index) otherwise SlotState.Empty
-				while currentState != SlotState.Empty 'find_slot'
-					index = (index + 1) mod newCapacity
-					currentState = try states.get(index) otherwise SlotState.Empty
-				end 'find_slot'
+        // Find empty slot (no deleted slots in fresh array)
+        var currentState = try states.get(index) otherwise SlotState.Empty
+        while currentState != SlotState.Empty 'find_slot'
+          index = (index + 1) mod newCapacity
+          currentState = try states.get(index) otherwise SlotState.Empty
+        end 'find_slot'
 
-				keys.set(index, value: key)
-				values.set(index, value: value)
-				states.set(index, value: SlotState.Occupied)
-				count = count + 1
-			end 'occupied'
-			i = i + 1
-		end 'rehash'
-	end 'grow'
+        keys.set(index, value: key)
+        values.set(index, value: value)
+        states.set(index, value: SlotState.Occupied)
+        count = count + 1
+      end 'occupied'
+      i = i + 1
+    end 'rehash'
+  end 'grow'
 end 'Map'

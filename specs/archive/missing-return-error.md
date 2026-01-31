@@ -15,7 +15,7 @@ Functions that declare a return type must return a value on all code paths.
 
 ```maxon
 function test() returns int
-    // Error: No return statement
+  // Error: No return statement
 end 'test'
 ```
 Error message:
@@ -30,10 +30,10 @@ Ensure every path returns:
 
 ```maxon
 function test(x int) returns int
-    if x > 0 'check'
-        return 1
-    end 'check'
-    return 0  // Handles else case
+  if x > 0 'check'
+    return 1
+  end 'check'
+  return 0  // Handles else case
 end 'test'
 ```
 ## Tests
@@ -50,14 +50,14 @@ error E037: specs/fragments/missing-return-error.no-return.1.test:2:10: missing 
 <!-- test: missing-else-return -->
 ```maxon
 function test(x int) returns int
-    if x > 0 'check'
-        return 1
-    end 'check'
-    // Missing return for else path
+  if x > 0 'check'
+    return 1
+  end 'check'
+  // Missing return for else path
 end 'test'
 
 function main() returns int
-    return test(5)
+  return test(5)
 end 'main'
 ```
 ```maxoncstderr
@@ -67,14 +67,14 @@ error E037: specs/fragments/missing-return-error.missing-else-return.1.test:2:10
 <!-- test: valid-all-paths -->
 ```maxon
 function test(x int) returns int
-    if x > 0 'check'
-        return 1
-    end 'check'
-    return 0
+  if x > 0 'check'
+    return 1
+  end 'check'
+  return 0
 end 'test'
 
 function main() returns int
-    return test(5)
+  return test(5)
 end 'main'
 ```
 ```exitcode

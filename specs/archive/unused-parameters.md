@@ -15,7 +15,7 @@ Maxon requires all function parameters to be used. Declaring unused parameters c
 
 ```maxon
 function add(a int, b int) returns int
-    return a  // Error: 'b' is unused
+  return a  // Error: 'b' is unused
 end 'add'
 ```
 Error message:
@@ -29,7 +29,7 @@ Only declare parameters you need:
 
 ```maxon
 function identity(a int) returns int
-    return a  // OK: 'a' is used
+  return a  // OK: 'a' is used
 end 'identity'
 ```
 ## Tests
@@ -37,11 +37,11 @@ end 'identity'
 <!-- test: single-unused -->
 ```maxon
 function add(a int, b int) returns int
-    return a
+  return a
 end 'add'
 
 function main() returns int
-    return add(5, b: 10)
+  return add(5, b: 10)
 end 'main'
 ```
 ```maxoncstderr
@@ -51,11 +51,11 @@ error E014: specs/fragments/unused-parameters.single-unused.1.test:2:21: unused 
 <!-- test: multiple-unused -->
 ```maxon
 function test(a int, b int, c int) returns int
-    return a
+  return a
 end 'test'
 
 function main() returns int
-    return test(1, b: 2, c: 3)
+  return test(1, b: 2, c: 3)
 end 'main'
 ```
 ```maxoncstderr
@@ -65,11 +65,11 @@ error E014: specs/fragments/unused-parameters.multiple-unused.1.test:2:22: unuse
 <!-- test: all-used-ok -->
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(5, b: 10)
+  return add(5, b: 10)
 end 'main'
 ```
 ```exitcode
@@ -80,11 +80,11 @@ end 'main'
 <!-- test: none-unused -->
 ```maxon
 function multiply(a int, b int) returns int
-    return a * b
+  return a * b
 end 'multiply'
 
 function main() returns int
-    return multiply(7, b: 6)
+  return multiply(7, b: 6)
 end 'main'
 ```
 ```exitcode
@@ -95,12 +95,12 @@ end 'main'
 <!-- test: void-function-unused -->
 ```maxon
 function doNothing(x int, y int)
-    var z = 42
+  var z = 42
 end 'doNothing'
 
 function main() returns int
-    doNothing(1, 2)
-    return 0
+  doNothing(1, 2)
+  return 0
 end 'main'
 ```
 ```maxoncstderr

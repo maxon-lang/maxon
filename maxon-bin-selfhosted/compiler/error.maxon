@@ -10,130 +10,130 @@
 /// - 6xxx: Code generation errors
 /// - 7xxx: PE generation errors
 export enum ErrorCode
-	// Lexer errors (1xxx)
-	E1001  // invalid token/character
-	E1002  // unterminated string
-	E1003  // invalid number
+  // Lexer errors (1xxx)
+  E1001  // invalid token/character
+  E1002  // unterminated string
+  E1003  // invalid number
 
-	// Parser errors (2xxx)
-	E2001  // unexpected token
-	E2002  // expected expression
-	E2003  // expected newline
-	E2004  // expected identifier
-	E2005  // missing block identifier
-	E2006  // block identifier mismatch
-	E2007  // unexpected end of file
+  // Parser errors (2xxx)
+  E2001  // unexpected token
+  E2002  // expected expression
+  E2003  // expected newline
+  E2004  // expected identifier
+  E2005  // missing block identifier
+  E2006  // block identifier mismatch
+  E2007  // unexpected end of file
 
-	// Semantic errors (3xxx)
-	E3001  // undefined variable
-	E3002  // unknown type
-	E3003  // type mismatch
-	E3004  // missing return
-	E3005  // undefined function
-	E3006  // wrong argument count
-	E3007  // cannot assign to immutable
-	E3008  // no main function
+  // Semantic errors (3xxx)
+  E3001  // undefined variable
+  E3002  // unknown type
+  E3003  // type mismatch
+  E3004  // missing return
+  E3005  // undefined function
+  E3006  // wrong argument count
+  E3007  // cannot assign to immutable
+  E3008  // no main function
 
-	// IR errors (4xxx)
-	E4001  // IR conversion error
+  // IR errors (4xxx)
+  E4001  // IR conversion error
 
-	// Codegen errors (6xxx)
-	E6001  // codegen error
+  // Codegen errors (6xxx)
+  E6001  // codegen error
 
-	// PE errors (7xxx)
-	E7001  // PE write error
+  // PE errors (7xxx)
+  E7001  // PE write error
 end 'ErrorCode'
 
 /// Source location for error reporting
 export type SourceLocation
-	export var file String
-	export var line int
-	export var column int
+  export var file String
+  export var line int
+  export var column int
 
-	/// Create a source location with file, line, and column
-	export static function create(file String, line int, column int) returns SourceLocation
-		return {file: file, line: line, column: column}
-	end 'create'
+  /// Create a source location with file, line, and column
+  export static function create(file String, line int, column int) returns SourceLocation
+    return {file: file, line: line, column: column}
+  end 'create'
 
-	/// Create an unknown source location (for errors without position)
-	export static function unknown() returns SourceLocation
-		return {file: "<unknown>", line: 0, column: 0}
-	end 'unknown'
+  /// Create an unknown source location (for errors without position)
+  export static function unknown() returns SourceLocation
+    return {file: "<unknown>", line: 0, column: 0}
+  end 'unknown'
 end 'SourceLocation'
 
 /// A single compilation error with code, message, and location
 export type CompileError
-	export var code ErrorCode
-	export var message String
-	export var location SourceLocation
+  export var code ErrorCode
+  export var message String
+  export var location SourceLocation
 
-	/// Create a compile error
-	export static function create(code ErrorCode, message String, loc SourceLocation) returns CompileError
-		return {code: code, message: message, location: loc}
-	end 'create'
+  /// Create a compile error
+  export static function create(code ErrorCode, message String, loc SourceLocation) returns CompileError
+    return {code: code, message: message, location: loc}
+  end 'create'
 
-	/// Format error for display
-	/// Format: "error E3003: basic.maxon:5:12: type mismatch: expected int, got string"
-	export function format() returns String
-		if location.line > 0 'hasLoc'
-			return "error {code.name}: {location.file}:{location.line}:{location.column}: {message}"
-		end 'hasLoc'
-		return "error {code.name}: {message}"
-	end 'format'
+  /// Format error for display
+  /// Format: "error E3003: basic.maxon:5:12: type mismatch: expected int, got string"
+  export function format() returns String
+    if location.line > 0 'hasLoc'
+      return "error {code.name}: {location.file}:{location.line}:{location.column}: {message}"
+    end 'hasLoc'
+    return "error {code.name}: {message}"
+  end 'format'
 
-	/// Print error to output
-	export function printError()
-		// Print parts individually to avoid complex string interpolation
-		if location.line > 0 'hasLoc'
-			print("error {code.name}: {location.file}:{location.line}:{location.column}: {message}\n")
-		end 'hasLoc' else 'noLoc'
-			print("error {code.name}: {message}\n")
-		end 'noLoc'
-	end 'printError'
+  /// Print error to output
+  export function printError()
+    // Print parts individually to avoid complex string interpolation
+    if location.line > 0 'hasLoc'
+      print("error {code.name}: {location.file}:{location.line}:{location.column}: {message}\n")
+    end 'hasLoc' else 'noLoc'
+      print("error {code.name}: {message}\n")
+    end 'noLoc'
+  end 'printError'
 end 'CompileError'
 
 /// Collects errors across all compilation stages
 export type ErrorCollector
-	typealias ErrorArray is Array with CompileError
+  typealias ErrorArray is Array with CompileError
 
-	export var errors ErrorArray
+  export var errors ErrorArray
 
-	/// Create a new error collector
-	export static function create() returns ErrorCollector
-		return {errors: ErrorArray{}}
-	end 'create'
+  /// Create a new error collector
+  export static function create() returns ErrorCollector
+    return {errors: ErrorArray{}}
+  end 'create'
 
-	/// Add an error with a pre-built source location
-	export function addError(code ErrorCode, message String, loc SourceLocation)
-		let err = CompileError.create(code, message: message, loc: loc)
-		errors.push(err)
-	end 'addError'
+  /// Add an error with a pre-built source location
+  export function addError(code ErrorCode, message String, loc SourceLocation)
+    let err = CompileError.create(code, message: message, loc: loc)
+    errors.push(err)
+  end 'addError'
 
-	/// Add an error with file, line, and column
-	export function addErrorAt(code ErrorCode, message String, file String, line int, column int)
-		let loc = SourceLocation.create(file, line: line, column: column)
-		addError(code, message: message, loc: loc)
-	end 'addErrorAt'
+  /// Add an error with file, line, and column
+  export function addErrorAt(code ErrorCode, message String, file String, line int, column int)
+    let loc = SourceLocation.create(file, line: line, column: column)
+    addError(code, message: message, loc: loc)
+  end 'addErrorAt'
 
-	/// Check if any errors have been recorded
-	export function hasAnyErrors() returns bool
-		return errors.count() > 0
-	end 'hasAnyErrors'
+  /// Check if any errors have been recorded
+  export function hasAnyErrors() returns bool
+    return errors.count() > 0
+  end 'hasAnyErrors'
 
-	/// Get the number of errors
-	export function count() returns int
-		return errors.count()
-	end 'count'
+  /// Get the number of errors
+  export function count() returns int
+    return errors.count()
+  end 'count'
 
-	/// Print all errors to output
-	export function printAll()
-		for err in errors 'printLoop'
-			err.printError()
-		end 'printLoop'
-	end 'printAll'
+  /// Print all errors to output
+  export function printAll()
+    for err in errors 'printLoop'
+      err.printError()
+    end 'printLoop'
+  end 'printAll'
 
-	/// Clear all errors
-	export function clear()
-		errors = []
-	end 'clear'
+  /// Clear all errors
+  export function clear()
+    errors = []
+  end 'clear'
 end 'ErrorCollector'

@@ -66,7 +66,7 @@ let PRIMES = [2, 3, 5, 7, 11]
 let ANSWER = 42
 
 function main() returns int
-    return ANSWER
+  return ANSWER
 end 'main'
 ```
 ```exitcode
@@ -79,7 +79,7 @@ let PI = 3.14
 let PI_INT = 3
 
 function main() returns int
-    return PI_INT
+  return PI_INT
 end 'main'
 ```
 ```exitcode
@@ -92,7 +92,7 @@ let BASE = 10
 let DOUBLED = BASE * 2
 
 function main() returns int
-    return DOUBLED
+  return DOUBLED
 end 'main'
 ```
 ```exitcode
@@ -106,7 +106,7 @@ let FIRST = 30
 let SECOND = 12
 
 function main() returns int
-    return TOTAL
+  return TOTAL
 end 'main'
 ```
 ```exitcode
@@ -118,10 +118,10 @@ end 'main'
 let DEBUG = true
 
 function main() returns int
-    if DEBUG 'check'
-        return 1
-    end 'check'
-    return 0
+  if DEBUG 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -133,8 +133,8 @@ end 'main'
 let OFFSET = 10
 
 function main() returns int
-    let x = 5
-    return x + OFFSET
+  let x = 5
+  return x + OFFSET
 end 'main'
 ```
 ```exitcode
@@ -148,7 +148,7 @@ let B = 2
 let C = 3
 
 function main() returns int
-    return A + B + C
+  return A + B + C
 end 'main'
 ```
 ```exitcode
@@ -160,7 +160,7 @@ end 'main'
 let NEGATIVE = -42
 
 function main() returns int
-    return 0 - NEGATIVE
+  return 0 - NEGATIVE
 end 'main'
 ```
 ```exitcode
@@ -172,10 +172,10 @@ end 'main'
 let IS_LARGE = 100 > 50
 
 function main() returns int
-    if IS_LARGE 'check'
-        return 1
-    end 'check'
-    return 0
+  if IS_LARGE 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -189,10 +189,10 @@ let EITHER = false or true
 let NEITHER = not false
 
 function main() returns int
-    if BOTH and EITHER and NEITHER 'check'
-        return 1
-    end 'check'
-    return 0
+  if BOTH and EITHER and NEITHER 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -205,7 +205,7 @@ let OFFSET = 10
 let SCALED = OFFSET * 3
 
 function main() returns int
-    return SCALED
+  return SCALED
 end 'main'
 ```
 ```exitcode
@@ -220,7 +220,7 @@ let C = B + 4
 let D = C * 2
 
 function main() returns int
-    return D
+  return D
 end 'main'
 ```
 ```exitcode
@@ -233,7 +233,7 @@ let A = B + 1
 let B = A + 1
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -245,11 +245,11 @@ error E005: specs/fragments/top-level-let.circular-dependency-error.1.test:3:1: 
 let numbers = [1, 2, 3, 4, 5]
 
 function main() returns int
-    var sum = 0
-    for n in numbers 'loop'
-        sum = sum + n
-    end 'loop'
-    return sum
+  var sum = 0
+  for n in numbers 'loop'
+    sum = sum + n
+  end 'loop'
+  return sum
 end 'main'
 ```
 ```exitcode
@@ -263,10 +263,10 @@ let SECOND = 20
 let values = [FIRST, SECOND, 30]
 
 function main() returns int
-    var v0 = try values.get(0) otherwise 0
-    var v1 = try values.get(1) otherwise 0
-    var v2 = try values.get(2) otherwise 0
-    return v0 + v1 + v2
+  var v0 = try values.get(0) otherwise 0
+  var v1 = try values.get(1) otherwise 0
+  var v2 = try values.get(2) otherwise 0
+  return v0 + v1 + v2
 end 'main'
 ```
 ```exitcode
@@ -276,18 +276,18 @@ end 'main'
 <!-- test: map-literal-with-enum-values -->
 ```maxon
 enum TokenKind
-    Function
-    Var
+  Function
+  Var
 end 'TokenKind'
 
 function main() returns int
-    var keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
-    var kind = try keywords.get("function") otherwise TokenKind.Var
-    match kind 'match'
-        TokenKind.Function then return 1
-        TokenKind.Var then return 2
-    end 'match'
-    return 0
+  var keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
+  var kind = try keywords.get("function") otherwise TokenKind.Var
+  match kind 'match'
+    TokenKind.Function then return 1
+    TokenKind.Var then return 2
+  end 'match'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -297,20 +297,20 @@ end 'main'
 <!-- test: enum-member-constant -->
 ```maxon
 enum Color
-    Red
-    Green
-    Blue
+  Red
+  Green
+  Blue
 end 'Color'
 
 let DEFAULT_COLOR = Color.Green
 
 function main() returns int
-    match DEFAULT_COLOR 'check'
-        Color.Red then return 1
-        Color.Green then return 2
-        Color.Blue then return 3
-    end 'check'
-    return 0
+  match DEFAULT_COLOR 'check'
+    Color.Red then return 1
+    Color.Green then return 2
+    Color.Blue then return 3
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode

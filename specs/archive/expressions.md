@@ -45,7 +45,7 @@ Operands must have compatible types:
 <!-- test: compound -->
 ```maxon
 function main() returns int
-    return (2 + 3) * 5
+  return (2 + 3) * 5
 end 'main'
 ```
 ```exitcode
@@ -56,12 +56,12 @@ end 'main'
 <!-- test: with-function-call -->
 ```maxon
 function main() returns int
-    var x = 3
-    return 5 + add(x, b: 4)
+  var x = 3
+  return 5 + add(x, b: 4)
 end 'main'
 
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 ```
 ```exitcode
@@ -72,10 +72,10 @@ end 'add'
 <!-- test: multiple-variables -->
 ```maxon
 function main() returns int
-    var x = 42
-    var y = 10
-    var result = x + y
-    return result
+  var x = 42
+  var y = 10
+  var result = x + y
+  return result
 end 'main'
 ```
 ```exitcode
@@ -86,9 +86,9 @@ end 'main'
 <!-- test: mixed-operators -->
 ```maxon
 function main() returns int
-    var a = 10
-    var b = 3
-    return a * 2 + b - 1
+  var a = 10
+  var b = 3
+  return a * 2 + b - 1
 end 'main'
 ```
 ```exitcode
@@ -99,11 +99,11 @@ end 'main'
 <!-- test: comparison-in-expression -->
 ```maxon
 function main() returns int
-    var isGreater = 10 > 5
-    if isGreater 'check'
-        return 1
-    end 'check'
-    return 0
+  var isGreater = 10 > 5
+  if isGreater 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode

@@ -15,8 +15,8 @@ Type fields can be marked with `export` to make them accessible from outside the
 
 ```maxon
 type Value
-    export var n int      // accessible from outside
-    var private int       // only accessible within methods
+  export var n int      // accessible from outside
+  var private int       // only accessible within methods
 end 'Value'
 ```
 
@@ -36,23 +36,23 @@ Non-exported fields are only accessible within methods of the same type:
 
 ```maxon
 type Counter
-    var count int              // private
-    export var name string     // public
+  var count int              // private
+  export var name string     // public
 
-    function increment()
-        count = count + 1      // OK - accessing within method
-    end 'increment'
+  function increment()
+    count = count + 1      // OK - accessing within method
+  end 'increment'
 
-    export function getCount() returns int
-        return count           // OK - accessing within method
-    end 'getCount'
+  export function getCount() returns int
+    return count           // OK - accessing within method
+  end 'getCount'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{count: 0, name: "test"}
-    c.increment()
-    return c.getCount()
-    // c.count would be an error - not exported
+  var c = Counter{count: 0, name: "test"}
+  c.increment()
+  return c.getCount()
+  // c.count would be an error - not exported
 end 'main'
 ```
 
@@ -65,17 +65,17 @@ All fields (exported or not) can be initialized in struct literals, since the ty
 <!-- test: export-var-basic -->
 ```maxon
 type Value
-    export var n int
-    var private int
+  export var n int
+  var private int
 
-    static function create() returns Self
-        return {n: 42, private: 100}
-    end 'create'
+  static function create() returns Self
+    return {n: 42, private: 100}
+  end 'create'
 end 'Value'
 
 function main() returns int
-    var v = Value.create()
-    return v.n
+  var v = Value.create()
+  return v.n
 end 'main'
 ```
 ```exitcode
@@ -85,17 +85,17 @@ end 'main'
 <!-- test: export-var-write -->
 ```maxon
 type Value
-    export var n int
+  export var n int
 
-    static function create() returns Self
-        return {n: 10}
-    end 'create'
+  static function create() returns Self
+    return {n: 10}
+  end 'create'
 end 'Value'
 
 function main() returns int
-    var v = Value.create()
-    v.n = 42
-    return v.n
+  var v = Value.create()
+  v.n = 42
+  return v.n
 end 'main'
 ```
 ```exitcode
@@ -105,16 +105,16 @@ end 'main'
 <!-- test: export-let-readonly -->
 ```maxon
 type Config
-    export let version int
+  export let version int
 
-    static function create() returns Self
-        return {version: 42}
-    end 'create'
+  static function create() returns Self
+    return {version: 42}
+  end 'create'
 end 'Config'
 
 function main() returns int
-    var c = Config.create()
-    return c.version
+  var c = Config.create()
+  return c.version
 end 'main'
 ```
 ```exitcode
@@ -124,22 +124,22 @@ end 'main'
 <!-- test: private-field-in-method -->
 ```maxon
 type Counter
-    var count int
+  var count int
 
-    function increment()
-        count = count + 1
-    end 'increment'
+  function increment()
+    count = count + 1
+  end 'increment'
 
-    function getCount() returns int
-        return count
-    end 'getCount'
+  function getCount() returns int
+    return count
+  end 'getCount'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{count: 40}
-    c.increment()
-    c.increment()
-    return c.getCount()
+  var c = Counter{count: 40}
+  c.increment()
+  c.increment()
+  return c.getCount()
 end 'main'
 ```
 ```exitcode
@@ -149,21 +149,21 @@ end 'main'
 <!-- test: mixed-export-fields -->
 ```maxon
 type Box
-    export var value int
-    var secret int
+  export var value int
+  var secret int
 
-    static function create(v int, s int) returns Self
-        return {value: v, secret: s}
-    end 'create'
+  static function create(v int, s int) returns Self
+    return {value: v, secret: s}
+  end 'create'
 
-    function getSecret() returns int
-        return secret
-    end 'getSecret'
+  function getSecret() returns int
+    return secret
+  end 'getSecret'
 end 'Box'
 
 function main() returns int
-    var b = Box.create(20, 22)
-    return b.value + b.getSecret()
+  var b = Box.create(20, 22)
+  return b.value + b.getSecret()
 end 'main'
 ```
 ```exitcode
@@ -173,16 +173,16 @@ end 'main'
 <!-- test: error.unexported-field-read -->
 ```maxon
 type Value
-    var private int
+  var private int
 
-    static function create() returns Self
-        return {private: 42}
-    end 'create'
+  static function create() returns Self
+    return {private: 42}
+  end 'create'
 end 'Value'
 
 function main() returns int
-    var v = Value.create()
-    return v.private
+  var v = Value.create()
+  return v.private
 end 'main'
 ```
 ```maxoncstderr
@@ -192,17 +192,17 @@ error E050: specs/fragments/export-var-fields.error.unexported-field-read.1.test
 <!-- test: error.unexported-field-write -->
 ```maxon
 type Value
-    var private int
+  var private int
 
-    static function create() returns Self
-        return {private: 0}
-    end 'create'
+  static function create() returns Self
+    return {private: 0}
+  end 'create'
 end 'Value'
 
 function main() returns int
-    var v = Value.create()
-    v.private = 42
-    return 0
+  var v = Value.create()
+  v.private = 42
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -212,21 +212,21 @@ error E050: specs/fragments/export-var-fields.error.unexported-field-write.1.tes
 <!-- test: all-fields-private-by-default -->
 ```maxon
 type Simple
-    var x int
-    var y int
+  var x int
+  var y int
 
-    static function make(a int, b int) returns Self
-        return {x: a, y: b}
-    end 'make'
+  static function make(a int, b int) returns Self
+    return {x: a, y: b}
+  end 'make'
 
-    function sum() returns int
-        return x + y
-    end 'sum'
+  function sum() returns int
+    return x + y
+  end 'sum'
 end 'Simple'
 
 function main() returns int
-    var s = Simple.make(20, 22)
-    return s.sum()
+  var s = Simple.make(20, 22)
+  return s.sum()
 end 'main'
 ```
 ```exitcode

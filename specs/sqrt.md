@@ -37,8 +37,8 @@ var w = sqrt(z)      // 1.414213... (√2)
 <!-- test: sqrt.basic -->
 ```maxon
 function main() returns int
-    var x = sqrt(16.0)
-    return trunc(x)
+  var x = sqrt(16.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -48,11 +48,11 @@ end 'main'
 <!-- test: sqrt.precision -->
 ```maxon
 function main() returns int
-    var x = sqrt(2.0)
-    // sqrt(2) * sqrt(2) should be approximately 2
-    var check = x * x
-    // Trunc to get integer 2
-    return trunc(check)
+  var x = sqrt(2.0)
+  // sqrt(2) * sqrt(2) should be approximately 2
+  var check = x * x
+  // Trunc to get integer 2
+  return trunc(check)
 end 'main'
 ```
 ```exitcode
@@ -62,11 +62,11 @@ end 'main'
 <!-- test: sqrt.zero -->
 ```maxon
 function main() returns int
-    var result = sqrt(0.0)
-    if result == 0.0 'check'
-        return 0
-    end 'check'
-    return 1
+  var result = sqrt(0.0)
+  if result == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode

@@ -15,21 +15,21 @@ Types conforming to `InitableFromStringLiteral` can be initialized from string l
 
 ```maxon
 type MyString is InitableFromStringLiteral
-    var _value String
+  var _value String
 
-    static function InitableFromStringLiteral.init(value String) returns MyString
-        return {_value: value}
-    end 'init'
+  static function InitableFromStringLiteral.init(value String) returns MyString
+    return {_value: value}
+  end 'init'
 
-    export function len() returns int
-        return _value.byteLength()
-    end 'len'
+  export function len() returns int
+    return _value.byteLength()
+  end 'len'
 end 'MyString'
 
 function main() returns int
-    var ms = "hello" as MyString
-    print("{ms.len()}\n")
-    return 0
+  var ms = "hello" as MyString
+  print("{ms.len()}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -45,21 +45,21 @@ Types conforming to `InitableFromCharLiteral` can be initialized from character 
 
 ```maxon
 type MyChar is InitableFromCharLiteral
-    var _value Character
+  var _value Character
 
-    static function InitableFromCharLiteral.init(value Character) returns MyChar
-        return {_value: value}
-    end 'init'
+  static function InitableFromCharLiteral.init(value Character) returns MyChar
+    return {_value: value}
+  end 'init'
 
-    export function len() returns int
-        return _value.byteLength()
-    end 'len'
+  export function len() returns int
+    return _value.byteLength()
+  end 'len'
 end 'MyChar'
 
 function main() returns int
-    var mc = 'A' as MyChar
-    print("{mc.len()}\n")
-    return 0
+  var mc = 'A' as MyChar
+  print("{mc.len()}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -75,20 +75,20 @@ end 'main'
 ```maxon
 // User-defined type that wraps a String and can be created from string literals
 type Wrapper is InitableFromStringLiteral
-    var _value String
+  var _value String
 
-    static function InitableFromStringLiteral.init(value String) returns Wrapper
-        return {_value: value}
-    end 'init'
+  static function InitableFromStringLiteral.init(value String) returns Wrapper
+    return {_value: value}
+  end 'init'
 
-    export function len() returns int
-        return _value.byteLength()
-    end 'len'
+  export function len() returns int
+    return _value.byteLength()
+  end 'len'
 end 'Wrapper'
 
 function main()
-    var w = "hello" as Wrapper
-    print("{w.len()}\n")
+  var w = "hello" as Wrapper
+  print("{w.len()}\n")
 end 'main'
 ```
 ```stdout
@@ -98,20 +98,20 @@ end 'main'
 <!-- test: init-from-string-literal-empty -->
 ```maxon
 type Wrapper is InitableFromStringLiteral
-    var _value String
+  var _value String
 
-    static function InitableFromStringLiteral.init(value String) returns Wrapper
-        return {_value: value}
-    end 'init'
+  static function InitableFromStringLiteral.init(value String) returns Wrapper
+    return {_value: value}
+  end 'init'
 
-    export function len() returns int
-        return _value.byteLength()
-    end 'len'
+  export function len() returns int
+    return _value.byteLength()
+  end 'len'
 end 'Wrapper'
 
 function main()
-    var w = "" as Wrapper
-    print("len: {w.len()}\n")
+  var w = "" as Wrapper
+  print("len: {w.len()}\n")
 end 'main'
 ```
 ```stdout
@@ -121,20 +121,20 @@ len: 0
 <!-- test: init-from-char-literal-basic -->
 ```maxon
 type CharWrapper is InitableFromCharLiteral
-    var _value Character
+  var _value Character
 
-    static function InitableFromCharLiteral.init(value Character) returns CharWrapper
-        return {_value: value}
-    end 'init'
+  static function InitableFromCharLiteral.init(value Character) returns CharWrapper
+    return {_value: value}
+  end 'init'
 
-    export function len() returns int
-        return _value.byteLength()
-    end 'len'
+  export function len() returns int
+    return _value.byteLength()
+  end 'len'
 end 'CharWrapper'
 
 function main()
-    var cw = 'X' as CharWrapper
-    print("{cw.len()}\n")
+  var cw = 'X' as CharWrapper
+  print("{cw.len()}\n")
 end 'main'
 ```
 ```stdout

@@ -25,12 +25,12 @@ Float literals must include a decimal point:
 
 ```maxon
 function circleArea(radius float) returns float
-    return 3.14159 * radius * radius
+  return 3.14159 * radius * radius
 end 'circleArea'
 
 function main() returns int
-    var area = circleArea(5.0)
-    return trunc(area)  // Returns 78
+  var area = circleArea(5.0)
+  return trunc(area)  // Returns 78
 end 'main'
 ```
 ```exitcode
@@ -43,11 +43,11 @@ end 'main'
 <!-- test: basic-float -->
 ```maxon
 function main() returns int
-    var x = 3.14
-    var y = 2.0
-    var z = x + y
-    var result = trunc(z)
-    return result
+  var x = 3.14
+  var y = 2.0
+  var z = x + y
+  var result = trunc(z)
+  return result
 end 'main'
 ```
 ```exitcode
@@ -58,12 +58,12 @@ end 'main'
 <!-- test: float-comparison -->
 ```maxon
 function main() returns int
-    var x = 3.5
-    var y = 2.1
-    if x > y 'check'
-        return 1
-    end 'check'
-    return 0
+  var x = 3.5
+  var y = 2.1
+  if x > y 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -74,10 +74,10 @@ end 'main'
 <!-- test: float-arithmetic -->
 ```maxon
 function main() returns int
-    var a = 10.0
-    var b = 3.0
-    var result = a / b
-    return trunc(result)
+  var a = 10.0
+  var b = 3.0
+  var result = a / b
+  return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -88,10 +88,10 @@ end 'main'
 <!-- test: float-promotion -->
 ```maxon
 function main() returns int
-    var x = 5
-    var y = 2.0
-    var result = x + y
-    return trunc(result)
+  var x = 5
+  var y = 2.0
+  var result = x + y
+  return trunc(result)
 end 'main'
 ```
 ```exitcode

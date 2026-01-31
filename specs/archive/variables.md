@@ -18,8 +18,8 @@ Maxon supports two kinds of variable declarations:
 <!-- test: let-declaration -->
 ```maxon
 function main() returns int
-    let x = 42
-    return x
+  let x = 42
+  return x
 end 'main'
 ```
 ```exitcode
@@ -29,8 +29,8 @@ end 'main'
 <!-- test: var-declaration -->
 ```maxon
 function main() returns int
-    var x = 10
-    return x
+  var x = 10
+  return x
 end 'main'
 ```
 ```exitcode
@@ -40,9 +40,9 @@ end 'main'
 <!-- test: multiple-variables -->
 ```maxon
 function main() returns int
-    let a = 10
-    let b = 20
-    return a + b
+  let a = 10
+  let b = 20
+  return a + b
 end 'main'
 ```
 ```exitcode
@@ -53,8 +53,8 @@ end 'main'
 Explicit type annotations are not allowed on var declarations.
 ```maxon
 function main() returns int
-    var x = 0
-    return x
+  var x = 0
+  return x
 end 'main'
 ```
 ```error
@@ -65,8 +65,8 @@ E002
 Explicit type annotations are not allowed on let declarations.
 ```maxon
 function main() returns int
-    let x = 0
-    return x
+  let x = 0
+  return x
 end 'main'
 ```
 ```error

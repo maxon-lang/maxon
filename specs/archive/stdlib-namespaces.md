@@ -23,9 +23,9 @@ The standard library organizes functions into logical namespaces based on file p
 
 ```maxon
 function main() returns int
-    // Use standard library function
-    print("{42}\n")
-    return 0
+  // Use standard library function
+  print("{42}\n")
+  return 0
 end 'main'
 ```
 ```exitcode

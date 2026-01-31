@@ -8,48 +8,48 @@
 
 // findGraphemeEndManagedRange - Find end of grapheme cluster in range
 function findGraphemeEndManagedRange(managed __ManagedMemory, offset int, startPos int, len int) returns int
-	if startPos >= len 'atEnd'
-			return startPos
-	end 'atEnd'
+  if startPos >= len 'atEnd'
+      return startPos
+  end 'atEnd'
 
-	// Decode first codepoint at startPos (with offset)
-	var pos = startPos
-	var absPos = offset + pos
-	var prevCp = utf8DecodeAt(managed, pos: absPos)
-	var prevBytes = utf8ByteLengthAt(managed, pos: absPos)
-	pos = pos + prevBytes
+  // Decode first codepoint at startPos (with offset)
+  var pos = startPos
+  var absPos = offset + pos
+  var prevCp = utf8DecodeAt(managed, pos: absPos)
+  var prevBytes = utf8ByteLengthAt(managed, pos: absPos)
+  pos = pos + prevBytes
 
-	// Get grapheme break property for first codepoint
-	var prevGbp = graphemeBreakProperty(prevCp)
-	var state = graphemeStateInit()
-	state = graphemeStateUpdate(state, gbp: prevGbp, cp: prevCp)
+  // Get grapheme break property for first codepoint
+  var prevGbp = graphemeBreakProperty(prevCp)
+  var state = graphemeStateInit()
+  state = graphemeStateUpdate(state, gbp: prevGbp, cp: prevCp)
 
-	// Scan forward until we find a grapheme break
-	while pos < len 'scan'
-			absPos = offset + pos
-			var currCp = utf8DecodeAt(managed, pos: absPos)
-			var currGbp = graphemeBreakProperty(currCp)
+  // Scan forward until we find a grapheme break
+  while pos < len 'scan'
+      absPos = offset + pos
+      var currCp = utf8DecodeAt(managed, pos: absPos)
+      var currGbp = graphemeBreakProperty(currCp)
 
-			// Check if there's a break before current codepoint
-			if isGraphemeBreak(prevGbp, currGbp: currGbp, prevCp: prevCp, currCp: currCp, state: state) 'breakFound'
-					return pos
-			end 'breakFound'
+      // Check if there's a break before current codepoint
+      if isGraphemeBreak(prevGbp, currGbp: currGbp, prevCp: prevCp, currCp: currCp, state: state) 'breakFound'
+          return pos
+      end 'breakFound'
 
-			// Update state and advance to next codepoint
-			state = graphemeStateUpdate(state, gbp: currGbp, cp: currCp)
-			prevGbp = currGbp
-			prevCp = currCp
-			var currBytes = utf8ByteLengthAt(managed, pos: absPos)
-			pos = pos + currBytes
-	end 'scan'
+      // Update state and advance to next codepoint
+      state = graphemeStateUpdate(state, gbp: currGbp, cp: currCp)
+      prevGbp = currGbp
+      prevCp = currCp
+      var currBytes = utf8ByteLengthAt(managed, pos: absPos)
+      pos = pos + currBytes
+  end 'scan'
 
-	return pos
+  return pos
 end 'findGraphemeEndManagedRange'
 
 /// Find the end of the grapheme cluster in a __ManagedMemory starting at startPos
 /// Returns the byte offset of the end of the grapheme cluster
 export function findGraphemeEndManaged(managed __ManagedMemory, startPos int, len int) returns int
-	return findGraphemeEndManagedRange(managed, offset: 0, startPos: startPos, len: len)
+  return findGraphemeEndManagedRange(managed, offset: 0, startPos: startPos, len: len)
 end 'findGraphemeEndManaged'
 
 // ============================================
@@ -58,44 +58,44 @@ end 'findGraphemeEndManaged'
 
 // countGraphemesManagedRange - Count grapheme clusters in range
 function countGraphemesManagedRange(managed __ManagedMemory, offset int, len int) returns int
-	var graphemeCount = 0
-	var pos = 0
-	while pos < len 'countLoop'
-			pos = findGraphemeEndManagedRange(managed, offset: offset, startPos: pos, len: len)
-			graphemeCount = graphemeCount + 1
-	end 'countLoop'
-	return graphemeCount
+  var graphemeCount = 0
+  var pos = 0
+  while pos < len 'countLoop'
+      pos = findGraphemeEndManagedRange(managed, offset: offset, startPos: pos, len: len)
+      graphemeCount = graphemeCount + 1
+  end 'countLoop'
+  return graphemeCount
 end 'countGraphemesManagedRange'
 
 /// Count the total number of grapheme clusters in a __ManagedMemory
 export function countGraphemesManaged(managed __ManagedMemory) returns int
-	return countGraphemesManagedRange(managed, offset: 0, len: __managed_memory_len(managed))
+  return countGraphemesManagedRange(managed, offset: 0, len: __managed_memory_len(managed))
 end 'countGraphemesManaged'
 
 /// Convert a byte index to a grapheme (character) index
 /// Returns the number of grapheme clusters before the byte position
 export function byteIndexToGraphemeIndex(managed __ManagedMemory, byteIdx int) returns int
-	var graphemeIdx = 0
-	var pos = 0
-	var len = __managed_memory_len(managed)
-	while pos < byteIdx and pos < len 'count'
-			pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
-			graphemeIdx = graphemeIdx + 1
-	end 'count'
-	return graphemeIdx
+  var graphemeIdx = 0
+  var pos = 0
+  var len = __managed_memory_len(managed)
+  while pos < byteIdx and pos < len 'count'
+      pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
+      graphemeIdx = graphemeIdx + 1
+  end 'count'
+  return graphemeIdx
 end 'byteIndexToGraphemeIndex'
 
 /// Advance from a byte position by a number of grapheme clusters
 /// Returns the byte position after advancing by `count` graphemes
 export function graphemeOffsetToBytePos(managed __ManagedMemory, startBytePos int, count int) returns int
-	var pos = startBytePos
-	var len = __managed_memory_len(managed)
-	var i = 0
-	while i < count and pos < len 'advance'
-			pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
-			i = i + 1
-	end 'advance'
-	return pos
+  var pos = startBytePos
+  var len = __managed_memory_len(managed)
+  var i = 0
+  while i < count and pos < len 'advance'
+      pos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
+      i = i + 1
+  end 'advance'
+  return pos
 end 'graphemeOffsetToBytePos'
 
 // Grapheme_Cluster_Break property values (used as return values):
@@ -108,135 +108,135 @@ end 'graphemeOffsetToBytePos'
 //          6=Regional_Indicator, 7=Prepend, 8=SpacingMark,
 //          9=L, 10=V, 11=T, 12=LV, 13=LVT
 export function graphemeBreakProperty(cp int) returns int
-	// CR (return 1)
-	if cp == 13 'cr'
-			return 1
-	end 'cr'
+  // CR (return 1)
+  if cp == 13 'cr'
+      return 1
+  end 'cr'
 
-	// LF (return 2)
-	if cp == 10 'lf'
-			return 2
-	end 'lf'
+  // LF (return 2)
+  if cp == 10 'lf'
+      return 2
+  end 'lf'
 
-	// Control characters (return 3)
-	if cp < 32 or (cp >= 127 and cp < 160) 'control'
-			return 3
-	end 'control'
+  // Control characters (return 3)
+  if cp < 32 or (cp >= 127 and cp < 160) 'control'
+      return 3
+  end 'control'
 
-	// ZWJ U+200D (return 5)
-	if cp == 8205 'zwj'
-			return 5
-	end 'zwj'
+  // ZWJ U+200D (return 5)
+  if cp == 8205 'zwj'
+      return 5
+  end 'zwj'
 
-	// Regional Indicators U+1F1E6..U+1F1FF (return 6)
-	if cp >= 127462 and cp <= 127487 'ri'
-			return 6
-	end 'ri'
+  // Regional Indicators U+1F1E6..U+1F1FF (return 6)
+  if cp >= 127462 and cp <= 127487 'ri'
+      return 6
+  end 'ri'
 
-	// Hangul syllables U+AC00..U+D7A3
-	if cp >= 44032 and cp <= 55203 'hangul'
-			var sindex = cp - 44032
-			if sindex mod 28 == 0 'lv'
-					return 12  // LV
-			end 'lv' else 'lvt'
-				return 13  // LVT
-			end 'lvt'
-	end 'hangul'
+  // Hangul syllables U+AC00..U+D7A3
+  if cp >= 44032 and cp <= 55203 'hangul'
+      var sindex = cp - 44032
+      if sindex mod 28 == 0 'lv'
+          return 12  // LV
+      end 'lv' else 'lvt'
+        return 13  // LVT
+      end 'lvt'
+  end 'hangul'
 
-	// Hangul Jamo L U+1100..U+115F (return 9)
-	if cp >= 4352 and cp <= 4447 'jamo_l'
-			return 9
-	end 'jamo_l'
+  // Hangul Jamo L U+1100..U+115F (return 9)
+  if cp >= 4352 and cp <= 4447 'jamo_l'
+      return 9
+  end 'jamo_l'
 
-	// Hangul Jamo V U+1160..U+11A7 (return 10)
-	if cp >= 4448 and cp <= 4519 'jamo_v'
-			return 10
-	end 'jamo_v'
+  // Hangul Jamo V U+1160..U+11A7 (return 10)
+  if cp >= 4448 and cp <= 4519 'jamo_v'
+      return 10
+  end 'jamo_v'
 
-	// Hangul Jamo T U+11A8..U+11FF (return 11)
-	if cp >= 4520 and cp <= 4607 'jamo_t'
-			return 11
-	end 'jamo_t'
+  // Hangul Jamo T U+11A8..U+11FF (return 11)
+  if cp >= 4520 and cp <= 4607 'jamo_t'
+      return 11
+  end 'jamo_t'
 
-	// Skin tone modifiers U+1F3FB..U+1F3FF (return 4 = Extend)
-	if cp >= 127995 and cp <= 127999 'skin_tone'
-			return 4
-	end 'skin_tone'
+  // Skin tone modifiers U+1F3FB..U+1F3FF (return 4 = Extend)
+  if cp >= 127995 and cp <= 127999 'skin_tone'
+      return 4
+  end 'skin_tone'
 
-	// Variation selectors U+FE00..U+FE0F (return 4 = Extend)
-	if cp >= 65024 and cp <= 65039 'vs'
-			return 4
-	end 'vs'
+  // Variation selectors U+FE00..U+FE0F (return 4 = Extend)
+  if cp >= 65024 and cp <= 65039 'vs'
+      return 4
+  end 'vs'
 
-	// Combining Diacritical Marks U+0300..U+036F (return 4 = Extend)
-	if cp >= 768 and cp <= 879 'combining'
-			return 4
-	end 'combining'
+  // Combining Diacritical Marks U+0300..U+036F (return 4 = Extend)
+  if cp >= 768 and cp <= 879 'combining'
+      return 4
+  end 'combining'
 
-	// Format characters that are Control (return 3)
-	// ZWSP U+200B, LRM/RLM U+200E-200F, Line/Para separators U+2028-202E
-	if cp == 8203 or (cp >= 8206 and cp <= 8207) or (cp >= 8232 and cp <= 8238) 'format_control'
-			return 3
-	end 'format_control'
+  // Format characters that are Control (return 3)
+  // ZWSP U+200B, LRM/RLM U+200E-200F, Line/Para separators U+2028-202E
+  if cp == 8203 or (cp >= 8206 and cp <= 8207) or (cp >= 8232 and cp <= 8238) 'format_control'
+      return 3
+  end 'format_control'
 
-	// ZWNJ U+200C (return 4 = Extend)
-	if cp == 8204 'zwnj'
-			return 4
-	end 'zwnj'
+  // ZWNJ U+200C (return 4 = Extend)
+  if cp == 8204 'zwnj'
+      return 4
+  end 'zwnj'
 
-	// Other (return 0)
-	return 0
+  // Other (return 0)
+  return 0
 end 'graphemeBreakProperty'
 
 // Check if codepoint has Extended_Pictographic property (emoji base)
 export function isExtendedPictographic(cp int) returns bool
-	// Basic emoji range U+1F600..U+1F64F
-	if cp >= 128512 and cp <= 128591 'emoji_faces'
-			return true
-	end 'emoji_faces'
+  // Basic emoji range U+1F600..U+1F64F
+  if cp >= 128512 and cp <= 128591 'emoji_faces'
+      return true
+  end 'emoji_faces'
 
-	// Emoji symbols U+1F300..U+1F5FF
-	if cp >= 127744 and cp <= 128511 'emoji_symbols'
-			return true
-	end 'emoji_symbols'
+  // Emoji symbols U+1F300..U+1F5FF
+  if cp >= 127744 and cp <= 128511 'emoji_symbols'
+      return true
+  end 'emoji_symbols'
 
-	// Transport and map symbols U+1F680..U+1F6FF
-	if cp >= 128640 and cp <= 128767 'emoji_transport'
-			return true
-	end 'emoji_transport'
+  // Transport and map symbols U+1F680..U+1F6FF
+  if cp >= 128640 and cp <= 128767 'emoji_transport'
+      return true
+  end 'emoji_transport'
 
-	// Supplemental symbols U+1F900..U+1F9FF
-	if cp >= 129280 and cp <= 129535 'emoji_supp'
-			return true
-	end 'emoji_supp'
+  // Supplemental symbols U+1F900..U+1F9FF
+  if cp >= 129280 and cp <= 129535 'emoji_supp'
+      return true
+  end 'emoji_supp'
 
-	// Additional emoji U+1FA00..U+1FAFF
-	if cp >= 129536 and cp <= 130047 'emoji_extra'
-			return true
-	end 'emoji_extra'
+  // Additional emoji U+1FA00..U+1FAFF
+  if cp >= 129536 and cp <= 130047 'emoji_extra'
+      return true
+  end 'emoji_extra'
 
-	// Miscellaneous symbols U+2600..U+26FF
-	if cp >= 9728 and cp <= 9983 'misc_symbols'
-			return true
-	end 'misc_symbols'
+  // Miscellaneous symbols U+2600..U+26FF
+  if cp >= 9728 and cp <= 9983 'misc_symbols'
+      return true
+  end 'misc_symbols'
 
-	// Dingbats U+2700..U+27BF
-	if cp >= 9984 and cp <= 10175 'dingbats'
-			return true
-	end 'dingbats'
+  // Dingbats U+2700..U+27BF
+  if cp >= 9984 and cp <= 10175 'dingbats'
+      return true
+  end 'dingbats'
 
-	return false
+  return false
 end 'isExtendedPictographic'
 
 // State for tracking complex grapheme sequences
 type GraphemeState
-	export var riCount int           // Count of consecutive Regional Indicators (for GB12-13)
-	export var inEmojiSeq bool      // Inside Extended_Pictographic...ZWJ sequence (for GB11)
+  export var riCount int           // Count of consecutive Regional Indicators (for GB12-13)
+  export var inEmojiSeq bool      // Inside Extended_Pictographic...ZWJ sequence (for GB11)
 end 'GraphemeState'
 
 // Create initial grapheme state
 function graphemeStateInit() returns GraphemeState
-	return {riCount: 0, inEmojiSeq: false}
+  return {riCount: 0, inEmojiSeq: false}
 end 'graphemeStateInit'
 
 // Check if there should be a grapheme break between two codepoints
@@ -248,114 +248,114 @@ end 'graphemeStateInit'
 //
 // Returns true if there should be a break BEFORE the current codepoint
 function isGraphemeBreak(prevGbp int, currGbp int, prevCp int, currCp int, state GraphemeState) returns bool
-	// Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
-	var unused = prevCp
-	unused = unused
+  // Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
+  var unused = prevCp
+  unused = unused
 
-	// GB3: Do not break between CR and LF (CR × LF)
-	// prevGbp == 1 (CR) and currGbp == 2 (LF)
-	if prevGbp == 1 and currGbp == 2 'gb3'
-			return false
-	end 'gb3'
+  // GB3: Do not break between CR and LF (CR × LF)
+  // prevGbp == 1 (CR) and currGbp == 2 (LF)
+  if prevGbp == 1 and currGbp == 2 'gb3'
+      return false
+  end 'gb3'
 
-	// GB4: Break after Control, CR, or LF
-	// prevGbp == 3 (Control) or prevGbp == 1 (CR) or prevGbp == 2 (LF)
-	if prevGbp == 3 or prevGbp == 1 or prevGbp == 2 'gb4'
-			return true
-	end 'gb4'
+  // GB4: Break after Control, CR, or LF
+  // prevGbp == 3 (Control) or prevGbp == 1 (CR) or prevGbp == 2 (LF)
+  if prevGbp == 3 or prevGbp == 1 or prevGbp == 2 'gb4'
+      return true
+  end 'gb4'
 
-	// GB5: Break before Control, CR, or LF
-	if currGbp == 3 or currGbp == 1 or currGbp == 2 'gb5'
-			return true
-	end 'gb5'
+  // GB5: Break before Control, CR, or LF
+  if currGbp == 3 or currGbp == 1 or currGbp == 2 'gb5'
+      return true
+  end 'gb5'
 
-	// GB6: Do not break Hangul syllable sequences (L × L/V/LV/LVT)
-	// prevGbp == 9 (L)
-	if prevGbp == 9 'gb6'
-			// currGbp == 9 (L), 10 (V), 12 (LV), or 13 (LVT)
-			if currGbp == 9 or currGbp == 10 or currGbp == 12 or currGbp == 13 'gb6_inner'
-					return false
-			end 'gb6_inner'
-	end 'gb6'
+  // GB6: Do not break Hangul syllable sequences (L × L/V/LV/LVT)
+  // prevGbp == 9 (L)
+  if prevGbp == 9 'gb6'
+      // currGbp == 9 (L), 10 (V), 12 (LV), or 13 (LVT)
+      if currGbp == 9 or currGbp == 10 or currGbp == 12 or currGbp == 13 'gb6_inner'
+          return false
+      end 'gb6_inner'
+  end 'gb6'
 
-	// GB7: Do not break Hangul syllable sequences (LV/V × V/T)
-	// prevGbp == 12 (LV) or 10 (V)
-	if prevGbp == 12 or prevGbp == 10 'gb7'
-			// currGbp == 10 (V) or 11 (T)
-			if currGbp == 10 or currGbp == 11 'gb7_inner'
-					return false
-			end 'gb7_inner'
-	end 'gb7'
+  // GB7: Do not break Hangul syllable sequences (LV/V × V/T)
+  // prevGbp == 12 (LV) or 10 (V)
+  if prevGbp == 12 or prevGbp == 10 'gb7'
+      // currGbp == 10 (V) or 11 (T)
+      if currGbp == 10 or currGbp == 11 'gb7_inner'
+          return false
+      end 'gb7_inner'
+  end 'gb7'
 
-	// GB8: Do not break Hangul syllable sequences (LVT/T × T)
-	// prevGbp == 13 (LVT) or 11 (T)
-	if prevGbp == 13 or prevGbp == 11 'gb8'
-			// currGbp == 11 (T)
-			if currGbp == 11 'gb8_inner'
-					return false
-			end 'gb8_inner'
-	end 'gb8'
+  // GB8: Do not break Hangul syllable sequences (LVT/T × T)
+  // prevGbp == 13 (LVT) or 11 (T)
+  if prevGbp == 13 or prevGbp == 11 'gb8'
+      // currGbp == 11 (T)
+      if currGbp == 11 'gb8_inner'
+          return false
+      end 'gb8_inner'
+  end 'gb8'
 
-	// GB9: Do not break before Extend or ZWJ (× Extend/ZWJ)
-	// currGbp == 4 (Extend) or 5 (ZWJ)
-	if currGbp == 4 or currGbp == 5 'gb9'
-			return false
-	end 'gb9'
+  // GB9: Do not break before Extend or ZWJ (× Extend/ZWJ)
+  // currGbp == 4 (Extend) or 5 (ZWJ)
+  if currGbp == 4 or currGbp == 5 'gb9'
+      return false
+  end 'gb9'
 
-	// GB9a: Do not break before SpacingMark (× SpacingMark)
-	// currGbp == 8 (SpacingMark)
-	if currGbp == 8 'gb9a'
-			return false
-	end 'gb9a'
+  // GB9a: Do not break before SpacingMark (× SpacingMark)
+  // currGbp == 8 (SpacingMark)
+  if currGbp == 8 'gb9a'
+      return false
+  end 'gb9a'
 
-	// GB9b: Do not break after Prepend (Prepend ×)
-	// prevGbp == 7 (Prepend)
-	if prevGbp == 7 'gb9b'
-			return false
-	end 'gb9b'
+  // GB9b: Do not break after Prepend (Prepend ×)
+  // prevGbp == 7 (Prepend)
+  if prevGbp == 7 'gb9b'
+      return false
+  end 'gb9b'
 
-	// GB11: Do not break within emoji ZWJ sequences
-	// \p{Extended_Pictographic} Extend* ZWJ × \p{Extended_Pictographic}
-	// prevGbp == 5 (ZWJ)
-	if prevGbp == 5 and isExtendedPictographic(currCp) 'gb11'
-			if state.inEmojiSeq 'gb11_check'
-					return false
-			end 'gb11_check'
-	end 'gb11'
+  // GB11: Do not break within emoji ZWJ sequences
+  // \p{Extended_Pictographic} Extend* ZWJ × \p{Extended_Pictographic}
+  // prevGbp == 5 (ZWJ)
+  if prevGbp == 5 and isExtendedPictographic(currCp) 'gb11'
+      if state.inEmojiSeq 'gb11_check'
+          return false
+      end 'gb11_check'
+  end 'gb11'
 
-	// GB12-13: Do not break within emoji flag sequences
-	// Only pair up RIs; odd-numbered RIs break before next RI
-	// prevGbp == 6 (Regional_Indicator) and currGbp == 6
-	if prevGbp == 6 and currGbp == 6 'gb12'
-			if state.riCount mod 2 == 1 'gb12_odd'
-					return false
-			end 'gb12_odd'
-	end 'gb12'
+  // GB12-13: Do not break within emoji flag sequences
+  // Only pair up RIs; odd-numbered RIs break before next RI
+  // prevGbp == 6 (Regional_Indicator) and currGbp == 6
+  if prevGbp == 6 and currGbp == 6 'gb12'
+      if state.riCount mod 2 == 1 'gb12_odd'
+          return false
+      end 'gb12_odd'
+  end 'gb12'
 
-	// GB999: Otherwise, break everywhere
-	return true
+  // GB999: Otherwise, break everywhere
+  return true
 end 'isGraphemeBreak'
 
 // Update grapheme state after processing a codepoint
 function graphemeStateUpdate(state GraphemeState, gbp int, cp int) returns GraphemeState
-	var new_state = GraphemeState{riCount: 0, inEmojiSeq: false}
+  var new_state = GraphemeState{riCount: 0, inEmojiSeq: false}
 
-	// Track Regional Indicator sequences (gbp == 6)
-	if gbp == 6 'ri_update'
-			new_state.riCount = state.riCount + 1
-	end 'ri_update'
+  // Track Regional Indicator sequences (gbp == 6)
+  if gbp == 6 'ri_update'
+      new_state.riCount = state.riCount + 1
+  end 'ri_update'
 
-	// Track emoji sequences for GB11
-	if isExtendedPictographic(cp) 'emoji_base'
-			new_state.inEmojiSeq = true
-	end 'emoji_base' else 'not_emoji_base'
-		if state.inEmojiSeq 'emoji_continue'
-				// gbp == 4 (Extend) or 5 (ZWJ)
-				if gbp == 4 or gbp == 5 'emoji_extend'
-						new_state.inEmojiSeq = true
-				end 'emoji_extend'
-		end 'emoji_continue'
-	end 'not_emoji_base'
+  // Track emoji sequences for GB11
+  if isExtendedPictographic(cp) 'emoji_base'
+      new_state.inEmojiSeq = true
+  end 'emoji_base' else 'not_emoji_base'
+    if state.inEmojiSeq 'emoji_continue'
+        // gbp == 4 (Extend) or 5 (ZWJ)
+        if gbp == 4 or gbp == 5 'emoji_extend'
+            new_state.inEmojiSeq = true
+        end 'emoji_extend'
+    end 'emoji_continue'
+  end 'not_emoji_base'
 
-	return new_state
+  return new_state
 end 'graphemeStateUpdate'

@@ -37,12 +37,12 @@ To get a reference to a function, use the function name without parentheses:
 
 ```maxon
 function double(x int) returns int
-    return x * 2
+  return x * 2
 end 'double'
 
 function main() returns int
-    var f = double      // f is a function reference
-    return f(21)        // calls double(21), returns 42
+  var f = double      // f is a function reference
+  return f(21)        // calls double(21), returns 42
 end 'main'
 ```
 
@@ -52,15 +52,15 @@ Functions can be passed to other functions:
 
 ```maxon
 function apply(f (int) returns int, x int) returns int
-    return f(x)
+  return f(x)
 end 'apply'
 
 function triple(n int) returns int
-    return n * 3
+  return n * 3
 end 'triple'
 
 function main() returns int
-    return apply(triple, x: 10)  // returns 30
+  return apply(triple, x: 10)  // returns 30
 end 'main'
 ```
 
@@ -70,8 +70,8 @@ Closures are inline anonymous functions:
 
 ```maxon
 function main() returns int
-    var f = (x int) gives x * 2
-    return f(21)  // returns 42
+  var f = (x int) gives x * 2
+  return f(21)  // returns 42
 end 'main'
 ```
 
@@ -79,11 +79,11 @@ Closures can be passed directly to higher-order functions:
 
 ```maxon
 function apply(f (int) returns int, x int) returns int
-    return f(x)
+  return f(x)
 end 'apply'
 
 function main() returns int
-    return apply((n int) gives n + 5, x: 10)  // returns 15
+  return apply((n int) gives n + 5, x: 10)  // returns 15
 end 'main'
 ```
 
@@ -92,12 +92,12 @@ end 'main'
 <!-- test: first-class-function.basic-reference -->
 ```maxon
 function double(x int) returns int
-    return x * 2
+  return x * 2
 end 'double'
 
 function main() returns int
-    var f = double
-    return f(21)
+  var f = double
+  return f(21)
 end 'main'
 ```
 ```exitcode
@@ -107,15 +107,15 @@ end 'main'
 <!-- test: first-class-function.pass-as-argument -->
 ```maxon
 function apply(f (int) returns int, x int) returns int
-    return f(x)
+  return f(x)
 end 'apply'
 
 function triple(n int) returns int
-    return n * 3
+  return n * 3
 end 'triple'
 
 function main() returns int
-    return apply(triple, x: 10)
+  return apply(triple, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -125,8 +125,8 @@ end 'main'
 <!-- test: first-class-function.closure-in-variable -->
 ```maxon
 function main() returns int
-    var f = (x int) gives x * 5
-    return f(8)
+  var f = (x int) gives x * 5
+  return f(8)
 end 'main'
 ```
 ```exitcode
@@ -136,11 +136,11 @@ end 'main'
 <!-- test: first-class-function.closure-as-argument -->
 ```maxon
 function apply(f (int) returns int, x int) returns int
-    return f(x)
+  return f(x)
 end 'apply'
 
 function main() returns int
-    return apply((n int) gives n + 7, x: 10)
+  return apply((n int) gives n + 7, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -150,15 +150,15 @@ end 'main'
 <!-- test: first-class-function.multiple-params -->
 ```maxon
 function calculate(f (int, int) returns int, a int, b int) returns int
-    return f(a, b)
+  return f(a, b)
 end 'calculate'
 
 function add(x int, y int) returns int
-    return x + y
+  return x + y
 end 'add'
 
 function main() returns int
-    return calculate(add, a: 15, b: 27)
+  return calculate(add, a: 15, b: 27)
 end 'main'
 ```
 ```exitcode
@@ -168,19 +168,19 @@ end 'main'
 <!-- test: first-class-function.reassign -->
 ```maxon
 function double(x int) returns int
-    return x * 2
+  return x * 2
 end 'double'
 
 function triple(x int) returns int
-    return x * 3
+  return x * 3
 end 'triple'
 
 function main() returns int
-    var f = double
-    var a = f(10)
-    f = triple
-    var b = f(10)
-    return a + b
+  var f = double
+  var a = f(10)
+  f = triple
+  var b = f(10)
+  return a + b
 end 'main'
 ```
 ```exitcode

@@ -3,238 +3,238 @@
 
 // Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
 export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Element, Indexed with Element
-	var iterIndex int          // Current iteration position (now at offset 0)
-	var managed __ManagedMemory  // Compiler-managed opaque array storage (now at offset 8)
+  var iterIndex int          // Current iteration position (now at offset 0)
+  var managed __ManagedMemory  // Compiler-managed opaque array storage (now at offset 8)
 
-	// =========================================================================
-	// Builtin initialization (compiler special-case)
-	// =========================================================================
+  // =========================================================================
+  // Builtin initialization (compiler special-case)
+  // =========================================================================
 
-	// Default type for array literals - compiler discovers this via BuiltinArrayLiteral interface
-	static function BuiltinArrayLiteral.init(managed __ManagedMemory) returns Self
-		return {managed: managed, iterIndex: 0}
-	end 'init'
+  // Default type for array literals - compiler discovers this via BuiltinArrayLiteral interface
+  static function BuiltinArrayLiteral.init(managed __ManagedMemory) returns Self
+    return {managed: managed, iterIndex: 0}
+  end 'init'
 
-	// =========================================================================
-	// Properties
-	// =========================================================================
+  // =========================================================================
+  // Properties
+  // =========================================================================
 
-	/// Get the number of elements in the array
-	export function Sized.count() returns int
-		return __managed_memory_len(managed)
-	end 'count'
+  /// Get the number of elements in the array
+  export function Sized.count() returns int
+    return __managed_memory_len(managed)
+  end 'count'
 
-	/// Get the current capacity (allocated space)
-	export function capacity() returns int
-		return __managed_memory_capacity(managed)
-	end 'capacity'
+  /// Get the current capacity (allocated space)
+  export function capacity() returns int
+    return __managed_memory_capacity(managed)
+  end 'capacity'
 
-	/// Check if array is empty
-	export function isEmpty() returns bool
-		return __managed_memory_len(managed) == 0
-	end 'isEmpty'
+  /// Check if array is empty
+  export function isEmpty() returns bool
+    return __managed_memory_len(managed) == 0
+  end 'isEmpty'
 
-	/// Get first element, throws if empty
-	export function first() returns Element throws ArrayError
-		if __managed_memory_len(managed) == 0 'empty'
-			throw ArrayError.indexOutOfBounds
-		end 'empty'
-		return __managed_memory_get_unchecked(managed, 0)
-	end 'first'
+  /// Get first element, throws if empty
+  export function first() returns Element throws ArrayError
+    if __managed_memory_len(managed) == 0 'empty'
+      throw ArrayError.indexOutOfBounds
+    end 'empty'
+    return __managed_memory_get_unchecked(managed, 0)
+  end 'first'
 
-	/// Get last element, throws if empty
-	export function last() returns Element throws ArrayError
-		var len = __managed_memory_len(managed)
-		if len == 0 'empty'
-			throw ArrayError.indexOutOfBounds
-		end 'empty'
-		return __managed_memory_get_unchecked(managed, len - 1)
-	end 'last'
+  /// Get last element, throws if empty
+  export function last() returns Element throws ArrayError
+    var len = __managed_memory_len(managed)
+    if len == 0 'empty'
+      throw ArrayError.indexOutOfBounds
+    end 'empty'
+    return __managed_memory_get_unchecked(managed, len - 1)
+  end 'last'
 
-	// =========================================================================
-	// Element Access
-	// =========================================================================
+  // =========================================================================
+  // Element Access
+  // =========================================================================
 
-	/// Get element at index, throws if out of bounds
-	export function Indexed.get(index int) returns Element throws ArrayError
-		var len = __managed_memory_len(managed)
-		if index < 0 'lower'
-			throw ArrayError.indexOutOfBounds
-		end 'lower'
-		if index >= len 'upper'
-			throw ArrayError.indexOutOfBounds
-		end 'upper'
-		return __managed_memory_get_unchecked(managed, index)
-	end 'get'
+  /// Get element at index, throws if out of bounds
+  export function Indexed.get(index int) returns Element throws ArrayError
+    var len = __managed_memory_len(managed)
+    if index < 0 'lower'
+      throw ArrayError.indexOutOfBounds
+    end 'lower'
+    if index >= len 'upper'
+      throw ArrayError.indexOutOfBounds
+    end 'upper'
+    return __managed_memory_get_unchecked(managed, index)
+  end 'get'
 
-	/// Set element at index (no-op if index out of bounds)
-	export function Indexed.set(index int, value Element)
-		var len = __managed_memory_len(managed)
-		if index >= 0 'lower'
-			if index < len 'upper'
-				__managed_memory_set_at(managed, index, value)
-			end 'upper'
-		end 'lower'
-	end 'set'
+  /// Set element at index (no-op if index out of bounds)
+  export function Indexed.set(index int, value Element)
+    var len = __managed_memory_len(managed)
+    if index >= 0 'lower'
+      if index < len 'upper'
+        __managed_memory_set_at(managed, index, value)
+      end 'upper'
+    end 'lower'
+  end 'set'
 
-	/// Transform each element with the given function
-	export function map(transform (Element) returns Element) returns Self
-		var len = __managed_memory_len(managed)
-		var result = __managed_memory_create(len, __element_size())
-		var i = 0
-		while i < len 'loop'
-			// Since i is always in bounds, we can safely unwrap with 'or 0'
-			// The default value is never used
-			var elem = __managed_memory_get_unchecked(managed, i)
-			var transformed = transform(elem)
-			__managed_memory_set_at(result, i, transformed)
-			i = i + 1
-		end 'loop'
-		__managed_memory_set_length(result, len)
-		return {managed: result, iterIndex: 0}
-	end 'map'
+  /// Transform each element with the given function
+  export function map(transform (Element) returns Element) returns Self
+    var len = __managed_memory_len(managed)
+    var result = __managed_memory_create(len, __element_size())
+    var i = 0
+    while i < len 'loop'
+      // Since i is always in bounds, we can safely unwrap with 'or 0'
+      // The default value is never used
+      var elem = __managed_memory_get_unchecked(managed, i)
+      var transformed = transform(elem)
+      __managed_memory_set_at(result, i, transformed)
+      i = i + 1
+    end 'loop'
+    __managed_memory_set_length(result, len)
+    return {managed: result, iterIndex: 0}
+  end 'map'
 
-	// =========================================================================
-	// Mutating Operations
-	// =========================================================================
+  // =========================================================================
+  // Mutating Operations
+  // =========================================================================
 
-	/// Ensure capacity for at least requiredLen elements, growing if needed
-	function ensureCapacity(requiredLen int)
-		var cap = __managed_memory_capacity(managed)
-		if requiredLen > cap 'grow'
-			// Double capacity until sufficient, minimum 4
-			var newCap = cap
-			if newCap < 4 'min'
-				newCap = 4
-			end 'min'
-			while newCap < requiredLen 'double'
-				newCap = newCap * 2
-			end 'double'
-			__managed_memory_grow(managed, newCap)
-		end 'grow'
-	end 'ensureCapacity'
+  /// Ensure capacity for at least requiredLen elements, growing if needed
+  function ensureCapacity(requiredLen int)
+    var cap = __managed_memory_capacity(managed)
+    if requiredLen > cap 'grow'
+      // Double capacity until sufficient, minimum 4
+      var newCap = cap
+      if newCap < 4 'min'
+        newCap = 4
+      end 'min'
+      while newCap < requiredLen 'double'
+        newCap = newCap * 2
+      end 'double'
+      __managed_memory_grow(managed, newCap)
+    end 'grow'
+  end 'ensureCapacity'
 
-	/// Append element to end
-	export function push(value Element)
-		var len = __managed_memory_len(managed)
-		ensureCapacity(len + 1)
-		__managed_memory_set_at(managed, len, value)
-		__managed_memory_set_length(managed, len + 1)
-	end 'push'
+  /// Append element to end
+  export function push(value Element)
+    var len = __managed_memory_len(managed)
+    ensureCapacity(len + 1)
+    __managed_memory_set_at(managed, len, value)
+    __managed_memory_set_length(managed, len + 1)
+  end 'push'
 
-	/// Append all elements from another array
-	export function append(other Self)
-		var otherLen = other.count()
-		if otherLen == 0 'empty'
-			return
-		end 'empty'
-		var len = __managed_memory_len(managed)
-		ensureCapacity(len + otherLen)
-		for item in other 'copy'
-			__managed_memory_set_at(managed, len, item)
-			len = len + 1
-		end 'copy'
-		__managed_memory_set_length(managed, len)
-	end 'append'
+  /// Append all elements from another array
+  export function append(other Self)
+    var otherLen = other.count()
+    if otherLen == 0 'empty'
+      return
+    end 'empty'
+    var len = __managed_memory_len(managed)
+    ensureCapacity(len + otherLen)
+    for item in other 'copy'
+      __managed_memory_set_at(managed, len, item)
+      len = len + 1
+    end 'copy'
+    __managed_memory_set_length(managed, len)
+  end 'append'
 
-	/// Remove and return last element, throws if empty
-	export function pop() returns Element throws ArrayError
-		var len = __managed_memory_len(managed)
-		if len == 0 'empty'
-			throw ArrayError.indexOutOfBounds
-		end 'empty'
-		var newLen = len - 1
-		var value = __managed_memory_get_unchecked(managed, newLen)
-		__managed_memory_set_length(managed, newLen)
-		return value
-	end 'pop'
+  /// Remove and return last element, throws if empty
+  export function pop() returns Element throws ArrayError
+    var len = __managed_memory_len(managed)
+    if len == 0 'empty'
+      throw ArrayError.indexOutOfBounds
+    end 'empty'
+    var newLen = len - 1
+    var value = __managed_memory_get_unchecked(managed, newLen)
+    __managed_memory_set_length(managed, newLen)
+    return value
+  end 'pop'
 
-	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
-	export function insert(at int, value Element)
-		var len = __managed_memory_len(managed)
-		var index = at
+  /// Insert element at index, shifting elements to the right (clamps index to [0, count])
+  export function insert(at int, value Element)
+    var len = __managed_memory_len(managed)
+    var index = at
 
-		// Clamp index to valid range
-		if index < 0 'clamp_low'
-			index = 0
-		end 'clamp_low'
-		if index > len 'clamp_high'
-			index = len
-		end 'clamp_high'
+    // Clamp index to valid range
+    if index < 0 'clamp_low'
+      index = 0
+    end 'clamp_low'
+    if index > len 'clamp_high'
+      index = len
+    end 'clamp_high'
 
-		// Ensure capacity
-		ensureCapacity(len + 1)
+    // Ensure capacity
+    ensureCapacity(len + 1)
 
-		// Shift elements right to make room
-		if index < len 'shift'
-			__managed_memory_shift_right(managed, index, 1)
-		end 'shift'
+    // Shift elements right to make room
+    if index < len 'shift'
+      __managed_memory_shift_right(managed, index, 1)
+    end 'shift'
 
-		// Insert element and update length
-		__managed_memory_set_at(managed, index, value)
-		__managed_memory_set_length(managed, len + 1)
-	end 'insert'
+    // Insert element and update length
+    __managed_memory_set_at(managed, index, value)
+    __managed_memory_set_length(managed, len + 1)
+  end 'insert'
 
-	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
-	export function remove(at int) returns Element throws ArrayError
-		var len = __managed_memory_len(managed)
+  /// Remove and return element at index, shifting elements to the left (throws if out of bounds)
+  export function remove(at int) returns Element throws ArrayError
+    var len = __managed_memory_len(managed)
 
-		// Check bounds
-		if at < 0 'lower'
-			throw ArrayError.indexOutOfBounds
-		end 'lower'
-		if at >= len 'upper'
-			throw ArrayError.indexOutOfBounds
-		end 'upper'
+    // Check bounds
+    if at < 0 'lower'
+      throw ArrayError.indexOutOfBounds
+    end 'lower'
+    if at >= len 'upper'
+      throw ArrayError.indexOutOfBounds
+    end 'upper'
 
-		// Save element before shifting
-		var value = __managed_memory_get_unchecked(managed, at)
+    // Save element before shifting
+    var value = __managed_memory_get_unchecked(managed, at)
 
-		// Shift elements left to fill gap
-		if at < len - 1 'shift'
-			__managed_memory_shift_left(managed, at, 1)
-		end 'shift'
+    // Shift elements left to fill gap
+    if at < len - 1 'shift'
+      __managed_memory_shift_left(managed, at, 1)
+    end 'shift'
 
-		__managed_memory_set_length(managed, len - 1)
-		return value
-	end 'remove'
+    __managed_memory_set_length(managed, len - 1)
+    return value
+  end 'remove'
 
-	/// Remove all elements from the array (keeps capacity)
-	export function clear()
-		__managed_memory_set_length(managed, 0)
-	end 'clear'
+  /// Remove all elements from the array (keeps capacity)
+  export function clear()
+    __managed_memory_set_length(managed, 0)
+  end 'clear'
 
-	// =========================================================================
-	// Capacity Management
-	// =========================================================================
+  // =========================================================================
+  // Capacity Management
+  // =========================================================================
 
-	/// Reserve space by ensuring array has at least minCapacity slots
-	export function reserve(minCapacity int)
-		var cap = __managed_memory_capacity(managed)
-		if minCapacity > cap 'grow'
-			__managed_memory_grow(managed, minCapacity)
-		end 'grow'
-	end 'reserve'
+  /// Reserve space by ensuring array has at least minCapacity slots
+  export function reserve(minCapacity int)
+    var cap = __managed_memory_capacity(managed)
+    if minCapacity > cap 'grow'
+      __managed_memory_grow(managed, minCapacity)
+    end 'grow'
+  end 'reserve'
 
-	/// Resize array to newLength elements, allocating if needed
-	/// New elements are zero-initialized
-	export function resize(newLength int)
-		reserve(newLength)
-		__managed_memory_set_length(managed, newLength)
-	end 'resize'
+  /// Resize array to newLength elements, allocating if needed
+  /// New elements are zero-initialized
+  export function resize(newLength int)
+    reserve(newLength)
+    __managed_memory_set_length(managed, newLength)
+  end 'resize'
 
-	// =========================================================================
-	// Iterable Interface
-	// =========================================================================
+  // =========================================================================
+  // Iterable Interface
+  // =========================================================================
 
-	/// Get next element in iteration, throws when exhausted
-	function Iterable.next() returns Element throws IterationError
-		var len = __managed_memory_len(managed)
-		if iterIndex >= len 'done'
-			throw IterationError.exhausted
-		end 'done'
-		var value = __managed_memory_get_unchecked(managed, iterIndex)
-		iterIndex = iterIndex + 1
-		return value
-	end 'next'
+  /// Get next element in iteration, throws when exhausted
+  function Iterable.next() returns Element throws IterationError
+    var len = __managed_memory_len(managed)
+    if iterIndex >= len 'done'
+      throw IterationError.exhausted
+    end 'done'
+    var value = __managed_memory_get_unchecked(managed, iterIndex)
+    iterIndex = iterIndex + 1
+    return value
+  end 'next'
 end 'Array'

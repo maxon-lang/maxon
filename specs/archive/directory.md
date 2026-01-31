@@ -17,7 +17,7 @@ Directory operations use function-specific error types:
 
 ```maxon
 enum DirectoryListError is Error
-    notFound
+  notFound
 end 'DirectoryListError'
 ```
 
@@ -40,14 +40,14 @@ where `type StringArray is Array with String`
 
 ```maxon
 function main() returns int
-    let files = try Directory.list("./") otherwise 'err'
-        print("Failed to list directory")
-        return 1
-    end 'err'
-    for f in files 'loop'
-        print("{f}\n")
-    end 'loop'
-    return 0
+  let files = try Directory.list("./") otherwise 'err'
+    print("Failed to list directory")
+    return 1
+  end 'err'
+  for f in files 'loop'
+    print("{f}\n")
+  end 'loop'
+  return 0
 end 'main'
 ```
 
@@ -66,12 +66,12 @@ Check if a path exists and is a directory.
 
 ```maxon
 function main() returns int
-    if Directory.exists("bin") 'check'
-        print("bin is a directory")
-    end 'check' else 'nodir'
-        print("bin is not a directory")
-    end 'nodir'
-    return 0
+  if Directory.exists("bin") 'check'
+    print("bin is a directory")
+  end 'check' else 'nodir'
+    print("bin is not a directory")
+  end 'nodir'
+  return 0
 end 'main'
 ```
 
@@ -91,20 +91,20 @@ Check if a path is a directory. Alias for `exists`.
 <!-- test: list-directory -->
 ```maxon
 function main() returns int
-    let files = try Directory.list("../bin") otherwise 'err'
-        return 0
-    end 'err'
-    // bin directory should contain maxon.exe
-    var foundMaxon = false
-    for f in files 'loop'
-        if f == "maxon.exe" 'check'
-            foundMaxon = true
-        end 'check'
-    end 'loop'
-    if foundMaxon 'result'
-        return 42
-    end 'result'
-    return 1
+  let files = try Directory.list("../bin") otherwise 'err'
+    return 0
+  end 'err'
+  // bin directory should contain maxon.exe
+  var foundMaxon = false
+  for f in files 'loop'
+    if f == "maxon.exe" 'check'
+      foundMaxon = true
+    end 'check'
+  end 'loop'
+  if foundMaxon 'result'
+    return 42
+  end 'result'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -114,14 +114,14 @@ end 'main'
 <!-- test: list-directory-count -->
 ```maxon
 function main() returns int
-    let files = try Directory.list("../bin") otherwise 'err'
-        return 99
-    end 'err'
-    // bin directory has at least maxon.exe and maxon.pdb
-    if files.count() >= 2 'ok'
-        return 42
-    end 'ok'
-    return files.count()
+  let files = try Directory.list("../bin") otherwise 'err'
+    return 99
+  end 'err'
+  // bin directory has at least maxon.exe and maxon.pdb
+  if files.count() >= 2 'ok'
+    return 42
+  end 'ok'
+  return files.count()
 end 'main'
 ```
 ```exitcode
@@ -131,12 +131,12 @@ end 'main'
 <!-- test: list-nonexistent-directory -->
 ```maxon
 function main() returns int
-    var files = try Directory.list("nonexistent_dir_12345") otherwise 'err'
-        print("Directory not found")
-        return 0
-    end 'err'
-    print("Found {files.count()} files\n")
-    return 1
+  var files = try Directory.list("nonexistent_dir_12345") otherwise 'err'
+    print("Directory not found")
+    return 0
+  end 'err'
+  print("Found {files.count()} files\n")
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -149,10 +149,10 @@ Directory not found
 <!-- test: directory-exists -->
 ```maxon
 function main() returns int
-    if Directory.exists("../bin") 'check'
-        return 42
-    end 'check'
-    return 0
+  if Directory.exists("../bin") 'check'
+    return 42
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -162,10 +162,10 @@ end 'main'
 <!-- test: directory-is-directory -->
 ```maxon
 function main() returns int
-    if Directory.isDirectory("../bin") 'check'
-        return 42
-    end 'check'
-    return 0
+  if Directory.isDirectory("../bin") 'check'
+    return 42
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -175,11 +175,11 @@ end 'main'
 <!-- test: file-is-not-directory -->
 ```maxon
 function main() returns int
-    // Test that a nonexistent path is not a directory
-    if Directory.isDirectory("nonexistent_path_12345") 'check'
-        return 1
-    end 'check'
-    return 42
+  // Test that a nonexistent path is not a directory
+  if Directory.isDirectory("nonexistent_path_12345") 'check'
+    return 1
+  end 'check'
+  return 42
 end 'main'
 ```
 ```exitcode

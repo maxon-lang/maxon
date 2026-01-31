@@ -52,7 +52,7 @@ Compares two values for equality.
 var a = 42
 var b = 42
 if a.equals(b) 'check'
-    // true
+  // true
 end 'check'
 ```
 
@@ -64,9 +64,9 @@ end 'check'
 <!-- test: int.hash -->
 ```maxon
 function main() returns int
-    var i = 42
-    var h = i.hash()
-    return h
+  var i = 42
+  var h = i.hash()
+  return h
 end 'main'
 ```
 ```exitcode
@@ -76,8 +76,8 @@ end 'main'
 <!-- test: bool.hash.true -->
 ```maxon
 function main() returns int
-    var t = true
-    return t.hash()
+  var t = true
+  return t.hash()
 end 'main'
 ```
 ```exitcode
@@ -87,8 +87,8 @@ end 'main'
 <!-- test: bool.hash.false -->
 ```maxon
 function main() returns int
-    var f = false
-    return f.hash()
+  var f = false
+  return f.hash()
 end 'main'
 ```
 ```exitcode
@@ -98,12 +98,12 @@ end 'main'
 <!-- test: float.hash.nonzero -->
 ```maxon
 function main() returns int
-    var f = 3.14
-    var h = f.hash()
-    if h != 0 'check'
-        return 1
-    end 'check'
-    return 0
+  var f = 3.14
+  var h = f.hash()
+  if h != 0 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -113,14 +113,14 @@ end 'main'
 <!-- test: float.hash.zero-normalization -->
 ```maxon
 function main() returns int
-    var pos = 0.0
-    var neg = -0.0
-    var h1 = pos.hash()
-    var h2 = neg.hash()
-    if h1 == h2 'eq'
-        return 1
-    end 'eq'
-    return 0
+  var pos = 0.0
+  var neg = -0.0
+  var h1 = pos.hash()
+  var h2 = neg.hash()
+  if h1 == h2 'eq'
+    return 1
+  end 'eq'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -130,12 +130,12 @@ end 'main'
 <!-- test: int.equals.same -->
 ```maxon
 function main() returns int
-    var a = 42
-    var b = 42
-    if a.equals(b) 'eq'
-        return 1
-    end 'eq'
-    return 0
+  var a = 42
+  var b = 42
+  if a.equals(b) 'eq'
+    return 1
+  end 'eq'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -145,12 +145,12 @@ end 'main'
 <!-- test: int.equals.different -->
 ```maxon
 function main() returns int
-    var a = 42
-    var b = 17
-    if a.equals(b) 'eq'
-        return 1
-    end 'eq'
-    return 0
+  var a = 42
+  var b = 17
+  if a.equals(b) 'eq'
+    return 1
+  end 'eq'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -160,12 +160,12 @@ end 'main'
 <!-- test: bool.equals -->
 ```maxon
 function main() returns int
-    var a = true
-    var b = true
-    if a.equals(b) 'eq'
-        return 1
-    end 'eq'
-    return 0
+  var a = true
+  var b = true
+  if a.equals(b) 'eq'
+    return 1
+  end 'eq'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -175,12 +175,12 @@ end 'main'
 <!-- test: float.equals -->
 ```maxon
 function main() returns int
-    var a = 3.14
-    var b = 3.14
-    if a.equals(b) 'eq'
-        return 1
-    end 'eq'
-    return 0
+  var a = 3.14
+  var b = 3.14
+  if a.equals(b) 'eq'
+    return 1
+  end 'eq'
+  return 0
 end 'main'
 ```
 ```exitcode

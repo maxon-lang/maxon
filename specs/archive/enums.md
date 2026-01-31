@@ -19,10 +19,10 @@ The simplest form of enum defines named cases with no additional data:
 
 ```maxon
 enum Direction
-    north
-    south
-    east
-    west
+  north
+  south
+  east
+  west
 end 'Direction'
 ```
 
@@ -40,9 +40,9 @@ All enums support `.rawValue` access. Simple enums return their ordinal (0, 1, 2
 
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
-    serverError = 500
+  ok = 200
+  notFound = 404
+  serverError = 500
 end 'HttpStatus'
 
 var status = HttpStatus.ok
@@ -56,14 +56,14 @@ Cases can have explicit string values, or use the case name as the value:
 ```maxon
 // Explicit string values
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 // Implicit string values - case name IS the raw value
 enum Direction
-    "North"
-    "South"
+  "North"
+  "South"
 end 'Direction'
 
 var dir = Direction.North  // Access without quotes
@@ -74,16 +74,16 @@ var dir = Direction.North  // Access without quotes
 ```maxon
 // Explicit character values
 enum CardSuit
-    Hearts = 'H'
-    Diamonds = 'D'
+  Hearts = 'H'
+  Diamonds = 'D'
 end 'CardSuit'
 
 // Implicit character values
 enum Compass
-    'N'
-    'S'
-    'E'
-    'W'
+  'N'
+  'S'
+  'E'
+  'W'
 end 'Compass'
 
 var c = Compass.N  // Access without quotes
@@ -93,14 +93,14 @@ var c = Compass.N  // Access without quotes
 
 ```maxon
 enum Weights
-    light = 1.5
-    medium = 2.5
-    heavy = 3.5
+  light = 1.5
+  medium = 2.5
+  heavy = 3.5
 end 'Weights'
 
 var w = Weights.medium
 if w.rawValue > 2.0 'check'
-    // weight is above 2.0
+  // weight is above 2.0
 end 'check'
 ```
 
@@ -110,9 +110,9 @@ Simple enums (no explicit values) also support `.rawValue`, returning their ordi
 
 ```maxon
 enum Color
-    red     // rawValue = 0
-    green   // rawValue = 1
-    blue    // rawValue = 2
+  red     // rawValue = 0
+  green   // rawValue = 1
+  blue    // rawValue = 2
 end 'Color'
 
 var c = Color.green
@@ -125,9 +125,9 @@ All enums have a `.name` property that returns the member's name as a String, re
 
 ```maxon
 enum Color
-    red
-    green
-    blue
+  red
+  green
+  blue
 end 'Color'
 
 var c = Color.green
@@ -138,8 +138,8 @@ This is different from `rawValue` for backed enums - `name` always returns the c
 
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 var s = HttpStatus.notFound
@@ -151,8 +151,8 @@ For string-backed enums, `rawValue` returns the backing value while `name` retur
 
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 var p = Planet.mars
@@ -166,9 +166,9 @@ Cases can carry additional data called associated values:
 
 ```maxon
 enum Result
-    success(value int)
-    failure(code int, message String)
-    pending
+  success(value int)
+  failure(code int, message String)
+  pending
 end 'Result'
 ```
 
@@ -186,9 +186,9 @@ Use `match` statements to extract associated values from enum cases:
 
 ```maxon
 match result 'handle'
-    success(value) then return value
-    failure(code, msg) then print(msg)
-    pending then print("waiting...")
+  success(value) then return value
+  failure(code, msg) then print(msg)
+  pending then print("waiting...")
 end 'handle'
 ```
 
@@ -198,8 +198,8 @@ Match expressions also support value extraction using `gives`:
 
 ```maxon
 var extracted = match container 'get'
-    empty gives 0
-    value(n) gives n
+  empty gives 0
+  value(n) gives n
 end 'get'
 ```
 
@@ -209,7 +209,7 @@ Enum values can be compared for equality using `==` and `!=`:
 
 ```maxon
 if dir == Direction.north 'check'
-    // handle north
+  // handle north
 end 'check'
 ```
 
@@ -221,33 +221,33 @@ Enums can have methods, similar to structs:
 
 ```maxon
 enum Direction
-    north
-    south
-    east
-    west
+  north
+  south
+  east
+  west
 
-    function opposite() returns Direction
-        if self == Direction.north 'n'
-            return Direction.south
-        end 'n'
-        if self == Direction.south 's'
-            return Direction.north
-        end 's'
-        if self == Direction.east 'e'
-            return Direction.west
-        end 'e'
-        return Direction.east
-    end 'opposite'
+  function opposite() returns Direction
+    if self == Direction.north 'n'
+      return Direction.south
+    end 'n'
+    if self == Direction.south 's'
+      return Direction.north
+    end 's'
+    if self == Direction.east 'e'
+      return Direction.west
+    end 'e'
+    return Direction.east
+  end 'opposite'
 
-    function isVertical() returns bool
-        if self == Direction.north 'check'
-            return true
-        end 'check'
-        if self == Direction.south 'check2'
-            return true
-        end 'check2'
-        return false
-    end 'isVertical'
+  function isVertical() returns bool
+    if self == Direction.north 'check'
+      return true
+    end 'check'
+    if self == Direction.south 'check2'
+      return true
+    end 'check2'
+    return false
+  end 'isVertical'
 end 'Direction'
 ```
 
@@ -267,9 +267,9 @@ For simple enums (no explicit backing values), the raw value is the ordinal (0, 
 
 ```maxon
 enum Color
-    red     // ordinal 0
-    green   // ordinal 1
-    blue    // ordinal 2
+  red     // ordinal 0
+  green   // ordinal 1
+  blue    // ordinal 2
 end 'Color'
 
 var c = try Color.fromRawValue(1) otherwise Color.red  // Color.green
@@ -279,8 +279,8 @@ For backed enums, the raw value is the explicit backing value:
 
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
@@ -291,8 +291,8 @@ Works with all backing types (int, float, String, Character):
 
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
@@ -306,18 +306,18 @@ Note: `fromRawValue` is not available for enums with associated values.
 <!-- test: simple-enum -->
 ```maxon
 enum Direction
-    north
-    south
-    east
-    west
+  north
+  south
+  east
+  west
 end 'Direction'
 
 function main() returns int
-    var dir = Direction.north
-    if dir == Direction.north 'check'
-        return 1
-    end 'check'
-    return 0
+  var dir = Direction.north
+  if dir == Direction.north 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -327,18 +327,18 @@ end 'main'
 <!-- test: enum-assignment -->
 ```maxon
 enum Color
-    red
-    green
-    blue
+  red
+  green
+  blue
 end 'Color'
 
 function main() returns int
-    var c = Color.red
-    c = Color.blue
-    if c == Color.blue 'check'
-        return 1
-    end 'check'
-    return 0
+  var c = Color.red
+  c = Color.blue
+  if c == Color.blue 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -348,17 +348,17 @@ end 'main'
 <!-- test: enum-not-equal -->
 ```maxon
 enum Status
-    pending
-    active
-    done
+  pending
+  active
+  done
 end 'Status'
 
 function main() returns int
-    var s = Status.pending
-    if s != Status.active 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = Status.pending
+  if s != Status.active 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -368,21 +368,21 @@ end 'main'
 <!-- test: enum-comparison -->
 ```maxon
 enum Status
-    pending
-    active
-    done
+  pending
+  active
+  done
 end 'Status'
 
 function main() returns int
-    var s1 = Status.pending
-    var s2 = Status.pending
-    var s3 = Status.active
-    if s1 == s2 'eq'
-        if s1 != s3 'neq'
-            return 1
-        end 'neq'
-    end 'eq'
-    return 0
+  var s1 = Status.pending
+  var s2 = Status.pending
+  var s3 = Status.active
+  if s1 == s2 'eq'
+    if s1 != s3 'neq'
+      return 1
+    end 'neq'
+  end 'eq'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -392,23 +392,23 @@ end 'main'
 <!-- test: enum-function-param -->
 ```maxon
 enum Status
-    on
-    off
+  on
+  off
 end 'Status'
 
 function isOn(s Status) returns bool
-    if s == Status.on 'check'
-        return true
-    end 'check'
-    return false
+  if s == Status.on 'check'
+    return true
+  end 'check'
+  return false
 end 'isOn'
 
 function main() returns int
-    var status = Status.on
-    if isOn(status) 'test'
-        return 1
-    end 'test'
-    return 0
+  var status = Status.on
+  if isOn(status) 'test'
+    return 1
+  end 'test'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -418,23 +418,23 @@ end 'main'
 <!-- test: enum-return-type -->
 ```maxon
 enum Result
-    success
-    failure
+  success
+  failure
 end 'Result'
 
 function getResult(succeed bool) returns Result
-    if succeed 'check'
-        return Result.success
-    end 'check'
-    return Result.failure
+  if succeed 'check'
+    return Result.success
+  end 'check'
+  return Result.failure
 end 'getResult'
 
 function main() returns int
-    var r = getResult(true)
-    if r == Result.success 'handle'
-        return 1
-    end 'handle'
-    return 0
+  var r = getResult(true)
+  if r == Result.success 'handle'
+    return 1
+  end 'handle'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -444,17 +444,17 @@ end 'main'
 <!-- test: raw-value-int -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
-    serverError = 500
+  ok = 200
+  notFound = 404
+  serverError = 500
 end 'HttpStatus'
 
 function main() returns int
-    var status = HttpStatus.ok
-    if status.rawValue == 200 'check'
-        return 1
-    end 'check'
-    return 0
+  var status = HttpStatus.ok
+  if status.rawValue == 200 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -464,17 +464,17 @@ end 'main'
 <!-- test: raw-value-int-comparison -->
 ```maxon
 enum Priority
-    low = 1
-    medium = 5
-    high = 10
+  low = 1
+  medium = 5
+  high = 10
 end 'Priority'
 
 function main() returns int
-    var p = Priority.high
-    if p.rawValue > 5 'check'
-        return 1
-    end 'check'
-    return 0
+  var p = Priority.high
+  if p.rawValue > 5 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -485,18 +485,18 @@ end 'main'
 <!-- test: associated-value-construction -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = Container.value(42)
-    var e = Container.empty
-    // Construction works - verify by checking tags are different
-    if c != e 'check'
-        return 1
-    end 'check'
-    return 0
+  var c = Container.value(42)
+  var e = Container.empty
+  // Construction works - verify by checking tags are different
+  if c != e 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -506,23 +506,23 @@ end 'main'
 <!-- test: enum-method -->
 ```maxon
 enum Direction
-    north
-    south
+  north
+  south
 
-    function isNorth() returns bool
-        if self == Direction.north 'check'
-            return true
-        end 'check'
-        return false
-    end 'isNorth'
+  function isNorth() returns bool
+    if self == Direction.north 'check'
+      return true
+    end 'check'
+    return false
+  end 'isNorth'
 end 'Direction'
 
 function main() returns int
-    let d = Direction.north
-    if d.isNorth() 'test'
-        return 1
-    end 'test'
-    return 0
+  let d = Direction.north
+  if d.isNorth() 'test'
+    return 1
+  end 'test'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -532,24 +532,24 @@ end 'main'
 <!-- test: enum-method-returns-enum -->
 ```maxon
 enum Toggle
-    on
-    off
+  on
+  off
 
-    function flip() returns Toggle
-        if self == Toggle.on 'check'
-            return Toggle.off
-        end 'check'
-        return Toggle.on
-    end 'flip'
+  function flip() returns Toggle
+    if self == Toggle.on 'check'
+      return Toggle.off
+    end 'check'
+    return Toggle.on
+  end 'flip'
 end 'Toggle'
 
 function main() returns int
-    let t = Toggle.on
-    let flipped = t.flip()
-    if flipped == Toggle.off 'check'
-        return 1
-    end 'check'
-    return 0
+  let t = Toggle.on
+  let flipped = t.flip()
+  if flipped == Toggle.off 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -559,12 +559,12 @@ end 'main'
 <!-- test: error.duplicate-case -->
 ```maxon
 enum Color
-    red
-    red
+  red
+  red
 end 'Color'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -574,13 +574,13 @@ error E030: specs/fragments/enums.error.duplicate-case.1.test:4:5: duplicate enu
 <!-- test: error.unknown-enum-case -->
 ```maxon
 enum Color
-    red
-    blue
+  red
+  blue
 end 'Color'
 
 function main() returns int
-    let _c = Color.green
-    return 0
+  let _c = Color.green
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -590,12 +590,12 @@ error E034: specs/fragments/enums.error.unknown-enum-case.1.test:8:5: unknown en
 <!-- test: error.duplicate-raw-value -->
 ```maxon
 enum Status
-    ok = 200
-    success = 200
+  ok = 200
+  success = 200
 end 'Status'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -605,12 +605,12 @@ error E031: specs/fragments/enums.error.duplicate-raw-value.1.test:4:5: duplicat
 <!-- test: error.raw-value-type-mismatch -->
 ```maxon
 enum Status
-    ok = 100
-    fail = "error"
+  ok = 100
+  fail = "error"
 end 'Status'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -620,13 +620,13 @@ error E032: specs/fragments/enums.error.raw-value-type-mismatch.1.test:4:5: raw 
 <!-- test: error.associated-value-wrong-count -->
 ```maxon
 enum Result
-    success(value int)
-    failure
+  success(value int)
+  failure
 end 'Result'
 
 function main() returns int
-    let _r = Result.success(1, 2)
-    return 0
+  let _r = Result.success(1, 2)
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -636,12 +636,12 @@ error E011: specs/fragments/enums.error.associated-value-wrong-count.1.test:8:21
 <!-- test: error.associated-value-type-mismatch -->
 ```maxon
 enum Container
-    value(n int)
+  value(n int)
 end 'Container'
 
 function main() returns int
-    let _c = Container.value("hello")
-    return 0
+  let _c = Container.value("hello")
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -651,16 +651,16 @@ error E022: specs/fragments/enums.error.associated-value-type-mismatch.1.test:7:
 <!-- test: match-enum-binding-simple -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = Container.value(42)
-    match c 'extract'
-        empty then return 0
-        value(n) then return n
-    end 'extract'
+  var c = Container.value(42)
+  match c 'extract'
+    empty then return 0
+    value(n) then return n
+  end 'extract'
 end 'main'
 ```
 ```exitcode
@@ -670,16 +670,16 @@ end 'main'
 <!-- test: match-enum-binding-multiple -->
 ```maxon
 enum Result
-    success(value int)
-    failure(code int)
+  success(value int)
+  failure(code int)
 end 'Result'
 
 function main() returns int
-    var r = Result.failure(99)
-    match r 'handle'
-        success(v) then return v
-        failure(c) then return c
-    end 'handle'
+  var r = Result.failure(99)
+  match r 'handle'
+    success(v) then return v
+    failure(c) then return c
+  end 'handle'
 end 'main'
 ```
 ```exitcode
@@ -689,17 +689,17 @@ end 'main'
 <!-- test: match-expr-enum-binding -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = Container.value(10)
-    var result = match c 'get'
-        empty gives 0
-        value(n) gives n * 2
-    end 'get'
-    return result
+  var c = Container.value(10)
+  var result = match c 'get'
+    empty gives 0
+    value(n) gives n * 2
+  end 'get'
+  return result
 end 'main'
 ```
 ```exitcode
@@ -709,16 +709,16 @@ end 'main'
 <!-- test: match-enum-no-binding -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = Container.empty
-    match c 'check'
-        empty then return 1
-        value(n) then return n
-    end 'check'
+  var c = Container.empty
+  match c 'check'
+    empty then return 1
+    value(n) then return n
+  end 'check'
 end 'main'
 ```
 ```exitcode
@@ -728,14 +728,14 @@ end 'main'
 <!-- test: error.match-enum-wrong-binding-count -->
 ```maxon
 enum Container
-    value(n int)
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = Container.value(42)
-    match c 'extract'
-        value(a, b) then return a
-    end 'extract'
+  var c = Container.value(42)
+  match c 'extract'
+    value(a, b) then return a
+  end 'extract'
 end 'main'
 ```
 ```maxoncstderr
@@ -745,15 +745,15 @@ error E035: specs/fragments/enums.error.match-enum-wrong-binding-count.1.test:8:
 <!-- test: error.match-enum-unknown-case -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = Container.value(42)
-    match c 'extract'
-        unknown(x) then return x
-    end 'extract'
+  var c = Container.value(42)
+  match c 'extract'
+    unknown(x) then return x
+  end 'extract'
 end 'main'
 ```
 ```maxoncstderr
@@ -763,14 +763,14 @@ error E034: specs/fragments/enums.error.match-enum-unknown-case.1.test:9:5: unkn
 <!-- test: simple-enum-rawvalue -->
 ```maxon
 enum Direction
-    north
-    south
-    east
+  north
+  south
+  east
 end 'Direction'
 
 function main() returns int
-    var d = Direction.south
-    return d.rawValue
+  var d = Direction.south
+  return d.rawValue
 end 'main'
 ```
 ```exitcode
@@ -780,17 +780,17 @@ end 'main'
 <!-- test: implicit-string-backed -->
 ```maxon
 enum StringBacked
-    "North"
-    "South"
-    "East"
+  "North"
+  "South"
+  "East"
 end 'StringBacked'
 
 function main() returns int
-    var dir = StringBacked.North
-    if dir == StringBacked.South 'check'
-        return 0
-    end 'check'
-    return 1
+  var dir = StringBacked.North
+  if dir == StringBacked.South 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -800,17 +800,17 @@ end 'main'
 <!-- test: implicit-char-backed -->
 ```maxon
 enum CharBacked
-    'N'
-    'S'
-    'E'
+  'N'
+  'S'
+  'E'
 end 'CharBacked'
 
 function main() returns int
-    var dir = CharBacked.N
-    if dir == CharBacked.S 'check'
-        return 0
-    end 'check'
-    return 1
+  var dir = CharBacked.N
+  if dir == CharBacked.S 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -820,17 +820,17 @@ end 'main'
 <!-- test: explicit-char-backed -->
 ```maxon
 enum Direction
-    North = 'n'
-    South = 's'
-    East = 'e'
+  North = 'n'
+  South = 's'
+  East = 'e'
 end 'Direction'
 
 function main() returns int
-    var d = Direction.North
-    if d == Direction.South 'check'
-        return 0
-    end 'check'
-    return 1
+  var d = Direction.North
+  if d == Direction.South 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -840,17 +840,17 @@ end 'main'
 <!-- test: float-backed -->
 ```maxon
 enum FloatBacked
-    North = 1.1
-    South = 2.2
-    East = 3.3
+  North = 1.1
+  South = 2.2
+  East = 3.3
 end 'FloatBacked'
 
 function main() returns int
-    var f = FloatBacked.North
-    if f == FloatBacked.South 'check'
-        return 0
-    end 'check'
-    return 1
+  var f = FloatBacked.North
+  if f == FloatBacked.South 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -860,18 +860,18 @@ end 'main'
 <!-- test: float-backed-rawvalue -->
 ```maxon
 enum Weights
-    light = 1.5
-    medium = 2.5
-    heavy = 3.5
+  light = 1.5
+  medium = 2.5
+  heavy = 3.5
 end 'Weights'
 
 function main() returns int
-    var w = Weights.medium
-    var rawVal = w.rawValue
-    if rawVal > 2.0 'check'
-        return 1
-    end 'check'
-    return 0
+  var w = Weights.medium
+  var rawVal = w.rawValue
+  if rawVal > 2.0 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -881,18 +881,18 @@ end 'main'
 <!-- test: int-backed-rawvalue -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
-    serverError = 500
+  ok = 200
+  notFound = 404
+  serverError = 500
 end 'HttpStatus'
 
 function main() returns int
-    var status = HttpStatus.notFound
-    var code = status.rawValue
-    if code == 404 'check'
-        return 1
-    end 'check'
-    return 0
+  var status = HttpStatus.notFound
+  var code = status.rawValue
+  if code == 404 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -902,17 +902,17 @@ end 'main'
 <!-- test: explicit-string-backed-rawvalue -->
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 function main() returns int
-    var p = Planet.mars
-    var name = p.rawValue
-    if name == "Mars" 'check'
-        return 1
-    end 'check'
-    return 0
+  var p = Planet.mars
+  var name = p.rawValue
+  if name == "Mars" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -922,18 +922,18 @@ end 'main'
 <!-- test: implicit-string-backed-rawvalue -->
 ```maxon
 enum Direction
-    "North"
-    "South"
-    "East"
+  "North"
+  "South"
+  "East"
 end 'Direction'
 
 function main() returns int
-    var d = Direction.South
-    var name = d.rawValue
-    if name == "South" 'check'
-        return 1
-    end 'check'
-    return 0
+  var d = Direction.South
+  var name = d.rawValue
+  if name == "South" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -943,18 +943,18 @@ end 'main'
 <!-- test: explicit-char-backed-rawvalue -->
 ```maxon
 enum CardSuit
-    Hearts = 'H'
-    Diamonds = 'D'
-    Spades = 'S'
+  Hearts = 'H'
+  Diamonds = 'D'
+  Spades = 'S'
 end 'CardSuit'
 
 function main() returns int
-    var suit = CardSuit.Diamonds
-    var ch = suit.rawValue
-    if ch == 'D' 'check'
-        return 1
-    end 'check'
-    return 0
+  var suit = CardSuit.Diamonds
+  var ch = suit.rawValue
+  if ch == 'D' 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -964,19 +964,19 @@ end 'main'
 <!-- test: implicit-char-backed-rawvalue -->
 ```maxon
 enum Compass
-    'N'
-    'S'
-    'E'
-    'W'
+  'N'
+  'S'
+  'E'
+  'W'
 end 'Compass'
 
 function main() returns int
-    var c = Compass.E
-    var ch = c.rawValue
-    if ch == 'E' 'check'
-        return 1
-    end 'check'
-    return 0
+  var c = Compass.E
+  var ch = c.rawValue
+  if ch == 'E' 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -986,22 +986,22 @@ end 'main'
 <!-- test: string-rawvalue-dynamic-comparison -->
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 function getName() returns String
-    return "Mars"
+  return "Mars"
 end 'getName'
 
 function main() returns int
-    var p = Planet.mars
-    var name = p.rawValue
-    var expected = getName()
-    if name == expected 'check'
-        return 1
-    end 'check'
-    return 0
+  var p = Planet.mars
+  var name = p.rawValue
+  var expected = getName()
+  if name == expected 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1011,18 +1011,18 @@ end 'main'
 <!-- test: string-rawvalue-after-reassign -->
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 function main() returns int
-    var p = Planet.earth
-    p = Planet.mars
-    var name = p.rawValue
-    if name == "Mars" 'check'
-        return 1
-    end 'check'
-    return 0
+  var p = Planet.earth
+  p = Planet.mars
+  var name = p.rawValue
+  if name == "Mars" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1032,21 +1032,21 @@ end 'main'
 <!-- test: float-rawvalue-in-function -->
 ```maxon
 enum Weights
-    light = 1.5
-    medium = 2.5
+  light = 1.5
+  medium = 2.5
 end 'Weights'
 
 function getRaw(w Weights) returns float
-    return w.rawValue
+  return w.rawValue
 end 'getRaw'
 
 function main() returns int
-    var w = Weights.medium
-    var raw = getRaw(w)
-    if raw > 2.0 'check'
-        return 1
-    end 'check'
-    return 0
+  var w = Weights.medium
+  var raw = getRaw(w)
+  if raw > 2.0 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1056,21 +1056,21 @@ end 'main'
 <!-- test: int-rawvalue-in-function -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 function getCode(s HttpStatus) returns int
-    return s.rawValue
+  return s.rawValue
 end 'getCode'
 
 function main() returns int
-    var status = HttpStatus.notFound
-    var code = getCode(status)
-    if code == 404 'check'
-        return 1
-    end 'check'
-    return 0
+  var status = HttpStatus.notFound
+  var code = getCode(status)
+  if code == 404 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1080,22 +1080,22 @@ end 'main'
 <!-- test: string-rawvalue-function-param -->
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
-    venus = "Venus"
+  earth = "Earth"
+  mars = "Mars"
+  venus = "Venus"
 end 'Planet'
 
 function getName(p Planet) returns String
-    return p.rawValue
+  return p.rawValue
 end 'getName'
 
 function main() returns int
-    var planet = Planet.mars
-    var name = getName(planet)
-    if name == "Mars" 'check'
-        return 1
-    end 'check'
-    return 0
+  var planet = Planet.mars
+  var name = getName(planet)
+  if name == "Mars" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1105,22 +1105,22 @@ end 'main'
 <!-- test: char-rawvalue-function-param -->
 ```maxon
 enum Grade
-    excellent = 'A'
-    good = 'B'
-    average = 'C'
+  excellent = 'A'
+  good = 'B'
+  average = 'C'
 end 'Grade'
 
 function getLetter(g Grade) returns Character
-    return g.rawValue
+  return g.rawValue
 end 'getLetter'
 
 function main() returns int
-    var grade = Grade.good
-    var letter = getLetter(grade)
-    if letter == 'B' 'check'
-        return 1
-    end 'check'
-    return 0
+  var grade = Grade.good
+  var letter = getLetter(grade)
+  if letter == 'B' 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1130,12 +1130,12 @@ end 'main'
 <!-- test: error.mixed-backing-types -->
 ```maxon
 enum Mixed
-    first = 1
-    second = "two"
+  first = 1
+  second = "two"
 end 'Mixed'
 
 function main() returns int
-    return 0
+  return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -1145,18 +1145,18 @@ error E032: specs/fragments/enums.error.mixed-backing-types.1.test:4:5: raw valu
 <!-- test: name-simple -->
 ```maxon
 enum Color
-    red
-    green
-    blue
+  red
+  green
+  blue
 end 'Color'
 
 function main() returns int
-    var c = Color.green
-    var n = c.name
-    if n == "green" 'check'
-        return 1
-    end 'check'
-    return 0
+  var c = Color.green
+  var n = c.name
+  if n == "green" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1166,16 +1166,16 @@ end 'main'
 <!-- test: name-int-backed -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 function main() returns int
-    var s = HttpStatus.notFound
-    if s.name == "notFound" 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = HttpStatus.notFound
+  if s.name == "notFound" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1185,17 +1185,17 @@ end 'main'
 <!-- test: name-string-backed -->
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 function main() returns int
-    var p = Planet.mars
-    // rawValue is "Mars", name is "mars"
-    if p.name == "mars" 'check'
-        return 1
-    end 'check'
-    return 0
+  var p = Planet.mars
+  // rawValue is "Mars", name is "mars"
+  if p.name == "mars" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1205,23 +1205,23 @@ end 'main'
 <!-- test: name-from-function -->
 ```maxon
 enum Direction
-    north
-    south
-    east
-    west
+  north
+  south
+  east
+  west
 end 'Direction'
 
 function getName(d Direction) returns String
-    return d.name
+  return d.name
 end 'getName'
 
 function main() returns int
-    var d = Direction.west
-    var n = getName(d)
-    if n == "west" 'check'
-        return 1
-    end 'check'
-    return 0
+  var d = Direction.west
+  var n = getName(d)
+  if n == "west" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1231,18 +1231,18 @@ end 'main'
 <!-- test: name-reassign -->
 ```maxon
 enum Status
-    pending
-    active
-    done
+  pending
+  active
+  done
 end 'Status'
 
 function main() returns int
-    var s = Status.pending
-    s = Status.done
-    if s.name == "done" 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = Status.pending
+  s = Status.done
+  if s.name == "done" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1252,17 +1252,17 @@ end 'main'
 <!-- test: name-float-backed -->
 ```maxon
 enum Weights
-    light = 1.5
-    medium = 2.5
-    heavy = 3.5
+  light = 1.5
+  medium = 2.5
+  heavy = 3.5
 end 'Weights'
 
 function main() returns int
-    var w = Weights.heavy
-    if w.name == "heavy" 'check'
-        return 1
-    end 'check'
-    return 0
+  var w = Weights.heavy
+  if w.name == "heavy" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1272,17 +1272,17 @@ end 'main'
 <!-- test: name-char-backed -->
 ```maxon
 enum CardSuit
-    Hearts = 'H'
-    Diamonds = 'D'
-    Spades = 'S'
+  Hearts = 'H'
+  Diamonds = 'D'
+  Spades = 'S'
 end 'CardSuit'
 
 function main() returns int
-    var s = CardSuit.Diamonds
-    if s.name == "Diamonds" 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = CardSuit.Diamonds
+  if s.name == "Diamonds" 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1292,18 +1292,18 @@ end 'main'
 <!-- test: fromName-simple-success -->
 ```maxon
 enum Direction
-    north
-    south
-    east
-    west
+  north
+  south
+  east
+  west
 end 'Direction'
 
 function main() returns int
-    var dir = try Direction.fromName("south") otherwise Direction.north
-    if dir == Direction.south 'check'
-        return 1
-    end 'check'
-    return 0
+  var dir = try Direction.fromName("south") otherwise Direction.north
+  if dir == Direction.south 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1313,21 +1313,21 @@ end 'main'
 <!-- test: fromName-simple-failure -->
 ```maxon
 enum Direction
-    north
-    south
+  north
+  south
 end 'Direction'
 
 function getInvalidName() returns String
-    return "invalid"
+  return "invalid"
 end 'getInvalidName'
 
 function main() returns int
-    var name = getInvalidName()
-    var dir = try Direction.fromName(name) otherwise Direction.north
-    if dir == Direction.north 'check'
-        return 1
-    end 'check'
-    return 0
+  var name = getInvalidName()
+  var dir = try Direction.fromName(name) otherwise Direction.north
+  if dir == Direction.north 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1337,16 +1337,16 @@ end 'main'
 <!-- test: fromName-int-backed -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 function main() returns int
-    var status = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok
-    if status.rawValue == 404 'check'
-        return 1
-    end 'check'
-    return 0
+  var status = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok
+  if status.rawValue == 404 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1356,22 +1356,22 @@ end 'main'
 <!-- test: fromName-dynamic -->
 ```maxon
 enum Color
-    red
-    green
-    blue
+  red
+  green
+  blue
 end 'Color'
 
 function getName() returns String
-    return "green"
+  return "green"
 end 'getName'
 
 function main() returns int
-    var name = getName()
-    var color = try Color.fromName(name) otherwise Color.red
-    if color == Color.green 'check'
-        return 1
-    end 'check'
-    return 0
+  var name = getName()
+  var color = try Color.fromName(name) otherwise Color.red
+  if color == Color.green 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1381,16 +1381,16 @@ end 'main'
 <!-- test: fromName-associated-compile-time -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = try Container.fromName("value", 42) otherwise Container.empty
-    match c 'check'
-        value(n) then return n
-        empty then return 0
-    end 'check'
+  var c = try Container.fromName("value", 42) otherwise Container.empty
+  match c 'check'
+    value(n) then return n
+    empty then return 0
+  end 'check'
 end 'main'
 ```
 ```exitcode
@@ -1400,16 +1400,16 @@ end 'main'
 <!-- test: fromName-associated-empty-case -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    var c = try Container.fromName("empty") otherwise Container.value(99)
-    match c 'check'
-        empty then return 1
-        value(_n) then return 0
-    end 'check'
+  var c = try Container.fromName("empty") otherwise Container.value(99)
+  match c 'check'
+    empty then return 1
+    value(_n) then return 0
+  end 'check'
 end 'main'
 ```
 ```exitcode
@@ -1419,13 +1419,13 @@ end 'main'
 <!-- test: error.fromName-invalid-case -->
 ```maxon
 enum Direction
-    north
-    south
+  north
+  south
 end 'Direction'
 
 function main() returns int
-    let _d = try Direction.fromName("invalid_case_name_that_does_not_exist") otherwise Direction.north
-    return 0
+  let _d = try Direction.fromName("invalid_case_name_that_does_not_exist") otherwise Direction.north
+  return 0
 end 'main'
 ```
 ```stderr
@@ -1435,12 +1435,12 @@ E034
 <!-- test: error.fromName-wrong-arg-count -->
 ```maxon
 enum Container
-    value(n int)
+  value(n int)
 end 'Container'
 
 function main() returns int
-    let _c = try Container.fromName("value") otherwise Container.value(0)
-    return 0
+  let _c = try Container.fromName("value") otherwise Container.value(0)
+  return 0
 end 'main'
 ```
 ```stderr
@@ -1450,21 +1450,21 @@ E011
 <!-- test: fromName-associated-runtime-empty -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function getName() returns String
-    return "empty"
+  return "empty"
 end 'getName'
 
 function main() returns int
-    var name = getName()
-    var c = try Container.fromName(name) otherwise Container.value(99)
-    match c 'check'
-        empty then return 1
-        value(_n) then return 0
-    end 'check'
+  var name = getName()
+  var c = try Container.fromName(name) otherwise Container.value(99)
+  match c 'check'
+    empty then return 1
+    value(_n) then return 0
+  end 'check'
 end 'main'
 ```
 ```exitcode
@@ -1474,17 +1474,17 @@ end 'main'
 <!-- test: fromRawValue-simple -->
 ```maxon
 enum Color
-    red
-    green
-    blue
+  red
+  green
+  blue
 end 'Color'
 
 function main() returns int
-    var c = try Color.fromRawValue(1) otherwise Color.red
-    if c == Color.green 'check'
-        return 1
-    end 'check'
-    return 0
+  var c = try Color.fromRawValue(1) otherwise Color.red
+  if c == Color.green 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1494,17 +1494,17 @@ end 'main'
 <!-- test: fromRawValue-int-backed -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
-    serverError = 500
+  ok = 200
+  notFound = 404
+  serverError = 500
 end 'HttpStatus'
 
 function main() returns int
-    var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
-    if status == HttpStatus.notFound 'check'
-        return 1
-    end 'check'
-    return 0
+  var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
+  if status == HttpStatus.notFound 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1514,17 +1514,17 @@ end 'main'
 <!-- test: fromRawValue-float-backed -->
 ```maxon
 enum Weights
-    light = 1.5
-    medium = 2.5
-    heavy = 3.5
+  light = 1.5
+  medium = 2.5
+  heavy = 3.5
 end 'Weights'
 
 function main() returns int
-    var w = try Weights.fromRawValue(2.5) otherwise Weights.light
-    if w == Weights.medium 'check'
-        return 1
-    end 'check'
-    return 0
+  var w = try Weights.fromRawValue(2.5) otherwise Weights.light
+  if w == Weights.medium 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1534,16 +1534,16 @@ end 'main'
 <!-- test: fromRawValue-string-backed -->
 ```maxon
 enum Planet
-    earth = "Earth"
-    mars = "Mars"
+  earth = "Earth"
+  mars = "Mars"
 end 'Planet'
 
 function main() returns int
-    var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
-    if p == Planet.mars 'check'
-        return 1
-    end 'check'
-    return 0
+  var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
+  if p == Planet.mars 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1553,17 +1553,17 @@ end 'main'
 <!-- test: fromRawValue-char-backed -->
 ```maxon
 enum Grade
-    excellent = 'A'
-    good = 'B'
-    average = 'C'
+  excellent = 'A'
+  good = 'B'
+  average = 'C'
 end 'Grade'
 
 function main() returns int
-    var g = try Grade.fromRawValue('B') otherwise Grade.average
-    if g == Grade.good 'check'
-        return 1
-    end 'check'
-    return 0
+  var g = try Grade.fromRawValue('B') otherwise Grade.average
+  if g == Grade.good 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1573,21 +1573,21 @@ end 'main'
 <!-- test: fromRawValue-runtime -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 function getCode() returns int
-    return 404
+  return 404
 end 'getCode'
 
 function main() returns int
-    var code = getCode()
-    var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
-    if status == HttpStatus.notFound 'check'
-        return 1
-    end 'check'
-    return 0
+  var code = getCode()
+  var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+  if status == HttpStatus.notFound 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1597,21 +1597,21 @@ end 'main'
 <!-- test: fromRawValue-failure -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 function getCode() returns int
-    return 999
+  return 999
 end 'getCode'
 
 function main() returns int
-    var code = getCode()
-    var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
-    if status == HttpStatus.ok 'check'
-        return 1
-    end 'check'
-    return 0
+  var code = getCode()
+  var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+  if status == HttpStatus.ok 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -1621,13 +1621,13 @@ end 'main'
 <!-- test: error.fromRawValue-invalid-literal -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 function main() returns int
-    let _s = try HttpStatus.fromRawValue(999) otherwise HttpStatus.ok
-    return 0
+  let _s = try HttpStatus.fromRawValue(999) otherwise HttpStatus.ok
+  return 0
 end 'main'
 ```
 ```stderr
@@ -1637,13 +1637,13 @@ E034
 <!-- test: error.fromRawValue-type-mismatch -->
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
+  ok = 200
+  notFound = 404
 end 'HttpStatus'
 
 function main() returns int
-    let _s = try HttpStatus.fromRawValue("404") otherwise HttpStatus.ok
-    return 0
+  let _s = try HttpStatus.fromRawValue("404") otherwise HttpStatus.ok
+  return 0
 end 'main'
 ```
 ```stderr
@@ -1653,13 +1653,13 @@ E022
 <!-- test: error.fromRawValue-associated-values -->
 ```maxon
 enum Container
-    empty
-    value(n int)
+  empty
+  value(n int)
 end 'Container'
 
 function main() returns int
-    let _c = try Container.fromRawValue(0) otherwise Container.empty
-    return 0
+  let _c = try Container.fromRawValue(0) otherwise Container.empty
+  return 0
 end 'main'
 ```
 ```stderr

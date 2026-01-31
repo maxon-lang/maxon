@@ -17,9 +17,9 @@ Access command line arguments in Maxon using the `CommandLine` stdlib type.
 
 ```text
 function main() returns int
-    let args = CommandLine.args()           // User arguments (excludes executable)
-    let exe = CommandLine.executablePath()  // The executable path
-    return 0
+  let args = CommandLine.args()           // User arguments (excludes executable)
+  let exe = CommandLine.executablePath()  // The executable path
+  return 0
 end 'main'
 ```
 
@@ -39,18 +39,18 @@ With `let args = CommandLine.args()`:
 
 ```text
 function main() returns int
-    let exe = CommandLine.executablePath()
-    print("Program: ")
-    print(exe)
-    
-    let args = CommandLine.args()
-    if args.count() > 0 'has-args'
-        print("First argument: ")
-        var first = try args.get(0) otherwise ""
-        print(first)
-    end 'has-args'
-    
-    return 0
+  let exe = CommandLine.executablePath()
+  print("Program: ")
+  print(exe)
+  
+  let args = CommandLine.args()
+  if args.count() > 0 'has-args'
+    print("First argument: ")
+    var first = try args.get(0) otherwise ""
+    print(first)
+  end 'has-args'
+  
+  return 0
 end 'main'
 ```
 
@@ -64,11 +64,11 @@ First argument: hello
 
 ```text
 function main() returns int
-    let args = CommandLine.args()
-    for arg in args 'loop'
-        print(arg)
-    end 'loop'
-    return 0
+  let args = CommandLine.args()
+  for arg in args 'loop'
+    print(arg)
+  end 'loop'
+  return 0
 end 'main'
 ```
 
@@ -84,9 +84,9 @@ end 'main'
 <!-- test: args-length-no-extra -->
 ```maxon
 function main() returns int
-    // Without extra args, count should be 0 (no user arguments)
-    let args = CommandLine.args()
-    return args.count()
+  // Without extra args, count should be 0 (no user arguments)
+  let args = CommandLine.args()
+  return args.count()
 end 'main'
 ```
 ```exitcode
@@ -97,8 +97,8 @@ end 'main'
 <!-- Args: hello -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    return args.count()
+  let args = CommandLine.args()
+  return args.count()
 end 'main'
 ```
 ```exitcode
@@ -109,8 +109,8 @@ end 'main'
 <!-- Args: one two three -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    return args.count()
+  let args = CommandLine.args()
+  return args.count()
 end 'main'
 ```
 ```exitcode
@@ -121,10 +121,10 @@ end 'main'
 <!-- Args: hello -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    var arg = try args.get(0) otherwise ""
-    print(arg)
-    return 0
+  let args = CommandLine.args()
+  var arg = try args.get(0) otherwise ""
+  print(arg)
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -139,17 +139,17 @@ hello
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    var arg1 = try args.get(0) otherwise ""
-    var arg2 = try args.get(1) otherwise ""
-    var arg3 = try args.get(2) otherwise ""
-    print(arg1)
-    print("\n")
-    print(arg2)
-    print("\n")
-    print(arg3)
-    print("\n")
-    return 0
+  let args = CommandLine.args()
+  var arg1 = try args.get(0) otherwise ""
+  var arg2 = try args.get(1) otherwise ""
+  var arg3 = try args.get(2) otherwise ""
+  print(arg1)
+  print("\n")
+  print(arg2)
+  print("\n")
+  print(arg3)
+  print("\n")
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -223,15 +223,15 @@ Cleanups:  13
 <!-- Args: a b c -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    var i = 0
-    while i < args.count() 'loop'
-        var arg = try args.get(i) otherwise ""
-        print(arg)
-        print("\n")
-        i = i + 1
-    end 'loop'
-    return 0
+  let args = CommandLine.args()
+  var i = 0
+  while i < args.count() 'loop'
+    var arg = try args.get(i) otherwise ""
+    print(arg)
+    print("\n")
+    i = i + 1
+  end 'loop'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -247,14 +247,14 @@ c
 <!-- Args: 42 -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    // Args are strings, just verify we can access them
-    if args.count() == 1 'check'
-        var arg = try args.get(0) otherwise ""
-        print(arg)
-        return 0
-    end 'check'
-    return 1
+  let args = CommandLine.args()
+  // Args are strings, just verify we can access them
+  if args.count() == 1 'check'
+    var arg = try args.get(0) otherwise ""
+    print(arg)
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -268,13 +268,13 @@ end 'main'
 <!-- Args: "" -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    // Empty quoted arg
-    var arg = try args.get(0) otherwise "x"
-    if arg == "" 'check'
-        return 0
-    end 'check'
-    return 1
+  let args = CommandLine.args()
+  // Empty quoted arg
+  var arg = try args.get(0) otherwise "x"
+  if arg == "" 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -285,10 +285,10 @@ end 'main'
 <!-- Args: --key=value -->
 ```maxon
 function main() returns int
-    let args = CommandLine.args()
-    var arg = try args.get(0) otherwise ""
-    print(arg)
-    return 0
+  let args = CommandLine.args()
+  var arg = try args.get(0) otherwise ""
+  print(arg)
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -301,12 +301,12 @@ end 'main'
 <!-- test: executable-path -->
 ```maxon
 function main() returns int
-    let exe = CommandLine.executablePath()
-    // Just verify it returns something (the actual path varies)
-    if exe.byteLength() > 0 'check'
-        return 0
-    end 'check'
-    return 1
+  let exe = CommandLine.executablePath()
+  // Just verify it returns something (the actual path varies)
+  if exe.byteLength() > 0 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode

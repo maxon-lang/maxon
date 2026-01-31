@@ -47,7 +47,7 @@ s.insert(10)  // Already exists, no-op
 Use `contains` to check if an element exists:
 ```text
 if s.contains(10) 'check'
-    // element is in set
+  // element is in set
 end 'check'
 ```
 
@@ -74,11 +74,11 @@ Create an empty set and verify it starts empty.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    if s.count() != 0 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = IntSet{}
+  if s.count() != 0 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -92,12 +92,12 @@ Insert a single element and check count.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(42)
-    if s.count() != 1 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = IntSet{}
+  s.insert(42)
+  if s.count() != 1 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -111,14 +111,14 @@ Insert multiple elements and verify count.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(10)
-    s.insert(20)
-    s.insert(30)
-    if s.count() != 3 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = IntSet{}
+  s.insert(10)
+  s.insert(20)
+  s.insert(30)
+  if s.count() != 3 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -132,14 +132,14 @@ Inserting duplicate should not increase count.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(42)
-    s.insert(42)
-    s.insert(42)
-    if s.count() != 1 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = IntSet{}
+  s.insert(42)
+  s.insert(42)
+  s.insert(42)
+  if s.count() != 1 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -153,12 +153,12 @@ Check contains returns true for present element.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(42)
-    if s.contains(42) == false 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = IntSet{}
+  s.insert(42)
+  if s.contains(42) == false 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -172,12 +172,12 @@ Check contains returns false for absent element.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(42)
-    if s.contains(99) == true 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = IntSet{}
+  s.insert(42)
+  if s.contains(99) == true 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -191,19 +191,19 @@ Remove an element and verify it's gone.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(42)
-    var removed = s.remove(42)
-    if removed == false 'check1'
-        return 1
-    end 'check1'
-    if s.count() != 0 'check2'
-        return 2
-    end 'check2'
-    if s.contains(42) == true 'check3'
-        return 3
-    end 'check3'
-    return 0
+  var s = IntSet{}
+  s.insert(42)
+  var removed = s.remove(42)
+  if removed == false 'check1'
+    return 1
+  end 'check1'
+  if s.count() != 0 'check2'
+    return 2
+  end 'check2'
+  if s.contains(42) == true 'check3'
+    return 3
+  end 'check3'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -217,13 +217,13 @@ Remove returns false for absent element.
 typealias IntSet is Set with int
 
 function main() returns int
-    var s = IntSet{}
-    s.insert(42)
-    var removed = s.remove(99)
-    if removed == true 'check'
-        return 1
-    end 'check'
-    return 0
+  var s = IntSet{}
+  s.insert(42)
+  var removed = s.remove(99)
+  if removed == true 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -235,20 +235,20 @@ Initialize set from array literal.
 
 ```maxon
 function main() returns int
-    var s = Set from [1, 2, 3]
-    if s.count() != 3 'count'
-        return 1
-    end 'count'
-    if s.contains(1) == false 'c1'
-        return 2
-    end 'c1'
-    if s.contains(2) == false 'c2'
-        return 3
-    end 'c2'
-    if s.contains(3) == false 'c3'
-        return 4
-    end 'c3'
-    return 0
+  var s = Set from [1, 2, 3]
+  if s.count() != 3 'count'
+    return 1
+  end 'count'
+  if s.contains(1) == false 'c1'
+    return 2
+  end 'c1'
+  if s.contains(2) == false 'c2'
+    return 3
+  end 'c2'
+  if s.contains(3) == false 'c3'
+    return 4
+  end 'c3'
+  return 0
 end 'main'
 ```
 ```exitcode

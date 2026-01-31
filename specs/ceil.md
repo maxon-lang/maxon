@@ -41,9 +41,9 @@ var i = trunc(ceil(x))   // 4
 <!-- test: ceil.positive -->
 ```maxon
 function main() returns int
-    var x = 3.1
-    var y = trunc(ceil(x))
-    return y
+  var x = 3.1
+  var y = trunc(ceil(x))
+  return y
 end 'main'
 ```
 ```exitcode
@@ -53,9 +53,9 @@ end 'main'
 <!-- test: ceil.negative -->
 ```maxon
 function main() returns int
-    var neg = 0.0 - 3.9
-    var y = trunc(ceil(neg))
-    return y + 10
+  var neg = 0.0 - 3.9
+  var y = trunc(ceil(neg))
+  return y + 10
 end 'main'
 ```
 ```exitcode
@@ -65,9 +65,9 @@ end 'main'
 <!-- test: ceil.exact -->
 ```maxon
 function main() returns int
-    var x = 5.0
-    var y = trunc(ceil(x))
-    return y
+  var x = 5.0
+  var y = trunc(ceil(x))
+  return y
 end 'main'
 ```
 ```exitcode

@@ -36,8 +36,8 @@ var z = max(-1.0, 1.0)   // 1.0
 <!-- test: max.basic -->
 ```maxon
 function main() returns int
-    var x = max(3.0, 5.0)
-    return trunc(x)
+  var x = max(3.0, 5.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -47,8 +47,8 @@ end 'main'
 <!-- test: max.first-larger -->
 ```maxon
 function main() returns int
-    var x = max(10.0, 2.0)
-    return trunc(x)
+  var x = max(10.0, 2.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -58,8 +58,8 @@ end 'main'
 <!-- test: max.negative -->
 ```maxon
 function main() returns int
-    var x = max(-5.0, 3.0)
-    return trunc(x)
+  var x = max(-5.0, 3.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -69,8 +69,8 @@ end 'main'
 <!-- test: max.both-negative -->
 ```maxon
 function main() returns int
-    var x = max(-2.0, -8.0)
-    return trunc(x)
+  var x = max(-2.0, -8.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -80,8 +80,8 @@ end 'main'
 <!-- test: max.equal-values -->
 ```maxon
 function main() returns int
-    var x = max(7.0, 7.0)
-    return trunc(x)
+  var x = max(7.0, 7.0)
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -91,9 +91,9 @@ end 'main'
 <!-- test: max.fractional -->
 ```maxon
 function main() returns int
-    var x = max(3.5, 5.2)
-    // max of 3.5 and 5.2 is 5.2, trunc gives 5
-    return trunc(x)
+  var x = max(3.5, 5.2)
+  // max of 3.5 and 5.2 is 5.2, trunc gives 5
+  return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -103,11 +103,11 @@ end 'main'
 <!-- test: max.zero -->
 ```maxon
 function main() returns int
-    var x = max(0.0, -5.0)
-    if x == 0.0 'check'
-        return 0
-    end 'check'
-    return 1
+  var x = max(0.0, -5.0)
+  if x == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode

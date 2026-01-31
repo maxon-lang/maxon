@@ -27,7 +27,7 @@ The standard library is automatically located relative to the compiler executabl
 <!-- test: single-file-still-works -->
 ```maxon
 function main() returns int
-    return 42
+  return 42
 end 'main'
 ```
 ```exitcode
@@ -37,11 +37,11 @@ end 'main'
 <!-- test: function-call-basic -->
 ```maxon
 function helper() returns int
-    return 21
+  return 21
 end 'helper'
 
 function main() returns int
-    return helper() + helper()
+  return helper() + helper()
 end 'main'
 ```
 ```exitcode
@@ -51,18 +51,18 @@ end 'main'
 <!-- test: type-with-method-basic -->
 ```maxon
 type Counter
-    var value int
+  var value int
 
-    function add(n int) returns int
-        value = value + n
-        return value
-    end 'add'
+  function add(n int) returns int
+    value = value + n
+    return value
+  end 'add'
 end 'Counter'
 
 function main() returns int
-    var c = Counter{value: 0}
-    c.add(20)
-    return c.add(22)
+  var c = Counter{value: 0}
+  c.add(20)
+  return c.add(22)
 end 'main'
 ```
 ```exitcode

@@ -36,11 +36,11 @@ The internal `__ManagedMemory` type is used internally by the `Array` implementa
 typealias IntArray is Array with int
 
 function main() returns int
-    var arr = IntArray{}
-    arr.push(10)
-    arr.push(20)
-    arr.push(30)
-    return arr.count()
+  var arr = IntArray{}
+  arr.push(10)
+  arr.push(20)
+  arr.push(30)
+  return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -50,8 +50,8 @@ end 'main'
 <!-- test: array-literal-works -->
 ```maxon
 function main() returns int
-    var arr = [1, 2, 3, 4, 5]
-    return arr.count()
+  var arr = [1, 2, 3, 4, 5]
+  return arr.count()
 end 'main'
 ```
 ```exitcode
