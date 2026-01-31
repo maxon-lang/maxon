@@ -211,10 +211,27 @@ public class X86CmpRegRegOp(X86Register lhs, X86Register rhs) : X86Op {
 	public override string Mnemonic => $"x86.cmp {Lhs.ToString().ToLower()}, {Rhs.ToString().ToLower()}";
 }
 
+public class X86TestRegRegOp(X86Register lhs, X86Register rhs) : X86Op {
+	public X86Register Lhs { get; } = lhs;
+	public X86Register Rhs { get; } = rhs;
+	public override string Mnemonic => $"x86.test {Lhs.ToString().ToLower()}, {Rhs.ToString().ToLower()}";
+}
+
 public class X86UcomisdOp(X86XmmRegister src1, X86XmmRegister src2) : X86Op {
 	public X86XmmRegister Src1 { get; } = src1;
 	public X86XmmRegister Src2 { get; } = src2;
 	public override string Mnemonic => $"x86.ucomisd {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
+}
+
+public class X86SetccOp(string condition, X86Register dest) : X86Op {
+	public string Condition { get; } = condition;
+	public X86Register Dest { get; } = dest;
+	public override string Mnemonic => $"x86.set{Condition} {Dest.ToString().ToLower()}";
+}
+
+public class X86MovzxRegOp(X86Register dest) : X86Op {
+	public X86Register Dest { get; } = dest;
+	public override string Mnemonic => $"x86.movzx {Dest.ToString().ToLower()}, {Dest.ToString().ToLower()}b";
 }
 
 public class X86JccOp(string condition, string target) : X86Op {

@@ -1,0 +1,51 @@
+// Test: docs-example-1
+function isPositive(x int) returns bool
+    if x > 0 'check'
+        return true
+    end 'check'
+    return false
+end 'isPositive'
+
+function main() returns int
+    if isPositive(5) 'test'
+        return 1
+    end 'test'
+    return 0
+end 'main'
+
+---
+ExitCode: 1
+---
+module {
+  func @isPositive(x: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.jle isPositive.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 5
+    x86.mov ecx, eax
+    x86.call isPositive
+    x86.test eax, eax
+    x86.je main.test_0.after
+  test_0:
+    x86.mov eax, 1
+    x86.ret
+  test_0.after:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

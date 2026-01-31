@@ -183,7 +183,7 @@ public class Parser(List<Token> tokens) {
 		Advance(); // consume 'return'
 
 		if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
-			var value = ResolveExprValue(ParseExpression());
+			var value = ResolveExprValue(ParseComparisonExpression());
 			_currentBlock!.AddOp(new MaxonReturnOp(value));
 		} else {
 			_currentBlock!.AddOp(new MaxonReturnOp());
@@ -196,7 +196,7 @@ public class Parser(List<Token> tokens) {
 		var nameToken = Expect(TokenType.Identifier);
 		var name = nameToken.Value;
 		Expect(TokenType.Equals);
-		var initValue = ResolveExprValue(ParseExpression()) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
+		var initValue = ResolveExprValue(ParseComparisonExpression()) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
 		var kind = initValue switch {
 			MaxonInteger => MaxonValueKind.Integer,
 			MaxonFloat => MaxonValueKind.Float,
@@ -219,7 +219,7 @@ public class Parser(List<Token> tokens) {
 			throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Variable '{name}' is not mutable", nameToken.Line, nameToken.Column);
 		}
 
-		var newValue = ResolveExprValue(ParseExpression());
+		var newValue = ResolveExprValue(ParseComparisonExpression());
 		_currentBlock!.AddOp(new MaxonAssignOp(name, newValue, isDeclaration: false, isMutable: true, varInfo.Kind));
 		_variables[name] = new VarInfo(varInfo.Kind, true, newValue, _currentBlock!);
 	}
@@ -442,6 +442,13 @@ public class Parser(List<Token> tokens) {
 			var token = Advance();
 			var value = double.Parse(token.Value, CultureInfo.InvariantCulture);
 			var op = new MaxonLiteralOp(value);
+			_currentBlock!.AddOp(op);
+			return new ExprResult.Direct(op.Result);
+		}
+
+		if (Check(TokenType.True) || Check(TokenType.False)) {
+			var token = Advance();
+			var op = new MaxonLiteralOp(token.Type == TokenType.True);
 			_currentBlock!.AddOp(op);
 			return new ExprResult.Direct(op.Result);
 		}

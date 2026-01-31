@@ -292,6 +292,24 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Ensure a bool value is in a register and emit test reg, reg.
+	/// Sets ZF=1 when value is 0 (false).
+	/// </summary>
+	public void EmitBoolTest(StdValue value, MlirBlock<X86Op> block) {
+		var reg = EnsureInRegister(value, block);
+		block.AddOp(new X86TestRegRegOp(reg, reg));
+	}
+
+	/// <summary>
+	/// Materialize a comparison result (from CPU flags) into a GPR via setcc + movzx.
+	/// </summary>
+	public void EmitSetcc(StdValue result, string condition, MlirBlock<X86Op> block) {
+		var reg = AllocateRegister(result, block);
+		block.AddOp(new X86SetccOp(condition, reg));
+		block.AddOp(new X86MovzxRegOp(reg));
+	}
+
+	/// <summary>
 	/// Emit an XMM binary operation (e.g. addsd).
 	/// </summary>
 	public void EmitXmmBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,

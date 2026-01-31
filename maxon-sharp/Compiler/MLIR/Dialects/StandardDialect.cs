@@ -66,6 +66,18 @@ public class StdConstF64Op(double value) : StandardOp {
 	public override List<StdValue> ReadValues => [];
 }
 
+// === Bool Constants ===
+
+public class StdConstI1Op(bool value) : StandardOp {
+	public override string Mnemonic => "arith.constant";
+	public bool Value { get; } = value;
+	public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+		new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(Value ? 1 : 0, MlirType.I1) };
+	public override List<StdValue> ReadValues => [];
+}
+
 // === Integer Arithmetic ===
 
 public class StdAddI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
@@ -273,6 +285,22 @@ public class StdLoadI64Op(string varName) : StandardOp {
 	public override List<StdValue> ReadValues => [];
 }
 
+public class StdStoreI1Op(StdBool value, string varName) : StandardOp, IStoreOp {
+	public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+	public StdBool Value { get; } = value;
+	public string VarName { get; } = varName;
+	public MlirType StoredType => MlirType.I1;
+	public override List<StdValue> ReadValues => [Value];
+}
+
+public class StdLoadI1Op(string varName) : StandardOp {
+	public override string Mnemonic => $"memref.load {VarName} : i1";
+	public string VarName { get; } = varName;
+	public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override List<StdValue> ReadValues => [];
+}
+
 public class StdLoadF64Op(string varName) : StandardOp {
 	public override string Mnemonic => $"memref.load {VarName} : f64";
 	public string VarName { get; } = varName;
@@ -288,7 +316,7 @@ public class StdCondBrOp(StdBool condition, string thenBlock, string elseBlock) 
 	public StdBool Condition { get; } = condition;
 	public string ThenBlock { get; } = thenBlock;
 	public string ElseBlock { get; } = elseBlock;
-	public override List<StdValue> ReadValues => [];
+	public override List<StdValue> ReadValues => [Condition];
 }
 
 public class StdBrOp(string target) : StandardOp {

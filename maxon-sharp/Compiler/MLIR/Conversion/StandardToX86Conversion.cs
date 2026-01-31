@@ -50,7 +50,8 @@ public static class StandardToX86Conversion {
 		// Track float constants for rdata deduplication
 		var floatConstants = new Dictionary<double, string>();
 
-		// Track last comparison for conditional branch emission
+		// Track pending comparison for flag-based branching
+		StdBool? lastCmpResult = null;
 		ComparisonKind? lastCmpKind = null;
 		string? lastCmpPredicate = null;
 
@@ -66,6 +67,20 @@ public static class StandardToX86Conversion {
 			regManager.Reset();
 
 			foreach (var op in srcBlock.Operations) {
+				// If there's a pending comparison result and this op is NOT a condBr
+				// that uses it, materialize the comparison into a register via setcc.
+				if (lastCmpResult != null && !(op is StdCondBrOp cb && cb.Condition == lastCmpResult)) {
+					var setccCond = lastCmpKind!.Value switch {
+						ComparisonKind.Integer => IntegerPredicateToSetcc(lastCmpPredicate!),
+						ComparisonKind.Float => FloatPredicateToSetcc(lastCmpPredicate!),
+						_ => throw new InvalidOperationException($"Unsupported comparison kind for setcc: {lastCmpKind}")
+					};
+					regManager.EmitSetcc(lastCmpResult, setccCond, x86Block);
+					lastCmpResult = null;
+					lastCmpKind = null;
+					lastCmpPredicate = null;
+				}
+
 				switch (op) {
 					case StdParamOp paramOp:
 						regManager.NoteParam(paramOp.Result, paramOp.Index, x86Block);
@@ -73,6 +88,10 @@ public static class StandardToX86Conversion {
 
 					case StdConstI64Op constOp:
 						regManager.EmitLoadImmediate(constOp.Result, (int)constOp.Value, x86Block);
+						break;
+
+					case StdConstI1Op boolOp:
+						regManager.EmitLoadImmediate(boolOp.Result, boolOp.Value ? 1 : 0, x86Block);
 						break;
 
 					case StdAddI64Op addOp:
@@ -182,34 +201,47 @@ public static class StandardToX86Conversion {
 						regManager.EmitXmmLoadFromStack(loadOp.Result, varOffsets[loadOp.VarName], x86Block);
 						break;
 
+					case StdStoreI1Op storeBoolOp:
+						regManager.EmitStoreToStack(storeBoolOp.Value, varOffsets[storeBoolOp.VarName], x86Block);
+						break;
+
+					case StdLoadI1Op loadBoolOp:
+						regManager.EmitLoadFromStack(loadBoolOp.Result, varOffsets[loadBoolOp.VarName], x86Block);
+						break;
+
 					case StdCmpI64Op cmpI64Op:
 						regManager.EmitIntegerCompare(cmpI64Op.Lhs, cmpI64Op.Rhs, x86Block);
+						lastCmpResult = cmpI64Op.Result;
 						lastCmpKind = ComparisonKind.Integer;
 						lastCmpPredicate = cmpI64Op.Predicate;
 						break;
 
 					case StdCmpF64Op cmpF64Op:
 						regManager.EmitXmmCompare(cmpF64Op.Lhs, cmpF64Op.Rhs, x86Block);
+						lastCmpResult = cmpF64Op.Result;
 						lastCmpKind = ComparisonKind.Float;
 						lastCmpPredicate = cmpF64Op.Predicate;
 						break;
 
 					case StdCondBrOp condBr: {
-							if (lastCmpKind is not { } cmpKind)
-								throw new InvalidOperationException("StdCondBrOp without a preceding comparison operation");
 							var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
-							switch (cmpKind) {
-								case ComparisonKind.Integer:
-									x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
-									break;
-								case ComparisonKind.Float:
-									x86Block.AddOp(new X86JccOp("ne", scopedElse));
-									x86Block.AddOp(new X86JccOp("p", scopedElse));
-									break;
-								default:
-									// this is defensive in case a new ComparisonKind is added in the future
-									throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {cmpKind}");
+							if (lastCmpResult != null && condBr.Condition == lastCmpResult) {
+								switch (lastCmpKind!.Value) {
+									case ComparisonKind.Integer:
+										x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
+										break;
+									case ComparisonKind.Float:
+										x86Block.AddOp(new X86JccOp("ne", scopedElse));
+										x86Block.AddOp(new X86JccOp("p", scopedElse));
+										break;
+									default:
+										throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {lastCmpKind}");
+								}
+							} else {
+								regManager.EmitBoolTest(condBr.Condition, x86Block);
+								x86Block.AddOp(new X86JccOp("e", scopedElse));
 							}
+							lastCmpResult = null;
 							lastCmpKind = null;
 							lastCmpPredicate = null;
 							break;
@@ -280,6 +312,22 @@ public static class StandardToX86Conversion {
 		"le" => "g",
 		"gt" => "le",
 		_ => throw new InvalidOperationException($"Unknown integer comparison predicate: {predicate}")
+	};
+
+	private static string IntegerPredicateToSetcc(string predicate) => predicate switch {
+		"eq" => "e",
+		"ne" => "ne",
+		"lt" => "l",
+		"gt" => "g",
+		"le" => "le",
+		"ge" => "ge",
+		_ => throw new InvalidOperationException($"Unknown integer comparison predicate: {predicate}")
+	};
+
+	private static string FloatPredicateToSetcc(string predicate) => predicate switch {
+		"eq" => "e",
+		"ne" => "ne",
+		_ => throw new InvalidOperationException($"Unknown float comparison predicate: {predicate}")
 	};
 
 	private static string GetOrCreateFloatLabel(double value, MlirModule<X86Op> module, Dictionary<double, string> floatConstants) {

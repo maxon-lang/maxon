@@ -155,6 +155,9 @@ public class X86CodeEmitter {
 			case X86CmpRegRegOp cmp:
 				EmitCmpRegReg(cmp.Lhs, cmp.Rhs);
 				break;
+			case X86TestRegRegOp test:
+				EmitTestRegReg(test.Lhs, test.Rhs);
+				break;
 			case X86AddSdOp addsd:
 				EmitAddSd(addsd.Dest, addsd.Src);
 				break;
@@ -190,6 +193,12 @@ public class X86CodeEmitter {
 				break;
 			case X86UcomisdOp ucomisd:
 				EmitUcomisd(ucomisd.Src1, ucomisd.Src2);
+				break;
+			case X86SetccOp setcc:
+				EmitSetcc(setcc.Condition, setcc.Dest);
+				break;
+			case X86MovzxRegOp movzx:
+				EmitMovzxReg8To64(movzx.Dest);
 				break;
 			case X86JccOp jcc:
 				EmitJcc(jcc.Condition, jcc.Target);
@@ -522,6 +531,52 @@ public class X86CodeEmitter {
 		EmitByte((byte)(0xC0 | (RegCode(rhs) << 3) | RegCode(lhs)));
 	}
 
+	private void EmitTestRegReg(X86Register lhs, X86Register rhs) {
+		// TEST r64, r64: REX.W + 85 /r
+		byte rex = 0x48;
+		if (NeedsRex(rhs)) rex |= 0x04; // REX.R
+		if (NeedsRex(lhs)) rex |= 0x01; // REX.B
+		EmitByte(rex);
+		EmitByte(0x85);
+		EmitByte((byte)(0xC0 | (RegCode(rhs) << 3) | RegCode(lhs)));
+	}
+
+	private void EmitSetcc(string condition, X86Register dest) {
+		// SETcc r/m8: 0F 9x /0 (with optional REX prefix for r8-r15)
+		byte condOpcode = ConditionToOpcode(condition);
+		byte setccOpcode = (byte)(0x90 | (condOpcode & 0x0F));
+		if (NeedsRex(dest)) {
+			EmitByte(0x41); // REX.B for extended registers
+		}
+		EmitByte(0x0F);
+		EmitByte(setccOpcode);
+		EmitByte((byte)(0xC0 | RegCode(dest)));
+	}
+
+	private void EmitMovzxReg8To64(X86Register dest) {
+		// MOVZX r64, r8: REX.W + 0F B6 /r (same register for src and dest)
+		byte rex = 0x48;
+		if (NeedsRex(dest)) rex |= 0x05; // REX.R + REX.B (same register)
+		EmitByte(rex);
+		EmitByte(0x0F);
+		EmitByte(0xB6);
+		EmitByte((byte)(0xC0 | (RegCode(dest) << 3) | RegCode(dest)));
+	}
+
+	private static byte ConditionToOpcode(string condition) => condition switch {
+		"e" or "z" => 0x84,
+		"ne" or "nz" => 0x85,
+		"b" or "c" => 0x82,
+		"ae" or "nc" => 0x83,
+		"p" or "pe" => 0x8A,
+		"np" or "po" => 0x8B,
+		"l" => 0x8C,
+		"ge" => 0x8D,
+		"le" => 0x8E,
+		"g" => 0x8F,
+		_ => throw new InvalidOperationException($"Unsupported condition: {condition}")
+	};
+
 	private void EmitImulRegReg(X86Register dest, X86Register src) {
 		// IMUL r64, r64: REX.W + 0F AF /r
 		byte rex = 0x48;
@@ -749,19 +804,7 @@ public class X86CodeEmitter {
 
 	private void EmitJcc(string condition, string target) {
 		// Jcc rel32: 0F 8x rel32
-		byte opcode = condition switch {
-			"e" or "z" => 0x84,
-			"ne" or "nz" => 0x85,
-			"b" or "c" => 0x82,
-			"ae" or "nc" => 0x83,
-			"p" or "pe" => 0x8A,
-			"np" or "po" => 0x8B,
-			"l" => 0x8C,
-			"ge" => 0x8D,
-			"le" => 0x8E,
-			"g" => 0x8F,
-			_ => throw new InvalidOperationException($"Unsupported Jcc condition: {condition}")
-		};
+		byte opcode = ConditionToOpcode(condition);
 		EmitByte(0x0F);
 		EmitByte(opcode);
 		_jumpFixups.Add((_code.Count, target));

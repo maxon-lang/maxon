@@ -39,8 +39,12 @@ public static class MaxonToStandardConversion {
 											valueMap[litOp.Result] = newOp.Result;
 											break;
 										}
-									case MaxonValueKind.Bool:
-										throw new InvalidOperationException("Bool literals not yet supported in MaxonToStandard conversion");
+									case MaxonValueKind.Bool: {
+											var newOp = new StdConstI1Op(litOp.BoolValue);
+											newBlock.AddOp(newOp);
+											valueMap[litOp.Result] = newOp.Result;
+											break;
+										}
 									default:
 										// this is defensive in case new kinds are added in the future
 										throw new InvalidOperationException($"Unsupported MaxonLiteralOp kind: {litOp.ValueKind}");
@@ -63,6 +67,12 @@ public static class MaxonToStandardConversion {
 										}
 									case "f64": {
 											var loadOp = new StdLoadF64Op(varRef.VarName);
+											newBlock.AddOp(loadOp);
+											valueMap[varRef.Result] = loadOp.Result;
+											break;
+										}
+									case "i1": {
+											var loadOp = new StdLoadI1Op(varRef.VarName);
 											newBlock.AddOp(loadOp);
 											valueMap[varRef.Result] = loadOp.Result;
 											break;
@@ -186,6 +196,10 @@ public static class MaxonToStandardConversion {
 			case StdF64 f64:
 				block.AddOp(new StdStoreF64Op(f64, varName));
 				varTypes[varName] = "f64";
+				break;
+			case StdBool b:
+				block.AddOp(new StdStoreI1Op(b, varName));
+				varTypes[varName] = "i1";
 				break;
 			default:
 				throw new InvalidOperationException($"Unsupported value type for store: {value.GetType().Name}");
