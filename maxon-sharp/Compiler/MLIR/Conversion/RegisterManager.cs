@@ -248,6 +248,29 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Emit an XMM binary operation (e.g. addsd).
+	/// </summary>
+	public void EmitXmmBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,
+		MlirBlock<X86Op> block, Func<X86XmmRegister, X86XmmRegister, X86Op> makeOp) {
+		var rhsXmm = EnsureInXmmRegister(rhs, block);
+		var lhsXmm = EnsureInXmmRegister(lhs, block);
+		var resultXmm = AllocateXmmRegister(result, block);
+		if (resultXmm != lhsXmm) {
+			block.AddOp(new X86MovSdXmmXmmOp(resultXmm, lhsXmm));
+		}
+		block.AddOp(makeOp(resultXmm, rhsXmm));
+	}
+
+	/// <summary>
+	/// Emit cvttsd2si: convert XMM float to GPR integer with truncation.
+	/// </summary>
+	public void EmitCvttSd2Si(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+		var srcXmm = EnsureInXmmRegister(input, block);
+		var destGpr = AllocateRegister(result, block);
+		block.AddOp(new X86CvttSd2SiOp(destGpr, srcXmm));
+	}
+
+	/// <summary>
 	/// Ensure both XMM operands are in registers and emit ucomisd.
 	/// </summary>
 	public void EmitXmmCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {

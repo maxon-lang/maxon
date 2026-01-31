@@ -138,6 +138,15 @@ public class X86CodeEmitter {
 			case X86CmpRegRegOp cmp:
 				EmitCmpRegReg(cmp.Lhs, cmp.Rhs);
 				break;
+			case X86AddSdOp addsd:
+				EmitAddSd(addsd.Dest, addsd.Src);
+				break;
+			case X86CvttSd2SiOp cvttsd2si:
+				EmitCvttSd2Si(cvttsd2si.Dest, cvttsd2si.Src);
+				break;
+			case X86MovSdXmmXmmOp movsdReg:
+				EmitMovSdXmmXmm(movsdReg.Dest, movsdReg.Src);
+				break;
 			case X86UcomisdOp ucomisd:
 				EmitUcomisd(ucomisd.Src1, ucomisd.Src2);
 				break;
@@ -536,6 +545,21 @@ public class X86CodeEmitter {
 		return (int)reg;
 	}
 
+	/// <summary>
+	/// Emit an SSE/SSE2 XMM-to-XMM register instruction: prefix [REX] opcode ModRM
+	/// </summary>
+	private void EmitXmmRegRegOp(byte prefix, byte opcode1, byte opcode2, int destCode, int srcCode) {
+		EmitByte(prefix);
+		if (destCode >= 8 || srcCode >= 8) {
+			byte rex = 0x40;
+			if (destCode >= 8) rex |= 0x04; // REX.R
+			if (srcCode >= 8) rex |= 0x01; // REX.B
+			EmitByte(rex);
+		}
+		EmitBytes(opcode1, opcode2);
+		EmitByte((byte)(0xC0 | ((destCode & 7) << 3) | (srcCode & 7)));
+	}
+
 	private void EmitMovSdXmmRipRel(X86XmmRegister dest, string rdataLabel) {
 		// MOVSD xmm, [rip+disp32]: F2 0F 10 /r (ModRM: mod=00, r/m=101 for RIP-relative)
 		var reg = XmmRegCode(dest);
@@ -583,19 +607,32 @@ public class X86CodeEmitter {
 		}
 	}
 
+	private void EmitAddSd(X86XmmRegister dest, X86XmmRegister src) {
+		// ADDSD xmm, xmm: F2 0F 58 /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x58, XmmRegCode(dest), XmmRegCode(src));
+	}
+
+	private void EmitCvttSd2Si(X86Register dest, X86XmmRegister src) {
+		// CVTTSD2SI r64, xmm: F2 REX.W 0F 2C /r
+		var d = RegCode(dest);
+		var s = XmmRegCode(src);
+		EmitByte(0xF2);
+		byte rex = 0x48; // REX.W
+		if (NeedsRex(dest)) rex |= 0x04; // REX.R
+		if (s >= 8) rex |= 0x01; // REX.B
+		EmitByte(rex);
+		EmitBytes(0x0F, 0x2C);
+		EmitByte((byte)(0xC0 | (d << 3) | (s & 7)));
+	}
+
+	private void EmitMovSdXmmXmm(X86XmmRegister dest, X86XmmRegister src) {
+		// MOVSD xmm, xmm: F2 0F 10 /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x10, XmmRegCode(dest), XmmRegCode(src));
+	}
+
 	private void EmitUcomisd(X86XmmRegister src1, X86XmmRegister src2) {
 		// UCOMISD xmm, xmm: 66 0F 2E /r
-		var r1 = XmmRegCode(src1);
-		var r2 = XmmRegCode(src2);
-		EmitByte(0x66);
-		if (r1 >= 8 || r2 >= 8) {
-			byte rex = 0x40;
-			if (r1 >= 8) rex |= 0x04; // REX.R
-			if (r2 >= 8) rex |= 0x01; // REX.B
-			EmitByte(rex);
-		}
-		EmitBytes(0x0F, 0x2E);
-		EmitByte((byte)(0xC0 | ((r1 & 7) << 3) | (r2 & 7)));
+		EmitXmmRegRegOp(0x66, 0x0F, 0x2E, XmmRegCode(src1), XmmRegCode(src2));
 	}
 
 	private void EmitJcc(string condition, string target) {

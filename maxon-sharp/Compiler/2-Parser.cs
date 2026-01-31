@@ -405,6 +405,14 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.Identifier)) {
 			var token = Advance();
 			if (Check(TokenType.LeftParen)) {
+				if (token.Value == "trunc") {
+					Advance(); // consume '('
+					var arg = ResolveExprValue(ParseExpression());
+					Expect(TokenType.RightParen);
+					var truncOp = new MaxonTruncOp(arg);
+					_currentBlock!.AddOp(truncOp);
+					return new ExprResult.Direct(truncOp.Result);
+				}
 				Advance(); // consume '('
 				var args = ParseCallArgs(token);
 				var callOp = CreateFunctionCall(token, args);

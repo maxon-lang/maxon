@@ -1,0 +1,319 @@
+// Test: int-loop-pressure-with-call
+function identity(x int) returns int
+    return x
+end 'identity'
+
+function main() returns int
+    var a = 1
+    var b = 2
+    var c = 3
+    var d = 4
+    var e = 5
+    var f = 6
+    var i = 0
+    while i < 3 'loop'
+        a = a + identity(b)
+        c = c + identity(d)
+        e = e + identity(f)
+        i = i + 1
+    end 'loop'
+    return (a + c + d + e + f) mod 256
+end 'main'
+---
+ExitCode: 55
+RequiredMLIR: ```
+=== maxon
+module {
+  func @identity(x: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
+    maxon.return %0
+  }
+  func @main() -> i64 {
+  entry:
+    %1 = maxon.literal {value = 1 : i64}
+    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 2 : i64}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 3 : i64}
+    maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 4 : i64}
+    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 5 : i64}
+    maxon.assign %5 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 6 : i64}
+    maxon.assign %6 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 0 : i64}
+    maxon.assign %7 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.header:
+    %8 = maxon.literal {value = 3 : i64}
+    %9 = maxon.var_ref {var = i} {type = i64}
+    %10 = maxon.binop %9, %8 {op = lt} {kind = i64}
+    maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %11 = maxon.var_ref {var = b} {type = i64}
+    %12 = maxon.call @identity %11
+    %13 = maxon.var_ref {var = a} {type = i64}
+    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
+    %15 = maxon.var_ref {var = d} {type = i64}
+    %16 = maxon.call @identity %15
+    %17 = maxon.var_ref {var = c} {type = i64}
+    %18 = maxon.binop %17, %16 {op = add} {kind = i64}
+    maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
+    %19 = maxon.var_ref {var = f} {type = i64}
+    %20 = maxon.call @identity %19
+    %21 = maxon.var_ref {var = e} {type = i64}
+    %22 = maxon.binop %21, %20 {op = add} {kind = i64}
+    maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
+    %23 = maxon.literal {value = 1 : i64}
+    %24 = maxon.var_ref {var = i} {type = i64}
+    %25 = maxon.binop %24, %23 {op = add} {kind = i64}
+    maxon.assign %25 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.exit:
+    %26 = maxon.var_ref {var = a} {type = i64}
+    %27 = maxon.var_ref {var = c} {type = i64}
+    %28 = maxon.binop %26, %27 {op = add} {kind = i64}
+    %29 = maxon.var_ref {var = d} {type = i64}
+    %30 = maxon.binop %28, %29 {op = add} {kind = i64}
+    %31 = maxon.var_ref {var = e} {type = i64}
+    %32 = maxon.binop %30, %31 {op = add} {kind = i64}
+    %33 = maxon.var_ref {var = f} {type = i64}
+    %34 = maxon.binop %32, %33 {op = add} {kind = i64}
+    %35 = maxon.literal {value = 256 : i64}
+    %36 = maxon.binop %34, %35 {op = mod} {kind = i64}
+    maxon.return %36
+  }
+}
+=== standard
+module {
+  func @identity(x: i64) -> i64 {
+  entry:
+    %37 = func.param x : StdI64
+    memref.store %37, x
+    func.return %37
+  }
+  func @main() -> i64 {
+  entry:
+    %38 = arith.constant {value = 1 : i64}
+    memref.store %38, a
+    %39 = arith.constant {value = 2 : i64}
+    memref.store %39, b
+    %40 = arith.constant {value = 3 : i64}
+    memref.store %40, c
+    %41 = arith.constant {value = 4 : i64}
+    memref.store %41, d
+    %42 = arith.constant {value = 5 : i64}
+    memref.store %42, e
+    %43 = arith.constant {value = 6 : i64}
+    memref.store %43, f
+    %44 = arith.constant {value = 0 : i64}
+    memref.store %44, i
+    cf.br loop_0.header
+  loop_0.header:
+    %45 = arith.constant {value = 3 : i64}
+    %46 = memref.load i : i64
+    %47 = arith.cmpi lt %46, %45
+    cf.cond_br %47 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %48 = memref.load b : i64
+    %49 = func.call @identity %48
+    %50 = memref.load a : i64
+    %51 = arith.addi %50, %49
+    memref.store %51, a
+    %52 = memref.load d : i64
+    %53 = func.call @identity %52
+    %54 = memref.load c : i64
+    %55 = arith.addi %54, %53
+    memref.store %55, c
+    %56 = memref.load f : i64
+    %57 = func.call @identity %56
+    %58 = memref.load e : i64
+    %59 = arith.addi %58, %57
+    memref.store %59, e
+    %60 = arith.constant {value = 1 : i64}
+    %61 = memref.load i : i64
+    %62 = arith.addi %61, %60
+    memref.store %62, i
+    cf.br loop_0.header
+  loop_0.exit:
+    %63 = memref.load a : i64
+    %64 = memref.load c : i64
+    %65 = arith.addi %63, %64
+    %66 = memref.load d : i64
+    %67 = arith.addi %65, %66
+    %68 = memref.load e : i64
+    %69 = arith.addi %67, %68
+    %70 = memref.load f : i64
+    %71 = arith.addi %69, %70
+    %72 = arith.constant {value = 256 : i64}
+    %73 = arith.remsi %71, %72
+    func.return %73
+  }
+}
+=== x86
+module {
+  func @identity(x: i64) -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, ecx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 64
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 2
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 3
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 4
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 5
+    x86.mov [rbp-40], esi
+    x86.mov edi, 6
+    x86.mov [rbp-48], edi
+    x86.mov r8, 0
+    x86.mov [rbp-56], r8
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 3
+    x86.mov ecx, [rbp-56]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, eax
+    x86.call identity
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, [rbp-32]
+    x86.mov ecx, edx
+    x86.call identity
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, eax
+    x86.mov [rbp-24], ebx
+    x86.mov esi, [rbp-48]
+    x86.mov ecx, esi
+    x86.call identity
+    x86.mov edi, [rbp-40]
+    x86.add edi, eax
+    x86.mov [rbp-40], edi
+    x86.mov r8, 1
+    x86.mov r9, [rbp-56]
+    x86.add r9, r8
+    x86.mov [rbp-56], r9
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-32]
+    x86.add eax, edx
+    x86.mov ebx, [rbp-40]
+    x86.add eax, ebx
+    x86.mov esi, [rbp-48]
+    x86.add eax, esi
+    x86.mov edi, 256
+    x86.cqo
+    x86.idiv edi
+    x86.mov eax, edx
+    x86.add rsp, 64
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @identity(x: i64) -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, ecx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 64
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 2
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 3
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 4
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 5
+    x86.mov [rbp-40], esi
+    x86.mov edi, 6
+    x86.mov [rbp-48], edi
+    x86.mov r8, 0
+    x86.mov [rbp-56], r8
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 3
+    x86.mov ecx, [rbp-56]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, eax
+    x86.call identity
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, [rbp-32]
+    x86.mov ecx, edx
+    x86.call identity
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, eax
+    x86.mov [rbp-24], ebx
+    x86.mov esi, [rbp-48]
+    x86.mov ecx, esi
+    x86.call identity
+    x86.mov edi, [rbp-40]
+    x86.add edi, eax
+    x86.mov [rbp-40], edi
+    x86.mov r8, 1
+    x86.mov r9, [rbp-56]
+    x86.add r9, r8
+    x86.mov [rbp-56], r9
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-32]
+    x86.add eax, edx
+    x86.mov ebx, [rbp-40]
+    x86.add eax, ebx
+    x86.mov esi, [rbp-48]
+    x86.add eax, esi
+    x86.mov edi, 256
+    x86.cqo
+    x86.idiv edi
+    x86.mov eax, edx
+    x86.add rsp, 64
+    x86.pop rbp
+    x86.ret
+  }
+}
+---

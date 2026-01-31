@@ -100,6 +100,15 @@ public static class StandardToX86Conversion {
 						regManager.EmitRemainder(remOp.Lhs, remOp.Rhs, remOp.Result, x86Block);
 						break;
 
+					case StdAddF64Op addF64Op:
+						regManager.EmitXmmBinaryRegReg(addF64Op.Lhs, addF64Op.Rhs, addF64Op.Result, x86Block,
+							(l, r) => new X86AddSdOp(l, r));
+						break;
+
+					case StdFpToSiOp fpToSiOp:
+						regManager.EmitCvttSd2Si(fpToSiOp.Input, fpToSiOp.Result, x86Block);
+						break;
+
 					case StdConstF64Op floatOp: {
 							var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
 							regManager.EmitXmmLoadFromRipRelative(floatOp.Result, label, x86Block);

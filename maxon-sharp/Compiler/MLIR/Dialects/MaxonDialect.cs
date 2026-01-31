@@ -163,6 +163,14 @@ public class MaxonCallOp(string callee, List<MaxonValue> args, MaxonValueKind? r
 	public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
 
+public class MaxonTruncOp(MaxonValue input) : MaxonOp {
+	public override string Mnemonic => "maxon.trunc";
+	public MaxonValue Input { get; } = input;
+	public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
 public class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBlock) : MaxonOp {
 	public override string Mnemonic => $"maxon.cond_br %{Condition.Id} [then: {ThenBlock}, else: {ElseBlock}]";
 	public MaxonValue Condition { get; } = condition;

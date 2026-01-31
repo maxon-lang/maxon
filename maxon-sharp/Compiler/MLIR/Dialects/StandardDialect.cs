@@ -121,6 +121,29 @@ public class StdDivI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
 	public override List<StdValue> ReadValues => [Lhs, Rhs];
 }
 
+// === Float Arithmetic ===
+
+public class StdAddF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+	public override string Mnemonic => "arith.addf";
+	public StdF64 Lhs { get; } = lhs;
+	public StdF64 Rhs { get; } = rhs;
+	public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+	public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
+// === Float-to-Int Conversion ===
+
+public class StdFpToSiOp(StdF64 input) : StandardOp {
+	public override string Mnemonic => "arith.fptosi";
+	public StdF64 Input { get; } = input;
+	public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+	public override List<StdValue> ReadValues => [Input];
+}
+
 // === Comparison ===
 
 public class StdCmpI64Op(string predicate, StdI64 lhs, StdI64 rhs) : StandardOp {
