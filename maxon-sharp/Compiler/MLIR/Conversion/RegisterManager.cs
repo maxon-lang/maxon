@@ -120,7 +120,10 @@ public class RegisterManager {
 	/// </summary>
 	public void EmitLoadImmediate(StdValue result, int immediate, MlirBlock<X86Op> block) {
 		var gpr = AllocateRegister(result, block);
-		block.AddOp(new X86MovRegImmOp(gpr, immediate));
+		if (immediate == 0)
+			block.AddOp(new X86XorRegRegOp(gpr, gpr));
+		else
+			block.AddOp(new X86MovRegImmOp(gpr, immediate));
 	}
 
 	/// <summary>

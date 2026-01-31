@@ -1281,11 +1281,11 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
-    x86.mov ecx, 0
+    x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
-    x86.mov edx, 0
+    x86.xor edx, edx
     x86.mov [rbp-24], edx
     x86.mov ebx, 10
     x86.add eax, ebx
@@ -1848,7 +1848,7 @@ module {
     x86.epilogue
     x86.ret
   other_1:
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.epilogue
     x86.ret
   }
@@ -1938,7 +1938,7 @@ module {
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
     x86.mov [rbp-16], ecx
-    x86.mov edx, 0
+    x86.xor edx, edx
     x86.mov [rbp-24], edx
     x86.mov ebx, 1
     x86.cmp ecx, ebx
@@ -2026,7 +2026,7 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.jmp main.loop_0.header
   loop_0.header:
@@ -2131,9 +2131,9 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
-    x86.mov ecx, 0
+    x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.jmp main.loop_0.header
   loop_0.header:
@@ -2310,13 +2310,13 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=48
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
-    x86.mov ecx, 0
+    x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
-    x86.mov edx, 0
+    x86.xor edx, edx
     x86.mov [rbp-24], edx
-    x86.mov ebx, 0
+    x86.xor ebx, ebx
     x86.mov [rbp-32], ebx
     x86.jmp main.loop_0.header
   loop_0.header:
@@ -2332,7 +2332,7 @@ module {
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.cmp edx, eax
     x86.jne main.odd_2
   even_1:
@@ -2491,7 +2491,7 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
     x86.mov [rbp-16], ecx
@@ -2654,9 +2654,9 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
-    x86.mov ecx, 0
+    x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.jmp main.outer_0.header
   outer_0.header:
@@ -2665,7 +2665,7 @@ module {
     x86.cmp ecx, eax
     x86.jge main.outer_0.exit
   outer_0:
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-24], eax
     x86.jmp main.inner_1.header
   inner_1.header:
@@ -2810,7 +2810,7 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
     x86.mov [rbp-16], ecx
@@ -2963,9 +2963,9 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
-    x86.mov ecx, 0
+    x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.jmp main.loop_0.header
   loop_0.header:
@@ -3706,7 +3706,7 @@ module {
     x86.mov [rbp-40], esi
     x86.mov edi, 6
     x86.mov [rbp-48], edi
-    x86.mov r8, 0
+    x86.xor r8, r8
     x86.mov [rbp-56], r8
     x86.jmp main.loop_0.header
   loop_0.header:
@@ -3984,9 +3984,9 @@ module {
     x86.prologue stack_size=32
     x86.mov eax, 100
     x86.mov [rbp-8], eax
-    x86.mov ecx, 0
+    x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
-    x86.mov edx, 0
+    x86.xor edx, edx
     x86.mov [rbp-24], edx
     x86.jmp main.outer_0.header
   outer_0.header:
@@ -3995,7 +3995,7 @@ module {
     x86.cmp ecx, eax
     x86.jge main.outer_0.exit
   outer_0:
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-32], eax
     x86.jmp main.inner_1.header
   inner_1.header:
@@ -4128,11 +4128,11 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
     x86.mov [rbp-16], ecx
-    x86.mov edx, 0
+    x86.xor edx, edx
     x86.mov [rbp-24], edx
     x86.jmp main.loop_0.header
   loop_0.header:
@@ -4932,11 +4932,11 @@ module {
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.mov [rbp-8], eax
-    x86.mov ecx, 0
+    x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
-    x86.mov edx, 0
+    x86.xor edx, edx
     x86.mov [rbp-24], edx
     x86.mov ebx, 1
     x86.mov esi, 2

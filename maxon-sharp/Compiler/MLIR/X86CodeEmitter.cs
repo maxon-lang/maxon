@@ -123,6 +123,9 @@ public class X86CodeEmitter {
 			case X86SubRegRegOp subReg:
 				EmitSubRegReg(subReg.Dest, subReg.Src);
 				break;
+			case X86XorRegRegOp xor:
+				EmitXorRegReg(xor.Dest, xor.Src);
+				break;
 			case X86ImulRegRegOp imul:
 				EmitImulRegReg(imul.Dest, imul.Src);
 				break;
@@ -494,6 +497,18 @@ public class X86CodeEmitter {
 		if (NeedsRex(dest)) rex |= 0x01; // REX.B
 		EmitByte(rex);
 		EmitByte(0x29);
+		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+	}
+
+	private void EmitXorRegReg(X86Register dest, X86Register src) {
+		// XOR r32, r32: 31 /r  (implicitly zero-extends to 64 bits)
+		if (NeedsRex(src) || NeedsRex(dest)) {
+			byte rex = 0x40;
+			if (NeedsRex(src)) rex |= 0x04; // REX.R
+			if (NeedsRex(dest)) rex |= 0x01; // REX.B
+			EmitByte(rex);
+		}
+		EmitByte(0x31);
 		EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
 	}
 

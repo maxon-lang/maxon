@@ -1,0 +1,49 @@
+---
+feature: advent of compiler optimization
+status: stable
+keywords: abs, absolute value, math
+category: math-intrinsic
+---
+# advent of compiler optimization
+
+## Documentation
+
+None
+
+## Tests
+
+<!-- test: day1 -->
+```maxon
+function main() returns int
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.return %0
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %1 = arith.constant {value = 0 : i64}
+    func.return %1
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+```

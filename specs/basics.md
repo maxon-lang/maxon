@@ -180,7 +180,7 @@ module {
     x86.epilogue
     x86.ret
   other_1:
-    x86.mov eax, 0
+    x86.xor eax, eax
     x86.epilogue
     x86.ret
   }
