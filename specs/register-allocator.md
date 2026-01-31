@@ -3089,7 +3089,7 @@ module {
 
 ### Level 6: Advanced Scenarios
 
-<!-- disabled-test: int-nested-expressions-deep -->
+<!-- test: int-nested-expressions-deep -->
 ```maxon
 function main() returns int
     return ((((1 + 2) * 3) + 4) * 2) + 6
@@ -3099,10 +3099,68 @@ end 'main'
 32
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 1 : i64}
+    %1 = maxon.literal {value = 2 : i64}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %3 = maxon.literal {value = 3 : i64}
+    %4 = maxon.binop %2, %3 {op = mul} {kind = i64}
+    %5 = maxon.literal {value = 4 : i64}
+    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    %7 = maxon.literal {value = 2 : i64}
+    %8 = maxon.binop %6, %7 {op = mul} {kind = i64}
+    %9 = maxon.literal {value = 6 : i64}
+    %10 = maxon.binop %8, %9 {op = add} {kind = i64}
+    maxon.return %10
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %11 = arith.constant {value = 1 : i64}
+    %12 = arith.constant {value = 2 : i64}
+    %13 = arith.addi %11, %12
+    %14 = arith.constant {value = 3 : i64}
+    %15 = arith.muli %13, %14
+    %16 = arith.constant {value = 4 : i64}
+    %17 = arith.addi %15, %16
+    %18 = arith.constant {value = 2 : i64}
+    %19 = arith.muli %17, %18
+    %20 = arith.constant {value = 6 : i64}
+    %21 = arith.addi %19, %20
+    func.return %21
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.add eax, ecx
+    x86.mov edx, 3
+    x86.mov ebx, eax
+    x86.imul ebx, edx
+    x86.mov esi, 4
+    x86.add ebx, esi
+    x86.mov edi, 2
+    x86.mov eax, ebx
+    x86.imul eax, edi
+    x86.mov ecx, 6
+    x86.add eax, ecx
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
-<!-- disabled-test: int-expression-both-sides-complex -->
+<!-- test: int-expression-both-sides-complex -->
 ```maxon
 function main() returns int
     var a = 3
@@ -3116,7 +3174,67 @@ end 'main'
 40
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 3 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 7 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 2 : i64}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %5 = maxon.binop %2, %3 {op = sub} {kind = i64}
+    %6 = maxon.binop %4, %5 {op = mul} {kind = i64}
+    maxon.return %6
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %7 = arith.constant {value = 3 : i64}
+    memref.store %7, a
+    %8 = arith.constant {value = 5 : i64}
+    memref.store %8, b
+    %9 = arith.constant {value = 7 : i64}
+    memref.store %9, c
+    %10 = arith.constant {value = 2 : i64}
+    memref.store %10, d
+    %11 = arith.addi %7, %8
+    %12 = arith.subi %9, %10
+    %13 = arith.muli %11, %12
+    func.return %13
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 3
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 5
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 7
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 2
+    x86.mov [rbp-32], ebx
+    x86.add eax, ecx
+    x86.sub edx, ebx
+    x86.mov esi, eax
+    x86.imul esi, edx
+    x86.mov eax, esi
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-many-params-function -->
