@@ -173,6 +173,9 @@ public class X86CodeEmitter {
       case X86CvttSd2SiOp cvttsd2si:
         EmitCvttSd2Si(cvttsd2si.Dest, cvttsd2si.Src);
         break;
+      case X86CvtSi2SdOp cvtsi2sd:
+        EmitCvtSi2Sd(cvtsi2sd.Dest, cvtsi2sd.Src);
+        break;
       case X86AndpdRipRelOp andpd:
         EmitAndpdRipRel(andpd.Dest, andpd.RdataLabel);
         break;
@@ -471,7 +474,17 @@ public class X86CodeEmitter {
   private void EmitMovRegImm(X86Register dest, long immediate) {
     if (!Is64BitReg(dest) && !Is32BitReg(dest))
       throw new ArgumentException($"EmitMovRegImm: unsupported register size: {dest}");
-    if (Is64BitReg(dest)) {
+    // For 32-bit register names, negative values require the 64-bit
+    // sign-extending form, since mov r32, imm32 zero-extends to 64 bits.
+    if (Is32BitReg(dest) && immediate < 0) {
+      // MOV r64, imm32 (sign-extended): REX.W + C7 /0 id
+      byte rex = 0x48;
+      if (NeedsRex(dest)) rex |= 0x01;
+      EmitByte(rex);
+      EmitByte(0xC7);
+      EmitByte((byte)(0xC0 | RegCode(dest)));
+      EmitDword((int)immediate);
+    } else if (Is64BitReg(dest)) {
       if (immediate >= int.MinValue && immediate <= int.MaxValue) {
         // MOV r64, imm32 (sign-extended): REX.W + C7 /0 id
         byte rex = 0x48;
@@ -489,7 +502,7 @@ public class X86CodeEmitter {
         _code.AddRange(BitConverter.GetBytes(immediate));
       }
     } else {
-      // MOV r32, imm32: B8+rd id
+      // MOV r32, imm32: B8+rd id (non-negative values only)
       EmitByte((byte)(0xB8 + RegCode(dest)));
       EmitDword((int)immediate);
     }
@@ -628,6 +641,8 @@ public class X86CodeEmitter {
     "ne" or "nz" => 0x85,
     "b" or "c" => 0x82,
     "ae" or "nc" => 0x83,
+    "be" => 0x86,
+    "a" => 0x87,
     "p" or "pe" => 0x8A,
     "np" or "po" => 0x8B,
     "l" => 0x8C,
@@ -813,6 +828,20 @@ public class X86CodeEmitter {
     EmitByte(rex);
     EmitBytes(0x0F, 0x2C);
     EmitByte((byte)(0xC0 | (d << 3) | (s & 7)));
+  }
+
+  private void EmitCvtSi2Sd(X86XmmRegister dest, X86Register src) {
+    RequireGpr(src, nameof(EmitCvtSi2Sd));
+    // CVTSI2SD xmm, r64: F2 REX.W 0F 2A /r
+    var d = XmmRegCode(dest);
+    var s = RegCode(src);
+    EmitByte(0xF2);
+    byte rex = 0x48; // REX.W
+    if (d >= 8) rex |= 0x04; // REX.R
+    if (NeedsRex(src)) rex |= 0x01; // REX.B
+    EmitByte(rex);
+    EmitBytes(0x0F, 0x2A);
+    EmitByte((byte)(0xC0 | ((d & 7) << 3) | (s & 7)));
   }
 
   private void EmitAndpdRipRel(X86XmmRegister dest, string rdataLabel) {

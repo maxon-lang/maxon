@@ -235,6 +235,17 @@ public class StdFpToSiOp(StdF64 input) : StandardOp {
   public override List<StdValue> ReadValues => [Input];
 }
 
+// === Int-to-Float Conversion ===
+
+public class StdSiToFpOp(StdI64 input) : StandardOp {
+  public override string Mnemonic => "arith.sitofp";
+  public StdI64 Input { get; } = input;
+  public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+}
+
 // === Comparison ===
 
 public class StdCmpI64Op(string predicate, StdI64 lhs, StdI64 rhs) : StandardOp {

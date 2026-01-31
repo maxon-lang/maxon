@@ -212,6 +212,11 @@ public class Parser(List<Token> tokens) {
     ParseBodyUntilEnd();
     ExpectEndLabel(name);
 
+    // Add implicit return for void functions if the last block doesn't have a terminator
+    if (returnType == null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonReturnOp());
+    }
+
     _currentFunction = null;
     _currentBlock = null;
   }
@@ -288,6 +293,8 @@ public class Parser(List<Token> tokens) {
       ParseFieldAssignment();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Equals) {
       ParseAssignment();
+    } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftParen) {
+      ParseCallStatement();
     } else {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected statement, got '{Current().Value}'", Current().Line, Current().Column);
     }
@@ -396,6 +403,13 @@ public class Parser(List<Token> tokens) {
     _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, varInfo.StructTypeName!, fieldName, newValue));
   }
 
+  private void ParseCallStatement() {
+    var token = Advance(); // consume identifier
+    Advance(); // consume '('
+    var args = ParseCallArgs(token);
+    CreateFunctionCall(token, args);
+  }
+
   private void ParseIf() {
     Advance(); // consume 'if'
 
@@ -417,19 +431,27 @@ public class Parser(List<Token> tokens) {
     // Parse: end 'thenLabel'
     ExpectEndLabel(thenSourceLabel);
 
-    // Check for else
+    // Check for else or else-if
     MlirBlock<MaxonOp>? elseBlock = null;
     string? elseLabel = null;
     if (Check(TokenType.Else)) {
       Advance(); // consume 'else'
-      var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
-      elseLabel = UniqueLabel(elseSourceLabel);
-      SkipNewlines();
+      if (Check(TokenType.If)) {
+        // else-if chain: create a synthetic block and parse the nested if into it
+        elseLabel = $"{thenLabel}.elseif";
+        elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+        _currentBlock = elseBlock;
+        ParseIf();
+      } else {
+        var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
+        elseLabel = UniqueLabel(elseSourceLabel);
+        SkipNewlines();
 
-      elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
-      _currentBlock = elseBlock;
-      ParseBodyUntilEnd();
-      ExpectEndLabel(elseSourceLabel);
+        elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+        _currentBlock = elseBlock;
+        ParseBodyUntilEnd();
+        ExpectEndLabel(elseSourceLabel);
+      }
     }
 
     // If either branch doesn't end with a return, create a merge block
@@ -564,8 +586,8 @@ public class Parser(List<Token> tokens) {
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
 
-      var kind = DetermineValueKind(lhsVal, rhsVal);
-      var binOp = new MaxonBinOp(cmpOperator, lhsVal, rhsVal, kind);
+      var (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal);
+      var binOp = new MaxonBinOp(cmpOperator, promotedLhs, promotedRhs, kind);
       _currentBlock!.AddOp(binOp);
       return new ExprResult.Direct(binOp.Result);
     }
@@ -582,9 +604,9 @@ public class Parser(List<Token> tokens) {
 
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
-      var kind = DetermineValueKind(lhsVal, rhsVal);
+      var (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal);
 
-      var binOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, kind);
+      var binOp = new MaxonBinOp(entry.Op, promotedLhs, promotedRhs, kind);
       _currentBlock!.AddOp(binOp);
       lhs = new ExprResult.Direct(binOp.Result);
     }
@@ -819,15 +841,23 @@ public class Parser(List<Token> tokens) {
     };
   }
 
-  private MaxonValueKind DetermineValueKind(MaxonValue lhs, MaxonValue rhs) {
+  private (MaxonValueKind Kind, MaxonValue Lhs, MaxonValue Rhs) DetermineValueKind(MaxonValue lhs, MaxonValue rhs) {
     return (lhs, rhs) switch {
-      (MaxonInteger, MaxonInteger) => MaxonValueKind.Integer,
-      (MaxonFloat, MaxonFloat) => MaxonValueKind.Float,
-      (MaxonBool, MaxonBool) => MaxonValueKind.Bool,
+      (MaxonInteger, MaxonInteger) => (MaxonValueKind.Integer, lhs, rhs),
+      (MaxonFloat, MaxonFloat) => (MaxonValueKind.Float, lhs, rhs),
+      (MaxonBool, MaxonBool) => (MaxonValueKind.Bool, lhs, rhs),
+      (MaxonInteger, MaxonFloat) => (MaxonValueKind.Float, PromoteIntToFloat(lhs), rhs),
+      (MaxonFloat, MaxonInteger) => (MaxonValueKind.Float, lhs, PromoteIntToFloat(rhs)),
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Cannot operate on {lhs.GetType().Name} and {rhs.GetType().Name}",
         Current().Line, Current().Column)
     };
+  }
+
+  private MaxonFloat PromoteIntToFloat(MaxonValue intValue) {
+    var op = new MaxonIntToFloatOp(intValue);
+    _currentBlock!.AddOp(op);
+    return op.Result;
   }
 
   /// <summary>

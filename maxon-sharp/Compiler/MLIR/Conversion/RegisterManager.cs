@@ -53,6 +53,7 @@ public class RegisterManager {
   private readonly Dictionary<StdValue, X86XmmRegister> _valueToXmm = [];
   private readonly Dictionary<StdValue, int> _valueXmmStackHome = [];
   private readonly Dictionary<X86XmmRegister, int> _xmmLastUsed = [];
+  private readonly Dictionary<StdValue, X86XmmRegister> _valuePreviousXmm = [];
 
   /// <summary>
   /// Allocate a physical register for a new value.
@@ -117,13 +118,18 @@ public class RegisterManager {
 
   /// <summary>
   /// Allocate a register and load an immediate value into it.
+  /// Uses 64-bit register for values that don't fit in 32 bits.
   /// </summary>
-  public void EmitLoadImmediate(StdValue result, int immediate, MlirBlock<X86Op> block) {
+  public void EmitLoadImmediate(StdValue result, long immediate, MlirBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
-    if (immediate == 0)
+    if (immediate == 0) {
       block.AddOp(new X86XorRegRegOp(gpr, gpr));
-    else
+    } else if (immediate < int.MinValue || immediate > int.MaxValue) {
+      // Value doesn't fit in 32 bits - need 64-bit register
+      block.AddOp(new X86MovRegImmOp(To64Bit(gpr), immediate));
+    } else {
       block.AddOp(new X86MovRegImmOp(gpr, immediate));
+    }
   }
 
   /// <summary>
@@ -333,6 +339,15 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit cvtsi2sd: convert GPR integer to XMM float.
+  /// </summary>
+  public void EmitCvtSi2Sd(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcGpr = EnsureInRegister(input, block);
+    var destXmm = AllocateXmmRegister(result);
+    block.AddOp(new X86CvtSi2SdOp(destXmm, srcGpr));
+  }
+
+  /// <summary>
   /// Emit a unary XMM operation where the instruction reads src and writes dest
   /// independently (e.g. sqrtsd, roundsd). No preliminary copy needed.
   /// </summary>
@@ -403,12 +418,26 @@ public class RegisterManager {
       block.AddOp(new X86MovMemRspRegOp(offset, argReg));
     }
 
-    // Snapshot where each register arg currently lives (register or stack).
+    // Place float args directly into their target XMM registers.
+    // Float args don't compete with GPR args for register slots.
+    var gprArgs = new List<int>();
+    for (int i = 0; i < regArgCount; i++) {
+      if (args[i] is StdF64) {
+        var srcXmm = EnsureInXmmRegister(args[i], block);
+        if (srcXmm != CallConvXmmRegs[i]) {
+          block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], srcXmm));
+        }
+      } else {
+        gprArgs.Add(i);
+      }
+    }
+
+    // Snapshot where each GPR register arg currently lives (register or stack).
     // This avoids calling EnsureInRegister in a loop where each call
     // can evict the previous arg under high register pressure.
     var argSources = new X86Register?[regArgCount];
     int?[] argStackHomes = new int?[regArgCount];
-    for (int i = 0; i < regArgCount; i++) {
+    foreach (int i in gprArgs) {
       if (_valueToRegister.TryGetValue(args[i], out var reg))
         argSources[i] = args[i] is StdPtr ? To64Bit(reg) : reg;
       else if (_valueStackHome.TryGetValue(args[i], out var disp))
@@ -417,13 +446,17 @@ public class RegisterManager {
         throw new InvalidOperationException($"RegisterManager: call arg %{args[i].Id} has no register and no stack home");
     }
 
-    // Move args to their target calling convention registers.
+    // Move GPR args to their target calling convention registers.
     // We track the actual current physical state of registers throughout
     // the placement process.
     var placed = new bool[regArgCount];
-
-    // Pass 1: mark args already in their target register
+    // Mark float args as already placed
     for (int i = 0; i < regArgCount; i++) {
+      if (args[i] is StdF64) placed[i] = true;
+    }
+
+    // Pass 1: mark GPR args already in their target register
+    foreach (int i in gprArgs) {
       if (argSources[i] == CallConvRegs[i])
         placed[i] = true;
     }
@@ -432,10 +465,10 @@ public class RegisterManager {
     bool progress = true;
     while (progress) {
       progress = false;
-      for (int i = 0; i < regArgCount; i++) {
+      foreach (int i in gprArgs) {
         if (placed[i]) continue;
         bool targetBlocked = false;
-        for (int j = 0; j < regArgCount; j++) {
+        foreach (int j in gprArgs) {
           if (j != i && !placed[j] && argSources[j] == CallConvRegs[i]) {
             targetBlocked = true;
             break;
@@ -453,11 +486,11 @@ public class RegisterManager {
     }
 
     // Pass 3: resolve remaining conflicts with xchg (only register-register cycles)
-    for (int i = 0; i < regArgCount; i++) {
+    foreach (int i in gprArgs) {
       if (placed[i]) continue;
       block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, CallConvRegs[i]));
       // Update the other arg that was in the target register
-      for (int j = 0; j < regArgCount; j++) {
+      foreach (int j in gprArgs) {
         if (j != i && argSources[j] == CallConvRegs[i]) {
           argSources[j] = argSources[i];
           break;
@@ -476,7 +509,11 @@ public class RegisterManager {
     InvalidateCallerSavedRegisters();
 
     if (result != null) {
-      Assign(X86Register.Eax, result);
+      if (result is StdF64) {
+        AssignXmm(X86XmmRegister.Xmm0, result);
+      } else {
+        Assign(X86Register.Eax, result);
+      }
     }
   }
 
@@ -485,13 +522,25 @@ public class RegisterManager {
   /// or load it from the stack for 5th+ parameters.
   /// After push rbp / mov rbp, rsp: [rbp+16] = 5th param, [rbp+24] = 6th, etc.
   /// </summary>
+  // Windows x64 float parameter registers (xmm0, xmm1, xmm2, xmm3)
+  private static readonly X86XmmRegister[] CallConvXmmRegs = [X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, X86XmmRegister.Xmm2, X86XmmRegister.Xmm3];
+
   public void NoteParam(StdValue paramValue, int paramIndex, MlirBlock<X86Op> block) {
     if (paramIndex < CallConvRegs.Length) {
-      Assign(CallConvRegs[paramIndex], paramValue);
+      if (paramValue is StdF64) {
+        AssignXmm(CallConvXmmRegs[paramIndex], paramValue);
+      } else {
+        Assign(CallConvRegs[paramIndex], paramValue);
+      }
     } else {
       int stackOffset = 16 + (paramIndex - CallConvRegs.Length) * 8;
-      var gpr = AllocateRegister(paramValue, block);
-      block.AddOp(new X86MovRegMemOp(gpr, stackOffset));
+      if (paramValue is StdF64) {
+        var xmm = AllocateXmmRegister(paramValue);
+        block.AddOp(new X86MovSdXmmMemOp(xmm, stackOffset));
+      } else {
+        var gpr = AllocateRegister(paramValue, block);
+        block.AddOp(new X86MovRegMemOp(gpr, stackOffset));
+      }
     }
   }
 
@@ -517,10 +566,16 @@ public class RegisterManager {
     }
   }
 
+  // Windows x64 caller-saved XMM: xmm0-xmm5
+  private static readonly X86XmmRegister[] CallerSavedXmmRegisters = [
+    X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, X86XmmRegister.Xmm2,
+    X86XmmRegister.Xmm3, X86XmmRegister.Xmm4, X86XmmRegister.Xmm5
+  ];
+
   /// <summary>
   /// After a call, caller-saved registers are clobbered. Remove any value mappings
   /// for those registers so stale values are never used.
-  /// Windows x64 caller-saved: rax, rcx, rdx, r8, r9, r10, r11.
+  /// Windows x64 caller-saved: rax, rcx, rdx, r8, r9, r10, r11, xmm0-xmm5.
   /// </summary>
   private void InvalidateCallerSavedRegisters() {
     foreach (var reg in CallerSavedRegisters) {
@@ -528,6 +583,14 @@ public class RegisterManager {
         _valueToRegister.Remove(value);
         _registerContents.Remove(reg);
         _lastUsed.Remove(reg);
+      }
+    }
+    foreach (var xmm in CallerSavedXmmRegisters) {
+      if (_xmmContents.TryGetValue(xmm, out var value)) {
+        _valuePreviousXmm[value] = xmm;  // Remember which register it was in
+        _valueToXmm.Remove(value);
+        _xmmContents.Remove(xmm);
+        _xmmLastUsed.Remove(xmm);
       }
     }
   }
@@ -541,8 +604,16 @@ public class RegisterManager {
 
   /// <summary>
   /// Allocate an XMM register for a new float value.
+  /// Prefers reusing the previous register if it's now free (optimization for post-call reloads).
   /// </summary>
   private X86XmmRegister AllocateXmmRegister(StdValue value) {
+    // If this value had a previous register and it's now free, reuse it
+    if (_valuePreviousXmm.TryGetValue(value, out var previousReg) && !_xmmContents.ContainsKey(previousReg)) {
+      _valuePreviousXmm.Remove(value);  // Clear the hint
+      AssignXmm(previousReg, value);
+      return previousReg;
+    }
+
     if (_nextFreshXmmIndex < XmmPool.Length) {
       var candidate = XmmPool[_nextFreshXmmIndex];
       if (!_xmmContents.ContainsKey(candidate)) {

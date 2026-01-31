@@ -214,6 +214,14 @@ public class MaxonTruncOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
+public class MaxonIntToFloatOp(MaxonValue input) : MaxonOp {
+  public override string Mnemonic => "maxon.int_to_float";
+  public MaxonValue Input { get; } = input;
+  public MaxonFloat Result { get; } = new MaxonFloat(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
 public class MaxonAbsOp(MaxonValue input) : MaxonOp {
   public override string Mnemonic => "maxon.abs";
   public MaxonValue Input { get; } = input;

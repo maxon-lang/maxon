@@ -77,12 +77,16 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       var result = RunTest(fragment);
       results.Add(result);
 
+      var root = Compiler.CompileError.ProjectRoot ?? Environment.CurrentDirectory;
+      var fullPath = Path.IsPathRooted(result.FilePath) ? result.FilePath : Path.GetFullPath(Path.Combine(root, result.FilePath));
+      var testIdentifier = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
+
       if (result.Passed) {
         // Passing tests only show at debug level
-        Logger.Debug(LogCategory.Testing, $"[PASS] {result.TestName}");
+        Logger.Debug(LogCategory.Testing, $"[PASS] {testIdentifier}");
       } else {
         // Failing tests show at error level (always visible)
-        Logger.Error(LogCategory.Testing, $"[FAIL] {result.TestName}");
+        Logger.Error(LogCategory.Testing, $"[FAIL] {testIdentifier}");
         if (result.ErrorMessage != null) {
           Logger.Error(LogCategory.Testing, $"  {result.ErrorMessage}");
         }
@@ -205,7 +209,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               TestName = fragment.TestName,
               Passed = false,
               ErrorMessage = "Expected compiler error but compilation succeeded",
-              Duration = sw.Elapsed
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
             };
           }
 
@@ -217,14 +222,16 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               TestName = fragment.TestName,
               Passed = false,
               ErrorMessage = $"Stderr mismatch.\nExpected:\n  {expectedNorm}\nActual:\n  {actualNorm}",
-              Duration = sw.Elapsed
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
             };
           }
 
           return new TestResult {
             TestName = fragment.TestName,
             Passed = true,
-            Duration = sw.Elapsed
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
           };
         }
 
@@ -234,7 +241,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
             TestName = fragment.TestName,
             Passed = false,
             ErrorMessage = $"Compilation failed: {compileError}",
-            Duration = sw.Elapsed
+            Duration = sw.Elapsed,
+            FilePath = fragment.FilePath
           };
         }
 
@@ -250,7 +258,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               TestName = fragment.TestName,
               Passed = false,
               ErrorMessage = "RequiredMLIR specified but compilation failed or produced no IR",
-              Duration = sw.Elapsed
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
             };
           }
 
@@ -260,7 +269,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               TestName = fragment.TestName,
               Passed = false,
               ErrorMessage = $"Required MLIR mismatch: {Message}",
-              Duration = sw.Elapsed
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
             };
           }
         }
@@ -273,7 +283,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               TestName = fragment.TestName,
               Passed = false,
               ErrorMessage = $"Required Rdata mismatch: {rdataMessage}",
-              Duration = sw.Elapsed
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
             };
           }
         }
@@ -287,7 +298,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               TestName = fragment.TestName,
               Passed = false,
               ErrorMessage = $"Expected exit code {successExpectation.ExitCode.Value}, got {ExitCode}",
-              Duration = sw.Elapsed
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
             };
           }
 
@@ -299,7 +311,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
                 TestName = fragment.TestName,
                 Passed = false,
                 ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
-                Duration = sw.Elapsed
+                Duration = sw.Elapsed,
+                FilePath = fragment.FilePath
               };
             }
           }
@@ -308,7 +321,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         return new TestResult {
           TestName = fragment.TestName,
           Passed = true,
-          Duration = sw.Elapsed
+          Duration = sw.Elapsed,
+          FilePath = fragment.FilePath
         };
       } finally {
         // Cleanup temp file if we created one
@@ -321,7 +335,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         TestName = fragment.TestName,
         Passed = false,
         ErrorMessage = $"Exception: {ex.Message}",
-        Duration = sw.Elapsed
+        Duration = sw.Elapsed,
+        FilePath = fragment.FilePath
       };
     }
   }

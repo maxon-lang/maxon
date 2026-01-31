@@ -87,7 +87,7 @@ public static class StandardToX86Conversion {
             break;
 
           case StdConstI64Op constOp:
-            regManager.EmitLoadImmediate(constOp.Result, (int)constOp.Value, x86Block);
+            regManager.EmitLoadImmediate(constOp.Result, constOp.Value, x86Block);
             break;
 
           case StdConstI1Op boolOp:
@@ -141,6 +141,10 @@ public static class StandardToX86Conversion {
 
           case StdFpToSiOp fpToSiOp:
             regManager.EmitCvttSd2Si(fpToSiOp.Input, fpToSiOp.Result, x86Block);
+            break;
+
+          case StdSiToFpOp siToFpOp:
+            regManager.EmitCvtSi2Sd(siToFpOp.Input, siToFpOp.Result, x86Block);
             break;
 
           case StdAbsF64Op absOp: {
@@ -231,8 +235,7 @@ public static class StandardToX86Conversion {
                     x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
                     break;
                   case ComparisonKind.Float:
-                    x86Block.AddOp(new X86JccOp("ne", scopedElse));
-                    x86Block.AddOp(new X86JccOp("p", scopedElse));
+                    EmitFloatCondBranch(lastCmpPredicate!, scopedElse, x86Block);
                     break;
                   default:
                     throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {lastCmpKind}");
@@ -348,8 +351,63 @@ public static class StandardToX86Conversion {
   private static string FloatPredicateToSetcc(string predicate) => predicate switch {
     "eq" => "e",
     "ne" => "ne",
+    "gt" => "a",
+    "ge" => "ae",
+    "lt" => "b",
+    "le" => "be",
     _ => throw new InvalidOperationException($"Unknown float comparison predicate: {predicate}")
   };
+
+  /// <summary>
+  /// Emit conditional branch(es) for a float comparison.
+  /// ucomisd sets CF/ZF/PF flags. We jump to elseLabel when the condition is FALSE.
+  /// For ordered comparisons, unordered (NaN) falls through to else.
+  /// </summary>
+  private static void EmitFloatCondBranch(string predicate, string elseLabel, MlirBlock<X86Op> block) {
+    // ucomisd(A, B) flag results:
+    //   A > B:  ZF=0, PF=0, CF=0
+    //   A < B:  ZF=0, PF=0, CF=1
+    //   A == B: ZF=1, PF=0, CF=0
+    //   NaN:    ZF=1, PF=1, CF=1
+    switch (predicate) {
+      case "eq":
+        // false when ZF=0 or PF=1
+        block.AddOp(new X86JccOp("ne", elseLabel));
+        block.AddOp(new X86JccOp("p", elseLabel));
+        break;
+      case "ne":
+        // true when ZF=0 or PF=1; false when ZF=1 and PF=0
+        // Jump to else when ZF=1 and PF=0 — use jp to skip the je
+        // Actually: ne is true except when exactly equal (ZF=1, PF=0)
+        // So jump to else only when e and np. Use: jp over, je else, over:
+        // Simpler: use "e" to jump to else (this treats NaN as not-equal, which is correct)
+        block.AddOp(new X86JccOp("e", elseLabel));
+        break;
+      case "gt":
+        // A > B: CF=0, ZF=0 → use "a" (above). False when CF=1 or ZF=1 → "be"
+        block.AddOp(new X86JccOp("be", elseLabel));
+        break;
+      case "ge":
+        // A >= B: CF=0 → use "ae". False when CF=1 → "b"
+        block.AddOp(new X86JccOp("b", elseLabel));
+        break;
+      case "lt":
+        // A < B: CF=1 → use "b". False when CF=0 → "ae". Also false on NaN (PF=1, CF=1 but that's "below")
+        // Actually for unordered: CF=1, so NaN would look like "less than" — wrong.
+        // For proper NaN handling: jump if PF=1 (unordered) OR CF=0
+        block.AddOp(new X86JccOp("p", elseLabel));
+        block.AddOp(new X86JccOp("ae", elseLabel));
+        break;
+      case "le":
+        // A <= B: CF=1 or ZF=1. False when CF=0 and ZF=0 → "a"
+        // But NaN gives CF=1, ZF=1, PF=1 which looks like "be" — wrong.
+        block.AddOp(new X86JccOp("p", elseLabel));
+        block.AddOp(new X86JccOp("a", elseLabel));
+        break;
+      default:
+        throw new InvalidOperationException($"Unknown float comparison predicate for branch: {predicate}");
+    }
+  }
 
   private static string GetOrCreateFloatLabel(double value, MlirModule<X86Op> module, Dictionary<double, string> floatConstants) {
     if (!floatConstants.TryGetValue(value, out var label)) {

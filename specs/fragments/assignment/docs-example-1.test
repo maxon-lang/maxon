@@ -1,0 +1,28 @@
+// Test: docs-example-1
+function main() returns int
+  var x = 10
+  x = 20          // Update x
+  x = x + 5       // x is now 25
+  return x
+end 'main'
+
+---
+ExitCode: 25
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 20
+    x86.mov [rbp-8], ecx
+    x86.mov edx, 5
+    x86.add ecx, edx
+    x86.mov [rbp-8], ecx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

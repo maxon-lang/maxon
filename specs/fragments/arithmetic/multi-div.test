@@ -1,0 +1,51 @@
+// Test: multi-div
+function multiDiv(a int, b int, c int, d int) returns int
+  var r1 = a / b
+  var r2 = c / d
+  return r1 + r2
+end 'multiDiv'
+
+function main() returns int
+  return multiDiv(10, b: 2, c: 20, d: 4)
+end 'main'
+---
+ExitCode: 10
+---
+module {
+  func @multiDiv(a: i64, b: i64, c: i64, d: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], r9
+    x86.mov ebx, edx
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov [rbp-40], eax
+    x86.mov eax, r8
+    x86.cqo
+    x86.idiv r9
+    x86.mov [rbp-48], eax
+    x86.mov ecx, [rbp-40]
+    x86.add ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 10
+    x86.mov ecx, 2
+    x86.mov edx, 20
+    x86.mov ebx, 4
+    x86.mov r8, edx
+    x86.mov r9, ebx
+    x86.mov edx, ecx
+    x86.mov ecx, eax
+    x86.call multiDiv
+    x86.ret
+  }
+}
+---

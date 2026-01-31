@@ -72,6 +72,7 @@ public class TestResult {
   public required bool Passed { get; init; }
   public string? ErrorMessage { get; init; }
   public TimeSpan Duration { get; init; }
+  public required string FilePath { get; init; }
 }
 
 /// <summary>

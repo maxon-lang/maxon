@@ -1,0 +1,46 @@
+// Test: mod-live-values
+function modLive(a int, b int, x int) returns int
+  var preserved = x + 1
+  var result = a mod b
+  return result + preserved
+end 'modLive'
+
+function main() returns int
+  return modLive(10, b: 3, x: 5)
+end 'main'
+---
+ExitCode: 7
+---
+module {
+  func @modLive(a: i64, b: i64, x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov eax, 1
+    x86.add r8, eax
+    x86.mov [rbp-32], r8
+    x86.mov ebx, edx
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov [rbp-40], edx
+    x86.add edx, r8
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 10
+    x86.mov ecx, 3
+    x86.mov edx, 5
+    x86.mov r8, edx
+    x86.mov edx, ecx
+    x86.mov ecx, eax
+    x86.call modLive
+    x86.ret
+  }
+}
+---

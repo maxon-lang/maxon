@@ -1,0 +1,20 @@
+// Test: float
+function main() returns int
+  var x = 3.14
+  return trunc(x)
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.movsd [rbp-8], xmm0
+    x86.cvttsd2si eax, xmm0
+    x86.epilogue
+    x86.ret
+  }
+}
+---
