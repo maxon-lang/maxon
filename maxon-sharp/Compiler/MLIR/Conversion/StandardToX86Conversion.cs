@@ -24,19 +24,16 @@ public static class StandardToX86Conversion {
 
 		// Pre-scan: calculate stack frame from store ops
 		var varOffsets = new Dictionary<string, int>();
-		int stackSize = 0;
+		int varStackSize = 0;
 		foreach (var block in func.Body.Blocks) {
 			foreach (var op in block.Operations) {
 				if (op is not IStoreOp store) continue;
 				if (!varOffsets.ContainsKey(store.VarName)) {
-					stackSize += store.StoredType.SizeInBytes;
-					varOffsets[store.VarName] = -stackSize;
+					varStackSize += store.StoredType.SizeInBytes;
+					varOffsets[store.VarName] = -varStackSize;
 				}
 			}
 		}
-		// Align to 16 bytes
-		if (stackSize > 0)
-			stackSize = (stackSize + 15) & ~15;
 
 		// Pre-scan: compute last use index for each StdValue (for dead-value freeing)
 		var lastUseOfValue = new Dictionary<StdValue, int>();
@@ -58,6 +55,7 @@ public static class StandardToX86Conversion {
 		string? lastCmpPredicate = null;
 
 		var regManager = new RegisterManager();
+		regManager.SetSpillBaseOffset(-varStackSize);
 		var sourceBlocks = func.Body.Blocks.ToList();
 		int currentOpIndex = 0;
 
@@ -66,14 +64,6 @@ public static class StandardToX86Conversion {
 			var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
 			regManager.Reset();
-
-			// Prologue only in entry block
-			if (blockIdx == 0) {
-				x86Block.AddOp(new X86PushRegOp(X86Register.Rbp));
-				x86Block.AddOp(new X86MovRegRegOp(X86Register.Rbp, X86Register.Rsp));
-				if (stackSize > 0)
-					x86Block.AddOp(new X86SubRegImmOp(X86Register.Rsp, stackSize));
-			}
 
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
@@ -173,8 +163,7 @@ public static class StandardToX86Conversion {
 					case StdReturnOp retOp: {
 							if (retOp.ReturnValue != null)
 								regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
-							if (stackSize > 0)
-								x86Block.AddOp(new X86AddRegImmOp(X86Register.Rsp, stackSize));
+							// Epilogue stack teardown is inserted below
 							x86Block.AddOp(new X86PopRegOp(X86Register.Rbp));
 							x86Block.AddOp(new X86RetOp());
 							break;
@@ -188,6 +177,31 @@ public static class StandardToX86Conversion {
 				FreeDeadValues(regManager, lastUseOfValue, currentOpIndex, op.ReadValues);
 				regManager.AdvanceOp();
 				currentOpIndex++;
+			}
+		}
+
+		// Insert prologue and epilogue stack adjustments now that the final
+		// stack size (variables + spill slots) is known.
+		int stackSize = regManager.TotalStackSize;
+		var entryBlock = newFunc.Body.Blocks.First();
+		int prologueInsertCount = 0;
+		entryBlock.Operations.Insert(prologueInsertCount++, new X86PushRegOp(X86Register.Rbp));
+		entryBlock.Operations.Insert(prologueInsertCount++, new X86MovRegRegOp(X86Register.Rbp, X86Register.Rsp));
+		if (stackSize > 0)
+			entryBlock.Operations.Insert(prologueInsertCount, new X86SubRegImmOp(X86Register.Rsp, stackSize));
+
+		if (stackSize > 0) {
+			foreach (var block in newFunc.Body.Blocks) {
+				for (int i = 0; i < block.Operations.Count; i++) {
+					// Insert `add rsp` before each `pop rbp` that precedes a `ret`
+					if (block.Operations[i] is X86PopRegOp popOp
+						&& popOp.Register == X86Register.Rbp
+						&& i + 1 < block.Operations.Count
+						&& block.Operations[i + 1] is X86RetOp) {
+						block.Operations.Insert(i, new X86AddRegImmOp(X86Register.Rsp, stackSize));
+						i++; // skip past the inserted op
+					}
+				}
 			}
 		}
 

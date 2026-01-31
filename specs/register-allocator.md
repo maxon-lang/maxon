@@ -611,20 +611,20 @@ module {
     x86.mov [rbp-72], eax
     x86.mov ecx, 10
     x86.mov [rbp-80], ecx
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.add edx, ebx
-    x86.mov ebx, [rbp-24]
-    x86.add edx, ebx
-    x86.mov ebx, [rbp-32]
-    x86.add edx, ebx
-    x86.add edx, esi
-    x86.add edx, edi
-    x86.add edx, r8
-    x86.add edx, r9
-    x86.add edx, eax
-    x86.add edx, ecx
-    x86.mov eax, edx
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, [rbp-8]
+    x86.add ebx, edx
+    x86.mov edx, [rbp-24]
+    x86.add ebx, edx
+    x86.mov edx, [rbp-32]
+    x86.add ebx, edx
+    x86.add ebx, esi
+    x86.add ebx, edi
+    x86.add ebx, r8
+    x86.add ebx, r9
+    x86.add ebx, eax
+    x86.add ebx, ecx
+    x86.mov eax, ebx
     x86.add rsp, 80
     x86.pop rbp
     x86.ret
@@ -809,34 +809,36 @@ module {
     x86.mov [rbp-120], r8
     x86.mov r9, 16
     x86.mov [rbp-128], r9
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-16]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-24]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-32]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-40]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-48]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-56]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-64]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-72]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-80]
-    x86.add eax, ecx
-    x86.add eax, edx
-    x86.add eax, ebx
-    x86.add eax, esi
-    x86.add eax, edi
-    x86.add eax, r8
-    x86.add eax, r9
-    x86.mov ecx, 256
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-24]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-32]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-40]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-48]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-56]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-64]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-72]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-80]
+    x86.add ecx, eax
+    x86.add ecx, edx
+    x86.add ecx, ebx
+    x86.add ecx, esi
+    x86.add ecx, edi
+    x86.add ecx, r8
+    x86.add ecx, r9
+    x86.mov eax, 256
+    x86.mov ebx, eax
+    x86.mov eax, ecx
     x86.cqo
-    x86.idiv ecx
+    x86.idiv ebx
     x86.mov eax, edx
     x86.add rsp, 128
     x86.pop rbp
@@ -1058,42 +1060,42 @@ module {
     x86.mov [rbp-152], edx
     x86.mov ebx, 20
     x86.mov [rbp-160], ebx
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-16]
-    x86.add esi, edi
-    x86.mov edi, [rbp-24]
-    x86.add esi, edi
-    x86.mov edi, [rbp-32]
-    x86.add esi, edi
-    x86.mov edi, [rbp-40]
-    x86.add esi, edi
-    x86.mov edi, [rbp-48]
-    x86.add esi, edi
-    x86.mov edi, [rbp-56]
-    x86.add esi, edi
-    x86.mov edi, [rbp-64]
-    x86.add esi, edi
-    x86.mov edi, [rbp-72]
-    x86.add esi, edi
-    x86.mov edi, [rbp-80]
-    x86.add esi, edi
-    x86.mov edi, [rbp-88]
-    x86.add esi, edi
-    x86.mov edi, [rbp-96]
-    x86.add esi, edi
-    x86.mov edi, [rbp-104]
-    x86.add esi, edi
-    x86.mov edi, [rbp-112]
-    x86.add esi, edi
-    x86.add esi, r8
-    x86.add esi, r9
-    x86.add esi, eax
-    x86.add esi, ecx
-    x86.add esi, edx
-    x86.add esi, ebx
+    x86.mov esi, [rbp-16]
+    x86.mov edi, [rbp-8]
+    x86.add edi, esi
+    x86.mov esi, [rbp-24]
+    x86.add edi, esi
+    x86.mov esi, [rbp-32]
+    x86.add edi, esi
+    x86.mov esi, [rbp-40]
+    x86.add edi, esi
+    x86.mov esi, [rbp-48]
+    x86.add edi, esi
+    x86.mov esi, [rbp-56]
+    x86.add edi, esi
+    x86.mov esi, [rbp-64]
+    x86.add edi, esi
+    x86.mov esi, [rbp-72]
+    x86.add edi, esi
+    x86.mov esi, [rbp-80]
+    x86.add edi, esi
+    x86.mov esi, [rbp-88]
+    x86.add edi, esi
+    x86.mov esi, [rbp-96]
+    x86.add edi, esi
+    x86.mov esi, [rbp-104]
+    x86.add edi, esi
+    x86.mov esi, [rbp-112]
+    x86.add edi, esi
+    x86.add edi, r8
+    x86.add edi, r9
+    x86.add edi, eax
+    x86.add edi, ecx
+    x86.add edi, edx
+    x86.add edi, ebx
     x86.mov eax, 256
     x86.mov ecx, eax
-    x86.mov eax, esi
+    x86.mov eax, edi
     x86.cqo
     x86.idiv ecx
     x86.mov eax, edx
@@ -1538,13 +1540,13 @@ module {
     x86.mov [rbp-24], ecx
     x86.call getTwo
     x86.mov [rbp-32], eax
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.add edx, ebx
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, [rbp-8]
+    x86.add ebx, edx
     x86.mov esi, [rbp-24]
-    x86.add edx, esi
-    x86.add edx, eax
-    x86.mov eax, edx
+    x86.add ebx, esi
+    x86.add ebx, eax
+    x86.mov eax, ebx
     x86.add rsp, 32
     x86.pop rbp
     x86.ret
@@ -3334,7 +3336,7 @@ module {
 }
 ```
 
-<!-- test: disabled-int-nine-params-function -->
+<!-- test: int-nine-params-function -->
 ```maxon
 function sum9(a int, b int, c int, d int, e int, f int, g int, h int, i int) returns int
     return a + b + c + d + e + f + g + h + i
@@ -3348,7 +3350,143 @@ end 'main'
 45
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
+    %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
+    %4 = maxon.param {index = 4 : i32} {name = e} {type = i64}
+    %5 = maxon.param {index = 5 : i32} {name = f} {type = i64}
+    %6 = maxon.param {index = 6 : i32} {name = g} {type = i64}
+    %7 = maxon.param {index = 7 : i32} {name = h} {type = i64}
+    %8 = maxon.param {index = 8 : i32} {name = i} {type = i64}
+    %9 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %10 = maxon.binop %9, %2 {op = add} {kind = i64}
+    %11 = maxon.binop %10, %3 {op = add} {kind = i64}
+    %12 = maxon.binop %11, %4 {op = add} {kind = i64}
+    %13 = maxon.binop %12, %5 {op = add} {kind = i64}
+    %14 = maxon.binop %13, %6 {op = add} {kind = i64}
+    %15 = maxon.binop %14, %7 {op = add} {kind = i64}
+    %16 = maxon.binop %15, %8 {op = add} {kind = i64}
+    maxon.return %16
+  }
+  func @main() -> i64 {
+  entry:
+    %17 = maxon.literal {value = 1 : i64}
+    %18 = maxon.literal {value = 2 : i64}
+    %19 = maxon.literal {value = 3 : i64}
+    %20 = maxon.literal {value = 4 : i64}
+    %21 = maxon.literal {value = 5 : i64}
+    %22 = maxon.literal {value = 6 : i64}
+    %23 = maxon.literal {value = 7 : i64}
+    %24 = maxon.literal {value = 8 : i64}
+    %25 = maxon.literal {value = 9 : i64}
+    %26 = maxon.call @sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
+    maxon.return %26
+  }
+}
+=== standard
+module {
+  func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  entry:
+    %27 = func.param a : StdI64
+    %28 = func.param b : StdI64
+    %29 = func.param c : StdI64
+    %30 = func.param d : StdI64
+    %31 = func.param e : StdI64
+    %32 = func.param f : StdI64
+    %33 = func.param g : StdI64
+    %34 = func.param h : StdI64
+    %35 = func.param i : StdI64
+    %36 = arith.addi %27, %28
+    %37 = arith.addi %36, %29
+    %38 = arith.addi %37, %30
+    %39 = arith.addi %38, %31
+    %40 = arith.addi %39, %32
+    %41 = arith.addi %40, %33
+    %42 = arith.addi %41, %34
+    %43 = arith.addi %42, %35
+    func.return %43
+  }
+  func @main() -> i64 {
+  entry:
+    %44 = arith.constant {value = 1 : i64}
+    %45 = arith.constant {value = 2 : i64}
+    %46 = arith.constant {value = 3 : i64}
+    %47 = arith.constant {value = 4 : i64}
+    %48 = arith.constant {value = 5 : i64}
+    %49 = arith.constant {value = 6 : i64}
+    %50 = arith.constant {value = 7 : i64}
+    %51 = arith.constant {value = 8 : i64}
+    %52 = arith.constant {value = 9 : i64}
+    %53 = func.call @sum9 %44, %45, %46, %47, %48, %49, %50, %51, %52
+    func.return %53
+  }
+}
+=== x86
+module {
+  func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, [rbp+16]
+    x86.mov ebx, [rbp+24]
+    x86.mov esi, [rbp+32]
+    x86.mov edi, [rbp+40]
+    x86.mov [rbp-8], ecx
+    x86.mov ecx, [rbp+48]
+    x86.mov [rbp-16], r8
+    x86.mov r8, [rbp-8]
+    x86.add r8, edx
+    x86.mov edx, [rbp-16]
+    x86.add r8, edx
+    x86.add r8, r9
+    x86.add r8, eax
+    x86.add r8, ebx
+    x86.add r8, esi
+    x86.add r8, edi
+    x86.add r8, ecx
+    x86.mov eax, r8
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.mov edx, 3
+    x86.mov ebx, 4
+    x86.mov esi, 5
+    x86.mov edi, 6
+    x86.mov r8, 7
+    x86.mov r9, 8
+    x86.mov [rbp-8], eax
+    x86.mov eax, 9
+    x86.sub rsp, 48
+    x86.mov [rsp+0], esi
+    x86.mov [rsp+8], edi
+    x86.mov [rsp+16], r8
+    x86.mov [rsp+24], r9
+    x86.mov [rsp+32], eax
+    x86.mov r8, edx
+    x86.mov r9, ebx
+    x86.mov edx, ecx
+    x86.mov ecx, [rbp-8]
+    x86.call sum9
+    x86.add rsp, 48
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-recursive-factorial -->
