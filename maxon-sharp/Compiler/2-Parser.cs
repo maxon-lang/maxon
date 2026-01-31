@@ -14,12 +14,12 @@ public class Parser(List<Token> tokens) {
 	private readonly Dictionary<string, VarInfo> _variables = [];
 	private int _blockCounter;
 
-	private static readonly Dictionary<TokenType, MaxonBinOperator> BinaryOperators = new() {
-		{ TokenType.Plus, MaxonBinOperator.Add },
-		{ TokenType.Minus, MaxonBinOperator.Sub },
-		{ TokenType.Star, MaxonBinOperator.Mul },
-		{ TokenType.Slash, MaxonBinOperator.Div },
-		{ TokenType.Mod, MaxonBinOperator.Mod },
+	private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
+		{ TokenType.Plus, (MaxonBinOperator.Add, 1) },
+		{ TokenType.Minus, (MaxonBinOperator.Sub, 1) },
+		{ TokenType.Star, (MaxonBinOperator.Mul, 2) },
+		{ TokenType.Slash, (MaxonBinOperator.Div, 2) },
+		{ TokenType.Mod, (MaxonBinOperator.Mod, 2) },
 	};
 
 	private static readonly Dictionary<TokenType, MaxonBinOperator> ComparisonOperators = new() {
@@ -365,18 +365,18 @@ public class Parser(List<Token> tokens) {
 		return lhs;
 	}
 
-	private ExprResult ParseExpression() {
+	private ExprResult ParseExpression(int minPrecedence = 0) {
 		var lhs = ParsePrimary();
 
-		while (BinaryOperators.TryGetValue(Current().Type, out var binOperator)) {
+		while (BinaryOperators.TryGetValue(Current().Type, out var entry) && entry.Precedence >= minPrecedence) {
 			Advance(); // consume operator
-			var rhs = ParsePrimary();
+			var rhs = ParseExpression(entry.Precedence + 1);
 
 			MaxonValue lhsVal = ResolveExprValue(lhs);
 			MaxonValue rhsVal = ResolveExprValue(rhs);
 			var kind = DetermineValueKind(lhsVal, rhsVal);
 
-			var binOp = new MaxonBinOp(binOperator, lhsVal, rhsVal, kind);
+			var binOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, kind);
 			_currentBlock!.AddOp(binOp);
 			lhs = new ExprResult.Direct(binOp.Result);
 		}
