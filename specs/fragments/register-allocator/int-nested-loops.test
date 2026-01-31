@@ -1,0 +1,205 @@
+// Test: int-nested-loops
+function main() returns int
+    var total = 0
+    var i = 0
+    while i < 5 'outer'
+        var j = 0
+        while j < 4 'inner'
+            total = total + 1
+            j = j + 1
+        end 'inner'
+        i = i + 1
+    end 'outer'
+    return total
+end 'main'
+---
+ExitCode: 20
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br outer_0.header
+  outer_0.header:
+    %2 = maxon.literal {value = 5 : i64}
+    %3 = maxon.var_ref {var = i} {type = i64}
+    %4 = maxon.binop %3, %2 {op = lt} {kind = i64}
+    maxon.cond_br %4 [then: outer_0, else: outer_0.exit]
+  outer_0:
+    %5 = maxon.literal {value = 0 : i64}
+    maxon.assign %5 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br inner_1.header
+  inner_1.header:
+    %6 = maxon.literal {value = 4 : i64}
+    %7 = maxon.var_ref {var = j} {type = i64}
+    %8 = maxon.binop %7, %6 {op = lt} {kind = i64}
+    maxon.cond_br %8 [then: inner_1, else: inner_1.exit]
+  inner_1:
+    %9 = maxon.literal {value = 1 : i64}
+    %10 = maxon.var_ref {var = total} {type = i64}
+    %11 = maxon.binop %10, %9 {op = add} {kind = i64}
+    maxon.assign %11 {var = total} {kind = i64} {mut = 1 : i1}
+    %12 = maxon.literal {value = 1 : i64}
+    %13 = maxon.var_ref {var = j} {type = i64}
+    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
+    maxon.br inner_1.header
+  inner_1.exit:
+    %15 = maxon.literal {value = 1 : i64}
+    %16 = maxon.var_ref {var = i} {type = i64}
+    %17 = maxon.binop %16, %15 {op = add} {kind = i64}
+    maxon.assign %17 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br outer_0.header
+  outer_0.exit:
+    %18 = maxon.var_ref {var = total} {type = i64}
+    maxon.return %18
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %19 = arith.constant {value = 0 : i64}
+    memref.store %19, total
+    %20 = arith.constant {value = 0 : i64}
+    memref.store %20, i
+    cf.br outer_0.header
+  outer_0.header:
+    %21 = arith.constant {value = 5 : i64}
+    %22 = memref.load i : i64
+    %23 = arith.cmpi lt %22, %21
+    cf.cond_br %23 [then: outer_0, else: outer_0.exit]
+  outer_0:
+    %24 = arith.constant {value = 0 : i64}
+    memref.store %24, j
+    cf.br inner_1.header
+  inner_1.header:
+    %25 = arith.constant {value = 4 : i64}
+    %26 = memref.load j : i64
+    %27 = arith.cmpi lt %26, %25
+    cf.cond_br %27 [then: inner_1, else: inner_1.exit]
+  inner_1:
+    %28 = arith.constant {value = 1 : i64}
+    %29 = memref.load total : i64
+    %30 = arith.addi %29, %28
+    memref.store %30, total
+    %31 = arith.constant {value = 1 : i64}
+    %32 = memref.load j : i64
+    %33 = arith.addi %32, %31
+    memref.store %33, j
+    cf.br inner_1.header
+  inner_1.exit:
+    %34 = arith.constant {value = 1 : i64}
+    %35 = memref.load i : i64
+    %36 = arith.addi %35, %34
+    memref.store %36, i
+    cf.br outer_0.header
+  outer_0.exit:
+    %37 = memref.load total : i64
+    func.return %37
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 0
+    x86.mov [rbp-16], ecx
+    x86.jmp main.outer_0.header
+  outer_0.header:
+    x86.mov eax, 5
+    x86.mov ecx, [rbp-16]
+    x86.cmp ecx, eax
+    x86.jge main.outer_0.exit
+  outer_0:
+    x86.mov eax, 0
+    x86.mov [rbp-24], eax
+    x86.jmp main.inner_1.header
+  inner_1.header:
+    x86.mov eax, 4
+    x86.mov ecx, [rbp-24]
+    x86.cmp ecx, eax
+    x86.jge main.inner_1.exit
+  inner_1:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, edx
+    x86.mov [rbp-24], ebx
+    x86.jmp main.inner_1.header
+  inner_1.exit:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.outer_0.header
+  outer_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 0
+    x86.mov [rbp-16], ecx
+    x86.jmp main.outer_0.header
+  outer_0.header:
+    x86.mov eax, 5
+    x86.mov ecx, [rbp-16]
+    x86.cmp ecx, eax
+    x86.jge main.outer_0.exit
+  outer_0:
+    x86.mov eax, 0
+    x86.mov [rbp-24], eax
+    x86.jmp main.inner_1.header
+  inner_1.header:
+    x86.mov eax, 4
+    x86.mov ecx, [rbp-24]
+    x86.cmp ecx, eax
+    x86.jge main.inner_1.exit
+  inner_1:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, edx
+    x86.mov [rbp-24], ebx
+    x86.jmp main.inner_1.header
+  inner_1.exit:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.outer_0.header
+  outer_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+---
