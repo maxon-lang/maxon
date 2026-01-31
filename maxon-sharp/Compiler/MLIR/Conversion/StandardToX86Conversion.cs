@@ -154,6 +154,7 @@ public static class StandardToX86Conversion {
 									x86Block.AddOp(new X86JccOp("p", scopedElse));
 									break;
 								default:
+									// this is defensive in case a new ComparisonKind is added in the future
 									throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {cmpKind}");
 							}
 							lastCmpKind = null;

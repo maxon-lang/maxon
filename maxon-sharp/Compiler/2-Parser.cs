@@ -326,8 +326,9 @@ public class Parser(List<Token> tokens) {
 		ExpectEndLabel(loopSourceLabel);
 
 		// At end of body, branch back to header
-		if (!BlockEndsWithTerminator(bodyBlock)) {
-			bodyBlock.AddOp(new MaxonBrOp(headerLabel));
+		// _currentBlock may differ from bodyBlock (e.g. if/else merge block)
+		if (!BlockEndsWithTerminator(_currentBlock!)) {
+			_currentBlock!.AddOp(new MaxonBrOp(headerLabel));
 		}
 
 		// Create exit block - this is where execution continues after the loop

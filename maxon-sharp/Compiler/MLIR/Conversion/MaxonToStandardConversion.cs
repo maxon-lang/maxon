@@ -38,7 +38,10 @@ public static class MaxonToStandardConversion {
 											valueMap[litOp.Result] = newOp.Result;
 											break;
 										}
+									case MaxonValueKind.Bool:
+										throw new InvalidOperationException("Bool literals not yet supported in MaxonToStandard conversion");
 									default:
+										// this is defensive in case new kinds are added in the future
 										throw new InvalidOperationException($"Unsupported MaxonLiteralOp kind: {litOp.ValueKind}");
 								}
 								break;

@@ -1,0 +1,274 @@
+// Test: int-while-loop-multiple-accumulators
+function main() returns int
+    var even_sum = 0
+    var odd_sum = 0
+    var count = 0
+    var i = 0
+    while i < 20 'loop'
+        if i mod 2 == 0 'even'
+            even_sum = even_sum + i
+            count = count + 1
+        end 'even' else 'odd'
+            odd_sum = odd_sum + i
+        end 'odd'
+        i = i + 1
+    end 'loop'
+    return (even_sum + odd_sum + count) mod 256
+end 'main'
+---
+ExitCode: 200
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = even_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = odd_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    maxon.assign %2 {var = count} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    maxon.assign %3 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.header:
+    %4 = maxon.literal {value = 20 : i64}
+    %5 = maxon.var_ref {var = i} {type = i64}
+    %6 = maxon.binop %5, %4 {op = lt} {kind = i64}
+    maxon.cond_br %6 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %7 = maxon.literal {value = 2 : i64}
+    %8 = maxon.var_ref {var = i} {type = i64}
+    %9 = maxon.binop %8, %7 {op = mod} {kind = i64}
+    %10 = maxon.literal {value = 0 : i64}
+    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
+    maxon.cond_br %11 [then: even_1, else: odd_2]
+  even_1:
+    %12 = maxon.var_ref {var = even_sum} {type = i64}
+    %13 = maxon.var_ref {var = i} {type = i64}
+    %14 = maxon.binop %12, %13 {op = add} {kind = i64}
+    maxon.assign %14 {var = even_sum} {kind = i64} {mut = 1 : i1}
+    %15 = maxon.literal {value = 1 : i64}
+    %16 = maxon.var_ref {var = count} {type = i64}
+    %17 = maxon.binop %16, %15 {op = add} {kind = i64}
+    maxon.assign %17 {var = count} {kind = i64} {mut = 1 : i1}
+    maxon.br even_1.merge
+  odd_2:
+    %18 = maxon.var_ref {var = odd_sum} {type = i64}
+    %19 = maxon.var_ref {var = i} {type = i64}
+    %20 = maxon.binop %18, %19 {op = add} {kind = i64}
+    maxon.assign %20 {var = odd_sum} {kind = i64} {mut = 1 : i1}
+    maxon.br even_1.merge
+  even_1.merge:
+    %21 = maxon.literal {value = 1 : i64}
+    %22 = maxon.var_ref {var = i} {type = i64}
+    %23 = maxon.binop %22, %21 {op = add} {kind = i64}
+    maxon.assign %23 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.exit:
+    %24 = maxon.var_ref {var = even_sum} {type = i64}
+    %25 = maxon.var_ref {var = odd_sum} {type = i64}
+    %26 = maxon.binop %24, %25 {op = add} {kind = i64}
+    %27 = maxon.var_ref {var = count} {type = i64}
+    %28 = maxon.binop %26, %27 {op = add} {kind = i64}
+    %29 = maxon.literal {value = 256 : i64}
+    %30 = maxon.binop %28, %29 {op = mod} {kind = i64}
+    maxon.return %30
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %31 = arith.constant {value = 0 : i64}
+    memref.store %31, even_sum
+    %32 = arith.constant {value = 0 : i64}
+    memref.store %32, odd_sum
+    %33 = arith.constant {value = 0 : i64}
+    memref.store %33, count
+    %34 = arith.constant {value = 0 : i64}
+    memref.store %34, i
+    cf.br loop_0.header
+  loop_0.header:
+    %35 = arith.constant {value = 20 : i64}
+    %36 = memref.load i : i64
+    %37 = arith.cmpi lt %36, %35
+    cf.cond_br %37 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %38 = arith.constant {value = 2 : i64}
+    %39 = memref.load i : i64
+    %40 = arith.remsi %39, %38
+    %41 = arith.constant {value = 0 : i64}
+    %42 = arith.cmpi eq %40, %41
+    cf.cond_br %42 [then: even_1, else: odd_2]
+  even_1:
+    %43 = memref.load even_sum : i64
+    %44 = memref.load i : i64
+    %45 = arith.addi %43, %44
+    memref.store %45, even_sum
+    %46 = arith.constant {value = 1 : i64}
+    %47 = memref.load count : i64
+    %48 = arith.addi %47, %46
+    memref.store %48, count
+    cf.br even_1.merge
+  odd_2:
+    %49 = memref.load odd_sum : i64
+    %50 = memref.load i : i64
+    %51 = arith.addi %49, %50
+    memref.store %51, odd_sum
+    cf.br even_1.merge
+  even_1.merge:
+    %52 = arith.constant {value = 1 : i64}
+    %53 = memref.load i : i64
+    %54 = arith.addi %53, %52
+    memref.store %54, i
+    cf.br loop_0.header
+  loop_0.exit:
+    %55 = memref.load even_sum : i64
+    %56 = memref.load odd_sum : i64
+    %57 = arith.addi %55, %56
+    %58 = memref.load count : i64
+    %59 = arith.addi %57, %58
+    %60 = arith.constant {value = 256 : i64}
+    %61 = arith.remsi %59, %60
+    func.return %61
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 0
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 0
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 0
+    x86.mov [rbp-32], ebx
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-32]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
+  loop_0:
+    x86.mov eax, 2
+    x86.mov ecx, [rbp-32]
+    x86.mov ebx, eax
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov eax, 0
+    x86.cmp edx, eax
+    x86.jne main.odd_2
+  even_1:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-32]
+    x86.add eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, edx
+    x86.mov [rbp-24], ebx
+    x86.jmp main.even_1.merge
+  odd_2:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-32]
+    x86.add eax, ecx
+    x86.mov [rbp-16], eax
+    x86.jmp main.even_1.merge
+  even_1.merge:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-32]
+    x86.add ecx, eax
+    x86.mov [rbp-32], ecx
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-24]
+    x86.add eax, edx
+    x86.mov ebx, 256
+    x86.cqo
+    x86.idiv ebx
+    x86.mov eax, edx
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 32
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 0
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 0
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 0
+    x86.mov [rbp-32], ebx
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-32]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
+  loop_0:
+    x86.mov eax, 2
+    x86.mov ecx, [rbp-32]
+    x86.mov ebx, eax
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov eax, 0
+    x86.cmp edx, eax
+    x86.jne main.odd_2
+  even_1:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-32]
+    x86.add eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, edx
+    x86.mov [rbp-24], ebx
+    x86.jmp main.even_1.merge
+  odd_2:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-32]
+    x86.add eax, ecx
+    x86.mov [rbp-16], eax
+    x86.jmp main.even_1.merge
+  even_1.merge:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-32]
+    x86.add ecx, eax
+    x86.mov [rbp-32], ecx
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-24]
+    x86.add eax, edx
+    x86.mov ebx, 256
+    x86.cqo
+    x86.idiv ebx
+    x86.mov eax, edx
+    x86.add rsp, 32
+    x86.pop rbp
+    x86.ret
+  }
+}
+---
