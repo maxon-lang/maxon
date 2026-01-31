@@ -150,6 +150,18 @@ public class X86SubSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
 	public override string Mnemonic => $"x86.subsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
+public class X86MulSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public X86XmmRegister Src { get; } = src;
+	public override string Mnemonic => $"x86.mulsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
+public class X86DivSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public X86XmmRegister Src { get; } = src;
+	public override string Mnemonic => $"x86.divsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
 public class X86CvttSd2SiOp(X86Register dest, X86XmmRegister src) : X86Op {
 	public X86Register Dest { get; } = dest;
 	public X86XmmRegister Src { get; } = src;
@@ -160,6 +172,31 @@ public class X86AndpdRipRelOp(X86XmmRegister dest, string rdataLabel) : X86Op {
 	public X86XmmRegister Dest { get; } = dest;
 	public string RdataLabel { get; } = rdataLabel;
 	public override string Mnemonic => $"x86.andpd {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
+}
+
+public class X86SqrtSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public X86XmmRegister Src { get; } = src;
+	public override string Mnemonic => $"x86.sqrtsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
+public class X86RoundSdOp(X86XmmRegister dest, X86XmmRegister src, byte mode) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public X86XmmRegister Src { get; } = src;
+	public byte Mode { get; } = mode;
+	public override string Mnemonic => $"x86.roundsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}, {Mode}";
+}
+
+public class X86MinSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public X86XmmRegister Src { get; } = src;
+	public override string Mnemonic => $"x86.minsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
+public class X86MaxSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public X86XmmRegister Src { get; } = src;
+	public override string Mnemonic => $"x86.maxsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
 public class X86CmpRegRegOp(X86Register lhs, X86Register rhs) : X86Op {

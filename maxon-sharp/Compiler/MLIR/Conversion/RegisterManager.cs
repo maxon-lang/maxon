@@ -312,6 +312,17 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Emit a unary XMM operation where the instruction reads src and writes dest
+	/// independently (e.g. sqrtsd, roundsd). No preliminary copy needed.
+	/// </summary>
+	public void EmitXmmUnaryRegReg(StdValue input, StdValue result, MlirBlock<X86Op> block,
+		Func<X86XmmRegister, X86XmmRegister, X86Op> makeOp) {
+		var srcXmm = EnsureInXmmRegister(input, block);
+		var resultXmm = AllocateXmmRegister(result);
+		block.AddOp(makeOp(resultXmm, srcXmm));
+	}
+
+	/// <summary>
 	/// Emit absf64: clear sign bit via ANDPD with rdata mask.
 	/// </summary>
 	public void EmitAbsF64(StdValue input, StdValue result, string maskLabel, MlirBlock<X86Op> block) {

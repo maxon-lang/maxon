@@ -158,11 +158,29 @@ public class X86CodeEmitter {
 			case X86SubSdOp subsd:
 				EmitSubSd(subsd.Dest, subsd.Src);
 				break;
+			case X86MulSdOp mulsd:
+				EmitMulSd(mulsd.Dest, mulsd.Src);
+				break;
+			case X86DivSdOp divsd:
+				EmitDivSd(divsd.Dest, divsd.Src);
+				break;
 			case X86CvttSd2SiOp cvttsd2si:
 				EmitCvttSd2Si(cvttsd2si.Dest, cvttsd2si.Src);
 				break;
 			case X86AndpdRipRelOp andpd:
 				EmitAndpdRipRel(andpd.Dest, andpd.RdataLabel);
+				break;
+			case X86SqrtSdOp sqrtsd:
+				EmitSqrtSd(sqrtsd.Dest, sqrtsd.Src);
+				break;
+			case X86RoundSdOp roundsd:
+				EmitRoundSd(roundsd.Dest, roundsd.Src, roundsd.Mode);
+				break;
+			case X86MinSdOp minsd:
+				EmitMinSd(minsd.Dest, minsd.Src);
+				break;
+			case X86MaxSdOp maxsd:
+				EmitMaxSd(maxsd.Dest, maxsd.Src);
 				break;
 			case X86MovSdXmmXmmOp movsdReg:
 				EmitMovSdXmmXmm(movsdReg.Dest, movsdReg.Src);
@@ -637,6 +655,16 @@ public class X86CodeEmitter {
 		EmitXmmRegRegOp(0xF2, 0x0F, 0x5C, XmmRegCode(dest), XmmRegCode(src));
 	}
 
+	private void EmitMulSd(X86XmmRegister dest, X86XmmRegister src) {
+		// MULSD xmm, xmm: F2 0F 59 /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x59, XmmRegCode(dest), XmmRegCode(src));
+	}
+
+	private void EmitDivSd(X86XmmRegister dest, X86XmmRegister src) {
+		// DIVSD xmm, xmm: F2 0F 5E /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x5E, XmmRegCode(dest), XmmRegCode(src));
+	}
+
 	private void EmitCvttSd2Si(X86Register dest, X86XmmRegister src) {
 		// CVTTSD2SI r64, xmm: F2 REX.W 0F 2C /r
 		var d = RegCode(dest);
@@ -661,6 +689,37 @@ public class X86CodeEmitter {
 		EmitByte((byte)(0x05 | ((reg & 7) << 3)));
 		_rdataFixups.Add((_code.Count, rdataLabel));
 		EmitDword(0); // placeholder for RIP-relative displacement
+	}
+
+	private void EmitSqrtSd(X86XmmRegister dest, X86XmmRegister src) {
+		// SQRTSD xmm, xmm: F2 0F 51 /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x51, XmmRegCode(dest), XmmRegCode(src));
+	}
+
+	private void EmitRoundSd(X86XmmRegister dest, X86XmmRegister src, byte mode) {
+		// ROUNDSD xmm, xmm, imm8: 66 0F 3A 0B /r ib
+		var d = XmmRegCode(dest);
+		var s = XmmRegCode(src);
+		EmitByte(0x66);
+		if (d >= 8 || s >= 8) {
+			byte rex = 0x40;
+			if (d >= 8) rex |= 0x04; // REX.R
+			if (s >= 8) rex |= 0x01; // REX.B
+			EmitByte(rex);
+		}
+		EmitBytes(0x0F, 0x3A, 0x0B);
+		EmitByte((byte)(0xC0 | ((d & 7) << 3) | (s & 7)));
+		EmitByte(mode);
+	}
+
+	private void EmitMinSd(X86XmmRegister dest, X86XmmRegister src) {
+		// MINSD xmm, xmm: F2 0F 5D /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x5D, XmmRegCode(dest), XmmRegCode(src));
+	}
+
+	private void EmitMaxSd(X86XmmRegister dest, X86XmmRegister src) {
+		// MAXSD xmm, xmm: F2 0F 5F /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x5F, XmmRegCode(dest), XmmRegCode(src));
 	}
 
 	private void EmitMovSdXmmXmm(X86XmmRegister dest, X86XmmRegister src) {

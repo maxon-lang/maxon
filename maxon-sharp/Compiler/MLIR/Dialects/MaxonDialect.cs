@@ -179,6 +179,56 @@ public class MaxonAbsOp(MaxonValue input) : MaxonOp {
 	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
+public class MaxonSqrtOp(MaxonValue input) : MaxonOp {
+	public override string Mnemonic => "maxon.sqrt";
+	public MaxonValue Input { get; } = input;
+	public MaxonFloat Result { get; } = new MaxonFloat(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
+public class MaxonFloorOp(MaxonValue input) : MaxonOp {
+	public override string Mnemonic => "maxon.floor";
+	public MaxonValue Input { get; } = input;
+	public MaxonFloat Result { get; } = new MaxonFloat(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
+public class MaxonCeilOp(MaxonValue input) : MaxonOp {
+	public override string Mnemonic => "maxon.ceil";
+	public MaxonValue Input { get; } = input;
+	public MaxonFloat Result { get; } = new MaxonFloat(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
+public class MaxonRoundOp(MaxonValue input) : MaxonOp {
+	public override string Mnemonic => "maxon.round";
+	public MaxonValue Input { get; } = input;
+	public MaxonFloat Result { get; } = new MaxonFloat(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
+public class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
+	public override string Mnemonic => "maxon.min";
+	public MaxonValue Lhs { get; } = lhs;
+	public MaxonValue Rhs { get; } = rhs;
+	public MaxonFloat Result { get; } = new MaxonFloat(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+}
+
+public class MaxonMaxOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
+	public override string Mnemonic => "maxon.max";
+	public MaxonValue Lhs { get; } = lhs;
+	public MaxonValue Rhs { get; } = rhs;
+	public MaxonFloat Result { get; } = new MaxonFloat(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+}
+
 public class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBlock) : MaxonOp {
 	public override string Mnemonic => $"maxon.cond_br %{Condition.Id} [then: {ThenBlock}, else: {ElseBlock}]";
 	public MaxonValue Condition { get; } = condition;

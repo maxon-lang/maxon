@@ -10,6 +10,23 @@ public abstract class StandardOp : IPrintableOp {
 	public abstract List<StdValue> ReadValues { get; }
 }
 
+public abstract class StdUnaryF64Op(StdF64 input) : StandardOp {
+	public StdF64 Input { get; } = input;
+	public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+	public override List<StdValue> ReadValues => [Input];
+}
+
+public abstract class StdBinaryF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+	public StdF64 Lhs { get; } = lhs;
+	public StdF64 Rhs { get; } = rhs;
+	public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+	public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
 public interface IStoreOp {
 	string VarName { get; }
 	MlirType StoredType { get; }
@@ -143,15 +160,56 @@ public class StdSubF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
 	public override List<StdValue> ReadValues => [Lhs, Rhs];
 }
 
-// === Float Absolute Value ===
-
-public class StdAbsF64Op(StdF64 input) : StandardOp {
-	public override string Mnemonic => "math.absf";
-	public StdF64 Input { get; } = input;
+public class StdMulF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+	public override string Mnemonic => "arith.mulf";
+	public StdF64 Lhs { get; } = lhs;
+	public StdF64 Rhs { get; } = rhs;
 	public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
 	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-	public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
-	public override List<StdValue> ReadValues => [Input];
+	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+	public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
+public class StdDivF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+	public override string Mnemonic => "arith.divf";
+	public StdF64 Lhs { get; } = lhs;
+	public StdF64 Rhs { get; } = rhs;
+	public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+	public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+	public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+	public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
+// === Float Absolute Value ===
+
+public class StdAbsF64Op(StdF64 input) : StdUnaryF64Op(input) {
+	public override string Mnemonic => "math.absf";
+}
+
+// === Float Math Operations ===
+
+public class StdSqrtF64Op(StdF64 input) : StdUnaryF64Op(input) {
+	public override string Mnemonic => "math.sqrt";
+}
+
+public class StdFloorF64Op(StdF64 input) : StdUnaryF64Op(input) {
+	public override string Mnemonic => "math.floor";
+}
+
+public class StdCeilF64Op(StdF64 input) : StdUnaryF64Op(input) {
+	public override string Mnemonic => "math.ceil";
+}
+
+public class StdRoundF64Op(StdF64 input) : StdUnaryF64Op(input) {
+	public override string Mnemonic => "math.round";
+}
+
+public class StdMinF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
+	public override string Mnemonic => "math.minf";
+}
+
+public class StdMaxF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
+	public override string Mnemonic => "math.maxf";
 }
 
 // === Float-to-Int Conversion ===

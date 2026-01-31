@@ -31,9 +31,18 @@ public class Parser(List<Token> tokens) {
 		{ TokenType.GreaterEquals, MaxonBinOperator.Ge },
 	};
 
-	private static readonly Dictionary<string, Func<MaxonValue, (MaxonOp Op, MaxonValue Result)>> BuiltinOps = new() {
+	private static readonly Dictionary<string, Func<MaxonValue, (MaxonOp Op, MaxonValue Result)>> BuiltinOps1 = new() {
 		{ "trunc", arg => { var op = new MaxonTruncOp(arg); return (op, op.Result); } },
 		{ "abs", arg => { var op = new MaxonAbsOp(arg); return (op, op.Result); } },
+		{ "sqrt", arg => { var op = new MaxonSqrtOp(arg); return (op, op.Result); } },
+		{ "floor", arg => { var op = new MaxonFloorOp(arg); return (op, op.Result); } },
+		{ "ceil", arg => { var op = new MaxonCeilOp(arg); return (op, op.Result); } },
+		{ "round", arg => { var op = new MaxonRoundOp(arg); return (op, op.Result); } },
+	};
+
+	private static readonly Dictionary<string, Func<MaxonValue, MaxonValue, (MaxonOp Op, MaxonValue Result)>> BuiltinOps2 = new() {
+		{ "min", (a, b) => { var op = new MaxonMinOp(a, b); return (op, op.Result); } },
+		{ "max", (a, b) => { var op = new MaxonMaxOp(a, b); return (op, op.Result); } },
 	};
 
 	private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock);
@@ -384,6 +393,36 @@ public class Parser(List<Token> tokens) {
 	}
 
 	private ExprResult ParsePrimary() {
+		if (Check(TokenType.Minus)) {
+			Advance(); // consume '-'
+			if (Check(TokenType.IntegerLiteral)) {
+				var token = Advance();
+				var value = -ParseIntegerLiteral(token.Value);
+				var op = new MaxonLiteralOp(value);
+				_currentBlock!.AddOp(op);
+				return new ExprResult.Direct(op.Result);
+			}
+
+			if (Check(TokenType.FloatLiteral)) {
+				var token = Advance();
+				var value = -double.Parse(token.Value, CultureInfo.InvariantCulture);
+				var op = new MaxonLiteralOp(value);
+				_currentBlock!.AddOp(op);
+				return new ExprResult.Direct(op.Result);
+			}
+
+			var inner = ParsePrimary();
+			var innerVal = ResolveExprValue(inner);
+			var kind = DetermineValueKind(innerVal);
+			var zeroOp = kind == MaxonValueKind.Float
+				? new MaxonLiteralOp(0.0)
+				: new MaxonLiteralOp(0L);
+			_currentBlock!.AddOp(zeroOp);
+			var subOp = new MaxonBinOp(MaxonBinOperator.Sub, zeroOp.Result, innerVal, kind);
+			_currentBlock!.AddOp(subOp);
+			return new ExprResult.Direct(subOp.Result);
+		}
+
 		if (Check(TokenType.LeftParen)) {
 			Advance(); // consume '('
 			var inner = ParseExpression();
@@ -410,11 +449,21 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.Identifier)) {
 			var token = Advance();
 			if (Check(TokenType.LeftParen)) {
-				if (BuiltinOps.TryGetValue(token.Value, out var makeOp)) {
+				if (BuiltinOps1.TryGetValue(token.Value, out var makeOp1)) {
 					Advance(); // consume '('
 					var arg = ResolveExprValue(ParseExpression());
 					Expect(TokenType.RightParen);
-					var (op, result) = makeOp(arg);
+					var (op, result) = makeOp1(arg);
+					_currentBlock!.AddOp(op);
+					return new ExprResult.Direct(result);
+				}
+				if (BuiltinOps2.TryGetValue(token.Value, out var makeOp2)) {
+					Advance(); // consume '('
+					var arg1 = ResolveExprValue(ParseExpression());
+					Expect(TokenType.Comma);
+					var arg2 = ResolveExprValue(ParseExpression());
+					Expect(TokenType.RightParen);
+					var (op, result) = makeOp2(arg1, arg2);
 					_currentBlock!.AddOp(op);
 					return new ExprResult.Direct(result);
 				}
@@ -454,6 +503,17 @@ public class Parser(List<Token> tokens) {
 	private abstract record ExprResult {
 		public sealed record Direct(MaxonValue Value) : ExprResult;
 		public sealed record VarRef(string VarName, VarInfo Info) : ExprResult;
+	}
+
+	private MaxonValueKind DetermineValueKind(MaxonValue value) {
+		return value switch {
+			MaxonInteger => MaxonValueKind.Integer,
+			MaxonFloat => MaxonValueKind.Float,
+			MaxonBool => MaxonValueKind.Bool,
+			_ => throw new CompileError(ErrorCode.ParserExpectedExpression,
+				$"Cannot determine kind of {value.GetType().Name}",
+				Current().Line, Current().Column)
+		};
 	}
 
 	private MaxonValueKind DetermineValueKind(MaxonValue lhs, MaxonValue rhs) {

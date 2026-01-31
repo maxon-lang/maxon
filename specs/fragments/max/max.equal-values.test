@@ -1,0 +1,23 @@
+// Test: max.equal-values
+function main() returns int
+    var x = max(7.0, 7.0)
+    return trunc(x)
+end 'main'
+---
+ExitCode: 7
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_7]
+    x86.movsd xmm1, [rip+__float_7]
+    x86.movsd xmm2, xmm0
+    x86.maxsd xmm2, xmm1
+    x86.movsd [rbp-8], xmm2
+    x86.cvttsd2si eax, xmm2
+    x86.epilogue
+    x86.ret
+  }
+}
+---

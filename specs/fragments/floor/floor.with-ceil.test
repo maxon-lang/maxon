@@ -1,0 +1,28 @@
+// Test: floor.with-ceil
+function main() returns int
+    var x = 3.7
+    var a = trunc(floor(x))
+    var b = trunc(ceil(x))
+    return a + b
+end 'main'
+---
+ExitCode: 7
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.movsd xmm0, [rip+__float_3.7]
+    x86.movsd [rbp-8], xmm0
+    x86.roundsd xmm1, xmm0, 1
+    x86.cvttsd2si eax, xmm1
+    x86.mov [rbp-16], eax
+    x86.roundsd xmm2, xmm0, 2
+    x86.cvttsd2si ecx, xmm2
+    x86.mov [rbp-24], ecx
+    x86.add eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

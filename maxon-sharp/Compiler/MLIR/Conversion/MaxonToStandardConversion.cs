@@ -96,18 +96,39 @@ public static class MaxonToStandardConversion {
 							}
 						case MaxonTruncOp truncOp: {
 								var input = (StdF64)valueMap[truncOp.Input];
-								var fpToSi = new StdFpToSiOp(input);
-								newBlock.AddOp(fpToSi);
-								valueMap[truncOp.Result] = fpToSi.Result;
+								var stdOp = new StdFpToSiOp(input);
+								newBlock.AddOp(stdOp);
+								valueMap[truncOp.Result] = stdOp.Result;
 								break;
 							}
-						case MaxonAbsOp absOp: {
-								var input = (StdF64)valueMap[absOp.Input];
-								var absF64 = new StdAbsF64Op(input);
-								newBlock.AddOp(absF64);
-								valueMap[absOp.Result] = absF64.Result;
-								break;
-							}
+						case MaxonAbsOp absOp:
+							LowerUnaryF64(valueMap, newBlock, absOp.Input, absOp.Result,
+								input => new StdAbsF64Op(input));
+							break;
+						case MaxonSqrtOp sqrtOp:
+							LowerUnaryF64(valueMap, newBlock, sqrtOp.Input, sqrtOp.Result,
+								input => new StdSqrtF64Op(input));
+							break;
+						case MaxonFloorOp floorOp:
+							LowerUnaryF64(valueMap, newBlock, floorOp.Input, floorOp.Result,
+								input => new StdFloorF64Op(input));
+							break;
+						case MaxonCeilOp ceilOp:
+							LowerUnaryF64(valueMap, newBlock, ceilOp.Input, ceilOp.Result,
+								input => new StdCeilF64Op(input));
+							break;
+						case MaxonRoundOp roundOp:
+							LowerUnaryF64(valueMap, newBlock, roundOp.Input, roundOp.Result,
+								input => new StdRoundF64Op(input));
+							break;
+						case MaxonMinOp minOp:
+							LowerBinaryF64(valueMap, newBlock, minOp.Lhs, minOp.Rhs, minOp.Result,
+								(l, r) => new StdMinF64Op(l, r));
+							break;
+						case MaxonMaxOp maxOp:
+							LowerBinaryF64(valueMap, newBlock, maxOp.Lhs, maxOp.Rhs, maxOp.Result,
+								(l, r) => new StdMaxF64Op(l, r));
+							break;
 						case MaxonCallOp callOp: {
 								var newArgs = callOp.Args.Select(a => valueMap[a]).ToList();
 								var callResult = callOp.ResultKind?.CreateStdValue();
@@ -133,6 +154,29 @@ public static class MaxonToStandardConversion {
 		return result;
 	}
 
+	private static void LowerUnaryF64(
+		Dictionary<MaxonValue, StdValue> valueMap,
+		MlirBlock<StandardOp> block,
+		MaxonValue maxonInput, MaxonValue maxonResult,
+		Func<StdF64, StdUnaryF64Op> factory) {
+		var input = (StdF64)valueMap[maxonInput];
+		var stdOp = factory(input);
+		block.AddOp(stdOp);
+		valueMap[maxonResult] = stdOp.Result;
+	}
+
+	private static void LowerBinaryF64(
+		Dictionary<MaxonValue, StdValue> valueMap,
+		MlirBlock<StandardOp> block,
+		MaxonValue maxonLhs, MaxonValue maxonRhs, MaxonValue maxonResult,
+		Func<StdF64, StdF64, StdBinaryF64Op> factory) {
+		var lhs = (StdF64)valueMap[maxonLhs];
+		var rhs = (StdF64)valueMap[maxonRhs];
+		var stdOp = factory(lhs, rhs);
+		block.AddOp(stdOp);
+		valueMap[maxonResult] = stdOp.Result;
+	}
+
 	private static void EmitStore(MlirBlock<StandardOp> block, StdValue value, string varName, Dictionary<string, string> varTypes) {
 		switch (value) {
 			case StdI64 i64:
@@ -156,6 +200,8 @@ public static class MaxonToStandardConversion {
 		{ (MaxonBinOperator.Mod, MaxonValueKind.Integer), (l, r) => { var op = new StdRemI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Add, MaxonValueKind.Float), (l, r) => { var op = new StdAddF64Op((StdF64)l, (StdF64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Sub, MaxonValueKind.Float), (l, r) => { var op = new StdSubF64Op((StdF64)l, (StdF64)r); return (op, op.Result); } },
+		{ (MaxonBinOperator.Mul, MaxonValueKind.Float), (l, r) => { var op = new StdMulF64Op((StdF64)l, (StdF64)r); return (op, op.Result); } },
+		{ (MaxonBinOperator.Div, MaxonValueKind.Float), (l, r) => { var op = new StdDivF64Op((StdF64)l, (StdF64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Eq, MaxonValueKind.Float), (l, r) => { var op = new StdCmpF64Op("eq", (StdF64)l, (StdF64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Eq, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("eq", (StdI64)l, (StdI64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Ne, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("ne", (StdI64)l, (StdI64)r); return (op, op.Result); } },

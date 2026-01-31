@@ -110,6 +110,16 @@ public static class StandardToX86Conversion {
 							(l, r) => new X86SubSdOp(l, r));
 						break;
 
+					case StdMulF64Op mulF64Op:
+						regManager.EmitXmmBinaryRegReg(mulF64Op.Lhs, mulF64Op.Rhs, mulF64Op.Result, x86Block,
+							(l, r) => new X86MulSdOp(l, r));
+						break;
+
+					case StdDivF64Op divF64Op:
+						regManager.EmitXmmBinaryRegReg(divF64Op.Lhs, divF64Op.Rhs, divF64Op.Result, x86Block,
+							(l, r) => new X86DivSdOp(l, r));
+						break;
+
 					case StdFpToSiOp fpToSiOp:
 						regManager.EmitCvttSd2Si(fpToSiOp.Input, fpToSiOp.Result, x86Block);
 						break;
@@ -119,6 +129,36 @@ public static class StandardToX86Conversion {
 							regManager.EmitAbsF64(absOp.Input, absOp.Result, maskLabel, x86Block);
 							break;
 						}
+
+					case StdSqrtF64Op sqrtOp:
+						regManager.EmitXmmUnaryRegReg(sqrtOp.Input, sqrtOp.Result, x86Block,
+							(d, s) => new X86SqrtSdOp(d, s));
+						break;
+
+					case StdFloorF64Op floorOp:
+						regManager.EmitXmmUnaryRegReg(floorOp.Input, floorOp.Result, x86Block,
+							(d, s) => new X86RoundSdOp(d, s, 0x01));
+						break;
+
+					case StdCeilF64Op ceilOp:
+						regManager.EmitXmmUnaryRegReg(ceilOp.Input, ceilOp.Result, x86Block,
+							(d, s) => new X86RoundSdOp(d, s, 0x02));
+						break;
+
+					case StdRoundF64Op roundOp:
+						regManager.EmitXmmUnaryRegReg(roundOp.Input, roundOp.Result, x86Block,
+							(d, s) => new X86RoundSdOp(d, s, 0x00));
+						break;
+
+					case StdMinF64Op minOp:
+						regManager.EmitXmmBinaryRegReg(minOp.Lhs, minOp.Rhs, minOp.Result, x86Block,
+							(l, r) => new X86MinSdOp(l, r));
+						break;
+
+					case StdMaxF64Op maxOp:
+						regManager.EmitXmmBinaryRegReg(maxOp.Lhs, maxOp.Rhs, maxOp.Result, x86Block,
+							(l, r) => new X86MaxSdOp(l, r));
+						break;
 
 					case StdConstF64Op floatOp: {
 							var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
