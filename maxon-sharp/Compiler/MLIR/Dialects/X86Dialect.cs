@@ -20,6 +20,15 @@ public abstract class X86Op : IPrintableOp {
 	public IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes => new Dictionary<string, MlirAttribute>();
 }
 
+public class X86PrologueOp(int stackSize) : X86Op {
+	public int StackSize { get; } = stackSize;
+	public override string Mnemonic => $"x86.prologue stack_size={StackSize}";
+}
+
+public class X86EpilogueOp : X86Op {
+	public override string Mnemonic => "x86.epilogue";
+}
+
 public class X86PushRegOp(X86Register register) : X86Op {
 	public X86Register Register { get; } = register;
 	public override string Mnemonic => $"x86.push {Register.ToString().ToLower()}";

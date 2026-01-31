@@ -101,18 +101,12 @@ module {
 module {
   func @getValue() -> i64 {
   entry:
-    x86.push rbp
-    x86.mov rbp, rsp
     x86.mov eax, 42
-    x86.pop rbp
     x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.push rbp
-    x86.mov rbp, rsp
     x86.call getValue
-    x86.pop rbp
     x86.ret
   }
 }
@@ -174,9 +168,7 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.push rbp
-    x86.mov rbp, rsp
-    x86.sub rsp, 16
+    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
     x86.movsd [rbp-8], xmm0
     x86.movsd xmm1, [rip+__float_3.14]
@@ -185,13 +177,11 @@ module {
     x86.jp main.other_1
   check_0:
     x86.mov eax, 1
-    x86.add rsp, 16
-    x86.pop rbp
+    x86.epilogue
     x86.ret
   other_1:
     x86.mov eax, 0
-    x86.add rsp, 16
-    x86.pop rbp
+    x86.epilogue
     x86.ret
   }
 }

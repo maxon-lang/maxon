@@ -79,6 +79,16 @@ public class X86CodeEmitter {
 
 	public void Emit(X86Op op) {
 		switch (op) {
+			case X86PrologueOp prologue:
+				EmitPushReg(X86Register.Rbp);
+				EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+				if (prologue.StackSize > 0)
+					EmitSubRegImm(X86Register.Rsp, prologue.StackSize);
+				break;
+			case X86EpilogueOp:
+				EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+				EmitPopReg(X86Register.Rbp);
+				break;
 			case X86PushRegOp push:
 				EmitPushReg(push.Register);
 				break;

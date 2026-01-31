@@ -175,8 +175,7 @@ public static class StandardToX86Conversion {
 					case StdReturnOp retOp: {
 							if (retOp.ReturnValue != null)
 								regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
-							// Epilogue stack teardown is inserted below
-							x86Block.AddOp(new X86PopRegOp(X86Register.Rbp));
+							x86Block.AddOp(new X86EpilogueOp());
 							x86Block.AddOp(new X86RetOp());
 							break;
 						}
@@ -192,28 +191,14 @@ public static class StandardToX86Conversion {
 			}
 		}
 
-		// Insert prologue and epilogue stack adjustments now that the final
-		// stack size (variables + spill slots) is known.
+		// Insert prologue/epilogue only when a stack frame is needed.
 		int stackSize = regManager.TotalStackSize;
-		var entryBlock = newFunc.Body.Blocks.First();
-		int prologueInsertCount = 0;
-		entryBlock.Operations.Insert(prologueInsertCount++, new X86PushRegOp(X86Register.Rbp));
-		entryBlock.Operations.Insert(prologueInsertCount++, new X86MovRegRegOp(X86Register.Rbp, X86Register.Rsp));
-		if (stackSize > 0)
-			entryBlock.Operations.Insert(prologueInsertCount, new X86SubRegImmOp(X86Register.Rsp, stackSize));
-
 		if (stackSize > 0) {
+			var entryBlock = newFunc.Body.Blocks.First();
+			entryBlock.Operations.Insert(0, new X86PrologueOp(stackSize));
+		} else {
 			foreach (var block in newFunc.Body.Blocks) {
-				for (int i = 0; i < block.Operations.Count; i++) {
-					// Insert `add rsp` before each `pop rbp` that precedes a `ret`
-					if (block.Operations[i] is X86PopRegOp popOp
-						&& popOp.Register == X86Register.Rbp
-						&& i + 1 < block.Operations.Count
-						&& block.Operations[i + 1] is X86RetOp) {
-						block.Operations.Insert(i, new X86AddRegImmOp(X86Register.Rsp, stackSize));
-						i++; // skip past the inserted op
-					}
-				}
+				block.Operations.RemoveAll(op => op is X86EpilogueOp);
 			}
 		}
 
