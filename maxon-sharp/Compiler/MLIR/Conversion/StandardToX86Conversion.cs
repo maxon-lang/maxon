@@ -176,10 +176,10 @@ public static class StandardToX86Conversion {
             break;
 
           case StdAbsF64Op absOp: {
-              var maskLabel = GetOrCreateAbsMask(outputModule);
-              regManager.EmitAbsF64(absOp.Input, absOp.Result, maskLabel, x86Block);
-              break;
-            }
+            var maskLabel = GetOrCreateAbsMask(outputModule);
+            regManager.EmitAbsF64(absOp.Input, absOp.Result, maskLabel, x86Block);
+            break;
+          }
 
           case StdSqrtF64Op sqrtOp:
             regManager.EmitXmmUnaryRegReg(sqrtOp.Input, sqrtOp.Result, x86Block,
@@ -212,10 +212,10 @@ public static class StandardToX86Conversion {
             break;
 
           case StdConstF64Op floatOp: {
-              var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
-              regManager.EmitXmmLoadFromRipRelative(floatOp.Result, label, x86Block);
-              break;
-            }
+            var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
+            regManager.EmitXmmLoadFromRipRelative(floatOp.Result, label, x86Block);
+            break;
+          }
 
           case StdStoreI64Op storeOp:
             regManager.EmitStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], x86Block);
@@ -256,27 +256,27 @@ public static class StandardToX86Conversion {
             break;
 
           case StdCondBrOp condBr: {
-              var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
-              if (lastCmpResult != null && condBr.Condition == lastCmpResult) {
-                switch (lastCmpKind!.Value) {
-                  case ComparisonKind.Integer:
-                    x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
-                    break;
-                  case ComparisonKind.Float:
-                    EmitFloatCondBranch(lastCmpPredicate!, scopedElse, x86Block);
-                    break;
-                  default:
-                    throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {lastCmpKind}");
-                }
-              } else {
-                regManager.EmitBoolTest(condBr.Condition, x86Block);
-                x86Block.AddOp(new X86JccOp("e", scopedElse));
+            var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
+            if (lastCmpResult != null && condBr.Condition == lastCmpResult) {
+              switch (lastCmpKind!.Value) {
+                case ComparisonKind.Integer:
+                  x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
+                  break;
+                case ComparisonKind.Float:
+                  EmitFloatCondBranch(lastCmpPredicate!, scopedElse, x86Block);
+                  break;
+                default:
+                  throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {lastCmpKind}");
               }
-              lastCmpResult = null;
-              lastCmpKind = null;
-              lastCmpPredicate = null;
-              break;
+            } else {
+              regManager.EmitBoolTest(condBr.Condition, x86Block);
+              x86Block.AddOp(new X86JccOp("e", scopedElse));
             }
+            lastCmpResult = null;
+            lastCmpKind = null;
+            lastCmpPredicate = null;
+            break;
+          }
 
           case StdBrOp br:
             x86Block.AddOp(new X86JmpOp($"{func.Name}.{br.Target}"));
@@ -287,12 +287,12 @@ public static class StandardToX86Conversion {
             break;
 
           case StdLeaOp leaOp: {
-              // Get the address of the first field slot of a struct variable.
-              // The sret pointer convention uses the address of the ".first_field" slot.
-              var firstFieldOffset = FindFirstFieldOffset(leaOp.VarName, varOffsets);
-              regManager.EmitLeaFromStack(leaOp.Result, firstFieldOffset, x86Block);
-              break;
-            }
+            // Get the address of the first field slot of a struct variable.
+            // The sret pointer convention uses the address of the ".first_field" slot.
+            var firstFieldOffset = FindFirstFieldOffset(leaOp.VarName, varOffsets);
+            regManager.EmitLeaFromStack(leaOp.Result, firstFieldOffset, x86Block);
+            break;
+          }
 
           case StdStoreIndirectOp storeIndOp:
             regManager.EmitStoreIndirect(storeIndOp.Value, storeIndOp.BasePtr, storeIndOp.FieldOffset, storeIndOp.FieldType, x86Block);
@@ -303,17 +303,17 @@ public static class StandardToX86Conversion {
             break;
 
           case StdReturnOp retOp: {
-              if (retOp.ReturnValue != null) {
-                if (retOp.ReturnValue is StdF64) {
-                  regManager.EnsureInXmm0ForReturn(retOp.ReturnValue, x86Block);
-                } else {
-                  regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
-                }
+            if (retOp.ReturnValue != null) {
+              if (retOp.ReturnValue is StdF64) {
+                regManager.EnsureInXmm0ForReturn(retOp.ReturnValue, x86Block);
+              } else {
+                regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
               }
-              x86Block.AddOp(new X86EpilogueOp());
-              x86Block.AddOp(new X86RetOp());
-              break;
             }
+            x86Block.AddOp(new X86EpilogueOp());
+            x86Block.AddOp(new X86RetOp());
+            break;
+          }
 
           default:
             throw new InvalidOperationException($"No StandardToX86 conversion for: {op.GetType().Name} ({op.Mnemonic})");

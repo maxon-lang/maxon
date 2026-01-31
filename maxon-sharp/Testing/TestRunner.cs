@@ -491,29 +491,29 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
       switch (type) {
         case "f64": {
-            if (!double.TryParse(value, CultureInfo.InvariantCulture, out var d)) return null;
-            result.AddRange(BitConverter.GetBytes(d));
-            break;
-          }
+          if (!double.TryParse(value, CultureInfo.InvariantCulture, out var d)) return null;
+          result.AddRange(BitConverter.GetBytes(d));
+          break;
+        }
         case "i64": {
-            if (!long.TryParse(value, out var l)) return null;
-            result.AddRange(BitConverter.GetBytes(l));
-            break;
-          }
+          if (!long.TryParse(value, out var l)) return null;
+          result.AddRange(BitConverter.GetBytes(l));
+          break;
+        }
         case "i64[]": {
-            var parts = value.Split(',');
-            foreach (var part in parts) {
-              if (!long.TryParse(part.Trim(), out var l)) return null;
-              result.AddRange(BitConverter.GetBytes(l));
-            }
-            break;
+          var parts = value.Split(',');
+          foreach (var part in parts) {
+            if (!long.TryParse(part.Trim(), out var l)) return null;
+            result.AddRange(BitConverter.GetBytes(l));
           }
+          break;
+        }
         case "utf8": {
-            if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
-            var str = ProcessEscapes(value[1..^1]);
-            result.AddRange(Encoding.UTF8.GetBytes(str));
-            break;
-          }
+          if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
+          var str = ProcessEscapes(value[1..^1]);
+          result.AddRange(Encoding.UTF8.GetBytes(str));
+          break;
+        }
         default:
           return null;
       }

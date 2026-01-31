@@ -72,150 +72,150 @@ public static class MaxonToStandardConversion {
         foreach (var op in block.Operations) {
           switch (op) {
             case MaxonParamOp paramOp: {
-                var stdResult = paramOp.ValueKind.CreateStdValue();
-                // Adjust index: if this function has sret, scalar params shift by 1.
-                // Also account for struct params that were flattened before this one.
-                int adjustedIndex = ComputeFlatParamIndex(paramOp.Index, func, retStructType != null);
-                newBlock.AddOp(new StdParamOp(adjustedIndex, paramOp.Name, stdResult));
-                valueMap[paramOp.Result] = stdResult;
-                EmitStore(newBlock, stdResult, paramOp.Name, varTypes);
-                break;
-              }
+              var stdResult = paramOp.ValueKind.CreateStdValue();
+              // Adjust index: if this function has sret, scalar params shift by 1.
+              // Also account for struct params that were flattened before this one.
+              int adjustedIndex = ComputeFlatParamIndex(paramOp.Index, func, retStructType != null);
+              newBlock.AddOp(new StdParamOp(adjustedIndex, paramOp.Name, stdResult));
+              valueMap[paramOp.Result] = stdResult;
+              EmitStore(newBlock, stdResult, paramOp.Name, varTypes);
+              break;
+            }
             case MaxonStructParamOp structParamOp: {
-                // Struct param was flattened to individual scalar params.
-                var fieldMappings = paramIndexMap[structParamOp.Index];
-                foreach (var (paramFlatIdx, field) in fieldMappings) {
-                  var fieldVarName = $"{structParamOp.Name}.{field.Name}";
-                  var fieldResult = StdValueFactory.CreateStdValueForType(field.Type);
-                  newBlock.AddOp(new StdParamOp(paramFlatIdx, fieldVarName, fieldResult));
-                  EmitStore(newBlock, fieldResult, fieldVarName, varTypes);
-                }
-                structVarNames[structParamOp.Result.Id] = structParamOp.Name;
-                break;
+              // Struct param was flattened to individual scalar params.
+              var fieldMappings = paramIndexMap[structParamOp.Index];
+              foreach (var (paramFlatIdx, field) in fieldMappings) {
+                var fieldVarName = $"{structParamOp.Name}.{field.Name}";
+                var fieldResult = StdValueFactory.CreateStdValueForType(field.Type);
+                newBlock.AddOp(new StdParamOp(paramFlatIdx, fieldVarName, fieldResult));
+                EmitStore(newBlock, fieldResult, fieldVarName, varTypes);
               }
+              structVarNames[structParamOp.Result.Id] = structParamOp.Name;
+              break;
+            }
             case MaxonLiteralOp litOp: {
-                switch (litOp.ValueKind) {
-                  case MaxonValueKind.Integer: {
-                      var newOp = new StdConstI64Op(litOp.IntValue);
-                      newBlock.AddOp(newOp);
-                      valueMap[litOp.Result] = newOp.Result;
-                      break;
-                    }
-                  case MaxonValueKind.Float: {
-                      var newOp = new StdConstF64Op(litOp.FloatValue);
-                      newBlock.AddOp(newOp);
-                      valueMap[litOp.Result] = newOp.Result;
-                      break;
-                    }
-                  case MaxonValueKind.Bool: {
-                      var newOp = new StdConstI1Op(litOp.BoolValue);
-                      newBlock.AddOp(newOp);
-                      valueMap[litOp.Result] = newOp.Result;
-                      break;
-                    }
-                  case MaxonValueKind.Byte: {
-                      var newOp = new StdConstI64Op(litOp.IntValue & 0xFF);
-                      newBlock.AddOp(newOp);
-                      valueMap[litOp.Result] = newOp.Result;
-                      break;
-                    }
-                  case MaxonValueKind.Struct:
-                    throw new InvalidOperationException("Struct literals are not MaxonLiteralOp");
+              switch (litOp.ValueKind) {
+                case MaxonValueKind.Integer: {
+                  var newOp = new StdConstI64Op(litOp.IntValue);
+                  newBlock.AddOp(newOp);
+                  valueMap[litOp.Result] = newOp.Result;
+                  break;
                 }
-                break;
+                case MaxonValueKind.Float: {
+                  var newOp = new StdConstF64Op(litOp.FloatValue);
+                  newBlock.AddOp(newOp);
+                  valueMap[litOp.Result] = newOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Bool: {
+                  var newOp = new StdConstI1Op(litOp.BoolValue);
+                  newBlock.AddOp(newOp);
+                  valueMap[litOp.Result] = newOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Byte: {
+                  var newOp = new StdConstI64Op(litOp.IntValue & 0xFF);
+                  newBlock.AddOp(newOp);
+                  valueMap[litOp.Result] = newOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Struct:
+                  throw new InvalidOperationException("Struct literals are not MaxonLiteralOp");
               }
+              break;
+            }
             case MaxonStructLiteralOp structLitOp: {
-                // Store each field value to named slots.
-                var tempName = $"__struct_{structLitOp.Result.Id}";
-                var structType = module.TypeDefs[structLitOp.TypeName];
-                foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
-                  var fieldVarName = $"{tempName}.{fieldName}";
-                  var mappedVal = valueMap[fieldVal];
-                  EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
-                }
-                structVarNames[structLitOp.Result.Id] = tempName;
-                break;
-              }
-            case MaxonAssignOp assignOp: {
-                if (assignOp.ValueKind == MaxonValueKind.Struct) {
-                  // Struct assignment: copy all fields from source to destination
-                  var srcName = structVarNames[assignOp.Value.Id];
-                  var dstName = assignOp.VarName;
-                  var structTypeName = ((MaxonStruct)assignOp.Value).TypeName;
-                  var structType = module.TypeDefs[structTypeName];
-                  foreach (var field in structType.Fields) {
-                    var srcFieldVar = $"{srcName}.{field.Name}";
-                    var dstFieldVar = $"{dstName}.{field.Name}";
-                    var loaded = EmitLoad(newBlock, srcFieldVar, varTypes);
-                    EmitStore(newBlock, loaded, dstFieldVar, varTypes);
-                  }
-                  // After assignment, the struct value is now known by both names
-                  structVarNames[assignOp.Value.Id] = dstName;
-                } else {
-                  var mappedValue = valueMap[assignOp.Value];
-                  EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
-                }
-                break;
-              }
-            case MaxonVarRefOp varRef: {
-                var loaded = EmitLoad(newBlock, varRef.VarName, varTypes);
-                valueMap[varRef.Result] = loaded;
-                break;
-              }
-            case MaxonStructVarRefOp structVarRef: {
-                // Just record the variable name mapping
-                structVarNames[structVarRef.Result.Id] = structVarRef.VarName;
-                break;
-              }
-            case MaxonFieldAccessOp fieldAccess: {
-                var structName = structVarNames[fieldAccess.StructValue.Id];
-                var fieldVarName = $"{structName}.{fieldAccess.FieldName}";
-                var loaded = EmitLoad(newBlock, fieldVarName, varTypes);
-                valueMap[fieldAccess.Result] = loaded;
-                break;
-              }
-            case MaxonFieldAssignOp fieldAssign: {
-                var structName = structVarNames[fieldAssign.StructValue.Id];
-                var fieldVarName = $"{structName}.{fieldAssign.FieldName}";
-                var mappedVal = valueMap[fieldAssign.NewValue];
+              // Store each field value to named slots.
+              var tempName = $"__struct_{structLitOp.Result.Id}";
+              var structType = module.TypeDefs[structLitOp.TypeName];
+              foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
+                var fieldVarName = $"{tempName}.{fieldName}";
+                var mappedVal = valueMap[fieldVal];
                 EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
-                break;
               }
+              structVarNames[structLitOp.Result.Id] = tempName;
+              break;
+            }
+            case MaxonAssignOp assignOp: {
+              if (assignOp.ValueKind == MaxonValueKind.Struct) {
+                // Struct assignment: copy all fields from source to destination
+                var srcName = structVarNames[assignOp.Value.Id];
+                var dstName = assignOp.VarName;
+                var structTypeName = ((MaxonStruct)assignOp.Value).TypeName;
+                var structType = module.TypeDefs[structTypeName];
+                foreach (var field in structType.Fields) {
+                  var srcFieldVar = $"{srcName}.{field.Name}";
+                  var dstFieldVar = $"{dstName}.{field.Name}";
+                  var loaded = EmitLoad(newBlock, srcFieldVar, varTypes);
+                  EmitStore(newBlock, loaded, dstFieldVar, varTypes);
+                }
+                // After assignment, the struct value is now known by both names
+                structVarNames[assignOp.Value.Id] = dstName;
+              } else {
+                var mappedValue = valueMap[assignOp.Value];
+                EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
+              }
+              break;
+            }
+            case MaxonVarRefOp varRef: {
+              var loaded = EmitLoad(newBlock, varRef.VarName, varTypes);
+              valueMap[varRef.Result] = loaded;
+              break;
+            }
+            case MaxonStructVarRefOp structVarRef: {
+              // Just record the variable name mapping
+              structVarNames[structVarRef.Result.Id] = structVarRef.VarName;
+              break;
+            }
+            case MaxonFieldAccessOp fieldAccess: {
+              var structName = structVarNames[fieldAccess.StructValue.Id];
+              var fieldVarName = $"{structName}.{fieldAccess.FieldName}";
+              var loaded = EmitLoad(newBlock, fieldVarName, varTypes);
+              valueMap[fieldAccess.Result] = loaded;
+              break;
+            }
+            case MaxonFieldAssignOp fieldAssign: {
+              var structName = structVarNames[fieldAssign.StructValue.Id];
+              var fieldVarName = $"{structName}.{fieldAssign.FieldName}";
+              var mappedVal = valueMap[fieldAssign.NewValue];
+              EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
+              break;
+            }
             case MaxonBinOp binOp: {
-                var key = (binOp.Operator, binOp.OperandKind);
-                if (!BinOpFactories.TryGetValue(key, out var factory))
-                  throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind}");
+              var key = (binOp.Operator, binOp.OperandKind);
+              if (!BinOpFactories.TryGetValue(key, out var factory))
+                throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind}");
 
-                var lhs = valueMap[binOp.Lhs];
-                var rhs = valueMap[binOp.Rhs];
-                var (newOp, factoryResult) = factory(lhs, rhs);
-                newBlock.AddOp(newOp);
-                valueMap[binOp.Result] = factoryResult;
-                break;
-              }
+              var lhs = valueMap[binOp.Lhs];
+              var rhs = valueMap[binOp.Rhs];
+              var (newOp, factoryResult) = factory(lhs, rhs);
+              newBlock.AddOp(newOp);
+              valueMap[binOp.Result] = factoryResult;
+              break;
+            }
             case MaxonCondBrOp condBr: {
-                var cond = (StdBool)valueMap[condBr.Condition];
-                newBlock.AddOp(new StdCondBrOp(cond, condBr.ThenBlock, condBr.ElseBlock));
-                break;
-              }
+              var cond = (StdBool)valueMap[condBr.Condition];
+              newBlock.AddOp(new StdCondBrOp(cond, condBr.ThenBlock, condBr.ElseBlock));
+              break;
+            }
             case MaxonBrOp br: {
-                newBlock.AddOp(new StdBrOp(br.Target));
-                break;
-              }
+              newBlock.AddOp(new StdBrOp(br.Target));
+              break;
+            }
             case MaxonTruncOp truncOp: {
-                var input = (StdF64)valueMap[truncOp.Input];
-                var stdOp = new StdFpToSiOp(input);
-                newBlock.AddOp(stdOp);
-                valueMap[truncOp.Result] = stdOp.Result;
-                break;
-              }
+              var input = (StdF64)valueMap[truncOp.Input];
+              var stdOp = new StdFpToSiOp(input);
+              newBlock.AddOp(stdOp);
+              valueMap[truncOp.Result] = stdOp.Result;
+              break;
+            }
             case MaxonIntToFloatOp intToFloatOp: {
-                var input = (StdI64)valueMap[intToFloatOp.Input];
-                var stdOp = new StdSiToFpOp(input);
-                newBlock.AddOp(stdOp);
-                valueMap[intToFloatOp.Result] = stdOp.Result;
-                break;
-              }
+              var input = (StdI64)valueMap[intToFloatOp.Input];
+              var stdOp = new StdSiToFpOp(input);
+              newBlock.AddOp(stdOp);
+              valueMap[intToFloatOp.Result] = stdOp.Result;
+              break;
+            }
             case MaxonAbsOp absOp:
               LowerUnaryF64(valueMap, newBlock, absOp.Input, absOp.Result,
                 input => new StdAbsF64Op(input));
@@ -245,49 +245,49 @@ public static class MaxonToStandardConversion {
                 (l, r) => new StdMaxF64Op(l, r));
               break;
             case MaxonCastOp castOp: {
-                var input = valueMap[castOp.Input];
-                switch (castOp.TargetKind) {
-                  case MaxonValueKind.Byte: {
-                      // Cast to byte: mask with 0xFF
-                      var maskOp = new StdConstI64Op(0xFF);
-                      newBlock.AddOp(maskOp);
-                      var andOp = new StdAndI64Op((StdI64)input, maskOp.Result);
-                      newBlock.AddOp(andOp);
-                      valueMap[castOp.Result] = andOp.Result;
-                      break;
-                    }
-                  case MaxonValueKind.Integer: {
-                      // Byte/int to int: pass through (bytes are already stored as I64)
-                      if (input is StdI64 i64) {
-                        valueMap[castOp.Result] = i64;
-                      } else if (input is StdF64 f64) {
-                        var fpToSi = new StdFpToSiOp(f64);
-                        newBlock.AddOp(fpToSi);
-                        valueMap[castOp.Result] = fpToSi.Result;
-                      } else {
-                        throw new InvalidOperationException($"Unsupported cast to int from: {input.GetType().Name}");
-                      }
-                      break;
-                    }
-                  case MaxonValueKind.Float: {
-                      if (input is StdI64 i64) {
-                        var siToFp = new StdSiToFpOp(i64);
-                        newBlock.AddOp(siToFp);
-                        valueMap[castOp.Result] = siToFp.Result;
-                      } else if (input is StdF64 f64) {
-                        valueMap[castOp.Result] = f64;
-                      } else {
-                        throw new InvalidOperationException($"Unsupported cast to float from: {input.GetType().Name}");
-                      }
-                      break;
-                    }
-                  case MaxonValueKind.Bool:
-                    throw new InvalidOperationException("Cannot cast to bool");
-                  case MaxonValueKind.Struct:
-                    throw new InvalidOperationException("Cannot cast to struct");
+              var input = valueMap[castOp.Input];
+              switch (castOp.TargetKind) {
+                case MaxonValueKind.Byte: {
+                  // Cast to byte: mask with 0xFF
+                  var maskOp = new StdConstI64Op(0xFF);
+                  newBlock.AddOp(maskOp);
+                  var andOp = new StdAndI64Op((StdI64)input, maskOp.Result);
+                  newBlock.AddOp(andOp);
+                  valueMap[castOp.Result] = andOp.Result;
+                  break;
                 }
-                break;
+                case MaxonValueKind.Integer: {
+                  // Byte/int to int: pass through (bytes are already stored as I64)
+                  if (input is StdI64 i64) {
+                    valueMap[castOp.Result] = i64;
+                  } else if (input is StdF64 f64) {
+                    var fpToSi = new StdFpToSiOp(f64);
+                    newBlock.AddOp(fpToSi);
+                    valueMap[castOp.Result] = fpToSi.Result;
+                  } else {
+                    throw new InvalidOperationException($"Unsupported cast to int from: {input.GetType().Name}");
+                  }
+                  break;
+                }
+                case MaxonValueKind.Float: {
+                  if (input is StdI64 i64) {
+                    var siToFp = new StdSiToFpOp(i64);
+                    newBlock.AddOp(siToFp);
+                    valueMap[castOp.Result] = siToFp.Result;
+                  } else if (input is StdF64 f64) {
+                    valueMap[castOp.Result] = f64;
+                  } else {
+                    throw new InvalidOperationException($"Unsupported cast to float from: {input.GetType().Name}");
+                  }
+                  break;
+                }
+                case MaxonValueKind.Bool:
+                  throw new InvalidOperationException("Cannot cast to bool");
+                case MaxonValueKind.Struct:
+                  throw new InvalidOperationException("Cannot cast to struct");
               }
+              break;
+            }
             case MaxonCallOp callOp:
               LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames);
               break;
@@ -450,20 +450,20 @@ public static class MaxonToStandardConversion {
     var varTypeName = varTypes[varName];
     switch (varTypeName) {
       case "i64": {
-          var loadOp = new StdLoadI64Op(varName);
-          block.AddOp(loadOp);
-          return loadOp.Result;
-        }
+        var loadOp = new StdLoadI64Op(varName);
+        block.AddOp(loadOp);
+        return loadOp.Result;
+      }
       case "f64": {
-          var loadOp = new StdLoadF64Op(varName);
-          block.AddOp(loadOp);
-          return loadOp.Result;
-        }
+        var loadOp = new StdLoadF64Op(varName);
+        block.AddOp(loadOp);
+        return loadOp.Result;
+      }
       case "i1": {
-          var loadOp = new StdLoadI1Op(varName);
-          block.AddOp(loadOp);
-          return loadOp.Result;
-        }
+        var loadOp = new StdLoadI1Op(varName);
+        block.AddOp(loadOp);
+        return loadOp.Result;
+      }
     }
     throw new InvalidOperationException($"Unsupported var type for load: {varTypeName}");
   }
