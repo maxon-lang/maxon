@@ -182,20 +182,26 @@ false
 - `int` → `float` (in mixed arithmetic)
 
 **Explicit Conversions** (using `as` operator)
+
+Only safe (widening) casts are allowed. The compiler rejects casts that could lose data:
+
 ```maxon
-var i = 65 as character         // 'A'
-var b = 1 as bool          // true
-var f = 5 as float         // 5.0
+var b = 42 as byte         // int literal 0-255 to byte (OK)
+var i = b as int           // byte to int (OK)
+var f = b as float         // byte to float (OK)
+var g = 100 as float       // int to float (OK)
 ```
 
 Supported casts:
-- `int` → `float` (int to float only)
-- `int` ↔ `character`
-- `int` ↔ `bool`
-- `character` ↔ `int`
+- `byte` → `int` (widening)
+- `byte` → `float` (widening)
+- `int` → `float` (widening)
+- `int` literal 0-255 → `byte` (compile-time range-checked)
+
+Casts to or from `bool` are not allowed. Narrowing casts (`int` variable → `byte`, `float` → `int`, `float` → `byte`) are not allowed.
 
 **Converting floats to integers:**
-The `float → int` cast is not supported. Use explicit functions instead to make your intent clear:
+The `float → int` cast is not supported because it silently truncates. Use explicit functions instead to make your intent clear:
 - `trunc(x)` - Truncate toward zero (removes fractional part)
 - `round(x)` - Round to nearest integer
 - `floor(x)` - Round down to nearest integer

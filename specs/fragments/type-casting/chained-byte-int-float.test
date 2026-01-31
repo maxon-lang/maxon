@@ -1,0 +1,28 @@
+// Test: chained-byte-int-float
+function main() returns int
+  var b = 25 as byte
+  var i = b as int
+  var f = i as float
+  return trunc(f)
+end 'main'
+---
+ExitCode: 25
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 25
+    x86.mov ecx, 255
+    x86.and eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
+    x86.cvtsi2sd xmm0, eax
+    x86.movsd [rbp-24], xmm0
+    x86.cvttsd2si edx, xmm0
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

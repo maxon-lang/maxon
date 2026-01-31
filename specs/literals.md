@@ -295,3 +295,38 @@ end 'main'
 ```exitcode
 10
 ```
+
+### Overflow Errors
+
+<!-- test: error.int-overflow -->
+```maxon
+function main() returns int
+  var x = 99999999999999999999
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2011: specs/fragments/literals/error.int-overflow.test:3:11: Integer literal '99999999999999999999' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+```
+
+<!-- test: error.hex-overflow -->
+```maxon
+function main() returns int
+  var x = 0x1ffffffffffffffff
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2011: specs/fragments/literals/error.hex-overflow.test:3:11: Integer literal '0x1ffffffffffffffff' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+```
+
+<!-- test: error.float-overflow -->
+```maxon
+function main() returns int
+  var x = 1.0e999
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2011: specs/fragments/literals/error.float-overflow.test:3:11: Float literal '1.0e999' is outside the range of float
+```

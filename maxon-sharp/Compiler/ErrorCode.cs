@@ -32,6 +32,7 @@ public enum ErrorCode {
   ParserMismatchedEndLabel = 2008,
   ParserInvalidAssignment = 2009,
   ParserExpectedToken = 2010,
+  ParserLiteralOverflow = 2011,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,
@@ -41,6 +42,7 @@ public enum ErrorCode {
   SemanticTypeMismatch = 3005,
   SemanticDuplicateDefinition = 3006,
   SemanticSymbolNotExported = 3007,
+  SemanticUnsafeCast = 3008,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

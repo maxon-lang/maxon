@@ -15,6 +15,7 @@ variables.md - let/var declarations (likely already working)
 ## Simple additions:
 bitwise-operators.md - Add bitwise ops to lexer/parser/codegen
 byte-type.md - Add u8 type and casting
+type-casting.md
 unary-operators.md - Additional unary operators
 parentheses.md - Expression grouping
 redundant-type-annotation.md - Error checking

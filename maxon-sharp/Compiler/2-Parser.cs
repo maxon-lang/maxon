@@ -146,21 +146,21 @@ public class Parser(List<Token> tokens) {
     if (Check(TokenType.Minus)) {
       Advance(); // consume '-'
       if (Check(TokenType.IntegerLiteral)) {
-        var val = -ParseIntegerLiteral(Advance().Value);
+        var val = -ParseIntegerLiteral(Advance());
         return (MlirType.I64, new IntegerAttr(val, MlirType.I64));
       }
       if (Check(TokenType.FloatLiteral)) {
-        var val = -double.Parse(Advance().Value, CultureInfo.InvariantCulture);
+        var val = -ParseFloatLiteral(Advance());
         return (MlirType.F64, new FloatAttr(val, MlirType.F64));
       }
       throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected number after '-' in default value", Current().Line, Current().Column);
     }
     if (Check(TokenType.IntegerLiteral)) {
-      var val = ParseIntegerLiteral(Advance().Value);
+      var val = ParseIntegerLiteral(Advance());
       return (MlirType.I64, new IntegerAttr(val, MlirType.I64));
     }
     if (Check(TokenType.FloatLiteral)) {
-      var val = double.Parse(Advance().Value, CultureInfo.InvariantCulture);
+      var val = ParseFloatLiteral(Advance());
       return (MlirType.F64, new FloatAttr(val, MlirType.F64));
     }
     if (Check(TokenType.True)) {
@@ -355,7 +355,7 @@ public class Parser(List<Token> tokens) {
       MaxonBool => MaxonValueKind.Bool,
       MaxonByte => MaxonValueKind.Byte,
       MaxonStruct s => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Cannot return '{s.TypeName}' from function declared to return '{returnType.ToValueKind().ToString().ToLower()}'",
+        $"Cannot return '{s.TypeName}' from function declared to return '{KindDisplayName(returnType.ToValueKind())}'",
         returnToken.Line, returnToken.Column),
       _ => throw new InvalidOperationException($"Compiler bug: unknown MaxonValue type '{value.GetType().Name}'")
     };
@@ -363,7 +363,7 @@ public class Parser(List<Token> tokens) {
     var expectedKind = returnType.ToValueKind();
     if (valueKind != expectedKind) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Cannot return '{valueKind.ToString().ToLower()}' from function declared to return '{expectedKind.ToString().ToLower()}'",
+        $"Cannot return '{KindDisplayName(valueKind)}' from function declared to return '{KindDisplayName(expectedKind)}'",
         returnToken.Line, returnToken.Column);
     }
   }
@@ -651,9 +651,11 @@ public class Parser(List<Token> tokens) {
 
     // Handle 'as' cast expressions (postfix, binds tighter than binary ops)
     while (Check(TokenType.As)) {
-      Advance(); // consume 'as'
+      var asToken = Advance(); // consume 'as'
       var targetKind = ParseTypeKeyword();
       var inputVal = ResolveExprValue(lhs);
+      var sourceKind = DetermineValueKind(inputVal);
+      ValidateCast(sourceKind, targetKind, asToken);
       var castOp = new MaxonCastOp(inputVal, targetKind);
       _currentBlock!.AddOp(castOp);
       lhs = new ExprResult.Direct(castOp.Result);
@@ -687,7 +689,7 @@ public class Parser(List<Token> tokens) {
       Advance(); // consume '-'
       if (Check(TokenType.IntegerLiteral)) {
         var token = Advance();
-        var value = -ParseIntegerLiteral(token.Value);
+        var value = -ParseIntegerLiteral(token);
         var op = new MaxonLiteralOp(value);
         _currentBlock!.AddOp(op);
         return new ExprResult.Direct(op.Result);
@@ -695,7 +697,7 @@ public class Parser(List<Token> tokens) {
 
       if (Check(TokenType.FloatLiteral)) {
         var token = Advance();
-        var value = -double.Parse(token.Value, CultureInfo.InvariantCulture);
+        var value = -ParseFloatLiteral(token);
         var op = new MaxonLiteralOp(value);
         _currentBlock!.AddOp(op);
         return new ExprResult.Direct(op.Result);
@@ -722,7 +724,7 @@ public class Parser(List<Token> tokens) {
 
     if (Check(TokenType.IntegerLiteral)) {
       var token = Advance();
-      var value = ParseIntegerLiteral(token.Value);
+      var value = ParseIntegerLiteral(token);
       var op = new MaxonLiteralOp(value);
       _currentBlock!.AddOp(op);
       return new ExprResult.Direct(op.Result);
@@ -730,7 +732,7 @@ public class Parser(List<Token> tokens) {
 
     if (Check(TokenType.FloatLiteral)) {
       var token = Advance();
-      var value = double.Parse(token.Value, CultureInfo.InvariantCulture);
+      var value = ParseFloatLiteral(token);
       var op = new MaxonLiteralOp(value);
       _currentBlock!.AddOp(op);
       return new ExprResult.Direct(op.Result);
@@ -910,17 +912,73 @@ public class Parser(List<Token> tokens) {
     };
   }
 
+  private static bool IsWideningCast(MaxonValueKind source, MaxonValueKind target) {
+    return (source, target) switch {
+      (MaxonValueKind.Byte, MaxonValueKind.Integer) => true,
+      (MaxonValueKind.Byte, MaxonValueKind.Float) => true,
+      (MaxonValueKind.Integer, MaxonValueKind.Float) => true,
+      (MaxonValueKind.Integer, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Float, MaxonValueKind.Integer) => false,
+      (MaxonValueKind.Float, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Bool, MaxonValueKind.Integer) => false,
+      (MaxonValueKind.Bool, MaxonValueKind.Float) => false,
+      (MaxonValueKind.Bool, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Integer, MaxonValueKind.Bool) => false,
+      (MaxonValueKind.Float, MaxonValueKind.Bool) => false,
+      (MaxonValueKind.Byte, MaxonValueKind.Bool) => false,
+      _ => throw new InvalidOperationException($"Unhandled cast combination: {source} -> {target}")
+    };
+  }
+
+  private void ValidateCast(MaxonValueKind sourceKind, MaxonValueKind targetKind, Token asToken) {
+    if (sourceKind == targetKind) return;
+
+    // Allow int literal in 0-255 range to cast to byte
+    if (targetKind == MaxonValueKind.Byte && sourceKind == MaxonValueKind.Integer) {
+      var lastOp = _currentBlock!.Operations.LastOrDefault();
+      if (lastOp is MaxonLiteralOp lit && lit.ValueKind == MaxonValueKind.Integer
+          && lit.IntValue >= 0 && lit.IntValue <= 255) {
+        return;
+      }
+    }
+
+    if (!IsWideningCast(sourceKind, targetKind)) {
+      throw new CompileError(
+        ErrorCode.SemanticUnsafeCast,
+        $"Cannot cast from {KindDisplayName(sourceKind)} to {KindDisplayName(targetKind)}",
+        asToken.Line, asToken.Column);
+    }
+  }
+
+  private static string KindDisplayName(MaxonValueKind kind) => kind switch {
+    MaxonValueKind.Integer => "int",
+    MaxonValueKind.Float => "float",
+    MaxonValueKind.Bool => "bool",
+    MaxonValueKind.Byte => "byte",
+    MaxonValueKind.Struct => "struct",
+    _ => throw new InvalidOperationException($"Unhandled MaxonValueKind: {kind}")
+  };
+
   private (MaxonValueKind Kind, MaxonValue Lhs, MaxonValue Rhs) DetermineValueKind(MaxonValue lhs, MaxonValue rhs) {
-    return (lhs, rhs) switch {
-      (MaxonInteger, MaxonInteger) => (MaxonValueKind.Integer, lhs, rhs),
-      (MaxonFloat, MaxonFloat) => (MaxonValueKind.Float, lhs, rhs),
-      (MaxonBool, MaxonBool) => (MaxonValueKind.Bool, lhs, rhs),
-      (MaxonByte, MaxonByte) => (MaxonValueKind.Byte, lhs, rhs),
-      (MaxonInteger, MaxonFloat) => (MaxonValueKind.Float, PromoteIntToFloat(lhs), rhs),
-      (MaxonFloat, MaxonInteger) => (MaxonValueKind.Float, lhs, PromoteIntToFloat(rhs)),
-      _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
-        $"Cannot operate on {lhs.GetType().Name} and {rhs.GetType().Name}",
-        Current().Line, Current().Column)
+    var lhsKind = DetermineValueKind(lhs);
+    var rhsKind = DetermineValueKind(rhs);
+
+    if (lhsKind == rhsKind) return (lhsKind, lhs, rhs);
+    if (IsWideningCast(lhsKind, rhsKind)) return (rhsKind, PromoteValue(lhs, rhsKind), rhs);
+    if (IsWideningCast(rhsKind, lhsKind)) return (lhsKind, lhs, PromoteValue(rhs, lhsKind));
+
+    throw new CompileError(ErrorCode.ParserExpectedExpression,
+      $"Cannot operate on {KindDisplayName(lhsKind)} and {KindDisplayName(rhsKind)}",
+      Current().Line, Current().Column);
+  }
+
+  private MaxonValue PromoteValue(MaxonValue value, MaxonValueKind targetKind) {
+    var sourceKind = DetermineValueKind(value);
+    return (sourceKind, targetKind) switch {
+      (MaxonValueKind.Integer, MaxonValueKind.Float) => PromoteIntToFloat(value),
+      (MaxonValueKind.Byte, MaxonValueKind.Integer) => value,
+      (MaxonValueKind.Byte, MaxonValueKind.Float) => PromoteIntToFloat(value),
+      _ => throw new InvalidOperationException($"Unhandled promotion: {sourceKind} -> {targetKind}")
     };
   }
 
@@ -1016,15 +1074,38 @@ public class Parser(List<Token> tokens) {
 
   private string UniqueLabel(string label) => $"{label}_{_blockCounter++}";
 
-  private static long ParseIntegerLiteral(string text) {
-    text = text.Replace("_", "");
-    if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-      return Convert.ToInt64(text[2..], 16);
-    if (text.StartsWith("0b", StringComparison.OrdinalIgnoreCase))
-      return Convert.ToInt64(text[2..], 2);
-    if (text.StartsWith("0o", StringComparison.OrdinalIgnoreCase))
-      return Convert.ToInt64(text[2..], 8);
-    return long.Parse(text);
+  private static long ParseIntegerLiteral(Token token) {
+    var text = token.Value.Replace("_", "");
+    try {
+      if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        return Convert.ToInt64(text[2..], 16);
+      if (text.StartsWith("0b", StringComparison.OrdinalIgnoreCase))
+        return Convert.ToInt64(text[2..], 2);
+      if (text.StartsWith("0o", StringComparison.OrdinalIgnoreCase))
+        return Convert.ToInt64(text[2..], 8);
+      return long.Parse(text);
+    } catch (OverflowException) {
+      throw new CompileError(ErrorCode.ParserLiteralOverflow,
+        $"Integer literal '{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
+        token.Line, token.Column);
+    }
+  }
+
+  private static double ParseFloatLiteral(Token token) {
+    var text = token.Value.Replace("_", "");
+    try {
+      var value = double.Parse(text, CultureInfo.InvariantCulture);
+      if (double.IsInfinity(value)) {
+        throw new CompileError(ErrorCode.ParserLiteralOverflow,
+          $"Float literal '{token.Value}' is outside the range of float",
+          token.Line, token.Column);
+      }
+      return value;
+    } catch (OverflowException) {
+      throw new CompileError(ErrorCode.ParserLiteralOverflow,
+        $"Float literal '{token.Value}' is outside the range of float",
+        token.Line, token.Column);
+    }
   }
 
   private int ExpectEndLabel(string expectedLabel) {
