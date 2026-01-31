@@ -169,25 +169,13 @@ public class Parser(List<Token> tokens) {
 		Advance(); // consume 'return'
 
 		if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
-			var value = ParseReturnExpression();
+			var value = ResolveExprValue(ParseExpression());
 			_currentBlock!.AddOp(new MaxonReturnOp(value));
 		} else {
 			_currentBlock!.AddOp(new MaxonReturnOp());
 		}
 	}
 
-	private MaxonValue ParseReturnExpression() {
-		// Check for function call: identifier followed by '('
-		if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftParen) {
-			var token = Advance();
-			Advance(); // consume '('
-			var args = ParseCallArgs(token);
-			var callOp = CreateFunctionCall(token, args);
-			return callOp.Result!;
-		}
-
-		return ResolveExprValue(ParseExpression());
-	}
 
 	private void ParseVarDecl() {
 		Advance(); // consume 'var'
@@ -258,11 +246,6 @@ public class Parser(List<Token> tokens) {
 			ExpectEndLabel(elseSourceLabel);
 		}
 
-		// Emit cond_br into the entry block
-		if (elseLabel != null) {
-			entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel));
-		}
-
 		// If either branch doesn't end with a return, create a merge block
 		bool thenNeedsMerge = !BlockEndsWithTerminator(thenBlock);
 		bool elseNeedsMerge = elseBlock != null && !BlockEndsWithTerminator(elseBlock);
@@ -276,9 +259,20 @@ public class Parser(List<Token> tokens) {
 			if (elseNeedsMerge)
 				elseBlock!.AddOp(new MaxonBrOp(mergeLabel));
 
+			// Emit cond_br: if true go to then-block, if false go to else or merge
+			entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel ?? mergeLabel));
 			_currentBlock = mergeBlock;
+		} else if (elseLabel != null) {
+			// Both branches terminate — cond_br dispatches directly, no after block needed.
+			entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel));
+			_currentBlock = null;
 		} else {
-			_currentBlock = entryBlock;
+			// If-without-else where the then-block terminates — need an after block
+			// as the false target for the cond_br.
+			var afterLabel = $"{thenLabel}.after";
+			var afterBlock = _currentFunction!.Body.AddBlock(afterLabel);
+			entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, afterLabel));
+			_currentBlock = afterBlock;
 		}
 	}
 

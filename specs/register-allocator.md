@@ -1807,7 +1807,9 @@ module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
     %6 = func.param a : StdI64
+    memref.store %6, a
     %7 = func.param b : StdI64
+    memref.store %7, b
     %8 = arith.addi %6, %7
     func.return %8
   }
@@ -1825,8 +1827,12 @@ module {
   entry:
     x86.push rbp
     x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
     x86.add ecx, edx
     x86.mov eax, ecx
+    x86.add rsp, 16
     x86.pop rbp
     x86.ret
   }
@@ -2593,11 +2599,10 @@ module {
   second_2:
     x86.mov eax, 2
     x86.mov ecx, [rbp-16]
-    x86.mov edx, ecx
-    x86.imul edx, eax
-    x86.mov ebx, [rbp-8]
-    x86.add ebx, edx
-    x86.mov [rbp-8], ebx
+    x86.imul ecx, eax
+    x86.mov edx, [rbp-8]
+    x86.add edx, ecx
+    x86.mov [rbp-8], edx
     x86.jmp main.first_1.merge
   first_1.merge:
     x86.mov eax, 1
@@ -3000,6 +3005,7 @@ module {
   func @double(x: i64) -> i64 {
   entry:
     %16 = func.param x : StdI64
+    memref.store %16, x
     %17 = arith.constant {value = 2 : i64}
     %18 = arith.muli %16, %17
     func.return %18
@@ -3038,10 +3044,12 @@ module {
   entry:
     x86.push rbp
     x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov [rbp-8], ecx
     x86.mov eax, 2
-    x86.mov edx, ecx
-    x86.imul edx, eax
-    x86.mov eax, edx
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.add rsp, 16
     x86.pop rbp
     x86.ret
   }
@@ -3139,16 +3147,13 @@ module {
     x86.mov ecx, 2
     x86.add eax, ecx
     x86.mov edx, 3
-    x86.mov ebx, eax
-    x86.imul ebx, edx
-    x86.mov esi, 4
-    x86.add ebx, esi
-    x86.mov edi, 2
-    x86.mov r8, ebx
-    x86.imul r8, edi
-    x86.mov r9, 6
-    x86.add r8, r9
-    x86.mov eax, r8
+    x86.imul eax, edx
+    x86.mov ebx, 4
+    x86.add eax, ebx
+    x86.mov esi, 2
+    x86.imul eax, esi
+    x86.mov edi, 6
+    x86.add eax, edi
     x86.pop rbp
     x86.ret
   }
@@ -3222,9 +3227,7 @@ module {
     x86.mov [rbp-32], ebx
     x86.add eax, ecx
     x86.sub edx, ebx
-    x86.mov esi, eax
-    x86.imul esi, edx
-    x86.mov eax, esi
+    x86.imul eax, edx
     x86.add rsp, 32
     x86.pop rbp
     x86.ret
@@ -3277,10 +3280,15 @@ module {
   func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
     %15 = func.param a : StdI64
+    memref.store %15, a
     %16 = func.param b : StdI64
+    memref.store %16, b
     %17 = func.param c : StdI64
+    memref.store %17, c
     %18 = func.param d : StdI64
+    memref.store %18, d
     %19 = func.param e : StdI64
+    memref.store %19, e
     %20 = arith.addi %15, %16
     %21 = arith.addi %20, %17
     %22 = arith.addi %21, %18
@@ -3304,12 +3312,19 @@ module {
   entry:
     x86.push rbp
     x86.mov rbp, rsp
+    x86.sub rsp, 48
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], r9
     x86.mov eax, [rbp+16]
+    x86.mov [rbp-40], eax
     x86.add ecx, edx
     x86.add ecx, r8
     x86.add ecx, r9
     x86.add ecx, eax
     x86.mov eax, ecx
+    x86.add rsp, 48
     x86.pop rbp
     x86.ret
   }
@@ -3393,14 +3408,23 @@ module {
   func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
     %27 = func.param a : StdI64
+    memref.store %27, a
     %28 = func.param b : StdI64
+    memref.store %28, b
     %29 = func.param c : StdI64
+    memref.store %29, c
     %30 = func.param d : StdI64
+    memref.store %30, d
     %31 = func.param e : StdI64
+    memref.store %31, e
     %32 = func.param f : StdI64
+    memref.store %32, f
     %33 = func.param g : StdI64
+    memref.store %33, g
     %34 = func.param h : StdI64
+    memref.store %34, h
     %35 = func.param i : StdI64
+    memref.store %35, i
     %36 = arith.addi %27, %28
     %37 = arith.addi %36, %29
     %38 = arith.addi %37, %30
@@ -3432,17 +3456,24 @@ module {
   entry:
     x86.push rbp
     x86.mov rbp, rsp
-    x86.sub rsp, 16
-    x86.mov eax, [rbp+16]
-    x86.mov ebx, [rbp+24]
-    x86.mov esi, [rbp+32]
-    x86.mov edi, [rbp+40]
+    x86.sub rsp, 80
     x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], r9
+    x86.mov eax, [rbp+16]
+    x86.mov [rbp-40], eax
+    x86.mov ebx, [rbp+24]
+    x86.mov [rbp-48], ebx
+    x86.mov esi, [rbp+32]
+    x86.mov [rbp-56], esi
+    x86.mov edi, [rbp+40]
+    x86.mov [rbp-64], edi
     x86.mov ecx, [rbp+48]
-    x86.mov [rbp-16], r8
+    x86.mov [rbp-72], ecx
     x86.mov r8, [rbp-8]
     x86.add r8, edx
-    x86.mov edx, [rbp-16]
+    x86.mov edx, [rbp-24]
     x86.add r8, edx
     x86.add r8, r9
     x86.add r8, eax
@@ -3451,7 +3482,7 @@ module {
     x86.add r8, edi
     x86.add r8, ecx
     x86.mov eax, r8
-    x86.add rsp, 16
+    x86.add rsp, 80
     x86.pop rbp
     x86.ret
   }
@@ -3489,7 +3520,7 @@ module {
 }
 ```
 
-<!-- disabled-test: int-recursive-factorial -->
+<!-- test: int-recursive-factorial -->
 ```maxon
 function factorial(n int) returns int
     if n <= 1 'base'
@@ -3506,7 +3537,108 @@ end 'main'
 120
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @factorial(n: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    %1 = maxon.literal {value = 1 : i64}
+    %2 = maxon.binop %0, %1 {op = le} {kind = i64}
+    maxon.cond_br %2 [then: base_0, else: base_0.after]
+  base_0:
+    %3 = maxon.literal {value = 1 : i64}
+    maxon.return %3
+  base_0.after:
+    %4 = maxon.literal {value = 1 : i64}
+    %5 = maxon.var_ref {var = n} {type = i64}
+    %6 = maxon.binop %5, %4 {op = sub} {kind = i64}
+    %7 = maxon.call @factorial %6
+    %8 = maxon.var_ref {var = n} {type = i64}
+    %9 = maxon.binop %8, %7 {op = mul} {kind = i64}
+    maxon.return %9
+  }
+  func @main() -> i64 {
+  entry:
+    %10 = maxon.literal {value = 5 : i64}
+    %11 = maxon.call @factorial %10
+    %12 = maxon.literal {value = 256 : i64}
+    %13 = maxon.binop %11, %12 {op = mod} {kind = i64}
+    maxon.return %13
+  }
+}
+=== standard
+module {
+  func @factorial(n: i64) -> i64 {
+  entry:
+    %14 = func.param n : StdI64
+    memref.store %14, n
+    %15 = arith.constant {value = 1 : i64}
+    %16 = arith.cmpi le %14, %15
+    cf.cond_br %16 [then: base_0, else: base_0.after]
+  base_0:
+    %17 = arith.constant {value = 1 : i64}
+    func.return %17
+  base_0.after:
+    %18 = arith.constant {value = 1 : i64}
+    %19 = memref.load n : i64
+    %20 = arith.subi %19, %18
+    %21 = func.call @factorial %20
+    %22 = memref.load n : i64
+    %23 = arith.muli %22, %21
+    func.return %23
+  }
+  func @main() -> i64 {
+  entry:
+    %24 = arith.constant {value = 5 : i64}
+    %25 = func.call @factorial %24
+    %26 = arith.constant {value = 256 : i64}
+    %27 = arith.remsi %25, %26
+    func.return %27
+  }
+}
+=== x86
+module {
+  func @factorial(n: i64) -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 1
+    x86.cmp ecx, eax
+    x86.jg factorial.base_0.after
+  base_0:
+    x86.mov eax, 1
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  base_0.after:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.sub ecx, eax
+    x86.call factorial
+    x86.mov edx, [rbp-8]
+    x86.imul edx, eax
+    x86.mov eax, edx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.mov eax, 5
+    x86.mov ecx, eax
+    x86.call factorial
+    x86.mov ecx, 256
+    x86.cqo
+    x86.idiv ecx
+    x86.mov eax, edx
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-loop-pressure-with-call -->

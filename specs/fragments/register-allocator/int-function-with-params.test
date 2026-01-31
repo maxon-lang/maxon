@@ -31,7 +31,9 @@ module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
     %6 = func.param a : StdI64
+    memref.store %6, a
     %7 = func.param b : StdI64
+    memref.store %7, b
     %8 = arith.addi %6, %7
     func.return %8
   }
@@ -49,8 +51,12 @@ module {
   entry:
     x86.push rbp
     x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
     x86.add ecx, edx
     x86.mov eax, ecx
+    x86.add rsp, 16
     x86.pop rbp
     x86.ret
   }
@@ -74,8 +80,12 @@ module {
   entry:
     x86.push rbp
     x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
     x86.add ecx, edx
     x86.mov eax, ecx
+    x86.add rsp, 16
     x86.pop rbp
     x86.ret
   }

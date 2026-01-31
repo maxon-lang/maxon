@@ -77,16 +77,19 @@ public static class StandardToX86Conversion {
 
 					case StdAddI64Op addOp:
 						regManager.EmitBinaryRegReg(addOp.Lhs, addOp.Rhs, addOp.Result, x86Block,
-							(l, r) => new X86AddRegRegOp(l, r));
+							(l, r) => new X86AddRegRegOp(l, r),
+							lhsConsumed: IsLastUse(lastUseOfValue, addOp.Lhs, currentOpIndex));
 						break;
 
 					case StdSubI64Op subOp:
 						regManager.EmitBinaryRegReg(subOp.Lhs, subOp.Rhs, subOp.Result, x86Block,
-							(l, r) => new X86SubRegRegOp(l, r));
+							(l, r) => new X86SubRegRegOp(l, r),
+							lhsConsumed: IsLastUse(lastUseOfValue, subOp.Lhs, currentOpIndex));
 						break;
 
 					case StdMulI64Op mulOp:
-						regManager.EmitMultiply(mulOp.Lhs, mulOp.Rhs, mulOp.Result, x86Block);
+						regManager.EmitMultiply(mulOp.Lhs, mulOp.Rhs, mulOp.Result, x86Block,
+							lhsConsumed: IsLastUse(lastUseOfValue, mulOp.Lhs, currentOpIndex));
 						break;
 
 					case StdDivI64Op divOp:
@@ -206,6 +209,10 @@ public static class StandardToX86Conversion {
 		}
 
 		return newFunc;
+	}
+
+	private static bool IsLastUse(Dictionary<StdValue, int> lastUseOfValue, StdValue value, int currentOpIndex) {
+		return lastUseOfValue.TryGetValue(value, out var lastUse) && lastUse == currentOpIndex;
 	}
 
 	private static void FreeDeadValues(

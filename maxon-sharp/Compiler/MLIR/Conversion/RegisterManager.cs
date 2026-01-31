@@ -59,7 +59,8 @@ public class RegisterManager {
 	/// May evict an existing value if all registers are occupied.
 	/// Protected registers will not be evicted.
 	/// </summary>
-	private X86Register AllocateRegister(StdValue value, MlirBlock<X86Op> block, X86Register? protect = null) {
+	private X86Register AllocateRegister(StdValue value, MlirBlock<X86Op> block,
+		X86Register? protect1 = null, X86Register? protect2 = null) {
 		// 1. Try the next sequential slot (preserves existing test output)
 		if (_nextFreshIndex < GprPool.Length) {
 			var candidate = GprPool[_nextFreshIndex];
@@ -79,7 +80,7 @@ public class RegisterManager {
 		}
 
 		// 3. All registers occupied — evict one
-		Evict(block, protect);
+		Evict(block, protect1, protect2);
 
 		// Now find the freed register
 		foreach (var reg in GprPool) {
@@ -96,7 +97,8 @@ public class RegisterManager {
 	/// Ensure a value is in a physical register, reloading from stack if needed.
 	/// Protected registers will not be evicted during allocation.
 	/// </summary>
-	private X86Register EnsureInRegister(StdValue value, MlirBlock<X86Op> block, X86Register? protect = null) {
+	private X86Register EnsureInRegister(StdValue value, MlirBlock<X86Op> block,
+		X86Register? protect1 = null, X86Register? protect2 = null) {
 		// Already in a register
 		if (_valueToRegister.TryGetValue(value, out var reg)) {
 			_lastUsed[reg] = _currentOpIndex;
@@ -105,7 +107,7 @@ public class RegisterManager {
 
 		// Not in a register — must reload from stack
 		if (_valueStackHome.TryGetValue(value, out var displacement)) {
-			var reloadReg = AllocateRegister(value, block, protect);
+			var reloadReg = AllocateRegister(value, block, protect1, protect2);
 			block.AddOp(new X86MovRegMemOp(reloadReg, displacement));
 			return reloadReg;
 		}
@@ -122,31 +124,34 @@ public class RegisterManager {
 	}
 
 	/// <summary>
-	/// Emit a two-operand register-register instruction (e.g. add, sub)
-	/// where the result overwrites the lhs register.
+	/// Emit a two-operand register-register instruction (e.g. add, sub).
+	/// When lhsConsumed is true, reuses the LHS register directly (no extra mov).
+	/// When false, allocates a separate result register and copies LHS into it first.
 	/// </summary>
 	public void EmitBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,
-		MlirBlock<X86Op> block, Func<X86Register, X86Register, X86Op> makeOp) {
+		MlirBlock<X86Op> block, Func<X86Register, X86Register, X86Op> makeOp,
+		bool lhsConsumed = false) {
 		var rhsReg = EnsureInRegister(rhs, block);
-		var lhsReg = EnsureInRegister(lhs, block, protect: rhsReg);
-		block.AddOp(makeOp(lhsReg, rhsReg));
-		TransferValue(lhs, lhsReg, result);
+		var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
+		if (lhsConsumed) {
+			TransferValue(lhs, lhsReg, result);
+			block.AddOp(makeOp(lhsReg, rhsReg));
+		} else {
+			var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: rhsReg);
+			if (resultReg != lhsReg) {
+				block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
+			}
+			block.AddOp(makeOp(resultReg, rhsReg));
+		}
 	}
 
 	/// <summary>
 	/// Emit IMUL (integer multiplication).
 	/// Result = lhs * rhs.
 	/// </summary>
-	public void EmitMultiply(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-		var rhsReg = EnsureInRegister(rhs, block);
-		var lhsReg = EnsureInRegister(lhs, block, protect: rhsReg);
-
-		// IMUL reg, reg - multiply and store result in first operand
-		var resultReg = AllocateRegister(result, block);
-		if (resultReg != lhsReg) {
-			block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
-		}
-		block.AddOp(new X86ImulRegRegOp(resultReg, rhsReg));
+	public void EmitMultiply(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block,
+		bool lhsConsumed = false) {
+		EmitBinaryRegReg(lhs, rhs, result, block, (l, r) => new X86ImulRegRegOp(l, r), lhsConsumed);
 	}
 
 	/// <summary>
@@ -171,7 +176,7 @@ public class RegisterManager {
 	/// </summary>
 	private void EmitIdivOperation(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
 		var rhsReg = EnsureInRegister(rhs, block);
-		var lhsReg = EnsureInRegister(lhs, block, protect: rhsReg);
+		var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
 
 		// Divisor must not be in RAX or RDX (IDIV clobbers both).
 		if (rhsReg == X86Register.Eax || rhsReg == X86Register.Edx) {
@@ -238,7 +243,7 @@ public class RegisterManager {
 	/// </summary>
 	public void EmitIntegerCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
 		var rhsReg = EnsureInRegister(rhs, block);
-		var lhsReg = EnsureInRegister(lhs, block, protect: rhsReg);
+		var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
 		block.AddOp(new X86CmpRegRegOp(lhsReg, rhsReg));
 	}
 
@@ -272,6 +277,11 @@ public class RegisterManager {
 	public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
 		int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
 		int stackArgCount = args.Count - regArgCount;
+
+		// Spill caller-saved registers that hold live values without a stack home.
+		// This must happen before argument placement overwrites those registers.
+		var argSet = new HashSet<StdValue>(args);
+		SpillCallerSavedRegisters(block, argSet);
 
 		// Allocate stack space for overflow args (aligned to 16 bytes)
 		int stackArgBytes = stackArgCount > 0 ? ((stackArgCount * 8 + 15) & ~15) : 0;
@@ -377,17 +387,35 @@ public class RegisterManager {
 		}
 	}
 
+	private static readonly X86Register[] CallerSavedRegisters = [
+		X86Register.Eax, X86Register.Ecx, X86Register.Edx,
+		X86Register.R8, X86Register.R9, X86Register.R10, X86Register.R11
+	];
+
+	/// <summary>
+	/// Before a call, spill any caller-saved register values that don't have
+	/// a stack home yet, skipping values that are call arguments (they will
+	/// be consumed by the call and don't need preserving).
+	/// </summary>
+	private void SpillCallerSavedRegisters(MlirBlock<X86Op> block, HashSet<StdValue> callArgs) {
+		foreach (var reg in CallerSavedRegisters) {
+			if (_registerContents.TryGetValue(reg, out var value)
+				&& !_valueStackHome.ContainsKey(value)
+				&& !callArgs.Contains(value)) {
+				_nextSpillOffset -= 8;
+				block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg));
+				_valueStackHome[value] = _nextSpillOffset;
+			}
+		}
+	}
+
 	/// <summary>
 	/// After a call, caller-saved registers are clobbered. Remove any value mappings
 	/// for those registers so stale values are never used.
 	/// Windows x64 caller-saved: rax, rcx, rdx, r8, r9, r10, r11.
 	/// </summary>
 	private void InvalidateCallerSavedRegisters() {
-		X86Register[] callerSaved = [
-			X86Register.Eax, X86Register.Ecx, X86Register.Edx,
-			X86Register.R8, X86Register.R9, X86Register.R10, X86Register.R11
-		];
-		foreach (var reg in callerSaved) {
+		foreach (var reg in CallerSavedRegisters) {
 			if (_registerContents.TryGetValue(reg, out var value)) {
 				_valueToRegister.Remove(value);
 				_registerContents.Remove(reg);
@@ -545,12 +573,12 @@ public class RegisterManager {
 	/// Find the least-recently-used register, optionally filtering to values with a stack home.
 	/// Returns null if no eligible register is found.
 	/// </summary>
-	private X86Register? FindLruRegister(X86Register? protect, bool requireStackHome) {
+	private X86Register? FindLruRegister(X86Register? protect1, X86Register? protect2, bool requireStackHome) {
 		X86Register? bestReg = null;
 		int bestLastUsed = int.MaxValue;
 
 		foreach (var (reg, value) in _registerContents) {
-			if (reg == protect) continue;
+			if (reg == protect1 || reg == protect2) continue;
 			if (requireStackHome && !_valueStackHome.ContainsKey(value)) continue;
 			var lastUsed = _lastUsed.GetValueOrDefault(reg, 0);
 			if (lastUsed < bestLastUsed) {
@@ -568,13 +596,13 @@ public class RegisterManager {
 	/// If no value has a stack home, allocates a spill slot and stores the value.
 	/// Protected registers will not be evicted.
 	/// </summary>
-	private void Evict(MlirBlock<X86Op> block, X86Register? protect = null) {
+	private void Evict(MlirBlock<X86Op> block, X86Register? protect1 = null, X86Register? protect2 = null) {
 		// Prefer evicting values that have a stack home (no spill store needed)
-		var bestReg = FindLruRegister(protect, requireStackHome: true);
+		var bestReg = FindLruRegister(protect1, protect2, requireStackHome: true);
 
 		if (bestReg == null) {
 			// No unprotected value has a stack home — spill the LRU value to a new stack slot
-			bestReg = FindLruRegister(protect, requireStackHome: false);
+			bestReg = FindLruRegister(protect1, protect2, requireStackHome: false);
 
 			if (bestReg == null) {
 				throw new InvalidOperationException("RegisterManager: no registers to evict");

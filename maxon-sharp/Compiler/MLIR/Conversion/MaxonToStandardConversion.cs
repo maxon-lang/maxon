@@ -22,6 +22,7 @@ public static class MaxonToStandardConversion {
 								var stdResult = paramOp.ValueKind.CreateStdValue();
 								newBlock.AddOp(new StdParamOp(paramOp.Index, paramOp.Name, stdResult));
 								valueMap[paramOp.Result] = stdResult;
+								EmitStore(newBlock, stdResult, paramOp.Name, varTypes);
 								break;
 							}
 						case MaxonLiteralOp litOp: {
@@ -48,20 +49,7 @@ public static class MaxonToStandardConversion {
 							}
 						case MaxonAssignOp assignOp: {
 								var mappedValue = valueMap[assignOp.Value];
-								switch (mappedValue) {
-									case StdI64 i64: {
-											newBlock.AddOp(new StdStoreI64Op(i64, assignOp.VarName));
-											varTypes[assignOp.VarName] = "i64";
-											break;
-										}
-									case StdF64 f64: {
-											newBlock.AddOp(new StdStoreF64Op(f64, assignOp.VarName));
-											varTypes[assignOp.VarName] = "f64";
-											break;
-										}
-									default:
-										throw new InvalidOperationException($"Unsupported value type for assign: {mappedValue.GetType().Name}");
-								}
+								EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
 								break;
 							}
 						case MaxonVarRefOp varRef: {
@@ -80,7 +68,7 @@ public static class MaxonToStandardConversion {
 											break;
 										}
 									default:
-										throw new InvalidOperationException($"Unsupported var type: {varTypeName}");
+										throw new InvalidOperationException($"Unsupported var type for load: {varTypeName}");
 								}
 								break;
 							}
@@ -129,6 +117,21 @@ public static class MaxonToStandardConversion {
 			result.AddFunction(newFunc);
 		}
 		return result;
+	}
+
+	private static void EmitStore(MlirBlock<StandardOp> block, StdValue value, string varName, Dictionary<string, string> varTypes) {
+		switch (value) {
+			case StdI64 i64:
+				block.AddOp(new StdStoreI64Op(i64, varName));
+				varTypes[varName] = "i64";
+				break;
+			case StdF64 f64:
+				block.AddOp(new StdStoreF64Op(f64, varName));
+				varTypes[varName] = "f64";
+				break;
+			default:
+				throw new InvalidOperationException($"Unsupported value type for store: {value.GetType().Name}");
+		}
 	}
 
 	private static readonly Dictionary<(MaxonBinOperator, MaxonValueKind), Func<StdValue, StdValue, (StandardOp Op, StdValue Result)>> BinOpFactories = new() {
