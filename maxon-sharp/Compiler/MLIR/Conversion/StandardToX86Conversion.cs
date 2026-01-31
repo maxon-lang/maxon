@@ -105,9 +105,20 @@ public static class StandardToX86Conversion {
 							(l, r) => new X86AddSdOp(l, r));
 						break;
 
+					case StdSubF64Op subF64Op:
+						regManager.EmitXmmBinaryRegReg(subF64Op.Lhs, subF64Op.Rhs, subF64Op.Result, x86Block,
+							(l, r) => new X86SubSdOp(l, r));
+						break;
+
 					case StdFpToSiOp fpToSiOp:
 						regManager.EmitCvttSd2Si(fpToSiOp.Input, fpToSiOp.Result, x86Block);
 						break;
+
+					case StdAbsF64Op absOp: {
+							var maskLabel = GetOrCreateAbsMask(outputModule);
+							regManager.EmitAbsF64(absOp.Input, absOp.Result, maskLabel, x86Block);
+							break;
+						}
 
 					case StdConstF64Op floatOp: {
 							var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
@@ -235,7 +246,20 @@ public static class StandardToX86Conversion {
 		if (!floatConstants.TryGetValue(value, out var label)) {
 			label = $"__float_{value.ToString(CultureInfo.InvariantCulture)}";
 			floatConstants[value] = label;
-			module.RdataEntries.Add((label, BitConverter.GetBytes(value)));
+			module.RdataEntries.Add((label, BitConverter.GetBytes(value), 1));
+		}
+		return label;
+	}
+
+	private static string GetOrCreateAbsMask(MlirModule<X86Op> module) {
+		const string label = "__abs_mask";
+		if (module.RdataEntries.All(e => e.label != label)) {
+			// 128-bit mask: clear sign bit of each 64-bit double lane
+			var mask = new byte[16];
+			var laneMask = BitConverter.GetBytes(0x7FFFFFFFFFFFFFFFL);
+			Array.Copy(laneMask, 0, mask, 0, 8);
+			Array.Copy(laneMask, 0, mask, 8, 8);
+			module.RdataEntries.Add((label, mask, 16));
 		}
 		return label;
 	}

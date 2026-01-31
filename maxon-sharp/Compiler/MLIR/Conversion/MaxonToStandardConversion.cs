@@ -101,6 +101,13 @@ public static class MaxonToStandardConversion {
 								valueMap[truncOp.Result] = fpToSi.Result;
 								break;
 							}
+						case MaxonAbsOp absOp: {
+								var input = (StdF64)valueMap[absOp.Input];
+								var absF64 = new StdAbsF64Op(input);
+								newBlock.AddOp(absF64);
+								valueMap[absOp.Result] = absF64.Result;
+								break;
+							}
 						case MaxonCallOp callOp: {
 								var newArgs = callOp.Args.Select(a => valueMap[a]).ToList();
 								var callResult = callOp.ResultKind?.CreateStdValue();
@@ -148,6 +155,7 @@ public static class MaxonToStandardConversion {
 		{ (MaxonBinOperator.Div, MaxonValueKind.Integer), (l, r) => { var op = new StdDivI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Mod, MaxonValueKind.Integer), (l, r) => { var op = new StdRemI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Add, MaxonValueKind.Float), (l, r) => { var op = new StdAddF64Op((StdF64)l, (StdF64)r); return (op, op.Result); } },
+		{ (MaxonBinOperator.Sub, MaxonValueKind.Float), (l, r) => { var op = new StdSubF64Op((StdF64)l, (StdF64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Eq, MaxonValueKind.Float), (l, r) => { var op = new StdCmpF64Op("eq", (StdF64)l, (StdF64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Eq, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("eq", (StdI64)l, (StdI64)r); return (op, op.Result); } },
 		{ (MaxonBinOperator.Ne, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("ne", (StdI64)l, (StdI64)r); return (op, op.Result); } },

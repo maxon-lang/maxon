@@ -312,6 +312,18 @@ public class RegisterManager {
 	}
 
 	/// <summary>
+	/// Emit absf64: clear sign bit via ANDPD with rdata mask.
+	/// </summary>
+	public void EmitAbsF64(StdValue input, StdValue result, string maskLabel, MlirBlock<X86Op> block) {
+		var srcXmm = EnsureInXmmRegister(input, block);
+		var resultXmm = AllocateXmmRegister(result);
+		if (resultXmm != srcXmm) {
+			block.AddOp(new X86MovSdXmmXmmOp(resultXmm, srcXmm));
+		}
+		block.AddOp(new X86AndpdRipRelOp(resultXmm, maskLabel));
+	}
+
+	/// <summary>
 	/// Ensure both XMM operands are in registers and emit ucomisd.
 	/// </summary>
 	public void EmitXmmCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {

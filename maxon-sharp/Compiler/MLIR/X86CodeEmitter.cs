@@ -60,7 +60,11 @@ public class X86CodeEmitter {
 
 	// --- Data section management ---
 
-	public void DefineRdata(string label, byte[] bytes) {
+	public void DefineRdata(string label, byte[] bytes, int alignment = 1) {
+		if (alignment > 1) {
+			var padding = (alignment - (_rdata.Count % alignment)) % alignment;
+			for (var i = 0; i < padding; i++) _rdata.Add(0);
+		}
 		_rdataLabels[label] = _rdata.Count;
 		_rdata.AddRange(bytes);
 	}
@@ -151,8 +155,14 @@ public class X86CodeEmitter {
 			case X86AddSdOp addsd:
 				EmitAddSd(addsd.Dest, addsd.Src);
 				break;
+			case X86SubSdOp subsd:
+				EmitSubSd(subsd.Dest, subsd.Src);
+				break;
 			case X86CvttSd2SiOp cvttsd2si:
 				EmitCvttSd2Si(cvttsd2si.Dest, cvttsd2si.Src);
+				break;
+			case X86AndpdRipRelOp andpd:
+				EmitAndpdRipRel(andpd.Dest, andpd.RdataLabel);
 				break;
 			case X86MovSdXmmXmmOp movsdReg:
 				EmitMovSdXmmXmm(movsdReg.Dest, movsdReg.Src);
@@ -622,6 +632,11 @@ public class X86CodeEmitter {
 		EmitXmmRegRegOp(0xF2, 0x0F, 0x58, XmmRegCode(dest), XmmRegCode(src));
 	}
 
+	private void EmitSubSd(X86XmmRegister dest, X86XmmRegister src) {
+		// SUBSD xmm, xmm: F2 0F 5C /r
+		EmitXmmRegRegOp(0xF2, 0x0F, 0x5C, XmmRegCode(dest), XmmRegCode(src));
+	}
+
 	private void EmitCvttSd2Si(X86Register dest, X86XmmRegister src) {
 		// CVTTSD2SI r64, xmm: F2 REX.W 0F 2C /r
 		var d = RegCode(dest);
@@ -633,6 +648,19 @@ public class X86CodeEmitter {
 		EmitByte(rex);
 		EmitBytes(0x0F, 0x2C);
 		EmitByte((byte)(0xC0 | (d << 3) | (s & 7)));
+	}
+
+	private void EmitAndpdRipRel(X86XmmRegister dest, string rdataLabel) {
+		// ANDPD xmm, [rip+disp32]: 66 0F 54 /r (ModRM: mod=00, r/m=101 for RIP-relative)
+		var reg = XmmRegCode(dest);
+		EmitByte(0x66);
+		if (reg >= 8) {
+			EmitByte(0x44); // REX.R
+		}
+		EmitBytes(0x0F, 0x54);
+		EmitByte((byte)(0x05 | ((reg & 7) << 3)));
+		_rdataFixups.Add((_code.Count, rdataLabel));
+		EmitDword(0); // placeholder for RIP-relative displacement
 	}
 
 	private void EmitMovSdXmmXmm(X86XmmRegister dest, X86XmmRegister src) {

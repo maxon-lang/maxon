@@ -29,8 +29,8 @@ public class CodeEmitter {
 		var emitter = new X86CodeEmitter();
 
 		// Define rdata constants from module's RdataEntries (populated during StandardToX86 conversion)
-		foreach (var (label, rdataBytes) in module.RdataEntries) {
-			emitter.DefineRdata(label, rdataBytes);
+		foreach (var (label, rdataBytes, alignment) in module.RdataEntries) {
+			emitter.DefineRdata(label, rdataBytes, alignment);
 		}
 
 		// Emit globals (define them in the data section)

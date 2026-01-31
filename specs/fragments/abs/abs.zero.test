@@ -1,0 +1,34 @@
+// Test: abs.zero
+function main() returns int
+    var x = abs(0.0)
+    if x == 0.0 'check'
+        return 0
+    end 'check'
+    return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_0]
+    x86.movsd xmm1, xmm0
+    x86.andpd xmm1, [rip+__abs_mask]
+    x86.movsd [rbp-8], xmm1
+    x86.movsd xmm2, [rip+__float_0]
+    x86.ucomisd xmm1, xmm2
+    x86.jne main.check_0.after
+    x86.jp main.check_0.after
+  check_0:
+    x86.mov eax, 0
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  }
+}
+---

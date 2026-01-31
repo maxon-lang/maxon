@@ -8,7 +8,7 @@ public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = n
 
 public class MlirModule<TOp> where TOp : IPrintableOp {
 	public List<MlirFunction<TOp>> Functions { get; } = [];
-	public List<(string label, byte[] bytes)> RdataEntries { get; } = [];
+	public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
 	public List<MlirGlobal> Globals { get; } = [];
 
 	public void AddFunction(MlirFunction<TOp> func) {

@@ -31,6 +31,11 @@ public class Parser(List<Token> tokens) {
 		{ TokenType.GreaterEquals, MaxonBinOperator.Ge },
 	};
 
+	private static readonly Dictionary<string, Func<MaxonValue, (MaxonOp Op, MaxonValue Result)>> BuiltinOps = new() {
+		{ "trunc", arg => { var op = new MaxonTruncOp(arg); return (op, op.Result); } },
+		{ "abs", arg => { var op = new MaxonAbsOp(arg); return (op, op.Result); } },
+	};
+
 	private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock);
 
 	public MlirModule<MaxonOp> Parse() {
@@ -405,13 +410,13 @@ public class Parser(List<Token> tokens) {
 		if (Check(TokenType.Identifier)) {
 			var token = Advance();
 			if (Check(TokenType.LeftParen)) {
-				if (token.Value == "trunc") {
+				if (BuiltinOps.TryGetValue(token.Value, out var makeOp)) {
 					Advance(); // consume '('
 					var arg = ResolveExprValue(ParseExpression());
 					Expect(TokenType.RightParen);
-					var truncOp = new MaxonTruncOp(arg);
-					_currentBlock!.AddOp(truncOp);
-					return new ExprResult.Direct(truncOp.Result);
+					var (op, result) = makeOp(arg);
+					_currentBlock!.AddOp(op);
+					return new ExprResult.Direct(result);
 				}
 				Advance(); // consume '('
 				var args = ParseCallArgs(token);

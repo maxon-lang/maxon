@@ -144,10 +144,22 @@ public class X86AddSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
 	public override string Mnemonic => $"x86.addsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
+public class X86SubSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public X86XmmRegister Src { get; } = src;
+	public override string Mnemonic => $"x86.subsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
 public class X86CvttSd2SiOp(X86Register dest, X86XmmRegister src) : X86Op {
 	public X86Register Dest { get; } = dest;
 	public X86XmmRegister Src { get; } = src;
 	public override string Mnemonic => $"x86.cvttsd2si {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
+public class X86AndpdRipRelOp(X86XmmRegister dest, string rdataLabel) : X86Op {
+	public X86XmmRegister Dest { get; } = dest;
+	public string RdataLabel { get; } = rdataLabel;
+	public override string Mnemonic => $"x86.andpd {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
 }
 
 public class X86CmpRegRegOp(X86Register lhs, X86Register rhs) : X86Op {
