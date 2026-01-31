@@ -253,3 +253,42 @@ public class X86IdivRegOp(X86Register divisor) : X86Op {
   public X86Register Divisor { get; } = divisor;
   public override string Mnemonic => $"x86.idiv {Divisor.ToString().ToLower()}";
 }
+
+// LEA dest, [rbp+disp] - load effective address of a stack variable
+public class X86LeaRegMemOp(X86Register dest, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x86.lea {Dest.ToString().ToLower()}, [rbp{(Displacement >= 0 ? "+" : "")}{Displacement}]";
+}
+
+// MOV [baseReg+disp], srcReg - store through register-indirect addressing
+public class X86MovIndirectMemRegOp(X86Register baseReg, int displacement, X86Register src) : X86Op {
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.mov [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}";
+}
+
+// MOV destReg, [baseReg+disp] - load through register-indirect addressing
+public class X86MovRegIndirectMemOp(X86Register dest, X86Register baseReg, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
+// MOVSD [baseReg+disp], xmm - store float through register-indirect addressing
+public class X86MovSdIndirectMemXmmOp(X86Register baseReg, int displacement, X86XmmRegister src) : X86Op {
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public X86XmmRegister Src { get; } = src;
+  public override string Mnemonic => $"x86.movsd [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}";
+}
+
+// MOVSD xmm, [baseReg+disp] - load float through register-indirect addressing
+public class X86MovSdXmmIndirectMemOp(X86XmmRegister dest, X86Register baseReg, int displacement) : X86Op {
+  public X86XmmRegister Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}

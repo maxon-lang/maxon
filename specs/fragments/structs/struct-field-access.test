@@ -1,0 +1,34 @@
+// Test: struct-field-access
+type Rect
+  export var width int
+  export var height int
+end 'Rect'
+
+function main() returns int
+  var r = Rect { width: 5, height: 10 }
+  return r.width * r.height
+end 'main'
+---
+ExitCode: 50
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 5
+    x86.mov ecx, 10
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-24]
+    x86.mov edi, [rbp-32]
+    x86.imul esi, edi
+    x86.mov eax, esi
+    x86.epilogue
+    x86.ret
+  }
+}
+---

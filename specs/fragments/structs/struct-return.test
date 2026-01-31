@@ -1,0 +1,61 @@
+// Test: struct-return
+type Pair
+  export var first int
+  export var second int
+end 'Pair'
+
+function makePair(a int, b int) returns Pair
+  return { first: a, second: b }
+end 'makePair'
+
+function main() returns int
+  var p = makePair(5, b: 7)
+  return p.first + p.second
+end 'main'
+---
+ExitCode: 12
+---
+module {
+  func @makePair(__sret: i64, a: i64, b: i64) {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], edx
+    x86.mov [rbp-40], r8
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-32]
+    x86.mov [eax+0], ecx
+    x86.mov edx, [rbp-40]
+    x86.mov [eax+8], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 5
+    x86.mov ecx, 7
+    x86.xor edx, edx
+    x86.mov [rbp-8], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-16], ebx
+    x86.lea esi, [rbp-16]
+    x86.mov edx, eax
+    x86.mov r8, ecx
+    x86.mov ecx, esi
+    x86.call makePair
+    x86.mov edi, [rbp-8]
+    x86.mov [rbp-24], edi
+    x86.mov r8, [rbp-16]
+    x86.mov [rbp-32], r8
+    x86.mov r9, [rbp-24]
+    x86.mov eax, [rbp-32]
+    x86.add r9, eax
+    x86.mov eax, r9
+    x86.epilogue
+    x86.ret
+  }
+}
+---

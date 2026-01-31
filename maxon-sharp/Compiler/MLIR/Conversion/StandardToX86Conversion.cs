@@ -255,9 +255,30 @@ public static class StandardToX86Conversion {
             regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, x86Block);
             break;
 
+          case StdLeaOp leaOp: {
+              // Get the address of the first field slot of a struct variable.
+              // The sret pointer convention uses the address of the ".first_field" slot.
+              var firstFieldOffset = FindFirstFieldOffset(leaOp.VarName, varOffsets);
+              regManager.EmitLeaFromStack(leaOp.Result, firstFieldOffset, x86Block);
+              break;
+            }
+
+          case StdStoreIndirectOp storeIndOp:
+            regManager.EmitStoreIndirect(storeIndOp.Value, storeIndOp.BasePtr, storeIndOp.FieldOffset, storeIndOp.FieldType, x86Block);
+            break;
+
+          case StdLoadIndirectOp loadIndOp:
+            regManager.EmitLoadIndirect(loadIndOp.Result, loadIndOp.BasePtr, loadIndOp.FieldOffset, loadIndOp.FieldType, x86Block);
+            break;
+
           case StdReturnOp retOp: {
-              if (retOp.ReturnValue != null)
-                regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
+              if (retOp.ReturnValue != null) {
+                if (retOp.ReturnValue is StdF64) {
+                  regManager.EnsureInXmm0ForReturn(retOp.ReturnValue, x86Block);
+                } else {
+                  regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
+                }
+              }
               x86Block.AddOp(new X86EpilogueOp());
               x86Block.AddOp(new X86RetOp());
               break;
@@ -337,6 +358,28 @@ public static class StandardToX86Conversion {
       module.RdataEntries.Add((label, BitConverter.GetBytes(value), 1));
     }
     return label;
+  }
+
+  /// <summary>
+  /// Find the stack offset of the first field slot of a struct variable.
+  /// The sret convention passes this address as the pointer to the struct's storage.
+  /// Fields are stored contiguously: first field at base, second at base-8, etc.
+  /// We use the most negative offset (last field) as the base, since stack grows down,
+  /// and the first field ends up at the highest address in the contiguous block.
+  /// </summary>
+  private static int FindFirstFieldOffset(string structVarName, Dictionary<string, int> varOffsets) {
+    // Find all field offsets for this struct prefix
+    int? lowestOffset = null;
+    foreach (var (name, offset) in varOffsets) {
+      if (name.StartsWith($"{structVarName}.")) {
+        if (lowestOffset == null || offset < lowestOffset)
+          lowestOffset = offset;
+      }
+    }
+    if (lowestOffset == null) {
+      throw new InvalidOperationException($"No field offsets found for struct variable '{structVarName}'");
+    }
+    return lowestOffset.Value;
   }
 
   private static string GetOrCreateAbsMask(MlirModule<X86Op> module) {

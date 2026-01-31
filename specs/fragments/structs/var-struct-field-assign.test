@@ -1,0 +1,35 @@
+// Test: var-struct-field-assign
+type Point
+  export var x int
+  export var y int
+end 'Point'
+
+function main() returns int
+  var p = Point{x: 10, y: 20}
+  p.x = 30
+  return p.x
+end 'main'
+---
+ExitCode: 30
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 30
+    x86.mov [rbp-24], esi
+    x86.mov edi, [rbp-24]
+    x86.mov eax, edi
+    x86.epilogue
+    x86.ret
+  }
+}
+---

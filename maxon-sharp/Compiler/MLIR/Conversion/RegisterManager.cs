@@ -587,6 +587,56 @@ public class RegisterManager {
     _valueXmmStackHome[value] = displacement;
   }
 
+  // --- Struct support: LEA and indirect memory operations ---
+
+  /// <summary>
+  /// Emit LEA reg, [rbp + offset] to get the address of a variable on the stack.
+  /// Used for sret pointer passing to callees.
+  /// </summary>
+  public void EmitLeaFromStack(StdPtr result, int offset, MlirBlock<X86Op> block) {
+    var gpr = AllocateRegister(result, block);
+    block.AddOp(new X86LeaRegMemOp(gpr, offset));
+  }
+
+  /// <summary>
+  /// Emit store through a register pointer with an offset: MOV [baseReg + offset], srcReg
+  /// Used for sret return writes.
+  /// </summary>
+  public void EmitStoreIndirect(StdValue value, StdValue basePtr, int fieldOffset, MlirType fieldType, MlirBlock<X86Op> block) {
+    var baseReg = EnsureInRegister(basePtr, block);
+    if (fieldType == MlirType.F64) {
+      var srcXmm = EnsureInXmmRegister(value, block);
+      block.AddOp(new X86MovSdIndirectMemXmmOp(baseReg, fieldOffset, srcXmm));
+    } else {
+      var srcReg = EnsureInRegister(value, block, protect1: baseReg);
+      block.AddOp(new X86MovIndirectMemRegOp(baseReg, fieldOffset, srcReg));
+    }
+  }
+
+  /// <summary>
+  /// Emit load through a register pointer with an offset: MOV destReg, [baseReg + offset]
+  /// </summary>
+  public void EmitLoadIndirect(StdValue result, StdValue basePtr, int fieldOffset, MlirType fieldType, MlirBlock<X86Op> block) {
+    var baseReg = EnsureInRegister(basePtr, block);
+    if (fieldType == MlirType.F64) {
+      var destXmm = AllocateXmmRegister(result);
+      block.AddOp(new X86MovSdXmmIndirectMemOp(destXmm, baseReg, fieldOffset));
+    } else {
+      var destGpr = AllocateRegister(result, block, protect1: baseReg);
+      block.AddOp(new X86MovRegIndirectMemOp(destGpr, baseReg, fieldOffset));
+    }
+  }
+
+  /// <summary>
+  /// Ensure a float value is in XMM0 for returning from a function.
+  /// </summary>
+  public void EnsureInXmm0ForReturn(StdValue value, MlirBlock<X86Op> block) {
+    var xmmReg = EnsureInXmmRegister(value, block);
+    if (xmmReg != X86XmmRegister.Xmm0) {
+      block.AddOp(new X86MovSdXmmXmmOp(X86XmmRegister.Xmm0, xmmReg));
+    }
+  }
+
   /// <summary>
   /// Mark a value as dead and free its register.
   /// </summary>

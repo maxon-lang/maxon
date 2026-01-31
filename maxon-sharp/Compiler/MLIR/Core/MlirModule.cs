@@ -10,6 +10,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   public List<MlirFunction<TOp>> Functions { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
   public List<MlirGlobal> Globals { get; } = [];
+  public Dictionary<string, MlirStructType> TypeDefs { get; } = [];
 
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
@@ -19,5 +20,6 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     Functions.AddRange(other.Functions);
     RdataEntries.AddRange(other.RdataEntries);
     Globals.AddRange(other.Globals);
+    foreach (var (k, v) in other.TypeDefs) TypeDefs[k] = v;
   }
 }

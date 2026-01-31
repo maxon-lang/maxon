@@ -14,6 +14,7 @@ public class Parser(List<Token> tokens) {
   private readonly Dictionary<string, VarInfo> _variables = [];
   private int _blockCounter;
   private readonly Stack<LoopContext> _loopStack = new();
+  private readonly Dictionary<string, MlirStructType> _typeRegistry = [];
 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
 
@@ -48,7 +49,8 @@ public class Parser(List<Token> tokens) {
     { "max", (a, b) => { var op = new MaxonMaxOp(a, b); return (op, op.Result); } },
   };
 
-  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock);
+  // VarInfo now tracks struct type name for struct variables
+  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null);
 
   public MlirModule<MaxonOp> Parse() {
     Logger.Debug(LogCategory.Parser, "Starting parser");
@@ -59,6 +61,11 @@ public class Parser(List<Token> tokens) {
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
       ParseTopLevel(module);
       SkipNewlines();
+    }
+
+    // Copy type registry to module for downstream passes
+    foreach (var (name, type) in _typeRegistry) {
+      module.TypeDefs[name] = type;
     }
 
     Logger.Debug(LogCategory.Parser, $"Parser complete: {module.Functions.Count} functions");
@@ -72,9 +79,94 @@ public class Parser(List<Token> tokens) {
   private void ParseTopLevel(MlirModule<MaxonOp> module) {
     if (Check(TokenType.Function)) {
       ParseFunction(module);
+    } else if (Check(TokenType.Type)) {
+      ParseTypeDecl();
     } else {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected function declaration, got '{Current().Value}'", Current().Line, Current().Column);
     }
+  }
+
+  private void ParseTypeDecl() {
+    Advance(); // consume 'type'
+    var nameToken = Expect(TokenType.Identifier);
+    var typeName = nameToken.Value;
+    Logger.Debug(LogCategory.Parser, $"Parsing type: {typeName}");
+    SkipNewlines();
+
+    var fields = new List<MlirStructField>();
+    while (!Check(TokenType.End) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End)) break;
+
+      bool isExported = false;
+      if (Check(TokenType.Export)) {
+        Advance();
+        isExported = true;
+      }
+
+      bool isMutable;
+      if (Check(TokenType.Var)) {
+        Advance();
+        isMutable = true;
+      } else if (Check(TokenType.Let)) {
+        Advance();
+        isMutable = false;
+      } else {
+        throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected 'var' or 'let' in field declaration, got '{Current().Value}'", Current().Line, Current().Column);
+      }
+
+      var fieldName = Expect(TokenType.Identifier).Value;
+
+      MlirType fieldType;
+      MlirAttribute? defaultValue = null;
+
+      if (Check(TokenType.Equals)) {
+        // Default value with inferred type: export var value = 0
+        Advance();
+        (fieldType, defaultValue) = ParseFieldDefault();
+      } else {
+        fieldType = ParseTypeRef();
+      }
+
+      fields.Add(new MlirStructField(fieldName, fieldType, isExported, isMutable, defaultValue));
+      SkipNewlines();
+    }
+
+    var structType = new MlirStructType(typeName, fields);
+    _typeRegistry[typeName] = structType;
+    ExpectEndLabel(typeName);
+  }
+
+  private (MlirType type, MlirAttribute defaultValue) ParseFieldDefault() {
+    if (Check(TokenType.Minus)) {
+      Advance(); // consume '-'
+      if (Check(TokenType.IntegerLiteral)) {
+        var val = -ParseIntegerLiteral(Advance().Value);
+        return (MlirType.I64, new IntegerAttr(val, MlirType.I64));
+      }
+      if (Check(TokenType.FloatLiteral)) {
+        var val = -double.Parse(Advance().Value, CultureInfo.InvariantCulture);
+        return (MlirType.F64, new FloatAttr(val, MlirType.F64));
+      }
+      throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected number after '-' in default value", Current().Line, Current().Column);
+    }
+    if (Check(TokenType.IntegerLiteral)) {
+      var val = ParseIntegerLiteral(Advance().Value);
+      return (MlirType.I64, new IntegerAttr(val, MlirType.I64));
+    }
+    if (Check(TokenType.FloatLiteral)) {
+      var val = double.Parse(Advance().Value, CultureInfo.InvariantCulture);
+      return (MlirType.F64, new FloatAttr(val, MlirType.F64));
+    }
+    if (Check(TokenType.True)) {
+      Advance();
+      return (MlirType.I1, new IntegerAttr(1, MlirType.I1));
+    }
+    if (Check(TokenType.False)) {
+      Advance();
+      return (MlirType.I1, new IntegerAttr(0, MlirType.I1));
+    }
+    throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected default value", Current().Line, Current().Column);
   }
 
   private void ParseFunction(MlirModule<MaxonOp> module) {
@@ -103,10 +195,18 @@ public class Parser(List<Token> tokens) {
 
     // Emit param ops and register parameters as variables
     for (int i = 0; i < paramNames.Count; i++) {
-      var kind = paramTypes[i].ToValueKind();
-      var paramOp = new MaxonParamOp(i, paramNames[i], kind);
-      _currentBlock.AddOp(paramOp);
-      _variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock);
+      var paramType = paramTypes[i];
+      if (paramType is MlirStructType structType) {
+        // Struct param: emit MaxonStructParamOp, register as struct var
+        var structParamOp = new MaxonStructParamOp(i, paramNames[i], structType.Name);
+        _currentBlock.AddOp(structParamOp);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock, structType.Name);
+      } else {
+        var kind = paramType.ToValueKind();
+        var paramOp = new MaxonParamOp(i, paramNames[i], kind);
+        _currentBlock.AddOp(paramOp);
+        _variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock);
+      }
     }
 
     ParseBodyUntilEnd();
@@ -141,7 +241,9 @@ public class Parser(List<Token> tokens) {
       "int" => MlirType.I64,
       "float" => MlirType.F64,
       "bool" => MlirType.I1,
-      _ => throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
+      _ => _typeRegistry.TryGetValue(typeName, out var structType)
+        ? structType
+        : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
     };
   }
 
@@ -171,6 +273,8 @@ public class Parser(List<Token> tokens) {
       ParseReturn();
     } else if (Check(TokenType.Var)) {
       ParseVarDecl();
+    } else if (Check(TokenType.Let)) {
+      ParseLetDecl();
     } else if (Check(TokenType.If)) {
       ParseIf();
     } else if (Check(TokenType.While)) {
@@ -179,6 +283,9 @@ public class Parser(List<Token> tokens) {
       ParseBreak();
     } else if (Check(TokenType.Continue)) {
       ParseContinue();
+    } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+      // Field assignment: p.x = 30
+      ParseFieldAssignment();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Equals) {
       ParseAssignment();
     } else {
@@ -190,28 +297,50 @@ public class Parser(List<Token> tokens) {
     Advance(); // consume 'return'
 
     if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
-      var value = ResolveExprValue(ParseComparisonExpression());
-      _currentBlock!.AddOp(new MaxonReturnOp(value));
+      // Check for anonymous struct literal: return { field: value, ... }
+      if (Check(TokenType.LeftBrace) && _currentFunction?.ReturnType is MlirStructType retStructType) {
+        var structLiteral = ParseStructLiteral(retStructType.Name);
+        var value = ResolveExprValue(structLiteral);
+        _currentBlock!.AddOp(new MaxonReturnOp(value));
+      } else {
+        var value = ResolveExprValue(ParseComparisonExpression());
+        _currentBlock!.AddOp(new MaxonReturnOp(value));
+      }
     } else {
       _currentBlock!.AddOp(new MaxonReturnOp());
     }
   }
 
-
   private void ParseVarDecl() {
-    Advance(); // consume 'var'
+    ParseVarOrLetDecl(isMutable: true);
+  }
+
+  private void ParseLetDecl() {
+    ParseVarOrLetDecl(isMutable: false);
+  }
+
+  private void ParseVarOrLetDecl(bool isMutable) {
+    Advance(); // consume 'var' or 'let'
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
     Expect(TokenType.Equals);
-    var initValue = ResolveExprValue(ParseComparisonExpression()) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
-    var kind = initValue switch {
-      MaxonInteger => MaxonValueKind.Integer,
-      MaxonFloat => MaxonValueKind.Float,
-      MaxonBool => MaxonValueKind.Bool,
-      _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Cannot determine type of value: {initValue.GetType().Name}", Current().Line, Current().Column)
-    };
-    _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: true, kind));
-    _variables[name] = new VarInfo(kind, true, initValue, _currentBlock!);
+    var initExpr = ParseComparisonExpression();
+    var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
+
+    if (initValue is MaxonStruct structVal) {
+      var kind = MaxonValueKind.Struct;
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, structVal.TypeName);
+    } else {
+      var kind = initValue switch {
+        MaxonInteger => MaxonValueKind.Integer,
+        MaxonFloat => MaxonValueKind.Float,
+        MaxonBool => MaxonValueKind.Bool,
+        _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Cannot determine type of value: {initValue.GetType().Name}", Current().Line, Current().Column)
+      };
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!);
+    }
   }
 
   private void ParseAssignment() {
@@ -228,7 +357,43 @@ public class Parser(List<Token> tokens) {
 
     var newValue = ResolveExprValue(ParseComparisonExpression());
     _currentBlock!.AddOp(new MaxonAssignOp(name, newValue, isDeclaration: false, isMutable: true, varInfo.Kind));
-    _variables[name] = new VarInfo(varInfo.Kind, true, newValue, _currentBlock!);
+    _variables[name] = new VarInfo(varInfo.Kind, true, newValue, _currentBlock!, varInfo.StructTypeName);
+  }
+
+  private void ParseFieldAssignment() {
+    var nameToken = Advance(); // consume struct var name
+    var name = nameToken.Value;
+    Expect(TokenType.Dot);
+    var fieldToken = Expect(TokenType.Identifier);
+    var fieldName = fieldToken.Value;
+    Expect(TokenType.Equals);
+
+    if (!_variables.TryGetValue(name, out var varInfo)) {
+      throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
+    }
+
+    // Check instance mutability first: let structs cannot have any fields assigned
+    if (!varInfo.Mutable) {
+      throw new CompileError(ErrorCode.ImmutableVariable,
+        $"cannot assign to immutable variable: '{name}'",
+        nameToken.Line, nameToken.Column);
+    }
+
+    // Check field mutability: even on a var struct, let fields cannot be modified
+    var structType = _typeRegistry[varInfo.StructTypeName!];
+    var field = structType.GetField(fieldName) ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+      $"Type '{structType.Name}' has no field named '{fieldName}'",
+      fieldToken.Line, fieldToken.Column);
+
+    if (!field.IsMutable) {
+      throw new CompileError(ErrorCode.ImmutableVariable,
+        $"cannot assign to field '{structType.Name}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)",
+        nameToken.Line, nameToken.Column);
+    }
+
+    var newValue = ResolveExprValue(ParseComparisonExpression());
+    var structVal = ResolveExprValue(new ExprResult.VarRef(name, varInfo));
+    _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, varInfo.StructTypeName!, fieldName, newValue));
   }
 
   private void ParseIf() {
@@ -490,6 +655,12 @@ public class Parser(List<Token> tokens) {
 
     if (Check(TokenType.Identifier)) {
       var token = Advance();
+
+      // Check for struct literal: TypeName{...} or TypeName { ... }
+      if (_typeRegistry.ContainsKey(token.Value) && Check(TokenType.LeftBrace)) {
+        return ParseStructLiteral(token.Value);
+      }
+
       if (Check(TokenType.LeftParen)) {
         if (BuiltinOps1.TryGetValue(token.Value, out var makeOp1)) {
           Advance(); // consume '('
@@ -512,16 +683,101 @@ public class Parser(List<Token> tokens) {
         Advance(); // consume '('
         var args = ParseCallArgs(token);
         var callOp = CreateFunctionCall(token, args);
-        return new ExprResult.Direct(callOp.Result!);
+        if (callOp.Result != null)
+          return new ExprResult.Direct(callOp.Result);
+        throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{token.Value}' does not return a value", token.Line, token.Column);
       }
+
       // Variable reference
       if (_variables.TryGetValue(token.Value, out var varInfo)) {
-        return new ExprResult.VarRef(token.Value, varInfo);
+        var result = new ExprResult.VarRef(token.Value, varInfo) as ExprResult;
+
+        // Check for field access chain: varName.fieldName
+        while (Check(TokenType.Dot)) {
+          Advance(); // consume '.'
+          var fieldToken = Expect(TokenType.Identifier);
+          var fieldName = fieldToken.Value;
+
+          // Determine the struct type name
+          string structTypeName;
+          if (result is ExprResult.VarRef vr) {
+            structTypeName = vr.Info.StructTypeName
+              ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct type", token.Line, token.Column);
+          } else if (result is ExprResult.Direct d && d.Value is MaxonStruct ms) {
+            structTypeName = ms.TypeName;
+          } else {
+            throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Cannot access field on non-struct value", fieldToken.Line, fieldToken.Column);
+          }
+
+          var structType = _typeRegistry[structTypeName];
+          var field = structType.GetField(fieldName)
+            ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{structTypeName}' has no field named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+
+          var fieldKind = field.Type.ToValueKind();
+          var structVal = ResolveExprValue(result);
+          var accessOp = new MaxonFieldAccessOp(structVal, structTypeName, fieldName, fieldKind);
+          _currentBlock!.AddOp(accessOp);
+          result = new ExprResult.Direct(accessOp.Result);
+        }
+
+        return result;
       }
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
     }
 
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got '{Current().Value}'", Current().Line, Current().Column);
+  }
+
+  /// <summary>
+  /// Parse a struct literal: {field: value, ...} or TypeName{field: value, ...}
+  /// The opening '{' has NOT been consumed yet.
+  /// </summary>
+  private ExprResult.Direct ParseStructLiteral(string typeName) {
+    Advance(); // consume '{'
+    var structType = _typeRegistry[typeName];
+    var fieldValues = new List<(string, MaxonValue)>();
+    var providedFields = new HashSet<string>();
+
+    if (!Check(TokenType.RightBrace)) {
+      do {
+        var fieldNameToken = Expect(TokenType.Identifier);
+        Expect(TokenType.Colon);
+        var value = ResolveExprValue(ParseComparisonExpression());
+        fieldValues.Add((fieldNameToken.Value, value));
+        providedFields.Add(fieldNameToken.Value);
+      } while (Check(TokenType.Comma) && Advance() != null);
+    }
+
+    // Fill in defaults for unspecified fields
+    foreach (var field in structType.Fields) {
+      if (!providedFields.Contains(field.Name)) {
+        if (field.DefaultValue == null) {
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Field '{field.Name}' of type '{typeName}' requires a value (no default defined)",
+            Current().Line, Current().Column);
+        }
+        MaxonLiteralOp defaultOp;
+        if (field.DefaultValue is IntegerAttr intAttr && field.Type == MlirType.I1) {
+          defaultOp = new MaxonLiteralOp(intAttr.Value != 0);
+        } else if (field.DefaultValue is IntegerAttr intAttr2) {
+          defaultOp = new MaxonLiteralOp(intAttr2.Value);
+        } else if (field.DefaultValue is FloatAttr floatAttr) {
+          defaultOp = new MaxonLiteralOp(floatAttr.Value);
+        } else {
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Unsupported default value type for field '{field.Name}'",
+            Current().Line, Current().Column);
+        }
+        _currentBlock!.AddOp(defaultOp);
+        fieldValues.Add((field.Name, defaultOp.Result));
+      }
+    }
+
+    Expect(TokenType.RightBrace);
+
+    var structLiteral = new MaxonStructLiteralOp(typeName, fieldValues);
+    _currentBlock!.AddOp(structLiteral);
+    return new ExprResult.Direct(structLiteral.Result);
   }
 
   // Resolves an expression result to a MaxonValue, emitting a var_ref op if needed for cross-block references
@@ -533,13 +789,17 @@ public class Parser(List<Token> tokens) {
         if (v.Info.DefinedInBlock == _currentBlock) {
           return v.Info.Value;
         }
-        // Cross-block reference: emit a var_ref op
+        // Cross-block reference: emit a var_ref or struct_var_ref op
+        if (v.Info.Kind == MaxonValueKind.Struct) {
+          var structRefOp = new MaxonStructVarRefOp(v.VarName, v.Info.StructTypeName!);
+          _currentBlock!.AddOp(structRefOp);
+          return structRefOp.Result;
+        }
         var refOp = new MaxonVarRefOp(v.VarName, v.Info.Kind);
         _currentBlock!.AddOp(refOp);
         return refOp.Result;
-      default:
-        throw new InvalidOperationException($"Unknown expression result type: {expr.GetType().Name}");
     }
+    throw new InvalidOperationException($"Unknown expression result type: {expr.GetType().Name}");
   }
 
   private abstract record ExprResult {
@@ -552,6 +812,7 @@ public class Parser(List<Token> tokens) {
       MaxonInteger => MaxonValueKind.Integer,
       MaxonFloat => MaxonValueKind.Float,
       MaxonBool => MaxonValueKind.Bool,
+      MaxonStruct => MaxonValueKind.Struct,
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Cannot determine kind of {value.GetType().Name}",
         Current().Line, Current().Column)
@@ -572,6 +833,7 @@ public class Parser(List<Token> tokens) {
   /// <summary>
   /// Parses call arguments using first-positional, rest-named rule.
   /// Resolves named arguments to positional order based on the callee's parameter names.
+  /// Handles struct arguments (including anonymous struct literals inferred from parameter type).
   /// </summary>
   private List<MaxonValue> ParseCallArgs(Token functionNameToken) {
     if (Check(TokenType.RightParen)) {
@@ -585,7 +847,7 @@ public class Parser(List<Token> tokens) {
     var args = new MaxonValue?[callee.ParamTypes.Count];
 
     // First argument is always positional
-    args[0] = ResolveExprValue(ParseExpression());
+    args[0] = ParseCallArgValue(callee.ParamTypes[0]);
     int nextPositional = 1;
 
     while (Check(TokenType.Comma) && Advance() != null) {
@@ -596,9 +858,9 @@ public class Parser(List<Token> tokens) {
         var idx = callee.ParamNames.IndexOf(nameToken.Value);
         if (idx < 0)
           throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unknown parameter '{nameToken.Value}' in call to '{callee.Name}'", nameToken.Line, nameToken.Column);
-        args[idx] = ResolveExprValue(ParseExpression());
+        args[idx] = ParseCallArgValue(callee.ParamTypes[idx]);
       } else {
-        args[nextPositional] = ResolveExprValue(ParseExpression());
+        args[nextPositional] = ParseCallArgValue(callee.ParamTypes[nextPositional]);
         nextPositional++;
       }
     }
@@ -608,21 +870,42 @@ public class Parser(List<Token> tokens) {
   }
 
   /// <summary>
+  /// Parse a single call argument value. If the argument starts with '{' and the expected
+  /// parameter type is a struct, parse it as an anonymous struct literal.
+  /// </summary>
+  private MaxonValue ParseCallArgValue(MlirType expectedType) {
+    if (Check(TokenType.LeftBrace) && expectedType is MlirStructType structType) {
+      var structLiteral = ParseStructLiteral(structType.Name);
+      return ResolveExprValue(structLiteral);
+    }
+    return ResolveExprValue(ParseExpression());
+  }
+
+  /// <summary>
   /// Creates a function call operation, validating the function exists and determining the result type.
+  /// Handles struct return types by setting ResultStructTypeName.
   /// </summary>
   private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args) {
     var functionName = functionNameToken.Value;
 
     var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{functionName}'", functionNameToken.Line, functionNameToken.Column);
-    MaxonValueKind? resultKind = callee.ReturnType switch {
+
+    MaxonValueKind? resultKind = null;
+    string? resultStructTypeName = null;
+
+    if (callee.ReturnType is MlirStructType retStructType) {
+      resultKind = MaxonValueKind.Struct;
+      resultStructTypeName = retStructType.Name;
+    } else if (callee.ReturnType != null) {
+      resultKind = callee.ReturnType switch {
         { } t when t == MlirType.I64 => MaxonValueKind.Integer,
         { } t when t == MlirType.F64 => MaxonValueKind.Float,
         { } t when t == MlirType.I1 => MaxonValueKind.Bool,
-      null => null, // void function
-      _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{functionName}'", functionNameToken.Line, functionNameToken.Column)
-    };
+        _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{functionName}'", functionNameToken.Line, functionNameToken.Column)
+      };
+    }
 
-    var callOp = new MaxonCallOp(functionName, args, resultKind);
+    var callOp = new MaxonCallOp(functionName, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
     return callOp;
   }

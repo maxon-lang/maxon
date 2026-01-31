@@ -1,0 +1,53 @@
+// Test: struct-field-default
+type Counter
+  export var value = 0
+  export var step = 1
+end 'Counter'
+
+function main() returns int
+  var c1 = Counter{}
+  var c2 = Counter{value: 40}
+  var c3 = Counter{value: 10, step: 2}
+  return c1.value + c2.value + c3.step
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=96
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 40
+    x86.mov edi, 1
+    x86.mov [rbp-40], esi
+    x86.mov [rbp-48], edi
+    x86.mov r8, [rbp-40]
+    x86.mov [rbp-56], r8
+    x86.mov r9, [rbp-48]
+    x86.mov [rbp-64], r9
+    x86.mov eax, 10
+    x86.mov ecx, 2
+    x86.mov [rbp-72], eax
+    x86.mov [rbp-80], ecx
+    x86.mov eax, [rbp-72]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-56]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-96]
+    x86.add eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

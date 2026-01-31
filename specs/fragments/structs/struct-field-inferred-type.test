@@ -1,0 +1,35 @@
+// Test: struct-field-inferred-type
+type Settings
+  export let maxRetries = 5
+  export var timeout = 50.0
+end 'Settings'
+
+function main() returns int
+  var s = Settings{}
+  return s.maxRetries + trunc(s.timeout)
+end 'main'
+---
+ExitCode: 55
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 5
+    x86.movsd xmm0, [rip+__float_50]
+    x86.mov [rbp-8], eax
+    x86.movsd [rbp-16], xmm0
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], ecx
+    x86.movsd xmm1, [rbp-16]
+    x86.movsd [rbp-32], xmm1
+    x86.mov edx, [rbp-24]
+    x86.movsd xmm2, [rbp-32]
+    x86.cvttsd2si ebx, xmm2
+    x86.add edx, ebx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+---
