@@ -180,10 +180,16 @@ public class RegisterManager {
 
 		// Divisor must not be in RAX or RDX (IDIV clobbers both).
 		if (rhsReg == X86Register.Eax || rhsReg == X86Register.Edx) {
-			var safeReg = lhsReg != X86Register.Ecx ? X86Register.Ecx : X86Register.Ebx;
+			var safeReg = FindSafeRegisterForIdiv(lhsReg, rhsReg);
+			SpillRegisterIfOccupied(safeReg, block);
 			block.AddOp(new X86MovRegRegOp(safeReg, rhsReg));
 			rhsReg = safeReg;
 		}
+
+		// IDIV clobbers both EAX and EDX. Spill any live values in those registers
+		// before we overwrite them.
+		SpillRegisterIfOccupied(X86Register.Eax, block);
+		SpillRegisterIfOccupied(X86Register.Edx, block);
 
 		if (lhsReg != X86Register.Eax) {
 			block.AddOp(new X86MovRegRegOp(X86Register.Eax, lhsReg));
@@ -193,7 +199,42 @@ public class RegisterManager {
 		block.AddOp(new X86CqoOp());
 		block.AddOp(new X86IdivRegOp(rhsReg));
 
-		NoteValueInRegister(result, resultRegister);
+		Assign(resultRegister, result);
+	}
+
+	/// <summary>
+	/// Find a register that is safe to use as a temporary for IDIV divisor relocation.
+	/// Must not be EAX, EDX, the LHS register, or the current divisor register.
+	/// Prefers a free register, but will return an occupied one (caller must spill it).
+	/// </summary>
+	private X86Register FindSafeRegisterForIdiv(X86Register lhsReg, X86Register divisorReg) {
+		X86Register? fallback = null;
+		foreach (var reg in GprPool) {
+			if (reg == X86Register.Eax || reg == X86Register.Edx) continue;
+			if (reg == lhsReg || reg == divisorReg) continue;
+			if (!_registerContents.ContainsKey(reg))
+				return reg;
+			fallback ??= reg;
+		}
+		if (fallback != null)
+			return fallback.Value;
+		throw new InvalidOperationException("RegisterManager: no safe register for IDIV divisor relocation");
+	}
+
+	/// <summary>
+	/// If a register contains a live value without a stack home, spill it.
+	/// Then remove the register mapping so the register can be reused.
+	/// </summary>
+	private void SpillRegisterIfOccupied(X86Register reg, MlirBlock<X86Op> block) {
+		if (!_registerContents.TryGetValue(reg, out var existing)) return;
+		if (!_valueStackHome.ContainsKey(existing)) {
+			_nextSpillOffset -= 8;
+			block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg));
+			_valueStackHome[existing] = _nextSpillOffset;
+		}
+		_valueToRegister.Remove(existing);
+		_registerContents.Remove(reg);
+		_lastUsed.Remove(reg);
 	}
 
 	/// <summary>
@@ -226,7 +267,7 @@ public class RegisterManager {
 	/// Load an XMM value from a stack offset.
 	/// </summary>
 	public void EmitXmmLoadFromStack(StdValue result, int offset, MlirBlock<X86Op> block) {
-		var xmmReg = AllocateXmmRegister(result, block);
+		var xmmReg = AllocateXmmRegister(result);
 		block.AddOp(new X86MovSdXmmMemOp(xmmReg, offset));
 	}
 
@@ -234,7 +275,7 @@ public class RegisterManager {
 	/// Allocate an XMM register and load a float constant from rdata.
 	/// </summary>
 	public void EmitXmmLoadFromRipRelative(StdValue result, string rdataLabel, MlirBlock<X86Op> block) {
-		var xmmReg = AllocateXmmRegister(result, block);
+		var xmmReg = AllocateXmmRegister(result);
 		block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, rdataLabel));
 	}
 
@@ -254,7 +295,7 @@ public class RegisterManager {
 		MlirBlock<X86Op> block, Func<X86XmmRegister, X86XmmRegister, X86Op> makeOp) {
 		var rhsXmm = EnsureInXmmRegister(rhs, block);
 		var lhsXmm = EnsureInXmmRegister(lhs, block);
-		var resultXmm = AllocateXmmRegister(result, block);
+		var resultXmm = AllocateXmmRegister(result);
 		if (resultXmm != lhsXmm) {
 			block.AddOp(new X86MovSdXmmXmmOp(resultXmm, lhsXmm));
 		}
@@ -448,21 +489,6 @@ public class RegisterManager {
 	}
 
 	/// <summary>
-	/// Record that a value is already in a specific physical register
-	/// (e.g. function call result in Eax).
-	/// Evicts any existing occupant of that register.
-	/// </summary>
-	private void NoteValueInRegister(StdValue value, X86Register reg) {
-		// Evict existing occupant if any
-		if (_registerContents.TryGetValue(reg, out var existing)) {
-			_valueToRegister.Remove(existing);
-			_registerContents.Remove(reg);
-			_lastUsed.Remove(reg);
-		}
-		Assign(reg, value);
-	}
-
-	/// <summary>
 	/// Record that a value has been stored to stack at the given displacement.
 	/// </summary>
 	private void NoteStoreToStack(StdValue value, int displacement) {
@@ -472,7 +498,7 @@ public class RegisterManager {
 	/// <summary>
 	/// Allocate an XMM register for a new float value.
 	/// </summary>
-	private X86XmmRegister AllocateXmmRegister(StdValue value, MlirBlock<X86Op> block) {
+	private X86XmmRegister AllocateXmmRegister(StdValue value) {
 		if (_nextFreshXmmIndex < XmmPool.Length) {
 			var candidate = XmmPool[_nextFreshXmmIndex];
 			if (!_xmmContents.ContainsKey(candidate)) {
@@ -502,7 +528,7 @@ public class RegisterManager {
 		}
 
 		if (_valueXmmStackHome.TryGetValue(value, out var displacement)) {
-			var reloadReg = AllocateXmmRegister(value, block);
+			var reloadReg = AllocateXmmRegister(value);
 			block.AddOp(new X86MovSdXmmMemOp(reloadReg, displacement));
 			return reloadReg;
 		}
@@ -621,26 +647,14 @@ public class RegisterManager {
 	/// </summary>
 	private void Evict(MlirBlock<X86Op> block, X86Register? protect1 = null, X86Register? protect2 = null) {
 		// Prefer evicting values that have a stack home (no spill store needed)
-		var bestReg = FindLruRegister(protect1, protect2, requireStackHome: true);
+		var bestReg = FindLruRegister(protect1, protect2, requireStackHome: true)
+			?? FindLruRegister(protect1, protect2, requireStackHome: false);
 
-		if (bestReg == null) {
-			// No unprotected value has a stack home — spill the LRU value to a new stack slot
-			bestReg = FindLruRegister(protect1, protect2, requireStackHome: false);
-
-			if (bestReg == null) {
-				throw new InvalidOperationException("RegisterManager: no registers to evict");
-			}
-
-			// Allocate a spill slot and store the value
-			_nextSpillOffset -= 8;
-			var spillOffset = _nextSpillOffset;
-			block.AddOp(new X86MovMemRegOp(spillOffset, bestReg.Value));
-			_valueStackHome[_registerContents[bestReg.Value]] = spillOffset;
+		if (bestReg != null) {
+			SpillRegisterIfOccupied(bestReg.Value, block);
+			return;
 		}
 
-		var evictedValue = _registerContents[bestReg.Value];
-		_registerContents.Remove(bestReg.Value);
-		_valueToRegister.Remove(evictedValue);
-		_lastUsed.Remove(bestReg.Value);
+		throw new InvalidOperationException("RegisterManager: no registers to evict");
 	}
 }

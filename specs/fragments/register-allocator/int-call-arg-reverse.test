@@ -1,0 +1,118 @@
+// Test: int-call-arg-reverse
+function sub(a int, b int) returns int
+    return a - b
+end 'sub'
+
+function main() returns int
+    var x = 10
+    var y = 3
+    var result = sub(y, x)
+    return result + 45
+end 'main'
+---
+ExitCode: 38
+RequiredMLIR: ```
+=== maxon
+module {
+  func @sub(a: i64, b: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
+    maxon.return %2
+  }
+  func @main() -> i64 {
+  entry:
+    %3 = maxon.literal {value = 10 : i64}
+    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 3 : i64}
+    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.call @sub %4, %3
+    maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 45 : i64}
+    %7 = maxon.binop %5, %6 {op = add} {kind = i64}
+    maxon.return %7
+  }
+}
+=== standard
+module {
+  func @sub(a: i64, b: i64) -> i64 {
+  entry:
+    %8 = func.param a : StdI64
+    memref.store %8, a
+    %9 = func.param b : StdI64
+    memref.store %9, b
+    %10 = arith.subi %8, %9
+    func.return %10
+  }
+  func @main() -> i64 {
+  entry:
+    %11 = arith.constant {value = 10 : i64}
+    memref.store %11, x
+    %12 = arith.constant {value = 3 : i64}
+    memref.store %12, y
+    %13 = func.call @sub %12, %11
+    memref.store %13, result
+    %14 = arith.constant {value = 45 : i64}
+    %15 = arith.addi %13, %14
+    func.return %15
+  }
+}
+=== x86
+module {
+  func @sub(a: i64, b: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.sub ecx, edx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 3
+    x86.mov [rbp-16], ecx
+    x86.mov edx, eax
+    x86.call sub
+    x86.mov [rbp-24], eax
+    x86.mov edx, 45
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @sub(a: i64, b: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.sub ecx, edx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 3
+    x86.mov [rbp-16], ecx
+    x86.mov edx, eax
+    x86.call sub
+    x86.mov [rbp-24], eax
+    x86.mov edx, 45
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

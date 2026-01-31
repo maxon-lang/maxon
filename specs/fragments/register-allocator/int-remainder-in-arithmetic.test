@@ -1,0 +1,87 @@
+// Test: int-remainder-in-arithmetic
+function main() returns int
+    var a = 100
+    var b = 7
+    var c = 10
+    var rem = a mod b
+    return rem * c
+end 'main'
+---
+ExitCode: 20
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 100 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 7 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 10 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.binop %0, %1 {op = mod} {kind = i64}
+    maxon.assign %3 {var = rem} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %3, %2 {op = mul} {kind = i64}
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %5 = arith.constant {value = 100 : i64}
+    memref.store %5, a
+    %6 = arith.constant {value = 7 : i64}
+    memref.store %6, b
+    %7 = arith.constant {value = 10 : i64}
+    memref.store %7, c
+    %8 = arith.remsi %5, %6
+    memref.store %8, rem
+    %9 = arith.muli %8, %7
+    func.return %9
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 100
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 7
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 10
+    x86.mov [rbp-24], edx
+    x86.cqo
+    x86.idiv ecx
+    x86.mov [rbp-32], edx
+    x86.mov ebx, [rbp-24]
+    x86.imul edx, ebx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 100
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 7
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 10
+    x86.mov [rbp-24], edx
+    x86.cqo
+    x86.idiv ecx
+    x86.mov [rbp-32], edx
+    x86.mov ebx, [rbp-24]
+    x86.imul edx, ebx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -1,0 +1,181 @@
+// Test: int-multi-var-branch-merge
+function main() returns int
+    var x = 0
+    var y = 0
+    var z = 0
+    if 1 < 2 'branch'
+        x = 10
+        y = 20
+        z = 12
+    end 'branch' else 'other'
+        x = 1
+        y = 2
+        z = 3
+    end 'other'
+    return x + y + z
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    maxon.assign %2 {var = z} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.literal {value = 2 : i64}
+    %5 = maxon.binop %3, %4 {op = lt} {kind = i64}
+    maxon.cond_br %5 [then: branch_0, else: other_1]
+  branch_0:
+    %6 = maxon.literal {value = 10 : i64}
+    maxon.assign %6 {var = x} {kind = i64} {mut = 1 : i1}
+    %7 = maxon.literal {value = 20 : i64}
+    maxon.assign %7 {var = y} {kind = i64} {mut = 1 : i1}
+    %8 = maxon.literal {value = 12 : i64}
+    maxon.assign %8 {var = z} {kind = i64} {mut = 1 : i1}
+    maxon.br branch_0.merge
+  other_1:
+    %9 = maxon.literal {value = 1 : i64}
+    maxon.assign %9 {var = x} {kind = i64} {mut = 1 : i1}
+    %10 = maxon.literal {value = 2 : i64}
+    maxon.assign %10 {var = y} {kind = i64} {mut = 1 : i1}
+    %11 = maxon.literal {value = 3 : i64}
+    maxon.assign %11 {var = z} {kind = i64} {mut = 1 : i1}
+    maxon.br branch_0.merge
+  branch_0.merge:
+    %12 = maxon.var_ref {var = x} {type = i64}
+    %13 = maxon.var_ref {var = y} {type = i64}
+    %14 = maxon.binop %12, %13 {op = add} {kind = i64}
+    %15 = maxon.var_ref {var = z} {type = i64}
+    %16 = maxon.binop %14, %15 {op = add} {kind = i64}
+    maxon.return %16
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %17 = arith.constant {value = 0 : i64}
+    memref.store %17, x
+    %18 = arith.constant {value = 0 : i64}
+    memref.store %18, y
+    %19 = arith.constant {value = 0 : i64}
+    memref.store %19, z
+    %20 = arith.constant {value = 1 : i64}
+    %21 = arith.constant {value = 2 : i64}
+    %22 = arith.cmpi lt %20, %21
+    cf.cond_br %22 [then: branch_0, else: other_1]
+  branch_0:
+    %23 = arith.constant {value = 10 : i64}
+    memref.store %23, x
+    %24 = arith.constant {value = 20 : i64}
+    memref.store %24, y
+    %25 = arith.constant {value = 12 : i64}
+    memref.store %25, z
+    cf.br branch_0.merge
+  other_1:
+    %26 = arith.constant {value = 1 : i64}
+    memref.store %26, x
+    %27 = arith.constant {value = 2 : i64}
+    memref.store %27, y
+    %28 = arith.constant {value = 3 : i64}
+    memref.store %28, z
+    cf.br branch_0.merge
+  branch_0.merge:
+    %29 = memref.load x : i64
+    %30 = memref.load y : i64
+    %31 = arith.addi %29, %30
+    %32 = memref.load z : i64
+    %33 = arith.addi %31, %32
+    func.return %33
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 0
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 0
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 1
+    x86.mov esi, 2
+    x86.cmp ebx, esi
+    x86.jge main.other_1
+  branch_0:
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 20
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 12
+    x86.mov [rbp-24], edx
+    x86.jmp main.branch_0.merge
+  other_1:
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 2
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 3
+    x86.mov [rbp-24], edx
+    x86.jmp main.branch_0.merge
+  branch_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-24]
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 0
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 0
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 1
+    x86.mov esi, 2
+    x86.cmp ebx, esi
+    x86.jge main.other_1
+  branch_0:
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 20
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 12
+    x86.mov [rbp-24], edx
+    x86.jmp main.branch_0.merge
+  other_1:
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 2
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 3
+    x86.mov [rbp-24], edx
+    x86.jmp main.branch_0.merge
+  branch_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-24]
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

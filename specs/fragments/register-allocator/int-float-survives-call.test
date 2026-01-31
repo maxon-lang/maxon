@@ -1,0 +1,93 @@
+// Test: int-float-survives-call
+function getInt() returns int
+    return 40
+end 'getInt'
+
+function main() returns int
+    var f = 3.14
+    var x = getInt()
+    return trunc(f) + x
+end 'main'
+---
+ExitCode: 43
+RequiredMLIR: ```
+=== maxon
+module {
+  func @getInt() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 40 : i64}
+    maxon.return %0
+  }
+  func @main() -> i64 {
+  entry:
+    %1 = maxon.literal {value = 3.14 : f64}
+    maxon.assign %1 {var = f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.call @getInt
+    maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.trunc %1
+    %4 = maxon.binop %3, %2 {op = add} {kind = i64}
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @getInt() -> i64 {
+  entry:
+    %5 = arith.constant {value = 40 : i64}
+    func.return %5
+  }
+  func @main() -> i64 {
+  entry:
+    %6 = arith.float_constant {value = 3.14 : f64}
+    memref.store %6, f
+    %7 = func.call @getInt
+    memref.store %7, x
+    %8 = arith.fptosi %6
+    %9 = arith.addi %8, %7
+    func.return %9
+  }
+}
+=== x86
+module {
+  func @getInt() -> i64 {
+  entry:
+    x86.mov eax, 40
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.movsd [rbp-8], xmm0
+    x86.call getInt
+    x86.mov [rbp-16], eax
+    x86.cvttsd2si ecx, xmm0
+    x86.add ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @getInt() -> i64 {
+  entry:
+    x86.mov eax, 40
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.movsd [rbp-8], xmm0
+    x86.call getInt
+    x86.mov [rbp-16], eax
+    x86.cvttsd2si ecx, xmm0
+    x86.add ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---
