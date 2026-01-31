@@ -1,18 +1,18 @@
 // Test: int-multiple-calls-preserve
 function getTen() returns int
-    return 10
+  return 10
 end 'getTen'
 
 function getTwo() returns int
-    return 2
+  return 2
 end 'getTwo'
 
 function main() returns int
-    var a = 5
-    var b = getTen()
-    var c = 7
-    var d = getTwo()
-    return a + b + c + d
+  var a = 5
+  var b = getTen()
+  var c = 7
+  var d = getTwo()
+  return a + b + c + d
 end 'main'
 ---
 ExitCode: 24
@@ -21,90 +21,90 @@ RequiredMLIR: ```
 module {
   func @getTen() -> i64 {
   entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.return %0
+  %0 = maxon.literal {value = 10 : i64}
+  maxon.return %0
   }
   func @getTwo() -> i64 {
   entry:
-    %1 = maxon.literal {value = 2 : i64}
-    maxon.return %1
+  %1 = maxon.literal {value = 2 : i64}
+  maxon.return %1
   }
   func @main() -> i64 {
   entry:
-    %2 = maxon.literal {value = 5 : i64}
-    maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.call @getTen
-    maxon.assign %3 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 7 : i64}
-    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.call @getTwo
-    maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.binop %2, %3 {op = add} {kind = i64}
-    %7 = maxon.binop %6, %4 {op = add} {kind = i64}
-    %8 = maxon.binop %7, %5 {op = add} {kind = i64}
-    maxon.return %8
+  %2 = maxon.literal {value = 5 : i64}
+  maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %3 = maxon.call @getTen
+  maxon.assign %3 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %4 = maxon.literal {value = 7 : i64}
+  maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %5 = maxon.call @getTwo
+  maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %6 = maxon.binop %2, %3 {op = add} {kind = i64}
+  %7 = maxon.binop %6, %4 {op = add} {kind = i64}
+  %8 = maxon.binop %7, %5 {op = add} {kind = i64}
+  maxon.return %8
   }
 }
 === standard
 module {
   func @getTen() -> i64 {
   entry:
-    %9 = arith.constant {value = 10 : i64}
-    func.return %9
+  %9 = arith.constant {value = 10 : i64}
+  func.return %9
   }
   func @getTwo() -> i64 {
   entry:
-    %10 = arith.constant {value = 2 : i64}
-    func.return %10
+  %10 = arith.constant {value = 2 : i64}
+  func.return %10
   }
   func @main() -> i64 {
   entry:
-    %11 = arith.constant {value = 5 : i64}
-    memref.store %11, a
-    %12 = func.call @getTen
-    memref.store %12, b
-    %13 = arith.constant {value = 7 : i64}
-    memref.store %13, c
-    %14 = func.call @getTwo
-    memref.store %14, d
-    %15 = arith.addi %11, %12
-    %16 = arith.addi %15, %13
-    %17 = arith.addi %16, %14
-    func.return %17
+  %11 = arith.constant {value = 5 : i64}
+  memref.store %11, a
+  %12 = func.call @getTen
+  memref.store %12, b
+  %13 = arith.constant {value = 7 : i64}
+  memref.store %13, c
+  %14 = func.call @getTwo
+  memref.store %14, d
+  %15 = arith.addi %11, %12
+  %16 = arith.addi %15, %13
+  %17 = arith.addi %16, %14
+  func.return %17
   }
 }
 === x86
 module {
   func @getTen() -> i64 {
   entry:
-    x86.mov eax, 10
-    x86.ret
+  x86.mov eax, 10
+  x86.ret
   }
   func @getTwo() -> i64 {
   entry:
-    x86.mov eax, 2
-    x86.ret
+  x86.mov eax, 2
+  x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov eax, 5
-    x86.mov [rbp-8], eax
-    x86.call getTen
-    x86.mov [rbp-16], eax
-    x86.mov ecx, 7
-    x86.mov [rbp-24], ecx
-    x86.call getTwo
-    x86.mov [rbp-32], eax
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-8]
-    x86.add ebx, edx
-    x86.mov esi, [rbp-24]
-    x86.add ebx, esi
-    x86.add ebx, eax
-    x86.mov eax, ebx
-    x86.epilogue
-    x86.ret
+  x86.prologue stack_size=32
+  x86.mov eax, 5
+  x86.mov [rbp-8], eax
+  x86.call getTen
+  x86.mov [rbp-16], eax
+  x86.mov ecx, 7
+  x86.mov [rbp-24], ecx
+  x86.call getTwo
+  x86.mov [rbp-32], eax
+  x86.mov edx, [rbp-16]
+  x86.mov ebx, [rbp-8]
+  x86.add ebx, edx
+  x86.mov esi, [rbp-24]
+  x86.add ebx, esi
+  x86.add ebx, eax
+  x86.mov eax, ebx
+  x86.epilogue
+  x86.ret
   }
 }
 ```

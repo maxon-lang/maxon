@@ -1,0 +1,53 @@
+// Test: break.multiple-conditions
+function main() returns int
+  var x = 5
+  var count = 0
+  while x < 100 'loop'
+    x = x + 1
+    count = count + 1
+    if count == 3 'check'
+      break
+    end 'check'
+  end 'loop'
+  return x
+end 'main'
+---
+ExitCode: 8
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 5
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 100
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
+  loop_0:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-16]
+    x86.add ebx, edx
+    x86.mov [rbp-16], ebx
+    x86.mov esi, 3
+    x86.cmp ebx, esi
+    x86.jne main.check_1.after
+  check_1:
+    x86.jmp main.loop_0.exit
+  check_1.after:
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

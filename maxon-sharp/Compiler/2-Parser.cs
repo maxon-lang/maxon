@@ -13,6 +13,9 @@ public class Parser(List<Token> tokens) {
   private MlirBlock<MaxonOp>? _currentBlock;
   private readonly Dictionary<string, VarInfo> _variables = [];
   private int _blockCounter;
+  private readonly Stack<LoopContext> _loopStack = new();
+
+  private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
     { TokenType.Plus, (MaxonBinOperator.Add, 1) },
@@ -172,6 +175,10 @@ public class Parser(List<Token> tokens) {
       ParseIf();
     } else if (Check(TokenType.While)) {
       ParseWhile();
+    } else if (Check(TokenType.Break)) {
+      ParseBreak();
+    } else if (Check(TokenType.Continue)) {
+      ParseContinue();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Equals) {
       ParseAssignment();
     } else {
@@ -330,7 +337,9 @@ public class Parser(List<Token> tokens) {
     // Create and parse the body block
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
     ParseBodyUntilEnd();
+    _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
     // At end of body, branch back to header
@@ -342,6 +351,32 @@ public class Parser(List<Token> tokens) {
     // Create exit block - this is where execution continues after the loop
     var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
     _currentBlock = exitBlock;
+  }
+
+  private void ParseBreak() {
+    var token = Advance(); // consume 'break'
+    var loop = ResolveLoopTarget(token);
+    _currentBlock!.AddOp(new MaxonBrOp(loop.ExitLabel));
+  }
+
+  private void ParseContinue() {
+    var token = Advance(); // consume 'continue'
+    var loop = ResolveLoopTarget(token);
+    _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
+  }
+
+  private LoopContext ResolveLoopTarget(Token keyword) {
+    if (_loopStack.Count == 0) {
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"'{keyword.Value}' can only be used inside a loop", keyword.Line, keyword.Column);
+    }
+    if (Check(TokenType.CharacterLiteral)) {
+      var labelToken = Advance();
+      foreach (var ctx in _loopStack) {
+        if (ctx.SourceLabel == labelToken.Value) return ctx;
+      }
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"No enclosing loop with label '{labelToken.Value}'", labelToken.Line, labelToken.Column);
+    }
+    return _loopStack.Peek();
   }
 
   private static bool BlockEndsWithTerminator(MlirBlock<MaxonOp> block) {

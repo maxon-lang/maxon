@@ -1,10 +1,10 @@
 // Test: int-division-preserves-other-values
 function main() returns int
-    var x = 10
-    var a = 84
-    var b = 2
-    var quotient = a / b
-    return quotient - x
+  var x = 10
+  var a = 84
+  var b = 2
+  var quotient = a / b
+  return quotient - x
 end 'main'
 ---
 ExitCode: 32
@@ -13,54 +13,54 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 84 : i64}
-    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 2 : i64}
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.binop %1, %2 {op = div} {kind = i64}
-    maxon.assign %3 {var = quotient} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.binop %3, %0 {op = sub} {kind = i64}
-    maxon.return %4
+  %0 = maxon.literal {value = 10 : i64}
+  maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %1 = maxon.literal {value = 84 : i64}
+  maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %2 = maxon.literal {value = 2 : i64}
+  maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %3 = maxon.binop %1, %2 {op = div} {kind = i64}
+  maxon.assign %3 {var = quotient} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %4 = maxon.binop %3, %0 {op = sub} {kind = i64}
+  maxon.return %4
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %5 = arith.constant {value = 10 : i64}
-    memref.store %5, x
-    %6 = arith.constant {value = 84 : i64}
-    memref.store %6, a
-    %7 = arith.constant {value = 2 : i64}
-    memref.store %7, b
-    %8 = arith.divsi %6, %7
-    memref.store %8, quotient
-    %9 = arith.subi %8, %5
-    func.return %9
+  %5 = arith.constant {value = 10 : i64}
+  memref.store %5, x
+  %6 = arith.constant {value = 84 : i64}
+  memref.store %6, a
+  %7 = arith.constant {value = 2 : i64}
+  memref.store %7, b
+  %8 = arith.divsi %6, %7
+  memref.store %8, quotient
+  %9 = arith.subi %8, %5
+  func.return %9
   }
 }
 === x86
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov eax, 10
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 84
-    x86.mov [rbp-16], ecx
-    x86.mov edx, 2
-    x86.mov [rbp-24], edx
-    x86.mov ebx, edx
-    x86.mov eax, ecx
-    x86.cqo
-    x86.idiv ebx
-    x86.mov [rbp-32], eax
-    x86.mov ebx, [rbp-8]
-    x86.sub eax, ebx
-    x86.epilogue
-    x86.ret
+  x86.prologue stack_size=32
+  x86.mov eax, 10
+  x86.mov [rbp-8], eax
+  x86.mov ecx, 84
+  x86.mov [rbp-16], ecx
+  x86.mov edx, 2
+  x86.mov [rbp-24], edx
+  x86.mov ebx, edx
+  x86.mov eax, ecx
+  x86.cqo
+  x86.idiv ebx
+  x86.mov [rbp-32], eax
+  x86.mov ebx, [rbp-8]
+  x86.sub eax, ebx
+  x86.epilogue
+  x86.ret
   }
 }
 ```

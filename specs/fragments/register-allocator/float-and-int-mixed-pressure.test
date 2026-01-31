@@ -1,12 +1,12 @@
 // Test: float-and-int-mixed-pressure
 function main() returns int
-    var x = 3.14
-    var y = 2.86
-    var sum_f = x + y
-    var a = 10
-    var b = 20
-    var sum_i = a + b
-    return trunc(sum_f) + sum_i
+  var x = 3.14
+  var y = 2.86
+  var sum_f = x + y
+  var a = 10
+  var b = 20
+  var sum_i = a + b
+  return trunc(sum_f) + sum_i
 end 'main'
 ---
 ExitCode: 36
@@ -15,67 +15,67 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 2.86 : f64}
-    maxon.assign %1 {var = y} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = add} {kind = f64}
-    maxon.assign %2 {var = sum_f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 10 : i64}
-    maxon.assign %3 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 20 : i64}
-    maxon.assign %4 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.binop %3, %4 {op = add} {kind = i64}
-    maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.trunc %2
-    %7 = maxon.binop %6, %5 {op = add} {kind = i64}
-    maxon.return %7
+  %0 = maxon.literal {value = 3.14 : f64}
+  maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+  %1 = maxon.literal {value = 2.86 : f64}
+  maxon.assign %1 {var = y} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+  %2 = maxon.binop %0, %1 {op = add} {kind = f64}
+  maxon.assign %2 {var = sum_f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+  %3 = maxon.literal {value = 10 : i64}
+  maxon.assign %3 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %4 = maxon.literal {value = 20 : i64}
+  maxon.assign %4 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %5 = maxon.binop %3, %4 {op = add} {kind = i64}
+  maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %6 = maxon.trunc %2
+  %7 = maxon.binop %6, %5 {op = add} {kind = i64}
+  maxon.return %7
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %8 = arith.float_constant {value = 3.14 : f64}
-    memref.store %8, x
-    %9 = arith.float_constant {value = 2.86 : f64}
-    memref.store %9, y
-    %10 = arith.addf %8, %9
-    memref.store %10, sum_f
-    %11 = arith.constant {value = 10 : i64}
-    memref.store %11, a
-    %12 = arith.constant {value = 20 : i64}
-    memref.store %12, b
-    %13 = arith.addi %11, %12
-    memref.store %13, sum_i
-    %14 = arith.fptosi %10
-    %15 = arith.addi %14, %13
-    func.return %15
+  %8 = arith.float_constant {value = 3.14 : f64}
+  memref.store %8, x
+  %9 = arith.float_constant {value = 2.86 : f64}
+  memref.store %9, y
+  %10 = arith.addf %8, %9
+  memref.store %10, sum_f
+  %11 = arith.constant {value = 10 : i64}
+  memref.store %11, a
+  %12 = arith.constant {value = 20 : i64}
+  memref.store %12, b
+  %13 = arith.addi %11, %12
+  memref.store %13, sum_i
+  %14 = arith.fptosi %10
+  %15 = arith.addi %14, %13
+  func.return %15
   }
 }
 === x86
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=48
-    x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd [rbp-8], xmm0
-    x86.movsd xmm1, [rip+__float_2.86]
-    x86.movsd [rbp-16], xmm1
-    x86.movsd xmm2, xmm0
-    x86.addsd xmm2, xmm1
-    x86.movsd [rbp-24], xmm2
-    x86.mov eax, 10
-    x86.mov [rbp-32], eax
-    x86.mov ecx, 20
-    x86.mov [rbp-40], ecx
-    x86.add eax, ecx
-    x86.mov [rbp-48], eax
-    x86.cvttsd2si edx, xmm2
-    x86.add edx, eax
-    x86.mov eax, edx
-    x86.epilogue
-    x86.ret
+  x86.prologue stack_size=48
+  x86.movsd xmm0, [rip+__float_3.14]
+  x86.movsd [rbp-8], xmm0
+  x86.movsd xmm1, [rip+__float_2.86]
+  x86.movsd [rbp-16], xmm1
+  x86.movsd xmm2, xmm0
+  x86.addsd xmm2, xmm1
+  x86.movsd [rbp-24], xmm2
+  x86.mov eax, 10
+  x86.mov [rbp-32], eax
+  x86.mov ecx, 20
+  x86.mov [rbp-40], ecx
+  x86.add eax, ecx
+  x86.mov [rbp-48], eax
+  x86.cvttsd2si edx, xmm2
+  x86.add edx, eax
+  x86.mov eax, edx
+  x86.epilogue
+  x86.ret
   }
 }
 ```

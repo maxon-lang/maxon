@@ -1,0 +1,57 @@
+// Test: break.labeled-break-outer
+function main() returns int
+  var x = 0
+  while x < 10 'outer'
+    x = x + 1
+    while true 'inner'
+      if x == 3 'check'
+        break 'outer'
+      end 'check'
+      break 'inner'
+    end 'inner'
+  end 'outer'
+  return x
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.jmp main.outer_0.header
+  outer_0.header:
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jge main.outer_0.exit
+  outer_0:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.jmp main.inner_1.header
+  inner_1.header:
+    x86.mov eax, 1
+    x86.test eax, eax
+    x86.je main.inner_1.exit
+  inner_1:
+    x86.mov eax, 3
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jne main.check_2.after
+  check_2:
+    x86.jmp main.outer_0.exit
+  check_2.after:
+    x86.jmp main.inner_1.exit
+  inner_1.exit:
+    x86.jmp main.outer_0.header
+  outer_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

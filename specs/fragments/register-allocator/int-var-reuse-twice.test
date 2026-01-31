@@ -1,7 +1,7 @@
 // Test: int-var-reuse-twice
 function main() returns int
-    var x = 21
-    return x + x
+  var x = 21
+  return x + x
 end 'main'
 ---
 ExitCode: 42
@@ -10,32 +10,32 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 21 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.binop %0, %0 {op = add} {kind = i64}
-    maxon.return %1
+  %0 = maxon.literal {value = 21 : i64}
+  maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+  %1 = maxon.binop %0, %0 {op = add} {kind = i64}
+  maxon.return %1
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-    %2 = arith.constant {value = 21 : i64}
-    memref.store %2, x
-    %3 = arith.addi %2, %2
-    func.return %3
+  %2 = arith.constant {value = 21 : i64}
+  memref.store %2, x
+  %3 = arith.addi %2, %2
+  func.return %3
   }
 }
 === x86
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 21
-    x86.mov [rbp-8], eax
-    x86.add eax, eax
-    x86.epilogue
-    x86.ret
+  x86.prologue stack_size=16
+  x86.mov eax, 21
+  x86.mov [rbp-8], eax
+  x86.add eax, eax
+  x86.epilogue
+  x86.ret
   }
 }
 ```

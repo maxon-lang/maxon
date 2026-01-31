@@ -1,0 +1,44 @@
+// Test: break.in-loop
+function main() returns int
+  var x = 0
+  while true 'loop'
+    x = x + 1
+    if x == 5 'check'
+      break
+    end 'check'
+  end 'loop'
+  return x
+end 'main'
+---
+ExitCode: 5
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 1
+    x86.test eax, eax
+    x86.je main.loop_0.exit
+  loop_0:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, 5
+    x86.cmp ecx, edx
+    x86.jne main.check_1.after
+  check_1:
+    x86.jmp main.loop_0.exit
+  check_1.after:
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

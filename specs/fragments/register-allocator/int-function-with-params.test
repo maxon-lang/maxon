@@ -1,10 +1,10 @@
 // Test: int-function-with-params
 function add(a int, b int) returns int
-    return a + b
+  return a + b
 end 'add'
 
 function main() returns int
-    return add(30, b: 12)
+  return add(30, b: 12)
 end 'main'
 ---
 ExitCode: 42
@@ -13,58 +13,58 @@ RequiredMLIR: ```
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
-    maxon.return %2
+  %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+  %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+  %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+  maxon.return %2
   }
   func @main() -> i64 {
   entry:
-    %3 = maxon.literal {value = 30 : i64}
-    %4 = maxon.literal {value = 12 : i64}
-    %5 = maxon.call @add %3, %4
-    maxon.return %5
+  %3 = maxon.literal {value = 30 : i64}
+  %4 = maxon.literal {value = 12 : i64}
+  %5 = maxon.call @add %3, %4
+  maxon.return %5
   }
 }
 === standard
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-    %6 = func.param a : StdI64
-    memref.store %6, a
-    %7 = func.param b : StdI64
-    memref.store %7, b
-    %8 = arith.addi %6, %7
-    func.return %8
+  %6 = func.param a : StdI64
+  memref.store %6, a
+  %7 = func.param b : StdI64
+  memref.store %7, b
+  %8 = arith.addi %6, %7
+  func.return %8
   }
   func @main() -> i64 {
   entry:
-    %9 = arith.constant {value = 30 : i64}
-    %10 = arith.constant {value = 12 : i64}
-    %11 = func.call @add %9, %10
-    func.return %11
+  %9 = arith.constant {value = 30 : i64}
+  %10 = arith.constant {value = 12 : i64}
+  %11 = func.call @add %9, %10
+  func.return %11
   }
 }
 === x86
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
-    x86.add ecx, edx
-    x86.mov eax, ecx
-    x86.epilogue
-    x86.ret
+  x86.prologue stack_size=16
+  x86.mov [rbp-8], ecx
+  x86.mov [rbp-16], edx
+  x86.add ecx, edx
+  x86.mov eax, ecx
+  x86.epilogue
+  x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.mov eax, 30
-    x86.mov ecx, 12
-    x86.mov edx, ecx
-    x86.mov ecx, eax
-    x86.call add
-    x86.ret
+  x86.mov eax, 30
+  x86.mov ecx, 12
+  x86.mov edx, ecx
+  x86.mov ecx, eax
+  x86.call add
+  x86.ret
   }
 }
 ```
