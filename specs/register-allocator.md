@@ -2127,7 +2127,7 @@ module {
 }
 ```
 
-<!-- disabled-test: int-while-loop-accumulator -->
+<!-- test: int-while-loop-accumulator -->
 ```maxon
 function main() returns int
     var sum = 0
@@ -2143,7 +2143,108 @@ end 'main'
 45
 ```
 ```RequiredMLIR
-FILL ME IN
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.header:
+    %2 = maxon.literal {value = 10 : i64}
+    %3 = maxon.var_ref {var = i} {type = i64}
+    %4 = maxon.binop %3, %2 {op = lt} {kind = i64}
+    maxon.cond_br %4 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %5 = maxon.var_ref {var = sum} {type = i64}
+    %6 = maxon.var_ref {var = i} {type = i64}
+    %7 = maxon.binop %5, %6 {op = add} {kind = i64}
+    maxon.assign %7 {var = sum} {kind = i64} {mut = 1 : i1}
+    %8 = maxon.literal {value = 1 : i64}
+    %9 = maxon.var_ref {var = i} {type = i64}
+    %10 = maxon.binop %9, %8 {op = add} {kind = i64}
+    maxon.assign %10 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.exit:
+    %11 = maxon.literal {value = 256 : i64}
+    %12 = maxon.var_ref {var = sum} {type = i64}
+    %13 = maxon.binop %12, %11 {op = mod} {kind = i64}
+    maxon.return %13
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %14 = arith.constant {value = 0 : i64}
+    memref.store %14, sum
+    %15 = arith.constant {value = 0 : i64}
+    memref.store %15, i
+    cf.br loop_0.header
+  loop_0.header:
+    %16 = arith.constant {value = 10 : i64}
+    %17 = memref.load i : i64
+    %18 = arith.cmpi lt %17, %16
+    cf.cond_br %18 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %19 = memref.load sum : i64
+    %20 = memref.load i : i64
+    %21 = arith.addi %19, %20
+    memref.store %21, sum
+    %22 = arith.constant {value = 1 : i64}
+    %23 = memref.load i : i64
+    %24 = arith.addi %23, %22
+    memref.store %24, i
+    cf.br loop_0.header
+  loop_0.exit:
+    %25 = arith.constant {value = 256 : i64}
+    %26 = memref.load sum : i64
+    %27 = arith.remsi %26, %25
+    func.return %27
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.push rbp
+    x86.mov rbp, rsp
+    x86.sub rsp, 16
+    x86.mov eax, 0
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 0
+    x86.mov [rbp-16], ecx
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-16]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-16]
+    x86.add ebx, edx
+    x86.mov [rbp-16], ebx
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, 256
+    x86.mov ecx, [rbp-8]
+    x86.mov ebx, eax
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov eax, edx
+    x86.add rsp, 16
+    x86.pop rbp
+    x86.ret
+  }
+}
 ```
 
 <!-- disabled-test: int-while-loop-multiple-accumulators -->
