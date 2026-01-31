@@ -410,7 +410,7 @@ public class RegisterManager {
     int?[] argStackHomes = new int?[regArgCount];
     for (int i = 0; i < regArgCount; i++) {
       if (_valueToRegister.TryGetValue(args[i], out var reg))
-        argSources[i] = reg;
+        argSources[i] = args[i] is StdPtr ? To64Bit(reg) : reg;
       else if (_valueStackHome.TryGetValue(args[i], out var disp))
         argStackHomes[i] = disp;
       else
@@ -595,7 +595,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitLeaFromStack(StdPtr result, int offset, MlirBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
-    block.AddOp(new X86LeaRegMemOp(gpr, offset));
+    block.AddOp(new X86LeaRegMemOp(To64Bit(gpr), offset));
   }
 
   /// <summary>
@@ -705,6 +705,18 @@ public class RegisterManager {
     _valueToRegister[value] = reg;
     _lastUsed[reg] = _currentOpIndex;
   }
+
+  private static X86Register To64Bit(X86Register reg) => reg switch {
+    X86Register.Eax => X86Register.Rax,
+    X86Register.Ecx => X86Register.Rcx,
+    X86Register.Edx => X86Register.Rdx,
+    X86Register.Ebx => X86Register.Rbx,
+    X86Register.Esp => X86Register.Rsp,
+    X86Register.Ebp => X86Register.Rbp,
+    X86Register.Esi => X86Register.Rsi,
+    X86Register.Edi => X86Register.Rdi,
+    _ => reg // R8-R15 and Rax-Rdi are already 64-bit
+  };
 
   private void AssignXmm(X86XmmRegister reg, StdValue value) {
     _xmmContents[reg] = value;

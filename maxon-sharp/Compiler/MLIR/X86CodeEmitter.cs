@@ -374,7 +374,11 @@ public class X86CodeEmitter {
   // --- X86 encoding helpers ---
 
   private static bool Is64BitReg(X86Register reg) {
-    return reg <= X86Register.R15;
+    return reg >= X86Register.Rax && reg <= X86Register.R15;
+  }
+
+  private static bool Is32BitReg(X86Register reg) {
+    return reg >= X86Register.Eax && reg <= X86Register.Edi;
   }
 
   private static int RegCode(X86Register reg) {
@@ -403,7 +407,18 @@ public class X86CodeEmitter {
     return reg >= X86Register.R8 && reg <= X86Register.R15;
   }
 
+  private static void Require64BitGpr(X86Register reg, string caller) {
+    if (!Is64BitReg(reg))
+      throw new ArgumentException($"{caller}: expected 64-bit register, got {reg}");
+  }
+
+  private static void RequireGpr(X86Register reg, string caller) {
+    if (!Is64BitReg(reg) && !Is32BitReg(reg))
+      throw new ArgumentException($"{caller}: unsupported register size: {reg}");
+  }
+
   private void EmitPushReg(X86Register reg) {
+    Require64BitGpr(reg, nameof(EmitPushReg));
     if (NeedsRex(reg)) {
       EmitByte(0x41); // REX.B
     }
@@ -411,6 +426,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitPopReg(X86Register reg) {
+    Require64BitGpr(reg, nameof(EmitPopReg));
     if (NeedsRex(reg)) {
       EmitByte(0x41); // REX.B
     }
@@ -418,29 +434,43 @@ public class X86CodeEmitter {
   }
 
   private void EmitXchgRegReg(X86Register a, X86Register b) {
+    if (!Is32BitReg(a))
+      throw new ArgumentException($"EmitXchgRegReg: expected 32-bit register, got {a}");
+    if (!Is32BitReg(b))
+      throw new ArgumentException($"EmitXchgRegReg: expected 32-bit register, got {b}");
     // XCHG r32, r32: 87 /r
     EmitByte(0x87);
     EmitByte((byte)(0xC0 | (RegCode(a) << 3) | RegCode(b)));
   }
 
   private void EmitMovRegReg(X86Register dest, X86Register src) {
-    // Always use 64-bit moves to preserve pointer-width values.
-    // MOV r64, r64: REX.W + 89 /r
-    //if (Is64BitReg(dest) || Is64BitReg(src)) {
-    byte rex = 0x48; // REX.W
-    if (NeedsRex(src)) rex |= 0x04; // REX.R
-    if (NeedsRex(dest)) rex |= 0x01; // REX.B
-    EmitByte(rex);
-    EmitByte(0x89);
-    EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
-    // } else {
-    //   // MOV r32, r32: 89 /r
-    //   EmitByte(0x89);
-    //   EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
-    // }
+    bool dest64 = Is64BitReg(dest), dest32 = Is32BitReg(dest);
+    bool src64 = Is64BitReg(src), src32 = Is32BitReg(src);
+
+    if (!dest64 && !dest32)
+      throw new ArgumentException($"EmitMovRegReg: unsupported dest register size: {dest}");
+    if (!src64 && !src32)
+      throw new ArgumentException($"EmitMovRegReg: unsupported src register size: {src}");
+
+    if (dest32 && src32) {
+      // MOV r32, r32: 89 /r (implicit zero-extension of upper 32 bits)
+      EmitByte(0x89);
+      EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+    } else {
+      // MOV r64, r64: REX.W + 89 /r
+      // Handles both pure 64-bit and mixed 32/64 (promoted to 64-bit).
+      byte rex = 0x48; // REX.W
+      if (NeedsRex(src)) rex |= 0x04; // REX.R
+      if (NeedsRex(dest)) rex |= 0x01; // REX.B
+      EmitByte(rex);
+      EmitByte(0x89);
+      EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+    }
   }
 
   private void EmitMovRegImm(X86Register dest, long immediate) {
+    if (!Is64BitReg(dest) && !Is32BitReg(dest))
+      throw new ArgumentException($"EmitMovRegImm: unsupported register size: {dest}");
     if (Is64BitReg(dest)) {
       if (immediate >= int.MinValue && immediate <= int.MaxValue) {
         // MOV r64, imm32 (sign-extended): REX.W + C7 /0 id
@@ -466,6 +496,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitSubRegImm(X86Register dest, long immediate) {
+    Require64BitGpr(dest, nameof(EmitSubRegImm));
     if (immediate >= -128 && immediate <= 127) {
       // SUB r64, imm8: REX.W + 83 /5 ib
       byte rex = 0x48;
@@ -486,6 +517,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitAddRegImm(X86Register dest, long immediate) {
+    Require64BitGpr(dest, nameof(EmitAddRegImm));
     if (immediate >= -128 && immediate <= 127) {
       // ADD r64, imm8: REX.W + 83 /0 ib
       byte rex = 0x48;
@@ -506,7 +538,9 @@ public class X86CodeEmitter {
   }
 
   private void EmitAddRegReg(X86Register dest, X86Register src) {
-    // ADD r64, r64: REX.W + 01 /r
+    RequireGpr(dest, nameof(EmitAddRegReg));
+    RequireGpr(src, nameof(EmitAddRegReg));
+    // ADD r/m64, r64: REX.W + 01 /r (REX.W promotes 32-bit register names)
     byte rex = 0x48;
     if (NeedsRex(src)) rex |= 0x04; // REX.R
     if (NeedsRex(dest)) rex |= 0x01; // REX.B
@@ -516,7 +550,9 @@ public class X86CodeEmitter {
   }
 
   private void EmitSubRegReg(X86Register dest, X86Register src) {
-    // SUB r64, r64: REX.W + 29 /r
+    RequireGpr(dest, nameof(EmitSubRegReg));
+    RequireGpr(src, nameof(EmitSubRegReg));
+    // SUB r/m64, r64: REX.W + 29 /r (REX.W promotes 32-bit register names)
     byte rex = 0x48;
     if (NeedsRex(src)) rex |= 0x04; // REX.R
     if (NeedsRex(dest)) rex |= 0x01; // REX.B
@@ -526,6 +562,8 @@ public class X86CodeEmitter {
   }
 
   private void EmitXorRegReg(X86Register dest, X86Register src) {
+    RequireGpr(dest, nameof(EmitXorRegReg));
+    RequireGpr(src, nameof(EmitXorRegReg));
     // XOR r32, r32: 31 /r  (implicitly zero-extends to 64 bits)
     if (NeedsRex(src) || NeedsRex(dest)) {
       byte rex = 0x40;
@@ -538,7 +576,9 @@ public class X86CodeEmitter {
   }
 
   private void EmitCmpRegReg(X86Register lhs, X86Register rhs) {
-    // CMP r64, r64: REX.W + 39 /r
+    RequireGpr(lhs, nameof(EmitCmpRegReg));
+    RequireGpr(rhs, nameof(EmitCmpRegReg));
+    // CMP r/m64, r64: REX.W + 39 /r (REX.W promotes 32-bit register names)
     byte rex = 0x48;
     if (NeedsRex(rhs)) rex |= 0x04; // REX.R
     if (NeedsRex(lhs)) rex |= 0x01; // REX.B
@@ -548,7 +588,9 @@ public class X86CodeEmitter {
   }
 
   private void EmitTestRegReg(X86Register lhs, X86Register rhs) {
-    // TEST r64, r64: REX.W + 85 /r
+    RequireGpr(lhs, nameof(EmitTestRegReg));
+    RequireGpr(rhs, nameof(EmitTestRegReg));
+    // TEST r/m64, r64: REX.W + 85 /r (REX.W promotes 32-bit register names)
     byte rex = 0x48;
     if (NeedsRex(rhs)) rex |= 0x04; // REX.R
     if (NeedsRex(lhs)) rex |= 0x01; // REX.B
@@ -558,6 +600,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitSetcc(string condition, X86Register dest) {
+    RequireGpr(dest, nameof(EmitSetcc));
     // SETcc r/m8: 0F 9x /0 (with optional REX prefix for r8-r15)
     byte condOpcode = ConditionToOpcode(condition);
     byte setccOpcode = (byte)(0x90 | (condOpcode & 0x0F));
@@ -570,6 +613,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovzxReg8To64(X86Register dest) {
+    RequireGpr(dest, nameof(EmitMovzxReg8To64));
     // MOVZX r64, r8: REX.W + 0F B6 /r (same register for src and dest)
     byte rex = 0x48;
     if (NeedsRex(dest)) rex |= 0x05; // REX.R + REX.B (same register)
@@ -594,7 +638,9 @@ public class X86CodeEmitter {
   };
 
   private void EmitImulRegReg(X86Register dest, X86Register src) {
-    // IMUL r64, r64: REX.W + 0F AF /r
+    RequireGpr(dest, nameof(EmitImulRegReg));
+    RequireGpr(src, nameof(EmitImulRegReg));
+    // IMUL r64, r/m64: REX.W + 0F AF /r (REX.W promotes 32-bit register names)
     byte rex = 0x48;
     if (NeedsRex(dest)) rex |= 0x04; // REX.R
     if (NeedsRex(src)) rex |= 0x01; // REX.B
@@ -605,7 +651,8 @@ public class X86CodeEmitter {
   }
 
   private void EmitIdivReg(X86Register divisor) {
-    // IDIV r64: REX.W + F7 /7
+    RequireGpr(divisor, nameof(EmitIdivReg));
+    // IDIV r/m64: REX.W + F7 /7 (REX.W promotes 32-bit register names)
     byte rex = 0x48;
     if (NeedsRex(divisor)) rex |= 0x01; // REX.B
     EmitByte(rex);
@@ -614,6 +661,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovMemReg(int displacement, X86Register src) {
+    RequireGpr(src, nameof(EmitMovMemReg));
     // MOV [rbp+disp], r64: REX.W + 89 /r (mod=01 or 10, r/m=rbp)
     byte rex = 0x48; // REX.W
     if (NeedsRex(src)) rex |= 0x04; // REX.R
@@ -629,6 +677,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovRegMem(X86Register dest, int displacement) {
+    RequireGpr(dest, nameof(EmitMovRegMem));
     // MOV r64, [rbp+disp]: REX.W + 8B /r (mod=01 or 10, r/m=rbp)
     byte rex = 0x48; // REX.W
     if (NeedsRex(dest)) rex |= 0x04; // REX.R
@@ -644,6 +693,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovMemRspReg(int offset, X86Register src) {
+    RequireGpr(src, nameof(EmitMovMemRspReg));
     // MOV [rsp+offset], r64: REX.W + 89 /r with SIB byte (rsp addressing requires SIB)
     byte rex = 0x48; // REX.W
     if (NeedsRex(src)) rex |= 0x04; // REX.R
@@ -752,6 +802,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitCvttSd2Si(X86Register dest, X86XmmRegister src) {
+    RequireGpr(dest, nameof(EmitCvttSd2Si));
     // CVTTSD2SI r64, xmm: F2 REX.W 0F 2C /r
     var d = RegCode(dest);
     var s = XmmRegCode(src);
@@ -837,6 +888,7 @@ public class X86CodeEmitter {
   // --- Struct support: LEA and indirect memory operations ---
 
   private void EmitLeaRegMem(X86Register dest, int displacement) {
+    RequireGpr(dest, nameof(EmitLeaRegMem));
     // LEA r64, [rbp+disp]: REX.W + 8D /r
     byte rex = 0x48; // REX.W
     if (NeedsRex(dest)) rex |= 0x04; // REX.R
@@ -852,6 +904,8 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovIndirectMemReg(X86Register baseReg, int displacement, X86Register src) {
+    RequireGpr(baseReg, nameof(EmitMovIndirectMemReg));
+    RequireGpr(src, nameof(EmitMovIndirectMemReg));
     // MOV [baseReg+disp], r64: REX.W + 89 /r
     byte rex = 0x48; // REX.W
     if (NeedsRex(src)) rex |= 0x04; // REX.R
@@ -862,6 +916,8 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovRegIndirectMem(X86Register dest, X86Register baseReg, int displacement) {
+    RequireGpr(dest, nameof(EmitMovRegIndirectMem));
+    RequireGpr(baseReg, nameof(EmitMovRegIndirectMem));
     // MOV r64, [baseReg+disp]: REX.W + 8B /r
     byte rex = 0x48; // REX.W
     if (NeedsRex(dest)) rex |= 0x04; // REX.R
@@ -872,6 +928,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovSdIndirectMemXmm(X86Register baseReg, int displacement, X86XmmRegister src) {
+    RequireGpr(baseReg, nameof(EmitMovSdIndirectMemXmm));
     // MOVSD [baseReg+disp], xmm: F2 [REX] 0F 11 /r
     var reg = XmmRegCode(src);
     EmitByte(0xF2);
@@ -886,6 +943,7 @@ public class X86CodeEmitter {
   }
 
   private void EmitMovSdXmmIndirectMem(X86XmmRegister dest, X86Register baseReg, int displacement) {
+    RequireGpr(baseReg, nameof(EmitMovSdXmmIndirectMem));
     // MOVSD xmm, [baseReg+disp]: F2 [REX] 0F 10 /r
     var reg = XmmRegCode(dest);
     EmitByte(0xF2);
