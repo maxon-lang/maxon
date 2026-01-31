@@ -120,6 +120,9 @@ public class X86CodeEmitter {
 			case X86MovMemRegOp movMem:
 				EmitMovMemReg(movMem.Displacement, movMem.Src);
 				break;
+			case X86MovMemRspRegOp movMemRsp:
+				EmitMovMemRspReg(movMemRsp.Offset, movMemRsp.Src);
+				break;
 			case X86MovRegMemOp movReg:
 				EmitMovRegMem(movReg.Dest, movReg.Displacement);
 				break;
@@ -504,6 +507,26 @@ public class X86CodeEmitter {
 		} else {
 			EmitByte((byte)(0x85 | (RegCode(dest) << 3))); // mod=10, r/m=rbp(5)
 			EmitDword(displacement);
+		}
+	}
+
+	private void EmitMovMemRspReg(int offset, X86Register src) {
+		// MOV [rsp+offset], r64: REX.W + 89 /r with SIB byte (rsp addressing requires SIB)
+		byte rex = 0x48; // REX.W
+		if (NeedsRex(src)) rex |= 0x04; // REX.R
+		EmitByte(rex);
+		EmitByte(0x89);
+		if (offset == 0) {
+			EmitByte((byte)(0x04 | (RegCode(src) << 3))); // mod=00, r/m=100 (SIB follows)
+			EmitByte(0x24); // SIB: scale=00, index=rsp(100), base=rsp(100)
+		} else if (offset >= -128 && offset <= 127) {
+			EmitByte((byte)(0x44 | (RegCode(src) << 3))); // mod=01, r/m=100 (SIB follows)
+			EmitByte(0x24); // SIB: scale=00, index=rsp(100), base=rsp(100)
+			EmitByte((byte)(offset & 0xFF));
+		} else {
+			EmitByte((byte)(0x84 | (RegCode(src) << 3))); // mod=10, r/m=100 (SIB follows)
+			EmitByte(0x24); // SIB: scale=00, index=rsp(100), base=rsp(100)
+			EmitDword(offset);
 		}
 	}
 

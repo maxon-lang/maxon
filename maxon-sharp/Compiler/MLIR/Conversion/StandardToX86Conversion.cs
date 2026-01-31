@@ -78,7 +78,7 @@ public static class StandardToX86Conversion {
 			foreach (var op in srcBlock.Operations) {
 				switch (op) {
 					case StdParamOp paramOp:
-						regManager.NoteParamInRegister(paramOp.Result, paramOp.Index);
+						regManager.NoteParam(paramOp.Result, paramOp.Index, x86Block);
 						break;
 
 					case StdConstI64Op constOp:

@@ -11,7 +11,8 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 public class RegisterManager {
 	private static readonly X86Register[] GprPool = [
 		X86Register.Eax, X86Register.Ecx, X86Register.Edx,
-		X86Register.Ebx, X86Register.Esi, X86Register.Edi
+		X86Register.Ebx, X86Register.Esi, X86Register.Edi,
+		X86Register.R8, X86Register.R9
 	];
 
 	// Sequential allocation pointer — assigns registers in pool order
@@ -243,28 +244,41 @@ public class RegisterManager {
 		}
 	}
 
-	// Windows x64 integer parameter registers
-	private static readonly X86Register[] CallConvRegs = [X86Register.Ecx, X86Register.Edx];
+	// Windows x64 integer parameter registers (rcx, rdx, r8, r9)
+	private static readonly X86Register[] CallConvRegs = [X86Register.Ecx, X86Register.Edx, X86Register.R8, X86Register.R9];
 
 	/// <summary>
-	/// Emit a function call, placing arguments in calling convention registers,
-	/// invalidating caller-saved registers, and recording the result (if any) in Eax.
+	/// Emit a function call, placing arguments in calling convention registers
+	/// (and on the stack for 5th+ args), invalidating caller-saved registers,
+	/// and recording the result (if any) in Eax.
 	/// </summary>
 	public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
-		if (args.Count > CallConvRegs.Length)
-			throw new InvalidOperationException($"Too many arguments ({args.Count}) — only {CallConvRegs.Length} calling convention registers supported");
+		int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
+		int stackArgCount = args.Count - regArgCount;
 
-		// Ensure all arg values are in registers first, before moving to targets.
-		var argRegs = new X86Register[args.Count];
-		for (int i = 0; i < args.Count; i++)
+		// Allocate stack space for overflow args (aligned to 16 bytes)
+		int stackArgBytes = stackArgCount > 0 ? ((stackArgCount * 8 + 15) & ~15) : 0;
+		if (stackArgBytes > 0)
+			block.AddOp(new X86SubRegImmOp(X86Register.Rsp, stackArgBytes));
+
+		// Place stack args first (5th+ parameters) using rsp-relative stores
+		for (int i = CallConvRegs.Length; i < args.Count; i++) {
+			var argReg = EnsureInRegister(args[i], block);
+			int offset = (i - CallConvRegs.Length) * 8;
+			block.AddOp(new X86MovMemRspRegOp(offset, argReg));
+		}
+
+		// Ensure all register arg values are in registers before moving to targets.
+		var argRegs = new X86Register[regArgCount];
+		for (int i = 0; i < regArgCount; i++)
 			argRegs[i] = EnsureInRegister(args[i], block);
 
 		// Move args to their target calling convention registers.
 		// Process args that are already in the right place first, then
 		// handle moves that don't conflict, and use xchg for cycles.
-		var placed = new bool[args.Count];
+		var placed = new bool[regArgCount];
 		// Pass 1: mark args already in place
-		for (int i = 0; i < args.Count; i++) {
+		for (int i = 0; i < regArgCount; i++) {
 			if (argRegs[i] == CallConvRegs[i])
 				placed[i] = true;
 		}
@@ -272,10 +286,10 @@ public class RegisterManager {
 		bool progress = true;
 		while (progress) {
 			progress = false;
-			for (int i = 0; i < args.Count; i++) {
+			for (int i = 0; i < regArgCount; i++) {
 				if (placed[i]) continue;
 				bool targetBlocked = false;
-				for (int j = 0; j < args.Count; j++) {
+				for (int j = 0; j < regArgCount; j++) {
 					if (j != i && !placed[j] && argRegs[j] == CallConvRegs[i]) {
 						targetBlocked = true;
 						break;
@@ -289,11 +303,11 @@ public class RegisterManager {
 			}
 		}
 		// Pass 3: resolve remaining conflicts with xchg
-		for (int i = 0; i < args.Count; i++) {
+		for (int i = 0; i < regArgCount; i++) {
 			if (placed[i]) continue;
 			block.AddOp(new X86XchgRegRegOp(argRegs[i], CallConvRegs[i]));
 			// Update the other arg that was in the target register
-			for (int j = 0; j < args.Count; j++) {
+			for (int j = 0; j < regArgCount; j++) {
 				if (j != i && argRegs[j] == CallConvRegs[i]) {
 					argRegs[j] = argRegs[i];
 					break;
@@ -304,6 +318,10 @@ public class RegisterManager {
 
 		block.AddOp(new X86CallDirectOp(callee));
 
+		// Clean up stack args
+		if (stackArgBytes > 0)
+			block.AddOp(new X86AddRegImmOp(X86Register.Rsp, stackArgBytes));
+
 		// Caller-saved registers are clobbered by the call.
 		InvalidateCallerSavedRegisters();
 
@@ -313,20 +331,30 @@ public class RegisterManager {
 	}
 
 	/// <summary>
-	/// Record that a function parameter has arrived in a calling convention register.
+	/// Record that a function parameter has arrived in a calling convention register,
+	/// or load it from the stack for 5th+ parameters.
+	/// After push rbp / mov rbp, rsp: [rbp+16] = 5th param, [rbp+24] = 6th, etc.
 	/// </summary>
-	public void NoteParamInRegister(StdValue paramValue, int paramIndex) {
-		if (paramIndex >= CallConvRegs.Length)
-			throw new InvalidOperationException($"Parameter index {paramIndex} exceeds supported calling convention registers");
-		Assign(CallConvRegs[paramIndex], paramValue);
+	public void NoteParam(StdValue paramValue, int paramIndex, MlirBlock<X86Op> block) {
+		if (paramIndex < CallConvRegs.Length) {
+			Assign(CallConvRegs[paramIndex], paramValue);
+		} else {
+			int stackOffset = 16 + (paramIndex - CallConvRegs.Length) * 8;
+			var gpr = AllocateRegister(paramValue, block);
+			block.AddOp(new X86MovRegMemOp(gpr, stackOffset));
+		}
 	}
 
 	/// <summary>
-	/// After a call, EAX/ECX/EDX are clobbered. Remove any value mappings
+	/// After a call, caller-saved registers are clobbered. Remove any value mappings
 	/// for those registers so stale values are never used.
+	/// Windows x64 caller-saved: rax, rcx, rdx, r8, r9, r10, r11.
 	/// </summary>
 	private void InvalidateCallerSavedRegisters() {
-		X86Register[] callerSaved = [X86Register.Eax, X86Register.Ecx, X86Register.Edx];
+		X86Register[] callerSaved = [
+			X86Register.Eax, X86Register.Ecx, X86Register.Edx,
+			X86Register.R8, X86Register.R9, X86Register.R10, X86Register.R11
+		];
 		foreach (var reg in callerSaved) {
 			if (_registerContents.TryGetValue(reg, out var value)) {
 				_valueToRegister.Remove(value);

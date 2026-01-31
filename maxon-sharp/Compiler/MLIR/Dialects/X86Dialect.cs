@@ -90,13 +90,19 @@ public class X86CallDirectOp(string target) : X86Op {
 public class X86MovMemRegOp(int displacement, X86Register src) : X86Op {
 	public int Displacement { get; } = displacement;
 	public X86Register Src { get; } = src;
-	public override string Mnemonic => $"x86.mov [rbp{Displacement}], {Src.ToString().ToLower()}";
+	public override string Mnemonic => $"x86.mov [rbp{(Displacement >= 0 ? "+" : "")}{Displacement}], {Src.ToString().ToLower()}";
 }
 
 public class X86MovRegMemOp(X86Register dest, int displacement) : X86Op {
 	public X86Register Dest { get; } = dest;
 	public int Displacement { get; } = displacement;
-	public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, [rbp{Displacement}]";
+	public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, [rbp{(Displacement >= 0 ? "+" : "")}{Displacement}]";
+}
+
+public class X86MovMemRspRegOp(int offset, X86Register src) : X86Op {
+	public int Offset { get; } = offset;
+	public X86Register Src { get; } = src;
+	public override string Mnemonic => $"x86.mov [rsp+{Offset}], {Src.ToString().ToLower()}";
 }
 
 public class X86MovSdXmmRipRelOp(X86XmmRegister dest, string rdataLabel) : X86Op {
