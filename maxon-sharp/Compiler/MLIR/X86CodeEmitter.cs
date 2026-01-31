@@ -123,8 +123,20 @@ public class X86CodeEmitter {
       case X86SubRegRegOp subReg:
         EmitSubRegReg(subReg.Dest, subReg.Src);
         break;
+      case X86AndRegRegOp andReg:
+        EmitAndRegReg(andReg.Dest, andReg.Src);
+        break;
+      case X86OrRegRegOp orReg:
+        EmitOrRegReg(orReg.Dest, orReg.Src);
+        break;
       case X86XorRegRegOp xor:
         EmitXorRegReg(xor.Dest, xor.Src);
+        break;
+      case X86ShlRegClOp shl:
+        EmitShlRegCl(shl.Dest);
+        break;
+      case X86SarRegClOp sar:
+        EmitSarRegCl(sar.Dest);
         break;
       case X86ImulRegRegOp imul:
         EmitImulRegReg(imul.Dest, imul.Src);
@@ -586,6 +598,50 @@ public class X86CodeEmitter {
     }
     EmitByte(0x31);
     EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+  }
+
+  private void EmitAndRegReg(X86Register dest, X86Register src) {
+    RequireGpr(dest, nameof(EmitAndRegReg));
+    RequireGpr(src, nameof(EmitAndRegReg));
+    // AND r/m64, r64: REX.W + 21 /r
+    byte rex = 0x48;
+    if (NeedsRex(src)) rex |= 0x04; // REX.R
+    if (NeedsRex(dest)) rex |= 0x01; // REX.B
+    EmitByte(rex);
+    EmitByte(0x21);
+    EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+  }
+
+  private void EmitOrRegReg(X86Register dest, X86Register src) {
+    RequireGpr(dest, nameof(EmitOrRegReg));
+    RequireGpr(src, nameof(EmitOrRegReg));
+    // OR r/m64, r64: REX.W + 09 /r
+    byte rex = 0x48;
+    if (NeedsRex(src)) rex |= 0x04; // REX.R
+    if (NeedsRex(dest)) rex |= 0x01; // REX.B
+    EmitByte(rex);
+    EmitByte(0x09);
+    EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
+  }
+
+  private void EmitShlRegCl(X86Register dest) {
+    RequireGpr(dest, nameof(EmitShlRegCl));
+    // SHL r/m64, CL: REX.W + D3 /4
+    byte rex = 0x48;
+    if (NeedsRex(dest)) rex |= 0x01; // REX.B
+    EmitByte(rex);
+    EmitByte(0xD3);
+    EmitByte((byte)(0xC0 | (4 << 3) | RegCode(dest)));
+  }
+
+  private void EmitSarRegCl(X86Register dest) {
+    RequireGpr(dest, nameof(EmitSarRegCl));
+    // SAR r/m64, CL: REX.W + D3 /7 (arithmetic right shift, preserves sign)
+    byte rex = 0x48;
+    if (NeedsRex(dest)) rex |= 0x01; // REX.B
+    EmitByte(rex);
+    EmitByte(0xD3);
+    EmitByte((byte)(0xC0 | (7 << 3) | RegCode(dest)));
   }
 
   private void EmitCmpRegReg(X86Register lhs, X86Register rhs) {

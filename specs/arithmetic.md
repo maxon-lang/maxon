@@ -51,7 +51,7 @@ end 'main'
 <!-- test: division -->
 ```maxon
 function main() returns int
-  return 100 / 4
+  return trunc(100 / 4)
 end 'main'
 ```
 ```exitcode
@@ -83,7 +83,7 @@ end 'main'
 function divLive(a int, b int, x int) returns int
   var preserved = x + 1
   var result = a / b
-  return result + preserved
+  return trunc(result + preserved)
 end 'divLive'
 
 function main() returns int
@@ -116,7 +116,7 @@ function divLoop(n int) returns int
   var sum = 0
   var i = 1
   while i <= n 'loop'
-    sum = sum + (100 / i)
+    sum = sum + trunc(100 / i)
     i = i + 1
   end 'loop'
   return sum
@@ -137,7 +137,7 @@ function helper(x int) returns int
 end 'helper'
 
 function divCall(a int, b int) returns int
-  var temp = a / b
+  var temp = trunc(a / b)
   var result = helper(temp)
   return result + temp
 end 'divCall'
@@ -155,7 +155,7 @@ end 'main'
 function multiDiv(a int, b int, c int, d int) returns int
   var r1 = a / b
   var r2 = c / d
-  return r1 + r2
+  return trunc(r1 + r2)
 end 'multiDiv'
 
 function main() returns int

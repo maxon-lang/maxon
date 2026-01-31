@@ -164,6 +164,39 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit a shift instruction (SHL/SAR). x86 shifts require the shift count in CL.
+  /// Ensures the shift count is in ECX, the value to shift is in a different register.
+  /// </summary>
+  public void EmitShift(StdValue lhs, StdValue rhs, StdValue result,
+    MlirBlock<X86Op> block, Func<X86Register, X86Op> makeShiftOp) {
+    var lhsReg = EnsureInRegister(lhs, block);
+    var rhsReg = EnsureInRegister(rhs, block, protect1: lhsReg);
+
+    // If LHS is in ECX and RHS is not, we need to move LHS out of ECX first
+    // because ECX will be used for the shift count.
+    if (lhsReg == X86Register.Ecx && rhsReg != X86Register.Ecx) {
+      // Allocate result in a register that isn't ECX or rhsReg
+      var resultReg = AllocateRegister(result, block, protect1: X86Register.Ecx, protect2: rhsReg);
+      block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
+      // Now put shift count in ECX
+      block.AddOp(new X86MovRegRegOp(X86Register.Ecx, rhsReg));
+      block.AddOp(makeShiftOp(resultReg));
+    } else {
+      // Move shift count to ECX if needed
+      if (rhsReg != X86Register.Ecx) {
+        SpillRegisterIfOccupied(X86Register.Ecx, block);
+        block.AddOp(new X86MovRegRegOp(X86Register.Ecx, rhsReg));
+      }
+      // Allocate result register, protecting LHS and ECX
+      var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: X86Register.Ecx);
+      if (resultReg != lhsReg) {
+        block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
+      }
+      block.AddOp(makeShiftOp(resultReg));
+    }
+  }
+
+  /// <summary>
   /// Emit IDIV and capture the quotient in EAX.
   /// Handles register constraints: divisor must not be in EAX/EDX.
   /// </summary>

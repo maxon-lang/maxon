@@ -85,10 +85,32 @@ public class X86SubRegRegOp(X86Register dest, X86Register src) : X86Op {
   public override string Mnemonic => $"x86.sub {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
+public class X86AndRegRegOp(X86Register dest, X86Register src) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.and {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
+public class X86OrRegRegOp(X86Register dest, X86Register src) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.or {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
 public class X86XorRegRegOp(X86Register dest, X86Register src) : X86Op {
   public X86Register Dest { get; } = dest;
   public X86Register Src { get; } = src;
   public override string Mnemonic => $"x86.xor {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
+public class X86ShlRegClOp(X86Register dest) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public override string Mnemonic => $"x86.shl {Dest.ToString().ToLower()}, cl";
+}
+
+public class X86SarRegClOp(X86Register dest) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public override string Mnemonic => $"x86.sar {Dest.ToString().ToLower()}, cl";
 }
 
 public class X86ImulRegRegOp(X86Register dest, X86Register src) : X86Op {

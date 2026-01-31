@@ -19,11 +19,16 @@ public class Parser(List<Token> tokens) {
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
-    { TokenType.Plus, (MaxonBinOperator.Add, 1) },
-    { TokenType.Minus, (MaxonBinOperator.Sub, 1) },
-    { TokenType.Star, (MaxonBinOperator.Mul, 2) },
-    { TokenType.Slash, (MaxonBinOperator.Div, 2) },
-    { TokenType.Mod, (MaxonBinOperator.Mod, 2) },
+    { TokenType.Pipe, (MaxonBinOperator.BitOr, 0) },
+    { TokenType.Caret, (MaxonBinOperator.BitXor, 1) },
+    { TokenType.Ampersand, (MaxonBinOperator.BitAnd, 2) },
+    { TokenType.LeftShift, (MaxonBinOperator.Shl, 3) },
+    { TokenType.RightShift, (MaxonBinOperator.Shr, 3) },
+    { TokenType.Plus, (MaxonBinOperator.Add, 4) },
+    { TokenType.Minus, (MaxonBinOperator.Sub, 4) },
+    { TokenType.Star, (MaxonBinOperator.Mul, 5) },
+    { TokenType.Slash, (MaxonBinOperator.Div, 5) },
+    { TokenType.Mod, (MaxonBinOperator.Mod, 5) },
   };
 
   private static readonly Dictionary<TokenType, MaxonBinOperator> ComparisonOperators = new() {
@@ -246,6 +251,7 @@ public class Parser(List<Token> tokens) {
       "int" => MlirType.I64,
       "float" => MlirType.F64,
       "bool" => MlirType.I1,
+      "byte" => MlirType.I8,
       _ => _typeRegistry.TryGetValue(typeName, out var structType)
         ? structType
         : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
@@ -256,8 +262,17 @@ public class Parser(List<Token> tokens) {
     if (Check(TokenType.Int)) return Advance().Value;
     if (Check(TokenType.Float)) return Advance().Value;
     if (Check(TokenType.Bool)) return Advance().Value;
+    if (Check(TokenType.Byte)) return Advance().Value;
     if (Check(TokenType.Identifier)) return Advance().Value;
     throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name", Current().Line, Current().Column);
+  }
+
+  private MaxonValueKind ParseTypeKeyword() {
+    if (Check(TokenType.Int)) { Advance(); return MaxonValueKind.Integer; }
+    if (Check(TokenType.Float)) { Advance(); return MaxonValueKind.Float; }
+    if (Check(TokenType.Bool)) { Advance(); return MaxonValueKind.Bool; }
+    if (Check(TokenType.Byte)) { Advance(); return MaxonValueKind.Byte; }
+    throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name after 'as'", Current().Line, Current().Column);
   }
 
   // ============================================================================
@@ -301,6 +316,7 @@ public class Parser(List<Token> tokens) {
   }
 
   private void ParseReturn() {
+    var returnToken = Current();
     Advance(); // consume 'return'
 
     if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
@@ -311,10 +327,44 @@ public class Parser(List<Token> tokens) {
         _currentBlock!.AddOp(new MaxonReturnOp(value));
       } else {
         var value = ResolveExprValue(ParseComparisonExpression());
+        CheckReturnType(value, returnToken);
         _currentBlock!.AddOp(new MaxonReturnOp(value));
       }
     } else {
       _currentBlock!.AddOp(new MaxonReturnOp());
+    }
+  }
+
+  private void CheckReturnType(MaxonValue value, Token returnToken) {
+    var returnType = _currentFunction?.ReturnType;
+    if (returnType == null) return;
+
+    if (returnType is MlirStructType expectedStruct) {
+      if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
+        var actualName = value is MaxonStruct s ? s.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Cannot return '{actualName}' from function declared to return '{expectedStruct.Name}'",
+          returnToken.Line, returnToken.Column);
+      }
+      return;
+    }
+
+    var valueKind = value switch {
+      MaxonInteger => MaxonValueKind.Integer,
+      MaxonFloat => MaxonValueKind.Float,
+      MaxonBool => MaxonValueKind.Bool,
+      MaxonByte => MaxonValueKind.Byte,
+      MaxonStruct s => throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Cannot return '{s.TypeName}' from function declared to return '{returnType.ToValueKind().ToString().ToLower()}'",
+        returnToken.Line, returnToken.Column),
+      _ => throw new InvalidOperationException($"Compiler bug: unknown MaxonValue type '{value.GetType().Name}'")
+    };
+
+    var expectedKind = returnType.ToValueKind();
+    if (valueKind != expectedKind) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Cannot return '{valueKind.ToString().ToLower()}' from function declared to return '{expectedKind.ToString().ToLower()}'",
+        returnToken.Line, returnToken.Column);
     }
   }
 
@@ -343,6 +393,7 @@ public class Parser(List<Token> tokens) {
         MaxonInteger => MaxonValueKind.Integer,
         MaxonFloat => MaxonValueKind.Float,
         MaxonBool => MaxonValueKind.Bool,
+        MaxonByte => MaxonValueKind.Byte,
         _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Cannot determine type of value: {initValue.GetType().Name}", Current().Line, Current().Column)
       };
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
@@ -598,6 +649,16 @@ public class Parser(List<Token> tokens) {
   private ExprResult ParseExpression(int minPrecedence = 0) {
     var lhs = ParsePrimary();
 
+    // Handle 'as' cast expressions (postfix, binds tighter than binary ops)
+    while (Check(TokenType.As)) {
+      Advance(); // consume 'as'
+      var targetKind = ParseTypeKeyword();
+      var inputVal = ResolveExprValue(lhs);
+      var castOp = new MaxonCastOp(inputVal, targetKind);
+      _currentBlock!.AddOp(castOp);
+      lhs = new ExprResult.Direct(castOp.Result);
+    }
+
     while (BinaryOperators.TryGetValue(Current().Type, out var entry) && entry.Precedence >= minPrecedence) {
       Advance(); // consume operator
       var rhs = ParseExpression(entry.Precedence + 1);
@@ -605,6 +666,13 @@ public class Parser(List<Token> tokens) {
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
       var (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal);
+
+      // Division always produces a float result
+      if (entry.Op == MaxonBinOperator.Div && kind == MaxonValueKind.Integer) {
+        promotedLhs = PromoteIntToFloat(promotedLhs);
+        promotedRhs = PromoteIntToFloat(promotedRhs);
+        kind = MaxonValueKind.Float;
+      }
 
       var binOp = new MaxonBinOp(entry.Op, promotedLhs, promotedRhs, kind);
       _currentBlock!.AddOp(binOp);
@@ -834,6 +902,7 @@ public class Parser(List<Token> tokens) {
       MaxonInteger => MaxonValueKind.Integer,
       MaxonFloat => MaxonValueKind.Float,
       MaxonBool => MaxonValueKind.Bool,
+      MaxonByte => MaxonValueKind.Byte,
       MaxonStruct => MaxonValueKind.Struct,
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Cannot determine kind of {value.GetType().Name}",
@@ -846,6 +915,7 @@ public class Parser(List<Token> tokens) {
       (MaxonInteger, MaxonInteger) => (MaxonValueKind.Integer, lhs, rhs),
       (MaxonFloat, MaxonFloat) => (MaxonValueKind.Float, lhs, rhs),
       (MaxonBool, MaxonBool) => (MaxonValueKind.Bool, lhs, rhs),
+      (MaxonByte, MaxonByte) => (MaxonValueKind.Byte, lhs, rhs),
       (MaxonInteger, MaxonFloat) => (MaxonValueKind.Float, PromoteIntToFloat(lhs), rhs),
       (MaxonFloat, MaxonInteger) => (MaxonValueKind.Float, lhs, PromoteIntToFloat(rhs)),
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,

@@ -4,7 +4,7 @@ function helper(x int) returns int
 end 'helper'
 
 function divCall(a int, b int) returns int
-  var temp = a / b
+  var temp = trunc(a / b)
   var result = helper(temp)
   return result + temp
 end 'divCall'
@@ -31,10 +31,11 @@ module {
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
     x86.mov [rbp-16], edx
-    x86.mov ebx, edx
-    x86.mov eax, ecx
-    x86.cqo
-    x86.idiv ebx
+    x86.cvtsi2sd xmm0, ecx
+    x86.cvtsi2sd xmm1, edx
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.cvttsd2si eax, xmm2
     x86.mov [rbp-24], eax
     x86.mov ecx, eax
     x86.call helper

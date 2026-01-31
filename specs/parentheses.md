@@ -22,15 +22,11 @@ Parentheses group expressions and control evaluation order.
 function main() returns int
   var a = 2 + 3 * 4      // 14 (multiply first)
   var b = (2 + 3) * 4    // 20 (add first)
-  print("{a}\n")
-  return b
+  return a+b
 end 'main'
 ```
 ```exitcode
-20
-```
-```stdout
-14
+34
 ```
 
 

@@ -113,6 +113,12 @@ public static class MaxonToStandardConversion {
                       valueMap[litOp.Result] = newOp.Result;
                       break;
                     }
+                  case MaxonValueKind.Byte: {
+                      var newOp = new StdConstI64Op(litOp.IntValue & 0xFF);
+                      newBlock.AddOp(newOp);
+                      valueMap[litOp.Result] = newOp.Result;
+                      break;
+                    }
                   case MaxonValueKind.Struct:
                     throw new InvalidOperationException("Struct literals are not MaxonLiteralOp");
                 }
@@ -238,6 +244,50 @@ public static class MaxonToStandardConversion {
               LowerBinaryF64(valueMap, newBlock, maxOp.Lhs, maxOp.Rhs, maxOp.Result,
                 (l, r) => new StdMaxF64Op(l, r));
               break;
+            case MaxonCastOp castOp: {
+                var input = valueMap[castOp.Input];
+                switch (castOp.TargetKind) {
+                  case MaxonValueKind.Byte: {
+                      // Cast to byte: mask with 0xFF
+                      var maskOp = new StdConstI64Op(0xFF);
+                      newBlock.AddOp(maskOp);
+                      var andOp = new StdAndI64Op((StdI64)input, maskOp.Result);
+                      newBlock.AddOp(andOp);
+                      valueMap[castOp.Result] = andOp.Result;
+                      break;
+                    }
+                  case MaxonValueKind.Integer: {
+                      // Byte/int to int: pass through (bytes are already stored as I64)
+                      if (input is StdI64 i64) {
+                        valueMap[castOp.Result] = i64;
+                      } else if (input is StdF64 f64) {
+                        var fpToSi = new StdFpToSiOp(f64);
+                        newBlock.AddOp(fpToSi);
+                        valueMap[castOp.Result] = fpToSi.Result;
+                      } else {
+                        throw new InvalidOperationException($"Unsupported cast to int from: {input.GetType().Name}");
+                      }
+                      break;
+                    }
+                  case MaxonValueKind.Float: {
+                      if (input is StdI64 i64) {
+                        var siToFp = new StdSiToFpOp(i64);
+                        newBlock.AddOp(siToFp);
+                        valueMap[castOp.Result] = siToFp.Result;
+                      } else if (input is StdF64 f64) {
+                        valueMap[castOp.Result] = f64;
+                      } else {
+                        throw new InvalidOperationException($"Unsupported cast to float from: {input.GetType().Name}");
+                      }
+                      break;
+                    }
+                  case MaxonValueKind.Bool:
+                    throw new InvalidOperationException("Cannot cast to bool");
+                  case MaxonValueKind.Struct:
+                    throw new InvalidOperationException("Cannot cast to struct");
+                }
+                break;
+              }
             case MaxonCallOp callOp:
               LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames);
               break;
@@ -458,6 +508,12 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.Gt, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("gt", (StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Le, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("le", (StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Ge, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("ge", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+    // Bitwise operations (integer only)
+    { (MaxonBinOperator.BitAnd, MaxonValueKind.Integer), (l, r) => { var op = new StdAndI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.BitOr, MaxonValueKind.Integer), (l, r) => { var op = new StdOrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.BitXor, MaxonValueKind.Integer), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Shl, MaxonValueKind.Integer), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Shr, MaxonValueKind.Integer), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   };
 
 }

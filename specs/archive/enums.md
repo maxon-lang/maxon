@@ -1665,3 +1665,26 @@ end 'main'
 ```stderr
 E003
 ```
+
+<!-- test: enum-member-constant -->
+```maxon
+enum Color
+  Red
+  Green
+  Blue
+end 'Color'
+
+let DEFAULT_COLOR = Color.Green
+
+function main() returns int
+  match DEFAULT_COLOR 'check'
+    Color.Red then return 1
+    Color.Green then return 2
+    Color.Blue then return 3
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+2
+```

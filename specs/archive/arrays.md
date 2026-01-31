@@ -290,3 +290,158 @@ end 'main'
 ```exitcode
 99
 ```
+
+### Byte Array Push and Get
+
+<!-- test: byte-array-push-get -->
+```maxon
+typealias ByteArray is Array with byte
+
+function main() returns int
+  var arr = ByteArray{}
+  arr.push(10 as byte)
+  arr.push(20 as byte)
+  arr.push(30 as byte)
+
+  var v0 = try arr.get(0) otherwise 0 as byte
+  var v1 = try arr.get(1) otherwise 0 as byte
+  var v2 = try arr.get(2) otherwise 0 as byte
+
+  return (v0 as int) + (v1 as int) + (v2 as int)
+end 'main'
+```
+```exitcode
+60
+```
+
+### Byte Array Initialized
+
+<!-- test: byte-array-initialized -->
+```maxon
+typealias ByteArray is Array with byte
+
+function main() returns int
+  var arr = ByteArray{}
+  arr.push(1 as byte)
+  arr.push(2 as byte)
+  arr.push(3 as byte)
+
+  var v0 = try arr.get(0) otherwise 0 as byte
+  var v1 = try arr.get(1) otherwise 0 as byte
+  var v2 = try arr.get(2) otherwise 0 as byte
+
+  return (v0 as int) + (v1 as int) + (v2 as int)
+end 'main'
+```
+```exitcode
+6
+```
+
+### Byte Array Set
+
+<!-- test: byte-array-set -->
+```maxon
+typealias ByteArray is Array with byte
+
+function main() returns int
+  var arr = ByteArray{}
+  arr.push(10 as byte)
+  arr.push(20 as byte)
+  arr.push(30 as byte)
+
+  arr.set(1, value: 99 as byte)
+
+  var val = try arr.get(1) otherwise 0 as byte
+  return val as int
+end 'main'
+```
+```exitcode
+99
+```
+
+### Byte Array Max Values
+
+<!-- test: byte-array-max-values -->
+```maxon
+typealias ByteArray is Array with byte
+
+function main() returns int
+  var arr = ByteArray{}
+  arr.push(255 as byte)
+  arr.push(0 as byte)
+  arr.push(128 as byte)
+
+  var v0 = try arr.get(0) otherwise 0 as byte
+  var v1 = try arr.get(1) otherwise 99 as byte
+  var v2 = try arr.get(2) otherwise 0 as byte
+
+  if (v0 as int) != 255 'c0'
+    return 1
+  end 'c0'
+  if (v1 as int) != 0 'c1'
+    return 2
+  end 'c1'
+  if (v2 as int) != 128 'c2'
+    return 3
+  end 'c2'
+
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Byte Array Count
+
+<!-- test: byte-array-count -->
+```maxon
+typealias ByteArray is Array with byte
+
+function main() returns int
+  var arr = ByteArray{}
+  arr.push(1 as byte)
+  arr.push(2 as byte)
+  arr.push(3 as byte)
+  arr.push(4 as byte)
+  arr.push(5 as byte)
+
+  return arr.count()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: array-literal-constant -->
+```maxon
+let numbers = [1, 2, 3, 4, 5]
+
+function main() returns int
+  var sum = 0
+  for n in numbers 'loop'
+    sum = sum + n
+  end 'loop'
+  return sum
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: array-literal-with-dependency -->
+```maxon
+let FIRST = 10
+let SECOND = 20
+let values = [FIRST, SECOND, 30]
+
+function main() returns int
+  var v0 = try values.get(0) otherwise 0
+  var v1 = try values.get(1) otherwise 0
+  var v2 = try values.get(2) otherwise 0
+  return v0 + v1 + v2
+end 'main'
+```
+```exitcode
+60
+```

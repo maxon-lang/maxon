@@ -864,7 +864,6 @@ extern function ExitProcess(uExitCode int) returns int
 | `mod` | Modulo | int only | `a mod b` |
 
 **Notes:**
-- Integer division truncates
 - Mixed int/float operations promote int to float
 
 ### Comparison Operators

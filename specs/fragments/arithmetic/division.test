@@ -1,6 +1,6 @@
 // Test: division
 function main() returns int
-  return 100 / 4
+  return trunc(100 / 4)
 end 'main'
 ---
 ExitCode: 25
@@ -8,13 +8,14 @@ ExitCode: 25
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 100
     x86.mov ecx, 4
-    x86.mov [rbp-8], eax
-    x86.cqo
-    x86.idiv ecx
-    x86.epilogue
+    x86.cvtsi2sd xmm0, eax
+    x86.cvtsi2sd xmm1, ecx
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.cvttsd2si edx, xmm2
+    x86.mov eax, edx
     x86.ret
   }
 }

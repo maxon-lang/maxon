@@ -2,7 +2,7 @@
 function main() returns int
   var a = 126
   var b = 3
-  return a / b
+  return trunc(a / b)
 end 'main'
 ---
 ExitCode: 42
@@ -11,39 +11,49 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-  %0 = maxon.literal {value = 126 : i64}
-  maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %1 = maxon.literal {value = 3 : i64}
-  maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %2 = maxon.binop %0, %1 {op = div} {kind = i64}
-  maxon.return %2
+    %0 = maxon.literal {value = 126 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.int_to_float %0
+    %3 = maxon.int_to_float %1
+    %4 = maxon.binop %2, %3 {op = div} {kind = f64}
+    %5 = maxon.trunc %4
+    maxon.return %5
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-  %3 = arith.constant {value = 126 : i64}
-  memref.store %3, a
-  %4 = arith.constant {value = 3 : i64}
-  memref.store %4, b
-  %5 = arith.divsi %3, %4
-  func.return %5
+    %6 = arith.constant {value = 126 : i64}
+    memref.store %6, a
+    %7 = arith.constant {value = 3 : i64}
+    memref.store %7, b
+    %8 = arith.sitofp %6
+    %9 = arith.sitofp %7
+    %10 = arith.divf %8, %9
+    %11 = arith.fptosi %10
+    func.return %11
   }
 }
 === x86
 module {
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov eax, 126
-  x86.mov [rbp-8], eax
-  x86.mov ecx, 3
-  x86.mov [rbp-16], ecx
-  x86.cqo
-  x86.idiv ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov eax, 126
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 3
+    x86.mov [rbp-16], ecx
+    x86.cvtsi2sd xmm0, eax
+    x86.cvtsi2sd xmm1, ecx
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.cvttsd2si edx, xmm2
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -56,8 +66,12 @@ module {
     x86.mov [rbp-8], eax
     x86.mov ecx, 3
     x86.mov [rbp-16], ecx
-    x86.cqo
-    x86.idiv ecx
+    x86.cvtsi2sd xmm0, eax
+    x86.cvtsi2sd xmm1, ecx
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.cvttsd2si edx, xmm2
+    x86.mov eax, edx
     x86.epilogue
     x86.ret
   }

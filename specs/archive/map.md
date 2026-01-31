@@ -672,3 +672,24 @@ Allocated: 968 bytes
 Freed:     968 bytes
 Leaked:    0 bytes
 Moves:     6
+
+<!-- test: map-literal-with-enum-values -->
+```maxon
+enum TokenKind
+  Function
+  Var
+end 'TokenKind'
+
+function main() returns int
+  var keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
+  var kind = try keywords.get("function") otherwise TokenKind.Var
+  match kind 'match'
+    TokenKind.Function then return 1
+    TokenKind.Var then return 2
+  end 'match'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```

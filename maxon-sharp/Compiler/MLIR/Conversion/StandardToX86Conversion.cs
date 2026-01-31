@@ -139,6 +139,34 @@ public static class StandardToX86Conversion {
               (l, r) => new X86DivSdOp(l, r));
             break;
 
+          case StdAndI64Op andOp:
+            regManager.EmitBinaryRegReg(andOp.Lhs, andOp.Rhs, andOp.Result, x86Block,
+              (l, r) => new X86AndRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, andOp.Lhs, currentOpIndex));
+            break;
+
+          case StdOrI64Op orOp:
+            regManager.EmitBinaryRegReg(orOp.Lhs, orOp.Rhs, orOp.Result, x86Block,
+              (l, r) => new X86OrRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, orOp.Lhs, currentOpIndex));
+            break;
+
+          case StdXorI64Op xorOp:
+            regManager.EmitBinaryRegReg(xorOp.Lhs, xorOp.Rhs, xorOp.Result, x86Block,
+              (l, r) => new X86XorRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, xorOp.Lhs, currentOpIndex));
+            break;
+
+          case StdShlI64Op shlOp:
+            regManager.EmitShift(shlOp.Lhs, shlOp.Rhs, shlOp.Result, x86Block,
+              dest => new X86ShlRegClOp(dest));
+            break;
+
+          case StdShrI64Op shrOp:
+            regManager.EmitShift(shrOp.Lhs, shrOp.Rhs, shrOp.Result, x86Block,
+              dest => new X86SarRegClOp(dest));
+            break;
+
           case StdFpToSiOp fpToSiOp:
             regManager.EmitCvttSd2Si(fpToSiOp.Input, fpToSiOp.Result, x86Block);
             break;

@@ -4,6 +4,7 @@ public class MlirType(string name, int sizeInBytes) {
   public string Name { get; } = name;
   public int SizeInBytes { get; } = sizeInBytes;
 
+  public static MlirType I8 { get; } = new("i8", 1);
   public static MlirType I32 { get; } = new("i32", 4);
   public static MlirType I64 { get; } = new("i64", 8);
   public static MlirType F64 { get; } = new("f64", 8);

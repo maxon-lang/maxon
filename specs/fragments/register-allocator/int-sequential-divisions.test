@@ -4,7 +4,7 @@ function main() returns int
   var b = 5
   var c = 84
   var d = 4
-  return a / b + c / d
+  return trunc(a / b + c / d)
 end 'main'
 ---
 ExitCode: 41
@@ -13,71 +13,53 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-  %0 = maxon.literal {value = 100 : i64}
-  maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %1 = maxon.literal {value = 5 : i64}
-  maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %2 = maxon.literal {value = 84 : i64}
-  maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %3 = maxon.literal {value = 4 : i64}
-  maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %4 = maxon.binop %0, %1 {op = div} {kind = i64}
-  %5 = maxon.binop %2, %3 {op = div} {kind = i64}
-  %6 = maxon.binop %4, %5 {op = add} {kind = i64}
-  maxon.return %6
+    %0 = maxon.literal {value = 100 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 84 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 4 : i64}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.int_to_float %0
+    %5 = maxon.int_to_float %1
+    %6 = maxon.binop %4, %5 {op = div} {kind = f64}
+    %7 = maxon.int_to_float %2
+    %8 = maxon.int_to_float %3
+    %9 = maxon.binop %7, %8 {op = div} {kind = f64}
+    %10 = maxon.binop %6, %9 {op = add} {kind = f64}
+    %11 = maxon.trunc %10
+    maxon.return %11
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-  %7 = arith.constant {value = 100 : i64}
-  memref.store %7, a
-  %8 = arith.constant {value = 5 : i64}
-  memref.store %8, b
-  %9 = arith.constant {value = 84 : i64}
-  memref.store %9, c
-  %10 = arith.constant {value = 4 : i64}
-  memref.store %10, d
-  %11 = arith.divsi %7, %8
-  %12 = arith.divsi %9, %10
-  %13 = arith.addi %11, %12
-  func.return %13
+    %12 = arith.constant {value = 100 : i64}
+    memref.store %12, a
+    %13 = arith.constant {value = 5 : i64}
+    memref.store %13, b
+    %14 = arith.constant {value = 84 : i64}
+    memref.store %14, c
+    %15 = arith.constant {value = 4 : i64}
+    memref.store %15, d
+    %16 = arith.sitofp %12
+    %17 = arith.sitofp %13
+    %18 = arith.divf %16, %17
+    %19 = arith.sitofp %14
+    %20 = arith.sitofp %15
+    %21 = arith.divf %19, %20
+    %22 = arith.addf %18, %21
+    %23 = arith.fptosi %22
+    func.return %23
   }
 }
 === x86
 module {
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=48
-  x86.mov eax, 100
-  x86.mov [rbp-8], eax
-  x86.mov ecx, 5
-  x86.mov [rbp-16], ecx
-  x86.mov edx, 84
-  x86.mov [rbp-24], edx
-  x86.mov ebx, 4
-  x86.mov [rbp-32], ebx
-  x86.cqo
-  x86.idiv ecx
-  x86.mov esi, [rbp-24]
-  x86.mov [rbp-40], eax
-  x86.mov eax, esi
-  x86.cqo
-  x86.idiv ebx
-  x86.mov edi, [rbp-40]
-  x86.add edi, eax
-  x86.mov eax, edi
-  x86.epilogue
-  x86.ret
-  }
-}
-```
----
-module {
-  func @main() -> i64 {
-  entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov eax, 100
     x86.mov [rbp-8], eax
     x86.mov ecx, 5
@@ -86,16 +68,48 @@ module {
     x86.mov [rbp-24], edx
     x86.mov ebx, 4
     x86.mov [rbp-32], ebx
-    x86.cqo
-    x86.idiv ecx
-    x86.mov esi, [rbp-24]
-    x86.mov [rbp-40], eax
+    x86.cvtsi2sd xmm0, eax
+    x86.cvtsi2sd xmm1, ecx
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.cvtsi2sd xmm3, edx
+    x86.cvtsi2sd xmm4, ebx
+    x86.movsd xmm5, xmm3
+    x86.divsd xmm5, xmm4
+    x86.movsd xmm6, xmm2
+    x86.addsd xmm6, xmm5
+    x86.cvttsd2si esi, xmm6
     x86.mov eax, esi
-    x86.cqo
-    x86.idiv ebx
-    x86.mov edi, [rbp-40]
-    x86.add edi, eax
-    x86.mov eax, edi
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 100
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 5
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 84
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 4
+    x86.mov [rbp-32], ebx
+    x86.cvtsi2sd xmm0, eax
+    x86.cvtsi2sd xmm1, ecx
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.cvtsi2sd xmm3, edx
+    x86.cvtsi2sd xmm4, ebx
+    x86.movsd xmm5, xmm3
+    x86.divsd xmm5, xmm4
+    x86.movsd xmm6, xmm2
+    x86.addsd xmm6, xmm5
+    x86.cvttsd2si esi, xmm6
+    x86.mov eax, esi
     x86.epilogue
     x86.ret
   }

@@ -1,0 +1,27 @@
+// Test: shift-chained
+function main() returns int
+  var a = 1
+  return a << 4 >> 2
+end 'main'
+---
+ExitCode: 4
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 4
+    x86.mov edx, eax
+    x86.shl edx, cl
+    x86.mov ebx, 2
+    x86.mov ecx, ebx
+    x86.mov esi, edx
+    x86.sar esi, cl
+    x86.mov eax, esi
+    x86.epilogue
+    x86.ret
+  }
+}
+---
