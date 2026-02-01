@@ -98,6 +98,6 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/stdlib-autodiscovery/wrong-arg-count.test:3:23: missing argument for parameter 'exponent'
+error E3005: specs/fragments/stdlib-autodiscovery/wrong-arg-count.test:3:21: missing argument for parameter 'exponent'
 ```
 

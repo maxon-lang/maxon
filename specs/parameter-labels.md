@@ -148,7 +148,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:7:17: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:7:10: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 
 <!-- test: error-unknown-param-name -->

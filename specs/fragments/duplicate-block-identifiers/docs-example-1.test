@@ -1,0 +1,45 @@
+// Test: docs-example-1
+function main() returns int
+  var x = 0
+  if true 'outer'
+    x = 1
+  end 'outer'
+
+  if true 'inner'
+    x = 2
+  end 'inner'
+
+  return x
+end 'main'
+
+---
+ExitCode: 2
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.test ecx, ecx
+    x86.je main.outer_0.merge
+  outer_0:
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.jmp main.outer_0.merge
+  outer_0.merge:
+    x86.mov eax, 1
+    x86.test eax, eax
+    x86.je main.inner_1.merge
+  inner_1:
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.jmp main.inner_1.merge
+  inner_1.merge:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

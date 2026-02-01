@@ -151,8 +151,15 @@ public static class MaxonToStandardConversion {
               var structType = module.TypeDefs[structLitOp.TypeName];
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                 var fieldVarName = $"{tempName}.{fieldName}";
-                var mappedVal = valueMap[fieldVal];
-                EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
+                if (structVarNames.TryGetValue(fieldVal.Id, out var nestedStructName)) {
+                  // Nested struct field: copy all sub-fields
+                  var field = structType.GetField(fieldName)!;
+                  var nestedType = (MlirStructType)field.Type;
+                  CopyStructFields(newBlock, nestedStructName, fieldVarName, nestedType, varTypes);
+                } else {
+                  var mappedVal = valueMap[fieldVal];
+                  EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
+                }
               }
               structVarNames[structLitOp.Result.Id] = tempName;
               break;
@@ -191,8 +198,13 @@ public static class MaxonToStandardConversion {
             case MaxonFieldAccessOp fieldAccess: {
               var structName = structVarNames[fieldAccess.StructValue.Id];
               var fieldVarName = $"{structName}.{fieldAccess.FieldName}";
-              var loaded = EmitLoad(newBlock, fieldVarName, varTypes);
-              valueMap[fieldAccess.Result] = loaded;
+              if (fieldAccess.ResultKind == MaxonValueKind.Struct) {
+                // Struct-typed field: record the name mapping for nested field access
+                structVarNames[fieldAccess.Result.Id] = fieldVarName;
+              } else {
+                var loaded = EmitLoad(newBlock, fieldVarName, varTypes);
+                valueMap[fieldAccess.Result] = loaded;
+              }
               break;
             }
             case MaxonFieldAssignOp fieldAssign: {
@@ -273,10 +285,20 @@ public static class MaxonToStandardConversion {
               var input = valueMap[castOp.Input];
               switch (castOp.TargetKind) {
                 case MaxonValueKind.Byte: {
-                  // Cast to byte: mask with 0xFF
+                  // Cast to byte: convert to i64 if needed, then mask with 0xFF
+                  StdI64 intInput;
+                  if (input is StdI64 alreadyI64) {
+                    intInput = alreadyI64;
+                  } else if (input is StdF64 f64Input) {
+                    var fpToSi = new StdFpToSiOp(f64Input);
+                    newBlock.AddOp(fpToSi);
+                    intInput = fpToSi.Result;
+                  } else {
+                    throw new InvalidOperationException($"Cannot cast {input.GetType().Name} to byte");
+                  }
                   var maskOp = new StdConstI64Op(0xFF);
                   newBlock.AddOp(maskOp);
-                  var andOp = new StdAndI64Op((StdI64)input, maskOp.Result);
+                  var andOp = new StdAndI64Op(intInput, maskOp.Result);
                   newBlock.AddOp(andOp);
                   valueMap[castOp.Result] = andOp.Result;
                   break;
@@ -486,12 +508,22 @@ public static class MaxonToStandardConversion {
     }
   }
 
+  private static StdF64 PromoteToF64(StdValue value, MlirBlock<StandardOp> block) {
+    if (value is StdF64 f64) return f64;
+    if (value is StdI64 i64) {
+      var conv = new StdSiToFpOp(i64);
+      block.AddOp(conv);
+      return conv.Result;
+    }
+    throw new InvalidOperationException($"Cannot promote {value.GetType().Name} to F64");
+  }
+
   private static void LowerUnaryF64(
     Dictionary<MaxonValue, StdValue> valueMap,
     MlirBlock<StandardOp> block,
     MaxonValue maxonInput, MaxonValue maxonResult,
     Func<StdF64, StdUnaryF64Op> factory) {
-    var input = (StdF64)valueMap[maxonInput];
+    var input = PromoteToF64(valueMap[maxonInput], block);
     var stdOp = factory(input);
     block.AddOp(stdOp);
     valueMap[maxonResult] = stdOp.Result;
@@ -502,8 +534,8 @@ public static class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     MaxonValue maxonLhs, MaxonValue maxonRhs, MaxonValue maxonResult,
     Func<StdF64, StdF64, StdBinaryF64Op> factory) {
-    var lhs = (StdF64)valueMap[maxonLhs];
-    var rhs = (StdF64)valueMap[maxonRhs];
+    var lhs = PromoteToF64(valueMap[maxonLhs], block);
+    var rhs = PromoteToF64(valueMap[maxonRhs], block);
     var stdOp = factory(lhs, rhs);
     block.AddOp(stdOp);
     valueMap[maxonResult] = stdOp.Result;
@@ -589,8 +621,12 @@ public static class MaxonToStandardConversion {
     foreach (var field in structType.Fields) {
       var srcFieldVar = $"{srcName}.{field.Name}";
       var dstFieldVar = $"{dstName}.{field.Name}";
-      var loaded = EmitLoad(block, srcFieldVar, varTypes);
-      EmitStore(block, loaded, dstFieldVar, varTypes);
+      if (field.Type is MlirStructType nestedStructType) {
+        CopyStructFields(block, srcFieldVar, dstFieldVar, nestedStructType, varTypes);
+      } else {
+        var loaded = EmitLoad(block, srcFieldVar, varTypes);
+        EmitStore(block, loaded, dstFieldVar, varTypes);
+      }
     }
   }
 
@@ -606,12 +642,17 @@ public static class MaxonToStandardConversion {
     for (int fi = structType.Fields.Count - 1; fi >= 0; fi--) {
       var field = structType.Fields[fi];
       var fieldVarName = $"{varName}.{field.Name}";
-      EmitZeroStore(block, field.Type, fieldVarName, varTypes);
+      if (field.Type is MlirStructType nestedStructType) {
+        AllocateStructOnStack(block, fieldVarName, nestedStructType, varTypes);
+      } else {
+        EmitZeroStore(block, field.Type, fieldVarName, varTypes);
+      }
     }
   }
 
   /// <summary>
   /// Load all struct fields from a pointer into named variables.
+  /// Handles nested struct fields by computing sub-pointers and recursing.
   /// </summary>
   private static void LoadStructFieldsFromPointer(
     MlirBlock<StandardOp> block,
@@ -621,9 +662,18 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes) {
     foreach (var field in structType.Fields) {
       var fieldVarName = $"{varName}.{field.Name}";
-      var loadOp = new StdLoadIndirectOp(ptr, field.Offset, field.Type);
-      block.AddOp(loadOp);
-      EmitStore(block, loadOp.Result, fieldVarName, varTypes);
+      if (field.Type is MlirStructType nestedStructType) {
+        // Compute pointer to nested struct: base + field offset
+        var offsetOp = new StdConstI64Op(field.Offset);
+        block.AddOp(offsetOp);
+        var subPtrOp = new StdAddI64Op((StdI64)ptr, offsetOp.Result);
+        block.AddOp(subPtrOp);
+        LoadStructFieldsFromPointer(block, subPtrOp.Result, fieldVarName, nestedStructType, varTypes);
+      } else {
+        var loadOp = new StdLoadIndirectOp(ptr, field.Offset, field.Type);
+        block.AddOp(loadOp);
+        EmitStore(block, loadOp.Result, fieldVarName, varTypes);
+      }
     }
   }
 
@@ -638,8 +688,17 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes) {
     foreach (var field in structType.Fields) {
       var srcFieldVar = $"{srcName}.{field.Name}";
-      var loaded = EmitLoad(block, srcFieldVar, varTypes);
-      block.AddOp(new StdStoreIndirectOp(loaded, ptr, field.Offset, field.Type));
+      if (field.Type is MlirStructType nestedStructType) {
+        // Compute pointer to nested struct location within parent
+        var offsetOp = new StdConstI64Op(field.Offset);
+        block.AddOp(offsetOp);
+        var subPtrOp = new StdAddI64Op((StdI64)ptr, offsetOp.Result);
+        block.AddOp(subPtrOp);
+        WriteStructFieldsToPointer(block, srcFieldVar, subPtrOp.Result, nestedStructType, varTypes);
+      } else {
+        var loaded = EmitLoad(block, srcFieldVar, varTypes);
+        block.AddOp(new StdStoreIndirectOp(loaded, ptr, field.Offset, field.Type));
+      }
     }
   }
 
@@ -657,13 +716,36 @@ public static class MaxonToStandardConversion {
     for (int fi = structType.Fields.Count - 1; fi >= 0; fi--) {
       var field = structType.Fields[fi];
       var srcField = $"{srcName}.{field.Name}";
-      var loaded = EmitLoad(block, srcField, varTypes);
       var dstField = $"{bufName}.{field.Name}";
-      EmitStore(block, loaded, dstField, varTypes);
+      if (field.Type is MlirStructType nestedStructType) {
+        AllocateAndCopyStructToStackNested(block, srcField, dstField, nestedStructType, varTypes);
+      } else {
+        var loaded = EmitLoad(block, srcField, varTypes);
+        EmitStore(block, loaded, dstField, varTypes);
+      }
     }
     var leaOp = new StdLeaOp(bufName);
     block.AddOp(leaOp);
     return leaOp.Result;
+  }
+
+  private static void AllocateAndCopyStructToStackNested(
+    MlirBlock<StandardOp> block,
+    string srcName,
+    string dstName,
+    MlirStructType structType,
+    Dictionary<string, string> varTypes) {
+    for (int fi = structType.Fields.Count - 1; fi >= 0; fi--) {
+      var field = structType.Fields[fi];
+      var srcField = $"{srcName}.{field.Name}";
+      var dstField = $"{dstName}.{field.Name}";
+      if (field.Type is MlirStructType nestedStructType) {
+        AllocateAndCopyStructToStackNested(block, srcField, dstField, nestedStructType, varTypes);
+      } else {
+        var loaded = EmitLoad(block, srcField, varTypes);
+        EmitStore(block, loaded, dstField, varTypes);
+      }
+    }
   }
 
   private static void EmitSelfFieldWriteThrough(
@@ -704,6 +786,15 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.BitXor, MaxonValueKind.Integer), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Shl, MaxonValueKind.Integer), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Shr, MaxonValueKind.Integer), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    // Byte operations (bytes are represented as I64 at standard level)
+    { (MaxonBinOperator.Eq, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("eq", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Ne, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("ne", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Lt, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("lt", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Gt, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("gt", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Le, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("le", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Ge, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("ge", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Add, MaxonValueKind.Byte), (l, r) => { var op = new StdAddI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Sub, MaxonValueKind.Byte), (l, r) => { var op = new StdSubI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     // Logical operations (bool)
     { (MaxonBinOperator.And, MaxonValueKind.Bool), (l, r) => { var op = new StdAndI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
     { (MaxonBinOperator.Or, MaxonValueKind.Bool), (l, r) => { var op = new StdOrI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },

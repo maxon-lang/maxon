@@ -1,0 +1,97 @@
+// Test: self-with-params
+type Accumulator
+  var total int
+
+  function add(value int)
+    self.total = self.total + value
+  end 'add'
+
+  function getTotal() returns int
+    return self.total
+  end 'getTotal'
+end 'Accumulator'
+
+function main() returns int
+  var acc = Accumulator{total: 0}
+  acc.add(10)
+  acc.add(20)
+  acc.add(12)
+  return acc.getTotal()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @Accumulator.add(__self_ptr: i64, value: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.mov eax, [rbp-16]
+    x86.add eax, edx
+    x86.mov [rbp-16], eax
+    x86.mov edx, [rbp-8]
+    x86.mov [edx+0], eax
+    x86.epilogue
+    x86.ret
+  }
+  func @Accumulator.getTotal(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-16]
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 10
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-24], ebx
+    x86.lea rsi, [rbp-24]
+    x86.mov ecx, rsi
+    x86.call Accumulator.add
+    x86.mov edi, [rbp-24]
+    x86.mov [rbp-16], edi
+    x86.mov r8, 20
+    x86.mov r9, [rbp-16]
+    x86.mov [rbp-32], r9
+    x86.lea rax, [rbp-32]
+    x86.mov ecx, rax
+    x86.mov edx, r8
+    x86.call Accumulator.add
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-16], eax
+    x86.mov eax, 12
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-40], ecx
+    x86.lea rcx, [rbp-40]
+    x86.mov ecx, rcx
+    x86.mov edx, eax
+    x86.call Accumulator.add
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-48], eax
+    x86.lea rax, [rbp-48]
+    x86.mov ecx, rax
+    x86.call Accumulator.getTotal
+    x86.mov ecx, [rbp-48]
+    x86.mov [rbp-16], ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

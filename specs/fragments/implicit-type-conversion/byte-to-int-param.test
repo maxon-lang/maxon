@@ -1,0 +1,35 @@
+// Test: byte-to-int-param
+function takeInt(x int) returns int
+  return x
+end 'takeInt'
+
+function main() returns int
+  var b = 42 as byte
+  return takeInt(b)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @takeInt(x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 42
+    x86.mov ecx, 255
+    x86.and eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov ecx, eax
+    x86.call takeInt
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -1,0 +1,36 @@
+// Test: float-to-byte-param
+function takeByte(x byte) returns int
+  return x as int
+end 'takeByte'
+
+function main() returns int
+  var f = 300.9
+  return takeByte(f)
+end 'main'
+---
+ExitCode: 44
+---
+module {
+  func @takeByte(x: i8) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_300.9]
+    x86.movsd [rbp-8], xmm0
+    x86.cvttsd2si eax, xmm0
+    x86.mov ecx, 255
+    x86.and eax, ecx
+    x86.mov ecx, eax
+    x86.call takeByte
+    x86.epilogue
+    x86.ret
+  }
+}
+---

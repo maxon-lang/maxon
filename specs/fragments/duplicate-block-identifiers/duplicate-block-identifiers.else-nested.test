@@ -1,0 +1,44 @@
+// Test: duplicate-block-identifiers.else-nested
+function main() returns int
+  var x = 0
+  if false 'check'
+    x = 1
+  end 'check' else 'else_check'
+    if true 'nested'
+      x = 2
+    end 'nested'
+  end 'else_check'
+  return x
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.test ecx, ecx
+    x86.je main.else_check_1
+  check_0:
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.jmp main.check_0.merge
+  else_check_1:
+    x86.mov eax, 1
+    x86.test eax, eax
+    x86.je main.nested_2.merge
+  nested_2:
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.jmp main.nested_2.merge
+  nested_2.merge:
+  check_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

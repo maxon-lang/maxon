@@ -1,0 +1,85 @@
+// Test: type-method-with-params
+type Adder
+  var total int
+
+  function add(value int)
+    total = total + value
+  end 'add'
+
+  function getTotal() returns int
+    return total
+  end 'getTotal'
+end 'Adder'
+
+function main() returns int
+  var a = Adder{total: 0}
+  a.add(10)
+  a.add(32)
+  return a.getTotal()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @Adder.add(__self_ptr: i64, value: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.add ecx, edx
+    x86.mov [rbp-32], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov [edx+0], ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @Adder.getTotal(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 10
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-24], ebx
+    x86.lea rsi, [rbp-24]
+    x86.mov ecx, rsi
+    x86.call Adder.add
+    x86.mov edi, [rbp-24]
+    x86.mov [rbp-16], edi
+    x86.mov r8, 32
+    x86.mov r9, [rbp-16]
+    x86.mov [rbp-32], r9
+    x86.lea rax, [rbp-32]
+    x86.mov ecx, rax
+    x86.mov edx, r8
+    x86.call Adder.add
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-40], eax
+    x86.lea rax, [rbp-40]
+    x86.mov ecx, rax
+    x86.call Adder.getTotal
+    x86.mov ecx, [rbp-40]
+    x86.mov [rbp-16], ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

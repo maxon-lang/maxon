@@ -10,6 +10,8 @@ public class MlirContext {
 
   public int NextId() => _nextValueId++;
 
+  public void ResetIds() => _nextValueId = 0;
+
   public IDisposable PushScope() {
     var previous = _current;
     _current = this;

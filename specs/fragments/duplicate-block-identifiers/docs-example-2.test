@@ -1,0 +1,42 @@
+// Test: docs-example-2
+function main() returns int
+  var x = 0
+  if true 'check'
+    x = 1
+    if true 'check'
+      x = 2
+    end 'check'
+  end 'check'
+  return x
+end 'main'
+
+---
+ExitCode: 2
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.test ecx, ecx
+    x86.je main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.test ecx, ecx
+    x86.je main.check_1.merge
+  check_1:
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.jmp main.check_1.merge
+  check_1.merge:
+  check_0.after:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -330,13 +330,16 @@ public class MaxonStructLiteralOp(string typeName, List<(string FieldName, Maxon
 }
 
 // Reads a field: p.x
-public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string fieldName, MaxonValueKind resultKind) : MaxonOp {
+public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string fieldName, MaxonValueKind resultKind, string? resultStructTypeName = null) : MaxonOp {
   public override string Mnemonic => $"maxon.field_access .{FieldName}";
   public MaxonValue StructValue { get; } = structValue;
   public string TypeName { get; } = typeName;
   public string FieldName { get; } = fieldName;
   public MaxonValueKind ResultKind { get; } = resultKind;
-  public MaxonValue Result { get; } = resultKind.CreateValue();
+  public string? ResultStructTypeName { get; } = resultStructTypeName;
+  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
+      ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!)
+      : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString()];
 }

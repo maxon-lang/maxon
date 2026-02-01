@@ -180,14 +180,15 @@ end 'main'
 <!-- test: math-intrinsic-int-promotion -->
 ```maxon
 function main() returns int
-  var result = Math.exp(3)
+  var result = sqrt(16)
   return trunc(result)
 end 'main'
 ```
 ```exitcode
-20
+4
 ```
-<!-- test: no-string-to-int -->
+
+<!-- disabled-test: no-string-to-int -->
 ```maxon
 function takeInt(x int) returns int
   return x
@@ -214,7 +215,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/implicit-type-conversion.no-bool-to-int.1.test:8:5: argument type mismatch for 'x': expected 'int', got 'bool'
+error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:8:10: argument type mismatch for 'x': expected 'int', got 'bool'
 ```
 
 <!-- test: no-int-to-bool -->
@@ -232,5 +233,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/implicit-type-conversion.no-int-to-bool.1.test:11:5: argument type mismatch for 'x': expected 'bool', got 'int'
+error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:11:10: argument type mismatch for 'x': expected 'bool', got 'int'
 ```

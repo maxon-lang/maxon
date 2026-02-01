@@ -1,0 +1,37 @@
+// Test: byte-vs-byte
+function main() returns int
+  var a = 50 as byte
+  var b = 50 as byte
+  if a == b 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 50
+    x86.mov ecx, 255
+    x86.and eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov edx, 50
+    x86.mov ebx, 255
+    x86.and edx, ebx
+    x86.mov [rbp-16], edx
+    x86.cmp eax, edx
+    x86.jne main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -1,0 +1,17 @@
+// Test: basic-autodiscovery
+function main() returns int
+  return trunc(sqrt(16.0))
+end 'main'
+---
+ExitCode: 4
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.movsd xmm0, [rip+__float_16]
+    x86.sqrtsd xmm1, xmm0
+    x86.cvttsd2si eax, xmm1
+    x86.ret
+  }
+}
+---

@@ -1,5 +1,6 @@
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler;
 
@@ -40,16 +41,31 @@ public class Compiler {
       Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
       // Stage 1-2: Lex and parse all source files into MLIR modules
+      // Parse stdlib first as a seed module, then reset IDs for user code
       var module = new MlirModule<MaxonOp>();
 
-      for (int i = 0; i < sources.Length; i++) {
-        var source = sources[i];
+      var stdlibSources = StdlibLoader.LoadStdlibModules();
+      foreach (var source in stdlibSources) {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens);
+        var parser = new Parser(tokens, module);
         var parsed = parser.Parse();
         module.Merge(parsed);
       }
+
+      // Reset IDs so user code starts at %0
+      _context.ResetIds();
+
+      foreach (var source in sources) {
+        var lexer = new Lexer(source.Content);
+        var tokens = lexer.Tokenize();
+        var parser = new Parser(tokens, module);
+        var parsed = parser.Parse();
+        module.Merge(parsed);
+      }
+
+      // Remove unreachable functions (e.g. unused stdlib functions)
+      DeadFunctionElimination.Run(module);
 
       // Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
       var pipeline = new MlirPipeline();
@@ -81,18 +97,7 @@ public class Compiler {
 
 public static class StdlibLoader {
   private static readonly string[] WhitelistedModules = [
-    "Math.maxon",
-    "Pair.maxon",
-    "Interfaces.maxon",
-    "Array.maxon",
-    "String.maxon",
-    "Character.maxon",
-    "helpers/string/_grapheme.maxon",
-    "helpers/string/_hash.maxon",
-    "helpers/string/_search.maxon",
-    "helpers/string/_utf16.maxon",
-    "helpers/string/_utf8.maxon",
-    "helpers/string/_views.maxon"
+    "Math.maxon"
   ];
 
   public static string? FindStdlibPath() {
