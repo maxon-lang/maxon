@@ -10,7 +10,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   public List<MlirFunction<TOp>> Functions { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
   public List<MlirGlobal> Globals { get; } = [];
-  public Dictionary<string, MlirStructType> TypeDefs { get; } = [];
+  public Dictionary<string, MlirType> TypeDefs { get; } = [];
   public Dictionary<string, Dictionary<int, MlirAttribute>> FunctionDefaults { get; } = [];
 
   public void AddFunction(MlirFunction<TOp> func) {

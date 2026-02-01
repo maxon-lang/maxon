@@ -50,6 +50,10 @@ public enum ErrorCode {
   SemanticMissingReturn = 3012,
   SemanticUnexportedFieldAccess = 3013,
   SemanticRedundantTypeAnnotation = 3014,
+  EnumDuplicateCase = 3030,
+  EnumDuplicateRawValue = 3031,
+  EnumRawValueTypeMismatch = 3032,
+  EnumUnknownCase = 3034,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

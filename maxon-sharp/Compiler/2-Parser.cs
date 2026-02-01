@@ -15,7 +15,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
   private readonly Stack<LoopContext> _loopStack = new();
-  private readonly Dictionary<string, MlirStructType> _typeRegistry = seedModule != null
+  private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
     ? new(seedModule.TypeDefs) : [];
   private string? _currentTypeName;
 
@@ -151,6 +151,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         PreScanFunction(module, null);
       } else if (Check(TokenType.Type)) {
         PreScanType(module);
+      } else if (Check(TokenType.Enum)) {
+        PreScanEnum(module);
       } else if (Check(TokenType.TypeAlias)) {
         PreScanTypeAlias();
       } else {
@@ -333,6 +335,111 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces);
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
+
+    // consume 'end'
+    if (Check(TokenType.End)) Advance();
+    // Skip end label
+    if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  private void PreScanEnum(MlirModule<MaxonOp> module) {
+    Advance(); // consume 'enum'
+    var nameToken = Expect(TokenType.Identifier);
+    var enumName = nameToken.Value;
+    _currentTypeName = enumName;
+
+    // Temporary entry so ParseTypeRef can resolve forward references
+    if (!_typeRegistry.ContainsKey(enumName)) {
+      _typeRegistry[enumName] = new MlirEnumType(enumName, []);
+    }
+
+    SkipNewlines();
+
+    var cases = new List<MlirEnumCase>();
+    var caseNames = new HashSet<string>();
+    MlirType? backingType = null;
+    int ordinal = 0;
+
+    while (!Check(TokenType.End) && !Check(TokenType.Function) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End) || Check(TokenType.Function)) break;
+
+      var caseToken = Expect(TokenType.Identifier);
+      var caseName = caseToken.Value;
+
+      if (!caseNames.Add(caseName)) {
+        throw new CompileError(ErrorCode.EnumDuplicateCase,
+          $"duplicate enum case: '{caseName}'", caseToken.Line, caseToken.Column);
+      }
+
+      if (Check(TokenType.Equals)) {
+        Advance(); // consume '='
+
+        bool isNegative = false;
+        if (Check(TokenType.Minus)) {
+          isNegative = true;
+          Advance();
+        }
+
+        if (Check(TokenType.IntegerLiteral)) {
+          var rawVal = ParseIntegerLiteral(Advance());
+          if (isNegative) rawVal = -rawVal;
+
+          if (backingType == null) {
+            backingType = MlirType.I64;
+          } else if (backingType != MlirType.I64) {
+            throw new CompileError(ErrorCode.EnumRawValueTypeMismatch,
+              $"raw value type mismatch: 'expected {(backingType == MlirType.F64 ? "float" : "int")}, got int'",
+              caseToken.Line, caseToken.Column);
+          }
+
+          // Check for duplicate raw values
+          foreach (var existing in cases) {
+            if (existing.RawValue is long existingVal && existingVal == rawVal) {
+              throw new CompileError(ErrorCode.EnumDuplicateRawValue,
+                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
+            }
+          }
+
+          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal));
+        } else if (Check(TokenType.FloatLiteral)) {
+          var rawVal = ParseFloatLiteral(Advance());
+          if (isNegative) rawVal = -rawVal;
+
+          if (backingType == null) {
+            backingType = MlirType.F64;
+          } else if (backingType != MlirType.F64) {
+            throw new CompileError(ErrorCode.EnumRawValueTypeMismatch,
+              $"raw value type mismatch: 'expected int, got float'",
+              caseToken.Line, caseToken.Column);
+          }
+
+          // Check for duplicate raw values
+          foreach (var existing in cases) {
+            if (existing.RawValue is double existingVal && existingVal == rawVal) {
+              throw new CompileError(ErrorCode.EnumDuplicateRawValue,
+                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
+            }
+          }
+
+          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal));
+        }
+      } else {
+        cases.Add(new MlirEnumCase(caseName, ordinal));
+      }
+
+      ordinal++;
+      SkipNewlines();
+    }
+
+    // Pre-scan methods inside the enum
+    while (Check(TokenType.Function) && !IsAtEnd()) {
+      PreScanInstanceMethod(module, enumName);
+      SkipNewlines();
+    }
+
+    _typeRegistry[enumName] = new MlirEnumType(enumName, cases, backingType);
+    _currentTypeName = null;
 
     // consume 'end'
     if (Check(TokenType.End)) Advance();
@@ -674,6 +781,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       ParseFunction(module);
     } else if (Check(TokenType.Type)) {
       ParseTypeDecl(module);
+    } else if (Check(TokenType.Enum)) {
+      ParseEnumDecl(module);
     } else if (Check(TokenType.Let) || Check(TokenType.Var)) {
       // Already handled in pre-scan; skip over
       SkipTopLevelDecl();
@@ -785,6 +894,85 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     ExpectEndLabel(typeName);
   }
 
+  private void ParseEnumDecl(MlirModule<MaxonOp> module) {
+    Advance(); // consume 'enum'
+    var nameToken = Expect(TokenType.Identifier);
+    var enumName = nameToken.Value;
+    _currentTypeName = enumName;
+    Logger.Debug(LogCategory.Parser, $"Parsing enum: {enumName}");
+
+    SkipNewlines();
+
+    var enumType = (MlirEnumType)_typeRegistry[enumName];
+
+    // Skip cases (already pre-scanned)
+    while (!Check(TokenType.End) && !Check(TokenType.Function) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End) || Check(TokenType.Function)) break;
+      SkipToEndOfLine();
+      SkipNewlines();
+    }
+
+    // Parse instance methods
+    while (Check(TokenType.Function) && !IsAtEnd()) {
+      ParseEnumInstanceMethod(module, enumName, enumType);
+      SkipNewlines();
+    }
+
+    _currentTypeName = null;
+    ExpectEndLabel(enumName);
+  }
+
+  private void ParseEnumInstanceMethod(MlirModule<MaxonOp> module, string enumName, MlirEnumType enumType) {
+    Expect(TokenType.Function);
+    var nameToken = Expect(TokenType.Identifier);
+    var methodName = $"{enumName}.{nameToken.Value}";
+    Logger.Debug(LogCategory.Parser, $"Parsing enum instance method: {methodName}");
+
+    Expect(TokenType.LeftParen);
+    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
+
+    MlirType? returnType = null;
+    if (Check(TokenType.Returns)) {
+      Advance();
+      returnType = ParseTypeRef();
+    }
+
+    SkipNewlines();
+
+    // Instance method gets 'self' as first parameter (the enum type)
+    var allParamNames = new List<string> { "self" };
+    allParamNames.AddRange(paramNames);
+    var allParamTypes = new List<MlirType> { (MlirType)enumType };
+    allParamTypes.AddRange(paramTypes);
+
+    // Store defaults (offset by 1 for 'self' parameter)
+    var offsetDefaults = new Dictionary<int, MlirAttribute>();
+    foreach (var (idx, attr) in paramDefaults) {
+      offsetDefaults[idx + 1] = attr;
+    }
+
+    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType);
+
+    // Emit self param as enum and register it
+    var backingKind = GetEnumBackingKind(enumType);
+    var selfParamOp = new MaxonEnumParamOp(0, "self", enumName, backingKind);
+    _currentBlock!.AddOp(selfParamOp);
+    _variables["self"] = new VarInfo(MaxonValueKind.Enum, false, selfParamOp.Result, _currentBlock!, enumName);
+
+    // Emit remaining params (offset by 1 for 'self')
+    EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
+
+    ParseBodyUntilEnd();
+    ExpectEndLabel(nameToken.Value);
+    FinishFunctionBody(nameToken.Value, nameToken, returnType);
+  }
+
+  private static MaxonValueKind GetEnumBackingKind(MlirEnumType enumType) {
+    if (enumType.BackingType == MlirType.F64) return MaxonValueKind.Float;
+    return MaxonValueKind.Integer;
+  }
+
   private void ParseStaticField(MlirModule<MaxonOp> module, string typeName) {
     bool isMutable;
     if (Check(TokenType.Var)) { Advance(); isMutable = true; } else if (Check(TokenType.Let)) { Advance(); isMutable = false; } else {
@@ -858,7 +1046,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     SkipNewlines();
 
     // Instance method gets 'self' as first parameter (the struct type)
-    var structType = _typeRegistry[typeName];
+    var structType = (MlirStructType)_typeRegistry[typeName];
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
     var allParamTypes = new List<MlirType> { structType };
@@ -939,6 +1127,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         var structParamOp = new MaxonStructParamOp(i + paramOffset, paramNames[i], structType.Name);
         _currentBlock!.AddOp(structParamOp);
         _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock!, structType.Name);
+      } else if (paramType is MlirEnumType enumType) {
+        var backingKind = GetEnumBackingKind(enumType);
+        var enumParamOp = new MaxonEnumParamOp(i + paramOffset, paramNames[i], enumType.Name, backingKind);
+        _currentBlock!.AddOp(enumParamOp);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, false, enumParamOp.Result, _currentBlock!, enumType.Name);
       } else {
         var kind = paramType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
@@ -1249,16 +1442,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       return;
     }
 
-    var valueKind = value switch {
-      MaxonInteger => MaxonValueKind.Integer,
-      MaxonFloat => MaxonValueKind.Float,
-      MaxonBool => MaxonValueKind.Bool,
-      MaxonByte => MaxonValueKind.Byte,
-      MaxonStruct s => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Cannot return '{s.TypeName}' from function declared to return '{KindDisplayName(returnType.ToValueKind())}'",
-        returnToken.Line, returnToken.Column),
-      _ => throw new InvalidOperationException($"Compiler bug: unknown MaxonValue type '{value.GetType().Name}'")
-    };
+    if (returnType is MlirEnumType expectedEnum) {
+      if (value is not MaxonEnum actualEnum || actualEnum.TypeName != expectedEnum.Name) {
+        var actualName = value is MaxonEnum e ? e.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Cannot return '{actualName}' from function declared to return '{expectedEnum.Name}'",
+          returnToken.Line, returnToken.Column);
+      }
+      return;
+    }
+
+    var valueKind = DetermineValueKind(value);
 
     var expectedKind = returnType.ToValueKind();
     if (valueKind != expectedKind) {
@@ -1288,14 +1482,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       var kind = MaxonValueKind.Struct;
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, structVal.TypeName);
+    } else if (initValue is MaxonEnum enumVal) {
+      var kind = MaxonValueKind.Enum;
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, enumVal.TypeName);
     } else {
-      var kind = initValue switch {
-        MaxonInteger => MaxonValueKind.Integer,
-        MaxonFloat => MaxonValueKind.Float,
-        MaxonBool => MaxonValueKind.Bool,
-        MaxonByte => MaxonValueKind.Byte,
-        _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Cannot determine type of value: {initValue.GetType().Name}", Current().Line, Current().Column)
-      };
+      var kind = DetermineValueKind(initValue);
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!);
     }
@@ -1363,7 +1555,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   }
 
   private void EmitFieldAssignment(string varName, VarInfo varInfo, Token fieldToken, Token errorToken) {
-    var structType = _typeRegistry[varInfo.StructTypeName!];
+    var structType = (MlirStructType)_typeRegistry[varInfo.StructTypeName!];
     var field = structType.GetField(fieldToken.Value)
       ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
@@ -1634,6 +1826,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       } else {
         (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal, entry.Op, opToken);
 
+        // Enum comparisons use the backing kind (Integer or Float)
+        if (kind == MaxonValueKind.Enum) {
+          var enumTypeName = lhsVal is MaxonEnum le ? le.TypeName : ((MaxonEnum)rhsVal).TypeName;
+          var enumType = (MlirEnumType)_typeRegistry[enumTypeName];
+          kind = GetEnumBackingKind(enumType);
+        }
+
         // Division always produces a float result
         if (entry.Op == MaxonBinOperator.Div && kind == MaxonValueKind.Integer) {
           promotedLhs = PromoteIntToFloat(promotedLhs);
@@ -1735,6 +1934,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           return new ExprResult.Direct(loadOp.Result);
         }
 
+        // Check for enum case: EnumType.caseName
+        if (_typeRegistry.TryGetValue(token.Value, out var typeEntry) && typeEntry is MlirEnumType enumType) {
+          var memberName = PeekNext().Value;
+          var enumCase = enumType.GetCase(memberName);
+          if (enumCase != null) {
+            Advance(); // consume '.'
+            Advance(); // consume case name
+            MaxonEnumLiteralOp enumLitOp;
+            if (enumType.BackingType == MlirType.F64) {
+              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (double)enumCase.RawValue!);
+            } else if (enumType.BackingType == MlirType.I64) {
+              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.RawValue!);
+            } else {
+              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
+            }
+            _currentBlock!.AddOp(enumLitOp);
+            return ParseFieldAccessChain(new ExprResult.Direct(enumLitOp.Result), token);
+          }
+          // Not a valid case - but could be a static method call, so fall through
+          // If it's not a method either, report unknown case
+          if (_pos + 2 >= _tokens.Count || _tokens[_pos + 2].Type != TokenType.LeftParen) {
+            Advance(); // consume '.'
+            Advance(); // consume member name
+            throw new CompileError(ErrorCode.EnumUnknownCase,
+              $"unknown enum case: '{memberName}'", token.Line, token.Column);
+          }
+        }
+
         // Check for qualified function call: TypeName.method(...)
         // _pos is at '.', _pos+1 is 'method', _pos+2 should be '('
         if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftParen) {
@@ -1817,21 +2044,56 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       var fieldToken = Expect(TokenType.Identifier);
       var fieldName = fieldToken.Value;
 
-      string structTypeName;
+      string userTypeName;
       if (result is ExprResult.VarRef vr) {
-        structTypeName = vr.Info.StructTypeName
-          ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct type", originToken.Line, originToken.Column);
+        userTypeName = vr.Info.StructTypeName
+          ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct or enum type", originToken.Line, originToken.Column);
       } else if (result is ExprResult.Direct d && d.Value is MaxonStruct ms) {
-        structTypeName = ms.TypeName;
+        userTypeName = ms.TypeName;
+      } else if (result is ExprResult.Direct d2 && d2.Value is MaxonEnum me) {
+        userTypeName = me.TypeName;
       } else {
         throw new CompileError(ErrorCode.MlirInvalidFieldAccess, "Cannot access field on non-struct value", fieldToken.Line, fieldToken.Column);
       }
 
-      var structType = _typeRegistry[structTypeName];
+      var registeredType = _typeRegistry[userTypeName];
+
+      // Handle enum-specific access
+      if (registeredType is MlirEnumType enumType) {
+        // .rawValue access
+        if (fieldName == "rawValue") {
+          var enumVal = ResolveExprValue(result);
+          var resultKind = GetEnumBackingKind(enumType);
+          var rawValueOp = new MaxonEnumRawValueOp(enumVal, userTypeName, resultKind);
+          _currentBlock!.AddOp(rawValueOp);
+          result = new ExprResult.Direct(rawValueOp.Result);
+          continue;
+        }
+
+        // Method call on enum
+        if (Check(TokenType.LeftParen)) {
+          var qualifiedMethodName = $"{userTypeName}.{fieldName}";
+          var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedMethodName);
+          if (callee != null) {
+            Advance(); // consume '('
+            var enumVal = ResolveExprValue(result);
+            var qualifiedFuncToken = new Token(TokenType.Identifier, qualifiedMethodName, fieldToken.Line, fieldToken.Column);
+            var allArgs = ParseInstanceMethodCallArgs(qualifiedFuncToken, enumVal);
+            var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs);
+            if (callOp.Result != null)
+              return new ExprResult.Direct(callOp.Result);
+            return new ExprResult.Direct(enumVal);
+          }
+        }
+
+        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Enum type '{userTypeName}' has no property or method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+      }
+
+      var structType = (MlirStructType)registeredType;
 
       // Check for method call: expr.method(...)
       if (Check(TokenType.LeftParen)) {
-        var qualifiedMethodName = $"{structTypeName}.{fieldName}";
+        var qualifiedMethodName = $"{userTypeName}.{fieldName}";
         var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedMethodName);
         if (callee != null) {
           Advance(); // consume '('
@@ -1846,16 +2108,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       }
 
       var field = structType.GetField(fieldName)
-        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{structTypeName}' has no field named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{userTypeName}' has no field named '{fieldName}'", fieldToken.Line, fieldToken.Column);
 
-      if (!field.IsExported && _currentTypeName != structTypeName) {
-        throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess, $"cannot access unexported field: '{fieldName}' outside of type '{structTypeName}'", fieldToken.Line, fieldToken.Column);
+      if (!field.IsExported && _currentTypeName != userTypeName) {
+        throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess, $"cannot access unexported field: '{fieldName}' outside of type '{userTypeName}'", fieldToken.Line, fieldToken.Column);
       }
 
       var fieldKind = field.Type.ToValueKind();
       var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
       var structVal2 = ResolveExprValue(result);
-      var accessOp = new MaxonFieldAccessOp(structVal2, structTypeName, fieldName, fieldKind, fieldStructName);
+      var accessOp = new MaxonFieldAccessOp(structVal2, userTypeName, fieldName, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);
       result = new ExprResult.Direct(accessOp.Result);
     }
@@ -1880,7 +2142,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   /// </summary>
   private ExprResult.Direct ParseStructLiteral(string typeName) {
     Advance(); // consume '{'
-    var structType = _typeRegistry[typeName];
+    var structType = (MlirStructType)_typeRegistry[typeName];
     var fieldValues = new List<(string, MaxonValue)>();
     var providedFields = new HashSet<string>();
 
@@ -1925,11 +2187,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         if (v.Info.DefinedInBlock == _currentBlock) {
           return v.Info.Value;
         }
-        // Cross-block reference: emit a var_ref or struct_var_ref op
+        // Cross-block reference: emit a var_ref, struct_var_ref, or enum_var_ref op
         if (v.Info.Kind == MaxonValueKind.Struct) {
           var structRefOp = new MaxonStructVarRefOp(v.VarName, v.Info.StructTypeName!);
           _currentBlock!.AddOp(structRefOp);
           return structRefOp.Result;
+        }
+        if (v.Info.Kind == MaxonValueKind.Enum) {
+          var enumType = (MlirEnumType)_typeRegistry[v.Info.StructTypeName!];
+          var backingKind = GetEnumBackingKind(enumType);
+          var enumRefOp = new MaxonEnumVarRefOp(v.VarName, v.Info.StructTypeName!, backingKind);
+          _currentBlock!.AddOp(enumRefOp);
+          return enumRefOp.Result;
         }
         var refOp = new MaxonVarRefOp(v.VarName, v.Info.Kind);
         _currentBlock!.AddOp(refOp);
@@ -1950,6 +2219,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       MaxonBool => MaxonValueKind.Bool,
       MaxonByte => MaxonValueKind.Byte,
       MaxonStruct => MaxonValueKind.Struct,
+      MaxonEnum => MaxonValueKind.Enum,
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Cannot determine kind of {value.GetType().Name}",
         Current().Line, Current().Column)
@@ -2002,7 +2272,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     MaxonValueKind.Bool => "bool",
     MaxonValueKind.Byte => "byte",
     MaxonValueKind.Struct => "struct",
-    _ => throw new InvalidOperationException($"Unhandled MaxonValueKind: {kind}")
+    MaxonValueKind.Enum => "enum",
+    _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
   private static bool IsComparisonOp(MaxonBinOperator op) =>
@@ -2115,6 +2386,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       var argKind = DetermineValueKind(args[i]!);
       var paramType = callee.ParamTypes[i];
       if (paramType is MlirStructType) continue;
+      if (paramType is MlirEnumType) continue;
 
       var paramKind = MlirTypeToValueKind(paramType);
       if (argKind == paramKind) continue;
@@ -2130,6 +2402,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     if (type == MlirType.F64) return MaxonValueKind.Float;
     if (type == MlirType.I1) return MaxonValueKind.Bool;
     if (type == MlirType.I8) return MaxonValueKind.Byte;
+    if (type is MlirEnumType) return MaxonValueKind.Enum;
     throw new InvalidOperationException($"Cannot map MlirType '{type}' to MaxonValueKind");
   }
 
@@ -2232,6 +2505,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     if (callee.ReturnType is MlirStructType retStructType) {
       resultKind = MaxonValueKind.Struct;
       resultStructTypeName = retStructType.Name;
+    } else if (callee.ReturnType is MlirEnumType retEnumType) {
+      resultKind = MaxonValueKind.Enum;
+      resultStructTypeName = retEnumType.Name;
     } else if (callee.ReturnType != null) {
       resultKind = callee.ReturnType switch {
         { } t when t == MlirType.I64 => MaxonValueKind.Integer,

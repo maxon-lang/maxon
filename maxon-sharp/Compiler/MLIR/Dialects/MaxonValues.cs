@@ -14,3 +14,6 @@ public class MaxonByte(int id) : MaxonValue(id);
 public class MaxonStruct(int id, string typeName) : MaxonValue(id) {
   public string TypeName { get; } = typeName;
 }
+public class MaxonEnum(int id, string typeName) : MaxonValue(id) {
+  public string TypeName { get; } = typeName;
+}

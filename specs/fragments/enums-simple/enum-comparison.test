@@ -1,0 +1,50 @@
+// Test: enum-comparison
+enum Status
+  pending
+  active
+  done
+end 'Status'
+
+function main() returns int
+  var s1 = Status.pending
+  var s2 = Status.pending
+  var s3 = Status.active
+  if s1 == s2 'eq'
+    if s1 != s3 'neq'
+      return 1
+    end 'neq'
+  end 'eq'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 1
+    x86.mov [rbp-24], edx
+    x86.cmp eax, ecx
+    x86.jne main.eq_0.after
+  eq_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.cmp eax, ecx
+    x86.je main.neq_1.after
+  neq_1:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  neq_1.after:
+  eq_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -396,7 +396,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E030: specs/fragments/enums.error.duplicate-case.1.test:4:5: duplicate enum case: 'red'
+error E3030: specs/fragments/enums-simple/error.duplicate-case.test:4:3: duplicate enum case: 'red'
 ```
 
 <!-- test: error.unknown-enum-case -->
@@ -412,7 +412,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E034: specs/fragments/enums.error.unknown-enum-case.1.test:8:5: unknown enum case: 'green'
+error E3034: specs/fragments/enums-simple/error.unknown-enum-case.test:8:12: unknown enum case: 'green'
 ```
 
 <!-- test: error.duplicate-raw-value -->
@@ -427,7 +427,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E031: specs/fragments/enums.error.duplicate-raw-value.1.test:4:5: duplicate raw value: '200'
+error E3031: specs/fragments/enums-simple/error.duplicate-raw-value.test:4:3: duplicate raw value: '200'
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
@@ -442,7 +442,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E032: specs/fragments/enums.error.raw-value-type-mismatch.1.test:4:5: raw value type mismatch: 'expected int, got float'
+error E3032: specs/fragments/enums-simple/error.raw-value-type-mismatch.test:4:3: raw value type mismatch: 'expected int, got float'
 ```
 
 

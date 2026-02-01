@@ -2,7 +2,7 @@ using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
 
-public enum MaxonValueKind { Integer, Float, Bool, Byte, Struct }
+public enum MaxonValueKind { Integer, Float, Bool, Byte, Struct, Enum }
 
 public static class MaxonValueKindExtensions {
   public static MlirType ToMlirType(this MaxonValueKind kind) => kind switch {
@@ -11,6 +11,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Bool => MlirType.I1,
     MaxonValueKind.Byte => MlirType.I8,
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require lookup via type registry, not ToMlirType()"),
+    MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require lookup via type registry, not ToMlirType()"),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -20,6 +21,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
     MaxonValueKind.Byte => new MaxonByte(MlirContext.Current.NextId()),
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require a type name, use CreateStructValue() instead"),
+    MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require a type name, use MaxonEnumLiteralOp instead"),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -28,6 +30,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.F64) return MaxonValueKind.Float;
     if (type == MlirType.I1) return MaxonValueKind.Bool;
     if (type == MlirType.I8) return MaxonValueKind.Byte;
+    if (type is MlirEnumType) return MaxonValueKind.Enum;
     if (type is MlirStructType) return MaxonValueKind.Struct;
     throw new ArgumentOutOfRangeException(nameof(type), $"No MaxonValueKind for MlirType: {type}");
   }
@@ -38,6 +41,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
     MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
     MaxonValueKind.Struct => new StdPtr(MlirContext.Current.NextId()),
+    MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 }
@@ -71,7 +75,8 @@ public class MaxonLiteralOp : MaxonOp {
       MaxonValueKind.Bool => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(BoolValue ? 1 : 0, MlirType.I1) },
       MaxonValueKind.Byte => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(IntValue, MlirType.I8) },
       MaxonValueKind.Struct => throw new InvalidOperationException("Struct literals are not MaxonLiteralOp"),
-      _ => throw new ArgumentOutOfRangeException(nameof(ValueKind), ValueKind, null),
+      MaxonValueKind.Enum => throw new InvalidOperationException("Enum literals are not MaxonLiteralOp"),
+      _ => throw new ArgumentOutOfRangeException(),
     };
 
   public MaxonLiteralOp(long value) {
@@ -106,7 +111,7 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
       var attrs = new Dictionary<string, MlirAttribute> {
         ["var"] = new StringAttr(VarName),
       };
-      if (ValueKind != MaxonValueKind.Struct) {
+      if (ValueKind != MaxonValueKind.Struct && ValueKind != MaxonValueKind.Enum) {
         attrs["kind"] = new TypeAttr(ValueKind.ToMlirType());
       }
       if (IsDeclaration) attrs["decl"] = new IntegerAttr(1, MlirType.I1);
@@ -203,6 +208,8 @@ public class MaxonCallOp : MaxonOp {
     ResultStructTypeName = resultStructTypeName;
     if (resultKind == MaxonValueKind.Struct) {
       Result = new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!);
+    } else if (resultKind == MaxonValueKind.Enum) {
+      Result = new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!);
     } else {
       Result = resultKind?.CreateValue();
     }
@@ -369,6 +376,68 @@ public class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind) : MaxonOp
       ["global"] = new StringAttr(GlobalName),
       ["type"] = new TypeAttr(ValueKind.ToMlirType())
     };
+}
+
+// Creates an enum value for a specific case
+public class MaxonEnumLiteralOp : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_literal @{EnumTypeName}.{CaseName}";
+  public string EnumTypeName { get; }
+  public string CaseName { get; }
+  public MaxonValueKind BackingKind { get; }
+  public long IntValue { get; }
+  public double FloatValue { get; }
+  public MaxonEnum Result { get; }
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+
+  public MaxonEnumLiteralOp(string enumTypeName, string caseName, long intValue) {
+    EnumTypeName = enumTypeName;
+    CaseName = caseName;
+    BackingKind = MaxonValueKind.Integer;
+    IntValue = intValue;
+    Result = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
+  }
+
+  public MaxonEnumLiteralOp(string enumTypeName, string caseName, double floatValue) {
+    EnumTypeName = enumTypeName;
+    CaseName = caseName;
+    BackingKind = MaxonValueKind.Float;
+    FloatValue = floatValue;
+    Result = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
+  }
+}
+
+// Enum parameter op: represents an enum being received as a function parameter
+public class MaxonEnumParamOp(int index, string name, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_param @{EnumTypeName}";
+  public int Index { get; } = index;
+  public string Name { get; } = name;
+  public string EnumTypeName { get; } = enumTypeName;
+  public MaxonValueKind BackingKind { get; } = backingKind;
+  public MaxonEnum Result { get; } = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Enum var ref: loads an enum from a variable in a different block
+public class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_var_ref {VarName}";
+  public string VarName { get; } = varName;
+  public string EnumTypeName { get; } = enumTypeName;
+  public MaxonValueKind BackingKind { get; } = backingKind;
+  public MaxonEnum Result { get; } = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Accesses .rawValue on an enum value
+public class MaxonEnumRawValueOp(MaxonValue enumValue, string enumTypeName, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_rawvalue @{EnumTypeName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Float
+    ? new MaxonFloat(MlirContext.Current.NextId())
+    : new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }
 
 public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind) : MaxonOp {

@@ -1,0 +1,60 @@
+// Test: enum-method
+enum Direction
+  north
+  south
+
+  function isNorth() returns bool
+    if self == Direction.north 'check'
+      return true
+    end 'check'
+    return false
+  end 'isNorth'
+end 'Direction'
+
+function main() returns int
+  let d = Direction.north
+  if d.isNorth() 'test'
+    return 1
+  end 'test'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Direction.isNorth(self: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.jne Direction.isNorth.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, eax
+    x86.call Direction.isNorth
+    x86.test eax, eax
+    x86.je main.test_0.after
+  test_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  test_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

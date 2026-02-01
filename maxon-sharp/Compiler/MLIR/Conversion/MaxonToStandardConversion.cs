@@ -16,12 +16,16 @@ public static class MaxonToStandardConversion {
     foreach (var func in module.Functions) {
       var retStructType = func.ReturnType as MlirStructType;
 
-      bool isInstanceMethod = IsInstanceMethod(func);
-      var selfStructType = isInstanceMethod ? (MlirStructType)func.ParamTypes[0] : null;
+      bool isStructInstanceMethod = IsStructInstanceMethod(func);
+      bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
+      bool isInstanceMethod = isStructInstanceMethod || isEnumInstanceMethod;
+      var selfStructType = isStructInstanceMethod ? (MlirStructType)func.ParamTypes[0] : null;
 
       // Build the new function signature:
-      // - Instance method 'self' param is passed as a pointer (by reference)
+      // - Struct instance method 'self' param is passed as a pointer (by reference)
+      // - Enum instance method 'self' param is passed as a scalar
       // - Other struct params are flattened to individual scalar params
+      // - Enum params are passed as scalars
       // - Struct return adds a hidden sret pointer as first param
       var newParamNames = new List<string>();
       var newParamTypes = new List<MlirType>();
@@ -36,10 +40,23 @@ public static class MaxonToStandardConversion {
       int flatIdx = newParamNames.Count;
 
       for (int i = 0; i < func.ParamNames.Count; i++) {
-        if (isInstanceMethod && i == 0) {
-          // Instance method self param: pass as pointer (i64)
+        if (isStructInstanceMethod && i == 0) {
+          // Struct instance method self param: pass as pointer (i64)
           newParamNames.Add("__self_ptr");
           newParamTypes.Add(MlirType.I64);
+          flatIdx++;
+        } else if (isEnumInstanceMethod && i == 0) {
+          // Enum instance method self param: pass as scalar
+          var enumType = (MlirEnumType)func.ParamTypes[0];
+          var backingMlirType = enumType.BackingType == MlirType.F64 ? MlirType.F64 : MlirType.I64;
+          newParamNames.Add("self");
+          newParamTypes.Add(backingMlirType);
+          flatIdx++;
+        } else if (func.ParamTypes[i] is MlirEnumType enumParamType) {
+          // Enum param: pass as scalar
+          var backingMlirType = enumParamType.BackingType == MlirType.F64 ? MlirType.F64 : MlirType.I64;
+          newParamNames.Add(func.ParamNames[i]);
+          newParamTypes.Add(backingMlirType);
           flatIdx++;
         } else if (func.ParamTypes[i] is MlirStructType structType) {
           var fieldIndices = new List<(int, MlirStructField)>();
@@ -57,7 +74,14 @@ public static class MaxonToStandardConversion {
         }
       }
 
-      MlirType? newReturnType = retStructType != null ? null : func.ReturnType;
+      MlirType? newReturnType;
+      if (retStructType != null) {
+        newReturnType = null;
+      } else if (func.ReturnType is MlirEnumType retEnumType) {
+        newReturnType = retEnumType.BackingType == MlirType.F64 ? MlirType.F64 : MlirType.I64;
+      } else {
+        newReturnType = func.ReturnType;
+      }
       var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType);
       var valueMap = new Dictionary<MaxonValue, StdValue>();
       var varTypes = new Dictionary<string, string>();
@@ -91,7 +115,7 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonStructParamOp structParamOp: {
-              if (isInstanceMethod && structParamOp.Name == "self") {
+              if (isStructInstanceMethod && structParamOp.Name == "self") {
                 // Instance method self: receive as pointer, save it, load fields indirectly
                 int selfFlatIdx = retStructType != null ? 1 : 0;
                 var selfPtrVal = new StdI64(MlirContext.Current.NextId());
@@ -112,6 +136,44 @@ public static class MaxonToStandardConversion {
                 }
                 structVarNames[structParamOp.Result.Id] = structParamOp.Name;
               }
+              break;
+            }
+            case MaxonEnumLiteralOp enumLitOp: {
+              if (enumLitOp.BackingKind == MaxonValueKind.Float) {
+                var newOp = new StdConstF64Op(enumLitOp.FloatValue);
+                newBlock.AddOp(newOp);
+                valueMap[enumLitOp.Result] = newOp.Result;
+              } else {
+                var newOp = new StdConstI64Op(enumLitOp.IntValue);
+                newBlock.AddOp(newOp);
+                valueMap[enumLitOp.Result] = newOp.Result;
+              }
+              break;
+            }
+            case MaxonEnumParamOp enumParamOp: {
+              int adjustedIndex = ComputeFlatParamIndex(enumParamOp.Index, func, retStructType != null);
+              if (enumParamOp.BackingKind == MaxonValueKind.Float) {
+                var stdResult = new StdF64(MlirContext.Current.NextId());
+                newBlock.AddOp(new StdParamOp(adjustedIndex, enumParamOp.Name, stdResult));
+                valueMap[enumParamOp.Result] = stdResult;
+                EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
+              } else {
+                var stdResult = new StdI64(MlirContext.Current.NextId());
+                newBlock.AddOp(new StdParamOp(adjustedIndex, enumParamOp.Name, stdResult));
+                valueMap[enumParamOp.Result] = stdResult;
+                EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
+              }
+              break;
+            }
+            case MaxonEnumVarRefOp enumVarRef: {
+              var loaded = EmitLoad(newBlock, enumVarRef.VarName, varTypes);
+              valueMap[enumVarRef.Result] = loaded;
+              break;
+            }
+            case MaxonEnumRawValueOp rawValueOp: {
+              // The enum's backing value IS the raw value - just pass through
+              var enumStdVal = valueMap[rawValueOp.EnumValue];
+              valueMap[rawValueOp.Result] = enumStdVal;
               break;
             }
             case MaxonLiteralOp litOp: {
@@ -148,7 +210,7 @@ public static class MaxonToStandardConversion {
             case MaxonStructLiteralOp structLitOp: {
               // Store each field value to named slots.
               var tempName = $"__struct_{structLitOp.Result.Id}";
-              var structType = module.TypeDefs[structLitOp.TypeName];
+              var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                 var fieldVarName = $"{tempName}.{fieldName}";
                 if (structVarNames.TryGetValue(fieldVal.Id, out var nestedStructName)) {
@@ -170,16 +232,16 @@ public static class MaxonToStandardConversion {
                 var srcName = structVarNames[assignOp.Value.Id];
                 var dstName = assignOp.VarName;
                 var structTypeName = ((MaxonStruct)assignOp.Value).TypeName;
-                var structType = module.TypeDefs[structTypeName];
+                var structType = (MlirStructType)module.TypeDefs[structTypeName];
                 CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // After assignment, the struct value is now known by both names
                 structVarNames[assignOp.Value.Id] = dstName;
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
-                // In instance methods, writing to a self field variable must also
+                // In struct instance methods, writing to a self field variable must also
                 // write through the self pointer so changes propagate to the caller.
-                if (isInstanceMethod && selfStructType != null) {
+                if (isStructInstanceMethod && selfStructType != null) {
                   EmitSelfFieldWriteThrough(newBlock, mappedValue, assignOp.VarName, selfStructType);
                 }
               }
@@ -212,8 +274,8 @@ public static class MaxonToStandardConversion {
               var fieldVarName = $"{structName}.{fieldAssign.FieldName}";
               var mappedVal = valueMap[fieldAssign.NewValue];
               EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
-              // Write through self pointer for instance methods
-              if (isInstanceMethod && structName == "self" && selfStructType != null) {
+              // Write through self pointer for struct instance methods
+              if (isStructInstanceMethod && structName == "self" && selfStructType != null) {
                 EmitSelfFieldWriteThrough(newBlock, mappedVal, fieldAssign.FieldName, selfStructType);
               }
               break;
@@ -402,11 +464,12 @@ public static class MaxonToStandardConversion {
   /// a single pointer, not flattened.
   /// </summary>
   private static int ComputeFlatParamIndex(int originalIndex, MlirFunction<MaxonOp> func, bool hasSret) {
-    bool isInstanceMethod = IsInstanceMethod(func);
+    bool isStructMethod = IsStructInstanceMethod(func);
+    bool isEnumMethod = IsEnumInstanceMethod(func);
     int flatIdx = hasSret ? 1 : 0;
     for (int i = 0; i < originalIndex; i++) {
-      if (isInstanceMethod && i == 0) {
-        // Self is passed as a single pointer param
+      if ((isStructMethod || isEnumMethod) && i == 0) {
+        // Self is passed as a single param (pointer for struct, scalar for enum)
         flatIdx += 1;
       } else if (func.ParamTypes[i] is MlirStructType st) {
         flatIdx += st.Fields.Count;
@@ -439,19 +502,26 @@ public static class MaxonToStandardConversion {
       newArgs.Add(leaOp.Result);
     }
 
-    // Detect instance method call: first param is "self" with struct type
-    bool calleeIsInstanceMethod = IsInstanceMethod(calleeFunc);
+    // Detect instance method call types
+    bool calleeIsStructInstance = IsStructInstanceMethod(calleeFunc);
+    bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
     string? selfBufName = null;
 
-    // Flatten struct arguments to individual field values
+    // Flatten struct arguments to individual field values; pass enum args as scalars
     for (int i = 0; i < callOp.Args.Count; i++) {
       var arg = callOp.Args[i];
-      if (calleeIsInstanceMethod && i == 0 && structVarNames.TryGetValue(arg.Id, out var selfName)) {
-        // Instance method self: pass pointer to struct fields on stack.
+      if (calleeIsEnumInstance && i == 0) {
+        // Enum instance method self: pass as scalar value
+        newArgs.Add(valueMap[arg]);
+      } else if (calleeIsStructInstance && i == 0 && structVarNames.TryGetValue(arg.Id, out var selfName)) {
+        // Struct instance method self: pass pointer to struct fields on stack.
         var calleeSelfStructType = (MlirStructType)calleeFunc.ParamTypes[0];
         selfBufName = $"__selfbuf_{MlirContext.Current.NextId()}";
         var selfPtr = AllocateAndCopyStructToStack(block, selfName, selfBufName, calleeSelfStructType, varTypes);
         newArgs.Add(selfPtr);
+      } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
+        // Enum param: pass as scalar
+        newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirStructType argStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
         foreach (var field in argStructType.Fields) {
           var fieldVarName = $"{argStructName}.{field.Name}";
@@ -470,7 +540,14 @@ public static class MaxonToStandardConversion {
         structVarNames[callOp.Result.Id] = sretVarName!;
       }
     } else {
-      var callResult = callOp.ResultKind?.CreateStdValue();
+      StdValue? callResult;
+      if (callOp.ResultKind == MaxonValueKind.Enum && calleeFunc.ReturnType is MlirEnumType retEnumType) {
+        callResult = retEnumType.BackingType == MlirType.F64
+          ? new StdF64(MlirContext.Current.NextId())
+          : new StdI64(MlirContext.Current.NextId());
+      } else {
+        callResult = callOp.ResultKind?.CreateStdValue();
+      }
       var funcCall = new StdCallOp(callOp.Callee, newArgs, callResult);
       block.AddOp(funcCall);
       if (callOp.Result != null && funcCall.Result != null) {
@@ -478,9 +555,9 @@ public static class MaxonToStandardConversion {
       }
     }
 
-    // After instance method call, read back modified self fields from the
+    // After struct instance method call, read back modified self fields from the
     // self buffer into the caller's original struct variable.
-    if (calleeIsInstanceMethod && selfBufName != null && callOp.Args.Count > 0
+    if (calleeIsStructInstance && selfBufName != null && callOp.Args.Count > 0
         && structVarNames.TryGetValue(callOp.Args[0].Id, out var callerSelfName)) {
       var calleeSelfStructType = (MlirStructType)calleeFunc.ParamTypes[0];
       CopyStructFields(block, selfBufName, callerSelfName, calleeSelfStructType, varTypes);
@@ -605,10 +682,15 @@ public static class MaxonToStandardConversion {
     }
   }
 
-  private static bool IsInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
+  private static bool IsStructInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"
     && func.ParamTypes[0] is MlirStructType;
+
+  private static bool IsEnumInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
+    func.ParamNames.Count > 0
+    && func.ParamNames[0] == "self"
+    && func.ParamTypes[0] is MlirEnumType;
 
   /// <summary>
   /// Copy all fields from one struct variable to another.
