@@ -17,7 +17,7 @@ Types conforming to `InitableFromStringLiteral` can be initialized from string l
 type MyString is InitableFromStringLiteral
   var _value String
 
-  static function InitableFromStringLiteral.init(value String) returns MyString
+  static function init(value String) returns MyString
     return {_value: value}
   end 'init'
 
@@ -47,7 +47,7 @@ Types conforming to `InitableFromCharLiteral` can be initialized from character 
 type MyChar is InitableFromCharLiteral
   var _value Character
 
-  static function InitableFromCharLiteral.init(value Character) returns MyChar
+  static function init(value Character) returns MyChar
     return {_value: value}
   end 'init'
 
@@ -77,7 +77,7 @@ end 'main'
 type Wrapper is InitableFromStringLiteral
   var _value String
 
-  static function InitableFromStringLiteral.init(value String) returns Wrapper
+  static function init(value String) returns Wrapper
     return {_value: value}
   end 'init'
 
@@ -100,7 +100,7 @@ end 'main'
 type Wrapper is InitableFromStringLiteral
   var _value String
 
-  static function InitableFromStringLiteral.init(value String) returns Wrapper
+  static function init(value String) returns Wrapper
     return {_value: value}
   end 'init'
 
@@ -123,7 +123,7 @@ len: 0
 type CharWrapper is InitableFromCharLiteral
   var _value Character
 
-  static function InitableFromCharLiteral.init(value Character) returns CharWrapper
+  static function init(value Character) returns CharWrapper
     return {_value: value}
   end 'init'
 

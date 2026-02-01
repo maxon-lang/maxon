@@ -45,14 +45,14 @@ end 'Point'
 
 ### Method Implementation
 
-Methods implementing interface requirements are defined **inside the type body** using `function InterfaceName.methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
+Methods implementing interface requirements are defined **inside the type body** using `function methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
 
 ```maxon
 type Point is Hashable
   var x int
   var y int
 
-  function Hashable.hash() returns int
+  function hash() returns int
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -101,7 +101,7 @@ type Point is Cloneable
   var x int
   var y int
 
-  function Cloneable.clone() returns Point
+  function clone() returns Point
     return {x: x, y: y}
   end 'clone'
 end 'Point'
@@ -121,7 +121,7 @@ typealias InternalIntArray is Array with int
 type IntArray is Container with int
   var data InternalIntArray
 
-  function Container.get(index int) returns int
+  function get(index int) returns int
     return try data.get(index) otherwise 0
   end 'get'
 end 'IntArray'
@@ -140,7 +140,7 @@ interface TwoMethods
 end 'TwoMethods'
 
 type Incomplete is TwoMethods
-  function TwoMethods.first() returns int
+  function first() returns int
     return 1
   end 'first'
   // Missing: TwoMethods.second()
@@ -170,7 +170,7 @@ type Point is Hashable
   var x int
   var y int
 
-  function Hashable.hash() returns int
+  function hash() returns int
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -198,7 +198,7 @@ type Point is Hashable
   var x int
   var y int
 
-  function Hashable.hash() returns int
+  function hash() returns int
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -227,11 +227,11 @@ end 'Describable'
 type Counter is Describable
   var count int
 
-  function Describable.describe() returns int
+  function describe() returns int
     return 100 + count
   end 'describe'
 
-  function Describable.value() returns int
+  function value() returns int
     return count
   end 'value'
 end 'Counter'
@@ -255,7 +255,7 @@ end 'Calculator'
 type Accumulator is Calculator
   var total int
 
-  function Calculator.add(n int) returns int
+  function add(n int) returns int
     return total + n
   end 'add'
 end 'Accumulator'
@@ -276,11 +276,11 @@ type Point is Hashable, Equatable
   var x int
   var y int
 
-  function Hashable.hash() returns int
+  function hash() returns int
     return x + y
   end 'hash'
 
-  function Equatable.equals(other Point) returns bool
+  function equals(other Point) returns bool
     if x == other.x and y == other.y 'c1'
       return true
     end 'c1'
@@ -309,7 +309,7 @@ type Point is Movable
   export var x int
   export var y int
 
-  function Movable.move(dx int, dy int) returns Point
+  function move(dx int, dy int) returns Point
     return {x: x + dx, y: y + dy}
   end 'move'
 end 'Point'
@@ -334,7 +334,7 @@ end 'Incrementable'
 type Value is Incrementable
   var n int
 
-  function Incrementable.inc() returns int
+  function inc() returns int
     return n + 1
   end 'inc'
 end 'Value'
@@ -360,7 +360,7 @@ end 'ThreeMethods'
 type Incomplete is ThreeMethods
   var value int
 
-  function ThreeMethods.one() returns int
+  function one() returns int
     return 1
   end 'one'
 end 'Incomplete'
@@ -414,7 +414,7 @@ end 'DerivedInterface'
 type IncompleteType is DerivedInterface
   var value int
 
-  function DerivedInterface.derivedMethod() returns int
+  function derivedMethod() returns int
     return value
   end 'derivedMethod'
 end 'IncompleteType'
@@ -443,11 +443,11 @@ end 'DerivedInterface'
 type CompleteType is DerivedInterface
   var value int
 
-  function BaseInterface.baseMethod() returns int
+  function baseMethod() returns int
     return value
   end 'baseMethod'
 
-  function DerivedInterface.derivedMethod() returns int
+  function derivedMethod() returns int
     return value * 2
   end 'derivedMethod'
 end 'CompleteType'

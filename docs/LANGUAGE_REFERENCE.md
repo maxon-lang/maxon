@@ -388,7 +388,7 @@ type Point is Hashable
     var x int
     var y int
 
-    function Hashable.hash() returns int
+    function hash() returns int
         return x + y * 31
     end 'hash'
 end 'Point'
@@ -402,7 +402,7 @@ Interfaces can declare static methods using the `static` keyword. Static interfa
 - `Self` in interface method parameters/returns refers to the conforming type
 - A type can conform to multiple interfaces: `type Foo is A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
-- Static interface methods use `static function Interface.method()` syntax in implementations
+- Static interface methods use `static function method()` syntax in implementations
 
 ---
 

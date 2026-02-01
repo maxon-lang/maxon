@@ -29,18 +29,18 @@ Associated types can be used in:
 
 ### Implementing Associated Types
 
-Types bind concrete types to associated types using `with` after the interface name. Interface methods use `function InterfaceName.methodName(params)` syntax:
+Types bind concrete types to associated types using `with` after the interface name. Interface methods use `function methodName(params)` syntax:
 
 ```maxon
 type IntArray is Container with int
   var data array of 100 int
   var len int
 
-  function Container.get(index int) returns int
+  function get(index int) returns int
     return data[index]
   end 'get'
 
-  function Container.set(index int, value int) returns IntArray
+  function set(index int, value int) returns IntArray
     data[index] = value
     return {data: data, len: len}
   end 'set'
@@ -63,11 +63,11 @@ type IntFloat is Pair with int, float
   var a int
   var b float
 
-  function Pair.getFirst() returns int
+  function getFirst() returns int
     return a
   end 'getFirst'
   
-  function Pair.getSecond() returns float
+  function getSecond() returns float
     return b
   end 'getSecond'
 end 'IntFloat'
@@ -130,7 +130,7 @@ type IntPair is Summable with int
   var a int
   var b int
 
-  function Summable.sum() returns int
+  function sum() returns int
     return a + b
   end 'sum'
 end 'IntPair'
@@ -165,7 +165,7 @@ end 'HasElement'
 type Broken is HasElement
   var value int
 
-  function HasElement.get() returns int
+  function get() returns int
     return value
   end 'get'
 end 'Broken'
@@ -191,7 +191,7 @@ end 'TwoMethods'
 type Partial is TwoMethods with int
   var value int
 
-  function TwoMethods.first() returns int
+  function first() returns int
     return value
   end 'first'
 end 'Partial'
@@ -217,7 +217,7 @@ end 'Producer'
 type WrongReturn is Producer with float
   var value int
 
-  function Producer.produce() returns int
+  function produce() returns int
     return value
   end 'produce'
 end 'WrongReturn'
@@ -242,7 +242,7 @@ end 'Wrapper'
 type IntBox is Wrapper with int
   var value int
 
-  function Wrapper.unwrap() returns int
+  function unwrap() returns int
     return value
   end 'unwrap'
 end 'IntBox'
@@ -267,11 +267,11 @@ end 'Accumulator'
 type IntSum is Accumulator with int
   var sum int
 
-  function Accumulator.add(item int) returns IntSum
+  function add(item int) returns IntSum
     return {sum: sum + item}
   end 'add'
 
-  function Accumulator.total() returns int
+  function total() returns int
     return sum
   end 'total'
 end 'IntSum'
@@ -299,11 +299,11 @@ type IntFloat is Pair with int, float
   var a int
   var b float
 
-  function Pair.getFirst() returns int
+  function getFirst() returns int
     return a
   end 'getFirst'
 
-  function Pair.getSecond() returns float
+  function getSecond() returns float
     return b
   end 'getSecond'
 end 'IntFloat'
@@ -330,7 +330,7 @@ end 'CharSource'
 type SingleChar is CharSource with Character
   var ch Character
 
-  function CharSource.getChar() returns Character
+  function getChar() returns Character
     return ch
   end 'getChar'
 end 'SingleChar'
@@ -358,7 +358,7 @@ end 'ByteSource'
 type SingleByte is ByteSource with byte
   var b byte
 
-  function ByteSource.getByte() returns byte
+  function getByte() returns byte
     return b
   end 'getByte'
 end 'SingleByte'
@@ -383,7 +383,7 @@ end 'NeedsElement'
 type Missing is NeedsElement
   var value int
 
-  function NeedsElement.get() returns int
+  function get() returns int
     return value
   end 'get'
 end 'Missing'
@@ -407,7 +407,7 @@ end 'TwoMethods'
 type Partial is TwoMethods with int
   var value int
 
-  function TwoMethods.first() returns int
+  function first() returns int
     return value
   end 'first'
 end 'Partial'
@@ -431,7 +431,7 @@ end 'Typed'
 type WrongType is Typed with float
   var value int
 
-  function Typed.make() returns int
+  function make() returns int
     return value
   end 'make'
 end 'WrongType'
@@ -454,7 +454,7 @@ end 'Acceptor'
 type WrongParam is Acceptor with float
   var value int
 
-  function Acceptor.accept(val int) returns int
+  function accept(val int) returns int
     return value + val
   end 'accept'
 end 'WrongParam'
@@ -477,7 +477,7 @@ end 'Countable'
 type Counter is Countable
   var count int
 
-  function Countable.getCount() returns int
+  function getCount() returns int
     return count
   end 'getCount'
 end 'Counter'
@@ -501,7 +501,7 @@ end 'Addable'
 type Number is Addable
   var value int
 
-  function Addable.addOne() returns int
+  function addOne() returns int
     return value + 1
   end 'addOne'
 end 'Number'

@@ -96,7 +96,7 @@ end 'Countable'
 type IntList is Countable
   var data int
 
-  function Countable.value() returns int
+  function value() returns int
     return data
   end 'value'
 end 'IntList'
@@ -126,7 +126,7 @@ end 'Summable'
 type Number is Summable
   var n int
 
-  function Summable.value() returns int
+  function value() returns int
     return n
   end 'value'
 end 'Number'
@@ -155,14 +155,14 @@ end 'Valued'
 
 type TypeA is Valued
   var a int
-  function Valued.val() returns int
+  function val() returns int
     return a
   end 'val'
 end 'TypeA'
 
 type TypeB is Valued
   var b int
-  function Valued.val() returns int
+  function val() returns int
     return b * 2
   end 'val'
 end 'TypeB'
@@ -193,7 +193,7 @@ end 'Scalable'
 type Amount is Scalable
   var amount int
 
-  function Scalable.base() returns int
+  function base() returns int
     return amount
   end 'base'
 end 'Amount'
@@ -230,11 +230,11 @@ type Coord is Pointlike
   var cx int
   var cy int
 
-  function Pointlike.getX() returns int
+  function getX() returns int
     return cx
   end 'getX'
 
-  function Pointlike.getY() returns int
+  function getY() returns int
     return cy
   end 'getY'
 end 'Coord'

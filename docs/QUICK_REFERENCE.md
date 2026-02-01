@@ -133,7 +133,7 @@ type Point is Hashable, Describable   // interface conformance
     static var count = 0               // static mutable field
     static let MAX = 100               // static immutable constant
 
-    function Hashable.hash() returns int   // interface method
+    function hash() returns int   // interface method
         return x * 31 + y
     end 'hash'
 
@@ -167,7 +167,7 @@ interface Container uses Element       // associated type
 end 'Container'
 
 type IntBox is Container with int      // specify associated type
-    function Container.get(index int) returns int
+    function get(index int) returns int
         // ...
     end 'get'
 end 'IntBox'

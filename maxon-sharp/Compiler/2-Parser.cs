@@ -228,6 +228,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     return names;
   }
 
+  /// <summary>
+  /// Parse an 'is' clause (e.g., 'is Equatable') for interface conformance.
+  /// Returns the list of interface names the type conforms to.
+  /// </summary>
+  private List<string> ParseConformanceClause() {
+    var names = new List<string>();
+    if (!Check(TokenType.Is)) return names;
+
+    Advance(); // consume 'is'
+    names.Add(Expect(TokenType.Identifier).Value);
+    while (Check(TokenType.Comma)) {
+      Advance();
+      names.Add(Expect(TokenType.Identifier).Value);
+    }
+    return names;
+  }
+
   private void RemoveAssociatedTypePlaceholders(List<string> associatedTypeNames) {
     foreach (var name in associatedTypeNames) {
       _typeRegistry.Remove(name);
@@ -245,6 +262,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       _typeRegistry[typeName] = new MlirStructType(typeName, []);
     }
 
+    var conformingInterfaces = ParseConformanceClause();
     var associatedTypeNames = ParseUsesClause();
 
     SkipNewlines();
@@ -312,7 +330,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     // Replace temporary entry with complete struct type
-    _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames);
+    _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces);
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
 
@@ -685,6 +703,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     _currentTypeName = typeName;
     Logger.Debug(LogCategory.Parser, $"Parsing type: {typeName}");
 
+    ParseConformanceClause();
     var associatedTypeNames = ParseUsesClause();
     SkipNewlines();
 

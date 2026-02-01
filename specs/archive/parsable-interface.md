@@ -29,7 +29,7 @@ end 'MoneyParseError'
 type Money is Parsable
   var cents int
 
-  static function Parsable.fromString(input String) returns Self throws MoneyParseError
+  static function fromString(input String) returns Self throws MoneyParseError
     if input.byteLength() == 0 'empty'
       throw MoneyParseError.InvalidFormat
     end 'empty'
@@ -77,7 +77,7 @@ end 'ParseError'
 type Value is Parsable
   var n int
 
-  static function Parsable.fromString(input String) returns Self throws ParseError
+  static function fromString(input String) returns Self throws ParseError
     return {n: input.byteLength()}
   end 'fromString'
 end 'Value'
@@ -100,7 +100,7 @@ end 'ParseError'
 type Value is Parsable
   export var n int
 
-  static function Parsable.fromString(input String) returns Self throws ParseError
+  static function fromString(input String) returns Self throws ParseError
     return {n: input.byteLength()}
   end 'fromString'
 end 'Value'
@@ -126,7 +126,7 @@ end 'ParseError'
 type Value is Parsable
   export var n int
 
-  static function Parsable.fromString(input String) returns Self throws ParseError
+  static function fromString(input String) returns Self throws ParseError
     if input.byteLength() == 0 'check'
       throw ParseError.Empty
     end 'check'
@@ -156,7 +156,7 @@ end 'MoneyParseError'
 type Money is Parsable
   export var cents int
 
-  static function Parsable.fromString(input String) returns Self throws MoneyParseError
+  static function fromString(input String) returns Self throws MoneyParseError
     if input.byteLength() == 0 'empty'
       throw MoneyParseError.InvalidFormat
     end 'empty'
@@ -190,7 +190,7 @@ end 'ParseError'
 type Value is Parsable
   export var n int
 
-  static function Parsable.fromString(input String) returns Self throws ParseError
+  static function fromString(input String) returns Self throws ParseError
     if input.startsWith("x") 'check'
       throw ParseError.Invalid
     end 'check'
@@ -226,7 +226,7 @@ end 'main'
 type Value is Parsable
   var n int
 
-  static function Parsable.fromString(input String) returns Self
+  static function fromString(input String) returns Self
     return {n: input.byteLength()}
   end 'fromString'
 end 'Value'
@@ -249,7 +249,7 @@ end 'NotAnError'
 type Value is Parsable
   var n int
 
-  static function Parsable.fromString(input String) returns Self throws NotAnError
+  static function fromString(input String) returns Self throws NotAnError
     return {n: input.byteLength()}
   end 'fromString'
 end 'Value'

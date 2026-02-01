@@ -44,6 +44,10 @@ duplicate-block-identifiers.md - Error checking for blocks
 
 ## Prerequisites
 pair.md
+equatable.md
+enums-simple.md
+match-statement.md
+
 
 ## Hard (Significant Compiler Work)
 arrays.md - Array type, literals, methods

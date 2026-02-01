@@ -19,7 +19,7 @@ interface Printable
 end 'Printable'
 
 type MyType is Printable
-  function Printable.toString() returns int
+  function toString() returns int
     return 42
   end 'toString'
 end 'MyType'
@@ -46,7 +46,7 @@ interface Counter
 end 'Counter'
 
 type BadCounter is Counter
-  function Counter.get() returns int
+  function get() returns int
     return 0
   end 'get'
   // ERROR: missing 'Counter.increment' method
@@ -65,11 +65,11 @@ end 'Counter'
 type SimpleCounter is Counter
   var value int
 
-  function Counter.get() returns int
+  function get() returns int
     return value
   end 'get'
 
-  function Counter.increment()
+  function increment()
     value = value + 1
   end 'increment'
 end 'SimpleCounter'
@@ -98,11 +98,11 @@ end 'Writable'
 type Buffer is Readable, Writable
   var data int
 
-  function Readable.read() returns int
+  function read() returns int
     return data
   end 'read'
 
-  function Writable.write(value int)
+  function write(value int)
     data = value
   end 'write'
 end 'Buffer'
@@ -127,7 +127,7 @@ end 'Counter'
 type BadCounter is Counter
   var value int
 
-  function Counter.get() returns int
+  function get() returns int
     return value
   end 'get'
 end 'BadCounter'
@@ -150,7 +150,7 @@ end 'Simple'
 type Extended is Simple
   var value int
 
-  function Simple.getValue() returns int
+  function getValue() returns int
     return value
   end 'getValue'
 
