@@ -147,13 +147,13 @@ public class X86CodeEmitter {
         EmitDword(0); // placeholder, patched by ResolveLabels
         break;
       case X86MovMemRegOp movMem:
-        EmitMovMemReg(movMem.Displacement, movMem.Src);
+        EmitMovMemReg(movMem.Displacement, movMem.Src, movMem.SizeInBytes);
         break;
       case X86MovMemRspRegOp movMemRsp:
         EmitMovMemRspReg(movMemRsp.Offset, movMemRsp.Src);
         break;
       case X86MovRegMemOp movReg:
-        EmitMovRegMem(movReg.Dest, movReg.Displacement);
+        EmitMovRegMem(movReg.Dest, movReg.Displacement, movReg.SizeInBytes);
         break;
       case X86MovSdXmmRipRelOp movsd:
         EmitMovSdXmmRipRel(movsd.Dest, movsd.RdataLabel);
@@ -743,13 +743,35 @@ public class X86CodeEmitter {
     EmitByte((byte)(0xF8 | RegCode(divisor))); // /7 = 111 in reg field
   }
 
-  private void EmitMovMemReg(int displacement, X86Register src) {
+  private void EmitMovMemReg(int displacement, X86Register src, int sizeInBytes) {
     RequireGpr(src, nameof(EmitMovMemReg));
-    // MOV [rbp+disp], r64: REX.W + 89 /r (mod=01 or 10, r/m=rbp)
-    byte rex = 0x48; // REX.W
-    if (NeedsRex(src)) rex |= 0x04; // REX.R
-    EmitByte(rex);
-    EmitByte(0x89);
+    switch (sizeInBytes) {
+      case 1: {
+        // MOV [rbp+disp], r8: 88 /r (uses low byte of register)
+        // REX needed for extended regs (R8-R15) and to access sil/dil/bpl/spl (codes 4-7)
+        byte rex1 = 0x40;
+        if (NeedsRex(src)) rex1 |= 0x04; // REX.R for extended register
+        if (NeedsRex(src) || RegCode(src) >= 4) EmitByte(rex1);
+        EmitByte(0x88);
+        break;
+      }
+      case 4:
+        // MOV [rbp+disp], r32: 89 /r (no REX.W = 32-bit operand)
+        if (NeedsRex(src)) {
+          EmitByte((byte)(0x40 | 0x04)); // REX.R for extended register
+        }
+        EmitByte(0x89);
+        break;
+      case 8:
+        // MOV [rbp+disp], r64: REX.W + 89 /r
+        byte rex = 0x48; // REX.W
+        if (NeedsRex(src)) rex |= 0x04; // REX.R
+        EmitByte(rex);
+        EmitByte(0x89);
+        break;
+      default:
+        throw new InvalidOperationException($"EmitMovMemReg: unsupported size {sizeInBytes}");
+    }
     if (displacement >= -128 && displacement <= 127) {
       EmitByte((byte)(0x45 | (RegCode(src) << 3))); // mod=01, r/m=rbp(5)
       EmitByte((byte)(displacement & 0xFF));
@@ -759,13 +781,34 @@ public class X86CodeEmitter {
     }
   }
 
-  private void EmitMovRegMem(X86Register dest, int displacement) {
+  private void EmitMovRegMem(X86Register dest, int displacement, int sizeInBytes) {
     RequireGpr(dest, nameof(EmitMovRegMem));
-    // MOV r64, [rbp+disp]: REX.W + 8B /r (mod=01 or 10, r/m=rbp)
-    byte rex = 0x48; // REX.W
-    if (NeedsRex(dest)) rex |= 0x04; // REX.R
-    EmitByte(rex);
-    EmitByte(0x8B);
+    switch (sizeInBytes) {
+      case 1:
+        // MOVZX r64, byte [rbp+disp]: REX.W + 0F B6 /r
+        byte rex1 = 0x48; // REX.W
+        if (NeedsRex(dest)) rex1 |= 0x04; // REX.R
+        EmitByte(rex1);
+        EmitByte(0x0F);
+        EmitByte(0xB6);
+        break;
+      case 4:
+        // MOV r32, [rbp+disp]: 8B /r (no REX.W = zero-extends to r64)
+        if (NeedsRex(dest)) {
+          EmitByte((byte)(0x40 | 0x04)); // REX.R for extended register
+        }
+        EmitByte(0x8B);
+        break;
+      case 8:
+        // MOV r64, [rbp+disp]: REX.W + 8B /r
+        byte rex8 = 0x48; // REX.W
+        if (NeedsRex(dest)) rex8 |= 0x04; // REX.R
+        EmitByte(rex8);
+        EmitByte(0x8B);
+        break;
+      default:
+        throw new InvalidOperationException($"EmitMovRegMem: unsupported size {sizeInBytes}");
+    }
     if (displacement >= -128 && displacement <= 127) {
       EmitByte((byte)(0x45 | (RegCode(dest) << 3))); // mod=01, r/m=rbp(5)
       EmitByte((byte)(displacement & 0xFF));

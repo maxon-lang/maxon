@@ -236,7 +236,7 @@ public static class StandardToX86Conversion {
           }
 
           case StdStoreI64Op storeOp:
-            regManager.EmitStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], x86Block);
+            regManager.EmitStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], 8, x86Block);
             break;
 
           case StdStoreF64Op storeOp:
@@ -244,7 +244,7 @@ public static class StandardToX86Conversion {
             break;
 
           case StdLoadI64Op loadOp:
-            regManager.EmitLoadFromStack(loadOp.Result, varOffsets[loadOp.VarName], x86Block);
+            regManager.EmitLoadFromStack(loadOp.Result, varOffsets[loadOp.VarName], 8, x86Block);
             break;
 
           case StdLoadF64Op loadOp:
@@ -252,11 +252,11 @@ public static class StandardToX86Conversion {
             break;
 
           case StdStoreI1Op storeBoolOp:
-            regManager.EmitStoreToStack(storeBoolOp.Value, varOffsets[storeBoolOp.VarName], x86Block);
+            regManager.EmitStoreToStack(storeBoolOp.Value, varOffsets[storeBoolOp.VarName], 1, x86Block);
             break;
 
           case StdLoadI1Op loadBoolOp:
-            regManager.EmitLoadFromStack(loadBoolOp.Result, varOffsets[loadBoolOp.VarName], x86Block);
+            regManager.EmitLoadFromStack(loadBoolOp.Result, varOffsets[loadBoolOp.VarName], 1, x86Block);
             break;
 
           case StdCmpI64Op cmpI64Op:

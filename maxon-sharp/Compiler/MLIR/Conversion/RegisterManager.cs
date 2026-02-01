@@ -282,18 +282,18 @@ public class RegisterManager {
   /// <summary>
   /// Store a GPR value to a stack offset and record the stack home.
   /// </summary>
-  public void EmitStoreToStack(StdValue value, int offset, MlirBlock<X86Op> block) {
+  public void EmitStoreToStack(StdValue value, int offset, int sizeInBytes, MlirBlock<X86Op> block) {
     var srcReg = EnsureInRegister(value, block);
-    block.AddOp(new X86MovMemRegOp(offset, srcReg));
+    block.AddOp(new X86MovMemRegOp(offset, srcReg, sizeInBytes));
     NoteStoreToStack(value, offset);
   }
 
   /// <summary>
   /// Load a GPR value from a stack offset.
   /// </summary>
-  public void EmitLoadFromStack(StdValue result, int offset, MlirBlock<X86Op> block) {
+  public void EmitLoadFromStack(StdValue result, int offset, int sizeInBytes, MlirBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
-    block.AddOp(new X86MovRegMemOp(gpr, offset));
+    block.AddOp(new X86MovRegMemOp(gpr, offset, sizeInBytes));
   }
 
   /// <summary>
