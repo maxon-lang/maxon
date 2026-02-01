@@ -1,0 +1,37 @@
+// Test: int-pair-field-write
+typealias IntPair is Pair with (int, int)
+
+function main() returns int
+  var p = IntPair{key: 0, value: 0}
+  p.key = 20
+  p.value = 22
+  return p.key + p.value
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 20
+    x86.mov [rbp-24], esi
+    x86.mov edi, 22
+    x86.mov [rbp-32], edi
+    x86.mov r8, [rbp-24]
+    x86.mov r9, [rbp-32]
+    x86.add r8, r9
+    x86.mov eax, r8
+    x86.epilogue
+    x86.ret
+  }
+}
+---

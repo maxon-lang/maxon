@@ -42,6 +42,9 @@ stdlib-basic.md - Basic stdlib integration
 stdlib-autodiscovery.md - Automatic stdlib discovery
 duplicate-block-identifiers.md - Error checking for blocks
 
+## Prerequisites
+pair.md
+
 ## Hard (Significant Compiler Work)
 arrays.md - Array type, literals, methods
 initablefromarrayliteral.md - Protocol for array initialization

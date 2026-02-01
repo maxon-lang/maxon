@@ -1,0 +1,47 @@
+// Test: int-pair-as-param
+typealias IntPair is Pair with (int, int)
+
+function sum(p IntPair) returns int
+  return p.key + p.value
+end 'sum'
+
+function main() returns int
+  var p = IntPair{key: 10, value: 32}
+  return sum(p)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @sum(p.key: i64, p.value: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov ecx, 32
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-24]
+    x86.mov edi, [rbp-32]
+    x86.mov ecx, esi
+    x86.mov edx, edi
+    x86.call sum
+    x86.epilogue
+    x86.ret
+  }
+}
+---

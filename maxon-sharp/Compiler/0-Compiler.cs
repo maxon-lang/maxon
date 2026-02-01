@@ -97,7 +97,8 @@ public class Compiler {
 
 public static class StdlibLoader {
   private static readonly string[] WhitelistedModules = [
-    "Math.maxon"
+    "Math.maxon",
+    "Pair.maxon"
   ];
 
   public static string? FindStdlibPath() {

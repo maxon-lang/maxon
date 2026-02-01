@@ -152,7 +152,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       } else if (Check(TokenType.Type)) {
         PreScanType(module);
       } else if (Check(TokenType.TypeAlias)) {
-        SkipTopLevelBlock();
+        PreScanTypeAlias();
       } else {
         // Unknown top-level token, skip to next line
         SkipToEndOfLine();
@@ -207,6 +207,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   /// <summary>
   /// Pre-scan a type declaration to register the type and its static methods.
   /// </summary>
+  /// <summary>
+  /// Parse a 'uses' clause (e.g., 'uses Key, Value') and register placeholder types
+  /// in the type registry so that ParseTypeRef can resolve associated type names.
+  /// Returns the list of associated type names parsed.
+  /// </summary>
+  private List<string> ParseUsesClause() {
+    var names = new List<string>();
+    if (!Check(TokenType.Uses)) return names;
+
+    Advance(); // consume 'uses'
+    names.Add(Expect(TokenType.Identifier).Value);
+    while (Check(TokenType.Comma)) {
+      Advance();
+      names.Add(Expect(TokenType.Identifier).Value);
+    }
+    foreach (var name in names) {
+      _typeRegistry[name] = new MlirStructType(name, []);
+    }
+    return names;
+  }
+
+  private void RemoveAssociatedTypePlaceholders(List<string> associatedTypeNames) {
+    foreach (var name in associatedTypeNames) {
+      _typeRegistry.Remove(name);
+    }
+  }
+
   private void PreScanType(MlirModule<MaxonOp> module) {
     Advance(); // consume 'type'
     var typeNameToken = Expect(TokenType.Identifier);
@@ -217,6 +244,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     if (!_typeRegistry.ContainsKey(typeName)) {
       _typeRegistry[typeName] = new MlirStructType(typeName, []);
     }
+
+    var associatedTypeNames = ParseUsesClause();
 
     SkipNewlines();
 
@@ -283,13 +312,69 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     // Replace temporary entry with complete struct type
-    _typeRegistry[typeName] = new MlirStructType(typeName, fields);
+    _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames);
     _currentTypeName = null;
+    RemoveAssociatedTypePlaceholders(associatedTypeNames);
 
     // consume 'end'
     if (Check(TokenType.End)) Advance();
     // Skip end label
     if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  /// <summary>
+  /// Pre-scan a typealias declaration: typealias Name is SourceType with (Type1, Type2, ...)
+  /// Creates a concrete struct type by substituting associated type parameters.
+  /// </summary>
+  private void PreScanTypeAlias() {
+    Advance(); // consume 'typealias'
+    var aliasNameToken = Expect(TokenType.Identifier);
+    var aliasName = aliasNameToken.Value;
+    Expect(TokenType.Is);
+    var sourceNameToken = Expect(TokenType.Identifier);
+    var sourceName = sourceNameToken.Value;
+
+    if (!_typeRegistry.TryGetValue(sourceName, out var sourceType))
+      throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {sourceName}", sourceNameToken.Line, sourceNameToken.Column);
+
+    if (sourceType is not MlirStructType sourceStruct)
+      throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' is not a struct type", sourceNameToken.Line, sourceNameToken.Column);
+
+    if (sourceStruct.AssociatedTypeNames.Count == 0)
+      throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
+
+    Expect(TokenType.With);
+    Expect(TokenType.LeftParen);
+
+    var concreteTypes = new List<MlirType>();
+    concreteTypes.Add(ParseTypeRef());
+    while (Check(TokenType.Comma)) {
+      Advance();
+      concreteTypes.Add(ParseTypeRef());
+    }
+    Expect(TokenType.RightParen);
+
+    if (concreteTypes.Count != sourceStruct.AssociatedTypeNames.Count)
+      throw new CompileError(ErrorCode.ParserExpectedType,
+        $"Type '{sourceName}' expects {sourceStruct.AssociatedTypeNames.Count} type argument(s), got {concreteTypes.Count}",
+        aliasNameToken.Line, aliasNameToken.Column);
+
+    // Build substitution map: associated type name -> concrete type
+    var substitution = new Dictionary<string, MlirType>();
+    for (int i = 0; i < sourceStruct.AssociatedTypeNames.Count; i++) {
+      substitution[sourceStruct.AssociatedTypeNames[i]] = concreteTypes[i];
+    }
+
+    // Create concrete fields with substituted types
+    var concreteFields = new List<MlirStructField>();
+    foreach (var field in sourceStruct.Fields) {
+      var fieldType = substitution.TryGetValue(field.Type.Name, out var concreteType)
+        ? concreteType
+        : field.Type;
+      concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
+    }
+
+    _typeRegistry[aliasName] = new MlirStructType(aliasName, concreteFields);
   }
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
@@ -599,6 +684,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     var typeName = nameToken.Value;
     _currentTypeName = typeName;
     Logger.Debug(LogCategory.Parser, $"Parsing type: {typeName}");
+
+    var associatedTypeNames = ParseUsesClause();
     SkipNewlines();
 
     // Type is already fully constructed in _typeRegistry from pre-scan
@@ -675,6 +762,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     _currentTypeName = null;
+    RemoveAssociatedTypePlaceholders(associatedTypeNames);
     ExpectEndLabel(typeName);
   }
 

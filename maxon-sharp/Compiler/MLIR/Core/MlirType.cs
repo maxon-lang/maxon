@@ -25,13 +25,11 @@ public class MlirStructField(string name, MlirType type, bool isExported, bool i
 
 public class MlirStructType : MlirType {
   public List<MlirStructField> Fields { get; }
+  public List<string> AssociatedTypeNames { get; }
 
-  public MlirStructType(string name, List<MlirStructField> fields) : base(name, ComputeSize(fields)) {
+  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null) : base(name, ComputeSize(fields)) {
     Fields = fields;
-    ComputeLayout();
-  }
-
-  private void ComputeLayout() {
+    AssociatedTypeNames = associatedTypeNames ?? [];
     int offset = 0;
     foreach (var field in Fields) {
       field.Offset = offset;
