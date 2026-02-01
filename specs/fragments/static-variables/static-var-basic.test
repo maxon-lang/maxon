@@ -1,0 +1,23 @@
+// Test: static-var-basic
+type Counter
+  static var count = 0
+end 'Counter'
+
+function main() returns int
+  Counter.count = 42
+  return Counter.count
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 42
+    x86.mov [rip+Counter.count], eax
+    x86.mov ecx, [rip+Counter.count]
+    x86.mov eax, ecx
+    x86.ret
+  }
+}
+---

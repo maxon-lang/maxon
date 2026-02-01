@@ -1,0 +1,23 @@
+// Test: constant-in-expression
+let OFFSET = 10
+
+function main() returns int
+  let x = 5
+  return x + OFFSET
+end 'main'
+---
+ExitCode: 15
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 5
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 10
+    x86.add eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

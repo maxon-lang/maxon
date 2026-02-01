@@ -1,0 +1,46 @@
+// Test: export-let-readonly
+type Config
+  export let version int
+
+  static function create() returns Self
+    return {version: 42}
+  end 'create'
+end 'Config'
+
+function main() returns int
+  var c = Config.create()
+  return c.version
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @Config.create(__sret: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 42
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [ecx+0], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.lea rcx, [rbp-8]
+    x86.mov ecx, rcx
+    x86.call Config.create
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-16], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov eax, ebx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

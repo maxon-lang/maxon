@@ -33,6 +33,7 @@ public enum ErrorCode {
   ParserInvalidAssignment = 2009,
   ParserExpectedToken = 2010,
   ParserLiteralOverflow = 2011,
+  ParserCircularDependency = 2012,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,
@@ -43,6 +44,12 @@ public enum ErrorCode {
   SemanticDuplicateDefinition = 3006,
   SemanticSymbolNotExported = 3007,
   SemanticUnsafeCast = 3008,
+  SemanticUnexpectedToken = 3009,
+  SemanticUnknownType = 3010,
+  SemanticUnusedVariable = 3011,
+  SemanticMissingReturn = 3012,
+  SemanticUnexportedFieldAccess = 3013,
+  SemanticRedundantTypeAnnotation = 3014,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,
@@ -76,6 +83,6 @@ public static class ErrorCodeExtensions {
   /// Formats an error code as "E1001", "E2001", etc.
   /// </summary>
   public static string Format(this ErrorCode code) {
-    return $"E{(int)code:D4}";
+    return $"E{(int)code:D3}";
   }
 }

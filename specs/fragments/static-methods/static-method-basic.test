@@ -1,0 +1,48 @@
+// Test: static-method-basic
+type Box
+  export var value int
+
+  static function make(v int) returns Box
+    return {value: v}
+  end 'make'
+end 'Box'
+
+function main() returns int
+  var b = Box.make(42)
+  return b.value
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @Box.make(__sret: i64, v: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.mov [eax+0], ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 42
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.lea rdx, [rbp-8]
+    x86.mov ecx, rdx
+    x86.mov edx, eax
+    x86.call Box.make
+    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-16], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov eax, esi
+    x86.epilogue
+    x86.ret
+  }
+}
+---

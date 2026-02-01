@@ -13,7 +13,7 @@ The standard library is automatically discovered and linked when you use its fun
 
 ### How It Works
 
-When you call a stdlib function like `pow()`, `sqrt()`, or `print()`, the compiler:
+When you call a stdlib function like `pow()`, the compiler:
 1. Searches the `stdlib/` directory
 2. Finds the function definition
 3. Compiles it automatically

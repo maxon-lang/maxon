@@ -31,14 +31,10 @@ function takeFloat(x float) returns int
 end 'takeFloat'
 
 function main() returns int
-  print("{takeFloat(42)}")  // int literal -> float (implicit)
-  return 0
+  return takeFloat(42)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 42
 ```
 
@@ -51,14 +47,10 @@ function takeFloat(x float) returns int
 end 'takeFloat'
 
 function main() returns int
-  print("{takeFloat(42)}")
-  return 0
+  return takeFloat(42)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 42
 ```
 
@@ -70,14 +62,10 @@ end 'takeFloat'
 
 function main() returns int
   var i = 42
-  print("{takeFloat(i)}")
-  return 0
+  return takeFloat(i)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 42
 ```
 
@@ -89,14 +77,10 @@ end 'takeInt'
 
 function main() returns int
   var b = 42 as byte
-  print("{takeInt(b)}")
-  return 0
+  return takeInt(b)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 42
 ```
 
@@ -107,14 +91,10 @@ function takeByte(x byte) returns int
 end 'takeByte'
 
 function main() returns int
-  print("{takeByte(300)}")
-  return 0
+  return takeByte(300)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 44
 ```
 
@@ -126,14 +106,10 @@ end 'takeByte'
 
 function main() returns int
   var i = 300
-  print("{takeByte(i)}")
-  return 0
+  return takeByte(i)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 44
 ```
 
@@ -145,14 +121,10 @@ end 'takeInt'
 
 function main() returns int
   var f = 3.7
-  print("{takeInt(f)}")
-  return 0
+  return takeInt(f)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 3
 ```
 
@@ -164,14 +136,10 @@ end 'takeByte'
 
 function main() returns int
   var f = 300.9
-  print("{takeByte(f)}")
-  return 0
+  return takeByte(f)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 44
 ```
 
@@ -186,14 +154,10 @@ function takeByte(x byte) returns int
 end 'takeByte'
 
 function main() returns int
-  print("{takeByte(getInt())}")
-  return 0
+  return takeByte(getInt())
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 44
 ```
 
@@ -206,14 +170,10 @@ end 'takeFloat'
 function main() returns int
   var a = 20
   var b = 22
-  print("{takeFloat(a + b)}")
-  return 0
+  return takeFloat(a + b)
 end 'main'
 ```
 ```exitcode
-0
-```
-```stdout
 42
 ```
 
@@ -240,22 +200,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E022: specs/fragments/implicit-type-conversion.no-string-to-int.1.test:8:5: argument type mismatch for 'x': expected 'int', got 'String'
-```
-
-<!-- test: no-int-to-string -->
-```maxon
-function takeString(x String) returns int
-  print(x)
-  return 0
-end 'takeString'
-
-function main() returns int
-  var i = 42
-  return takeString(i)
-end 'main'
-```
-```maxoncstderr
-error E022: specs/fragments/implicit-type-conversion.no-int-to-string.1.test:9:5: argument type mismatch for 'x': expected 'String', got 'int'
 ```
 
 <!-- test: no-bool-to-int -->

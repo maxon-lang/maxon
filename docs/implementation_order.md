@@ -36,11 +36,9 @@ type-methods.md - Methods on types
 method-call-on-parameter.md - Method calls on parameters
 contextual-literal-typing.md - Type inference improvements
 implicit-type-conversion.md - Type coercion rules
-type-checking.md - Enhanced type checking
 namespaces.md - Namespace system
 multi-file.md - Multi-file compilation
 stdlib-basic.md - Basic stdlib integration
-stdlib-namespaces.md - Stdlib with namespaces
 stdlib-autodiscovery.md - Automatic stdlib discovery
 duplicate-block-identifiers.md - Error checking for blocks
 
@@ -56,6 +54,7 @@ associated-types.md - Associated types in interfaces
 collection.md - Collection protocols
 primitive-hashable.md - Hashable protocol for primitives
 exp.md - Math function (might need runtime support)
+type-checking.md - Enhanced type checking
 
 ## Very Hard (Major Features)
 ownership.md - Ownership and borrow checking

@@ -1,0 +1,34 @@
+// Test: docs-example-3
+function repeat(value int, times int = 1) returns int
+  return value * times
+end 'repeat'
+
+function main() returns int
+  return repeat(value: 7, times: 6)
+end 'main'
+
+---
+ExitCode: 42
+---
+module {
+  func @repeat(value: i64, times: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.imul ecx, edx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 7
+    x86.mov ecx, 6
+    x86.mov edx, ecx
+    x86.mov ecx, eax
+    x86.call repeat
+    x86.ret
+  }
+}
+---

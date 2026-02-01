@@ -1,0 +1,55 @@
+// Test: export-var-basic
+type Value
+  export var n int
+  var private int
+
+  static function create() returns Self
+    return {n: 42, private: 100}
+  end 'create'
+end 'Value'
+
+function main() returns int
+  var v = Value.create()
+  return v.n
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @Value.create(__sret: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 42
+    x86.mov ecx, 100
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-24]
+    x86.mov [edx+8], esi
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.lea rdx, [rbp-16]
+    x86.mov ecx, rdx
+    x86.call Value.create
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-24], ebx
+    x86.mov esi, [rbp-8]
+    x86.mov [rbp-32], esi
+    x86.mov edi, [rbp-24]
+    x86.mov eax, edi
+    x86.epilogue
+    x86.ret
+  }
+}
+---

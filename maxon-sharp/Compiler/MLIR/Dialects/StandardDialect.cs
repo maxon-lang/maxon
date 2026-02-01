@@ -271,6 +271,38 @@ public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp 
   public override List<StdValue> ReadValues => [Lhs, Rhs];
 }
 
+// === Bool Logical Operations ===
+
+public class StdAndI1Op(StdBool lhs, StdBool rhs) : StandardOp {
+  public override string Mnemonic => "arith.andi1";
+  public StdBool Lhs { get; } = lhs;
+  public StdBool Rhs { get; } = rhs;
+  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
+public class StdOrI1Op(StdBool lhs, StdBool rhs) : StandardOp {
+  public override string Mnemonic => "arith.ori1";
+  public StdBool Lhs { get; } = lhs;
+  public StdBool Rhs { get; } = rhs;
+  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
+public class StdXorI1Op(StdBool lhs, StdBool rhs) : StandardOp {
+  public override string Mnemonic => "arith.xori1";
+  public StdBool Lhs { get; } = lhs;
+  public StdBool Rhs { get; } = rhs;
+  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
 // === Memory Operations ===
 
 public class StdStoreI64Op(StdI64 value, string varName) : StandardOp, IStoreOp {
@@ -408,4 +440,56 @@ public static class StdValueFactory {
     if (type == MlirType.I64) return new StdI64(MlirContext.Current.NextId());
     throw new InvalidOperationException($"Cannot create StdValue for type: {type}");
   }
+}
+
+// ============================================================================
+// Global variable operations
+// ============================================================================
+
+public class StdGlobalLoadI64Op(string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_load_i64 @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+}
+
+public class StdGlobalLoadF64Op(string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_load_f64 @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+}
+
+public class StdGlobalLoadI1Op(string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_load_i1 @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+}
+
+public class StdGlobalStoreI64Op(StdI64 value, string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_store_i64 @{GlobalName}";
+  public StdI64 Value { get; } = value;
+  public string GlobalName { get; } = globalName;
+  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override List<StdValue> ReadValues => [Value];
+}
+
+public class StdGlobalStoreF64Op(StdF64 value, string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_store_f64 @{GlobalName}";
+  public StdF64 Value { get; } = value;
+  public string GlobalName { get; } = globalName;
+  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override List<StdValue> ReadValues => [Value];
+}
+
+public class StdGlobalStoreI1Op(StdBool value, string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_store_i1 @{GlobalName}";
+  public StdBool Value { get; } = value;
+  public string GlobalName { get; } = globalName;
+  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override List<StdValue> ReadValues => [Value];
 }

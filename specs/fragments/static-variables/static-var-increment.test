@@ -1,0 +1,37 @@
+// Test: static-var-increment
+type Counter
+  static var count = 0
+
+  static function increment()
+    Counter.count = Counter.count + 1
+  end 'increment'
+end 'Counter'
+
+function main() returns int
+  Counter.increment()
+  Counter.increment()
+  Counter.increment()
+  return Counter.count
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @Counter.increment() {
+  entry:
+    x86.mov eax, [rip+Counter.count]
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov [rip+Counter.count], eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.call Counter.increment
+    x86.call Counter.increment
+    x86.call Counter.increment
+    x86.mov eax, [rip+Counter.count]
+    x86.ret
+  }
+}
+---

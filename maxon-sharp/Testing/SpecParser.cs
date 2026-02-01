@@ -127,8 +127,22 @@ public static partial class SpecParser {
 				if (code.Contains("function main()")) {
 					exampleIndex++;
 
-					// Look for an exitcode block immediately following this code block
 					var afterCode = docsSection[(codeMatch.Index + codeMatch.Length)..];
+
+					// Check for maxoncstderr block (compile error expectation)
+					var stderrMatch = MaxoncStderrBlockRegex().Match(afterCode);
+					if (stderrMatch.Success && stderrMatch.Index < 20) {
+						tests.Add(new TestCase {
+							Name = $"docs-example-{exampleIndex}",
+							Source = code,
+							Expectation = new CompilerErrorExpectation {
+								ExpectedStderr = stderrMatch.Groups[1].Value.TrimEnd()
+							}
+						});
+						continue;
+					}
+
+					// Look for an exitcode block immediately following this code block
 					var exitCodeMatch = ExitCodeBlockRegex().Match(afterCode);
 					int? exitCode = 0;
 					if (exitCodeMatch.Success && exitCodeMatch.Index < 20) {
@@ -175,4 +189,7 @@ public static partial class SpecParser {
 
 	[GeneratedRegex(@"```exitcode\r?\n(\d+)\r?\n```", RegexOptions.Singleline)]
 	private static partial Regex ExitCodeBlockRegex();
+
+	[GeneratedRegex(@"```maxoncstderr\r?\n(.*?)```", RegexOptions.Singleline)]
+	private static partial Regex MaxoncStderrBlockRegex();
 }

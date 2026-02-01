@@ -242,6 +242,18 @@ public class X86CodeEmitter {
       case X86MovSdXmmIndirectMemOp movsdInd:
         EmitMovSdXmmIndirectMem(movsdInd.Dest, movsdInd.BaseReg, movsdInd.Displacement);
         break;
+      case X86GlobalLoadOp globalLoad:
+        EmitGlobalLoadReg(globalLoad.Dest, globalLoad.GlobalName);
+        break;
+      case X86GlobalStoreOp globalStore:
+        EmitGlobalStoreReg(globalStore.Src, globalStore.GlobalName);
+        break;
+      case X86GlobalLoadXmmOp globalLoadXmm:
+        EmitGlobalLoadXmm(globalLoadXmm.Dest, globalLoadXmm.GlobalName);
+        break;
+      case X86GlobalStoreXmmOp globalStoreXmm:
+        EmitGlobalStoreXmm(globalStoreXmm.Src, globalStoreXmm.GlobalName);
+        break;
       default:
         throw new InvalidOperationException($"No X86 emission for: {op.GetType().Name} ({op.Mnemonic})");
     }
@@ -1089,5 +1101,57 @@ public class X86CodeEmitter {
       if (needsSib) EmitByte(0x24);
       EmitDword(displacement);
     }
+  }
+
+  // --- Global variable load/store (RIP-relative addressing) ---
+
+  private void EmitGlobalLoadReg(X86Register dest, string globalName) {
+    RequireGpr(dest, nameof(EmitGlobalLoadReg));
+    // MOV r64, [rip+disp32]: REX.W + 8B /r (mod=00, r/m=101 for RIP-relative)
+    byte rex = 0x48; // REX.W
+    if (NeedsRex(dest)) rex |= 0x04; // REX.R
+    EmitByte(rex);
+    EmitByte(0x8B);
+    EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
+    _globalFixups.Add((_code.Count, globalName));
+    EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  private void EmitGlobalStoreReg(X86Register src, string globalName) {
+    RequireGpr(src, nameof(EmitGlobalStoreReg));
+    // MOV [rip+disp32], r64: REX.W + 89 /r (mod=00, r/m=101 for RIP-relative)
+    byte rex = 0x48; // REX.W
+    if (NeedsRex(src)) rex |= 0x04; // REX.R
+    EmitByte(rex);
+    EmitByte(0x89);
+    EmitByte((byte)(0x05 | (RegCode(src) << 3))); // mod=00, r/m=101 (RIP-relative)
+    _globalFixups.Add((_code.Count, globalName));
+    EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  private void EmitGlobalLoadXmm(X86XmmRegister dest, string globalName) {
+    // MOVSD xmm, [rip+disp32]: F2 [REX] 0F 10 /r (mod=00, r/m=101 for RIP-relative)
+    var reg = XmmRegCode(dest);
+    EmitByte(0xF2);
+    if (reg >= 8) {
+      EmitByte(0x44); // REX.R
+    }
+    EmitBytes(0x0F, 0x10);
+    EmitByte((byte)(0x05 | ((reg & 7) << 3)));
+    _globalFixups.Add((_code.Count, globalName));
+    EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  private void EmitGlobalStoreXmm(X86XmmRegister src, string globalName) {
+    // MOVSD [rip+disp32], xmm: F2 [REX] 0F 11 /r (mod=00, r/m=101 for RIP-relative)
+    var reg = XmmRegCode(src);
+    EmitByte(0xF2);
+    if (reg >= 8) {
+      EmitByte(0x44); // REX.R
+    }
+    EmitBytes(0x0F, 0x11);
+    EmitByte((byte)(0x05 | ((reg & 7) << 3)));
+    _globalFixups.Add((_code.Count, globalName));
+    EmitDword(0); // placeholder for RIP-relative displacement
   }
 }

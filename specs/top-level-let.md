@@ -237,5 +237,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E005: specs/fragments/top-level-let.circular-dependency-error.1.test:3:1: Circular dependency detected among global constants: A, B
+error E2012: specs/fragments/top-level-let/circular-dependency-error.test:3:5: Circular dependency detected among global constants: A, B
 ```

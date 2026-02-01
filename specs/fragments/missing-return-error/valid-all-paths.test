@@ -1,0 +1,40 @@
+// Test: valid-all-paths
+function test(x int) returns int
+  if x > 0 'check'
+    return 1
+  end 'check'
+  return 0
+end 'test'
+
+function main() returns int
+  return test(5)
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @test(x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.jle test.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 5
+    x86.mov ecx, eax
+    x86.call test
+    x86.ret
+  }
+}
+---

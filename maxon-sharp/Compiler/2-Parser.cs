@@ -12,32 +12,43 @@ public class Parser(List<Token> tokens) {
   private MlirFunction<MaxonOp>? _currentFunction;
   private MlirBlock<MaxonOp>? _currentBlock;
   private readonly Dictionary<string, VarInfo> _variables = [];
+  private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Dictionary<string, MlirStructType> _typeRegistry = [];
+  private string? _currentTypeName;
+
+  // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
+  private Dictionary<string, object> _topLevelConstants = [];
+
+  // Global mutable variables (name -> type info)
+  private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable);
+  private readonly Dictionary<string, GlobalVarInfo> _globalVars = [];
+
+  // Default parameter values (funcName -> index -> value)
+  private readonly Dictionary<string, Dictionary<int, MlirAttribute>> _functionDefaults = [];
 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
-    { TokenType.Pipe, (MaxonBinOperator.BitOr, 0) },
-    { TokenType.Caret, (MaxonBinOperator.BitXor, 1) },
-    { TokenType.Ampersand, (MaxonBinOperator.BitAnd, 2) },
-    { TokenType.LeftShift, (MaxonBinOperator.Shl, 3) },
-    { TokenType.RightShift, (MaxonBinOperator.Shr, 3) },
-    { TokenType.Plus, (MaxonBinOperator.Add, 4) },
-    { TokenType.Minus, (MaxonBinOperator.Sub, 4) },
-    { TokenType.Star, (MaxonBinOperator.Mul, 5) },
-    { TokenType.Slash, (MaxonBinOperator.Div, 5) },
-    { TokenType.Mod, (MaxonBinOperator.Mod, 5) },
-  };
-
-  private static readonly Dictionary<TokenType, MaxonBinOperator> ComparisonOperators = new() {
-    { TokenType.EqualsEquals, MaxonBinOperator.Eq },
-    { TokenType.NotEquals, MaxonBinOperator.Ne },
-    { TokenType.LessThan, MaxonBinOperator.Lt },
-    { TokenType.GreaterThan, MaxonBinOperator.Gt },
-    { TokenType.LessEquals, MaxonBinOperator.Le },
-    { TokenType.GreaterEquals, MaxonBinOperator.Ge },
+    { TokenType.Or, (MaxonBinOperator.Or, 0) },
+    { TokenType.And, (MaxonBinOperator.And, 1) },
+    { TokenType.EqualsEquals, (MaxonBinOperator.Eq, 2) },
+    { TokenType.NotEquals, (MaxonBinOperator.Ne, 2) },
+    { TokenType.LessThan, (MaxonBinOperator.Lt, 2) },
+    { TokenType.GreaterThan, (MaxonBinOperator.Gt, 2) },
+    { TokenType.LessEquals, (MaxonBinOperator.Le, 2) },
+    { TokenType.GreaterEquals, (MaxonBinOperator.Ge, 2) },
+    { TokenType.Pipe, (MaxonBinOperator.BitOr, 3) },
+    { TokenType.Caret, (MaxonBinOperator.BitXor, 4) },
+    { TokenType.Ampersand, (MaxonBinOperator.BitAnd, 5) },
+    { TokenType.LeftShift, (MaxonBinOperator.Shl, 6) },
+    { TokenType.RightShift, (MaxonBinOperator.Shr, 6) },
+    { TokenType.Plus, (MaxonBinOperator.Add, 7) },
+    { TokenType.Minus, (MaxonBinOperator.Sub, 7) },
+    { TokenType.Star, (MaxonBinOperator.Mul, 8) },
+    { TokenType.Slash, (MaxonBinOperator.Div, 8) },
+    { TokenType.Mod, (MaxonBinOperator.Mod, 8) },
   };
 
   private static readonly Dictionary<string, Func<MaxonValue, (MaxonOp Op, MaxonValue Result)>> BuiltinOps1 = new() {
@@ -57,10 +68,16 @@ public class Parser(List<Token> tokens) {
   // VarInfo now tracks struct type name for struct variables
   private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null);
 
+  // Tracks parameter locations for unused parameter error reporting
+  private readonly List<(string Name, int Line, int Column)> _paramLocations = [];
+
   public MlirModule<MaxonOp> Parse() {
     Logger.Debug(LogCategory.Parser, "Starting parser");
     var module = new MlirModule<MaxonOp>();
     _currentModule = module;
+
+    // Pre-scan to collect and evaluate top-level constants and global variables
+    CollectAndEvaluateTopLevelDecls(module);
 
     SkipNewlines();
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
@@ -78,68 +95,764 @@ public class Parser(List<Token> tokens) {
   }
 
   // ============================================================================
+  // Pre-scanning for top-level let and var declarations
+  // ============================================================================
+
+  // Raw constant declaration: stores the token range for the initializer expression
+  private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column);
+
+  private void CollectAndEvaluateTopLevelDecls(MlirModule<MaxonOp> module) {
+    var constDecls = new List<ConstantDecl>();
+    int savedPos = _pos;
+
+    // First pass: scan for top-level declarations (constants, vars, function signatures, type declarations)
+    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+      SkipNewlines();
+      if (IsAtEnd() || Current().Type == TokenType.Eof) break;
+
+      // Skip 'export' prefix
+      if (Check(TokenType.Export)) {
+        Advance();
+      }
+
+      if (Check(TokenType.Let)) {
+        Advance(); // consume 'let'
+        var nameToken = Expect(TokenType.Identifier);
+        Expect(TokenType.Equals);
+        int exprStart = _pos;
+        SkipToEndOfLine();
+        constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+      } else if (Check(TokenType.Var)) {
+        Advance(); // consume 'var'
+        var nameToken = Expect(TokenType.Identifier);
+        Expect(TokenType.Equals);
+        var (fieldType, defaultValue) = ParseFieldDefault();
+        var globalName = nameToken.Value;
+        var kind = fieldType.ToValueKind();
+        module.Globals.Add(new MlirGlobal(globalName, fieldType, defaultValue));
+        _globalVars[globalName] = new GlobalVarInfo(kind, true);
+      } else if (Check(TokenType.Function)) {
+        // Pre-register function signature for forward references
+        PreScanFunction(module, null);
+      } else if (Check(TokenType.Type)) {
+        PreScanType(module);
+      } else if (Check(TokenType.TypeAlias)) {
+        SkipTopLevelBlock();
+      } else {
+        // Unknown top-level token, skip to next line
+        SkipToEndOfLine();
+      }
+      SkipNewlines();
+    }
+
+    _pos = savedPos;
+
+    // Evaluate constants (handling forward references)
+    var evaluated = new Dictionary<string, object>();
+    var evaluating = new HashSet<string>();
+
+    foreach (var decl in constDecls) {
+      EvaluateConstant(decl.Name, constDecls, evaluated, evaluating);
+    }
+
+    _topLevelConstants = evaluated;
+  }
+
+  /// <summary>
+  /// Pre-scan a function declaration to register its signature.
+  /// Only parses name, params, and return type; skips the body.
+  /// </summary>
+  private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType) {
+    Advance(); // consume 'function'
+    var nameToken = Expect(TokenType.Identifier);
+    var funcName = owningType != null ? $"{owningType}.{nameToken.Value}" : nameToken.Value;
+
+    Expect(TokenType.LeftParen);
+    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
+
+    MlirType? returnType = null;
+    if (Check(TokenType.Returns)) {
+      Advance();
+      returnType = ParseTypeRef();
+    }
+
+    // Only register if not already known (avoid duplicates)
+    if (!module.Functions.Any(f => f.Name == funcName)) {
+      var func = new MlirFunction<MaxonOp>(funcName, paramNames, paramTypes, returnType);
+      module.AddFunction(func);
+
+      if (paramDefaults.Count > 0) {
+        _functionDefaults[funcName] = paramDefaults;
+      }
+    }
+
+    SkipToMatchingEnd();
+  }
+
+  /// <summary>
+  /// Pre-scan a type declaration to register the type and its static methods.
+  /// </summary>
+  private void PreScanType(MlirModule<MaxonOp> module) {
+    Advance(); // consume 'type'
+    var typeNameToken = Expect(TokenType.Identifier);
+    var typeName = typeNameToken.Value;
+    _currentTypeName = typeName;
+
+    // Temporary entry so ParseTypeRef/PreScanInstanceMethod can resolve Self references
+    if (!_typeRegistry.ContainsKey(typeName)) {
+      _typeRegistry[typeName] = new MlirStructType(typeName, []);
+    }
+
+    SkipNewlines();
+
+    var fields = new List<MlirStructField>();
+
+    while (!Check(TokenType.End) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End)) break;
+
+      bool isFieldExported = false;
+      if (Check(TokenType.Export)) {
+        Advance();
+        isFieldExported = true;
+      }
+
+      if (Check(TokenType.Static)) {
+        Advance(); // consume 'static'
+
+        if (Check(TokenType.Function)) {
+          PreScanFunction(module, typeName);
+          SkipNewlines();
+          continue;
+        }
+
+        // Static var/let: skip
+        if (Check(TokenType.Var) || Check(TokenType.Let)) {
+          Advance();
+          Advance(); // consume name
+          Expect(TokenType.Equals);
+          SkipToEndOfLine();
+          SkipNewlines();
+          continue;
+        }
+      }
+
+      if (Check(TokenType.Function)) {
+        PreScanInstanceMethod(module, typeName);
+        SkipNewlines();
+        continue;
+      }
+
+      // Instance field declaration
+      if (Check(TokenType.Var) || Check(TokenType.Let)) {
+        bool isMutable = Check(TokenType.Var);
+        Advance(); // consume var/let
+        var fieldName = Expect(TokenType.Identifier).Value;
+
+        MlirType fieldType;
+        MlirAttribute? defaultValue = null;
+        if (Check(TokenType.Equals)) {
+          Advance();
+          (fieldType, defaultValue) = ParseFieldDefault();
+        } else {
+          fieldType = ParseTypeRef();
+        }
+
+        fields.Add(new MlirStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
+        SkipNewlines();
+        continue;
+      }
+
+      SkipToEndOfLine();
+      SkipNewlines();
+    }
+
+    // Replace temporary entry with complete struct type
+    _typeRegistry[typeName] = new MlirStructType(typeName, fields);
+    _currentTypeName = null;
+
+    // consume 'end'
+    if (Check(TokenType.End)) Advance();
+    // Skip end label
+    if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
+    Advance(); // consume 'function'
+    var nameToken = Expect(TokenType.Identifier);
+    var methodName = $"{typeName}.{nameToken.Value}";
+
+    Expect(TokenType.LeftParen);
+    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
+
+    MlirType? returnType = null;
+    if (Check(TokenType.Returns)) {
+      Advance();
+      returnType = ParseTypeRef();
+    }
+
+    // Instance method gets 'self' as first parameter
+    var structType = _typeRegistry[typeName];
+    var allParamNames = new List<string> { "self" };
+    allParamNames.AddRange(paramNames);
+    var allParamTypes = new List<MlirType> { (MlirType)structType };
+    allParamTypes.AddRange(paramTypes);
+
+    // Only register if not already known
+    if (!module.Functions.Any(f => f.Name == methodName)) {
+      var func = new MlirFunction<MaxonOp>(methodName, allParamNames, allParamTypes, returnType);
+      module.AddFunction(func);
+
+      if (paramDefaults.Count > 0) {
+        var offsetDefaults = new Dictionary<int, MlirAttribute>();
+        foreach (var (idx, attr) in paramDefaults) {
+          offsetDefaults[idx + 1] = attr;
+        }
+        _functionDefaults[methodName] = offsetDefaults;
+      }
+    }
+
+    SkipToMatchingEnd();
+  }
+
+  private void SkipToEndOfLine() {
+    while (!IsAtEnd() && !Check(TokenType.Newline) && Current().Type != TokenType.Eof) {
+      Advance();
+    }
+  }
+
+  /// <summary>
+  /// Skip to matching 'end' keyword by tracking nesting depth for if/while/function blocks.
+  /// Also skips any trailing end label.
+  /// </summary>
+  private void SkipToMatchingEnd() {
+    SkipNewlines();
+    int depth = 1;
+    while (!IsAtEnd() && depth > 0) {
+      if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While)) {
+        depth++;
+      } else if (Check(TokenType.End)) {
+        depth--;
+      }
+      Advance();
+    }
+    // Skip end label if present
+    if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  private void SkipTopLevelBlock() {
+    // Skip to matching 'end' by tracking nesting depth
+    // For typealias, there's no end - just skip to end of line
+    if (Check(TokenType.TypeAlias)) {
+      SkipToEndOfLine();
+      return;
+    }
+
+    Advance(); // consume 'function' or 'type'
+    int depth = 1;
+    while (!IsAtEnd() && depth > 0) {
+      if (Check(TokenType.Function) || Check(TokenType.Type) || Check(TokenType.If) || Check(TokenType.While)) {
+        depth++;
+      } else if (Check(TokenType.End)) {
+        depth--;
+      }
+      Advance();
+    }
+    // Skip the end label if present
+    if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  private object EvaluateConstant(string name, List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    if (evaluated.TryGetValue(name, out var val)) return val;
+
+    var decl = decls.FirstOrDefault(d => d.Name == name) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined constant '{name}'", 0, 0);
+    if (!evaluating.Add(name)) {
+      // Circular dependency: collect all names in the cycle
+      var cycleNames = string.Join(", ", evaluating);
+      var lastDecl = decls.Last(d => evaluating.Contains(d.Name));
+      throw new CompileError(ErrorCode.ParserCircularDependency,
+        $"Circular dependency detected among global constants: {cycleNames}",
+        lastDecl.Line, lastDecl.Column);
+    }
+
+    int savedPos = _pos;
+    _pos = decl.TokenStart;
+    var result = EvalConstExpr(decls, evaluated, evaluating);
+    _pos = savedPos;
+
+    evaluated[name] = result;
+    evaluating.Remove(name);
+    return result;
+  }
+
+  // ============================================================================
+  // Compile-time constant expression evaluator
+  // ============================================================================
+
+  private object EvalConstExpr(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    return EvalConstLogicalOr(decls, evaluated, evaluating);
+  }
+
+  private object EvalConstLogicalOr(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstLogicalAnd(decls, evaluated, evaluating);
+    while (Check(TokenType.Or)) {
+      Advance();
+      var rhs = EvalConstLogicalAnd(decls, evaluated, evaluating);
+      lhs = (bool)lhs || (bool)rhs;
+    }
+    return lhs;
+  }
+
+  private object EvalConstLogicalAnd(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstComparison(decls, evaluated, evaluating);
+    while (Check(TokenType.And)) {
+      Advance();
+      var rhs = EvalConstComparison(decls, evaluated, evaluating);
+      lhs = (bool)lhs && (bool)rhs;
+    }
+    return lhs;
+  }
+
+  private object EvalConstComparison(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstAddSub(decls, evaluated, evaluating);
+
+    if (Check(TokenType.EqualsEquals) || Check(TokenType.NotEquals) ||
+        Check(TokenType.LessThan) || Check(TokenType.GreaterThan) ||
+        Check(TokenType.LessEquals) || Check(TokenType.GreaterEquals)) {
+      var opType = Advance().Type;
+      var rhs = EvalConstAddSub(decls, evaluated, evaluating);
+      return EvalConstComparisonOp(lhs, rhs, opType);
+    }
+
+    return lhs;
+  }
+
+  private static bool EvalConstComparisonOp(object lhs, object rhs, TokenType op) {
+    (var lVal, var rVal) = PromoteConstPair(lhs, rhs);
+
+    if (lVal is not IComparable lCmp)
+      throw new InvalidOperationException($"Cannot compare {lVal?.GetType().Name} and {rVal?.GetType().Name}");
+
+    return op switch {
+      TokenType.EqualsEquals => lVal.Equals(rVal),
+      TokenType.NotEquals => !lVal.Equals(rVal),
+      TokenType.LessThan => lCmp.CompareTo(rVal) < 0,
+      TokenType.GreaterThan => lCmp.CompareTo(rVal) > 0,
+      TokenType.LessEquals => lCmp.CompareTo(rVal) <= 0,
+      TokenType.GreaterEquals => lCmp.CompareTo(rVal) >= 0,
+      _ => throw new InvalidOperationException($"Unsupported comparison: {op}")
+    };
+  }
+
+  private object EvalConstAddSub(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstMulDiv(decls, evaluated, evaluating);
+
+    while (Check(TokenType.Plus) || Check(TokenType.Minus)) {
+      var op = Advance().Type;
+      var rhs = EvalConstMulDiv(decls, evaluated, evaluating);
+      (var lVal, var rVal) = PromoteConstPair(lhs, rhs);
+
+      if (lVal is long li && rVal is long ri) {
+        lhs = op == TokenType.Plus ? li + ri : li - ri;
+      } else if (lVal is double ld && rVal is double rd) {
+        lhs = op == TokenType.Plus ? ld + rd : ld - rd;
+      } else {
+        throw new InvalidOperationException($"Cannot add/subtract {lVal?.GetType().Name} and {rVal?.GetType().Name}");
+      }
+    }
+
+    return lhs;
+  }
+
+  private object EvalConstMulDiv(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstUnary(decls, evaluated, evaluating);
+
+    while (Check(TokenType.Star) || Check(TokenType.Slash) || Check(TokenType.Mod)) {
+      var op = Advance().Type;
+      var rhs = EvalConstUnary(decls, evaluated, evaluating);
+      (var lVal, var rVal) = PromoteConstPair(lhs, rhs);
+
+      if (lVal is long li && rVal is long ri) {
+        if (op == TokenType.Star) lhs = li * ri;
+        else if (op == TokenType.Slash) lhs = (double)li / ri;
+        else if (op == TokenType.Mod) lhs = li % ri;
+        else throw new InvalidOperationException();
+      } else if (lVal is double ld && rVal is double rd) {
+        if (op == TokenType.Star) lhs = ld * rd;
+        else if (op == TokenType.Slash) lhs = ld / rd;
+        else if (op == TokenType.Mod) lhs = (long)ld % (long)rd;
+        else throw new InvalidOperationException();
+      } else {
+        throw new InvalidOperationException($"Cannot multiply/divide {lVal?.GetType().Name} and {rVal?.GetType().Name}");
+      }
+    }
+
+    return lhs;
+  }
+
+  private object EvalConstUnary(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    if (Check(TokenType.Minus)) {
+      Advance();
+      var val = EvalConstPrimary(decls, evaluated, evaluating);
+      if (val is long l) return -l;
+      if (val is double d) return -d;
+      throw new InvalidOperationException($"Cannot negate {val?.GetType().Name}");
+    }
+    if (Check(TokenType.Not)) {
+      Advance();
+      var val = EvalConstPrimary(decls, evaluated, evaluating);
+      if (val is bool b) return !b;
+      throw new InvalidOperationException($"Cannot apply 'not' to {val?.GetType().Name}");
+    }
+    return EvalConstPrimary(decls, evaluated, evaluating);
+  }
+
+  private object EvalConstPrimary(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    if (Check(TokenType.IntegerLiteral)) {
+      var token = Advance();
+      return ParseIntegerLiteral(token);
+    }
+    if (Check(TokenType.FloatLiteral)) {
+      var token = Advance();
+      return ParseFloatLiteral(token);
+    }
+    if (Check(TokenType.True)) {
+      Advance();
+      return true;
+    }
+    if (Check(TokenType.False)) {
+      Advance();
+      return false;
+    }
+    if (Check(TokenType.LeftParen)) {
+      Advance();
+      var val = EvalConstExpr(decls, evaluated, evaluating);
+      Expect(TokenType.RightParen);
+      return val;
+    }
+    if (Check(TokenType.Identifier)) {
+      var token = Advance();
+      return EvaluateConstant(token.Value, decls, evaluated, evaluating);
+    }
+    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected constant expression, got '{Current().Value}'", Current().Line, Current().Column);
+  }
+
+  private static (object, object) PromoteConstPair(object lhs, object rhs) {
+    if (lhs is long ll && rhs is double rd) return ((double)ll, rd);
+    if (lhs is double ld && rhs is long rl) return (ld, (double)rl);
+    return (lhs, rhs);
+  }
+
+  // ============================================================================
   // Top-level parsing
   // ============================================================================
 
   private void ParseTopLevel(MlirModule<MaxonOp> module) {
+    if (Check(TokenType.Export)) {
+      Advance();
+    }
+
     if (Check(TokenType.Function)) {
       ParseFunction(module);
     } else if (Check(TokenType.Type)) {
-      ParseTypeDecl();
+      ParseTypeDecl(module);
+    } else if (Check(TokenType.Let)) {
+      // Already handled in pre-scan; skip over
+      SkipTopLevelLet();
+    } else if (Check(TokenType.Var)) {
+      // Already handled in pre-scan; skip over
+      SkipTopLevelVar();
+    } else if (Check(TokenType.TypeAlias)) {
+      SkipTypeAlias();
     } else {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected function declaration, got '{Current().Value}'", Current().Line, Current().Column);
     }
   }
 
-  private void ParseTypeDecl() {
+  private void SkipTopLevelLet() {
+    Advance(); // consume 'let'
+    Advance(); // consume name
+    Expect(TokenType.Equals);
+    SkipToEndOfLine();
+  }
+
+  private void SkipTopLevelVar() {
+    Advance(); // consume 'var'
+    Advance(); // consume name
+    Expect(TokenType.Equals);
+    SkipToEndOfLine();
+  }
+
+  private void SkipTypeAlias() {
+    Advance(); // consume 'typealias'
+    SkipToEndOfLine();
+  }
+
+  private void ParseTypeDecl(MlirModule<MaxonOp> module) {
     Advance(); // consume 'type'
     var nameToken = Expect(TokenType.Identifier);
     var typeName = nameToken.Value;
+    _currentTypeName = typeName;
     Logger.Debug(LogCategory.Parser, $"Parsing type: {typeName}");
     SkipNewlines();
 
-    var fields = new List<MlirStructField>();
+    // Type is already fully constructed in _typeRegistry from pre-scan
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
       if (Check(TokenType.End)) break;
 
-      bool isExported = false;
+      // Handle 'static' keyword for static fields and static methods
+      if (Check(TokenType.Static)) {
+        Advance(); // consume 'static'
+
+        if (Check(TokenType.Function)) {
+          // Static method: parse as a function with qualified name
+          ParseStaticMethod(module, typeName);
+          SkipNewlines();
+          continue;
+        }
+
+        ParseStaticField(module, typeName);
+        SkipNewlines();
+        continue;
+      }
+
+      // Handle 'export' keyword
       if (Check(TokenType.Export)) {
         Advance();
-        isExported = true;
+
+        // export function (instance method)
+        if (Check(TokenType.Function)) {
+          ParseInstanceMethod(module, typeName);
+          SkipNewlines();
+          continue;
+        }
+
+        // export static function/var/let
+        if (Check(TokenType.Static)) {
+          Advance(); // consume 'static'
+
+          if (Check(TokenType.Function)) {
+            ParseStaticMethod(module, typeName);
+            SkipNewlines();
+            continue;
+          }
+
+          ParseStaticField(module, typeName);
+          SkipNewlines();
+          continue;
+        }
       }
 
-      bool isMutable;
-      if (Check(TokenType.Var)) {
-        Advance();
-        isMutable = true;
-      } else if (Check(TokenType.Let)) {
-        Advance();
-        isMutable = false;
-      } else {
-        throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected 'var' or 'let' in field declaration, got '{Current().Value}'", Current().Line, Current().Column);
+      if (Check(TokenType.Var) || Check(TokenType.Let)) {
+        Advance(); // consume var/let
+        Expect(TokenType.Identifier); // consume field name
+
+        // Advance past type or default value
+        if (Check(TokenType.Equals)) {
+          Advance();
+          ParseFieldDefault();
+        } else {
+          ParseTypeRef();
+        }
+
+        SkipNewlines();
+        continue;
       }
 
-      var fieldName = Expect(TokenType.Identifier).Value;
-
-      MlirType fieldType;
-      MlirAttribute? defaultValue = null;
-
-      if (Check(TokenType.Equals)) {
-        // Default value with inferred type: export var value = 0
-        Advance();
-        (fieldType, defaultValue) = ParseFieldDefault();
-      } else {
-        fieldType = ParseTypeRef();
+      if (Check(TokenType.Function)) {
+        ParseInstanceMethod(module, typeName);
+        SkipNewlines();
+        continue;
       }
 
-      fields.Add(new MlirStructField(fieldName, fieldType, isExported, isMutable, defaultValue));
-      SkipNewlines();
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected 'var' or 'let' in field declaration, got '{Current().Value}'", Current().Line, Current().Column);
     }
 
-    var structType = new MlirStructType(typeName, fields);
-    _typeRegistry[typeName] = structType;
+    _currentTypeName = null;
     ExpectEndLabel(typeName);
+  }
+
+  private void ParseStaticField(MlirModule<MaxonOp> module, string typeName) {
+    bool isMutable;
+    if (Check(TokenType.Var)) { Advance(); isMutable = true; } else if (Check(TokenType.Let)) { Advance(); isMutable = false; } else {
+      throw new CompileError(ErrorCode.ParserUnexpectedToken,
+        $"Expected 'var', 'let', or 'function' after 'static', got '{Current().Value}'",
+        Current().Line, Current().Column);
+    }
+
+    var fieldName = Expect(TokenType.Identifier).Value;
+    Expect(TokenType.Equals);
+    var (fieldType, defaultValue) = ParseFieldDefault();
+    var qualifiedName = $"{typeName}.{fieldName}";
+
+    if (isMutable) {
+      module.Globals.Add(new MlirGlobal(qualifiedName, fieldType, defaultValue));
+      _globalVars[qualifiedName] = new GlobalVarInfo(fieldType.ToValueKind(), true);
+    } else {
+      RegisterStaticLetConstant(qualifiedName, fieldType, defaultValue);
+    }
+  }
+
+  private void RegisterStaticLetConstant(string name, MlirType type, MlirAttribute? value) {
+    if (value is IntegerAttr intAttr && type == MlirType.I1) {
+      _topLevelConstants[name] = intAttr.Value != 0;
+    } else if (value is IntegerAttr intAttr2) {
+      _topLevelConstants[name] = intAttr2.Value;
+    } else if (value is FloatAttr floatAttr) {
+      _topLevelConstants[name] = floatAttr.Value;
+    }
+  }
+
+  private void ParseStaticMethod(MlirModule<MaxonOp> module, string typeName) {
+    Expect(TokenType.Function);
+    var nameToken = Expect(TokenType.Identifier);
+    var methodName = $"{typeName}.{nameToken.Value}";
+    Logger.Debug(LogCategory.Parser, $"Parsing static method: {methodName}");
+
+    Expect(TokenType.LeftParen);
+    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
+
+    MlirType? returnType = null;
+    if (Check(TokenType.Returns)) {
+      Advance();
+      returnType = ParseTypeRef();
+    }
+
+    SkipNewlines();
+    SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType);
+    EmitParameters(paramNames, paramTypes, paramTokens);
+
+    ParseBodyUntilEnd();
+    ExpectEndLabel(nameToken.Value);
+    FinishFunctionBody(nameToken.Value, nameToken, returnType);
+  }
+
+  private void ParseInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
+    Expect(TokenType.Function);
+    var nameToken = Expect(TokenType.Identifier);
+    var methodName = $"{typeName}.{nameToken.Value}";
+    Logger.Debug(LogCategory.Parser, $"Parsing instance method: {methodName}");
+
+    Expect(TokenType.LeftParen);
+    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
+
+    MlirType? returnType = null;
+    if (Check(TokenType.Returns)) {
+      Advance();
+      returnType = ParseTypeRef();
+    }
+
+    SkipNewlines();
+
+    // Instance method gets 'self' as first parameter (the struct type)
+    var structType = _typeRegistry[typeName];
+    var allParamNames = new List<string> { "self" };
+    allParamNames.AddRange(paramNames);
+    var allParamTypes = new List<MlirType> { structType };
+    allParamTypes.AddRange(paramTypes);
+
+    // Store defaults (offset by 1 for 'self' parameter)
+    var offsetDefaults = new Dictionary<int, MlirAttribute>();
+    foreach (var (idx, attr) in paramDefaults) {
+      offsetDefaults[idx + 1] = attr;
+    }
+
+    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType);
+
+    // Emit self param (struct) and register fields as accessible variables
+    var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
+    _currentBlock!.AddOp(selfParamOp);
+    _variables["self"] = new VarInfo(MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, typeName);
+
+    // Register all fields of 'self' as directly accessible variables
+    foreach (var field in structType.Fields) {
+      var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, field.Type.ToValueKind());
+      _currentBlock!.AddOp(fieldAccessOp);
+      _variables[field.Name] = new VarInfo(field.Type.ToValueKind(), field.IsMutable, fieldAccessOp.Result, _currentBlock!);
+    }
+
+    // Emit remaining params (offset by 1 for 'self')
+    EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
+
+    ParseBodyUntilEnd();
+    ExpectEndLabel(nameToken.Value);
+    FinishFunctionBody(nameToken.Value, nameToken, returnType);
+  }
+
+  /// <summary>
+  /// Common setup for parsing a function body: replaces pre-registered stub, clears state,
+  /// creates entry block, and stores defaults. Returns the created function.
+  /// </summary>
+  private MlirFunction<MaxonOp> SetupFunctionParsing(
+      MlirModule<MaxonOp> module, string funcName,
+      List<string> paramNames, List<MlirType> paramTypes,
+      Dictionary<int, MlirAttribute> paramDefaults, MlirType? returnType) {
+    // Replace pre-registered stub with full function (or create new one)
+    var existing = module.Functions.FirstOrDefault(f => f.Name == funcName);
+    if (existing != null) {
+      module.Functions.Remove(existing);
+    }
+    var func = new MlirFunction<MaxonOp>(funcName, paramNames, paramTypes, returnType);
+    module.AddFunction(func);
+
+    // Store defaults
+    if (paramDefaults.Count > 0) {
+      _functionDefaults[funcName] = paramDefaults;
+    }
+
+    _currentFunction = func;
+    _currentBlock = func.Body.AddBlock("entry");
+    _variables.Clear();
+    _referencedVars.Clear();
+    _paramLocations.Clear();
+    _blockCounter = 0;
+
+    return func;
+  }
+
+  /// <summary>
+  /// Emits parameter ops and registers them as variables.
+  /// paramOffset is the index offset for the MLIR param op (e.g., 1 for instance methods with 'self').
+  /// </summary>
+  private void EmitParameters(List<string> paramNames, List<MlirType> paramTypes, List<Token> paramTokens, int paramOffset = 0) {
+    for (int i = 0; i < paramNames.Count; i++) {
+      if (!paramNames[i].StartsWith('_')) {
+        _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
+      }
+      var paramType = paramTypes[i];
+      if (paramType is MlirStructType structType) {
+        var structParamOp = new MaxonStructParamOp(i + paramOffset, paramNames[i], structType.Name);
+        _currentBlock!.AddOp(structParamOp);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock!, structType.Name);
+      } else {
+        var kind = paramType.ToValueKind();
+        var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
+        _currentBlock!.AddOp(paramOp);
+        _variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock!);
+      }
+    }
+  }
+
+  private void FinishFunctionBody(string name, Token nameToken, MlirType? returnType) {
+    // E014: Check for unused parameters
+    foreach (var (paramName, paramLine, paramCol) in _paramLocations) {
+      if (!_referencedVars.Contains(paramName)) {
+        throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{paramName}'", paramLine, paramCol);
+      }
+    }
+
+    // E037: Check for missing return statements
+    if (returnType != null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      throw new CompileError(ErrorCode.SemanticMissingReturn, $"missing return statement: '{name}'", nameToken.Line, nameToken.Column);
+    }
+
+    if (returnType == null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonReturnOp());
+    }
+
+    _currentFunction = null;
+    _currentBlock = null;
   }
 
   private (MlirType type, MlirAttribute defaultValue) ParseFieldDefault() {
@@ -181,7 +894,7 @@ public class Parser(List<Token> tokens) {
     Logger.Debug(LogCategory.Parser, $"Parsing function: {name}");
 
     Expect(TokenType.LeftParen);
-    var (paramNames, paramTypes) = ParseParamList();
+    var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
 
     MlirType? returnType = null;
     if (Check(TokenType.Returns)) {
@@ -190,59 +903,41 @@ public class Parser(List<Token> tokens) {
     }
 
     SkipNewlines();
-
-    var func = new MlirFunction<MaxonOp>(name, paramNames, paramTypes, returnType);
-    module.AddFunction(func);
-    _currentFunction = func;
-    _currentBlock = func.Body.AddBlock("entry");
-    _variables.Clear();
-    _blockCounter = 0;
-
-    // Emit param ops and register parameters as variables
-    for (int i = 0; i < paramNames.Count; i++) {
-      var paramType = paramTypes[i];
-      if (paramType is MlirStructType structType) {
-        // Struct param: emit MaxonStructParamOp, register as struct var
-        var structParamOp = new MaxonStructParamOp(i, paramNames[i], structType.Name);
-        _currentBlock.AddOp(structParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock, structType.Name);
-      } else {
-        var kind = paramType.ToValueKind();
-        var paramOp = new MaxonParamOp(i, paramNames[i], kind);
-        _currentBlock.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock);
-      }
-    }
+    SetupFunctionParsing(module, name, paramNames, paramTypes, paramDefaults, returnType);
+    EmitParameters(paramNames, paramTypes, paramTokens);
 
     ParseBodyUntilEnd();
     ExpectEndLabel(name);
-
-    // Add implicit return for void functions if the last block doesn't have a terminator
-    if (returnType == null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
-      _currentBlock.AddOp(new MaxonReturnOp());
-    }
-
-    _currentFunction = null;
-    _currentBlock = null;
+    FinishFunctionBody(name, nameToken, returnType);
   }
 
   // ============================================================================
   // Parameter and type parsing
   // ============================================================================
 
-  private (List<string> Names, List<MlirType> Types) ParseParamList() {
+  private (List<string> Names, List<MlirType> Types, Dictionary<int, MlirAttribute> Defaults, List<Token> ParamTokens) ParseParamListWithDefaults() {
     var names = new List<string>();
     var types = new List<MlirType>();
+    var defaults = new Dictionary<int, MlirAttribute>();
+    var paramTokens = new List<Token>();
     if (!Check(TokenType.RightParen)) {
+      int paramIndex = 0;
       do {
-        var paramName = Expect(TokenType.Identifier).Value;
+        var paramToken = Expect(TokenType.Identifier);
         var paramType = ParseTypeRef();
-        names.Add(paramName);
+        if (Check(TokenType.Equals)) {
+          Advance(); // consume '='
+          var (_, defaultValue) = ParseFieldDefault();
+          defaults[paramIndex] = defaultValue;
+        }
+        names.Add(paramToken.Value);
         types.Add(paramType);
+        paramTokens.Add(paramToken);
+        paramIndex++;
       } while (Check(TokenType.Comma) && Advance() != null);
     }
     Expect(TokenType.RightParen);
-    return (names, types);
+    return (names, types, defaults, paramTokens);
   }
 
   private MlirType ParseTypeRef() {
@@ -263,6 +958,11 @@ public class Parser(List<Token> tokens) {
     if (Check(TokenType.Float)) return Advance().Value;
     if (Check(TokenType.Bool)) return Advance().Value;
     if (Check(TokenType.Byte)) return Advance().Value;
+    if (Check(TokenType.SelfType)) {
+      Advance();
+      if (_currentTypeName == null) throw new CompileError(ErrorCode.ParserExpectedType, "'Self' can only be used inside a type declaration", Current().Line, Current().Column);
+      return _currentTypeName;
+    }
     if (Check(TokenType.Identifier)) return Advance().Value;
     throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name", Current().Line, Current().Column);
   }
@@ -304,15 +1004,61 @@ public class Parser(List<Token> tokens) {
     } else if (Check(TokenType.Continue)) {
       ParseContinue();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
-      // Field assignment: p.x = 30
-      ParseFieldAssignment();
+      // Could be: field assignment (p.x = 30), qualified name assignment (Counter.count = 42),
+      // or qualified name call (Counter.increment())
+      ParseDotStatement();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Equals) {
+      // Simple assignment or global assignment
       ParseAssignment();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftParen) {
       ParseCallStatement();
     } else {
-      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected statement, got '{Current().Value}'", Current().Line, Current().Column);
+      throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"unexpected token: '{Current().Value}'", Current().Line, Current().Column);
     }
+  }
+
+  private void ParseDotStatement() {
+    var nameToken = _tokens[_pos];
+    var dotToken = _tokens[_pos + 1];
+    // Look ahead further to determine what follows: identifier.identifier = ... or identifier.identifier(...)
+    if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.Identifier) {
+      var afterIdent = _pos + 3 < _tokens.Count ? _tokens[_pos + 3] : new Token(TokenType.Eof, "", 0, 0);
+
+      // Check if it's a qualified name (Type.member)
+      var qualifiedName = $"{nameToken.Value}.{_tokens[_pos + 2].Value}";
+
+      if (afterIdent.Type == TokenType.Equals) {
+        // Could be either Type.field = value or instance.field = value
+        if (_globalVars.ContainsKey(qualifiedName)) {
+          // Global/static variable assignment: Type.field = value
+          ParseQualifiedAssignment();
+          return;
+        }
+        // Otherwise it's an instance field assignment: p.x = 30
+        ParseFieldAssignment();
+        return;
+      }
+
+      if (afterIdent.Type == TokenType.LeftParen) {
+        // Check for static/qualified function call: Type.method(...)
+        if (_currentModule!.Functions.Any(f => f.Name == qualifiedName)) {
+          ParseQualifiedCallStatement();
+          return;
+        }
+
+        // Check for instance method call: var.method(...)
+        if (_variables.TryGetValue(nameToken.Value, out var varInfo) && varInfo.StructTypeName != null) {
+          var instanceMethodName = $"{varInfo.StructTypeName}.{_tokens[_pos + 2].Value}";
+          if (_currentModule!.Functions.Any(f => f.Name == instanceMethodName)) {
+            ParseInstanceMethodCallStatement(varInfo, instanceMethodName);
+            return;
+          }
+        }
+      }
+    }
+
+    // Fall through to field assignment
+    ParseFieldAssignment();
   }
 
   private void ParseReturn() {
@@ -326,7 +1072,7 @@ public class Parser(List<Token> tokens) {
         var value = ResolveExprValue(structLiteral);
         _currentBlock!.AddOp(new MaxonReturnOp(value));
       } else {
-        var value = ResolveExprValue(ParseComparisonExpression());
+        var value = ResolveExprValue(ParseExpression());
         CheckReturnType(value, returnToken);
         _currentBlock!.AddOp(new MaxonReturnOp(value));
       }
@@ -381,7 +1127,7 @@ public class Parser(List<Token> tokens) {
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
     Expect(TokenType.Equals);
-    var initExpr = ParseComparisonExpression();
+    var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
 
     if (initValue is MaxonStruct structVal) {
@@ -406,6 +1152,13 @@ public class Parser(List<Token> tokens) {
     var name = nameToken.Value;
     Expect(TokenType.Equals);
 
+    // Check if it's a global variable assignment
+    if (_globalVars.TryGetValue(name, out var globalInfo)) {
+      var newValue = ResolveExprValue(ParseExpression());
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newValue, globalInfo.Kind));
+      return;
+    }
+
     if (!_variables.TryGetValue(name, out var varInfo)) {
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
     }
@@ -413,9 +1166,26 @@ public class Parser(List<Token> tokens) {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Variable '{name}' is not mutable", nameToken.Line, nameToken.Column);
     }
 
-    var newValue = ResolveExprValue(ParseComparisonExpression());
-    _currentBlock!.AddOp(new MaxonAssignOp(name, newValue, isDeclaration: false, isMutable: true, varInfo.Kind));
-    _variables[name] = new VarInfo(varInfo.Kind, true, newValue, _currentBlock!, varInfo.StructTypeName);
+    var newVal = ResolveExprValue(ParseExpression());
+    _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
+    _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName);
+  }
+
+  private void ParseQualifiedAssignment() {
+    var typeToken = Advance(); // consume type name
+    Advance(); // consume '.'
+    var fieldToken = Advance(); // consume field name
+    Expect(TokenType.Equals);
+
+    var qualifiedName = $"{typeToken.Value}.{fieldToken.Value}";
+
+    if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
+      var newValue = ResolveExprValue(ParseExpression());
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(qualifiedName, newValue, globalInfo.Kind));
+      return;
+    }
+
+    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined static variable '{qualifiedName}'", typeToken.Line, typeToken.Column);
   }
 
   private void ParseFieldAssignment() {
@@ -443,13 +1213,18 @@ public class Parser(List<Token> tokens) {
       $"Type '{structType.Name}' has no field named '{fieldName}'",
       fieldToken.Line, fieldToken.Column);
 
+    // E050: Check field export visibility
+    if (!field.IsExported && _currentTypeName != structType.Name) {
+      throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess, $"cannot access unexported field: '{fieldName}' outside of type '{structType.Name}'", fieldToken.Line, fieldToken.Column);
+    }
+
     if (!field.IsMutable) {
       throw new CompileError(ErrorCode.ImmutableVariable,
         $"cannot assign to field '{structType.Name}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)",
         nameToken.Line, nameToken.Column);
     }
 
-    var newValue = ResolveExprValue(ParseComparisonExpression());
+    var newValue = ResolveExprValue(ParseExpression());
     var structVal = ResolveExprValue(new ExprResult.VarRef(name, varInfo));
     _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, varInfo.StructTypeName!, fieldName, newValue));
   }
@@ -461,10 +1236,52 @@ public class Parser(List<Token> tokens) {
     CreateFunctionCall(token, args);
   }
 
+  private void ParseQualifiedCallStatement() {
+    var typeToken = Advance(); // consume type name
+    Advance(); // consume '.'
+    var methodToken = Advance(); // consume method name
+    Advance(); // consume '('
+
+    // Create a synthetic token for the qualified name
+    var qualifiedName = $"{typeToken.Value}.{methodToken.Value}";
+    var qualifiedToken = new Token(TokenType.Identifier, qualifiedName, typeToken.Line, typeToken.Column);
+
+    var args = ParseCallArgs(qualifiedToken);
+    CreateFunctionCall(qualifiedToken, args);
+  }
+
+  private void ParseInstanceMethodCallStatement(VarInfo varInfo, string methodName) {
+    var instanceToken = Advance(); // consume variable name
+    Advance(); // consume '.'
+    Advance(); // consume method name
+    Advance(); // consume '('
+
+    // Resolve the struct instance
+    var structVal = varInfo.Value;
+
+    // Parse explicit arguments
+    var explicitArgs = new List<MaxonValue>();
+    if (!Check(TokenType.RightParen)) {
+      explicitArgs.Add(ResolveExprValue(ParseExpression()));
+      while (Check(TokenType.Comma)) {
+        Advance();
+        explicitArgs.Add(ResolveExprValue(ParseExpression()));
+      }
+    }
+    Expect(TokenType.RightParen);
+
+    // Build full args: self + explicit
+    var allArgs = new List<MaxonValue> { structVal };
+    allArgs.AddRange(explicitArgs);
+
+    var qualifiedToken = new Token(TokenType.Identifier, methodName, instanceToken.Line, instanceToken.Column);
+    CreateFunctionCall(qualifiedToken, allArgs);
+  }
+
   private void ParseIf() {
     Advance(); // consume 'if'
 
-    var condition = ResolveExprValue(ParseComparisonExpression());
+    var condition = ResolveExprValue(ParseExpression());
 
     // Parse then-block label
     var thenSourceLabel = Expect(TokenType.CharacterLiteral).Value;
@@ -563,7 +1380,7 @@ public class Parser(List<Token> tokens) {
     // Create header block with condition
     var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
     _currentBlock = headerBlock;
-    var condition = ResolveExprValue(ParseComparisonExpression());
+    var condition = ResolveExprValue(ParseExpression());
 
     // Consume the label (already parsed above, but we need to advance past it)
     Expect(TokenType.CharacterLiteral);
@@ -627,25 +1444,6 @@ public class Parser(List<Token> tokens) {
   // Expression parsing
   // ============================================================================
 
-  private ExprResult ParseComparisonExpression() {
-    var lhs = ParseExpression();
-
-    if (ComparisonOperators.TryGetValue(Current().Type, out var cmpOperator)) {
-      Advance(); // consume comparison operator
-      var rhs = ParseExpression();
-
-      MaxonValue lhsVal = ResolveExprValue(lhs);
-      MaxonValue rhsVal = ResolveExprValue(rhs);
-
-      var (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal);
-      var binOp = new MaxonBinOp(cmpOperator, promotedLhs, promotedRhs, kind);
-      _currentBlock!.AddOp(binOp);
-      return new ExprResult.Direct(binOp.Result);
-    }
-
-    return lhs;
-  }
-
   private ExprResult ParseExpression(int minPrecedence = 0) {
     var lhs = ParsePrimary();
 
@@ -667,13 +1465,23 @@ public class Parser(List<Token> tokens) {
 
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
-      var (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal);
 
-      // Division always produces a float result
-      if (entry.Op == MaxonBinOperator.Div && kind == MaxonValueKind.Integer) {
-        promotedLhs = PromoteIntToFloat(promotedLhs);
-        promotedRhs = PromoteIntToFloat(promotedRhs);
-        kind = MaxonValueKind.Float;
+      MaxonValueKind kind;
+      MaxonValue promotedLhs, promotedRhs;
+
+      if (entry.Op is MaxonBinOperator.And or MaxonBinOperator.Or) {
+        kind = MaxonValueKind.Bool;
+        promotedLhs = lhsVal;
+        promotedRhs = rhsVal;
+      } else {
+        (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal);
+
+        // Division always produces a float result
+        if (entry.Op == MaxonBinOperator.Div && kind == MaxonValueKind.Integer) {
+          promotedLhs = PromoteIntToFloat(promotedLhs);
+          promotedRhs = PromoteIntToFloat(promotedRhs);
+          kind = MaxonValueKind.Float;
+        }
       }
 
       var binOp = new MaxonBinOp(entry.Op, promotedLhs, promotedRhs, kind);
@@ -745,6 +1553,18 @@ public class Parser(List<Token> tokens) {
       return new ExprResult.Direct(op.Result);
     }
 
+    if (Check(TokenType.Not)) {
+      var token = Advance(); // consume 'not'
+      var inner = ParsePrimary();
+      var innerVal = ResolveExprValue(inner);
+      // Implement 'not' as XOR with true (1)
+      var trueOp = new MaxonLiteralOp(true);
+      _currentBlock!.AddOp(trueOp);
+      var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, trueOp.Result, MaxonValueKind.Bool);
+      _currentBlock!.AddOp(xorOp);
+      return new ExprResult.Direct(xorOp.Result);
+    }
+
     if (Check(TokenType.Identifier)) {
       var token = Advance();
 
@@ -753,6 +1573,44 @@ public class Parser(List<Token> tokens) {
         return ParseStructLiteral(token.Value);
       }
 
+      // Check for qualified name: TypeName.member
+      if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier) {
+        var qualifiedName = $"{token.Value}.{PeekNext().Value}";
+
+        // Check for compile-time constant
+        if (_topLevelConstants.TryGetValue(qualifiedName, out var constVal)) {
+          Advance(); // consume '.'
+          Advance(); // consume member name
+          return EmitConstantLiteral(constVal);
+        }
+
+        // Check for global/static variable
+        if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
+          Advance(); // consume '.'
+          Advance(); // consume member name
+          var loadOp = new MaxonGlobalLoadOp(qualifiedName, globalInfo.Kind);
+          _currentBlock!.AddOp(loadOp);
+          return new ExprResult.Direct(loadOp.Result);
+        }
+
+        // Check for qualified function call: TypeName.method(...)
+        // _pos is at '.', _pos+1 is 'method', _pos+2 should be '('
+        if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftParen) {
+          if (_currentModule!.Functions.Any(f => f.Name == qualifiedName)) {
+            Advance(); // consume '.'
+            var methodToken = Advance(); // consume method name
+            Advance(); // consume '('
+            var qualifiedFuncToken = new Token(TokenType.Identifier, qualifiedName, token.Line, token.Column);
+            var args = ParseCallArgs(qualifiedFuncToken);
+            var callOp = CreateFunctionCall(qualifiedFuncToken, args);
+            if (callOp.Result != null)
+              return new ExprResult.Direct(callOp.Result);
+            throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{qualifiedName}' does not return a value", token.Line, token.Column);
+          }
+        }
+      }
+
+      // Check for function call: name(...)
       if (Check(TokenType.LeftParen)) {
         if (BuiltinOps1.TryGetValue(token.Value, out var makeOp1)) {
           Advance(); // consume '('
@@ -780,8 +1638,21 @@ public class Parser(List<Token> tokens) {
         throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{token.Value}' does not return a value", token.Line, token.Column);
       }
 
+      // Check for top-level constant reference
+      if (_topLevelConstants.TryGetValue(token.Value, out var constValue)) {
+        return EmitConstantLiteral(constValue);
+      }
+
+      // Check for global variable reference
+      if (_globalVars.TryGetValue(token.Value, out var globalVarInfo)) {
+        var loadOp = new MaxonGlobalLoadOp(token.Value, globalVarInfo.Kind);
+        _currentBlock!.AddOp(loadOp);
+        return new ExprResult.Direct(loadOp.Result);
+      }
+
       // Variable reference
       if (_variables.TryGetValue(token.Value, out var varInfo)) {
+        _referencedVars.Add(token.Value);
         var result = new ExprResult.VarRef(token.Value, varInfo) as ExprResult;
 
         // Check for field access chain: varName.fieldName
@@ -802,12 +1673,49 @@ public class Parser(List<Token> tokens) {
           }
 
           var structType = _typeRegistry[structTypeName];
+          // Check for instance method call: var.method(...)
+          if (Check(TokenType.LeftParen)) {
+            var qualifiedMethodName = $"{structTypeName}.{fieldName}";
+            var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedMethodName);
+            if (callee != null) {
+              Advance(); // consume '('
+              var structVal = ResolveExprValue(result);
+
+              // Parse explicit arguments (everything except implicit 'self')
+              var explicitArgs = new List<MaxonValue>();
+              if (!Check(TokenType.RightParen)) {
+                explicitArgs.Add(ResolveExprValue(ParseExpression()));
+                while (Check(TokenType.Comma)) {
+                  Advance();
+                  explicitArgs.Add(ResolveExprValue(ParseExpression()));
+                }
+              }
+              Expect(TokenType.RightParen);
+
+              // Build full args: self + explicit args
+              var allArgs = new List<MaxonValue> { structVal };
+              allArgs.AddRange(explicitArgs);
+
+              var qualifiedFuncToken = new Token(TokenType.Identifier, qualifiedMethodName, token.Line, token.Column);
+              var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs);
+              if (callOp.Result != null)
+                return new ExprResult.Direct(callOp.Result);
+              // Void method call used in expression context -- just return a dummy
+              return new ExprResult.Direct(structVal);
+            }
+          }
+
           var field = structType.GetField(fieldName)
             ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{structTypeName}' has no field named '{fieldName}'", fieldToken.Line, fieldToken.Column);
 
+          // E050: Check field export visibility
+          if (!field.IsExported && _currentTypeName != structTypeName) {
+            throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess, $"cannot access unexported field: '{fieldName}' outside of type '{structTypeName}'", fieldToken.Line, fieldToken.Column);
+          }
+
           var fieldKind = field.Type.ToValueKind();
-          var structVal = ResolveExprValue(result);
-          var accessOp = new MaxonFieldAccessOp(structVal, structTypeName, fieldName, fieldKind);
+          var structVal2 = ResolveExprValue(result);
+          var accessOp = new MaxonFieldAccessOp(structVal2, structTypeName, fieldName, fieldKind);
           _currentBlock!.AddOp(accessOp);
           result = new ExprResult.Direct(accessOp.Result);
         }
@@ -818,6 +1726,25 @@ public class Parser(List<Token> tokens) {
     }
 
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got '{Current().Value}'", Current().Line, Current().Column);
+  }
+
+  private ExprResult.Direct EmitConstantLiteral(object constValue) {
+    if (constValue is long longVal) {
+      var op = new MaxonLiteralOp(longVal);
+      _currentBlock!.AddOp(op);
+      return new ExprResult.Direct(op.Result);
+    }
+    if (constValue is double doubleVal) {
+      var op = new MaxonLiteralOp(doubleVal);
+      _currentBlock!.AddOp(op);
+      return new ExprResult.Direct(op.Result);
+    }
+    if (constValue is bool boolVal) {
+      var op = new MaxonLiteralOp(boolVal);
+      _currentBlock!.AddOp(op);
+      return new ExprResult.Direct(op.Result);
+    }
+    throw new InvalidOperationException($"Unsupported constant type: {constValue.GetType().Name}");
   }
 
   /// <summary>
@@ -834,7 +1761,7 @@ public class Parser(List<Token> tokens) {
       do {
         var fieldNameToken = Expect(TokenType.Identifier);
         Expect(TokenType.Colon);
-        var value = ResolveExprValue(ParseComparisonExpression());
+        var value = ResolveExprValue(ParseExpression());
         fieldValues.Add((fieldNameToken.Value, value));
         providedFields.Add(fieldNameToken.Value);
       } while (Check(TokenType.Comma) && Advance() != null);
@@ -848,20 +1775,10 @@ public class Parser(List<Token> tokens) {
             $"Field '{field.Name}' of type '{typeName}' requires a value (no default defined)",
             Current().Line, Current().Column);
         }
-        MaxonLiteralOp defaultOp;
-        if (field.DefaultValue is IntegerAttr intAttr && field.Type == MlirType.I1) {
-          defaultOp = new MaxonLiteralOp(intAttr.Value != 0);
-        } else if (field.DefaultValue is IntegerAttr intAttr2) {
-          defaultOp = new MaxonLiteralOp(intAttr2.Value);
-        } else if (field.DefaultValue is FloatAttr floatAttr) {
-          defaultOp = new MaxonLiteralOp(floatAttr.Value);
-        } else {
-          throw new CompileError(ErrorCode.ParserExpectedExpression,
-            $"Unsupported default value type for field '{field.Name}'",
-            Current().Line, Current().Column);
-        }
-        _currentBlock!.AddOp(defaultOp);
-        fieldValues.Add((field.Name, defaultOp.Result));
+        var errorToken = new Token(TokenType.Identifier, field.Name, Current().Line, Current().Column);
+        var defaultValue = EmitDefaultLiteral(field.DefaultValue, field.Type, errorToken,
+          $"Unsupported default value type for field '{field.Name}'");
+        fieldValues.Add((field.Name, defaultValue));
       }
     }
 
@@ -989,13 +1906,19 @@ public class Parser(List<Token> tokens) {
   }
 
   /// <summary>
-  /// Parses call arguments using first-positional, rest-named rule.
-  /// Resolves named arguments to positional order based on the callee's parameter names.
-  /// Handles struct arguments (including anonymous struct literals inferred from parameter type).
+  /// Parses call arguments. The first argument can be positional or named.
+  /// Second and subsequent arguments MUST be named (name: value syntax),
+  /// unless a function has 2+ params and a second positional arg is given (error).
+  /// Handles default parameter values for omitted arguments.
   /// </summary>
   private List<MaxonValue> ParseCallArgs(Token functionNameToken) {
     if (Check(TokenType.RightParen)) {
       Advance();
+      // Fill in defaults for all parameters
+      var callee0 = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionNameToken.Value);
+      if (callee0 != null && callee0.ParamTypes.Count > 0) {
+        return FillDefaultArgs(functionNameToken, callee0, new MaxonValue?[callee0.ParamTypes.Count]);
+      }
       return [];
     }
 
@@ -1004,26 +1927,58 @@ public class Parser(List<Token> tokens) {
 
     var args = new MaxonValue?[callee.ParamTypes.Count];
 
-    // First argument is always positional
-    args[0] = ParseCallArgValue(callee.ParamTypes[0]);
-    int nextPositional = 1;
+    // First argument: check if it's named (identifier followed by ':')
+    if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+      var nameToken = Advance();
+      Advance(); // consume ':'
+      var idx = callee.ParamNames.IndexOf(nameToken.Value);
+      if (idx < 0)
+        throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+      args[idx] = ParseCallArgValue(callee.ParamTypes[idx]);
+    } else {
+      // Positional first argument
+      args[0] = ParseCallArgValue(callee.ParamTypes[0]);
+    }
 
     while (Check(TokenType.Comma) && Advance() != null) {
-      // Check for named argument: identifier followed by ':'
       if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+        // Named argument
         var nameToken = Advance();
         Advance(); // consume ':'
         var idx = callee.ParamNames.IndexOf(nameToken.Value);
         if (idx < 0)
-          throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unknown parameter '{nameToken.Value}' in call to '{callee.Name}'", nameToken.Line, nameToken.Column);
+          throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
         args[idx] = ParseCallArgValue(callee.ParamTypes[idx]);
       } else {
-        args[nextPositional] = ParseCallArgValue(callee.ParamTypes[nextPositional]);
-        nextPositional++;
+        // E3005: Second and subsequent arguments must be named
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Second and subsequent arguments must be named. Use 'name: value' syntax",
+          Current().Line, Current().Column);
       }
     }
 
     Expect(TokenType.RightParen);
+
+    return FillDefaultArgs(functionNameToken, callee, args);
+  }
+
+  private List<MaxonValue> FillDefaultArgs(Token functionNameToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args) {
+    // Fill in defaults for missing arguments
+    _functionDefaults.TryGetValue(callee.Name, out var defaults);
+
+    for (int i = 0; i < args.Length; i++) {
+      if (args[i] == null) {
+        if (defaults != null && defaults.TryGetValue(i, out var defaultAttr)) {
+          args[i] = EmitDefaultLiteral(defaultAttr, callee.ParamTypes[i], functionNameToken,
+            $"Missing argument for parameter '{callee.ParamNames[i]}' in call to '{callee.Name}'");
+        } else {
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Missing argument for parameter '{callee.ParamNames[i]}' in call to '{callee.Name}'",
+            functionNameToken.Line, functionNameToken.Column);
+        }
+      }
+    }
+
     return args.ToList()!;
   }
 
@@ -1073,6 +2028,24 @@ public class Parser(List<Token> tokens) {
   // ============================================================================
 
   private string UniqueLabel(string label) => $"{label}_{_blockCounter++}";
+
+  /// <summary>
+  /// Emits a literal op for a default attribute value and returns the resulting MaxonValue.
+  /// </summary>
+  private MaxonValue EmitDefaultLiteral(MlirAttribute attr, MlirType type, Token errorToken, string context) {
+    MaxonLiteralOp defaultOp;
+    if (attr is IntegerAttr intAttr && type == MlirType.I1) {
+      defaultOp = new MaxonLiteralOp(intAttr.Value != 0);
+    } else if (attr is IntegerAttr intAttr2) {
+      defaultOp = new MaxonLiteralOp(intAttr2.Value);
+    } else if (attr is FloatAttr floatAttr) {
+      defaultOp = new MaxonLiteralOp(floatAttr.Value);
+    } else {
+      throw new CompileError(ErrorCode.ParserExpectedExpression, context, errorToken.Line, errorToken.Column);
+    }
+    _currentBlock!.AddOp(defaultOp);
+    return defaultOp.Result;
+  }
 
   private static long ParseIntegerLiteral(Token token) {
     var text = token.Value.Replace("_", "");

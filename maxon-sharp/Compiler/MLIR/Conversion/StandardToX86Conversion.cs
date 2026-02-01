@@ -157,6 +157,24 @@ public static class StandardToX86Conversion {
               lhsConsumed: IsLastUse(lastUseOfValue, xorOp.Lhs, currentOpIndex));
             break;
 
+          case StdAndI1Op andI1Op:
+            regManager.EmitBinaryRegReg(andI1Op.Lhs, andI1Op.Rhs, andI1Op.Result, x86Block,
+              (l, r) => new X86AndRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, andI1Op.Lhs, currentOpIndex));
+            break;
+
+          case StdOrI1Op orI1Op:
+            regManager.EmitBinaryRegReg(orI1Op.Lhs, orI1Op.Rhs, orI1Op.Result, x86Block,
+              (l, r) => new X86OrRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, orI1Op.Lhs, currentOpIndex));
+            break;
+
+          case StdXorI1Op xorI1Op:
+            regManager.EmitBinaryRegReg(xorI1Op.Lhs, xorI1Op.Rhs, xorI1Op.Result, x86Block,
+              (l, r) => new X86XorRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, xorI1Op.Lhs, currentOpIndex));
+            break;
+
           case StdShlI64Op shlOp:
             regManager.EmitShift(shlOp.Lhs, shlOp.Rhs, shlOp.Result, x86Block,
               dest => new X86ShlRegClOp(dest));
@@ -300,6 +318,30 @@ public static class StandardToX86Conversion {
 
           case StdLoadIndirectOp loadIndOp:
             regManager.EmitLoadIndirect(loadIndOp.Result, loadIndOp.BasePtr, loadIndOp.FieldOffset, loadIndOp.FieldType, x86Block);
+            break;
+
+          case StdGlobalLoadI64Op globalLoadI64:
+            regManager.EmitGlobalLoad(globalLoadI64.Result, globalLoadI64.GlobalName, x86Block);
+            break;
+
+          case StdGlobalStoreI64Op globalStoreI64:
+            regManager.EmitGlobalStore(globalStoreI64.Value, globalStoreI64.GlobalName, x86Block);
+            break;
+
+          case StdGlobalLoadF64Op globalLoadF64:
+            regManager.EmitXmmGlobalLoad(globalLoadF64.Result, globalLoadF64.GlobalName, x86Block);
+            break;
+
+          case StdGlobalStoreF64Op globalStoreF64:
+            regManager.EmitXmmGlobalStore(globalStoreF64.Value, globalStoreF64.GlobalName, x86Block);
+            break;
+
+          case StdGlobalLoadI1Op globalLoadI1:
+            regManager.EmitGlobalLoad(globalLoadI1.Result, globalLoadI1.GlobalName, x86Block);
+            break;
+
+          case StdGlobalStoreI1Op globalStoreI1:
+            regManager.EmitGlobalStore(globalStoreI1.Value, globalStoreI1.GlobalName, x86Block);
             break;
 
           case StdReturnOp retOp: {

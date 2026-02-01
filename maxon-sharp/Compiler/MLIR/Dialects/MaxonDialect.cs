@@ -350,3 +350,33 @@ public class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string 
   public MaxonValue NewValue { get; } = newValue;
   public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString(), NewValue.ToString()];
 }
+
+// ============================================================================
+// Global variable operations (for top-level var and static var)
+// ============================================================================
+
+public class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind) : MaxonOp {
+  public override string Mnemonic => $"maxon.global_load @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public MaxonValueKind ValueKind { get; } = kind;
+  public MaxonValue Result { get; } = kind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> {
+      ["global"] = new StringAttr(GlobalName),
+      ["type"] = new TypeAttr(ValueKind.ToMlirType())
+    };
+}
+
+public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind) : MaxonOp {
+  public override string Mnemonic => $"maxon.global_store @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public MaxonValue Value { get; } = value;
+  public MaxonValueKind ValueKind { get; } = kind;
+  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> {
+      ["global"] = new StringAttr(GlobalName),
+      ["type"] = new TypeAttr(ValueKind.ToMlirType())
+    };
+}

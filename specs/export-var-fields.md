@@ -37,7 +37,7 @@ Non-exported fields are only accessible within methods of the same type:
 ```maxon
 type Counter
   var count int              // private
-  export var name string     // public
+  export var name int     // public
 
   function increment()
     count = count + 1      // OK - accessing within method
@@ -49,11 +49,14 @@ type Counter
 end 'Counter'
 
 function main() returns int
-  var c = Counter{count: 0, name: "test"}
+  var c = Counter{count: 0, name: 5}
   c.increment()
   return c.getCount()
   // c.count would be an error - not exported
 end 'main'
+```
+```exitcode
+1
 ```
 
 ### Initialization
@@ -162,7 +165,7 @@ type Box
 end 'Box'
 
 function main() returns int
-  var b = Box.create(20, 22)
+  var b = Box.create(20, s: 22)
   return b.value + b.getSecret()
 end 'main'
 ```
@@ -186,7 +189,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E050: specs/fragments/export-var-fields.error.unexported-field-read.1.test:12:5: cannot access unexported field: 'private' outside of type 'Value'
+error E3013: specs/fragments/export-var-fields/error.unexported-field-read.test:12:12: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: error.unexported-field-write -->
@@ -206,7 +209,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E050: specs/fragments/export-var-fields.error.unexported-field-write.1.test:12:5: cannot access unexported field: 'private' outside of type 'Value'
+error E3013: specs/fragments/export-var-fields/error.unexported-field-write.test:12:5: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: all-fields-private-by-default -->
@@ -225,7 +228,7 @@ type Simple
 end 'Simple'
 
 function main() returns int
-  var s = Simple.make(20, 22)
+  var s = Simple.make(20, b: 22)
   return s.sum()
 end 'main'
 ```

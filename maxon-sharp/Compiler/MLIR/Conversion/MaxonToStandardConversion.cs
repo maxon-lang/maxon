@@ -16,8 +16,12 @@ public static class MaxonToStandardConversion {
     foreach (var func in module.Functions) {
       var retStructType = func.ReturnType as MlirStructType;
 
+      bool isInstanceMethod = IsInstanceMethod(func);
+      var selfStructType = isInstanceMethod ? (MlirStructType)func.ParamTypes[0] : null;
+
       // Build the new function signature:
-      // - Struct params are flattened to individual scalar params
+      // - Instance method 'self' param is passed as a pointer (by reference)
+      // - Other struct params are flattened to individual scalar params
       // - Struct return adds a hidden sret pointer as first param
       var newParamNames = new List<string>();
       var newParamTypes = new List<MlirType>();
@@ -32,7 +36,12 @@ public static class MaxonToStandardConversion {
       int flatIdx = newParamNames.Count;
 
       for (int i = 0; i < func.ParamNames.Count; i++) {
-        if (func.ParamTypes[i] is MlirStructType structType) {
+        if (isInstanceMethod && i == 0) {
+          // Instance method self param: pass as pointer (i64)
+          newParamNames.Add("__self_ptr");
+          newParamTypes.Add(MlirType.I64);
+          flatIdx++;
+        } else if (func.ParamTypes[i] is MlirStructType structType) {
           var fieldIndices = new List<(int, MlirStructField)>();
           foreach (var field in structType.Fields) {
             newParamNames.Add($"{func.ParamNames[i]}.{field.Name}");
@@ -82,15 +91,27 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonStructParamOp structParamOp: {
-              // Struct param was flattened to individual scalar params.
-              var fieldMappings = paramIndexMap[structParamOp.Index];
-              foreach (var (paramFlatIdx, field) in fieldMappings) {
-                var fieldVarName = $"{structParamOp.Name}.{field.Name}";
-                var fieldResult = StdValueFactory.CreateStdValueForType(field.Type);
-                newBlock.AddOp(new StdParamOp(paramFlatIdx, fieldVarName, fieldResult));
-                EmitStore(newBlock, fieldResult, fieldVarName, varTypes);
+              if (isInstanceMethod && structParamOp.Name == "self") {
+                // Instance method self: receive as pointer, save it, load fields indirectly
+                int selfFlatIdx = retStructType != null ? 1 : 0;
+                var selfPtrVal = new StdI64(MlirContext.Current.NextId());
+                newBlock.AddOp(new StdParamOp(selfFlatIdx, "__self_ptr", selfPtrVal));
+                newBlock.AddOp(new StdStoreI64Op(selfPtrVal, "__self_ptr"));
+                varTypes["__self_ptr"] = "i64";
+                // Load each field from the self pointer into named variables
+                LoadStructFieldsFromPointer(newBlock, selfPtrVal, "self", selfStructType!, varTypes);
+                structVarNames[structParamOp.Result.Id] = "self";
+              } else {
+                // Non-self struct param: flattened to individual scalar params.
+                var fieldMappings = paramIndexMap[structParamOp.Index];
+                foreach (var (paramFlatIdx, field) in fieldMappings) {
+                  var fieldVarName = $"{structParamOp.Name}.{field.Name}";
+                  var fieldResult = StdValueFactory.CreateStdValueForType(field.Type);
+                  newBlock.AddOp(new StdParamOp(paramFlatIdx, fieldVarName, fieldResult));
+                  EmitStore(newBlock, fieldResult, fieldVarName, varTypes);
+                }
+                structVarNames[structParamOp.Result.Id] = structParamOp.Name;
               }
-              structVarNames[structParamOp.Result.Id] = structParamOp.Name;
               break;
             }
             case MaxonLiteralOp litOp: {
@@ -143,17 +164,17 @@ public static class MaxonToStandardConversion {
                 var dstName = assignOp.VarName;
                 var structTypeName = ((MaxonStruct)assignOp.Value).TypeName;
                 var structType = module.TypeDefs[structTypeName];
-                foreach (var field in structType.Fields) {
-                  var srcFieldVar = $"{srcName}.{field.Name}";
-                  var dstFieldVar = $"{dstName}.{field.Name}";
-                  var loaded = EmitLoad(newBlock, srcFieldVar, varTypes);
-                  EmitStore(newBlock, loaded, dstFieldVar, varTypes);
-                }
+                CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // After assignment, the struct value is now known by both names
                 structVarNames[assignOp.Value.Id] = dstName;
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
+                // In instance methods, writing to a self field variable must also
+                // write through the self pointer so changes propagate to the caller.
+                if (isInstanceMethod && selfStructType != null) {
+                  EmitSelfFieldWriteThrough(newBlock, mappedValue, assignOp.VarName, selfStructType);
+                }
               }
               break;
             }
@@ -179,6 +200,10 @@ public static class MaxonToStandardConversion {
               var fieldVarName = $"{structName}.{fieldAssign.FieldName}";
               var mappedVal = valueMap[fieldAssign.NewValue];
               EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
+              // Write through self pointer for instance methods
+              if (isInstanceMethod && structName == "self" && selfStructType != null) {
+                EmitSelfFieldWriteThrough(newBlock, mappedVal, fieldAssign.FieldName, selfStructType);
+              }
               break;
             }
             case MaxonBinOp binOp: {
@@ -288,6 +313,50 @@ public static class MaxonToStandardConversion {
               }
               break;
             }
+            case MaxonGlobalLoadOp globalLoad: {
+              switch (globalLoad.ValueKind) {
+                case MaxonValueKind.Integer: {
+                  var loadOp = new StdGlobalLoadI64Op(globalLoad.GlobalName);
+                  newBlock.AddOp(loadOp);
+                  valueMap[globalLoad.Result] = loadOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Float: {
+                  var loadOp = new StdGlobalLoadF64Op(globalLoad.GlobalName);
+                  newBlock.AddOp(loadOp);
+                  valueMap[globalLoad.Result] = loadOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Bool: {
+                  var loadOp = new StdGlobalLoadI1Op(globalLoad.GlobalName);
+                  newBlock.AddOp(loadOp);
+                  valueMap[globalLoad.Result] = loadOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Byte:
+                case MaxonValueKind.Struct:
+                  throw new InvalidOperationException($"Unsupported global variable type: {globalLoad.ValueKind}");
+              }
+              break;
+            }
+            case MaxonGlobalStoreOp globalStore: {
+              var mappedValue = valueMap[globalStore.Value];
+              switch (globalStore.ValueKind) {
+                case MaxonValueKind.Integer:
+                  newBlock.AddOp(new StdGlobalStoreI64Op((StdI64)mappedValue, globalStore.GlobalName));
+                  break;
+                case MaxonValueKind.Float:
+                  newBlock.AddOp(new StdGlobalStoreF64Op((StdF64)mappedValue, globalStore.GlobalName));
+                  break;
+                case MaxonValueKind.Bool:
+                  newBlock.AddOp(new StdGlobalStoreI1Op((StdBool)mappedValue, globalStore.GlobalName));
+                  break;
+                case MaxonValueKind.Byte:
+                case MaxonValueKind.Struct:
+                  throw new InvalidOperationException($"Unsupported global variable type: {globalStore.ValueKind}");
+              }
+              break;
+            }
             case MaxonCallOp callOp:
               LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames);
               break;
@@ -307,11 +376,17 @@ public static class MaxonToStandardConversion {
   /// <summary>
   /// Compute the flat parameter index for a scalar param, accounting for
   /// sret offset and preceding struct params that expanded to multiple flat params.
+  /// Instance method self (param 0 with struct type named "self") is passed as
+  /// a single pointer, not flattened.
   /// </summary>
   private static int ComputeFlatParamIndex(int originalIndex, MlirFunction<MaxonOp> func, bool hasSret) {
+    bool isInstanceMethod = IsInstanceMethod(func);
     int flatIdx = hasSret ? 1 : 0;
     for (int i = 0; i < originalIndex; i++) {
-      if (func.ParamTypes[i] is MlirStructType st) {
+      if (isInstanceMethod && i == 0) {
+        // Self is passed as a single pointer param
+        flatIdx += 1;
+      } else if (func.ParamTypes[i] is MlirStructType st) {
         flatIdx += st.Fields.Count;
       } else {
         flatIdx += 1;
@@ -332,23 +407,30 @@ public static class MaxonToStandardConversion {
 
     var newArgs = new List<StdValue>();
 
-    // If callee returns struct, allocate local space and pass sret pointer
+    // If callee returns struct, allocate local space and pass sret pointer.
     string? sretVarName = null;
     if (calleeRetStructType != null) {
       sretVarName = $"__sret_{callOp.Result!.Id}";
-      foreach (var field in calleeRetStructType.Fields) {
-        var fieldVarName = $"{sretVarName}.{field.Name}";
-        EmitZeroStore(block, field.Type, fieldVarName, varTypes);
-      }
+      AllocateStructOnStack(block, sretVarName, calleeRetStructType, varTypes);
       var leaOp = new StdLeaOp(sretVarName);
       block.AddOp(leaOp);
       newArgs.Add(leaOp.Result);
     }
 
+    // Detect instance method call: first param is "self" with struct type
+    bool calleeIsInstanceMethod = IsInstanceMethod(calleeFunc);
+    string? selfBufName = null;
+
     // Flatten struct arguments to individual field values
     for (int i = 0; i < callOp.Args.Count; i++) {
       var arg = callOp.Args[i];
-      if (calleeFunc.ParamTypes[i] is MlirStructType argStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
+      if (calleeIsInstanceMethod && i == 0 && structVarNames.TryGetValue(arg.Id, out var selfName)) {
+        // Instance method self: pass pointer to struct fields on stack.
+        var calleeSelfStructType = (MlirStructType)calleeFunc.ParamTypes[0];
+        selfBufName = $"__selfbuf_{MlirContext.Current.NextId()}";
+        var selfPtr = AllocateAndCopyStructToStack(block, selfName, selfBufName, calleeSelfStructType, varTypes);
+        newArgs.Add(selfPtr);
+      } else if (calleeFunc.ParamTypes[i] is MlirStructType argStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
         foreach (var field in argStructType.Fields) {
           var fieldVarName = $"{argStructName}.{field.Name}";
           var loaded = EmitLoad(block, fieldVarName, varTypes);
@@ -373,6 +455,14 @@ public static class MaxonToStandardConversion {
         valueMap[callOp.Result] = funcCall.Result;
       }
     }
+
+    // After instance method call, read back modified self fields from the
+    // self buffer into the caller's original struct variable.
+    if (calleeIsInstanceMethod && selfBufName != null && callOp.Args.Count > 0
+        && structVarNames.TryGetValue(callOp.Args[0].Id, out var callerSelfName)) {
+      var calleeSelfStructType = (MlirStructType)calleeFunc.ParamTypes[0];
+      CopyStructFields(block, selfBufName, callerSelfName, calleeSelfStructType, varTypes);
+    }
   }
 
   private static void LowerReturn(
@@ -388,13 +478,7 @@ public static class MaxonToStandardConversion {
       var srcName = structVarNames[retOp.Value.Id];
       var sretLoad = new StdLoadI64Op("__sret");
       block.AddOp(sretLoad);
-      var sretPtr = sretLoad.Result;
-
-      foreach (var field in retStructType.Fields) {
-        var srcFieldVar = $"{srcName}.{field.Name}";
-        var loaded = EmitLoad(block, srcFieldVar, varTypes);
-        block.AddOp(new StdStoreIndirectOp(loaded, sretPtr, field.Offset, field.Type));
-      }
+      WriteStructFieldsToPointer(block, srcName, sretLoad.Result, retStructType, varTypes);
       block.AddOp(new StdReturnOp());
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
@@ -443,6 +527,8 @@ public static class MaxonToStandardConversion {
         throw new InvalidOperationException("Cannot store a pointer value directly - struct fields should be stored individually");
       case StdI32:
         throw new InvalidOperationException("Cannot store I32 values in variable slots");
+      default:
+        throw new InvalidOperationException($"Unsupported StdValue type for store: {value.GetType().Name}");
     }
   }
 
@@ -464,8 +550,9 @@ public static class MaxonToStandardConversion {
         block.AddOp(loadOp);
         return loadOp.Result;
       }
+      default:
+        throw new InvalidOperationException($"Unsupported var type for load: {varTypeName}");
     }
-    throw new InvalidOperationException($"Unsupported var type for load: {varTypeName}");
   }
 
   private static void EmitZeroStore(MlirBlock<StandardOp> block, MlirType fieldType, string varName, Dictionary<string, string> varTypes) {
@@ -483,6 +570,109 @@ public static class MaxonToStandardConversion {
       EmitStore(block, zeroOp.Result, varName, varTypes);
     } else {
       throw new InvalidOperationException($"Unsupported field type for zero-store: {fieldType}");
+    }
+  }
+
+  private static bool IsInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
+    func.ParamNames.Count > 0
+    && func.ParamNames[0] == "self"
+    && func.ParamTypes[0] is MlirStructType;
+
+  /// <summary>
+  /// Copy all fields from one struct variable to another.
+  /// </summary>
+  private static void CopyStructFields(
+    MlirBlock<StandardOp> block,
+    string srcName, string dstName,
+    MlirStructType structType,
+    Dictionary<string, string> varTypes) {
+    foreach (var field in structType.Fields) {
+      var srcFieldVar = $"{srcName}.{field.Name}";
+      var dstFieldVar = $"{dstName}.{field.Name}";
+      var loaded = EmitLoad(block, srcFieldVar, varTypes);
+      EmitStore(block, loaded, dstFieldVar, varTypes);
+    }
+  }
+
+  /// <summary>
+  /// Allocate struct fields on stack in reverse order (for proper stack layout).
+  /// Returns the base variable name for LEA.
+  /// </summary>
+  private static void AllocateStructOnStack(
+    MlirBlock<StandardOp> block,
+    string varName,
+    MlirStructType structType,
+    Dictionary<string, string> varTypes) {
+    for (int fi = structType.Fields.Count - 1; fi >= 0; fi--) {
+      var field = structType.Fields[fi];
+      var fieldVarName = $"{varName}.{field.Name}";
+      EmitZeroStore(block, field.Type, fieldVarName, varTypes);
+    }
+  }
+
+  /// <summary>
+  /// Load all struct fields from a pointer into named variables.
+  /// </summary>
+  private static void LoadStructFieldsFromPointer(
+    MlirBlock<StandardOp> block,
+    StdValue ptr,
+    string varName,
+    MlirStructType structType,
+    Dictionary<string, string> varTypes) {
+    foreach (var field in structType.Fields) {
+      var fieldVarName = $"{varName}.{field.Name}";
+      var loadOp = new StdLoadIndirectOp(ptr, field.Offset, field.Type);
+      block.AddOp(loadOp);
+      EmitStore(block, loadOp.Result, fieldVarName, varTypes);
+    }
+  }
+
+  /// <summary>
+  /// Write all struct fields from named variables to a pointer.
+  /// </summary>
+  private static void WriteStructFieldsToPointer(
+    MlirBlock<StandardOp> block,
+    string srcName,
+    StdValue ptr,
+    MlirStructType structType,
+    Dictionary<string, string> varTypes) {
+    foreach (var field in structType.Fields) {
+      var srcFieldVar = $"{srcName}.{field.Name}";
+      var loaded = EmitLoad(block, srcFieldVar, varTypes);
+      block.AddOp(new StdStoreIndirectOp(loaded, ptr, field.Offset, field.Type));
+    }
+  }
+
+  /// <summary>
+  /// Allocate struct on stack, copy fields from source, and return LEA result.
+  /// </summary>
+  private static StdPtr AllocateAndCopyStructToStack(
+    MlirBlock<StandardOp> block,
+    string srcName,
+    string bufName,
+    MlirStructType structType,
+    Dictionary<string, string> varTypes) {
+    // Emit field stores in reverse order so the first field gets the
+    // lowest stack address, then LEA points to the first field.
+    for (int fi = structType.Fields.Count - 1; fi >= 0; fi--) {
+      var field = structType.Fields[fi];
+      var srcField = $"{srcName}.{field.Name}";
+      var loaded = EmitLoad(block, srcField, varTypes);
+      var dstField = $"{bufName}.{field.Name}";
+      EmitStore(block, loaded, dstField, varTypes);
+    }
+    var leaOp = new StdLeaOp(bufName);
+    block.AddOp(leaOp);
+    return leaOp.Result;
+  }
+
+  private static void EmitSelfFieldWriteThrough(
+    MlirBlock<StandardOp> block, StdValue value, string fieldName, MlirStructType selfStructType) {
+    var field = selfStructType.GetField(fieldName);
+    if (field != null) {
+      var selfPtrLoad = new StdLoadI64Op("__self_ptr");
+      block.AddOp(selfPtrLoad);
+      block.AddOp(new StdStoreIndirectOp(value, selfPtrLoad.Result, field.Offset, field.Type));
     }
   }
 
@@ -514,6 +704,10 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.BitXor, MaxonValueKind.Integer), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Shl, MaxonValueKind.Integer), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Shr, MaxonValueKind.Integer), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    // Logical operations (bool)
+    { (MaxonBinOperator.And, MaxonValueKind.Bool), (l, r) => { var op = new StdAndI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Or, MaxonValueKind.Bool), (l, r) => { var op = new StdOrI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
+    { (MaxonBinOperator.BitXor, MaxonValueKind.Bool), (l, r) => { var op = new StdXorI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
   };
 
 }

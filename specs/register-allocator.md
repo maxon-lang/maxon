@@ -4398,7 +4398,7 @@ end 'useRegs'
 
 function main() returns int
   var sentinel = 42
-  var result = useRegs(1, 2, 3, 4)
+  var result = useRegs(1, b: 2, c: 3, d: 4)
   return sentinel + result
 end 'main'
 ```
@@ -4756,7 +4756,7 @@ end 'sub'
 function main() returns int
   var x = 10
   var y = 3
-  var result = sub(y, x)
+  var result = sub(y, b: x)
   return result + 45
 end 'main'
 ```

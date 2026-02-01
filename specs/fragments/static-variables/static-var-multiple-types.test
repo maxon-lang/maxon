@@ -1,0 +1,36 @@
+// Test: static-var-multiple-types
+type TypeA
+  static var value = 10
+end 'TypeA'
+
+type TypeB
+  static var value = 20
+end 'TypeB'
+
+function main() returns int
+  TypeA.value = TypeA.value + 2
+  TypeB.value = TypeB.value + 10
+  return TypeA.value + TypeB.value
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, [rip+TypeA.value]
+    x86.mov ecx, 2
+    x86.add eax, ecx
+    x86.mov [rip+TypeA.value], eax
+    x86.mov edx, [rip+TypeB.value]
+    x86.mov ebx, 10
+    x86.add edx, ebx
+    x86.mov [rip+TypeB.value], edx
+    x86.mov esi, [rip+TypeA.value]
+    x86.mov edi, [rip+TypeB.value]
+    x86.add esi, edi
+    x86.mov eax, esi
+    x86.ret
+  }
+}
+---

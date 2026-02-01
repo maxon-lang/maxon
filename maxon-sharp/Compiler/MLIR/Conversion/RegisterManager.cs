@@ -731,6 +731,40 @@ public class RegisterManager {
     }
   }
 
+  // --- Global variable support: RIP-relative addressing ---
+
+  /// <summary>
+  /// Load a global integer/bool variable into a GPR register via RIP-relative addressing.
+  /// </summary>
+  public void EmitGlobalLoad(StdValue result, string globalName, MlirBlock<X86Op> block) {
+    var gpr = AllocateRegister(result, block);
+    block.AddOp(new X86GlobalLoadOp(globalName, gpr));
+  }
+
+  /// <summary>
+  /// Store a GPR value to a global variable via RIP-relative addressing.
+  /// </summary>
+  public void EmitGlobalStore(StdValue value, string globalName, MlirBlock<X86Op> block) {
+    var reg = EnsureInRegister(value, block);
+    block.AddOp(new X86GlobalStoreOp(globalName, reg));
+  }
+
+  /// <summary>
+  /// Load a global float variable into an XMM register via RIP-relative addressing.
+  /// </summary>
+  public void EmitXmmGlobalLoad(StdValue result, string globalName, MlirBlock<X86Op> block) {
+    var xmmReg = AllocateXmmRegister(result);
+    block.AddOp(new X86GlobalLoadXmmOp(globalName, xmmReg));
+  }
+
+  /// <summary>
+  /// Store an XMM value to a global float variable via RIP-relative addressing.
+  /// </summary>
+  public void EmitXmmGlobalStore(StdValue value, string globalName, MlirBlock<X86Op> block) {
+    var srcXmm = EnsureInXmmRegister(value, block);
+    block.AddOp(new X86GlobalStoreXmmOp(globalName, srcXmm));
+  }
+
   /// <summary>
   /// Ensure a float value is in XMM0 for returning from a function.
   /// </summary>

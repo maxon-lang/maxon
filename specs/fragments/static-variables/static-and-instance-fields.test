@@ -1,0 +1,67 @@
+// Test: static-and-instance-fields
+type Thing
+  static var created = 0
+  export var id int
+
+  static function make(n int) returns Thing
+    Thing.created = Thing.created + 1
+    return {id: n}
+  end 'make'
+end 'Thing'
+
+function main() returns int
+  var a = Thing.make(10)
+  var b = Thing.make(20)
+  return Thing.created + a.id + b.id
+end 'main'
+---
+ExitCode: 32
+---
+module {
+  func @Thing.make(__sret: i64, n: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rip+Thing.created]
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov [rip+Thing.created], eax
+    x86.mov [rbp-24], edx
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-24]
+    x86.mov [edx+0], ebx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.lea rdx, [rbp-8]
+    x86.mov ecx, rdx
+    x86.mov edx, eax
+    x86.call Thing.make
+    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-16], ebx
+    x86.mov esi, 20
+    x86.xor edi, edi
+    x86.mov [rbp-24], edi
+    x86.lea r8, [rbp-24]
+    x86.mov ecx, r8
+    x86.mov edx, esi
+    x86.call Thing.make
+    x86.mov r9, [rbp-24]
+    x86.mov [rbp-32], r9
+    x86.mov eax, [rip+Thing.created]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-32]
+    x86.add eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

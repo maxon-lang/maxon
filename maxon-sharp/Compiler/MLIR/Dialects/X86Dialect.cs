@@ -320,3 +320,35 @@ public class X86MovSdXmmIndirectMemOp(X86XmmRegister dest, X86Register baseReg, 
   public int Displacement { get; } = displacement;
   public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
 }
+
+// ============================================================================
+// Global variable operations (RIP-relative addressing)
+// ============================================================================
+
+// MOV dest, [rip + globalName] - load integer/bool global
+public class X86GlobalLoadOp(string globalName, X86Register dest) : X86Op {
+  public string GlobalName { get; } = globalName;
+  public X86Register Dest { get; } = dest;
+  public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, [rip+{GlobalName}]";
+}
+
+// MOV [rip + globalName], src - store integer/bool global
+public class X86GlobalStoreOp(string globalName, X86Register src) : X86Op {
+  public string GlobalName { get; } = globalName;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.mov [rip+{GlobalName}], {Src.ToString().ToLower()}";
+}
+
+// MOVSD xmm, [rip + globalName] - load float global
+public class X86GlobalLoadXmmOp(string globalName, X86XmmRegister dest) : X86Op {
+  public string GlobalName { get; } = globalName;
+  public X86XmmRegister Dest { get; } = dest;
+  public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [rip+{GlobalName}]";
+}
+
+// MOVSD [rip + globalName], xmm - store float global
+public class X86GlobalStoreXmmOp(string globalName, X86XmmRegister src) : X86Op {
+  public string GlobalName { get; } = globalName;
+  public X86XmmRegister Src { get; } = src;
+  public override string Mnemonic => $"x86.movsd [rip+{GlobalName}], {Src.ToString().ToLower()}";
+}

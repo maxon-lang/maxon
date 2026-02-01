@@ -1,0 +1,24 @@
+// Test: top-level-var-with-let
+let BASE = 40
+var offset = 0
+
+function main() returns int
+  offset = 2
+  return BASE + offset
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 2
+    x86.mov [rip+offset], eax
+    x86.mov ecx, 40
+    x86.mov edx, [rip+offset]
+    x86.add ecx, edx
+    x86.mov eax, ecx
+    x86.ret
+  }
+}
+---

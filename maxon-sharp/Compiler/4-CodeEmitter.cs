@@ -39,6 +39,9 @@ public class CodeEmitter {
       long initValue = 0;
       if (global.InitValue is IntegerAttr intAttr) {
         initValue = intAttr.Value;
+      } else if (global.InitValue is FloatAttr floatAttr) {
+        // Store IEEE 754 double bits as long for the data section
+        initValue = BitConverter.DoubleToInt64Bits(floatAttr.Value);
       }
       emitter.DefineGlobal(global.Name, size, initValue);
     }

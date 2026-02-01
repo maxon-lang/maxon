@@ -1,0 +1,79 @@
+// Test: export-static-method
+type Factory
+  export var id int
+
+  export static function create(val int) returns Factory
+    return {id: val}
+  end 'create'
+
+  export static function zero() returns Factory
+    return Factory.create(0)
+  end 'zero'
+end 'Factory'
+
+function main() returns int
+  var f1 = Factory.create(100)
+  var f2 = Factory.zero()
+  return f1.id + f2.id
+end 'main'
+---
+ExitCode: 100
+---
+module {
+  func @Factory.create(__sret: i64, val: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.mov [eax+0], ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @Factory.zero(__sret: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.lea rdx, [rbp-16]
+    x86.mov ecx, rdx
+    x86.mov edx, eax
+    x86.call Factory.create
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-16]
+    x86.mov [ebx+0], esi
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 100
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.lea rdx, [rbp-8]
+    x86.mov ecx, rdx
+    x86.mov edx, eax
+    x86.call Factory.create
+    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-16], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-24], esi
+    x86.lea rdi, [rbp-24]
+    x86.mov ecx, rdi
+    x86.call Factory.zero
+    x86.mov r8, [rbp-24]
+    x86.mov [rbp-32], r8
+    x86.mov r9, [rbp-16]
+    x86.mov eax, [rbp-32]
+    x86.add r9, eax
+    x86.mov eax, r9
+    x86.epilogue
+    x86.ret
+  }
+}
+---

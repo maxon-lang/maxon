@@ -1,0 +1,39 @@
+// Test: top-level-var-multiple
+var a = 1
+var b = 2
+var c = 3
+
+function main() returns int
+  a = a * 10
+  b = b * 10
+  c = c * 10
+  return a + b + c
+end 'main'
+---
+ExitCode: 60
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, [rip+a]
+    x86.mov ecx, 10
+    x86.imul eax, ecx
+    x86.mov [rip+a], eax
+    x86.mov edx, [rip+b]
+    x86.mov ebx, 10
+    x86.imul edx, ebx
+    x86.mov [rip+b], edx
+    x86.mov esi, [rip+c]
+    x86.mov edi, 10
+    x86.imul esi, edi
+    x86.mov [rip+c], esi
+    x86.mov r8, [rip+a]
+    x86.mov r9, [rip+b]
+    x86.add r8, r9
+    x86.mov eax, [rip+c]
+    x86.add r8, eax
+    x86.mov eax, r8
+    x86.ret
+  }
+}
+---
