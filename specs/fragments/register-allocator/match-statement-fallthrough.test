@@ -1,0 +1,229 @@
+// Test: match-statement-fallthrough
+function main() returns int
+  var x = 1
+  var result = 0
+  match x 'cascade'
+    1 then result = result + 10 and fallthrough
+    2 then result = result + 20 and fallthrough
+    3 then result = result + 30
+    default then result = 100
+  end 'cascade'
+  return result
+end 'main'
+---
+ExitCode: 60
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 1 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_cascade_0} {kind = i64} {decl = 1 : i1}
+    maxon.br cascade_0.cmp0
+  cascade_0.cmp0:
+    %2 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    maxon.cond_br %4 [then: cascade_0.case0, else: cascade_0.cmp1]
+  cascade_0.case0:
+    %5 = maxon.literal {value = 10 : i64}
+    %6 = maxon.var_ref {var = result} {type = i64}
+    %7 = maxon.binop %6, %5 {op = add} {kind = i64}
+    maxon.assign %7 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.case1
+  cascade_0.cmp1:
+    %8 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %9 = maxon.literal {value = 2 : i64}
+    %10 = maxon.binop %8, %9 {op = eq} {kind = i64}
+    maxon.cond_br %10 [then: cascade_0.case1, else: cascade_0.cmp2]
+  cascade_0.case1:
+    %11 = maxon.literal {value = 20 : i64}
+    %12 = maxon.var_ref {var = result} {type = i64}
+    %13 = maxon.binop %12, %11 {op = add} {kind = i64}
+    maxon.assign %13 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.case2
+  cascade_0.cmp2:
+    %14 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %15 = maxon.literal {value = 3 : i64}
+    %16 = maxon.binop %14, %15 {op = eq} {kind = i64}
+    maxon.cond_br %16 [then: cascade_0.case2, else: cascade_0.case3]
+  cascade_0.case2:
+    %17 = maxon.literal {value = 30 : i64}
+    %18 = maxon.var_ref {var = result} {type = i64}
+    %19 = maxon.binop %18, %17 {op = add} {kind = i64}
+    maxon.assign %19 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.merge
+  cascade_0.case3:
+    %20 = maxon.literal {value = 100 : i64}
+    maxon.assign %20 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.merge
+  cascade_0.merge:
+    %21 = maxon.var_ref {var = result} {type = i64}
+    maxon.return %21
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %22 = arith.constant {value = 1 : i64}
+    memref.store %22, x
+    %23 = arith.constant {value = 0 : i64}
+    memref.store %23, result
+    memref.store %22, __match_cascade_0
+    cf.br cascade_0.cmp0
+  cascade_0.cmp0:
+    %24 = memref.load __match_cascade_0 : i64
+    %25 = arith.constant {value = 1 : i64}
+    %26 = arith.cmpi eq %24, %25
+    cf.cond_br %26 [then: cascade_0.case0, else: cascade_0.cmp1]
+  cascade_0.case0:
+    %27 = arith.constant {value = 10 : i64}
+    %28 = memref.load result : i64
+    %29 = arith.addi %28, %27
+    memref.store %29, result
+    cf.br cascade_0.case1
+  cascade_0.cmp1:
+    %30 = memref.load __match_cascade_0 : i64
+    %31 = arith.constant {value = 2 : i64}
+    %32 = arith.cmpi eq %30, %31
+    cf.cond_br %32 [then: cascade_0.case1, else: cascade_0.cmp2]
+  cascade_0.case1:
+    %33 = arith.constant {value = 20 : i64}
+    %34 = memref.load result : i64
+    %35 = arith.addi %34, %33
+    memref.store %35, result
+    cf.br cascade_0.case2
+  cascade_0.cmp2:
+    %36 = memref.load __match_cascade_0 : i64
+    %37 = arith.constant {value = 3 : i64}
+    %38 = arith.cmpi eq %36, %37
+    cf.cond_br %38 [then: cascade_0.case2, else: cascade_0.case3]
+  cascade_0.case2:
+    %39 = arith.constant {value = 30 : i64}
+    %40 = memref.load result : i64
+    %41 = arith.addi %40, %39
+    memref.store %41, result
+    cf.br cascade_0.merge
+  cascade_0.case3:
+    %42 = arith.constant {value = 100 : i64}
+    memref.store %42, result
+    cf.br cascade_0.merge
+  cascade_0.merge:
+    %43 = memref.load result : i64
+    func.return %43
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.cascade_0.cmp0
+  cascade_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.cmp1
+  cascade_0.case0:
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.case1
+  cascade_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.cmp2
+  cascade_0.case1:
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.case2
+  cascade_0.cmp2:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.case3
+  cascade_0.case2:
+    x86.mov eax, 30
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.merge
+  cascade_0.case3:
+    x86.mov eax, 100
+    x86.mov [rbp-16], eax
+    x86.jmp main.cascade_0.merge
+  cascade_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.cascade_0.cmp0
+  cascade_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.cmp1
+  cascade_0.case0:
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.case1
+  cascade_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.cmp2
+  cascade_0.case1:
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.case2
+  cascade_0.cmp2:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.case3
+  cascade_0.case2:
+    x86.mov eax, 30
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.merge
+  cascade_0.case3:
+    x86.mov eax, 100
+    x86.mov [rbp-16], eax
+    x86.jmp main.cascade_0.merge
+  cascade_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

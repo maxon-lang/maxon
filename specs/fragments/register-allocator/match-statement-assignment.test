@@ -1,0 +1,168 @@
+// Test: match-statement-assignment
+function main() returns int
+  var x = 2
+  var result = 0
+  match x 'process'
+    1 then result = 100
+    2 then result = 200
+    default then result = 0
+  end 'process'
+  return result
+end 'main'
+---
+ExitCode: 200
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 2 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_process_0} {kind = i64} {decl = 1 : i1}
+    maxon.br process_0.cmp0
+  process_0.cmp0:
+    %2 = maxon.var_ref {var = __match_process_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    maxon.cond_br %4 [then: process_0.case0, else: process_0.cmp1]
+  process_0.case0:
+    %5 = maxon.literal {value = 100 : i64}
+    maxon.assign %5 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.cmp1:
+    %6 = maxon.var_ref {var = __match_process_0} {type = i64}
+    %7 = maxon.literal {value = 2 : i64}
+    %8 = maxon.binop %6, %7 {op = eq} {kind = i64}
+    maxon.cond_br %8 [then: process_0.case1, else: process_0.case2]
+  process_0.case1:
+    %9 = maxon.literal {value = 200 : i64}
+    maxon.assign %9 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.case2:
+    %10 = maxon.literal {value = 0 : i64}
+    maxon.assign %10 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.merge:
+    %11 = maxon.var_ref {var = result} {type = i64}
+    maxon.return %11
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %12 = arith.constant {value = 2 : i64}
+    memref.store %12, x
+    %13 = arith.constant {value = 0 : i64}
+    memref.store %13, result
+    memref.store %12, __match_process_0
+    cf.br process_0.cmp0
+  process_0.cmp0:
+    %14 = memref.load __match_process_0 : i64
+    %15 = arith.constant {value = 1 : i64}
+    %16 = arith.cmpi eq %14, %15
+    cf.cond_br %16 [then: process_0.case0, else: process_0.cmp1]
+  process_0.case0:
+    %17 = arith.constant {value = 100 : i64}
+    memref.store %17, result
+    cf.br process_0.merge
+  process_0.cmp1:
+    %18 = memref.load __match_process_0 : i64
+    %19 = arith.constant {value = 2 : i64}
+    %20 = arith.cmpi eq %18, %19
+    cf.cond_br %20 [then: process_0.case1, else: process_0.case2]
+  process_0.case1:
+    %21 = arith.constant {value = 200 : i64}
+    memref.store %21, result
+    cf.br process_0.merge
+  process_0.case2:
+    %22 = arith.constant {value = 0 : i64}
+    memref.store %22, result
+    cf.br process_0.merge
+  process_0.merge:
+    %23 = memref.load result : i64
+    func.return %23
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.process_0.cmp0
+  process_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.process_0.cmp1
+  process_0.case0:
+    x86.mov eax, 100
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.process_0.case2
+  process_0.case1:
+    x86.mov eax, 200
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.process_0.cmp0
+  process_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.process_0.cmp1
+  process_0.case0:
+    x86.mov eax, 100
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.process_0.case2
+  process_0.case1:
+    x86.mov eax, 200
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

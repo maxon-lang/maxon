@@ -5094,3 +5094,1170 @@ module {
   }
 }
 ```
+
+### Level 7: Match Statements and Expressions
+
+<!-- test: match-statement-simple -->
+```maxon
+function main() returns int
+  var x = 2
+  match x 'check'
+    1 then return 10
+    2 then return 20
+    default then return 0
+  end 'check'
+end 'main'
+```
+```exitcode
+20
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 2 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_check_0} {kind = i64} {decl = 1 : i1}
+    maxon.br check_0.cmp0
+  check_0.cmp0:
+    %1 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
+    maxon.cond_br %3 [then: check_0.case0, else: check_0.cmp1]
+  check_0.case0:
+    %4 = maxon.literal {value = 10 : i64}
+    maxon.return %4
+  check_0.cmp1:
+    %5 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %6 = maxon.literal {value = 2 : i64}
+    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
+    maxon.cond_br %7 [then: check_0.case1, else: check_0.case2]
+  check_0.case1:
+    %8 = maxon.literal {value = 20 : i64}
+    maxon.return %8
+  check_0.case2:
+    %9 = maxon.literal {value = 0 : i64}
+    maxon.return %9
+  check_0.merge:
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %10 = arith.constant {value = 2 : i64}
+    memref.store %10, x
+    memref.store %10, __match_check_0
+    cf.br check_0.cmp0
+  check_0.cmp0:
+    %11 = memref.load __match_check_0 : i64
+    %12 = arith.constant {value = 1 : i64}
+    %13 = arith.cmpi eq %11, %12
+    cf.cond_br %13 [then: check_0.case0, else: check_0.cmp1]
+  check_0.case0:
+    %14 = arith.constant {value = 10 : i64}
+    func.return %14
+  check_0.cmp1:
+    %15 = memref.load __match_check_0 : i64
+    %16 = arith.constant {value = 2 : i64}
+    %17 = arith.cmpi eq %15, %16
+    cf.cond_br %17 [then: check_0.case1, else: check_0.case2]
+  check_0.case1:
+    %18 = arith.constant {value = 20 : i64}
+    func.return %18
+  check_0.case2:
+    %19 = arith.constant {value = 0 : i64}
+    func.return %19
+  check_0.merge:
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.check_0.cmp1
+  check_0.case0:
+    x86.mov eax, 10
+    x86.epilogue
+    x86.ret
+  check_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.check_0.case2
+  check_0.case1:
+    x86.mov eax, 20
+    x86.epilogue
+    x86.ret
+  check_0.case2:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.merge:
+  }
+}
+```
+
+<!-- test: match-statement-assignment -->
+```maxon
+function main() returns int
+  var x = 2
+  var result = 0
+  match x 'process'
+    1 then result = 100
+    2 then result = 200
+    default then result = 0
+  end 'process'
+  return result
+end 'main'
+```
+```exitcode
+200
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 2 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_process_0} {kind = i64} {decl = 1 : i1}
+    maxon.br process_0.cmp0
+  process_0.cmp0:
+    %2 = maxon.var_ref {var = __match_process_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    maxon.cond_br %4 [then: process_0.case0, else: process_0.cmp1]
+  process_0.case0:
+    %5 = maxon.literal {value = 100 : i64}
+    maxon.assign %5 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.cmp1:
+    %6 = maxon.var_ref {var = __match_process_0} {type = i64}
+    %7 = maxon.literal {value = 2 : i64}
+    %8 = maxon.binop %6, %7 {op = eq} {kind = i64}
+    maxon.cond_br %8 [then: process_0.case1, else: process_0.case2]
+  process_0.case1:
+    %9 = maxon.literal {value = 200 : i64}
+    maxon.assign %9 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.case2:
+    %10 = maxon.literal {value = 0 : i64}
+    maxon.assign %10 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.merge:
+    %11 = maxon.var_ref {var = result} {type = i64}
+    maxon.return %11
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %12 = arith.constant {value = 2 : i64}
+    memref.store %12, x
+    %13 = arith.constant {value = 0 : i64}
+    memref.store %13, result
+    memref.store %12, __match_process_0
+    cf.br process_0.cmp0
+  process_0.cmp0:
+    %14 = memref.load __match_process_0 : i64
+    %15 = arith.constant {value = 1 : i64}
+    %16 = arith.cmpi eq %14, %15
+    cf.cond_br %16 [then: process_0.case0, else: process_0.cmp1]
+  process_0.case0:
+    %17 = arith.constant {value = 100 : i64}
+    memref.store %17, result
+    cf.br process_0.merge
+  process_0.cmp1:
+    %18 = memref.load __match_process_0 : i64
+    %19 = arith.constant {value = 2 : i64}
+    %20 = arith.cmpi eq %18, %19
+    cf.cond_br %20 [then: process_0.case1, else: process_0.case2]
+  process_0.case1:
+    %21 = arith.constant {value = 200 : i64}
+    memref.store %21, result
+    cf.br process_0.merge
+  process_0.case2:
+    %22 = arith.constant {value = 0 : i64}
+    memref.store %22, result
+    cf.br process_0.merge
+  process_0.merge:
+    %23 = memref.load result : i64
+    func.return %23
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.process_0.cmp0
+  process_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.process_0.cmp1
+  process_0.case0:
+    x86.mov eax, 100
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.process_0.case2
+  process_0.case1:
+    x86.mov eax, 200
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: match-statement-or-patterns -->
+```maxon
+function main() returns int
+  var x = 3
+  match x 'check'
+    1 or 2 then return 10
+    3 or 4 then return 20
+    default then return 0
+  end 'check'
+end 'main'
+```
+```exitcode
+20
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 3 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_check_0} {kind = i64} {decl = 1 : i1}
+    maxon.br check_0.cmp0
+  check_0.cmp0:
+    %1 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
+    %4 = maxon.literal {value = 2 : i64}
+    %5 = maxon.binop %1, %4 {op = eq} {kind = i64}
+    %6 = maxon.binop %3, %5 {op = or} {kind = i1}
+    maxon.cond_br %6 [then: check_0.case0, else: check_0.cmp1]
+  check_0.case0:
+    %7 = maxon.literal {value = 10 : i64}
+    maxon.return %7
+  check_0.cmp1:
+    %8 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %9 = maxon.literal {value = 3 : i64}
+    %10 = maxon.binop %8, %9 {op = eq} {kind = i64}
+    %11 = maxon.literal {value = 4 : i64}
+    %12 = maxon.binop %8, %11 {op = eq} {kind = i64}
+    %13 = maxon.binop %10, %12 {op = or} {kind = i1}
+    maxon.cond_br %13 [then: check_0.case1, else: check_0.case2]
+  check_0.case1:
+    %14 = maxon.literal {value = 20 : i64}
+    maxon.return %14
+  check_0.case2:
+    %15 = maxon.literal {value = 0 : i64}
+    maxon.return %15
+  check_0.merge:
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %16 = arith.constant {value = 3 : i64}
+    memref.store %16, x
+    memref.store %16, __match_check_0
+    cf.br check_0.cmp0
+  check_0.cmp0:
+    %17 = memref.load __match_check_0 : i64
+    %18 = arith.constant {value = 1 : i64}
+    %19 = arith.cmpi eq %17, %18
+    %20 = arith.constant {value = 2 : i64}
+    %21 = arith.cmpi eq %17, %20
+    %22 = arith.ori1 %19, %21
+    cf.cond_br %22 [then: check_0.case0, else: check_0.cmp1]
+  check_0.case0:
+    %23 = arith.constant {value = 10 : i64}
+    func.return %23
+  check_0.cmp1:
+    %24 = memref.load __match_check_0 : i64
+    %25 = arith.constant {value = 3 : i64}
+    %26 = arith.cmpi eq %24, %25
+    %27 = arith.constant {value = 4 : i64}
+    %28 = arith.cmpi eq %24, %27
+    %29 = arith.ori1 %26, %28
+    cf.cond_br %29 [then: check_0.case1, else: check_0.case2]
+  check_0.case1:
+    %30 = arith.constant {value = 20 : i64}
+    func.return %30
+  check_0.case2:
+    %31 = arith.constant {value = 0 : i64}
+    func.return %31
+  check_0.merge:
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 3
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 2
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je main.check_0.cmp1
+  check_0.case0:
+    x86.mov eax, 10
+    x86.epilogue
+    x86.ret
+  check_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 4
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je main.check_0.case2
+  check_0.case1:
+    x86.mov eax, 20
+    x86.epilogue
+    x86.ret
+  check_0.case2:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.merge:
+  }
+}
+```
+
+<!-- test: match-statement-fallthrough -->
+```maxon
+function main() returns int
+  var x = 1
+  var result = 0
+  match x 'cascade'
+    1 then result = result + 10 and fallthrough
+    2 then result = result + 20 and fallthrough
+    3 then result = result + 30
+    default then result = 100
+  end 'cascade'
+  return result
+end 'main'
+```
+```exitcode
+60
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 1 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_cascade_0} {kind = i64} {decl = 1 : i1}
+    maxon.br cascade_0.cmp0
+  cascade_0.cmp0:
+    %2 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    maxon.cond_br %4 [then: cascade_0.case0, else: cascade_0.cmp1]
+  cascade_0.case0:
+    %5 = maxon.literal {value = 10 : i64}
+    %6 = maxon.var_ref {var = result} {type = i64}
+    %7 = maxon.binop %6, %5 {op = add} {kind = i64}
+    maxon.assign %7 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.case1
+  cascade_0.cmp1:
+    %8 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %9 = maxon.literal {value = 2 : i64}
+    %10 = maxon.binop %8, %9 {op = eq} {kind = i64}
+    maxon.cond_br %10 [then: cascade_0.case1, else: cascade_0.cmp2]
+  cascade_0.case1:
+    %11 = maxon.literal {value = 20 : i64}
+    %12 = maxon.var_ref {var = result} {type = i64}
+    %13 = maxon.binop %12, %11 {op = add} {kind = i64}
+    maxon.assign %13 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.case2
+  cascade_0.cmp2:
+    %14 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %15 = maxon.literal {value = 3 : i64}
+    %16 = maxon.binop %14, %15 {op = eq} {kind = i64}
+    maxon.cond_br %16 [then: cascade_0.case2, else: cascade_0.case3]
+  cascade_0.case2:
+    %17 = maxon.literal {value = 30 : i64}
+    %18 = maxon.var_ref {var = result} {type = i64}
+    %19 = maxon.binop %18, %17 {op = add} {kind = i64}
+    maxon.assign %19 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.merge
+  cascade_0.case3:
+    %20 = maxon.literal {value = 100 : i64}
+    maxon.assign %20 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br cascade_0.merge
+  cascade_0.merge:
+    %21 = maxon.var_ref {var = result} {type = i64}
+    maxon.return %21
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %22 = arith.constant {value = 1 : i64}
+    memref.store %22, x
+    %23 = arith.constant {value = 0 : i64}
+    memref.store %23, result
+    memref.store %22, __match_cascade_0
+    cf.br cascade_0.cmp0
+  cascade_0.cmp0:
+    %24 = memref.load __match_cascade_0 : i64
+    %25 = arith.constant {value = 1 : i64}
+    %26 = arith.cmpi eq %24, %25
+    cf.cond_br %26 [then: cascade_0.case0, else: cascade_0.cmp1]
+  cascade_0.case0:
+    %27 = arith.constant {value = 10 : i64}
+    %28 = memref.load result : i64
+    %29 = arith.addi %28, %27
+    memref.store %29, result
+    cf.br cascade_0.case1
+  cascade_0.cmp1:
+    %30 = memref.load __match_cascade_0 : i64
+    %31 = arith.constant {value = 2 : i64}
+    %32 = arith.cmpi eq %30, %31
+    cf.cond_br %32 [then: cascade_0.case1, else: cascade_0.cmp2]
+  cascade_0.case1:
+    %33 = arith.constant {value = 20 : i64}
+    %34 = memref.load result : i64
+    %35 = arith.addi %34, %33
+    memref.store %35, result
+    cf.br cascade_0.case2
+  cascade_0.cmp2:
+    %36 = memref.load __match_cascade_0 : i64
+    %37 = arith.constant {value = 3 : i64}
+    %38 = arith.cmpi eq %36, %37
+    cf.cond_br %38 [then: cascade_0.case2, else: cascade_0.case3]
+  cascade_0.case2:
+    %39 = arith.constant {value = 30 : i64}
+    %40 = memref.load result : i64
+    %41 = arith.addi %40, %39
+    memref.store %41, result
+    cf.br cascade_0.merge
+  cascade_0.case3:
+    %42 = arith.constant {value = 100 : i64}
+    memref.store %42, result
+    cf.br cascade_0.merge
+  cascade_0.merge:
+    %43 = memref.load result : i64
+    func.return %43
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.cascade_0.cmp0
+  cascade_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.cmp1
+  cascade_0.case0:
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.case1
+  cascade_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.cmp2
+  cascade_0.case1:
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.case2
+  cascade_0.cmp2:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.jne main.cascade_0.case3
+  cascade_0.case2:
+    x86.mov eax, 30
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp main.cascade_0.merge
+  cascade_0.case3:
+    x86.mov eax, 100
+    x86.mov [rbp-16], eax
+    x86.jmp main.cascade_0.merge
+  cascade_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: match-expression-basic -->
+```maxon
+function main() returns int
+  var x = 2
+  let result = match x 'eval'
+    1 gives 10
+    2 gives 20
+    default gives 0
+  end 'eval'
+  return result
+end 'main'
+```
+```exitcode
+20
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 2 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = __matchexpr_eval_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_eval_0} {kind = i64} {decl = 1 : i1}
+    maxon.br eval_0.cmp0
+  eval_0.cmp0:
+    %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    maxon.cond_br %4 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %5 = maxon.literal {value = 10 : i64}
+    maxon.assign %5 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.cmp1:
+    %6 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %7 = maxon.literal {value = 2 : i64}
+    %8 = maxon.binop %6, %7 {op = eq} {kind = i64}
+    maxon.cond_br %8 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %9 = maxon.literal {value = 20 : i64}
+    maxon.assign %9 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.case2:
+    %10 = maxon.literal {value = 0 : i64}
+    maxon.assign %10 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.merge:
+    %11 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
+    maxon.assign %11 {var = result} {kind = i64} {decl = 1 : i1}
+    maxon.return %11
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %12 = arith.constant {value = 2 : i64}
+    memref.store %12, x
+    %13 = arith.constant {value = 0 : i64}
+    memref.store %13, __matchexpr_eval_0
+    memref.store %12, __match_eval_0
+    cf.br eval_0.cmp0
+  eval_0.cmp0:
+    %14 = memref.load __match_eval_0 : i64
+    %15 = arith.constant {value = 1 : i64}
+    %16 = arith.cmpi eq %14, %15
+    cf.cond_br %16 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %17 = arith.constant {value = 10 : i64}
+    memref.store %17, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.cmp1:
+    %18 = memref.load __match_eval_0 : i64
+    %19 = arith.constant {value = 2 : i64}
+    %20 = arith.cmpi eq %18, %19
+    cf.cond_br %20 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %21 = arith.constant {value = 20 : i64}
+    memref.store %21, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.case2:
+    %22 = arith.constant {value = 0 : i64}
+    memref.store %22, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.merge:
+    %23 = memref.load __matchexpr_eval_0 : i64
+    memref.store %23, result
+    func.return %23
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.eval_0.cmp0
+  eval_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.eval_0.cmp1
+  eval_0.case0:
+    x86.mov eax, 10
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.eval_0.case2
+  eval_0.case1:
+    x86.mov eax, 20
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-32], eax
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: match-expression-or-patterns -->
+```maxon
+function main() returns int
+  var x = 4
+  let result = match x 'eval'
+    1 or 2 gives 10
+    3 or 4 gives 20
+    default gives 0
+  end 'eval'
+  return result
+end 'main'
+```
+```exitcode
+20
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 4 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = __matchexpr_eval_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_eval_0} {kind = i64} {decl = 1 : i1}
+    maxon.br eval_0.cmp0
+  eval_0.cmp0:
+    %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    %5 = maxon.literal {value = 2 : i64}
+    %6 = maxon.binop %2, %5 {op = eq} {kind = i64}
+    %7 = maxon.binop %4, %6 {op = or} {kind = i1}
+    maxon.cond_br %7 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %8 = maxon.literal {value = 10 : i64}
+    maxon.assign %8 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.cmp1:
+    %9 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %10 = maxon.literal {value = 3 : i64}
+    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
+    %12 = maxon.literal {value = 4 : i64}
+    %13 = maxon.binop %9, %12 {op = eq} {kind = i64}
+    %14 = maxon.binop %11, %13 {op = or} {kind = i1}
+    maxon.cond_br %14 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %15 = maxon.literal {value = 20 : i64}
+    maxon.assign %15 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.case2:
+    %16 = maxon.literal {value = 0 : i64}
+    maxon.assign %16 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.merge:
+    %17 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
+    maxon.assign %17 {var = result} {kind = i64} {decl = 1 : i1}
+    maxon.return %17
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %18 = arith.constant {value = 4 : i64}
+    memref.store %18, x
+    %19 = arith.constant {value = 0 : i64}
+    memref.store %19, __matchexpr_eval_0
+    memref.store %18, __match_eval_0
+    cf.br eval_0.cmp0
+  eval_0.cmp0:
+    %20 = memref.load __match_eval_0 : i64
+    %21 = arith.constant {value = 1 : i64}
+    %22 = arith.cmpi eq %20, %21
+    %23 = arith.constant {value = 2 : i64}
+    %24 = arith.cmpi eq %20, %23
+    %25 = arith.ori1 %22, %24
+    cf.cond_br %25 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %26 = arith.constant {value = 10 : i64}
+    memref.store %26, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.cmp1:
+    %27 = memref.load __match_eval_0 : i64
+    %28 = arith.constant {value = 3 : i64}
+    %29 = arith.cmpi eq %27, %28
+    %30 = arith.constant {value = 4 : i64}
+    %31 = arith.cmpi eq %27, %30
+    %32 = arith.ori1 %29, %31
+    cf.cond_br %32 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %33 = arith.constant {value = 20 : i64}
+    memref.store %33, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.case2:
+    %34 = arith.constant {value = 0 : i64}
+    memref.store %34, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.merge:
+    %35 = memref.load __matchexpr_eval_0 : i64
+    memref.store %35, result
+    func.return %35
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 4
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.eval_0.cmp0
+  eval_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 2
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je main.eval_0.cmp1
+  eval_0.case0:
+    x86.mov eax, 10
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 4
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je main.eval_0.case2
+  eval_0.case1:
+    x86.mov eax, 20
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-32], eax
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: match-expression-in-arithmetic -->
+```maxon
+function main() returns int
+  var x = 2
+  let doubled = match x 'eval'
+    1 gives 10
+    2 gives 20
+    default gives 0
+  end 'eval' * 2
+  return doubled
+end 'main'
+```
+```exitcode
+40
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 2 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = __matchexpr_eval_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_eval_0} {kind = i64} {decl = 1 : i1}
+    maxon.br eval_0.cmp0
+  eval_0.cmp0:
+    %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    maxon.cond_br %4 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %5 = maxon.literal {value = 10 : i64}
+    maxon.assign %5 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.cmp1:
+    %6 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %7 = maxon.literal {value = 2 : i64}
+    %8 = maxon.binop %6, %7 {op = eq} {kind = i64}
+    maxon.cond_br %8 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %9 = maxon.literal {value = 20 : i64}
+    maxon.assign %9 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.case2:
+    %10 = maxon.literal {value = 0 : i64}
+    maxon.assign %10 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.merge:
+    %11 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
+    %12 = maxon.literal {value = 2 : i64}
+    %13 = maxon.binop %11, %12 {op = mul} {kind = i64}
+    maxon.assign %13 {var = doubled} {kind = i64} {decl = 1 : i1}
+    maxon.return %13
+  }
+}
+=== standard
+module {
+  func @main() -> i64 {
+  entry:
+    %14 = arith.constant {value = 2 : i64}
+    memref.store %14, x
+    %15 = arith.constant {value = 0 : i64}
+    memref.store %15, __matchexpr_eval_0
+    memref.store %14, __match_eval_0
+    cf.br eval_0.cmp0
+  eval_0.cmp0:
+    %16 = memref.load __match_eval_0 : i64
+    %17 = arith.constant {value = 1 : i64}
+    %18 = arith.cmpi eq %16, %17
+    cf.cond_br %18 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %19 = arith.constant {value = 10 : i64}
+    memref.store %19, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.cmp1:
+    %20 = memref.load __match_eval_0 : i64
+    %21 = arith.constant {value = 2 : i64}
+    %22 = arith.cmpi eq %20, %21
+    cf.cond_br %22 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %23 = arith.constant {value = 20 : i64}
+    memref.store %23, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.case2:
+    %24 = arith.constant {value = 0 : i64}
+    memref.store %24, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.merge:
+    %25 = memref.load __matchexpr_eval_0 : i64
+    %26 = arith.constant {value = 2 : i64}
+    %27 = arith.muli %25, %26
+    memref.store %27, doubled
+    func.return %27
+  }
+}
+=== x86
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.eval_0.cmp0
+  eval_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.eval_0.cmp1
+  eval_0.case0:
+    x86.mov eax, 10
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.eval_0.case2
+  eval_0.case1:
+    x86.mov eax, 20
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.merge
+  eval_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.imul eax, ecx
+    x86.mov [rbp-32], eax
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: match-statement-with-function-call -->
+```maxon
+function double(n int) returns int
+  return n * 2
+end 'double'
+
+function main() returns int
+  var x = 2
+  var result = 0
+  match x 'process'
+    1 then result = double(10)
+    2 then result = double(20)
+    default then result = 0
+  end 'process'
+  return result
+end 'main'
+```
+```exitcode
+40
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @double(n: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    %1 = maxon.literal {value = 2 : i64}
+    %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
+    maxon.return %2
+  }
+  func @main() -> i64 {
+  entry:
+    %3 = maxon.literal {value = 2 : i64}
+    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.assign %4 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = __match_process_0} {kind = i64} {decl = 1 : i1}
+    maxon.br process_0.cmp0
+  process_0.cmp0:
+    %5 = maxon.var_ref {var = __match_process_0} {type = i64}
+    %6 = maxon.literal {value = 1 : i64}
+    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
+    maxon.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
+  process_0.case0:
+    %8 = maxon.literal {value = 10 : i64}
+    %9 = maxon.call @double %8
+    maxon.assign %9 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.cmp1:
+    %10 = maxon.var_ref {var = __match_process_0} {type = i64}
+    %11 = maxon.literal {value = 2 : i64}
+    %12 = maxon.binop %10, %11 {op = eq} {kind = i64}
+    maxon.cond_br %12 [then: process_0.case1, else: process_0.case2]
+  process_0.case1:
+    %13 = maxon.literal {value = 20 : i64}
+    %14 = maxon.call @double %13
+    maxon.assign %14 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.case2:
+    %15 = maxon.literal {value = 0 : i64}
+    maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br process_0.merge
+  process_0.merge:
+    %16 = maxon.var_ref {var = result} {type = i64}
+    maxon.return %16
+  }
+}
+=== standard
+module {
+  func @double(n: i64) -> i64 {
+  entry:
+    %17 = func.param n : StdI64
+    memref.store %17, n
+    %18 = arith.constant {value = 2 : i64}
+    %19 = arith.muli %17, %18
+    func.return %19
+  }
+  func @main() -> i64 {
+  entry:
+    %20 = arith.constant {value = 2 : i64}
+    memref.store %20, x
+    %21 = arith.constant {value = 0 : i64}
+    memref.store %21, result
+    memref.store %20, __match_process_0
+    cf.br process_0.cmp0
+  process_0.cmp0:
+    %22 = memref.load __match_process_0 : i64
+    %23 = arith.constant {value = 1 : i64}
+    %24 = arith.cmpi eq %22, %23
+    cf.cond_br %24 [then: process_0.case0, else: process_0.cmp1]
+  process_0.case0:
+    %25 = arith.constant {value = 10 : i64}
+    %26 = func.call @double %25
+    memref.store %26, result
+    cf.br process_0.merge
+  process_0.cmp1:
+    %27 = memref.load __match_process_0 : i64
+    %28 = arith.constant {value = 2 : i64}
+    %29 = arith.cmpi eq %27, %28
+    cf.cond_br %29 [then: process_0.case1, else: process_0.case2]
+  process_0.case1:
+    %30 = arith.constant {value = 20 : i64}
+    %31 = func.call @double %30
+    memref.store %31, result
+    cf.br process_0.merge
+  process_0.case2:
+    %32 = arith.constant {value = 0 : i64}
+    memref.store %32, result
+    cf.br process_0.merge
+  process_0.merge:
+    %33 = memref.load result : i64
+    func.return %33
+  }
+}
+=== x86
+module {
+  func @double(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 2
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.process_0.cmp0
+  process_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.process_0.cmp1
+  process_0.case0:
+    x86.mov eax, 10
+    x86.mov ecx, eax
+    x86.call double
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.process_0.case2
+  process_0.case1:
+    x86.mov eax, 20
+    x86.mov ecx, eax
+    x86.call double
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
