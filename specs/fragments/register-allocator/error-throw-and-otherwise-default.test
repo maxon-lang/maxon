@@ -1,0 +1,139 @@
+// Test: error-throw-and-otherwise-default
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+  let val = try mayFail() otherwise 42
+  return val
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %0 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %0
+  }
+  func @main() -> i64 {
+  entry:
+    %3, %2 = maxon.try_call @mayFail
+    %4 = maxon.literal {value = 42 : i64}
+    maxon.assign %4 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %2, %5 {op = ne} {kind = i64}
+    maxon.cond_br %6 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %7 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %7 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %8 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %8 {var = val} {kind = i64} {decl = 1 : i1}
+    maxon.return %8
+  }
+}
+=== standard
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %9 = arith.constant {value = 0 : i64}
+    %10 = arith.constant {value = 1 : i64}
+    %11 = arith.addi %9, %10
+    func.error_return %11
+  }
+  func @main() -> i64 {
+  entry:
+    %12, %13 = func.try_call @mayFail
+    memref.store %13, __error_flag
+    %14 = arith.constant {value = 42 : i64}
+    memref.store %14, __try_default_1
+    memref.store %12, __try_result_0
+    %15 = arith.constant {value = 0 : i64}
+    %16 = arith.cmpi ne %13, %15
+    cf.cond_br %16 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %17 = memref.load __try_default_1 : i64
+    memref.store %17, __try_result_0
+    cf.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %18 = memref.load __try_result_0 : i64
+    memref.store %18, val
+    func.return %18
+  }
+}
+=== x86
+module {
+  func @mayFail() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.call mayFail
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @mayFail() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.call mayFail
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

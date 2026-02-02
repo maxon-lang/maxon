@@ -1,0 +1,93 @@
+// Test: error-otherwise-ignore
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+  try mayFail() otherwise ignore
+  return 42
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %0 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %0
+  }
+  func @main() -> i64 {
+  entry:
+    %3, %2 = maxon.try_call @mayFail
+    %4 = maxon.literal {value = 42 : i64}
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.constant {value = 1 : i64}
+    %7 = arith.addi %5, %6
+    func.error_return %7
+  }
+  func @main() -> i64 {
+  entry:
+    %8, %9 = func.try_call @mayFail
+    memref.store %9, __error_flag
+    %10 = arith.constant {value = 42 : i64}
+    func.return %10
+  }
+}
+=== x86
+module {
+  func @mayFail() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call mayFail
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @mayFail() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call mayFail
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

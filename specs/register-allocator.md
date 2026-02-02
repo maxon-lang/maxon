@@ -6261,3 +6261,866 @@ module {
   }
 }
 ```
+
+### Level 8: Error Handling
+
+<!-- test: error-otherwise-ignore -->
+```maxon
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+  try mayFail() otherwise ignore
+  return 42
+end 'main'
+```
+```exitcode
+42
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %0 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %0
+  }
+  func @main() -> i64 {
+  entry:
+    %3, %2 = maxon.try_call @mayFail
+    %4 = maxon.literal {value = 42 : i64}
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.constant {value = 1 : i64}
+    %7 = arith.addi %5, %6
+    func.error_return %7
+  }
+  func @main() -> i64 {
+  entry:
+    %8, %9 = func.try_call @mayFail
+    memref.store %9, __error_flag
+    %10 = arith.constant {value = 42 : i64}
+    func.return %10
+  }
+}
+=== x86
+module {
+  func @mayFail() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call mayFail
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: error-otherwise-block -->
+```maxon
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  try mayFail() otherwise 'err'
+    result = 42
+  end 'err'
+  return result
+end 'main'
+```
+```exitcode
+42
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %0 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %0
+  }
+  func @main() -> i64 {
+  entry:
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4, %3 = maxon.try_call @mayFail
+    maxon.assign %3 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %4 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %3, %5 {op = ne} {kind = i64}
+    maxon.cond_br %6 [then: otherwise_error_0, else: otherwise_continue_1]
+  otherwise_error_0:
+    %7 = maxon.literal {value = 42 : i64}
+    maxon.assign %7 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_continue_1
+  otherwise_continue_1:
+    %8 = maxon.var_ref {var = __try_result_3} {type = i64}
+    %9 = maxon.var_ref {var = result} {type = i64}
+    maxon.return %9
+  }
+}
+=== standard
+module {
+  func @mayFail() -> i64 {
+  entry:
+    %10 = arith.constant {value = 0 : i64}
+    %11 = arith.constant {value = 1 : i64}
+    %12 = arith.addi %10, %11
+    func.error_return %12
+  }
+  func @main() -> i64 {
+  entry:
+    %13 = arith.constant {value = 0 : i64}
+    memref.store %13, result
+    %14, %15 = func.try_call @mayFail
+    memref.store %15, __error_flag
+    memref.store %15, __try_error_2
+    memref.store %14, __try_result_3
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.cmpi ne %15, %16
+    cf.cond_br %17 [then: otherwise_error_0, else: otherwise_continue_1]
+  otherwise_error_0:
+    %18 = arith.constant {value = 42 : i64}
+    memref.store %18, result
+    cf.br otherwise_continue_1
+  otherwise_continue_1:
+    %19 = memref.load __try_result_3 : i64
+    %20 = memref.load result : i64
+    func.return %20
+  }
+}
+=== x86
+module {
+  func @mayFail() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.call mayFail
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.je main.otherwise_continue_1
+  otherwise_error_0:
+    x86.mov eax, 42
+    x86.mov [rbp-8], eax
+    x86.jmp main.otherwise_continue_1
+  otherwise_continue_1:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-8]
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: error-propagate-through-caller -->
+```maxon
+enum MyError is Error
+  failed
+end 'MyError'
+
+function inner() returns int throws MyError
+  throw MyError.failed
+end 'inner'
+
+function middle() returns int throws MyError
+  let x = try inner()
+  return x
+end 'middle'
+
+function main() returns int
+  let x = try middle() otherwise 99
+  return x
+end 'main'
+```
+```exitcode
+99
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @inner() -> i64 {
+  entry:
+    %0 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %0
+  }
+  func @middle() -> i64 {
+  entry:
+    %3, %2 = maxon.try_call @inner
+    maxon.assign %2 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 0 : i64}
+    %5 = maxon.binop %2, %4 {op = ne} {kind = i64}
+    maxon.cond_br %5 [then: propagate_error_0, else: try_continue_1]
+  propagate_error_0:
+    %6 = maxon.var_ref {var = __try_error_2} {type = i64}
+    maxon.return %6
+  try_continue_1:
+    %7 = maxon.var_ref {var = __try_result_3} {type = i64}
+    maxon.assign %7 {var = x} {kind = i64} {decl = 1 : i1}
+    maxon.return %7
+  }
+  func @main() -> i64 {
+  entry:
+    %10, %9 = maxon.try_call @middle
+    %11 = maxon.literal {value = 99 : i64}
+    maxon.assign %11 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %10 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %9, %12 {op = ne} {kind = i64}
+    maxon.cond_br %13 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %14 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %14 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %15 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %15 {var = x} {kind = i64} {decl = 1 : i1}
+    maxon.return %15
+  }
+}
+=== standard
+module {
+  func @inner() -> i64 {
+  entry:
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.constant {value = 1 : i64}
+    %18 = arith.addi %16, %17
+    func.error_return %18
+  }
+  func @middle() -> i64 {
+  entry:
+    %19, %20 = func.try_call @inner
+    memref.store %20, __error_flag
+    memref.store %20, __try_error_2
+    memref.store %19, __try_result_3
+    %21 = arith.constant {value = 0 : i64}
+    %22 = arith.cmpi ne %20, %21
+    cf.cond_br %22 [then: propagate_error_0, else: try_continue_1]
+  propagate_error_0:
+    %23 = memref.load __try_error_2 : i64
+    func.error_return %23
+  try_continue_1:
+    %24 = memref.load __try_result_3 : i64
+    memref.store %24, x
+    func.return %24
+  }
+  func @main() -> i64 {
+  entry:
+    %25, %26 = func.try_call @middle
+    memref.store %26, __error_flag
+    %27 = arith.constant {value = 99 : i64}
+    memref.store %27, __try_default_1
+    memref.store %25, __try_result_0
+    %28 = arith.constant {value = 0 : i64}
+    %29 = arith.cmpi ne %26, %28
+    cf.cond_br %29 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %30 = memref.load __try_default_1 : i64
+    memref.store %30, __try_result_0
+    cf.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %31 = memref.load __try_result_0 : i64
+    memref.store %31, x
+    func.return %31
+  }
+}
+=== x86
+module {
+  func @inner() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @middle() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.call inner
+    x86.mov [rbp-8], edx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je middle.try_continue_1
+  propagate_error_0:
+    x86.mov eax, [rbp-16]
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  try_continue_1:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.call middle
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 99
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: error-multiple-try-calls -->
+```maxon
+enum MyError is Error
+  failed
+end 'MyError'
+
+function getA() returns int throws MyError
+  return 10
+end 'getA'
+
+function getB() returns int throws MyError
+  return 20
+end 'getB'
+
+function getC() returns int throws MyError
+  throw MyError.failed
+end 'getC'
+
+function main() returns int
+  let a = try getA() otherwise 0
+  let b = try getB() otherwise 0
+  let c = try getC() otherwise 12
+  return a + b + c
+end 'main'
+```
+```exitcode
+42
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @getA() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.return %0
+  }
+  func @getB() -> i64 {
+  entry:
+    %1 = maxon.literal {value = 20 : i64}
+    maxon.return %1
+  }
+  func @getC() -> i64 {
+  entry:
+    %2 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %2
+  }
+  func @main() -> i64 {
+  entry:
+    %5, %4 = maxon.try_call @getA
+    %6 = maxon.literal {value = 0 : i64}
+    maxon.assign %6 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %5 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 0 : i64}
+    %8 = maxon.binop %4, %7 {op = ne} {kind = i64}
+    maxon.cond_br %8 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %9 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %9 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %10 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %10 {var = a} {kind = i64} {decl = 1 : i1}
+    %13, %12 = maxon.try_call @getB
+    %14 = maxon.literal {value = 0 : i64}
+    maxon.assign %14 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %15 = maxon.literal {value = 0 : i64}
+    %16 = maxon.binop %12, %15 {op = ne} {kind = i64}
+    maxon.cond_br %16 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %17 = maxon.var_ref {var = __try_default_5} {type = i64}
+    maxon.assign %17 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %18 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.assign %18 {var = b} {kind = i64} {decl = 1 : i1}
+    %21, %20 = maxon.try_call @getC
+    %22 = maxon.literal {value = 12 : i64}
+    maxon.assign %22 {var = __try_default_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %21 {var = __try_result_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %23 = maxon.literal {value = 0 : i64}
+    %24 = maxon.binop %20, %23 {op = ne} {kind = i64}
+    maxon.cond_br %24 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
+  otherwise_default_error_10:
+    %25 = maxon.var_ref {var = __try_default_9} {type = i64}
+    maxon.assign %25 {var = __try_result_8} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_11
+  otherwise_default_continue_11:
+    %26 = maxon.var_ref {var = __try_result_8} {type = i64}
+    maxon.assign %26 {var = c} {kind = i64} {decl = 1 : i1}
+    %27 = maxon.var_ref {var = a} {type = i64}
+    %28 = maxon.var_ref {var = b} {type = i64}
+    %29 = maxon.binop %27, %28 {op = add} {kind = i64}
+    %30 = maxon.binop %29, %26 {op = add} {kind = i64}
+    maxon.return %30
+  }
+}
+=== standard
+module {
+  func @getA() -> i64 {
+  entry:
+    %31 = arith.constant {value = 10 : i64}
+    func.return %31
+  }
+  func @getB() -> i64 {
+  entry:
+    %32 = arith.constant {value = 20 : i64}
+    func.return %32
+  }
+  func @getC() -> i64 {
+  entry:
+    %33 = arith.constant {value = 0 : i64}
+    %34 = arith.constant {value = 1 : i64}
+    %35 = arith.addi %33, %34
+    func.error_return %35
+  }
+  func @main() -> i64 {
+  entry:
+    %36, %37 = func.try_call @getA
+    memref.store %37, __error_flag
+    %38 = arith.constant {value = 0 : i64}
+    memref.store %38, __try_default_1
+    memref.store %36, __try_result_0
+    %39 = arith.constant {value = 0 : i64}
+    %40 = arith.cmpi ne %37, %39
+    cf.cond_br %40 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %41 = memref.load __try_default_1 : i64
+    memref.store %41, __try_result_0
+    cf.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %42 = memref.load __try_result_0 : i64
+    memref.store %42, a
+    %43, %44 = func.try_call @getB
+    memref.store %44, __error_flag
+    %45 = arith.constant {value = 0 : i64}
+    memref.store %45, __try_default_5
+    memref.store %43, __try_result_4
+    %46 = arith.constant {value = 0 : i64}
+    %47 = arith.cmpi ne %44, %46
+    cf.cond_br %47 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %48 = memref.load __try_default_5 : i64
+    memref.store %48, __try_result_4
+    cf.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %49 = memref.load __try_result_4 : i64
+    memref.store %49, b
+    %50, %51 = func.try_call @getC
+    memref.store %51, __error_flag
+    %52 = arith.constant {value = 12 : i64}
+    memref.store %52, __try_default_9
+    memref.store %50, __try_result_8
+    %53 = arith.constant {value = 0 : i64}
+    %54 = arith.cmpi ne %51, %53
+    cf.cond_br %54 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
+  otherwise_default_error_10:
+    %55 = memref.load __try_default_9 : i64
+    memref.store %55, __try_result_8
+    cf.br otherwise_default_continue_11
+  otherwise_default_continue_11:
+    %56 = memref.load __try_result_8 : i64
+    memref.store %56, c
+    %57 = memref.load a : i64
+    %58 = memref.load b : i64
+    %59 = arith.addi %57, %58
+    %60 = arith.addi %59, %56
+    func.return %60
+  }
+}
+=== x86
+module {
+  func @getA() -> i64 {
+  entry:
+    x86.mov eax, 10
+    x86.xor edx, edx
+    x86.ret
+  }
+  func @getB() -> i64 {
+  entry:
+    x86.mov eax, 20
+    x86.xor edx, edx
+    x86.ret
+  }
+  func @getC() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=80
+    x86.call getA
+    x86.mov [rbp-8], edx
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.call getB
+    x86.mov [rbp-8], edx
+    x86.xor ecx, ecx
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
+    x86.jmp main.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
+    x86.call getC
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 12
+    x86.mov [rbp-64], ecx
+    x86.mov [rbp-72], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_11
+  otherwise_default_error_10:
+    x86.mov eax, [rbp-64]
+    x86.mov [rbp-72], eax
+    x86.jmp main.otherwise_default_continue_11
+  otherwise_default_continue_11:
+    x86.mov eax, [rbp-72]
+    x86.mov [rbp-80], eax
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, [rbp-56]
+    x86.add ecx, edx
+    x86.add ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: error-throw-in-match -->
+```maxon
+enum MyError is Error
+  invalidInput
+  notFound
+end 'MyError'
+
+function lookup(key int) returns int throws MyError
+  match key 'dispatch'
+    1 then return 100
+    2 then return 200
+    default then throw MyError.notFound
+  end 'dispatch'
+end 'lookup'
+
+function main() returns int
+  let a = try lookup(2) otherwise 0
+  let b = try lookup(99) otherwise 42
+  return a + b mod 256
+end 'main'
+```
+```exitcode
+242
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @lookup(key: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = key} {type = i64}
+    maxon.assign %0 {var = __match_dispatch_0} {kind = i64} {decl = 1 : i1}
+    maxon.br dispatch_0.cmp0
+  dispatch_0.cmp0:
+    %1 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
+    maxon.cond_br %3 [then: dispatch_0.case0, else: dispatch_0.cmp1]
+  dispatch_0.case0:
+    %4 = maxon.literal {value = 100 : i64}
+    maxon.return %4
+  dispatch_0.cmp1:
+    %5 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
+    %6 = maxon.literal {value = 2 : i64}
+    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
+    maxon.cond_br %7 [then: dispatch_0.case1, else: dispatch_0.case2]
+  dispatch_0.case1:
+    %8 = maxon.literal {value = 200 : i64}
+    maxon.return %8
+  dispatch_0.case2:
+    %9 = maxon.enum_literal @MyError.notFound
+    maxon.throw @MyError %9
+  dispatch_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    %10 = maxon.literal {value = 2 : i64}
+    %13, %12 = maxon.try_call @lookup %10
+    %14 = maxon.literal {value = 0 : i64}
+    maxon.assign %14 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %15 = maxon.literal {value = 0 : i64}
+    %16 = maxon.binop %12, %15 {op = ne} {kind = i64}
+    maxon.cond_br %16 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %17 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %17 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %18 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
+    %19 = maxon.literal {value = 99 : i64}
+    %22, %21 = maxon.try_call @lookup %19
+    %23 = maxon.literal {value = 42 : i64}
+    maxon.assign %23 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %22 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %24 = maxon.literal {value = 0 : i64}
+    %25 = maxon.binop %21, %24 {op = ne} {kind = i64}
+    maxon.cond_br %25 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %26 = maxon.var_ref {var = __try_default_5} {type = i64}
+    maxon.assign %26 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %27 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.assign %27 {var = b} {kind = i64} {decl = 1 : i1}
+    %28 = maxon.literal {value = 256 : i64}
+    %29 = maxon.binop %27, %28 {op = mod} {kind = i64}
+    %30 = maxon.var_ref {var = a} {type = i64}
+    %31 = maxon.binop %30, %29 {op = add} {kind = i64}
+    maxon.return %31
+  }
+}
+=== standard
+module {
+  func @lookup(key: i64) -> i64 {
+  entry:
+    %32 = func.param key : StdI64
+    memref.store %32, key
+    memref.store %32, __match_dispatch_0
+    cf.br dispatch_0.cmp0
+  dispatch_0.cmp0:
+    %33 = memref.load __match_dispatch_0 : i64
+    %34 = arith.constant {value = 1 : i64}
+    %35 = arith.cmpi eq %33, %34
+    cf.cond_br %35 [then: dispatch_0.case0, else: dispatch_0.cmp1]
+  dispatch_0.case0:
+    %36 = arith.constant {value = 100 : i64}
+    func.return %36
+  dispatch_0.cmp1:
+    %37 = memref.load __match_dispatch_0 : i64
+    %38 = arith.constant {value = 2 : i64}
+    %39 = arith.cmpi eq %37, %38
+    cf.cond_br %39 [then: dispatch_0.case1, else: dispatch_0.case2]
+  dispatch_0.case1:
+    %40 = arith.constant {value = 200 : i64}
+    func.return %40
+  dispatch_0.case2:
+    %41 = arith.constant {value = 1 : i64}
+    %42 = arith.constant {value = 1 : i64}
+    %43 = arith.addi %41, %42
+    func.error_return %43
+  dispatch_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    %44 = arith.constant {value = 2 : i64}
+    %45, %46 = func.try_call @lookup %44
+    memref.store %46, __error_flag
+    %47 = arith.constant {value = 0 : i64}
+    memref.store %47, __try_default_1
+    memref.store %45, __try_result_0
+    %48 = arith.constant {value = 0 : i64}
+    %49 = arith.cmpi ne %46, %48
+    cf.cond_br %49 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %50 = memref.load __try_default_1 : i64
+    memref.store %50, __try_result_0
+    cf.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %51 = memref.load __try_result_0 : i64
+    memref.store %51, a
+    %52 = arith.constant {value = 99 : i64}
+    %53, %54 = func.try_call @lookup %52
+    memref.store %54, __error_flag
+    %55 = arith.constant {value = 42 : i64}
+    memref.store %55, __try_default_5
+    memref.store %53, __try_result_4
+    %56 = arith.constant {value = 0 : i64}
+    %57 = arith.cmpi ne %54, %56
+    cf.cond_br %57 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %58 = memref.load __try_default_5 : i64
+    memref.store %58, __try_result_4
+    cf.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %59 = memref.load __try_result_4 : i64
+    memref.store %59, b
+    %60 = arith.constant {value = 256 : i64}
+    %61 = arith.remsi %59, %60
+    %62 = memref.load a : i64
+    %63 = arith.addi %62, %61
+    func.return %63
+  }
+}
+=== x86
+module {
+  func @lookup(key: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp lookup.dispatch_0.cmp0
+  dispatch_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne lookup.dispatch_0.cmp1
+  dispatch_0.case0:
+    x86.mov eax, 100
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  dispatch_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne lookup.dispatch_0.case2
+  dispatch_0.case1:
+    x86.mov eax, 200
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  dispatch_0.case2:
+    x86.mov eax, 1
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  dispatch_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov eax, 2
+    x86.mov ecx, eax
+    x86.call lookup
+    x86.mov [rbp-8], edx
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov ecx, 99
+    x86.call lookup
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
+    x86.jmp main.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
+    x86.mov ecx, 256
+    x86.cqo
+    x86.idiv ecx
+    x86.mov eax, [rbp-32]
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+```

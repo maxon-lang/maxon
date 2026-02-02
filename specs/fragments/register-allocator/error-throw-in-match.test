@@ -1,0 +1,329 @@
+// Test: error-throw-in-match
+enum MyError is Error
+  invalidInput
+  notFound
+end 'MyError'
+
+function lookup(key int) returns int throws MyError
+  match key 'dispatch'
+    1 then return 100
+    2 then return 200
+    default then throw MyError.notFound
+  end 'dispatch'
+end 'lookup'
+
+function main() returns int
+  let a = try lookup(2) otherwise 0
+  let b = try lookup(99) otherwise 42
+  return a + b mod 256
+end 'main'
+---
+ExitCode: 242
+RequiredMLIR: ```
+=== maxon
+module {
+  func @lookup(key: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = key} {type = i64}
+    maxon.assign %0 {var = __match_dispatch_0} {kind = i64} {decl = 1 : i1}
+    maxon.br dispatch_0.cmp0
+  dispatch_0.cmp0:
+    %1 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
+    maxon.cond_br %3 [then: dispatch_0.case0, else: dispatch_0.cmp1]
+  dispatch_0.case0:
+    %4 = maxon.literal {value = 100 : i64}
+    maxon.return %4
+  dispatch_0.cmp1:
+    %5 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
+    %6 = maxon.literal {value = 2 : i64}
+    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
+    maxon.cond_br %7 [then: dispatch_0.case1, else: dispatch_0.case2]
+  dispatch_0.case1:
+    %8 = maxon.literal {value = 200 : i64}
+    maxon.return %8
+  dispatch_0.case2:
+    %9 = maxon.enum_literal @MyError.notFound
+    maxon.throw @MyError %9
+  dispatch_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    %10 = maxon.literal {value = 2 : i64}
+    %13, %12 = maxon.try_call @lookup %10
+    %14 = maxon.literal {value = 0 : i64}
+    maxon.assign %14 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %15 = maxon.literal {value = 0 : i64}
+    %16 = maxon.binop %12, %15 {op = ne} {kind = i64}
+    maxon.cond_br %16 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %17 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %17 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %18 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
+    %19 = maxon.literal {value = 99 : i64}
+    %22, %21 = maxon.try_call @lookup %19
+    %23 = maxon.literal {value = 42 : i64}
+    maxon.assign %23 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %22 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %24 = maxon.literal {value = 0 : i64}
+    %25 = maxon.binop %21, %24 {op = ne} {kind = i64}
+    maxon.cond_br %25 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %26 = maxon.var_ref {var = __try_default_5} {type = i64}
+    maxon.assign %26 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %27 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.assign %27 {var = b} {kind = i64} {decl = 1 : i1}
+    %28 = maxon.literal {value = 256 : i64}
+    %29 = maxon.binop %27, %28 {op = mod} {kind = i64}
+    %30 = maxon.var_ref {var = a} {type = i64}
+    %31 = maxon.binop %30, %29 {op = add} {kind = i64}
+    maxon.return %31
+  }
+}
+=== standard
+module {
+  func @lookup(key: i64) -> i64 {
+  entry:
+    %32 = func.param key : StdI64
+    memref.store %32, key
+    memref.store %32, __match_dispatch_0
+    cf.br dispatch_0.cmp0
+  dispatch_0.cmp0:
+    %33 = memref.load __match_dispatch_0 : i64
+    %34 = arith.constant {value = 1 : i64}
+    %35 = arith.cmpi eq %33, %34
+    cf.cond_br %35 [then: dispatch_0.case0, else: dispatch_0.cmp1]
+  dispatch_0.case0:
+    %36 = arith.constant {value = 100 : i64}
+    func.return %36
+  dispatch_0.cmp1:
+    %37 = memref.load __match_dispatch_0 : i64
+    %38 = arith.constant {value = 2 : i64}
+    %39 = arith.cmpi eq %37, %38
+    cf.cond_br %39 [then: dispatch_0.case1, else: dispatch_0.case2]
+  dispatch_0.case1:
+    %40 = arith.constant {value = 200 : i64}
+    func.return %40
+  dispatch_0.case2:
+    %41 = arith.constant {value = 1 : i64}
+    %42 = arith.constant {value = 1 : i64}
+    %43 = arith.addi %41, %42
+    func.error_return %43
+  dispatch_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    %44 = arith.constant {value = 2 : i64}
+    %45, %46 = func.try_call @lookup %44
+    memref.store %46, __error_flag
+    %47 = arith.constant {value = 0 : i64}
+    memref.store %47, __try_default_1
+    memref.store %45, __try_result_0
+    %48 = arith.constant {value = 0 : i64}
+    %49 = arith.cmpi ne %46, %48
+    cf.cond_br %49 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %50 = memref.load __try_default_1 : i64
+    memref.store %50, __try_result_0
+    cf.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %51 = memref.load __try_result_0 : i64
+    memref.store %51, a
+    %52 = arith.constant {value = 99 : i64}
+    %53, %54 = func.try_call @lookup %52
+    memref.store %54, __error_flag
+    %55 = arith.constant {value = 42 : i64}
+    memref.store %55, __try_default_5
+    memref.store %53, __try_result_4
+    %56 = arith.constant {value = 0 : i64}
+    %57 = arith.cmpi ne %54, %56
+    cf.cond_br %57 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %58 = memref.load __try_default_5 : i64
+    memref.store %58, __try_result_4
+    cf.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %59 = memref.load __try_result_4 : i64
+    memref.store %59, b
+    %60 = arith.constant {value = 256 : i64}
+    %61 = arith.remsi %59, %60
+    %62 = memref.load a : i64
+    %63 = arith.addi %62, %61
+    func.return %63
+  }
+}
+=== x86
+module {
+  func @lookup(key: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp lookup.dispatch_0.cmp0
+  dispatch_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne lookup.dispatch_0.cmp1
+  dispatch_0.case0:
+    x86.mov eax, 100
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  dispatch_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne lookup.dispatch_0.case2
+  dispatch_0.case1:
+    x86.mov eax, 200
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  dispatch_0.case2:
+    x86.mov eax, 1
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  dispatch_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov eax, 2
+    x86.mov ecx, eax
+    x86.call lookup
+    x86.mov [rbp-8], edx
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov ecx, 99
+    x86.call lookup
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
+    x86.jmp main.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
+    x86.mov ecx, 256
+    x86.cqo
+    x86.idiv ecx
+    x86.mov eax, [rbp-32]
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+module {
+  func @lookup(key: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp lookup.dispatch_0.cmp0
+  dispatch_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne lookup.dispatch_0.cmp1
+  dispatch_0.case0:
+    x86.mov eax, 100
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  dispatch_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne lookup.dispatch_0.case2
+  dispatch_0.case1:
+    x86.mov eax, 200
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  dispatch_0.case2:
+    x86.mov eax, 1
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  dispatch_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov eax, 2
+    x86.mov ecx, eax
+    x86.call lookup
+    x86.mov [rbp-8], edx
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov ecx, 99
+    x86.call lookup
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 42
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
+    x86.jmp main.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
+    x86.mov ecx, 256
+    x86.cqo
+    x86.idiv ecx
+    x86.mov eax, [rbp-32]
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+---
