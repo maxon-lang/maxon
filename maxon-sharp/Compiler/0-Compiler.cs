@@ -48,7 +48,7 @@ public class Compiler {
       foreach (var source in stdlibSources) {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module);
+        var parser = new Parser(tokens, module, isStdlib: true);
         var parsed = parser.Parse();
         module.Merge(parsed);
       }
@@ -102,6 +102,7 @@ public static class StdlibLoader {
   private static readonly string[] WhitelistedModules = [
     "Interfaces.maxon",
     "Array.maxon",
+    "Vector.maxon",
     "Math.maxon",
     "Pair.maxon"
   ];

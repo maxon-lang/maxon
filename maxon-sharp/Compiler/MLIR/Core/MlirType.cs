@@ -29,11 +29,15 @@ public class MlirStructType : MlirType {
   public List<MlirStructField> Fields { get; }
   public List<string> AssociatedTypeNames { get; }
   public List<string> ConformingInterfaces { get; }
+  public Dictionary<string, long> ConstParams { get; }
+  public Dictionary<string, MlirType> TypeParams { get; }
 
-  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null) : base(name, ComputeSize(fields)) {
+  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null) : base(name, ComputeSize(fields)) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];
     ConformingInterfaces = conformingInterfaces ?? [];
+    ConstParams = constParams ?? [];
+    TypeParams = typeParams ?? [];
     int offset = 0;
     foreach (var field in Fields) {
       field.Offset = offset;

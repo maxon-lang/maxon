@@ -35,8 +35,8 @@ public static class MaxonToStandardConversion {
         newParamTypes.Add(MlirType.I64);
       }
 
-      // Map from original param index to flattened param indices
-      var paramIndexMap = new Dictionary<int, List<(int flatIndex, MlirStructField field)>>();
+      // Map from original param index to flattened scalar params (with full path for nested structs)
+      var paramIndexMap = new Dictionary<int, List<(int flatIndex, string path, MlirType scalarType)>>();
       int flatIdx = newParamNames.Count;
 
       for (int i = 0; i < func.ParamNames.Count; i++) {
@@ -59,14 +59,9 @@ public static class MaxonToStandardConversion {
           newParamTypes.Add(backingMlirType);
           flatIdx++;
         } else if (func.ParamTypes[i] is MlirStructType structType) {
-          var fieldIndices = new List<(int, MlirStructField)>();
-          foreach (var field in structType.Fields) {
-            newParamNames.Add($"{func.ParamNames[i]}.{field.Name}");
-            newParamTypes.Add(field.Type);
-            fieldIndices.Add((flatIdx, field));
-            flatIdx++;
-          }
-          paramIndexMap[i] = fieldIndices;
+          var scalarParams = new List<(int, string, MlirType)>();
+          FlattenStructParams(func.ParamNames[i], structType, scalarParams, newParamNames, newParamTypes, ref flatIdx);
+          paramIndexMap[i] = scalarParams;
         } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(func.ParamTypes[i]);
@@ -94,47 +89,8 @@ public static class MaxonToStandardConversion {
       // Maps variable names to their resolved struct prefix (for cross-block references)
       var varNameToStructPrefix = new Dictionary<string, string>();
 
-      // Pre-scan: find constant array literals (arrays with all-literal elements).
-      // Both let and var arrays get rdata; var arrays additionally copy to heap (COW).
-      var constantArrayLiterals = new Dictionary<int, (string rdataLabel, long[] values, bool isMutable)>();
-      foreach (var block in func.Body.Blocks) {
-        // Collect MaxonLiteralOp results and MaxonStructLiteralOp results
-        var literalValues = new Dictionary<int, long>();
-        var structLiterals = new Dictionary<int, MaxonStructLiteralOp>();
-        foreach (var op in block.Operations) {
-          if (op is MaxonLiteralOp lit && lit.ValueKind == MaxonValueKind.Integer)
-            literalValues[lit.Result.Id] = lit.IntValue;
-          if (op is MaxonStructLiteralOp slit)
-            structLiterals[slit.Result.Id] = slit;
-        }
-        // Find array assigns with all-constant elements (both let and var)
-        foreach (var op in block.Operations) {
-          if (op is not MaxonAssignOp { ValueKind: MaxonValueKind.Struct } assignOp) continue;
-          if (!structLiterals.TryGetValue(assignOp.Value.Id, out var arrayStructLit)) continue;
-          if (arrayStructLit.TypeName != "Array" || arrayStructLit.ArrayLiteralTag == null) continue;
-
-          var tag = arrayStructLit.ArrayLiteralTag;
-          int count = arrayStructLit.ArrayLiteralCount;
-          // Collect element values from the element assign ops
-          var elementValues = new long[count];
-          bool allConstant = true;
-          foreach (var elemOp in block.Operations) {
-            if (elemOp is not MaxonAssignOp elemAssign) continue;
-            if (!elemAssign.VarName.StartsWith($"{tag}.")) continue;
-            var indexStr = elemAssign.VarName[($"{tag}.".Length)..];
-            if (!int.TryParse(indexStr, out var idx)) continue;
-            if (!literalValues.TryGetValue(elemAssign.Value.Id, out var val)) {
-              allConstant = false;
-              break;
-            }
-            elementValues[idx] = val;
-          }
-          if (allConstant) {
-            var rdataLabel = $"__const_array_{assignOp.VarName}";
-            constantArrayLiterals[arrayStructLit.Result.Id] = (rdataLabel, elementValues, assignOp.IsMutable);
-          }
-        }
-      }
+      // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
+      // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
 
       bool sretParamEmitted = false;
       foreach (var block in func.Body.Blocks) {
@@ -174,13 +130,12 @@ public static class MaxonToStandardConversion {
                 LoadStructFieldsFromPointer(newBlock, selfPtrVal, "self", selfStructType!, varTypes);
                 structVarNames[structParamOp.Result.Id] = "self";
               } else {
-                // Non-self struct param: flattened to individual scalar params.
-                var fieldMappings = paramIndexMap[structParamOp.Index];
-                foreach (var (paramFlatIdx, field) in fieldMappings) {
-                  var fieldVarName = $"{structParamOp.Name}.{field.Name}";
-                  var fieldResult = StdValueFactory.CreateStdValueForType(field.Type);
-                  newBlock.AddOp(new StdParamOp(paramFlatIdx, fieldVarName, fieldResult));
-                  EmitStore(newBlock, fieldResult, fieldVarName, varTypes);
+                // Non-self struct param: flattened to individual scalar params (recursively for nested structs)
+                var scalarMappings = paramIndexMap[structParamOp.Index];
+                foreach (var (paramFlatIdx, fieldPath, scalarType) in scalarMappings) {
+                  var fieldResult = StdValueFactory.CreateStdValueForType(scalarType);
+                  newBlock.AddOp(new StdParamOp(paramFlatIdx, fieldPath, fieldResult));
+                  EmitStore(newBlock, fieldResult, fieldPath, varTypes);
                 }
                 structVarNames[structParamOp.Result.Id] = structParamOp.Name;
               }
@@ -276,28 +231,30 @@ public static class MaxonToStandardConversion {
                 }
               }
 
-              // For array literals, patch the buffer field to point to element data
-              if (structLitOp.ArrayLiteralTag != null && structLitOp.TypeName == "Array") {
-                var managedName = $"{tempName}.managed";
-                var bufferVarName = $"{managedName}.buffer";
+              // For array/vector literals, patch the buffer field to point to element data
+              if (structLitOp.ArrayLiteralTag != null) {
+                // __ManagedMemory structs have buffer directly; outer structs (Array, Vector) nest it under .managed
+                var bufferVarName = structLitOp.TypeName == "__ManagedMemory"
+                  ? $"{tempName}.buffer"
+                  : $"{tempName}.managed.buffer";
 
-                if (constantArrayLiterals.TryGetValue(structLitOp.Result.Id, out var constArrayInfo)) {
+                if (module.ConstantArrayLiterals.TryGetValue(structLitOp.Result.Id, out var constArrayInfo)) {
                   // Constant array: store element data in .rdata
-                  var rdataBytes = new byte[constArrayInfo.values.Length * 8];
-                  for (int i = 0; i < constArrayInfo.values.Length; i++) {
-                    BitConverter.GetBytes(constArrayInfo.values[i]).CopyTo(rdataBytes, i * 8);
+                  var rdataBytes = new byte[constArrayInfo.Values.Length * 8];
+                  for (int i = 0; i < constArrayInfo.Values.Length; i++) {
+                    BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * 8);
                   }
-                  result.RdataEntries.Add((constArrayInfo.rdataLabel, rdataBytes, 8));
+                  result.RdataEntries.Add((constArrayInfo.RdataLabel, rdataBytes, 8));
 
-                  var leaRdataOp = new StdLeaRdataOp(constArrayInfo.rdataLabel);
+                  var leaRdataOp = new StdLeaRdataOp(constArrayInfo.RdataLabel);
                   newBlock.AddOp(leaRdataOp);
                   var rdataPtrOp = new StdPtrToI64Op(leaRdataOp.Result);
                   newBlock.AddOp(rdataPtrOp);
 
-                  if (constArrayInfo.isMutable) {
+                  if (constArrayInfo.IsMutable) {
                     // COW: allocate heap buffer and copy rdata contents into it
                     // Store rdata ptr and reload after call (call clobbers registers)
-                    var rdataPtrVar = $"__cow_rdata_{constArrayInfo.rdataLabel}";
+                    var rdataPtrVar = $"__cow_rdata_{constArrayInfo.RdataLabel}";
                     newBlock.AddOp(new StdStoreI64Op(rdataPtrOp.Result, rdataPtrVar));
                     varTypes[rdataPtrVar] = "i64";
 
@@ -758,11 +715,8 @@ public static class MaxonToStandardConversion {
       } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirStructType argStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
-        foreach (var field in argStructType.Fields) {
-          var fieldVarName = $"{argStructName}.{field.Name}";
-          var loaded = EmitLoad(block, fieldVarName, varTypes);
-          newArgs.Add(loaded);
-        }
+        // Recursively flatten struct args (including nested structs)
+        LoadFlattenedStructArgs(block, argStructName, argStructType, newArgs, varTypes);
       } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
         newArgs.Add(valueMap[arg]);
       } else {
@@ -770,6 +724,26 @@ public static class MaxonToStandardConversion {
       }
     }
     return selfBufName;
+  }
+
+  /// <summary>
+  /// Recursively load struct fields as call arguments, flattening nested structs.
+  /// </summary>
+  private static void LoadFlattenedStructArgs(
+      MlirBlock<StandardOp> block,
+      string basePath,
+      MlirStructType structType,
+      List<StdValue> args,
+      Dictionary<string, string> varTypes) {
+    foreach (var field in structType.Fields) {
+      var fieldVarName = $"{basePath}.{field.Name}";
+      if (field.Type is MlirStructType nestedStruct) {
+        LoadFlattenedStructArgs(block, fieldVarName, nestedStruct, args, varTypes);
+      } else {
+        var loaded = EmitLoad(block, fieldVarName, varTypes);
+        args.Add(loaded);
+      }
+    }
   }
 
   /// <summary>
@@ -1150,8 +1124,9 @@ public static class MaxonToStandardConversion {
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var index = (StdI64)valueMap[op.Index];
     var addr = ComputeElementAddress(block, buffer, index, op.ElementSize);
-    // Load from computed address: treat as indirect load from base=addr, offset=0
-    var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
+    // Determine type based on result kind (F64 for floats, I64 for integers/bools)
+    var elemType = op.ResultKind == MaxonValueKind.Float ? MlirType.F64 : MlirType.I64;
+    var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
     block.AddOp(loadOp);
     valueMap[op.Result] = loadOp.Result;
   }
@@ -1170,8 +1145,9 @@ public static class MaxonToStandardConversion {
     var index = (StdI64)valueMap[op.Index];
     var value = valueMap[op.Value];
     var addr = ComputeElementAddress(block, buffer, index, op.ElementSize);
-    // Store to computed address
-    block.AddOp(new StdStoreIndirectOp(value, addr, 0, MlirType.I64));
+    // Use ElementKind from the op to determine type
+    var elemType = op.ElementKind == MaxonValueKind.Float ? MlirType.F64 : MlirType.I64;
+    block.AddOp(new StdStoreIndirectOp(value, addr, 0, elemType));
   }
 
   /// <summary>
@@ -1341,5 +1317,31 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.Or, MaxonValueKind.Bool), (l, r) => { var op = new StdOrI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
     { (MaxonBinOperator.BitXor, MaxonValueKind.Bool), (l, r) => { var op = new StdXorI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
   };
+
+  /// <summary>
+  /// Recursively flattens a struct type into scalar parameters.
+  /// Handles nested structs by expanding them to their leaf scalar fields.
+  /// </summary>
+  private static void FlattenStructParams(
+      string basePath,
+      MlirStructType structType,
+      List<(int flatIndex, string path, MlirType scalarType)> scalarParams,
+      List<string> newParamNames,
+      List<MlirType> newParamTypes,
+      ref int flatIdx) {
+    foreach (var field in structType.Fields) {
+      var fieldPath = $"{basePath}.{field.Name}";
+      if (field.Type is MlirStructType nestedStruct) {
+        // Recurse into nested struct
+        FlattenStructParams(fieldPath, nestedStruct, scalarParams, newParamNames, newParamTypes, ref flatIdx);
+      } else {
+        // Scalar field - add it directly
+        newParamNames.Add(fieldPath);
+        newParamTypes.Add(field.Type);
+        scalarParams.Add((flatIdx, fieldPath, field.Type));
+        flatIdx++;
+      }
+    }
+  }
 
 }

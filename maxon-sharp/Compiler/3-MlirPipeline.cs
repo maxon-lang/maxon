@@ -17,6 +17,12 @@ public class MlirPipeline {
     // Semantic checks
     SemanticCheckPass.Run(module);
 
+    // Monomorphize generic type methods for concrete aliases
+    MonomorphizationPass.Run(module);
+
+    // Analyze constant array literals for .rdata placement (after monomorphization)
+    ConstantArrayAnalysisPass.Run(module);
+
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {

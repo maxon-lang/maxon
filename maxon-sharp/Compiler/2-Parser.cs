@@ -4,8 +4,9 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) {
+public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false) {
   private readonly List<Token> _tokens = tokens;
+  private readonly bool _isStdlib = isStdlib;
   private int _pos;
 
   private MlirModule<MaxonOp>? _currentModule;
@@ -36,6 +37,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
   // Type alias source tracking (aliasName -> sourceTypeName)
   private readonly Dictionary<string, string> _typeAliasSources = [];
+
+  // Element-polymorphic parameter tracking (funcName -> set of param indices that are Element type)
+  // Also tracks return type: index -1 means return type is Element-polymorphic
+  private readonly Dictionary<string, HashSet<int>> _elementPolymorphicParams = [];
 
   /// <summary>
   /// Resolves a qualified method name, falling back to the source type for type aliases.
@@ -125,6 +130,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       foreach (var (name, defaults) in seedModule.FunctionDefaults) {
         _functionDefaults.TryAdd(name, defaults);
       }
+      foreach (var (name, params_) in seedModule.ElementPolymorphicParams) {
+        _elementPolymorphicParams.TryAdd(name, params_);
+      }
     }
 
     // Pre-scan to collect and evaluate top-level constants and global variables
@@ -142,6 +150,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
     foreach (var (name, defaults) in _functionDefaults) {
       module.FunctionDefaults.TryAdd(name, defaults);
+    }
+    foreach (var (name, params_) in _elementPolymorphicParams) {
+      module.ElementPolymorphicParams.TryAdd(name, params_);
+    }
+    // Propagate type alias sources to module for monomorphization
+    foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
+      // Get TypeParams from the registered struct type if it exists
+      Dictionary<string, MlirType>? typeParams = null;
+      if (_typeRegistry.TryGetValue(aliasName, out var aliasType) && aliasType is MlirStructType st) {
+        typeParams = st.TypeParams.Count > 0 ? new Dictionary<string, MlirType>(st.TypeParams) : null;
+      }
+      module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams);
     }
 
     Logger.Debug(LogCategory.Parser, $"Parser complete: {module.Functions.Count} functions");
@@ -360,6 +380,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     var associatedTypeNames = ParseUsesClause();
     var conformingInterfaces = ParseConformanceClause();
 
+    // Builtin* interfaces are reserved for stdlib types
+    if (!_isStdlib) {
+      var builtinInterface = conformingInterfaces.FirstOrDefault(i => i.StartsWith("Builtin"));
+      if (builtinInterface != null)
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Interface '{builtinInterface}' can only be implemented by stdlib types",
+          typeNameToken.Line, typeNameToken.Column);
+    }
+
     SkipNewlines();
 
     var fields = new List<MlirStructField>();
@@ -396,6 +425,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
       if (Check(TokenType.Function)) {
         PreScanInstanceMethod(module, typeName);
+        SkipNewlines();
+        continue;
+      }
+
+      // Internal typealias declaration (e.g., typealias ElementArray is Array with Element)
+      if (Check(TokenType.TypeAlias)) {
+        PreScanTypeAlias();
         SkipNewlines();
         continue;
       }
@@ -552,6 +588,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   /// <summary>
   /// Pre-scan a typealias declaration: typealias Name is SourceType with (Type1, Type2, ...)
   /// Creates a concrete struct type by substituting associated type parameters.
+  /// Also supports "with N Type" form where N is an integer capacity hint (e.g., Vector with 3 int).
   /// </summary>
   private void PreScanTypeAlias() {
     Advance(); // consume 'typealias'
@@ -573,6 +610,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     Expect(TokenType.With);
 
     var concreteTypes = new List<MlirType>();
+    var constParams = new Dictionary<string, long>();
+
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
       concreteTypes.Add(ParseTypeRef());
@@ -582,6 +621,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       }
       Expect(TokenType.RightParen);
     } else {
+      // Check for "with N Type" form: integer followed by type
+      if (Check(TokenType.IntegerLiteral)) {
+        var intToken = Advance();
+        constParams["__capacity"] = ParseIntegerLiteral(intToken);
+      }
       concreteTypes.Add(ParseTypeRef());
     }
 
@@ -596,7 +640,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       substitution[sourceStruct.AssociatedTypeNames[i]] = concreteTypes[i];
     }
 
-    // Create concrete fields with substituted types
+    RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution,
+      constParams.Count > 0 ? constParams : null);
+  }
+
+  private void RegisterConcreteTypeAlias(
+      string aliasName,
+      string sourceName,
+      MlirStructType sourceStruct,
+      Dictionary<string, MlirType> substitution,
+      Dictionary<string, long>? constParams = null) {
     var concreteFields = new List<MlirStructField>();
     foreach (var field in sourceStruct.Fields) {
       var fieldType = substitution.TryGetValue(field.Type.Name, out var concreteType)
@@ -604,8 +657,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         : field.Type;
       concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
     }
-
-    _typeRegistry[aliasName] = new MlirStructType(aliasName, concreteFields);
+    _typeRegistry[aliasName] = new MlirStructType(aliasName, concreteFields,
+      conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
+      constParams: constParams,
+      typeParams: substitution.Count > 0 ? substitution : null);
     _typeAliasSources[aliasName] = sourceName;
   }
 
@@ -633,15 +688,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     // Instance method gets 'self' as first parameter
     var structType = _typeRegistry[typeName];
 
-    // Replace associated type references with I64 (e.g., Element → I64)
-    if (structType is MlirStructType st) {
+    // Track element-polymorphic parameters BEFORE replacing with I64
+    var elementParams = new HashSet<int>();
+    if (structType is MlirStructType st && st.AssociatedTypeNames.Count > 0) {
+      // Check return type (index -1)
       if (returnType is MlirStructType retSt && st.AssociatedTypeNames.Contains(retSt.Name)) {
+        elementParams.Add(-1);
         returnType = MlirType.I64;
       }
+      // Check parameters (offset by 1 for 'self')
       for (int i = 0; i < paramTypes.Count; i++) {
         if (paramTypes[i] is MlirStructType paramSt && st.AssociatedTypeNames.Contains(paramSt.Name)) {
+          elementParams.Add(i + 1); // +1 for 'self' at index 0
           paramTypes[i] = MlirType.I64;
         }
+      }
+      if (elementParams.Count > 0) {
+        _elementPolymorphicParams[methodName] = elementParams;
       }
     }
 
@@ -1001,6 +1064,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         continue;
       }
 
+      // Internal typealias declaration - already handled in prescan, skip
+      if (Check(TokenType.TypeAlias)) {
+        SkipTypeAlias();
+        SkipNewlines();
+        continue;
+      }
+
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected 'var' or 'let' in field declaration, got '{Current().Value}'", Current().Line, Current().Column);
     }
 
@@ -1188,13 +1258,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     // Instance method gets 'self' as first parameter (the struct type)
     var structType = (MlirStructType)_typeRegistry[typeName];
 
-    // Replace associated type placeholders with I64 (e.g., Element → I64)
-    if (returnType is MlirStructType retSt && structType.AssociatedTypeNames.Contains(retSt.Name)) {
-      returnType = MlirType.I64;
-    }
-    for (int i = 0; i < paramTypes.Count; i++) {
-      if (paramTypes[i] is MlirStructType paramSt && structType.AssociatedTypeNames.Contains(paramSt.Name)) {
-        paramTypes[i] = MlirType.I64;
+    // Track element-polymorphic parameters BEFORE replacing with I64
+    var elementParams = new HashSet<int>();
+    if (structType.AssociatedTypeNames.Count > 0) {
+      // Check return type (index -1)
+      if (returnType is MlirStructType retSt && structType.AssociatedTypeNames.Contains(retSt.Name)) {
+        elementParams.Add(-1);
+        returnType = MlirType.I64;
+      }
+      // Check parameters (offset by 1 for 'self')
+      for (int i = 0; i < paramTypes.Count; i++) {
+        if (paramTypes[i] is MlirStructType paramSt && structType.AssociatedTypeNames.Contains(paramSt.Name)) {
+          elementParams.Add(i + 1); // +1 for 'self' at index 0
+          paramTypes[i] = MlirType.I64;
+        }
+      }
+      if (elementParams.Count > 0) {
+        _elementPolymorphicParams[methodName] = elementParams;
       }
     }
 
@@ -2020,6 +2100,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private MaxonValue? TryEmitManagedMemoryBuiltin(Token token) {
     const int ELEMENT_SIZE = 8; // all values are 8 bytes in current implementation
 
+    // Get the element type from the current struct's type parameters (e.g., Element for Array/Vector)
+    MaxonValueKind GetElementKind() {
+      if (_currentTypeName != null
+          && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
+          && typeInfo is MlirStructType structType
+          && structType.TypeParams.TryGetValue("Element", out var elementType)) {
+        return elementType == MlirType.F64 ? MaxonValueKind.Float : MaxonValueKind.Integer;
+      }
+      return MaxonValueKind.Integer;
+    }
+
     switch (token.Value) {
       case "__element_size": {
         Expect(TokenType.RightParen);
@@ -2059,7 +2150,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         Expect(TokenType.Comma);
         var index = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGetOp(managed, index, ELEMENT_SIZE, MaxonValueKind.Integer);
+        var op = new MaxonManagedMemGetOp(managed, index, ELEMENT_SIZE, GetElementKind());
         _currentBlock!.AddOp(op);
         return op.Result;
       }
@@ -2071,7 +2162,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         Expect(TokenType.Comma);
         var value = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemSetOp(managed, index, value, ELEMENT_SIZE);
+        // Determine element kind from the value being stored (for Element-polymorphic types)
+        var elementKind = DetermineValueKind(value);
+        var op = new MaxonManagedMemSetOp(managed, index, value, ELEMENT_SIZE, elementKind);
         _currentBlock!.AddOp(op);
         return null;
       }
@@ -3069,6 +3162,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         return ParseStructLiteral(token.Value);
       }
 
+      // Check for "TypeName from [...]" syntax (BuiltinArrayLiteral or InitableFromArrayLiteral)
+      if (_typeRegistry.ContainsKey(token.Value) && Check(TokenType.From)) {
+        return ParseFromExpression(token);
+      }
+
       // Check for qualified name: TypeName.member
       if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
@@ -3308,6 +3406,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   /// Creates a stack-allocated __ManagedMemory struct and wraps it in an Array struct.
   /// </summary>
   private ExprResult.Direct ParseArrayLiteral() {
+    var (managedStruct, arrayTag, elementCount) = EmitArrayLiteralElements();
+
+    // Create Array struct: {iterIndex: 0, managed: <managed>}
+    var iterIndexLit = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(iterIndexLit);
+
+    var arrayFields = new List<(string Name, MaxonValue Value)> {
+      ("iterIndex", iterIndexLit.Result),
+      ("managed", managedStruct.Result)
+    };
+    var arrayStruct = new MaxonStructLiteralOp("Array", arrayFields);
+    _currentBlock!.AddOp(arrayStruct);
+
+    // Record the element variable names for lowering to resolve the buffer
+    arrayStruct.ArrayLiteralTag = arrayTag;
+    arrayStruct.ArrayLiteralCount = elementCount;
+
+    return new ExprResult.Direct(arrayStruct.Result);
+  }
+
+  /// <summary>
+  /// Parses [expr, expr, ...] and emits element assigns + __ManagedMemory struct.
+  /// Returns the managed memory struct op and the element count.
+  /// </summary>
+  private (MaxonStructLiteralOp ManagedStruct, string ArrayTag, int ElementCount) EmitArrayLiteralElements() {
     Advance(); // consume '['
 
     // Parse element expressions
@@ -3324,13 +3447,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
     int count = elements.Count;
 
+    // Determine element type from first element (all elements must have same type)
+    var elementKind = count > 0 ? GetValueKind(elements[0]) : MaxonValueKind.Integer;
+
     // Store elements in reverse order so element 0 ends up at the lowest stack address.
     // Stack grows downward: first stored → highest address, last stored → lowest address.
     // LEA finds the lowest address, so element 0 must be stored last.
     var arrayTag = $"__arr_{_blockCounter++}";
     for (int i = count - 1; i >= 0; i--) {
       var elemVarName = $"{arrayTag}.{i}";
-      var assignOp = new MaxonAssignOp(elemVarName, elements[i], isDeclaration: true, isMutable: false, MaxonValueKind.Integer);
+      var assignOp = new MaxonAssignOp(elemVarName, elements[i], isDeclaration: true, isMutable: false, elementKind);
       _currentBlock!.AddOp(assignOp);
     }
 
@@ -3351,22 +3477,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields);
     _currentBlock!.AddOp(managedStruct);
 
-    // Create Array struct: {iterIndex: 0, managed: <managed>}
-    var iterIndexLit = new MaxonLiteralOp(0L);
-    _currentBlock!.AddOp(iterIndexLit);
-
-    var arrayFields = new List<(string Name, MaxonValue Value)> {
-      ("iterIndex", iterIndexLit.Result),
-      ("managed", managedStruct.Result)
-    };
-    var arrayStruct = new MaxonStructLiteralOp("Array", arrayFields);
-    _currentBlock!.AddOp(arrayStruct);
-
-    // Record the element variable names for lowering to resolve the buffer
-    arrayStruct.ArrayLiteralTag = arrayTag;
-    arrayStruct.ArrayLiteralCount = count;
-
-    return new ExprResult.Direct(arrayStruct.Result);
+    return (managedStruct, arrayTag, count);
   }
 
   private ExprResult.Direct ParseStructLiteral(string typeName) {
@@ -3374,6 +3485,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     var structType = (MlirStructType)_typeRegistry[typeName];
     var fieldValues = new List<(string, MaxonValue)>();
     var providedFields = new HashSet<string>();
+
+    // Track array literal tag if this is a Vector-like type with __capacity
+    string? arrayLiteralTag = null;
+    int arrayLiteralCount = 0;
 
     if (!Check(TokenType.RightBrace)) {
       do {
@@ -3389,8 +3504,38 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     foreach (var field in structType.Fields) {
       if (!providedFields.Contains(field.Name)) {
         if (field.DefaultValue == null) {
-          // For struct-typed fields, emit a zero-initialized struct literal
-          if (field.Type is MlirStructType fieldStructType) {
+          // Special case: Vector-like type with __capacity and managed __ManagedMemory field
+          if (field.Name == "managed" && field.Type.Name == "__ManagedMemory" &&
+              structType.ConstParams.TryGetValue("__capacity", out var capacity)) {
+            // Create N zero-valued elements on the stack (in reverse order for proper memory layout)
+            arrayLiteralTag = $"__arr_{_blockCounter++}";
+            arrayLiteralCount = (int)capacity;
+            for (int i = arrayLiteralCount - 1; i >= 0; i--) {
+              var zeroVal = new MaxonLiteralOp(0L);
+              _currentBlock!.AddOp(zeroVal);
+              var elemVarName = $"{arrayLiteralTag}.{i}";
+              var assignOp = new MaxonAssignOp(elemVarName, zeroVal.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Integer);
+              _currentBlock!.AddOp(assignOp);
+            }
+
+            // Create __ManagedMemory struct with stack-allocated buffer
+            var bufLit = new MaxonLiteralOp(0L); // buffer pointer placeholder
+            _currentBlock!.AddOp(bufLit);
+            var lenLit = new MaxonLiteralOp(capacity);
+            _currentBlock!.AddOp(lenLit);
+            var capLit = new MaxonLiteralOp(0L); // capacity = 0 means stack-allocated
+            _currentBlock!.AddOp(capLit);
+
+            var managedFields = new List<(string Name, MaxonValue Value)> {
+              ("buffer", bufLit.Result),
+              ("length", lenLit.Result),
+              ("capacity", capLit.Result)
+            };
+            var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields);
+            _currentBlock!.AddOp(managedStruct);
+            fieldValues.Add((field.Name, managedStruct.Result));
+          } else if (field.Type is MlirStructType fieldStructType) {
+            // For struct-typed fields, emit a zero-initialized struct literal
             var zeroFields = new List<(string Name, MaxonValue Value)>();
             foreach (var subField in fieldStructType.Fields) {
               var zeroLit = new MaxonLiteralOp(0L);
@@ -3417,8 +3562,132 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     Expect(TokenType.RightBrace);
 
     var structLiteral = new MaxonStructLiteralOp(typeName, fieldValues);
+    // If this is a Vector-like type, set the array literal tag for lowering
+    if (arrayLiteralTag != null) {
+      structLiteral.ArrayLiteralTag = arrayLiteralTag;
+      structLiteral.ArrayLiteralCount = arrayLiteralCount;
+    }
     _currentBlock!.AddOp(structLiteral);
     return new ExprResult.Direct(structLiteral.Result);
+  }
+
+  /// <summary>
+  /// Parse "TypeName from [...]" syntax.
+  /// Checks BuiltinArrayLiteral first (passes __ManagedMemory directly, stdlib types).
+  /// Falls back to InitableFromArrayLiteral (passes Array wrapper, user types).
+  /// For types with associated types and __capacity, auto-creates a concrete alias type.
+  /// </summary>
+  private ExprResult.Direct ParseFromExpression(Token typeToken) {
+    Advance(); // consume 'from'
+    var typeName = typeToken.Value;
+
+    // Expect array literal
+    if (!Check(TokenType.LeftBracket)) {
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "Expected array literal after 'from'", Current().Line, Current().Column);
+    }
+
+    // Look up the type
+    if (!_typeRegistry.TryGetValue(typeName, out var registeredType))
+      throw new CompileError(ErrorCode.ParserExpectedType,
+        $"Unknown type '{typeName}'", typeToken.Line, typeToken.Column);
+    if (registeredType is not MlirStructType sourceStruct)
+      throw new CompileError(ErrorCode.ParserExpectedType,
+        $"Type '{typeName}' is not a struct type", typeToken.Line, typeToken.Column);
+
+    bool isBuiltinArrayLiteral = sourceStruct.ConformingInterfaces.Contains("BuiltinArrayLiteral");
+    bool isInitableFromArrayLiteral = sourceStruct.ConformingInterfaces.Contains("InitableFromArrayLiteral");
+
+    if (!isBuiltinArrayLiteral && !isInitableFromArrayLiteral)
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Type '{typeName}' does not conform to BuiltinArrayLiteral or InitableFromArrayLiteral",
+        typeToken.Line, typeToken.Column);
+
+    // Parse elements — both paths start the same way
+    var (managedStruct, arrayTag, elementCount) = EmitArrayLiteralElements();
+
+    // The init argument differs: BuiltinArrayLiteral gets __ManagedMemory, InitableFromArrayLiteral gets Array
+    MaxonValue initArg;
+    if (isBuiltinArrayLiteral) {
+      // Pass __ManagedMemory directly
+      managedStruct.ArrayLiteralTag = arrayTag;
+      managedStruct.ArrayLiteralCount = elementCount;
+      initArg = managedStruct.Result;
+    } else {
+      // Wrap in Array struct for InitableFromArrayLiteral
+      var iterIndexLit = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(iterIndexLit);
+
+      var arrayFields = new List<(string Name, MaxonValue Value)> {
+        ("iterIndex", iterIndexLit.Result),
+        ("managed", managedStruct.Result)
+      };
+      var arrayStruct = new MaxonStructLiteralOp("Array", arrayFields);
+      _currentBlock!.AddOp(arrayStruct);
+
+      arrayStruct.ArrayLiteralTag = arrayTag;
+      arrayStruct.ArrayLiteralCount = elementCount;
+      initArg = arrayStruct.Result;
+    }
+
+    // For types with associated types, auto-create a concrete alias with __capacity
+    string concreteTypeName = typeName;
+    if (sourceStruct.AssociatedTypeNames.Count > 0 && elementCount > 0) {
+      var elementType = InferArrayLiteralElementType(arrayTag);
+
+      concreteTypeName = $"__{typeName}_{elementCount}_{elementType.Name}";
+      if (!_typeRegistry.ContainsKey(concreteTypeName)) {
+        var substitution = new Dictionary<string, MlirType>();
+        foreach (var assocName in sourceStruct.AssociatedTypeNames) {
+          substitution[assocName] = elementType;
+        }
+        RegisterConcreteTypeAlias(concreteTypeName, typeName, sourceStruct, substitution,
+          new Dictionary<string, long> { ["__capacity"] = elementCount });
+      }
+    }
+
+    // Look up the init method: TypeName.init or the source type's init
+    var sourceTypeName = _typeAliasSources.TryGetValue(concreteTypeName, out var src) ? src : concreteTypeName;
+    var initMethodName = $"{sourceTypeName}.init";
+
+    var initFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == initMethodName) ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+        $"Type '{typeName}' does not have a valid init method (no '{initMethodName}' found)",
+        typeToken.Line, typeToken.Column);
+
+    // Determine return type - init returns Self which is the struct type
+    MaxonValueKind? resultKind = MaxonValueKind.Struct;
+    string resultStructTypeName = concreteTypeName;
+
+    // Create the call to init — pass either __ManagedMemory or Array depending on interface
+    var callOp = new MaxonCallOp(initMethodName, [initArg], resultKind, resultStructTypeName);
+    _currentBlock!.AddOp(callOp);
+
+    if (callOp.Result == null) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"'{initMethodName}' must return a value", typeToken.Line, typeToken.Column);
+    }
+
+    return new ExprResult.Direct(callOp.Result);
+  }
+
+  /// <summary>
+  /// Infer the element type of an array literal from its element assignments.
+  /// </summary>
+  private MlirType InferArrayLiteralElementType(string arrayTag) {
+    var elemAssign = _currentBlock!.Operations.OfType<MaxonAssignOp>()
+      .FirstOrDefault(op => op.VarName.StartsWith($"{arrayTag}.")) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        "Cannot infer element type: no element assignments found in array literal",
+        Current().Line, Current().Column);
+
+    return elemAssign.ValueKind switch {
+      MaxonValueKind.Integer => MlirType.I64,
+      MaxonValueKind.Float => MlirType.F64,
+      MaxonValueKind.Bool => MlirType.I1,
+      MaxonValueKind.Byte => MlirType.I8,
+      _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Cannot infer element type from value kind '{elemAssign.ValueKind}'",
+        Current().Line, Current().Column)
+    };
   }
 
   // Resolves an expression result to a MaxonValue, emitting a var_ref op if needed for cross-block references
@@ -3624,6 +3893,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       }
     }
 
+    // Check if we're calling an Element-polymorphic method and get caller's Element type
+    MlirType? callerElementType = null;
+    if (args.Length > 0 && args[0] is MaxonStruct selfStruct
+        && _typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
+        && selfType is MlirStructType selfStructType
+        && selfStructType.TypeParams.TryGetValue("Element", out var elemType)) {
+      callerElementType = elemType;
+      Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - callerElementType={callerElementType}");
+    }
+
+    // Get Element-polymorphic param indices for this function (or its source via alias)
+    if (_elementPolymorphicParams.TryGetValue(callee.Name, out HashSet<int>? elementParams)) {
+      Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - found elementParams directly: [{string.Join(",", elementParams)}]");
+    } else {
+      // Check if callee is from an aliased type (Vec2F.set → Vector.set)
+      var dotIdx = callee.Name.IndexOf('.');
+      if (dotIdx > 0) {
+        var typePart = callee.Name[..dotIdx];
+        var methodPart = callee.Name[(dotIdx + 1)..];
+        if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
+          var sourceMethodName = $"{sourceType}.{methodPart}";
+          if (_elementPolymorphicParams.TryGetValue(sourceMethodName, out elementParams)) {
+            Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - found elementParams via alias {sourceMethodName}: [{string.Join(",", elementParams)}]");
+          }
+        }
+      }
+    }
+
     // Implicit type conversion for function arguments
     for (int i = 0; i < args.Length; i++) {
       var argKind = DetermineValueKind(args[i]!);
@@ -3633,6 +3930,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
       var paramKind = MlirTypeToValueKind(paramType);
       if (argKind == paramKind) continue;
+
+      // Skip float<->int conversion for Element-polymorphic parameters when caller has float Element type
+      if (elementParams != null && elementParams.Contains(i)
+          && callerElementType == MlirType.F64
+          && ((argKind == MaxonValueKind.Float && paramKind == MaxonValueKind.Integer)
+           || (argKind == MaxonValueKind.Integer && paramKind == MaxonValueKind.Float))) {
+        continue;
+      }
 
       args[i] = ConvertArgToParamType(args[i]!, argKind, paramKind, callee.ParamNames[i], functionNameToken);
     }
@@ -3765,6 +4070,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         { } t when t == MlirType.I1 => MaxonValueKind.Bool,
         _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{functionName}'", functionNameToken.Line, functionNameToken.Column)
       };
+
+      // For generic methods (returning I64 as Element placeholder), check if the caller's
+      // struct type has a concrete Element type that should override the result kind
+      if (resultKind == MaxonValueKind.Integer && args.Count > 0 && args[0] is MaxonStruct selfStruct) {
+        Logger.Debug(LogCategory.Parser, $"CreateFunctionCall: checking Element type for {selfStruct.TypeName}");
+        if (_typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
+            && selfType is MlirStructType selfStructType) {
+          Logger.Debug(LogCategory.Parser, $"  TypeParams: {string.Join(", ", selfStructType.TypeParams.Select(kv => $"{kv.Key}={kv.Value}"))}");
+          if (selfStructType.TypeParams.TryGetValue("Element", out var elementType)) {
+            Logger.Debug(LogCategory.Parser, $"  elementType={elementType}, MlirType.F64={MlirType.F64}, equal={elementType == MlirType.F64}, name={elementType.Name}");
+            if (elementType == MlirType.F64) {
+              Logger.Debug(LogCategory.Parser, $"  Overriding resultKind to Float");
+              resultKind = MaxonValueKind.Float;
+            }
+          }
+        }
+      }
     }
 
     var callOp = new MaxonCallOp(functionName, args, resultKind, resultStructTypeName);
@@ -3811,6 +4133,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         $"Integer literal '{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
         token.Line, token.Column);
     }
+  }
+
+  private static MaxonValueKind GetValueKind(MaxonValue value) {
+    return value switch {
+      MaxonInteger => MaxonValueKind.Integer,
+      MaxonFloat => MaxonValueKind.Float,
+      MaxonBool => MaxonValueKind.Bool,
+      MaxonByte => MaxonValueKind.Byte,
+      MaxonStruct => MaxonValueKind.Struct,
+      MaxonEnum => MaxonValueKind.Enum,
+      _ => throw new InvalidOperationException($"Unknown MaxonValue type: {value.GetType()}")
+    };
   }
 
   private static double ParseFloatLiteral(Token token) {

@@ -473,7 +473,7 @@ public class RegisterManager {
     int?[] argStackHomes = new int?[regArgCount];
     foreach (int i in gprArgs) {
       if (_valueToRegister.TryGetValue(args[i], out var reg))
-        argSources[i] = args[i] is StdPtr ? To64Bit(reg) : reg;
+        argSources[i] = To64Bit(reg);
       else if (_valueStackHome.TryGetValue(args[i], out var disp))
         argStackHomes[i] = disp;
       else
@@ -489,10 +489,12 @@ public class RegisterManager {
       if (args[i] is StdF64) placed[i] = true;
     }
 
-    // Compute target registers: use 64-bit for pointer args
+    // x86-64 calling convention always uses 64-bit registers for arguments.
+    // Using 64-bit ensures pointer-sized values (like heap pointers stored
+    // as i64) are not truncated by 32-bit mov instructions.
     var targetRegs = new X86Register[regArgCount];
     for (int i = 0; i < regArgCount; i++) {
-      targetRegs[i] = args[i] is StdPtr ? To64Bit(CallConvRegs[i]) : CallConvRegs[i];
+      targetRegs[i] = To64Bit(CallConvRegs[i]);
     }
 
     // Pass 1: mark GPR args already in their target register

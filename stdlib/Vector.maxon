@@ -1,0 +1,63 @@
+/// Fixed-size collection with stack allocation for small data.
+/// @category Collections
+
+export type Vector uses Element is Sized, BuiltinArrayLiteral, Iterable with Element, Indexed with Element
+  var iterIndex int            // Current iteration position
+  var managed __ManagedMemory  // Storage for elements
+
+  // BuiltinArrayLiteral conformance - initialize Vector from managed memory directly
+  // Called by the compiler for `Vector from [1, 2, 3]` syntax
+  static function BuiltinArrayLiteral.init(managed __ManagedMemory) returns Self
+    return {managed: managed, iterIndex: 0}
+  end 'init'
+
+  // =========================================================================
+  // Properties
+  // =========================================================================
+
+  /// Get the fixed size of the vector
+  export function Sized.count() returns int
+    return __managed_memory_len(managed)
+  end 'count'
+
+  // =========================================================================
+  // Element Access (Indexed interface)
+  // =========================================================================
+
+  /// Get element at index, throws if out of bounds
+  export function Indexed.get(index int) returns Element throws ArrayError
+    var len = __managed_memory_len(managed)
+    if index < 0 'lower'
+      throw ArrayError.indexOutOfBounds
+    end 'lower'
+    if index >= len 'upper'
+      throw ArrayError.indexOutOfBounds
+    end 'upper'
+    return __managed_memory_get_unchecked(managed, index)
+  end 'get'
+
+  /// Set element at index (no-op if index out of bounds)
+  export function Indexed.set(index int, value Element)
+    var len = __managed_memory_len(managed)
+    if index >= 0 'lower'
+      if index < len 'upper'
+        __managed_memory_set_at(managed, index, value)
+      end 'upper'
+    end 'lower'
+  end 'set'
+
+  // =========================================================================
+  // Iterable Interface
+  // =========================================================================
+
+  /// Get next element in iteration, throws when exhausted
+  function Iterable.next() returns Element throws IterationError
+    var len = __managed_memory_len(managed)
+    if iterIndex >= len 'done'
+      throw IterationError.exhausted
+    end 'done'
+    var value = __managed_memory_get_unchecked(managed, iterIndex)
+    iterIndex = iterIndex + 1
+    return value
+  end 'next'
+end 'Vector'

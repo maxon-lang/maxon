@@ -215,6 +215,15 @@ public class MaxonCallOp : MaxonOp {
     }
   }
 
+  // Internal constructor preserving existing result for call site rewriting
+  internal MaxonCallOp(string callee, List<MaxonValue> args, MaxonValue? existingResult, MaxonValueKind? resultKind, string? resultStructTypeName) {
+    Callee = callee;
+    Args = args;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    Result = existingResult;
+  }
+
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
   public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
@@ -360,6 +369,16 @@ public class MaxonTryCallOp : MaxonOp {
     } else {
       Result = resultKind?.CreateValue();
     }
+  }
+
+  // Internal constructor preserving existing result/errorFlag for call site rewriting
+  internal MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValue? existingResult, MaxonInteger existingErrorFlag, MaxonValueKind? resultKind, string? resultStructTypeName) {
+    Callee = callee;
+    Args = args;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    Result = existingResult;
+    ErrorFlag = existingErrorFlag;
   }
 
   public override IReadOnlyList<string> PrintableResults =>
@@ -517,12 +536,13 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, in
 }
 
 // Set element at index in managed buffer: __managed_memory_set_at(managed, index, value)
-public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, int elementSize) : MaxonOp {
+public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, int elementSize, MaxonValueKind elementKind = MaxonValueKind.Integer) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_set";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
   public MaxonValue Value { get; } = value;
   public int ElementSize { get; } = elementSize;
+  public MaxonValueKind ElementKind { get; } = elementKind;
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
 }
 

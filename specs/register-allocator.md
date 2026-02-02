@@ -1747,58 +1747,58 @@ end 'main'
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-  %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-  %2 = maxon.binop %0, %1 {op = add} {kind = i64}
-  maxon.return %2
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.return %2
   }
   func @main() -> i64 {
   entry:
-  %3 = maxon.literal {value = 30 : i64}
-  %4 = maxon.literal {value = 12 : i64}
-  %5 = maxon.call @add %3, %4
-  maxon.return %5
+    %3 = maxon.literal {value = 30 : i64}
+    %4 = maxon.literal {value = 12 : i64}
+    %5 = maxon.call @add %3, %4
+    maxon.return %5
   }
 }
 === standard
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-  %6 = func.param a : StdI64
-  memref.store %6, a
-  %7 = func.param b : StdI64
-  memref.store %7, b
-  %8 = arith.addi %6, %7
-  func.return %8
+    %6 = func.param a : StdI64
+    memref.store %6, a
+    %7 = func.param b : StdI64
+    memref.store %7, b
+    %8 = arith.addi %6, %7
+    func.return %8
   }
   func @main() -> i64 {
   entry:
-  %9 = arith.constant {value = 30 : i64}
-  %10 = arith.constant {value = 12 : i64}
-  %11 = func.call @add %9, %10
-  func.return %11
+    %9 = arith.constant {value = 30 : i64}
+    %10 = arith.constant {value = 12 : i64}
+    %11 = func.call @add %9, %10
+    func.return %11
   }
 }
 === x86
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov [rbp-8], ecx
-  x86.mov [rbp-16], edx
-  x86.add ecx, edx
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.add ecx, edx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.mov eax, 30
-  x86.mov ecx, 12
-  x86.mov edx, ecx
-  x86.mov ecx, eax
-  x86.call add
-  x86.ret
+    x86.mov eax, 30
+    x86.mov ecx, 12
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call add
+    x86.ret
   }
 }
 ```
@@ -1823,65 +1823,65 @@ end 'main'
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-  %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-  %2 = maxon.binop %0, %1 {op = add} {kind = i64}
-  maxon.return %2
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.return %2
   }
   func @main() -> i64 {
   entry:
-  %3 = maxon.literal {value = 20 : i64}
-  maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %4 = maxon.literal {value = 22 : i64}
-  maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %5 = maxon.call @add %4, %3
-  maxon.return %5
+    %3 = maxon.literal {value = 20 : i64}
+    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 22 : i64}
+    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.call @add %4, %3
+    maxon.return %5
   }
 }
 === standard
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-  %6 = func.param a : StdI64
-  memref.store %6, a
-  %7 = func.param b : StdI64
-  memref.store %7, b
-  %8 = arith.addi %6, %7
-  func.return %8
+    %6 = func.param a : StdI64
+    memref.store %6, a
+    %7 = func.param b : StdI64
+    memref.store %7, b
+    %8 = arith.addi %6, %7
+    func.return %8
   }
   func @main() -> i64 {
   entry:
-  %9 = arith.constant {value = 20 : i64}
-  memref.store %9, x
-  %10 = arith.constant {value = 22 : i64}
-  memref.store %10, y
-  %11 = func.call @add %10, %9
-  func.return %11
+    %9 = arith.constant {value = 20 : i64}
+    memref.store %9, x
+    %10 = arith.constant {value = 22 : i64}
+    memref.store %10, y
+    %11 = func.call @add %10, %9
+    func.return %11
   }
 }
 === x86
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov [rbp-8], ecx
-  x86.mov [rbp-16], edx
-  x86.add ecx, edx
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.add ecx, edx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov eax, 20
-  x86.mov [rbp-8], eax
-  x86.mov ecx, 22
-  x86.mov [rbp-16], ecx
-  x86.mov edx, eax
-  x86.call add
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 22
+    x86.mov [rbp-16], ecx
+    x86.mov rdx, rax
+    x86.call add
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -2981,118 +2981,118 @@ end 'main'
 module {
   func @double(x: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
-  %1 = maxon.literal {value = 2 : i64}
-  %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
-  maxon.return %2
+    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
+    %1 = maxon.literal {value = 2 : i64}
+    %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
+    maxon.return %2
   }
   func @main() -> i64 {
   entry:
-  %3 = maxon.literal {value = 0 : i64}
-  maxon.assign %3 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %4 = maxon.literal {value = 0 : i64}
-  maxon.assign %4 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  maxon.br loop_0.header
+    %3 = maxon.literal {value = 0 : i64}
+    maxon.assign %3 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.assign %4 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
   loop_0.header:
-  %5 = maxon.literal {value = 5 : i64}
-  %6 = maxon.var_ref {var = i} {type = i64}
-  %7 = maxon.binop %6, %5 {op = lt} {kind = i64}
-  maxon.cond_br %7 [then: loop_0, else: loop_0.exit]
+    %5 = maxon.literal {value = 5 : i64}
+    %6 = maxon.var_ref {var = i} {type = i64}
+    %7 = maxon.binop %6, %5 {op = lt} {kind = i64}
+    maxon.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
-  %8 = maxon.var_ref {var = i} {type = i64}
-  %9 = maxon.call @double %8
-  %10 = maxon.var_ref {var = sum} {type = i64}
-  %11 = maxon.binop %10, %9 {op = add} {kind = i64}
-  maxon.assign %11 {var = sum} {kind = i64} {mut = 1 : i1}
-  %12 = maxon.literal {value = 1 : i64}
-  %13 = maxon.var_ref {var = i} {type = i64}
-  %14 = maxon.binop %13, %12 {op = add} {kind = i64}
-  maxon.assign %14 {var = i} {kind = i64} {mut = 1 : i1}
-  maxon.br loop_0.header
+    %8 = maxon.var_ref {var = i} {type = i64}
+    %9 = maxon.call @double %8
+    %10 = maxon.var_ref {var = sum} {type = i64}
+    %11 = maxon.binop %10, %9 {op = add} {kind = i64}
+    maxon.assign %11 {var = sum} {kind = i64} {mut = 1 : i1}
+    %12 = maxon.literal {value = 1 : i64}
+    %13 = maxon.var_ref {var = i} {type = i64}
+    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    maxon.assign %14 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br loop_0.header
   loop_0.exit:
-  %15 = maxon.var_ref {var = sum} {type = i64}
-  maxon.return %15
+    %15 = maxon.var_ref {var = sum} {type = i64}
+    maxon.return %15
   }
 }
 === standard
 module {
   func @double(x: i64) -> i64 {
   entry:
-  %16 = func.param x : StdI64
-  memref.store %16, x
-  %17 = arith.constant {value = 2 : i64}
-  %18 = arith.muli %16, %17
-  func.return %18
+    %16 = func.param x : StdI64
+    memref.store %16, x
+    %17 = arith.constant {value = 2 : i64}
+    %18 = arith.muli %16, %17
+    func.return %18
   }
   func @main() -> i64 {
   entry:
-  %19 = arith.constant {value = 0 : i64}
-  memref.store %19, sum
-  %20 = arith.constant {value = 0 : i64}
-  memref.store %20, i
-  cf.br loop_0.header
+    %19 = arith.constant {value = 0 : i64}
+    memref.store %19, sum
+    %20 = arith.constant {value = 0 : i64}
+    memref.store %20, i
+    cf.br loop_0.header
   loop_0.header:
-  %21 = arith.constant {value = 5 : i64}
-  %22 = memref.load i : i64
-  %23 = arith.cmpi lt %22, %21
-  cf.cond_br %23 [then: loop_0, else: loop_0.exit]
+    %21 = arith.constant {value = 5 : i64}
+    %22 = memref.load i : i64
+    %23 = arith.cmpi lt %22, %21
+    cf.cond_br %23 [then: loop_0, else: loop_0.exit]
   loop_0:
-  %24 = memref.load i : i64
-  %25 = func.call @double %24
-  %26 = memref.load sum : i64
-  %27 = arith.addi %26, %25
-  memref.store %27, sum
-  %28 = arith.constant {value = 1 : i64}
-  %29 = memref.load i : i64
-  %30 = arith.addi %29, %28
-  memref.store %30, i
-  cf.br loop_0.header
+    %24 = memref.load i : i64
+    %25 = func.call @double %24
+    %26 = memref.load sum : i64
+    %27 = arith.addi %26, %25
+    memref.store %27, sum
+    %28 = arith.constant {value = 1 : i64}
+    %29 = memref.load i : i64
+    %30 = arith.addi %29, %28
+    memref.store %30, i
+    cf.br loop_0.header
   loop_0.exit:
-  %31 = memref.load sum : i64
-  func.return %31
+    %31 = memref.load sum : i64
+    func.return %31
   }
 }
 === x86
 module {
   func @double(x: i64) -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov [rbp-8], ecx
-  x86.mov eax, 2
-  x86.imul ecx, eax
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 2
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.xor eax, eax
-  x86.mov [rbp-8], eax
-  x86.xor ecx, ecx
-  x86.mov [rbp-16], ecx
-  x86.jmp main.loop_0.header
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp main.loop_0.header
   loop_0.header:
-  x86.mov eax, 5
-  x86.mov ecx, [rbp-16]
-  x86.cmp ecx, eax
-  x86.jge main.loop_0.exit
+    x86.mov eax, 5
+    x86.mov ecx, [rbp-16]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
   loop_0:
-  x86.mov eax, [rbp-16]
-  x86.mov ecx, eax
-  x86.call double
-  x86.mov ecx, [rbp-8]
-  x86.add ecx, eax
-  x86.mov [rbp-8], ecx
-  x86.mov edx, 1
-  x86.mov ebx, [rbp-16]
-  x86.add ebx, edx
-  x86.mov [rbp-16], ebx
-  x86.jmp main.loop_0.header
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call double
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-16]
+    x86.add ebx, edx
+    x86.mov [rbp-16], ebx
+    x86.jmp main.loop_0.header
   loop_0.exit:
-  x86.mov eax, [rbp-8]
-  x86.epilogue
-  x86.ret
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -3255,94 +3255,94 @@ end 'main'
 module {
   func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-  %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-  %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
-  %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
-  %4 = maxon.param {index = 4 : i32} {name = e} {type = i64}
-  %5 = maxon.binop %0, %1 {op = add} {kind = i64}
-  %6 = maxon.binop %5, %2 {op = add} {kind = i64}
-  %7 = maxon.binop %6, %3 {op = add} {kind = i64}
-  %8 = maxon.binop %7, %4 {op = add} {kind = i64}
-  maxon.return %8
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
+    %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
+    %4 = maxon.param {index = 4 : i32} {name = e} {type = i64}
+    %5 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %6 = maxon.binop %5, %2 {op = add} {kind = i64}
+    %7 = maxon.binop %6, %3 {op = add} {kind = i64}
+    %8 = maxon.binop %7, %4 {op = add} {kind = i64}
+    maxon.return %8
   }
   func @main() -> i64 {
   entry:
-  %9 = maxon.literal {value = 5 : i64}
-  %10 = maxon.literal {value = 10 : i64}
-  %11 = maxon.literal {value = 8 : i64}
-  %12 = maxon.literal {value = 12 : i64}
-  %13 = maxon.literal {value = 7 : i64}
-  %14 = maxon.call @sum5 %9, %10, %11, %12, %13
-  maxon.return %14
+    %9 = maxon.literal {value = 5 : i64}
+    %10 = maxon.literal {value = 10 : i64}
+    %11 = maxon.literal {value = 8 : i64}
+    %12 = maxon.literal {value = 12 : i64}
+    %13 = maxon.literal {value = 7 : i64}
+    %14 = maxon.call @sum5 %9, %10, %11, %12, %13
+    maxon.return %14
   }
 }
 === standard
 module {
   func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
-  %15 = func.param a : StdI64
-  memref.store %15, a
-  %16 = func.param b : StdI64
-  memref.store %16, b
-  %17 = func.param c : StdI64
-  memref.store %17, c
-  %18 = func.param d : StdI64
-  memref.store %18, d
-  %19 = func.param e : StdI64
-  memref.store %19, e
-  %20 = arith.addi %15, %16
-  %21 = arith.addi %20, %17
-  %22 = arith.addi %21, %18
-  %23 = arith.addi %22, %19
-  func.return %23
+    %15 = func.param a : StdI64
+    memref.store %15, a
+    %16 = func.param b : StdI64
+    memref.store %16, b
+    %17 = func.param c : StdI64
+    memref.store %17, c
+    %18 = func.param d : StdI64
+    memref.store %18, d
+    %19 = func.param e : StdI64
+    memref.store %19, e
+    %20 = arith.addi %15, %16
+    %21 = arith.addi %20, %17
+    %22 = arith.addi %21, %18
+    %23 = arith.addi %22, %19
+    func.return %23
   }
   func @main() -> i64 {
   entry:
-  %24 = arith.constant {value = 5 : i64}
-  %25 = arith.constant {value = 10 : i64}
-  %26 = arith.constant {value = 8 : i64}
-  %27 = arith.constant {value = 12 : i64}
-  %28 = arith.constant {value = 7 : i64}
-  %29 = func.call @sum5 %24, %25, %26, %27, %28
-  func.return %29
+    %24 = arith.constant {value = 5 : i64}
+    %25 = arith.constant {value = 10 : i64}
+    %26 = arith.constant {value = 8 : i64}
+    %27 = arith.constant {value = 12 : i64}
+    %28 = arith.constant {value = 7 : i64}
+    %29 = func.call @sum5 %24, %25, %26, %27, %28
+    func.return %29
   }
 }
 === x86
 module {
   func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
-  x86.prologue stack_size=48
-  x86.mov [rbp-8], ecx
-  x86.mov [rbp-16], edx
-  x86.mov [rbp-24], r8
-  x86.mov [rbp-32], r9
-  x86.mov eax, [rbp+16]
-  x86.mov [rbp-40], eax
-  x86.add ecx, edx
-  x86.add ecx, r8
-  x86.add ecx, r9
-  x86.add ecx, eax
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], r9
+    x86.mov eax, [rbp+16]
+    x86.mov [rbp-40], eax
+    x86.add ecx, edx
+    x86.add ecx, r8
+    x86.add ecx, r9
+    x86.add ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.mov eax, 5
-  x86.mov ecx, 10
-  x86.mov edx, 8
-  x86.mov ebx, 12
-  x86.mov esi, 7
-  x86.sub rsp, 16
-  x86.mov [rsp+0], esi
-  x86.mov r8, edx
-  x86.mov r9, ebx
-  x86.mov edx, ecx
-  x86.mov ecx, eax
-  x86.call sum5
-  x86.add rsp, 16
-  x86.ret
+    x86.mov eax, 5
+    x86.mov ecx, 10
+    x86.mov edx, 8
+    x86.mov ebx, 12
+    x86.mov esi, 7
+    x86.sub rsp, 16
+    x86.mov [rsp+0], esi
+    x86.mov r8, rdx
+    x86.mov r9, rbx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call sum5
+    x86.add rsp, 16
+    x86.ret
   }
 }
 ```
@@ -3365,147 +3365,147 @@ end 'main'
 module {
   func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-  %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-  %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
-  %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
-  %4 = maxon.param {index = 4 : i32} {name = e} {type = i64}
-  %5 = maxon.param {index = 5 : i32} {name = f} {type = i64}
-  %6 = maxon.param {index = 6 : i32} {name = g} {type = i64}
-  %7 = maxon.param {index = 7 : i32} {name = h} {type = i64}
-  %8 = maxon.param {index = 8 : i32} {name = i} {type = i64}
-  %9 = maxon.binop %0, %1 {op = add} {kind = i64}
-  %10 = maxon.binop %9, %2 {op = add} {kind = i64}
-  %11 = maxon.binop %10, %3 {op = add} {kind = i64}
-  %12 = maxon.binop %11, %4 {op = add} {kind = i64}
-  %13 = maxon.binop %12, %5 {op = add} {kind = i64}
-  %14 = maxon.binop %13, %6 {op = add} {kind = i64}
-  %15 = maxon.binop %14, %7 {op = add} {kind = i64}
-  %16 = maxon.binop %15, %8 {op = add} {kind = i64}
-  maxon.return %16
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
+    %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
+    %4 = maxon.param {index = 4 : i32} {name = e} {type = i64}
+    %5 = maxon.param {index = 5 : i32} {name = f} {type = i64}
+    %6 = maxon.param {index = 6 : i32} {name = g} {type = i64}
+    %7 = maxon.param {index = 7 : i32} {name = h} {type = i64}
+    %8 = maxon.param {index = 8 : i32} {name = i} {type = i64}
+    %9 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %10 = maxon.binop %9, %2 {op = add} {kind = i64}
+    %11 = maxon.binop %10, %3 {op = add} {kind = i64}
+    %12 = maxon.binop %11, %4 {op = add} {kind = i64}
+    %13 = maxon.binop %12, %5 {op = add} {kind = i64}
+    %14 = maxon.binop %13, %6 {op = add} {kind = i64}
+    %15 = maxon.binop %14, %7 {op = add} {kind = i64}
+    %16 = maxon.binop %15, %8 {op = add} {kind = i64}
+    maxon.return %16
   }
   func @main() -> i64 {
   entry:
-  %17 = maxon.literal {value = 1 : i64}
-  %18 = maxon.literal {value = 2 : i64}
-  %19 = maxon.literal {value = 3 : i64}
-  %20 = maxon.literal {value = 4 : i64}
-  %21 = maxon.literal {value = 5 : i64}
-  %22 = maxon.literal {value = 6 : i64}
-  %23 = maxon.literal {value = 7 : i64}
-  %24 = maxon.literal {value = 8 : i64}
-  %25 = maxon.literal {value = 9 : i64}
-  %26 = maxon.call @sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
-  maxon.return %26
+    %17 = maxon.literal {value = 1 : i64}
+    %18 = maxon.literal {value = 2 : i64}
+    %19 = maxon.literal {value = 3 : i64}
+    %20 = maxon.literal {value = 4 : i64}
+    %21 = maxon.literal {value = 5 : i64}
+    %22 = maxon.literal {value = 6 : i64}
+    %23 = maxon.literal {value = 7 : i64}
+    %24 = maxon.literal {value = 8 : i64}
+    %25 = maxon.literal {value = 9 : i64}
+    %26 = maxon.call @sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
+    maxon.return %26
   }
 }
 === standard
 module {
   func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
-  %27 = func.param a : StdI64
-  memref.store %27, a
-  %28 = func.param b : StdI64
-  memref.store %28, b
-  %29 = func.param c : StdI64
-  memref.store %29, c
-  %30 = func.param d : StdI64
-  memref.store %30, d
-  %31 = func.param e : StdI64
-  memref.store %31, e
-  %32 = func.param f : StdI64
-  memref.store %32, f
-  %33 = func.param g : StdI64
-  memref.store %33, g
-  %34 = func.param h : StdI64
-  memref.store %34, h
-  %35 = func.param i : StdI64
-  memref.store %35, i
-  %36 = arith.addi %27, %28
-  %37 = arith.addi %36, %29
-  %38 = arith.addi %37, %30
-  %39 = arith.addi %38, %31
-  %40 = arith.addi %39, %32
-  %41 = arith.addi %40, %33
-  %42 = arith.addi %41, %34
-  %43 = arith.addi %42, %35
-  func.return %43
+    %27 = func.param a : StdI64
+    memref.store %27, a
+    %28 = func.param b : StdI64
+    memref.store %28, b
+    %29 = func.param c : StdI64
+    memref.store %29, c
+    %30 = func.param d : StdI64
+    memref.store %30, d
+    %31 = func.param e : StdI64
+    memref.store %31, e
+    %32 = func.param f : StdI64
+    memref.store %32, f
+    %33 = func.param g : StdI64
+    memref.store %33, g
+    %34 = func.param h : StdI64
+    memref.store %34, h
+    %35 = func.param i : StdI64
+    memref.store %35, i
+    %36 = arith.addi %27, %28
+    %37 = arith.addi %36, %29
+    %38 = arith.addi %37, %30
+    %39 = arith.addi %38, %31
+    %40 = arith.addi %39, %32
+    %41 = arith.addi %40, %33
+    %42 = arith.addi %41, %34
+    %43 = arith.addi %42, %35
+    func.return %43
   }
   func @main() -> i64 {
   entry:
-  %44 = arith.constant {value = 1 : i64}
-  %45 = arith.constant {value = 2 : i64}
-  %46 = arith.constant {value = 3 : i64}
-  %47 = arith.constant {value = 4 : i64}
-  %48 = arith.constant {value = 5 : i64}
-  %49 = arith.constant {value = 6 : i64}
-  %50 = arith.constant {value = 7 : i64}
-  %51 = arith.constant {value = 8 : i64}
-  %52 = arith.constant {value = 9 : i64}
-  %53 = func.call @sum9 %44, %45, %46, %47, %48, %49, %50, %51, %52
-  func.return %53
+    %44 = arith.constant {value = 1 : i64}
+    %45 = arith.constant {value = 2 : i64}
+    %46 = arith.constant {value = 3 : i64}
+    %47 = arith.constant {value = 4 : i64}
+    %48 = arith.constant {value = 5 : i64}
+    %49 = arith.constant {value = 6 : i64}
+    %50 = arith.constant {value = 7 : i64}
+    %51 = arith.constant {value = 8 : i64}
+    %52 = arith.constant {value = 9 : i64}
+    %53 = func.call @sum9 %44, %45, %46, %47, %48, %49, %50, %51, %52
+    func.return %53
   }
 }
 === x86
 module {
   func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
-  x86.prologue stack_size=80
-  x86.mov [rbp-8], ecx
-  x86.mov [rbp-16], edx
-  x86.mov [rbp-24], r8
-  x86.mov [rbp-32], r9
-  x86.mov eax, [rbp+16]
-  x86.mov [rbp-40], eax
-  x86.mov ebx, [rbp+24]
-  x86.mov [rbp-48], ebx
-  x86.mov esi, [rbp+32]
-  x86.mov [rbp-56], esi
-  x86.mov edi, [rbp+40]
-  x86.mov [rbp-64], edi
-  x86.mov ecx, [rbp+48]
-  x86.mov [rbp-72], ecx
-  x86.mov r8, [rbp-8]
-  x86.add r8, edx
-  x86.mov edx, [rbp-24]
-  x86.add r8, edx
-  x86.add r8, r9
-  x86.add r8, eax
-  x86.add r8, ebx
-  x86.add r8, esi
-  x86.add r8, edi
-  x86.add r8, ecx
-  x86.mov eax, r8
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=80
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], r9
+    x86.mov eax, [rbp+16]
+    x86.mov [rbp-40], eax
+    x86.mov ebx, [rbp+24]
+    x86.mov [rbp-48], ebx
+    x86.mov esi, [rbp+32]
+    x86.mov [rbp-56], esi
+    x86.mov edi, [rbp+40]
+    x86.mov [rbp-64], edi
+    x86.mov ecx, [rbp+48]
+    x86.mov [rbp-72], ecx
+    x86.mov r8, [rbp-8]
+    x86.add r8, edx
+    x86.mov edx, [rbp-24]
+    x86.add r8, edx
+    x86.add r8, r9
+    x86.add r8, eax
+    x86.add r8, ebx
+    x86.add r8, esi
+    x86.add r8, edi
+    x86.add r8, ecx
+    x86.mov eax, r8
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov eax, 1
-  x86.mov ecx, 2
-  x86.mov edx, 3
-  x86.mov ebx, 4
-  x86.mov esi, 5
-  x86.mov edi, 6
-  x86.mov r8, 7
-  x86.mov r9, 8
-  x86.mov [rbp-8], eax
-  x86.mov eax, 9
-  x86.sub rsp, 48
-  x86.mov [rsp+0], esi
-  x86.mov [rsp+8], edi
-  x86.mov [rsp+16], r8
-  x86.mov [rsp+24], r9
-  x86.mov [rsp+32], eax
-  x86.mov r8, edx
-  x86.mov r9, ebx
-  x86.mov edx, ecx
-  x86.mov ecx, [rbp-8]
-  x86.call sum9
-  x86.add rsp, 48
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.mov edx, 3
+    x86.mov ebx, 4
+    x86.mov esi, 5
+    x86.mov edi, 6
+    x86.mov r8, 7
+    x86.mov r9, 8
+    x86.mov [rbp-8], eax
+    x86.mov eax, 9
+    x86.sub rsp, 48
+    x86.mov [rsp+0], esi
+    x86.mov [rsp+8], edi
+    x86.mov [rsp+16], r8
+    x86.mov [rsp+24], r9
+    x86.mov [rsp+32], eax
+    x86.mov r8, rdx
+    x86.mov r9, rbx
+    x86.mov rdx, rcx
+    x86.mov rcx, [rbp-8]
+    x86.call sum9
+    x86.add rsp, 48
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -3531,98 +3531,98 @@ end 'main'
 module {
   func @factorial(n: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
-  %1 = maxon.literal {value = 1 : i64}
-  %2 = maxon.binop %0, %1 {op = le} {kind = i64}
-  maxon.cond_br %2 [then: base_0, else: base_0.after]
+    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    %1 = maxon.literal {value = 1 : i64}
+    %2 = maxon.binop %0, %1 {op = le} {kind = i64}
+    maxon.cond_br %2 [then: base_0, else: base_0.after]
   base_0:
-  %3 = maxon.literal {value = 1 : i64}
-  maxon.return %3
+    %3 = maxon.literal {value = 1 : i64}
+    maxon.return %3
   base_0.after:
-  %4 = maxon.literal {value = 1 : i64}
-  %5 = maxon.var_ref {var = n} {type = i64}
-  %6 = maxon.binop %5, %4 {op = sub} {kind = i64}
-  %7 = maxon.call @factorial %6
-  %8 = maxon.var_ref {var = n} {type = i64}
-  %9 = maxon.binop %8, %7 {op = mul} {kind = i64}
-  maxon.return %9
+    %4 = maxon.literal {value = 1 : i64}
+    %5 = maxon.var_ref {var = n} {type = i64}
+    %6 = maxon.binop %5, %4 {op = sub} {kind = i64}
+    %7 = maxon.call @factorial %6
+    %8 = maxon.var_ref {var = n} {type = i64}
+    %9 = maxon.binop %8, %7 {op = mul} {kind = i64}
+    maxon.return %9
   }
   func @main() -> i64 {
   entry:
-  %10 = maxon.literal {value = 5 : i64}
-  %11 = maxon.call @factorial %10
-  %12 = maxon.literal {value = 256 : i64}
-  %13 = maxon.binop %11, %12 {op = mod} {kind = i64}
-  maxon.return %13
+    %10 = maxon.literal {value = 5 : i64}
+    %11 = maxon.call @factorial %10
+    %12 = maxon.literal {value = 256 : i64}
+    %13 = maxon.binop %11, %12 {op = mod} {kind = i64}
+    maxon.return %13
   }
 }
 === standard
 module {
   func @factorial(n: i64) -> i64 {
   entry:
-  %14 = func.param n : StdI64
-  memref.store %14, n
-  %15 = arith.constant {value = 1 : i64}
-  %16 = arith.cmpi le %14, %15
-  cf.cond_br %16 [then: base_0, else: base_0.after]
+    %14 = func.param n : StdI64
+    memref.store %14, n
+    %15 = arith.constant {value = 1 : i64}
+    %16 = arith.cmpi le %14, %15
+    cf.cond_br %16 [then: base_0, else: base_0.after]
   base_0:
-  %17 = arith.constant {value = 1 : i64}
-  func.return %17
+    %17 = arith.constant {value = 1 : i64}
+    func.return %17
   base_0.after:
-  %18 = arith.constant {value = 1 : i64}
-  %19 = memref.load n : i64
-  %20 = arith.subi %19, %18
-  %21 = func.call @factorial %20
-  %22 = memref.load n : i64
-  %23 = arith.muli %22, %21
-  func.return %23
+    %18 = arith.constant {value = 1 : i64}
+    %19 = memref.load n : i64
+    %20 = arith.subi %19, %18
+    %21 = func.call @factorial %20
+    %22 = memref.load n : i64
+    %23 = arith.muli %22, %21
+    func.return %23
   }
   func @main() -> i64 {
   entry:
-  %24 = arith.constant {value = 5 : i64}
-  %25 = func.call @factorial %24
-  %26 = arith.constant {value = 256 : i64}
-  %27 = arith.remsi %25, %26
-  func.return %27
+    %24 = arith.constant {value = 5 : i64}
+    %25 = func.call @factorial %24
+    %26 = arith.constant {value = 256 : i64}
+    %27 = arith.remsi %25, %26
+    func.return %27
   }
 }
 === x86
 module {
   func @factorial(n: i64) -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov [rbp-8], ecx
-  x86.mov eax, 1
-  x86.cmp ecx, eax
-  x86.jg factorial.base_0.after
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 1
+    x86.cmp ecx, eax
+    x86.jg factorial.base_0.after
   base_0:
-  x86.mov eax, 1
-  x86.epilogue
-  x86.ret
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
   base_0.after:
-  x86.mov eax, 1
-  x86.mov ecx, [rbp-8]
-  x86.sub ecx, eax
-  x86.call factorial
-  x86.mov edx, [rbp-8]
-  x86.imul edx, eax
-  x86.mov eax, edx
-  x86.epilogue
-  x86.ret
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.sub ecx, eax
+    x86.call factorial
+    x86.mov edx, [rbp-8]
+    x86.imul edx, eax
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov eax, 5
-  x86.mov ecx, eax
-  x86.call factorial
-  x86.mov ecx, 256
-  x86.mov [rbp-8], eax
-  x86.cqo
-  x86.idiv ecx
-  x86.mov eax, edx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov eax, 5
+    x86.mov rcx, rax
+    x86.call factorial
+    x86.mov ecx, 256
+    x86.mov [rbp-8], eax
+    x86.cqo
+    x86.idiv ecx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -3658,207 +3658,207 @@ end 'main'
 module {
   func @identity(x: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
-  maxon.return %0
+    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
+    maxon.return %0
   }
   func @main() -> i64 {
   entry:
-  %1 = maxon.literal {value = 1 : i64}
-  maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %2 = maxon.literal {value = 2 : i64}
-  maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %3 = maxon.literal {value = 3 : i64}
-  maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %4 = maxon.literal {value = 4 : i64}
-  maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %5 = maxon.literal {value = 5 : i64}
-  maxon.assign %5 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %6 = maxon.literal {value = 6 : i64}
-  maxon.assign %6 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %7 = maxon.literal {value = 0 : i64}
-  maxon.assign %7 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  maxon.br loop_0.header
+    %1 = maxon.literal {value = 1 : i64}
+    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 2 : i64}
+    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 3 : i64}
+    maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 4 : i64}
+    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 5 : i64}
+    maxon.assign %5 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 6 : i64}
+    maxon.assign %6 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 0 : i64}
+    maxon.assign %7 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
   loop_0.header:
-  %8 = maxon.literal {value = 3 : i64}
-  %9 = maxon.var_ref {var = i} {type = i64}
-  %10 = maxon.binop %9, %8 {op = lt} {kind = i64}
-  maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
+    %8 = maxon.literal {value = 3 : i64}
+    %9 = maxon.var_ref {var = i} {type = i64}
+    %10 = maxon.binop %9, %8 {op = lt} {kind = i64}
+    maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
-  %11 = maxon.var_ref {var = b} {type = i64}
-  %12 = maxon.call @identity %11
-  %13 = maxon.var_ref {var = a} {type = i64}
-  %14 = maxon.binop %13, %12 {op = add} {kind = i64}
-  maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
-  %15 = maxon.var_ref {var = d} {type = i64}
-  %16 = maxon.call @identity %15
-  %17 = maxon.var_ref {var = c} {type = i64}
-  %18 = maxon.binop %17, %16 {op = add} {kind = i64}
-  maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
-  %19 = maxon.var_ref {var = f} {type = i64}
-  %20 = maxon.call @identity %19
-  %21 = maxon.var_ref {var = e} {type = i64}
-  %22 = maxon.binop %21, %20 {op = add} {kind = i64}
-  maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
-  %23 = maxon.literal {value = 1 : i64}
-  %24 = maxon.var_ref {var = i} {type = i64}
-  %25 = maxon.binop %24, %23 {op = add} {kind = i64}
-  maxon.assign %25 {var = i} {kind = i64} {mut = 1 : i1}
-  maxon.br loop_0.header
+    %11 = maxon.var_ref {var = b} {type = i64}
+    %12 = maxon.call @identity %11
+    %13 = maxon.var_ref {var = a} {type = i64}
+    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
+    %15 = maxon.var_ref {var = d} {type = i64}
+    %16 = maxon.call @identity %15
+    %17 = maxon.var_ref {var = c} {type = i64}
+    %18 = maxon.binop %17, %16 {op = add} {kind = i64}
+    maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
+    %19 = maxon.var_ref {var = f} {type = i64}
+    %20 = maxon.call @identity %19
+    %21 = maxon.var_ref {var = e} {type = i64}
+    %22 = maxon.binop %21, %20 {op = add} {kind = i64}
+    maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
+    %23 = maxon.literal {value = 1 : i64}
+    %24 = maxon.var_ref {var = i} {type = i64}
+    %25 = maxon.binop %24, %23 {op = add} {kind = i64}
+    maxon.assign %25 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br loop_0.header
   loop_0.exit:
-  %26 = maxon.var_ref {var = a} {type = i64}
-  %27 = maxon.var_ref {var = c} {type = i64}
-  %28 = maxon.binop %26, %27 {op = add} {kind = i64}
-  %29 = maxon.var_ref {var = d} {type = i64}
-  %30 = maxon.binop %28, %29 {op = add} {kind = i64}
-  %31 = maxon.var_ref {var = e} {type = i64}
-  %32 = maxon.binop %30, %31 {op = add} {kind = i64}
-  %33 = maxon.var_ref {var = f} {type = i64}
-  %34 = maxon.binop %32, %33 {op = add} {kind = i64}
-  %35 = maxon.literal {value = 256 : i64}
-  %36 = maxon.binop %34, %35 {op = mod} {kind = i64}
-  maxon.return %36
+    %26 = maxon.var_ref {var = a} {type = i64}
+    %27 = maxon.var_ref {var = c} {type = i64}
+    %28 = maxon.binop %26, %27 {op = add} {kind = i64}
+    %29 = maxon.var_ref {var = d} {type = i64}
+    %30 = maxon.binop %28, %29 {op = add} {kind = i64}
+    %31 = maxon.var_ref {var = e} {type = i64}
+    %32 = maxon.binop %30, %31 {op = add} {kind = i64}
+    %33 = maxon.var_ref {var = f} {type = i64}
+    %34 = maxon.binop %32, %33 {op = add} {kind = i64}
+    %35 = maxon.literal {value = 256 : i64}
+    %36 = maxon.binop %34, %35 {op = mod} {kind = i64}
+    maxon.return %36
   }
 }
 === standard
 module {
   func @identity(x: i64) -> i64 {
   entry:
-  %37 = func.param x : StdI64
-  memref.store %37, x
-  func.return %37
+    %37 = func.param x : StdI64
+    memref.store %37, x
+    func.return %37
   }
   func @main() -> i64 {
   entry:
-  %38 = arith.constant {value = 1 : i64}
-  memref.store %38, a
-  %39 = arith.constant {value = 2 : i64}
-  memref.store %39, b
-  %40 = arith.constant {value = 3 : i64}
-  memref.store %40, c
-  %41 = arith.constant {value = 4 : i64}
-  memref.store %41, d
-  %42 = arith.constant {value = 5 : i64}
-  memref.store %42, e
-  %43 = arith.constant {value = 6 : i64}
-  memref.store %43, f
-  %44 = arith.constant {value = 0 : i64}
-  memref.store %44, i
-  cf.br loop_0.header
+    %38 = arith.constant {value = 1 : i64}
+    memref.store %38, a
+    %39 = arith.constant {value = 2 : i64}
+    memref.store %39, b
+    %40 = arith.constant {value = 3 : i64}
+    memref.store %40, c
+    %41 = arith.constant {value = 4 : i64}
+    memref.store %41, d
+    %42 = arith.constant {value = 5 : i64}
+    memref.store %42, e
+    %43 = arith.constant {value = 6 : i64}
+    memref.store %43, f
+    %44 = arith.constant {value = 0 : i64}
+    memref.store %44, i
+    cf.br loop_0.header
   loop_0.header:
-  %45 = arith.constant {value = 3 : i64}
-  %46 = memref.load i : i64
-  %47 = arith.cmpi lt %46, %45
-  cf.cond_br %47 [then: loop_0, else: loop_0.exit]
+    %45 = arith.constant {value = 3 : i64}
+    %46 = memref.load i : i64
+    %47 = arith.cmpi lt %46, %45
+    cf.cond_br %47 [then: loop_0, else: loop_0.exit]
   loop_0:
-  %48 = memref.load b : i64
-  %49 = func.call @identity %48
-  %50 = memref.load a : i64
-  %51 = arith.addi %50, %49
-  memref.store %51, a
-  %52 = memref.load d : i64
-  %53 = func.call @identity %52
-  %54 = memref.load c : i64
-  %55 = arith.addi %54, %53
-  memref.store %55, c
-  %56 = memref.load f : i64
-  %57 = func.call @identity %56
-  %58 = memref.load e : i64
-  %59 = arith.addi %58, %57
-  memref.store %59, e
-  %60 = arith.constant {value = 1 : i64}
-  %61 = memref.load i : i64
-  %62 = arith.addi %61, %60
-  memref.store %62, i
-  cf.br loop_0.header
+    %48 = memref.load b : i64
+    %49 = func.call @identity %48
+    %50 = memref.load a : i64
+    %51 = arith.addi %50, %49
+    memref.store %51, a
+    %52 = memref.load d : i64
+    %53 = func.call @identity %52
+    %54 = memref.load c : i64
+    %55 = arith.addi %54, %53
+    memref.store %55, c
+    %56 = memref.load f : i64
+    %57 = func.call @identity %56
+    %58 = memref.load e : i64
+    %59 = arith.addi %58, %57
+    memref.store %59, e
+    %60 = arith.constant {value = 1 : i64}
+    %61 = memref.load i : i64
+    %62 = arith.addi %61, %60
+    memref.store %62, i
+    cf.br loop_0.header
   loop_0.exit:
-  %63 = memref.load a : i64
-  %64 = memref.load c : i64
-  %65 = arith.addi %63, %64
-  %66 = memref.load d : i64
-  %67 = arith.addi %65, %66
-  %68 = memref.load e : i64
-  %69 = arith.addi %67, %68
-  %70 = memref.load f : i64
-  %71 = arith.addi %69, %70
-  %72 = arith.constant {value = 256 : i64}
-  %73 = arith.remsi %71, %72
-  func.return %73
+    %63 = memref.load a : i64
+    %64 = memref.load c : i64
+    %65 = arith.addi %63, %64
+    %66 = memref.load d : i64
+    %67 = arith.addi %65, %66
+    %68 = memref.load e : i64
+    %69 = arith.addi %67, %68
+    %70 = memref.load f : i64
+    %71 = arith.addi %69, %70
+    %72 = arith.constant {value = 256 : i64}
+    %73 = arith.remsi %71, %72
+    func.return %73
   }
 }
 === x86
 module {
   func @identity(x: i64) -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov [rbp-8], ecx
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=64
-  x86.mov eax, 1
-  x86.mov [rbp-8], eax
-  x86.mov ecx, 2
-  x86.mov [rbp-16], ecx
-  x86.mov edx, 3
-  x86.mov [rbp-24], edx
-  x86.mov ebx, 4
-  x86.mov [rbp-32], ebx
-  x86.mov esi, 5
-  x86.mov [rbp-40], esi
-  x86.mov edi, 6
-  x86.mov [rbp-48], edi
-  x86.xor r8, r8
-  x86.mov [rbp-56], r8
-  x86.jmp main.loop_0.header
+    x86.prologue stack_size=64
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 2
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 3
+    x86.mov [rbp-24], edx
+    x86.mov ebx, 4
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 5
+    x86.mov [rbp-40], esi
+    x86.mov edi, 6
+    x86.mov [rbp-48], edi
+    x86.xor r8, r8
+    x86.mov [rbp-56], r8
+    x86.jmp main.loop_0.header
   loop_0.header:
-  x86.mov eax, 3
-  x86.mov ecx, [rbp-56]
-  x86.cmp ecx, eax
-  x86.jge main.loop_0.exit
+    x86.mov eax, 3
+    x86.mov ecx, [rbp-56]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
   loop_0:
-  x86.mov eax, [rbp-16]
-  x86.mov ecx, eax
-  x86.call identity
-  x86.mov ecx, [rbp-8]
-  x86.add ecx, eax
-  x86.mov [rbp-8], ecx
-  x86.mov edx, [rbp-32]
-  x86.mov ecx, edx
-  x86.call identity
-  x86.mov ebx, [rbp-24]
-  x86.add ebx, eax
-  x86.mov [rbp-24], ebx
-  x86.mov esi, [rbp-48]
-  x86.mov ecx, esi
-  x86.call identity
-  x86.mov edi, [rbp-40]
-  x86.add edi, eax
-  x86.mov [rbp-40], edi
-  x86.mov r8, 1
-  x86.mov r9, [rbp-56]
-  x86.add r9, r8
-  x86.mov [rbp-56], r9
-  x86.jmp main.loop_0.header
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call identity
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, [rbp-32]
+    x86.mov rcx, rdx
+    x86.call identity
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, eax
+    x86.mov [rbp-24], ebx
+    x86.mov esi, [rbp-48]
+    x86.mov rcx, rsi
+    x86.call identity
+    x86.mov edi, [rbp-40]
+    x86.add edi, eax
+    x86.mov [rbp-40], edi
+    x86.mov r8, 1
+    x86.mov r9, [rbp-56]
+    x86.add r9, r8
+    x86.mov [rbp-56], r9
+    x86.jmp main.loop_0.header
   loop_0.exit:
-  x86.mov eax, [rbp-8]
-  x86.mov ecx, [rbp-24]
-  x86.add eax, ecx
-  x86.mov edx, [rbp-32]
-  x86.add eax, edx
-  x86.mov ebx, [rbp-40]
-  x86.add eax, ebx
-  x86.mov esi, [rbp-48]
-  x86.add eax, esi
-  x86.mov edi, 256
-  x86.mov [rbp-64], eax
-  x86.cqo
-  x86.idiv edi
-  x86.mov eax, edx
-  x86.epilogue
-  x86.ret
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-32]
+    x86.add eax, edx
+    x86.mov ebx, [rbp-40]
+    x86.add eax, ebx
+    x86.mov esi, [rbp-48]
+    x86.add eax, esi
+    x86.mov edi, 256
+    x86.mov [rbp-64], eax
+    x86.cqo
+    x86.idiv edi
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -4410,103 +4410,103 @@ end 'main'
 module {
   func @useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-  %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-  %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
-  %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
-  %4 = maxon.binop %0, %1 {op = add} {kind = i64}
-  maxon.assign %4 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %5 = maxon.binop %2, %3 {op = add} {kind = i64}
-  maxon.assign %5 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %6 = maxon.binop %4, %5 {op = add} {kind = i64}
-  maxon.assign %6 {var = z} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  maxon.return %6
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
+    %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
+    %4 = maxon.binop %0, %1 {op = add} {kind = i64}
+    maxon.assign %4 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.binop %2, %3 {op = add} {kind = i64}
+    maxon.assign %5 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    maxon.assign %6 {var = z} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.return %6
   }
   func @main() -> i64 {
   entry:
-  %7 = maxon.literal {value = 42 : i64}
-  maxon.assign %7 {var = sentinel} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %8 = maxon.literal {value = 1 : i64}
-  %9 = maxon.literal {value = 2 : i64}
-  %10 = maxon.literal {value = 3 : i64}
-  %11 = maxon.literal {value = 4 : i64}
-  %12 = maxon.call @useRegs %8, %9, %10, %11
-  maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %13 = maxon.binop %7, %12 {op = add} {kind = i64}
-  maxon.return %13
+    %7 = maxon.literal {value = 42 : i64}
+    maxon.assign %7 {var = sentinel} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %8 = maxon.literal {value = 1 : i64}
+    %9 = maxon.literal {value = 2 : i64}
+    %10 = maxon.literal {value = 3 : i64}
+    %11 = maxon.literal {value = 4 : i64}
+    %12 = maxon.call @useRegs %8, %9, %10, %11
+    maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %13 = maxon.binop %7, %12 {op = add} {kind = i64}
+    maxon.return %13
   }
 }
 === standard
 module {
   func @useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
-  %14 = func.param a : StdI64
-  memref.store %14, a
-  %15 = func.param b : StdI64
-  memref.store %15, b
-  %16 = func.param c : StdI64
-  memref.store %16, c
-  %17 = func.param d : StdI64
-  memref.store %17, d
-  %18 = arith.addi %14, %15
-  memref.store %18, x
-  %19 = arith.addi %16, %17
-  memref.store %19, y
-  %20 = arith.addi %18, %19
-  memref.store %20, z
-  func.return %20
+    %14 = func.param a : StdI64
+    memref.store %14, a
+    %15 = func.param b : StdI64
+    memref.store %15, b
+    %16 = func.param c : StdI64
+    memref.store %16, c
+    %17 = func.param d : StdI64
+    memref.store %17, d
+    %18 = arith.addi %14, %15
+    memref.store %18, x
+    %19 = arith.addi %16, %17
+    memref.store %19, y
+    %20 = arith.addi %18, %19
+    memref.store %20, z
+    func.return %20
   }
   func @main() -> i64 {
   entry:
-  %21 = arith.constant {value = 42 : i64}
-  memref.store %21, sentinel
-  %22 = arith.constant {value = 1 : i64}
-  %23 = arith.constant {value = 2 : i64}
-  %24 = arith.constant {value = 3 : i64}
-  %25 = arith.constant {value = 4 : i64}
-  %26 = func.call @useRegs %22, %23, %24, %25
-  memref.store %26, result
-  %27 = arith.addi %21, %26
-  func.return %27
+    %21 = arith.constant {value = 42 : i64}
+    memref.store %21, sentinel
+    %22 = arith.constant {value = 1 : i64}
+    %23 = arith.constant {value = 2 : i64}
+    %24 = arith.constant {value = 3 : i64}
+    %25 = arith.constant {value = 4 : i64}
+    %26 = func.call @useRegs %22, %23, %24, %25
+    memref.store %26, result
+    %27 = arith.addi %21, %26
+    func.return %27
   }
 }
 === x86
 module {
   func @useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
-  x86.prologue stack_size=64
-  x86.mov [rbp-8], ecx
-  x86.mov [rbp-16], edx
-  x86.mov [rbp-24], r8
-  x86.mov [rbp-32], r9
-  x86.add ecx, edx
-  x86.mov [rbp-40], ecx
-  x86.add r8, r9
-  x86.mov [rbp-48], r8
-  x86.add ecx, r8
-  x86.mov [rbp-56], ecx
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=64
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], r9
+    x86.add ecx, edx
+    x86.mov [rbp-40], ecx
+    x86.add r8, r9
+    x86.mov [rbp-48], r8
+    x86.add ecx, r8
+    x86.mov [rbp-56], ecx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov eax, 42
-  x86.mov [rbp-8], eax
-  x86.mov ecx, 1
-  x86.mov edx, 2
-  x86.mov ebx, 3
-  x86.mov esi, 4
-  x86.mov r8, ebx
-  x86.mov r9, esi
-  x86.call useRegs
-  x86.mov [rbp-16], eax
-  x86.mov edi, [rbp-8]
-  x86.add edi, eax
-  x86.mov eax, edi
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov eax, 42
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov edx, 2
+    x86.mov ebx, 3
+    x86.mov esi, 4
+    x86.mov r8, rbx
+    x86.mov r9, rsi
+    x86.call useRegs
+    x86.mov [rbp-16], eax
+    x86.mov edi, [rbp-8]
+    x86.add edi, eax
+    x86.mov eax, edi
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -4768,74 +4768,74 @@ end 'main'
 module {
   func @sub(a: i64, b: i64) -> i64 {
   entry:
-  %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-  %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-  %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
-  maxon.return %2
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
+    maxon.return %2
   }
   func @main() -> i64 {
   entry:
-  %3 = maxon.literal {value = 10 : i64}
-  maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %4 = maxon.literal {value = 3 : i64}
-  maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %5 = maxon.call @sub %4, %3
-  maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %6 = maxon.literal {value = 45 : i64}
-  %7 = maxon.binop %5, %6 {op = add} {kind = i64}
-  maxon.return %7
+    %3 = maxon.literal {value = 10 : i64}
+    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 3 : i64}
+    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.call @sub %4, %3
+    maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 45 : i64}
+    %7 = maxon.binop %5, %6 {op = add} {kind = i64}
+    maxon.return %7
   }
 }
 === standard
 module {
   func @sub(a: i64, b: i64) -> i64 {
   entry:
-  %8 = func.param a : StdI64
-  memref.store %8, a
-  %9 = func.param b : StdI64
-  memref.store %9, b
-  %10 = arith.subi %8, %9
-  func.return %10
+    %8 = func.param a : StdI64
+    memref.store %8, a
+    %9 = func.param b : StdI64
+    memref.store %9, b
+    %10 = arith.subi %8, %9
+    func.return %10
   }
   func @main() -> i64 {
   entry:
-  %11 = arith.constant {value = 10 : i64}
-  memref.store %11, x
-  %12 = arith.constant {value = 3 : i64}
-  memref.store %12, y
-  %13 = func.call @sub %12, %11
-  memref.store %13, result
-  %14 = arith.constant {value = 45 : i64}
-  %15 = arith.addi %13, %14
-  func.return %15
+    %11 = arith.constant {value = 10 : i64}
+    memref.store %11, x
+    %12 = arith.constant {value = 3 : i64}
+    memref.store %12, y
+    %13 = func.call @sub %12, %11
+    memref.store %13, result
+    %14 = arith.constant {value = 45 : i64}
+    %15 = arith.addi %13, %14
+    func.return %15
   }
 }
 === x86
 module {
   func @sub(a: i64, b: i64) -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov [rbp-8], ecx
-  x86.mov [rbp-16], edx
-  x86.sub ecx, edx
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.sub ecx, edx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=32
-  x86.mov eax, 10
-  x86.mov [rbp-8], eax
-  x86.mov ecx, 3
-  x86.mov [rbp-16], ecx
-  x86.mov edx, eax
-  x86.call sub
-  x86.mov [rbp-24], eax
-  x86.mov edx, 45
-  x86.add eax, edx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 3
+    x86.mov [rbp-16], ecx
+    x86.mov rdx, rax
+    x86.call sub
+    x86.mov [rbp-24], eax
+    x86.mov edx, 45
+    x86.add eax, edx
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -6235,7 +6235,7 @@ module {
     x86.jne main.process_0.cmp1
   process_0.case0:
     x86.mov eax, 10
-    x86.mov ecx, eax
+    x86.mov rcx, rax
     x86.call double
     x86.mov [rbp-16], eax
     x86.jmp main.process_0.merge
@@ -6246,7 +6246,7 @@ module {
     x86.jne main.process_0.case2
   process_0.case1:
     x86.mov eax, 20
-    x86.mov ecx, eax
+    x86.mov rcx, rax
     x86.call double
     x86.mov [rbp-16], eax
     x86.jmp main.process_0.merge
@@ -7082,7 +7082,7 @@ module {
   entry:
     x86.prologue stack_size=64
     x86.mov eax, 2
-    x86.mov ecx, eax
+    x86.mov rcx, rax
     x86.call lookup
     x86.mov [rbp-8], edx
     x86.xor ecx, ecx

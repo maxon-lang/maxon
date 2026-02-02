@@ -556,13 +556,27 @@ public class X86CodeEmitter {
   }
 
   private void EmitXchgRegReg(X86Register a, X86Register b) {
-    if (!Is32BitReg(a))
-      throw new ArgumentException($"EmitXchgRegReg: expected 32-bit register, got {a}");
-    if (!Is32BitReg(b))
-      throw new ArgumentException($"EmitXchgRegReg: expected 32-bit register, got {b}");
-    // XCHG r32, r32: 87 /r
-    EmitByte(0x87);
-    EmitByte((byte)(0xC0 | (RegCode(a) << 3) | RegCode(b)));
+    bool a64 = Is64BitReg(a), a32 = Is32BitReg(a);
+    bool b64 = Is64BitReg(b), b32 = Is32BitReg(b);
+
+    if (!a64 && !a32)
+      throw new ArgumentException($"EmitXchgRegReg: unsupported register size for a: {a}");
+    if (!b64 && !b32)
+      throw new ArgumentException($"EmitXchgRegReg: unsupported register size for b: {b}");
+
+    if (a64 && b64) {
+      // XCHG r64, r64: REX.W 87 /r
+      byte rex = (byte)(0x48 | (NeedsRex(a) ? 0x04 : 0) | (NeedsRex(b) ? 0x01 : 0));
+      EmitByte(rex);
+      EmitByte(0x87);
+      EmitByte((byte)(0xC0 | (RegCode(a) << 3) | RegCode(b)));
+    } else if (a32 && b32) {
+      // XCHG r32, r32: 87 /r
+      EmitByte(0x87);
+      EmitByte((byte)(0xC0 | (RegCode(a) << 3) | RegCode(b)));
+    } else {
+      throw new ArgumentException($"EmitXchgRegReg: register sizes must match (got {a} and {b})");
+    }
   }
 
   private void EmitMovRegReg(X86Register dest, X86Register src) {

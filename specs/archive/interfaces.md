@@ -461,4 +461,20 @@ end 'main'
 63
 ```
 
+<!-- test: error.builtin-interface-stdlib-only -->
+```maxon
+type MyCollection uses Element is BuiltinArrayLiteral
+  var managed __ManagedMemory
 
+  static function BuiltinArrayLiteral.init(managed __ManagedMemory) returns Self
+    return {managed: managed}
+  end 'init'
+end 'MyCollection'
+
+function main() returns int
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/vector/error.builtin-interface-stdlib-only.test:2:6: Interface 'BuiltinArrayLiteral' can only be implemented by stdlib types
+```

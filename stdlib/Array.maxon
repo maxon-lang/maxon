@@ -77,23 +77,6 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
     end 'lower'
   end 'set'
 
-  /// Transform each element with the given function
-  export function map(transform (Element) returns Element) returns Self
-    var len = __managed_memory_len(managed)
-    var result = __managed_memory_create(len, __element_size())
-    var i = 0
-    while i < len 'loop'
-      // Since i is always in bounds, we can safely unwrap with 'or 0'
-      // The default value is never used
-      var elem = __managed_memory_get_unchecked(managed, i)
-      var transformed = transform(elem)
-      __managed_memory_set_at(result, i, transformed)
-      i = i + 1
-    end 'loop'
-    __managed_memory_set_length(result, len)
-    return {managed: result, iterIndex: 0}
-  end 'map'
-
   // =========================================================================
   // Mutating Operations
   // =========================================================================

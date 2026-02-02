@@ -52,6 +52,7 @@ runtime (HeapAlloc,HeapFree, etc)
 __chkstk
 closures
 arrays.md
+vector.md
 
 
 ## Hard (Significant Compiler Work)
