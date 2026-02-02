@@ -54,6 +54,7 @@ public enum ErrorCode {
   SemanticMissingReturn = 3012,
   SemanticUnexportedFieldAccess = 3013,
   SemanticRedundantTypeAnnotation = 3014,
+  SemanticPartialInterfaceImpl = 3015,
   SemanticEnumDuplicateCase = 3030,
   SemanticEnumDuplicateRawValue = 3031,
   SemanticEnumRawValueTypeMismatch = 3032,

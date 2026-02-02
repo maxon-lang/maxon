@@ -42,6 +42,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Also tracks return type: index -1 means return type is Element-polymorphic
   private readonly Dictionary<string, HashSet<int>> _elementPolymorphicParams = [];
 
+
   /// <summary>
   /// Resolves a qualified method name, falling back to the source type for type aliases.
   /// E.g., "ByteArray.push" → looks for "ByteArray.push" first, then "Array.push".
@@ -218,8 +219,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         PreScanEnum(module);
       } else if (Check(TokenType.TypeAlias)) {
         PreScanTypeAlias();
-      } else if (Check(TokenType.Interface) || Check(TokenType.Extension)) {
-        // Skip interface/extension declarations (skip to matching end)
+      } else if (Check(TokenType.Interface)) {
+        PreScanInterface();
+      } else if (Check(TokenType.Extension)) {
         Advance();
         SkipToMatchingEnd();
       } else {
@@ -269,11 +271,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
-    // Handle interface-qualified names like BuiltinArrayLiteral.init → strip interface prefix
-    if (Check(TokenType.Dot)) {
-      Advance(); // consume '.'
-      nameToken = Expect(TokenType.Identifier);
-    }
     var funcName = owningType != null ? $"{owningType}.{nameToken.Value}" : nameToken.Value;
 
     Expect(TokenType.LeftParen);
@@ -470,10 +467,113 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
 
+    // Validate interface conformance: each required method must exist with matching signature
+    foreach (var ifaceName in conformingInterfaces) {
+      if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceType) || ifaceType is not MlirInterfaceType iface)
+        continue;
+
+      var missingMethods = new List<string>();
+      var wrongSignatureMethods = new List<string>();
+      foreach (var method in iface.Methods) {
+        var qualifiedName = $"{typeName}.{method.Name}";
+        var func = module.Functions.FirstOrDefault(f => f.Name == qualifiedName);
+        if (func == null) {
+          missingMethods.Add(method.Format());
+        } else if (!SignatureMatches(method, func, ifaceName, typeName)) {
+          var actualSig = FormatFunctionSignature(method.Name, func);
+          wrongSignatureMethods.Add($"{actualSig} (expected {method.Format()})");
+        }
+      }
+
+      if (missingMethods.Count > 0) {
+        var details = string.Join("\n", missingMethods.Select(m => $"  - {m}"));
+        throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
+          $"Partial interface implementation: type '{typeName}' is missing {missingMethods.Count} method(s):\n{details}",
+          typeNameToken.Line, typeNameToken.Column);
+      }
+
+      if (wrongSignatureMethods.Count > 0) {
+        var details = string.Join("\n", wrongSignatureMethods.Select(m => $"  - {m}"));
+        throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
+          $"Partial interface implementation: type '{typeName}' has {wrongSignatureMethods.Count} method(s) with wrong signature:\n{details}",
+          typeNameToken.Line, typeNameToken.Column);
+      }
+    }
+
     // consume 'end'
     if (Check(TokenType.End)) Advance();
     // Skip end label
     if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  /// <summary>
+  /// Maps a source-level type name (e.g., "int") to the corresponding MlirType.Name (e.g., "i64").
+  /// </summary>
+  private static string ResolveTypeName(string sourceTypeName) {
+    return sourceTypeName switch {
+      "int" => MlirType.I64.Name,
+      "float" => MlirType.F64.Name,
+      "bool" => MlirType.I1.Name,
+      "byte" => MlirType.I8.Name,
+      _ => sourceTypeName
+    };
+  }
+
+  /// <summary>
+  /// Checks whether a function's signature matches an interface method's expected signature.
+  /// Instance methods have 'self' as the first parameter which is skipped during comparison.
+  /// Self-typed parameters in the interface (resolved to ifaceName) match the implementing typeName.
+  /// </summary>
+  private static bool SignatureMatches(MlirInterfaceMethodSignature method, MlirFunction<MaxonOp> func, string ifaceName, string typeName) {
+    // Instance methods have 'self' as first param; skip it
+    var funcParamTypes = func.ParamTypes.Skip(1).ToList();
+
+    if (method.ParamTypeNames.Count != funcParamTypes.Count)
+      return false;
+
+    for (int i = 0; i < method.ParamTypeNames.Count; i++) {
+      var expectedTypeName = method.ParamTypeNames[i];
+      // Self-typed parameters: interface stores the interface name, implementation uses the concrete type
+      if (expectedTypeName == ifaceName)
+        expectedTypeName = typeName;
+      if (ResolveTypeName(expectedTypeName) != funcParamTypes[i].Name)
+        return false;
+    }
+
+    var expectedReturnName = method.ReturnTypeName;
+    if (expectedReturnName == ifaceName)
+      expectedReturnName = typeName;
+    var expectedReturn = expectedReturnName != null ? ResolveTypeName(expectedReturnName) : MlirType.Void.Name;
+    var actualReturn = func.ReturnType?.Name ?? MlirType.Void.Name;
+    if (expectedReturn != actualReturn)
+      return false;
+
+    return true;
+  }
+
+  /// <summary>
+  /// Formats a function's actual signature in the same style as MlirInterfaceMethodSignature.Format(),
+  /// using source-level type names for readability.
+  /// </summary>
+  private static string FormatFunctionSignature(string methodName, MlirFunction<MaxonOp> func) {
+    // Skip 'self' parameter
+    var paramNames = func.ParamNames.Skip(1).ToList();
+    var paramTypes = func.ParamTypes.Skip(1).ToList();
+    var paramsStr = string.Join(", ", paramNames.Zip(paramTypes, (n, t) => $"{n} {FormatTypeName(t)}"));
+    var returnStr = func.ReturnType != null ? $" returns {FormatTypeName(func.ReturnType)}" : " returns void";
+    return $"{methodName}({paramsStr}){returnStr}";
+  }
+
+  /// <summary>
+  /// Maps an MlirType back to its source-level name for error messages.
+  /// </summary>
+  private static string FormatTypeName(MlirType type) {
+    if (type == MlirType.I64) return "int";
+    if (type == MlirType.F64) return "float";
+    if (type == MlirType.I1) return "bool";
+    if (type == MlirType.I8) return "byte";
+    if (type == MlirType.Void) return "void";
+    return type.Name;
   }
 
   private void PreScanEnum(MlirModule<MaxonOp> module) {
@@ -586,6 +686,96 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Pre-scan an interface declaration to register its method signatures.
+  /// Interface methods are signature-only (no body, no end keyword per method).
+  /// Handles uses clause, static functions, typealias declarations, and throws clauses.
+  /// </summary>
+  private void PreScanInterface() {
+    Advance(); // consume 'interface'
+    var nameToken = Expect(TokenType.Identifier);
+    var interfaceName = nameToken.Value;
+    // Allow Self to resolve inside interface method signatures
+    _currentTypeName = interfaceName;
+
+    // Temporary entry so ParseTypeRef can resolve Self references
+    if (!_typeRegistry.ContainsKey(interfaceName)) {
+      _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, []);
+    }
+
+    // Handle 'uses' clause for associated types (e.g., interface Iterable uses Element)
+    var associatedTypeNames = ParseUsesClause();
+
+    SkipNewlines();
+
+    var methods = new List<MlirInterfaceMethodSignature>();
+
+    while (!Check(TokenType.End) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End)) break;
+
+      // Skip 'export' on members
+      if (Check(TokenType.Export)) Advance();
+
+      // Skip static function declarations (factory methods, not instance requirements)
+      if (Check(TokenType.Static)) {
+        SkipToEndOfLine();
+        SkipNewlines();
+        continue;
+      }
+
+      // Skip typealias declarations inside interfaces
+      if (Check(TokenType.TypeAlias)) {
+        SkipToEndOfLine();
+        SkipNewlines();
+        continue;
+      }
+
+      if (!Check(TokenType.Function)) {
+        SkipToEndOfLine();
+        SkipNewlines();
+        continue;
+      }
+
+      Advance(); // consume 'function'
+      var methodName = Expect(TokenType.Identifier).Value;
+
+      Expect(TokenType.LeftParen);
+      var paramNames = new List<string>();
+      var paramTypeNames = new List<string>();
+      if (!Check(TokenType.RightParen)) {
+        do {
+          var paramToken = Expect(TokenType.Identifier);
+          var paramTypeName = ExpectTypeName();
+          paramNames.Add(paramToken.Value);
+          paramTypeNames.Add(paramTypeName);
+        } while (Check(TokenType.Comma) && Advance() != null);
+      }
+      Expect(TokenType.RightParen);
+
+      string? returnTypeName = null;
+      if (Check(TokenType.Returns)) {
+        Advance();
+        returnTypeName = ExpectTypeName();
+      }
+
+      // Skip rest of line (handles throws clause and any other trailing tokens)
+      SkipToEndOfLine();
+
+      methods.Add(new MlirInterfaceMethodSignature(methodName, paramTypeNames, paramNames, returnTypeName));
+      SkipNewlines();
+    }
+
+    // consume 'end'
+    if (Check(TokenType.End)) Advance();
+    // Skip end label
+    if (Check(TokenType.CharacterLiteral)) Advance();
+
+    _currentTypeName = null;
+    RemoveAssociatedTypePlaceholders(associatedTypeNames);
+    _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, methods);
+  }
+
+  /// <summary>
   /// Pre-scan a typealias declaration: typealias Name is SourceType with (Type1, Type2, ...)
   /// Creates a concrete struct type by substituting associated type parameters.
   /// Also supports "with N Type" form where N is an integer capacity hint (e.g., Vector with 3 int).
@@ -667,11 +857,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
-    // Handle interface-qualified names like Sized.count → strip interface prefix
-    if (Check(TokenType.Dot)) {
-      Advance(); // consume '.'
-      nameToken = Expect(TokenType.Identifier);
-    }
     var methodName = $"{typeName}.{nameToken.Value}";
 
     Expect(TokenType.LeftParen);
@@ -962,8 +1147,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SkipTopLevelDecl();
     } else if (Check(TokenType.TypeAlias)) {
       SkipTypeAlias();
-    } else if (Check(TokenType.Interface) || Check(TokenType.Extension)) {
-      // Skip interface/extension declarations (already handled or not needed)
+    } else if (Check(TokenType.Interface)) {
+      SkipInterfaceDecl();
+    } else if (Check(TokenType.Extension)) {
       Advance();
       SkipToMatchingEnd();
     } else {
@@ -981,6 +1167,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void SkipTypeAlias() {
     Advance(); // consume 'typealias'
     SkipToEndOfLine();
+  }
+
+  /// <summary>
+  /// Skip an interface declaration during the main parse phase.
+  /// Does not use SkipToMatchingEnd because interface method signatures
+  /// have no body/end, so the depth counter would be wrong.
+  /// </summary>
+  private void SkipInterfaceDecl() {
+    Advance(); // consume 'interface'
+    SkipToEndOfLine(); // skip name and optional uses clause
+    SkipNewlines();
+    while (!Check(TokenType.End) && !IsAtEnd()) {
+      SkipToEndOfLine();
+      SkipNewlines();
+    }
+    // consume 'end'
+    if (Check(TokenType.End)) Advance();
+    // Skip end label
+    if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
   private void ParseTypeDecl(MlirModule<MaxonOp> module) {
@@ -1197,11 +1402,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseStaticMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = Expect(TokenType.Identifier);
-    // Handle interface-qualified names like BuiltinArrayLiteral.init → strip interface prefix
-    if (Check(TokenType.Dot)) {
-      Advance(); // consume '.'
-      nameToken = Expect(TokenType.Identifier);
-    }
     var methodName = $"{typeName}.{nameToken.Value}";
     Logger.Debug(LogCategory.Parser, $"Parsing static method: {methodName}");
 
@@ -1228,11 +1428,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = Expect(TokenType.Identifier);
-    // Handle interface-qualified names like Sized.count → strip interface prefix
-    if (Check(TokenType.Dot)) {
-      Advance(); // consume '.'
-      nameToken = Expect(TokenType.Identifier);
-    }
     var methodName = $"{typeName}.{nameToken.Value}";
     Logger.Debug(LogCategory.Parser, $"Parsing instance method: {methodName}");
 

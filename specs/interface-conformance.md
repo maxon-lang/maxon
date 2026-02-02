@@ -11,7 +11,7 @@ category: type-system
 
 ### Declaring Interface Conformance
 
-Types declare interface conformance using the `is` keyword. Methods implementing interface requirements must use the qualified name `InterfaceName.methodName`:
+Types declare interface conformance using the `is` keyword. The type must implement all methods declared by the interface:
 
 ```text
 interface Printable
@@ -37,7 +37,7 @@ end 'MyType'
 
 ### Conformance Errors
 
-If a type declares conformance but doesn't implement all required methods (or doesn't use qualified names), a compile error is reported:
+If a type declares conformance but doesn't implement all required methods, a compile error is reported:
 
 ```text
 interface Counter
@@ -49,7 +49,7 @@ type BadCounter is Counter
   function get() returns int
     return 0
   end 'get'
-  // ERROR: missing 'Counter.increment' method
+  // ERROR: missing 'increment' method
 end 'BadCounter'
 ```
 
@@ -137,8 +137,50 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/interface-conformance.conformance-missing-method.1.test:1:1: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
+error E3015: specs/fragments/interface-conformance/conformance-missing-method.test:7:6: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
   - increment() returns void
+```
+
+<!-- test: conformance-wrong-param-type -->
+```maxon
+interface Processor
+  function process(value int) returns int
+end 'Processor'
+
+type BadProcessor is Processor
+  function process(value float) returns int
+    return 0
+  end 'process'
+end 'BadProcessor'
+
+function main() returns int
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3015: specs/fragments/interface-conformance/conformance-wrong-param-type.test:6:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
+  - process(value float) returns int (expected process(value int) returns int)
+```
+
+<!-- test: conformance-wrong-return-type -->
+```maxon
+interface Provider
+  function provide() returns int
+end 'Provider'
+
+type BadProvider is Provider
+  function provide() returns float
+    return 0.0
+  end 'provide'
+end 'BadProvider'
+
+function main() returns int
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3015: specs/fragments/interface-conformance/conformance-wrong-return-type.test:6:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
+  - provide() returns float (expected provide() returns int)
 ```
 
 <!-- test: conformance-extra-methods-ok -->
@@ -168,30 +210,6 @@ end 'main'
 42
 ```
 
-<!-- test: conformance-unqualified-method-error -->
-```maxon
-interface Counter
-  function get() returns int
-end 'Counter'
-
-type BadCounter is Counter
-  var value int
-
-  // ERROR: method must be declared as Counter.get
-  function get() returns int
-    return value
-  end 'get'
-end 'BadCounter'
-
-function main() returns int
-  return 0
-end 'main'
-```
-```maxoncstderr
-error E015: specs/fragments/interface-conformance.conformance-unqualified-method-error.1.test:1:1: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
-  - get() returns int
-```
-
 <!-- test: conformance-no-interface -->
 ```maxon
 type Standalone
@@ -209,4 +227,22 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: error.builtin-interface-stdlib-only -->
+```maxon
+type MyCollection uses Element is BuiltinArrayLiteral
+  var managed __ManagedMemory
+
+  static function init(managed __ManagedMemory) returns Self
+    return {managed: managed}
+  end 'init'
+end 'MyCollection'
+
+function main() returns int
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/interface-conformance/error.builtin-interface-stdlib-only.test:2:6: Interface 'BuiltinArrayLiteral' can only be implemented by stdlib types
 ```

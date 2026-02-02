@@ -53,6 +53,23 @@ public class MlirStructType : MlirType {
   public MlirStructField? GetField(string name) => Fields.FirstOrDefault(f => f.Name == name);
 }
 
+public class MlirInterfaceMethodSignature(string name, List<string> paramTypeNames, List<string> paramNames, string? returnTypeName) {
+  public string Name { get; } = name;
+  public List<string> ParamTypeNames { get; } = paramTypeNames;
+  public List<string> ParamNames { get; } = paramNames;
+  public string? ReturnTypeName { get; } = returnTypeName;
+
+  public string Format() {
+    var paramsStr = string.Join(", ", ParamNames.Zip(ParamTypeNames, (n, t) => $"{n} {t}"));
+    var returnStr = ReturnTypeName != null ? $" returns {ReturnTypeName}" : " returns void";
+    return $"{Name}({paramsStr}){returnStr}";
+  }
+}
+
+public class MlirInterfaceType(string name, List<MlirInterfaceMethodSignature> methods) : MlirType(name, 0) {
+  public List<MlirInterfaceMethodSignature> Methods { get; } = methods;
+}
+
 public class MlirEnumCase(string name, int ordinal, object? rawValue = null) {
   public string Name { get; } = name;
   public int Ordinal { get; } = ordinal;

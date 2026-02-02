@@ -7,7 +7,7 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
   var _iterPos int
 
   // Default type for string literals - compiler discovers this via BuiltinStringLiteral interface
-  static function BuiltinStringLiteral.init(managed __ManagedMemory) returns String
+  static function init(managed __ManagedMemory) returns String
     return {_managed: managed, _iterPos: 0}
   end 'init'
 
@@ -30,11 +30,11 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
     return countGraphemesManaged(_managed)
   end 'count'
 
-  function Hashable.hash() returns int
+  function hash() returns int
     return hashManagedString(_managed)
   end 'hash'
 
-  function Equatable.equals(other String) returns bool
+  function equals(other String) returns bool
     var lenA = __managed_memory_len(_managed)
     var lenB = __managed_memory_len(other._managed)
     if lenA != lenB 'lenMismatch'
@@ -50,11 +50,11 @@ export type String is BuiltinStringLiteral, Hashable, Equatable, Stringable, Ite
     return true
   end 'equals'
 
-  function Stringable.toString(_format String) returns String
+  function toString(_format String) returns String
     return self
   end 'toString'
 
-  function Iterable.next() returns Character throws IterationError
+  function next() returns Character throws IterationError
     if _iterPos < __managed_memory_len(_managed) 'check'
       var len = __managed_memory_len(_managed)
       var endPos = findGraphemeEndManaged(_managed, startPos: _iterPos, len: len)
@@ -275,11 +275,11 @@ export type StringIndex is Equatable, Comparable
     return _bytePos
   end 'bytePos'
 
-  function Equatable.equals(other StringIndex) returns bool
+  function equals(other StringIndex) returns bool
     return _charIndex == other._charIndex
   end 'equals'
 
-  function Comparable.compare(other StringIndex) returns int
+  function compare(other StringIndex) returns int
     if _charIndex < other._charIndex 'less'
       return 0 - 1
     end 'less'

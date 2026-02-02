@@ -22,7 +22,7 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
   var iterIndex int                  // Iteration state
 
   // Default type for dictionary literals - compiler discovers this via BuiltinDictionaryLiteral interface
-  static function BuiltinDictionaryLiteral.init(initKeys __ManagedMemory, initValues __ManagedMemory) returns Self
+  static function init(initKeys __ManagedMemory, initValues __ManagedMemory) returns Self
     // Get number of elements in the managed memorys
     var numElements = __managed_memory_len(initKeys)
 
@@ -59,7 +59,7 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
   /// Insert a key-value pair into the map
   /// If the key already exists, updates the value
   /// Automatically resizes the map when load factor exceeds 75%
-  export function Dictionary.insert(key Key, value Value)
+  export function insert(key Key, value Value)
     // Initialize if empty struct was created with zero capacity
     if capacity == 0 'init_empty'
       var newKeys = KeyArray{}
@@ -136,7 +136,7 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
   end 'insert'
 
   /// Get the value for a key, throws if not found
-  export function Dictionary.get(key Key) returns Value throws MapError
+  export function get(key Key) returns Value throws MapError
     // Empty map contains nothing
     if capacity == 0 'empty_check'
       throw MapError.keyNotFound
@@ -174,7 +174,7 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
   end 'get'
 
   /// Check if key exists in the map
-  export function Dictionary.contains(key Key) returns bool
+  export function contains(key Key) returns bool
     // Empty map contains nothing
     if capacity == 0 'empty_check'
       return false
@@ -210,7 +210,7 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
   end 'contains'
 
   /// Remove key from map, returns true if key was present
-  export function Dictionary.remove(key Key) returns bool
+  export function remove(key Key) returns bool
     // Empty map has nothing to remove
     if capacity == 0 'empty_check'
       return false
@@ -248,12 +248,12 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
   end 'remove'
 
   /// Get number of entries in the map
-  export function Sized.count() returns int
+  export function count() returns int
     return count
   end 'count'
 
   /// Iterate through map entries, returning key-value pairs
-  function Iterable.next() returns Entry throws IterationError
+  function next() returns Entry throws IterationError
     while iterIndex < capacity 'scan'
       var state = try states.get(iterIndex) otherwise SlotState.Empty
       var idx = iterIndex

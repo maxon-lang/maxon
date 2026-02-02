@@ -53,15 +53,14 @@ __chkstk
 closures
 arrays.md
 vector.md
+interface-conformance.md - Interface conformance checking
 
 
 ## Hard (Significant Compiler Work)
-arrays.md - Array type, literals, methods
 initablefromarrayliteral.md - Protocol for array initialization
 array-managed-elements.md - Managed array memory
 init-from-literal.md - Initialization protocols
 interfaces.md - Interface system with conformance
-interface-conformance.md - Interface conformance checking
 interface-extensions.md - Extending interfaces
 associated-types.md - Associated types in interfaces
 collection.md - Collection protocols
