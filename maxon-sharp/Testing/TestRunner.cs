@@ -447,20 +447,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       return (false, "Failed to read .rdata section data");
     }
 
-    // Trim trailing zeros from actual (PE sections are padded to alignment)
-    var actualTrimmed = TrimTrailingZeros(actualBytes);
-
-    if (actualTrimmed.AsSpan().SequenceEqual(expectedBytes)) {
+    if (actualBytes.AsSpan().SequenceEqual(expectedBytes)) {
       return (true, null);
     }
 
-    return (false, $"Rdata mismatch.\nExpected ({expectedBytes.Length} bytes): {FormatHex(expectedBytes)}\nActual ({actualTrimmed.Length} bytes): {FormatHex(actualTrimmed)}");
-  }
-
-  private static byte[] TrimTrailingZeros(byte[] data) {
-    var end = data.Length;
-    while (end > 0 && data[end - 1] == 0) end--;
-    return data[..end];
+    return (false, $"Rdata mismatch.\nExpected ({expectedBytes.Length} bytes): {FormatHex(expectedBytes)}\nActual ({actualBytes.Length} bytes): {FormatHex(actualBytes)}");
   }
 
   private static string FormatHex(byte[] data) {
@@ -598,8 +589,10 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     try {
       using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read);
       fs.Position = section.RawOffset;
-      var data = new byte[section.RawSize];
-      fs.ReadExactly(data, 0, (int)section.RawSize);
+      // Read VirtualSize bytes (actual data) rather than RawSize (file-aligned, padded with zeros)
+      var readSize = Math.Min(section.VirtualSize, section.RawSize);
+      var data = new byte[readSize];
+      fs.ReadExactly(data, 0, (int)readSize);
       return data;
     } catch {
       return null;

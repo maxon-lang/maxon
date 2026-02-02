@@ -291,6 +291,13 @@ public class X86LeaRegMemOp(X86Register dest, int displacement) : X86Op {
   public override string Mnemonic => $"x86.lea {Dest.ToString().ToLower()}, [rbp{(Displacement >= 0 ? "+" : "")}{Displacement}]";
 }
 
+// LEA dest, [rip+disp] - load effective address of an rdata label via RIP-relative
+public class X86LeaRipRelOp(X86Register dest, string rdataLabel) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public string RdataLabel { get; } = rdataLabel;
+  public override string Mnemonic => $"x86.lea_rdata {Dest.ToString().ToLower()}, [{RdataLabel}]";
+}
+
 // MOV [baseReg+disp], srcReg - store through register-indirect addressing
 public class X86MovIndirectMemRegOp(X86Register baseReg, int displacement, X86Register src) : X86Op {
   public X86Register BaseReg { get; } = baseReg;
@@ -353,4 +360,16 @@ public class X86GlobalStoreXmmOp(string globalName, X86XmmRegister src) : X86Op 
   public string GlobalName { get; } = globalName;
   public X86XmmRegister Src { get; } = src;
   public override string Mnemonic => $"x86.movsd [rip+{GlobalName}], {Src.ToString().ToLower()}";
+}
+
+// REP MOVSB - block copy RSI -> RDI, RCX bytes
+public class X86RepMovsbOp : X86Op {
+  public override string Mnemonic => "x86.rep_movsb";
+}
+
+// CALL [rip+IAT] for imported DLL function
+public class X86CallImportOp(string dllName, string functionName) : X86Op {
+  public string DllName { get; } = dllName;
+  public string FunctionName { get; } = functionName;
+  public override string Mnemonic => $"x86.call_import {DllName}!{FunctionName}";
 }

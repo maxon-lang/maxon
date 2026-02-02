@@ -28,6 +28,7 @@ public class RegisterManager {
   // Spill slot allocation: offsets grow downward (more negative) from the variable area
   private int _spillBaseOffset;
   private int _nextSpillOffset;
+  private int _minSpillOffset; // tracks deepest spill across all blocks
 
   /// <summary>
   /// Total stack frame size including variables and spill slots, aligned to 16 bytes.
@@ -35,7 +36,7 @@ public class RegisterManager {
   /// </summary>
   public int TotalStackSize {
     get {
-      int raw = -_nextSpillOffset;
+      int raw = -Math.Min(_nextSpillOffset, _minSpillOffset);
       return raw > 0 ? (raw + 15) & ~15 : 0;
     }
   }
@@ -488,9 +489,15 @@ public class RegisterManager {
       if (args[i] is StdF64) placed[i] = true;
     }
 
+    // Compute target registers: use 64-bit for pointer args
+    var targetRegs = new X86Register[regArgCount];
+    for (int i = 0; i < regArgCount; i++) {
+      targetRegs[i] = args[i] is StdPtr ? To64Bit(CallConvRegs[i]) : CallConvRegs[i];
+    }
+
     // Pass 1: mark GPR args already in their target register
     foreach (int i in gprArgs) {
-      if (argSources[i] == CallConvRegs[i])
+      if (SamePhysicalRegister(argSources[i], targetRegs[i]))
         placed[i] = true;
     }
 
@@ -502,16 +509,16 @@ public class RegisterManager {
         if (placed[i]) continue;
         bool targetBlocked = false;
         foreach (int j in gprArgs) {
-          if (j != i && !placed[j] && argSources[j] == CallConvRegs[i]) {
+          if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
             targetBlocked = true;
             break;
           }
         }
         if (!targetBlocked) {
           if (argSources[i] is { } srcReg)
-            block.AddOp(new X86MovRegRegOp(CallConvRegs[i], srcReg));
+            block.AddOp(new X86MovRegRegOp(targetRegs[i], srcReg));
           else
-            block.AddOp(new X86MovRegMemOp(CallConvRegs[i], argStackHomes[i]!.Value));
+            block.AddOp(new X86MovRegMemOp(targetRegs[i], argStackHomes[i]!.Value));
           placed[i] = true;
           progress = true;
         }
@@ -521,10 +528,10 @@ public class RegisterManager {
     // Pass 3: resolve remaining conflicts with xchg (only register-register cycles)
     foreach (int i in gprArgs) {
       if (placed[i]) continue;
-      block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, CallConvRegs[i]));
+      block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, targetRegs[i]));
       // Update the other arg that was in the target register
       foreach (int j in gprArgs) {
-        if (j != i && argSources[j] == CallConvRegs[i]) {
+        if (j != i && SamePhysicalRegister(argSources[j], targetRegs[i])) {
           argSources[j] = argSources[i];
           break;
         }
@@ -545,7 +552,7 @@ public class RegisterManager {
       if (result is StdF64) {
         AssignXmm(X86XmmRegister.Xmm0, result);
       } else {
-        Assign(X86Register.Eax, result);
+        Assign(result is StdPtr ? X86Register.Rax : X86Register.Eax, result);
       }
     }
   }
@@ -624,6 +631,14 @@ public class RegisterManager {
   /// for those registers so stale values are never used.
   /// Windows x64 caller-saved: rax, rcx, rdx, r8, r9, r10, r11, xmm0-xmm5.
   /// </summary>
+  private void Invalidate(X86Register reg) {
+    if (_registerContents.TryGetValue(reg, out var value)) {
+      _valueToRegister.Remove(value);
+      _registerContents.Remove(reg);
+      _lastUsed.Remove(reg);
+    }
+  }
+
   private void InvalidateCallerSavedRegisters() {
     foreach (var reg in CallerSavedRegisters) {
       if (_registerContents.TryGetValue(reg, out var value)) {
@@ -714,6 +729,42 @@ public class RegisterManager {
   public void EmitLeaFromStack(StdPtr result, int offset, MlirBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new X86LeaRegMemOp(To64Bit(gpr), offset));
+  }
+
+  /// <summary>
+  /// Emit LEA reg, [rip + disp] to get the address of an rdata label.
+  /// Used for constant array literals stored in .rdata.
+  /// </summary>
+  public void EmitLeaRipRelative(StdPtr result, string rdataLabel, MlirBlock<X86Op> block) {
+    var gpr = AllocateRegister(result, block);
+    block.AddOp(new X86LeaRipRelOp(To64Bit(gpr), rdataLabel));
+  }
+
+  /// <summary>
+  /// Move one value to another (same register, type reinterpretation).
+  /// Used for StdPtrToI64Op where the value is the same register.
+  /// </summary>
+  public void EmitMovValueToValue(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcReg = EnsureInRegister(input, block);
+    var dstReg = AllocateRegister(result, block, protect1: srcReg);
+    if (srcReg != dstReg)
+      block.AddOp(new X86MovRegRegOp(To64Bit(dstReg), To64Bit(srcReg)));
+  }
+
+  /// <summary>
+  /// Copy byteCount bytes from src to dst using rep movsb.
+  /// Uses RSI (src), RDI (dst), RCX (count).
+  /// </summary>
+  public void EmitMemCopy(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, MlirBlock<X86Op> block) {
+    // Ensure values are in the required registers for rep movsb
+    EnsureInSpecificRegister(srcPtr, X86Register.Rsi, block);
+    EnsureInSpecificRegister(dstPtr, X86Register.Rdi, block);
+    EnsureInSpecificRegister(byteCount, X86Register.Rcx, block);
+    block.AddOp(new X86RepMovsbOp());
+    // rep movsb clobbers RSI, RDI, RCX — invalidate them
+    Invalidate(X86Register.Esi);
+    Invalidate(X86Register.Edi);
+    Invalidate(X86Register.Ecx);
   }
 
   /// <summary>
@@ -833,6 +884,7 @@ public class RegisterManager {
   public void SetSpillBaseOffset(int offset) {
     _spillBaseOffset = offset;
     _nextSpillOffset = offset;
+    _minSpillOffset = offset;
   }
 
   public void Reset() {
@@ -849,6 +901,8 @@ public class RegisterManager {
     _valueXmmStackHome.Clear();
     _xmmLastUsed.Clear();
 
+    if (_nextSpillOffset < _minSpillOffset)
+      _minSpillOffset = _nextSpillOffset;
     _nextSpillOffset = _spillBaseOffset;
   }
 
@@ -856,6 +910,11 @@ public class RegisterManager {
     _registerContents[reg] = value;
     _valueToRegister[value] = reg;
     _lastUsed[reg] = _currentOpIndex;
+  }
+
+  private static bool SamePhysicalRegister(X86Register? a, X86Register? b) {
+    if (a == null || b == null) return false;
+    return To64Bit(a.Value) == To64Bit(b.Value);
   }
 
   private static X86Register To64Bit(X86Register reg) => reg switch {

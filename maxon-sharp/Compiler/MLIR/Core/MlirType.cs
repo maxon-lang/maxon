@@ -10,6 +10,8 @@ public class MlirType(string name, int sizeInBytes) {
   public static MlirType F64 { get; } = new("f64", 8);
   public static MlirType I1 { get; } = new("i1", 1);
   public static MlirType Void { get; } = new("void", 0);
+  // Sentinel type for function-typed parameters (higher-order functions)
+  public static MlirType Fn { get; } = new("fn", 8);
 
   public override string ToString() => Name;
 }

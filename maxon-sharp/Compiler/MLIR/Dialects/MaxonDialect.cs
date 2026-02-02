@@ -378,6 +378,9 @@ public class MaxonStructLiteralOp(string typeName, List<(string FieldName, Maxon
   public List<(string FieldName, MaxonValue Value)> FieldValues { get; } = fieldValues;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), typeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  // For array literals: tag prefix and count of sequential element variables
+  public string? ArrayLiteralTag { get; set; }
+  public int ArrayLiteralCount { get; set; }
 }
 
 // Reads a field: p.x
@@ -495,4 +498,60 @@ public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueK
       ["global"] = new StringAttr(GlobalName),
       ["type"] = new TypeAttr(ValueKind.ToMlirType())
     };
+}
+
+// ============================================================================
+// Managed memory operations (for __ManagedMemory builtin intrinsics)
+// ============================================================================
+
+// Get element at index from managed buffer: __managed_memory_get_unchecked(managed, index)
+public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, int elementSize, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_get";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue Index { get; } = index;
+  public int ElementSize { get; } = elementSize;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public MaxonValue Result { get; } = resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
+}
+
+// Set element at index in managed buffer: __managed_memory_set_at(managed, index, value)
+public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, int elementSize) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_set";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue Index { get; } = index;
+  public MaxonValue Value { get; } = value;
+  public int ElementSize { get; } = elementSize;
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
+}
+
+// Create a new heap-allocated managed memory: __managed_memory_create(count, elemSize)
+public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_create";
+  public MaxonValue Count { get; } = count;
+  public int ElementSize { get; } = elementSize;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Count.ToString()];
+}
+
+// Grow managed memory to new capacity: __managed_memory_grow(managed, newCap)
+public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapacity, int elementSize) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_grow";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue NewCapacity { get; } = newCapacity;
+  public int ElementSize { get; } = elementSize;
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewCapacity.ToString()];
+}
+
+// Shift elements right/left in managed buffer
+public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, MaxonValue count, int elementSize, bool shiftRight) : MaxonOp {
+  public override string Mnemonic => ShiftRight ? "maxon.managed_mem_shift_right" : "maxon.managed_mem_shift_left";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue Index { get; } = index;
+  public MaxonValue Count { get; } = count;
+  public int ElementSize { get; } = elementSize;
+  public bool ShiftRight { get; } = shiftRight;
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
 }

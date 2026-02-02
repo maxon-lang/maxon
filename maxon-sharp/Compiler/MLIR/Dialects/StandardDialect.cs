@@ -435,6 +435,15 @@ public class StdLeaOp(string varName) : StandardOp {
   public override List<StdValue> ReadValues => [];
 }
 
+// Gets the address of an rdata label via RIP-relative addressing (for constant data in .rdata)
+public class StdLeaRdataOp(string rdataLabel) : StandardOp {
+  public override string Mnemonic => $"memref.lea_rdata {RdataLabel}";
+  public string RdataLabel { get; } = rdataLabel;
+  public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+}
+
 // Store a value through a pointer at a given offset (for sret writes)
 public class StdStoreIndirectOp(StdValue value, StdValue basePtr, int fieldOffset, MlirType fieldType) : StandardOp {
   public override string Mnemonic => $"memref.store_indirect %{Value.Id}, %{BasePtr.Id}+{FieldOffset}";
@@ -516,4 +525,43 @@ public class StdGlobalStoreI1Op(StdBool value, string globalName) : StandardOp {
   public string GlobalName { get; } = globalName;
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override List<StdValue> ReadValues => [Value];
+}
+
+// ============================================================================
+// Runtime call operations (for heap allocation via maxon_alloc/maxon_realloc/maxon_free)
+// ============================================================================
+
+public class StdCallRuntimeOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
+  public override string Mnemonic => $"std.call_runtime @{Callee}";
+  public string Callee { get; } = callee;
+  public List<StdValue> Args { get; } = args;
+  public StdValue? Result { get; } = result;
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString()] : [];
+  public override IReadOnlyList<string> PrintableOperands =>
+    [.. Args.Select(a => a.ToString())];
+  public override List<StdValue> ReadValues => Args;
+}
+
+// ============================================================================
+// Memory copy operation (for buffer grow/shift)
+// ============================================================================
+
+// Reinterpret a pointer value as i64 (same register, different type wrapper)
+public class StdPtrToI64Op(StdPtr input) : StandardOp {
+  public override string Mnemonic => "std.ptr_to_i64";
+  public StdPtr Input { get; } = input;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+}
+
+public class StdMemCopyOp(StdValue srcPtr, StdValue dstPtr, StdValue byteCount) : StandardOp {
+  public override string Mnemonic => "std.memcopy";
+  public StdValue SrcPtr { get; } = srcPtr;
+  public StdValue DstPtr { get; } = dstPtr;
+  public StdValue ByteCount { get; } = byteCount;
+  public override IReadOnlyList<string> PrintableOperands => [SrcPtr.ToString(), DstPtr.ToString(), ByteCount.ToString()];
+  public override List<StdValue> ReadValues => [SrcPtr, DstPtr, ByteCount];
 }

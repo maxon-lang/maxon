@@ -230,6 +230,9 @@ public class X86CodeEmitter {
       case X86LeaRegMemOp lea:
         EmitLeaRegMem(lea.Dest, lea.Displacement);
         break;
+      case X86LeaRipRelOp leaRip:
+        EmitLeaRegRipRel(leaRip.Dest, leaRip.RdataLabel);
+        break;
       case X86MovIndirectMemRegOp movInd:
         EmitMovIndirectMemReg(movInd.BaseReg, movInd.Displacement, movInd.Src);
         break;
@@ -253,6 +256,12 @@ public class X86CodeEmitter {
         break;
       case X86GlobalStoreXmmOp globalStoreXmm:
         EmitGlobalStoreXmm(globalStoreXmm.Src, globalStoreXmm.GlobalName);
+        break;
+      case X86RepMovsbOp:
+        EmitBytes(0xF3, 0xA4); // REP MOVSB
+        break;
+      case X86CallImportOp callImport:
+        EmitCallImport(callImport.DllName, callImport.FunctionName);
         break;
       default:
         throw new InvalidOperationException($"No X86 emission for: {op.GetType().Name} ({op.Mnemonic})");
@@ -294,8 +303,94 @@ public class X86CodeEmitter {
     EmitByte(0xC3); // ret
   }
 
-  public static void EmitRuntimeFunctions() {
-    // No runtime functions needed for basic.maxon
+  /// <summary>
+  /// Emit runtime allocation functions.
+  /// Uses Windows HeapAlloc/HeapReAlloc/HeapFree via GetProcessHeap.
+  /// </summary>
+  public void EmitRuntimeFunctions() {
+    // maxon_alloc(size_in_rcx) -> ptr_in_rax
+    // Windows x64 ABI: RCX=arg1, RDX=arg2, R8=arg3, R9=arg4
+    DefineLabel("maxon_alloc");
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x30); // shadow space + alignment
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = size
+    EmitCallImport("kernel32.dll", "GetProcessHeap");
+    // HeapAlloc(heap, HEAP_ZERO_MEMORY, size)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
+    EmitMovRegMem(X86Register.R8, -0x08, 8);
+    EmitCallImport("kernel32.dll", "HeapAlloc");
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
+
+    // maxon_realloc(ptr_in_rcx, new_size_in_rdx) -> new_ptr_in_rax
+    // If ptr is NULL, falls back to HeapAlloc (HeapReAlloc doesn't accept NULL).
+    // Returns a new pointer — caller must update its buffer field.
+    DefineLabel("maxon_realloc");
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x30);
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = ptr
+    EmitMovMemReg(-0x10, X86Register.Rdx, 8); // [rbp-16] = new_size
+    // If ptr == 0, use HeapAlloc instead
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitByte(0x75); // JNZ realloc_path
+    int jnzPatchPos = _code.Count;
+    EmitByte(0x00); // placeholder
+    // Alloc path: HeapAlloc(heap, HEAP_ZERO_MEMORY, new_size)
+    EmitCallImport("kernel32.dll", "GetProcessHeap");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
+    EmitMovRegMem(X86Register.R8, -0x10, 8);
+    EmitCallImport("kernel32.dll", "HeapAlloc");
+    EmitByte(0xEB); // JMP epilogue
+    int jmpEpiloguePatchPos = _code.Count;
+    EmitByte(0x00); // placeholder
+    // Realloc path: HeapReAlloc(heap, HEAP_ZERO_MEMORY, ptr, new_size)
+    _code[jnzPatchPos] = (byte)(_code.Count - (jnzPatchPos + 1));
+    EmitCallImport("kernel32.dll", "GetProcessHeap");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
+    EmitMovRegMem(X86Register.R8, -0x08, 8); // ptr
+    EmitMovRegMem(X86Register.R9, -0x10, 8); // new_size
+    EmitCallImport("kernel32.dll", "HeapReAlloc");
+    // Epilogue (both paths converge here with result in RAX)
+    _code[jmpEpiloguePatchPos] = (byte)(_code.Count - (jmpEpiloguePatchPos + 1));
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
+
+    // maxon_free(ptr_in_rcx)
+    DefineLabel("maxon_free");
+    // If ptr is 0, just return (noop)
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitByte(0x74); // JZ skip
+    int jzPatchPos = _code.Count;
+    EmitByte(0x00); // placeholder
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x30);
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = ptr
+    EmitCallImport("kernel32.dll", "GetProcessHeap");
+    // HeapFree(heap, 0, ptr)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitMovRegImm(X86Register.Rdx, 0);
+    EmitMovRegMem(X86Register.R8, -0x08, 8);
+    EmitCallImport("kernel32.dll", "HeapFree");
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    _code[jzPatchPos] = (byte)(_code.Count - (jzPatchPos + 1));
+    EmitByte(0xC3); // ret
+  }
+
+  private void EmitCallImport(string dllName, string functionName) {
+    // call [rip+disp32] (indirect call through IAT)
+    EmitBytes(0xFF, 0x15);
+    var importIndex = AddImport(dllName, functionName);
+    _importCallFixups.Add((_code.Count, importIndex));
+    EmitDword(0); // placeholder
   }
 
   public void PatchChkstkCalls() {
@@ -1041,6 +1136,18 @@ public class X86CodeEmitter {
       EmitByte((byte)(0x85 | (RegCode(dest) << 3))); // mod=10, r/m=rbp(5)
       EmitDword(displacement);
     }
+  }
+
+  private void EmitLeaRegRipRel(X86Register dest, string rdataLabel) {
+    RequireGpr(dest, nameof(EmitLeaRegRipRel));
+    // LEA r64, [rip+disp32]: REX.W + 8D /r (mod=00, r/m=101 for RIP-relative)
+    byte rex = 0x48; // REX.W
+    if (NeedsRex(dest)) rex |= 0x04; // REX.R
+    EmitByte(rex);
+    EmitByte(0x8D);
+    EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
+    _rdataFixups.Add((_code.Count, rdataLabel));
+    EmitDword(0); // placeholder for RIP-relative displacement
   }
 
   private void EmitMovIndirectMemReg(X86Register baseReg, int displacement, X86Register src) {

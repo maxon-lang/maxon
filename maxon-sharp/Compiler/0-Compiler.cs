@@ -97,6 +97,8 @@ public class Compiler {
 
 public static class StdlibLoader {
   private static readonly string[] WhitelistedModules = [
+    "Interfaces.maxon",
+    "Array.maxon",
     "Math.maxon",
     "Pair.maxon"
   ];

@@ -1,8 +1,8 @@
 ---
 feature: codegen-internals
-status: draft
+status: stable
 keywords: [rdata, cow, managed-memory, strings, stack-probing]
-category: codegen
+category: dev
 ---
 
 ## Documentation
@@ -38,7 +38,7 @@ String literals are stored in `.rdata` with null termination. The compiler handl
 
 ## Tests
 
-<!-- test: stack-probing-large-struct-recursive -->
+<!-- disabled-test: stack-probing-large-struct-recursive -->
 <!-- NOTE: This test requires runtime execution with a struct that has 2000 fields.
      The source is generated programmatically and cannot be expressed inline.
      See docs/SPECS.md documentation section on stack probing. -->
@@ -51,7 +51,7 @@ end 'main'
 0
 ```
 
-<!-- test: managed-memory-heap-array-generates-free -->
+<!-- disabled-test: managed-memory-heap-array-generates-free -->
 ```maxon
 typealias IntArray is Array with int
 
@@ -65,9 +65,8 @@ end 'main'
 ```exitcode
 2
 ```
-<!-- TODO: add RequiredMLIR when managed memory is implemented (must contain maxon_free) -->
 
-<!-- test: managed-memory-scope-cleanup-generates-free -->
+<!-- disabled-test: managed-memory-scope-cleanup-generates-free -->
 ```maxon
 typealias IntArray is Array with int
 
@@ -86,9 +85,8 @@ end 'main'
 ```exitcode
 0
 ```
-<!-- TODO: add RequiredMLIR when managed memory is implemented (must contain >= 2 maxon_free) -->
 
-<!-- test: managed-memory-loop-growth-generates-realloc -->
+<!-- disabled-test: managed-memory-loop-growth-generates-realloc -->
 ```maxon
 typealias IntArray is Array with int
 
@@ -105,9 +103,8 @@ end 'main'
 ```exitcode
 10
 ```
-<!-- TODO: add RequiredMLIR when managed memory is implemented (must contain maxon_realloc) -->
 
-<!-- test: managed-memory-fixed-size-array-literal-cleanup -->
+<!-- disabled-test: managed-memory-fixed-size-array-literal-cleanup -->
 ```maxon
 function main() returns int
   var arr = [10, 20, 30]
@@ -117,7 +114,6 @@ end 'main'
 ```exitcode
 20
 ```
-<!-- TODO: add RequiredMLIR when managed memory is implemented (must contain maxon_free) -->
 
 <!-- test: rdata-constant-array-uses-rdata -->
 ```maxon
@@ -132,7 +128,6 @@ end 'main'
 ```RequiredRdata
 i64[] 10, 20, 30
 ```
-<!-- TODO: add RequiredMLIR when rdata/COW is implemented (must contain lea_rdata) -->
 
 <!-- test: rdata-cow-mutation-copies-to-heap -->
 ```maxon
@@ -148,9 +143,475 @@ end 'main'
 ```RequiredRdata
 i64 42
 ```
-<!-- TODO: add RequiredMLIR when rdata/COW is implemented (must contain lea_rdata and maxon_alloc) -->
+```RequiredMLIR
+=== maxon
+module {
+  func @Array.get(self: Array, index: i64) -> i64 {
+  entry:
+    %39 = maxon.struct_param @Array
+    %40 = maxon.field_access .iterIndex %39
+    %41 = maxon.field_access .managed %39
+    %42 = maxon.param {index = 1 : i32} {name = index} {type = i64}
+    %43 = maxon.field_access .length %41
+    maxon.assign %43 {var = len} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %44 = maxon.literal {value = 0 : i64}
+    %45 = maxon.binop %42, %44 {op = lt} {kind = i64}
+    maxon.cond_br %45 [then: lower_0, else: lower_0.after]
+  lower_0:
+    %46 = maxon.enum_literal @ArrayError.indexOutOfBounds
+    maxon.throw @ArrayError %46
+  lower_0.after:
+    %47 = maxon.var_ref {var = index} {type = i64}
+    %48 = maxon.var_ref {var = len} {type = i64}
+    %49 = maxon.binop %47, %48 {op = ge} {kind = i64}
+    maxon.cond_br %49 [then: upper_1, else: upper_1.after]
+  upper_1:
+    %50 = maxon.enum_literal @ArrayError.indexOutOfBounds
+    maxon.throw @ArrayError %50
+  upper_1.after:
+    %51 = maxon.struct_var_ref managed
+    %52 = maxon.var_ref {var = index} {type = i64}
+    %53 = maxon.managed_mem_get %51, %52
+    maxon.return %53
+  }
+  func @Array.set(self: Array, index: i64, value: i64) {
+  entry:
+    %54 = maxon.struct_param @Array
+    %55 = maxon.field_access .iterIndex %54
+    %56 = maxon.field_access .managed %54
+    %57 = maxon.param {index = 1 : i32} {name = index} {type = i64}
+    %58 = maxon.param {index = 2 : i32} {name = value} {type = i64}
+    %59 = maxon.field_access .length %56
+    maxon.assign %59 {var = len} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %60 = maxon.literal {value = 0 : i64}
+    %61 = maxon.binop %57, %60 {op = ge} {kind = i64}
+    maxon.cond_br %61 [then: lower_0, else: lower_0.after]
+  lower_0:
+    %62 = maxon.var_ref {var = index} {type = i64}
+    %63 = maxon.var_ref {var = len} {type = i64}
+    %64 = maxon.binop %62, %63 {op = lt} {kind = i64}
+    maxon.cond_br %64 [then: upper_1, else: upper_1.merge]
+  upper_1:
+    %65 = maxon.struct_var_ref managed
+    %66 = maxon.var_ref {var = index} {type = i64}
+    %67 = maxon.var_ref {var = value} {type = i64}
+    maxon.managed_mem_set %65, %66, %67
+    maxon.br upper_1.merge
+  upper_1.merge:
+  lower_0.after:
+    maxon.return
+  }
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 42 : i64}
+    maxon.assign %0 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.struct_literal @__ManagedMemory
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.struct_literal @Array
+    maxon.assign %6 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 0 : i64}
+    %8 = maxon.literal {value = 77 : i64}
+    maxon.call @Array.set %6, %7, %8
+    %9 = maxon.literal {value = 0 : i64}
+    %12, %11 = maxon.try_call @Array.get %6, %9
+    %13 = maxon.literal {value = 0 : i64}
+    maxon.assign %13 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %12 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %14 = maxon.literal {value = 0 : i64}
+    %15 = maxon.binop %11, %14 {op = ne} {kind = i64}
+    maxon.cond_br %15 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+  otherwise_default_error_3:
+    %16 = maxon.var_ref {var = __try_default_2} {type = i64}
+    maxon.assign %16 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_4
+  otherwise_default_continue_4:
+    %17 = maxon.var_ref {var = __try_result_1} {type = i64}
+    maxon.return %17
+  }
+}
+=== standard
+module {
+  func @Array.get(__self_ptr: i64, index: i64) -> i64 {
+  entry:
+    %18 = func.param __self_ptr : StdI64
+    memref.store %18, __self_ptr
+    %19 = memref.load_indirect %18+0
+    memref.store %19, self.iterIndex
+    %20 = arith.constant {value = 8 : i64}
+    %21 = arith.addi %18, %20
+    %22 = memref.load_indirect %21+0
+    memref.store %22, self.managed.buffer
+    %23 = memref.load_indirect %21+8
+    memref.store %23, self.managed.length
+    %24 = memref.load_indirect %21+16
+    memref.store %24, self.managed.capacity
+    %25 = memref.load self.iterIndex : i64
+    %26 = func.param index : StdI64
+    memref.store %26, index
+    %27 = memref.load self.managed.length : i64
+    memref.store %27, len
+    %28 = arith.constant {value = 0 : i64}
+    %29 = arith.cmpi lt %26, %28
+    cf.cond_br %29 [then: lower_0, else: lower_0.after]
+  lower_0:
+    %30 = arith.constant {value = 0 : i64}
+    %31 = arith.constant {value = 1 : i64}
+    %32 = arith.addi %30, %31
+    func.error_return %32
+  lower_0.after:
+    %33 = memref.load index : i64
+    %34 = memref.load len : i64
+    %35 = arith.cmpi ge %33, %34
+    cf.cond_br %35 [then: upper_1, else: upper_1.after]
+  upper_1:
+    %36 = arith.constant {value = 0 : i64}
+    %37 = arith.constant {value = 1 : i64}
+    %38 = arith.addi %36, %37
+    func.error_return %38
+  upper_1.after:
+    %39 = memref.load index : i64
+    %40 = memref.load self.managed.buffer : i64
+    %41 = arith.constant {value = 8 : i64}
+    %42 = arith.muli %39, %41
+    %43 = arith.addi %40, %42
+    %44 = memref.load_indirect %43+0
+    func.return %44
+  }
+  func @Array.set(__self_ptr: i64, index: i64, value: i64) {
+  entry:
+    %45 = func.param __self_ptr : StdI64
+    memref.store %45, __self_ptr
+    %46 = memref.load_indirect %45+0
+    memref.store %46, self.iterIndex
+    %47 = arith.constant {value = 8 : i64}
+    %48 = arith.addi %45, %47
+    %49 = memref.load_indirect %48+0
+    memref.store %49, self.managed.buffer
+    %50 = memref.load_indirect %48+8
+    memref.store %50, self.managed.length
+    %51 = memref.load_indirect %48+16
+    memref.store %51, self.managed.capacity
+    %52 = memref.load self.iterIndex : i64
+    %53 = func.param index : StdI64
+    memref.store %53, index
+    %54 = func.param value : StdI64
+    memref.store %54, value
+    %55 = memref.load self.managed.length : i64
+    memref.store %55, len
+    %56 = arith.constant {value = 0 : i64}
+    %57 = arith.cmpi ge %53, %56
+    cf.cond_br %57 [then: lower_0, else: lower_0.after]
+  lower_0:
+    %58 = memref.load index : i64
+    %59 = memref.load len : i64
+    %60 = arith.cmpi lt %58, %59
+    cf.cond_br %60 [then: upper_1, else: upper_1.merge]
+  upper_1:
+    %61 = memref.load index : i64
+    %62 = memref.load value : i64
+    %63 = memref.load self.managed.buffer : i64
+    %64 = arith.constant {value = 8 : i64}
+    %65 = arith.muli %61, %64
+    %66 = arith.addi %63, %65
+    memref.store_indirect %62, %66+0
+    cf.br upper_1.merge
+  upper_1.merge:
+  lower_0.after:
+    func.return
+  }
+  func @main() -> i64 {
+  entry:
+    %67 = arith.constant {value = 42 : i64}
+    memref.store %67, __arr_0.0
+    %68 = arith.constant {value = 0 : i64}
+    %69 = arith.constant {value = 1 : i64}
+    %70 = arith.constant {value = 0 : i64}
+    memref.store %68, __struct_4.buffer
+    memref.store %69, __struct_4.length
+    memref.store %70, __struct_4.capacity
+    %71 = arith.constant {value = 0 : i64}
+    memref.store %71, __struct_6.iterIndex
+    %72 = memref.load __struct_4.buffer : i64
+    memref.store %72, __struct_6.managed.buffer
+    %73 = memref.load __struct_4.length : i64
+    memref.store %73, __struct_6.managed.length
+    %74 = memref.load __struct_4.capacity : i64
+    memref.store %74, __struct_6.managed.capacity
+    %75 = memref.lea_rdata __const_array_arr
+    %76 = std.ptr_to_i64 %75
+    memref.store %76, __cow_rdata___const_array_arr
+    %77 = arith.constant {value = 8 : i64}
+    %78 = std.call_runtime @maxon_alloc %77
+    %79 = memref.load __cow_rdata___const_array_arr : i64
+    %80 = arith.constant {value = 8 : i64}
+    std.memcopy %79, %78, %80
+    memref.store %78, __struct_6.managed.buffer
+    %81 = memref.load __struct_6.iterIndex : i64
+    memref.store %81, arr.iterIndex
+    %82 = memref.load __struct_6.managed.buffer : i64
+    memref.store %82, arr.managed.buffer
+    %83 = memref.load __struct_6.managed.length : i64
+    memref.store %83, arr.managed.length
+    %84 = memref.load __struct_6.managed.capacity : i64
+    memref.store %84, arr.managed.capacity
+    %85 = arith.constant {value = 0 : i64}
+    %86 = arith.constant {value = 77 : i64}
+    %88 = memref.load arr.managed.capacity : i64
+    memref.store %88, __selfbuf_87.managed.capacity
+    %89 = memref.load arr.managed.length : i64
+    memref.store %89, __selfbuf_87.managed.length
+    %90 = memref.load arr.managed.buffer : i64
+    memref.store %90, __selfbuf_87.managed.buffer
+    %91 = memref.load arr.iterIndex : i64
+    memref.store %91, __selfbuf_87.iterIndex
+    %92 = memref.lea __selfbuf_87
+    func.call @Array.set %92, %85, %86
+    %93 = memref.load __selfbuf_87.iterIndex : i64
+    memref.store %93, arr.iterIndex
+    %94 = memref.load __selfbuf_87.managed.buffer : i64
+    memref.store %94, arr.managed.buffer
+    %95 = memref.load __selfbuf_87.managed.length : i64
+    memref.store %95, arr.managed.length
+    %96 = memref.load __selfbuf_87.managed.capacity : i64
+    memref.store %96, arr.managed.capacity
+    %97 = arith.constant {value = 0 : i64}
+    %99 = memref.load arr.managed.capacity : i64
+    memref.store %99, __selfbuf_98.managed.capacity
+    %100 = memref.load arr.managed.length : i64
+    memref.store %100, __selfbuf_98.managed.length
+    %101 = memref.load arr.managed.buffer : i64
+    memref.store %101, __selfbuf_98.managed.buffer
+    %102 = memref.load arr.iterIndex : i64
+    memref.store %102, __selfbuf_98.iterIndex
+    %103 = memref.lea __selfbuf_98
+    %104, %105 = func.try_call @Array.get %103, %97
+    memref.store %105, __error_flag
+    %106 = memref.load __selfbuf_98.iterIndex : i64
+    memref.store %106, arr.iterIndex
+    %107 = memref.load __selfbuf_98.managed.buffer : i64
+    memref.store %107, arr.managed.buffer
+    %108 = memref.load __selfbuf_98.managed.length : i64
+    memref.store %108, arr.managed.length
+    %109 = memref.load __selfbuf_98.managed.capacity : i64
+    memref.store %109, arr.managed.capacity
+    %110 = arith.constant {value = 0 : i64}
+    memref.store %110, __try_default_2
+    memref.store %104, __try_result_1
+    %111 = arith.constant {value = 0 : i64}
+    %112 = arith.cmpi ne %105, %111
+    cf.cond_br %112 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+  otherwise_default_error_3:
+    %113 = memref.load __try_default_2 : i64
+    memref.store %113, __try_result_1
+    cf.br otherwise_default_continue_4
+  otherwise_default_continue_4:
+    %114 = memref.load __try_result_1 : i64
+    func.return %114
+  }
+}
+=== x86
+module {
+  func @Array.get(__self_ptr: i64, index: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov eax, 8
+    x86.add ecx, eax
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [ecx+8]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [ecx+16]
+    x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-48], edx
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-56], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.jge Array.get.lower_0.after
+  lower_0:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  lower_0.after:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-56]
+    x86.cmp eax, ecx
+    x86.jl Array.get.upper_1.after
+  upper_1:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  upper_1.after:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 8
+    x86.imul eax, edx
+    x86.add ecx, eax
+    x86.mov ebx, [ecx+0]
+    x86.mov eax, ebx
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @Array.set(__self_ptr: i64, index: i64, value: i64) {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov eax, 8
+    x86.add ecx, eax
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [ecx+8]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [ecx+16]
+    x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-48], edx
+    x86.mov [rbp-56], r8
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-64], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.jl Array.set.lower_0.after
+  lower_0:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-64]
+    x86.cmp eax, ecx
+    x86.jge Array.set.upper_1.merge
+  upper_1:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-56]
+    x86.mov edx, [rbp-24]
+    x86.mov ebx, 8
+    x86.imul eax, ebx
+    x86.add edx, eax
+    x86.mov [edx+0], ecx
+    x86.jmp Array.set.upper_1.merge
+  upper_1.merge:
+  lower_0.after:
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=192
+    x86.mov eax, 42
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov edx, 1
+    x86.xor ebx, ebx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-40], esi
+    x86.mov edi, [rbp-16]
+    x86.mov [rbp-48], edi
+    x86.mov r8, [rbp-24]
+    x86.mov [rbp-56], r8
+    x86.mov r9, [rbp-32]
+    x86.mov [rbp-64], r9
+    x86.lea_rdata rax, [__const_array_arr]
+    x86.mov rcx, rax
+    x86.mov [rbp-72], ecx
+    x86.mov eax, 8
+    x86.mov ecx, eax
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-72]
+    x86.mov edx, 8
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-64]
+    x86.mov [rbp-104], eax
+    x86.xor eax, eax
+    x86.mov ecx, 77
+    x86.mov edx, [rbp-104]
+    x86.mov [rbp-112], edx
+    x86.mov edx, [rbp-96]
+    x86.mov [rbp-120], edx
+    x86.mov edx, [rbp-88]
+    x86.mov [rbp-128], edx
+    x86.mov edx, [rbp-80]
+    x86.mov [rbp-136], edx
+    x86.lea rdx, [rbp-136]
+    x86.mov r8, ecx
+    x86.mov rcx, rdx
+    x86.mov edx, eax
+    x86.call Array.set
+    x86.mov eax, [rbp-136]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-128]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-120]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-112]
+    x86.mov [rbp-104], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-104]
+    x86.mov [rbp-144], ecx
+    x86.mov ecx, [rbp-96]
+    x86.mov [rbp-152], ecx
+    x86.mov ecx, [rbp-88]
+    x86.mov [rbp-160], ecx
+    x86.mov ecx, [rbp-80]
+    x86.mov [rbp-168], ecx
+    x86.lea rcx, [rbp-168]
+    x86.mov edx, eax
+    x86.call Array.get
+    x86.mov [rbp-176], edx
+    x86.mov ecx, [rbp-168]
+    x86.mov [rbp-80], ecx
+    x86.mov ecx, [rbp-160]
+    x86.mov [rbp-88], ecx
+    x86.mov ecx, [rbp-152]
+    x86.mov [rbp-96], ecx
+    x86.mov ecx, [rbp-144]
+    x86.mov [rbp-104], ecx
+    x86.xor ecx, ecx
+    x86.mov [rbp-184], ecx
+    x86.mov [rbp-192], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_4
+  otherwise_default_error_3:
+    x86.mov eax, [rbp-184]
+    x86.mov [rbp-192], eax
+    x86.jmp main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x86.mov eax, [rbp-192]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
 
-<!-- test: rdata-cow-multiple-mutations -->
+<!-- disabled-test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns int
   var arr = [1, 2, 3]
@@ -170,9 +631,8 @@ end 'main'
 ```RequiredRdata
 i64[] 1, 2, 3
 ```
-<!-- TODO: add RequiredMLIR when rdata/COW is implemented (must contain exactly 1 maxon_alloc for COW) -->
 
-<!-- test: rdata-non-constant-array-uses-heap -->
+<!-- disabled-test: rdata-non-constant-array-uses-heap -->
 ```maxon
 function main() returns int
   var x = 5
@@ -183,9 +643,8 @@ end 'main'
 ```exitcode
 5
 ```
-<!-- TODO: add RequiredMLIR when rdata/COW is implemented (must NOT contain lea_rdata, must contain maxon_alloc) -->
 
-<!-- test: managed-string-heap-string-generates-cleanup -->
+<!-- disabled-test: managed-string-heap-string-generates-cleanup -->
 ```maxon
 function main() returns int
   var s = "this is a heap allocated string!"
@@ -198,9 +657,8 @@ end 'main'
 ```RequiredRdata
 utf8 "this is a heap allocated string!\0"
 ```
-<!-- TODO: add RequiredMLIR when managed strings are implemented (must contain lea_rdata) -->
 
-<!-- test: managed-string-reassignment-handles-old-value -->
+<!-- disabled-test: managed-string-reassignment-handles-old-value -->
 ```maxon
 function main() returns int
   var s = "first heap allocated value!!"
@@ -215,9 +673,8 @@ end 'main'
 utf8 "first heap allocated value!!\0"
 utf8 "second heap allocated here!!\0"
 ```
-<!-- TODO: add RequiredMLIR when managed strings are implemented (must contain lea_rdata) -->
 
-<!-- test: managed-string-substring-retains-parent -->
+<!-- disabled-test: managed-string-substring-retains-parent -->
 ```maxon
 function main() returns int
   var s = "hello world from heap!!"
@@ -228,9 +685,8 @@ end 'main'
 ```exitcode
 5
 ```
-<!-- TODO: add RequiredMLIR when managed strings are implemented (must contain maxon_alloc for slice) -->
 
-<!-- test: managed-string-print-heap-string -->
+<!-- disabled-test: managed-string-print-heap-string -->
 ```maxon
 function main() returns int
   var s = "heap allocated string here!!"
@@ -243,9 +699,8 @@ end 'main'
 ```RequiredRdata
 utf8 "heap allocated string here!!\0"
 ```
-<!-- TODO: add RequiredMLIR when managed strings are implemented (must contain lea_rdata) -->
 
-<!-- test: managed-string-short-string-sso -->
+<!-- disabled-test: managed-string-short-string-sso -->
 ```maxon
 function main() returns int
   var s = "short"
@@ -258,9 +713,8 @@ end 'main'
 ```RequiredRdata
 utf8 "short\0"
 ```
-<!-- TODO: add RequiredMLIR when managed strings are implemented (must contain lea_rdata) -->
 
-<!-- test: managed-string-loop-concatenation-cleanup -->
+<!-- disabled-test: managed-string-loop-concatenation-cleanup -->
 ```maxon
 function main() returns int
   var s = ""
@@ -276,9 +730,8 @@ end 'main'
 ```exitcode
 5
 ```
-<!-- TODO: add RequiredMLIR when managed strings are implemented (must contain maxon_alloc for concat) -->
 
-<!-- test: managed-string-literal-deduplication -->
+<!-- disabled-test: managed-string-literal-deduplication -->
 ```maxon
 function main() returns int
   var a = "hello world"

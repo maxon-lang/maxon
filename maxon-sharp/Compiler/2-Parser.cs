@@ -23,12 +23,41 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
   private Dictionary<string, object> _topLevelConstants = [];
 
+  // Top-level array let declarations deferred to main function body
+  private record DeferredArrayLet(string Name, int TokenStart, int TokenEnd, int Line, int Column);
+  private readonly List<DeferredArrayLet> _deferredArrayLets = [];
+
   // Global mutable variables (name -> type info)
   private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable);
   private readonly Dictionary<string, GlobalVarInfo> _globalVars = [];
 
   // Default parameter values (funcName -> index -> value)
   private readonly Dictionary<string, Dictionary<int, MlirAttribute>> _functionDefaults = [];
+
+  // Type alias source tracking (aliasName -> sourceTypeName)
+  private readonly Dictionary<string, string> _typeAliasSources = [];
+
+  /// <summary>
+  /// Resolves a qualified method name, falling back to the source type for type aliases.
+  /// E.g., "ByteArray.push" → looks for "ByteArray.push" first, then "Array.push".
+  /// Returns the resolved function name if found, null otherwise.
+  /// </summary>
+  private string? ResolveMethodName(string qualifiedName) {
+    if (_currentModule!.Functions.Any(f => f.Name == qualifiedName))
+      return qualifiedName;
+    // Try alias fallback: ByteArray.push → Array.push
+    var dotIdx = qualifiedName.IndexOf('.');
+    if (dotIdx > 0) {
+      var typePart = qualifiedName[..dotIdx];
+      var methodPart = qualifiedName[(dotIdx + 1)..];
+      if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
+        var aliasedName = $"{sourceType}.{methodPart}";
+        if (_currentModule!.Functions.Any(f => f.Name == aliasedName))
+          return aliasedName;
+      }
+    }
+    return null;
+  }
 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
 
@@ -77,6 +106,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     Logger.Debug(LogCategory.Parser, "Starting parser");
     var module = new MlirModule<MaxonOp>();
     _currentModule = module;
+
+    // Register __ManagedMemory opaque struct type (buffer pointer, length, capacity)
+    if (!_typeRegistry.ContainsKey("__ManagedMemory")) {
+      _typeRegistry["__ManagedMemory"] = new MlirStructType("__ManagedMemory", [
+        new MlirStructField("buffer", MlirType.I64, false, true),
+        new MlirStructField("length", MlirType.I64, false, true),
+        new MlirStructField("capacity", MlirType.I64, false, true),
+      ]);
+    }
 
     // Seed module with functions and defaults from previously parsed modules
     if (seedModule != null) {
@@ -137,7 +175,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         Expect(TokenType.Equals);
         int exprStart = _pos;
         SkipToEndOfLine();
-        constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        if (_tokens[exprStart].Type == TokenType.LeftBracket) {
+          _deferredArrayLets.Add(new DeferredArrayLet(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        } else {
+          constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        }
       } else if (Check(TokenType.Var)) {
         Advance(); // consume 'var'
         var nameToken = Expect(TokenType.Identifier);
@@ -156,6 +198,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         PreScanEnum(module);
       } else if (Check(TokenType.TypeAlias)) {
         PreScanTypeAlias();
+      } else if (Check(TokenType.Interface) || Check(TokenType.Extension)) {
+        // Skip interface/extension declarations (skip to matching end)
+        Advance();
+        SkipToMatchingEnd();
       } else {
         // Unknown top-level token, skip to next line
         SkipToEndOfLine();
@@ -177,12 +223,37 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   }
 
   /// <summary>
+  /// Emit deferred top-level array let declarations at the start of the main function body.
+  /// Re-parses each saved token range to produce array literal ops in the current block.
+  /// </summary>
+  private void EmitDeferredArrayLets() {
+    foreach (var deferred in _deferredArrayLets) {
+      int savedPos = _pos;
+      _pos = deferred.TokenStart;
+
+      var arrayResult = ParseArrayLiteral();
+      var arrayValue = arrayResult.Value;
+
+      var assignOp = new MaxonAssignOp(deferred.Name, arrayValue, isDeclaration: true, isMutable: false, MaxonValueKind.Struct);
+      _currentBlock!.AddOp(assignOp);
+      _variables[deferred.Name] = new VarInfo(MaxonValueKind.Struct, false, arrayValue, _currentBlock!, "Array");
+
+      _pos = savedPos;
+    }
+  }
+
+  /// <summary>
   /// Pre-scan a function declaration to register its signature.
   /// Only parses name, params, and return type; skips the body.
   /// </summary>
   private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
+    // Handle interface-qualified names like BuiltinArrayLiteral.init → strip interface prefix
+    if (Check(TokenType.Dot)) {
+      Advance(); // consume '.'
+      nameToken = Expect(TokenType.Identifier);
+    }
     var funcName = owningType != null ? $"{owningType}.{nameToken.Value}" : nameToken.Value;
 
     Expect(TokenType.LeftParen);
@@ -243,9 +314,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
     Advance(); // consume 'is'
     names.Add(Expect(TokenType.Identifier).Value);
+    // Skip optional 'with TypeArg' suffix (e.g., Iterable with Element)
+    if (Check(TokenType.With)) {
+      Advance();
+      ParseTypeRef();
+    }
     while (Check(TokenType.Comma)) {
       Advance();
       names.Add(Expect(TokenType.Identifier).Value);
+      if (Check(TokenType.With)) {
+        Advance();
+        ParseTypeRef();
+      }
     }
     return names;
   }
@@ -277,8 +357,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       _typeRegistry[typeName] = new MlirStructType(typeName, []);
     }
 
-    var conformingInterfaces = ParseConformanceClause();
     var associatedTypeNames = ParseUsesClause();
+    var conformingInterfaces = ParseConformanceClause();
 
     SkipNewlines();
 
@@ -333,6 +413,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           (fieldType, defaultValue) = ParseFieldDefault();
         } else {
           fieldType = ParseTypeRef();
+          // Provide implicit defaults for primitive types
+          if (fieldType == MlirType.I64) defaultValue = new IntegerAttr(0, MlirType.I64);
+          else if (fieldType == MlirType.F64) defaultValue = new FloatAttr(0.0, MlirType.F64);
+          else if (fieldType == MlirType.I1) defaultValue = new IntegerAttr(0, MlirType.I1);
+          else if (fieldType == MlirType.I8) defaultValue = new IntegerAttr(0, MlirType.I8);
         }
 
         fields.Add(new MlirStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
@@ -486,16 +571,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
     Expect(TokenType.With);
-    Expect(TokenType.LeftParen);
 
-    var concreteTypes = new List<MlirType> {
-      ParseTypeRef()
-    };
-    while (Check(TokenType.Comma)) {
-      Advance();
+    var concreteTypes = new List<MlirType>();
+    if (Check(TokenType.LeftParen)) {
+      Advance(); // consume '('
+      concreteTypes.Add(ParseTypeRef());
+      while (Check(TokenType.Comma)) {
+        Advance();
+        concreteTypes.Add(ParseTypeRef());
+      }
+      Expect(TokenType.RightParen);
+    } else {
       concreteTypes.Add(ParseTypeRef());
     }
-    Expect(TokenType.RightParen);
 
     if (concreteTypes.Count != sourceStruct.AssociatedTypeNames.Count)
       throw new CompileError(ErrorCode.ParserExpectedType,
@@ -518,11 +606,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     _typeRegistry[aliasName] = new MlirStructType(aliasName, concreteFields);
+    _typeAliasSources[aliasName] = sourceName;
   }
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
+    // Handle interface-qualified names like Sized.count → strip interface prefix
+    if (Check(TokenType.Dot)) {
+      Advance(); // consume '.'
+      nameToken = Expect(TokenType.Identifier);
+    }
     var methodName = $"{typeName}.{nameToken.Value}";
 
     Expect(TokenType.LeftParen);
@@ -538,10 +632,29 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
     // Instance method gets 'self' as first parameter
     var structType = _typeRegistry[typeName];
+
+    // Replace associated type references with I64 (e.g., Element → I64)
+    if (structType is MlirStructType st) {
+      if (returnType is MlirStructType retSt && st.AssociatedTypeNames.Contains(retSt.Name)) {
+        returnType = MlirType.I64;
+      }
+      for (int i = 0; i < paramTypes.Count; i++) {
+        if (paramTypes[i] is MlirStructType paramSt && st.AssociatedTypeNames.Contains(paramSt.Name)) {
+          paramTypes[i] = MlirType.I64;
+        }
+      }
+    }
+
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
     var allParamTypes = new List<MlirType> { (MlirType)structType };
     allParamTypes.AddRange(paramTypes);
+
+    // Skip methods with function-typed parameters (higher-order functions not yet supported)
+    if (paramTypes.Any(t => t == MlirType.Fn)) {
+      SkipToMatchingEnd();
+      return;
+    }
 
     // Only register if not already known
     if (!module.Functions.Any(f => f.Name == methodName)) {
@@ -574,7 +687,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     SkipNewlines();
     int depth = 1;
     while (!IsAtEnd() && depth > 0) {
-      if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While)) {
+      if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For)) {
         depth++;
       } else if (Check(TokenType.End)) {
         depth--;
@@ -786,6 +899,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       SkipTopLevelDecl();
     } else if (Check(TokenType.TypeAlias)) {
       SkipTypeAlias();
+    } else if (Check(TokenType.Interface) || Check(TokenType.Extension)) {
+      // Skip interface/extension declarations (already handled or not needed)
+      Advance();
+      SkipToMatchingEnd();
     } else {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected function declaration, got '{Current().Value}'", Current().Line, Current().Column);
     }
@@ -810,8 +927,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     _currentTypeName = typeName;
     Logger.Debug(LogCategory.Parser, $"Parsing type: {typeName}");
 
-    ParseConformanceClause();
     var associatedTypeNames = ParseUsesClause();
+    ParseConformanceClause();
     SkipNewlines();
 
     // Type is already fully constructed in _typeRegistry from pre-scan
@@ -1010,6 +1127,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private void ParseStaticMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = Expect(TokenType.Identifier);
+    // Handle interface-qualified names like BuiltinArrayLiteral.init → strip interface prefix
+    if (Check(TokenType.Dot)) {
+      Advance(); // consume '.'
+      nameToken = Expect(TokenType.Identifier);
+    }
     var methodName = $"{typeName}.{nameToken.Value}";
     Logger.Debug(LogCategory.Parser, $"Parsing static method: {methodName}");
 
@@ -1036,6 +1158,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private void ParseInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = Expect(TokenType.Identifier);
+    // Handle interface-qualified names like Sized.count → strip interface prefix
+    if (Check(TokenType.Dot)) {
+      Advance(); // consume '.'
+      nameToken = Expect(TokenType.Identifier);
+    }
     var methodName = $"{typeName}.{nameToken.Value}";
     Logger.Debug(LogCategory.Parser, $"Parsing instance method: {methodName}");
 
@@ -1052,8 +1179,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
     SkipNewlines();
 
+    // Skip methods with function-typed parameters (higher-order functions not yet supported)
+    if (paramTypes.Any(t => t == MlirType.Fn)) {
+      SkipToMatchingEnd();
+      return;
+    }
+
     // Instance method gets 'self' as first parameter (the struct type)
     var structType = (MlirStructType)_typeRegistry[typeName];
+
+    // Replace associated type placeholders with I64 (e.g., Element → I64)
+    if (returnType is MlirStructType retSt && structType.AssociatedTypeNames.Contains(retSt.Name)) {
+      returnType = MlirType.I64;
+    }
+    for (int i = 0; i < paramTypes.Count; i++) {
+      if (paramTypes[i] is MlirStructType paramSt && structType.AssociatedTypeNames.Contains(paramSt.Name)) {
+        paramTypes[i] = MlirType.I64;
+      }
+    }
+
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
     var allParamTypes = new List<MlirType> { structType };
@@ -1224,6 +1368,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     func.SourceColumn = nameToken.Column;
     EmitParameters(paramNames, paramTypes, paramTokens);
 
+    // Emit deferred top-level array lets at start of main
+    if (name == "main") {
+      EmitDeferredArrayLets();
+    }
+
     ParseBodyUntilEnd();
     ExpectEndLabel(name);
     FinishFunctionBody(name, nameToken, returnType);
@@ -1259,6 +1408,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   }
 
   private MlirType ParseTypeRef() {
+    // Function type: (ParamType, ...) returns ReturnType
+    if (Check(TokenType.LeftParen)) {
+      Advance(); // consume '('
+      while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+        ParseTypeRef();
+        if (Check(TokenType.Comma)) Advance();
+      }
+      Expect(TokenType.RightParen);
+      if (Check(TokenType.Returns)) {
+        Advance();
+        ParseTypeRef();
+      }
+      return MlirType.Fn; // sentinel for function-typed parameters
+    }
+
     var typeName = ExpectTypeName();
     return typeName switch {
       "int" => MlirType.I64,
@@ -1317,6 +1481,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       ParseIf();
     } else if (Check(TokenType.While)) {
       ParseWhile();
+    } else if (Check(TokenType.For)) {
+      ParseForIn();
     } else if (Check(TokenType.Break)) {
       ParseBreak();
     } else if (Check(TokenType.Continue)) {
@@ -1375,8 +1541,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         // Check for instance method call: var.method(...)
         if (_variables.TryGetValue(nameToken.Value, out var varInfo) && varInfo.StructTypeName != null) {
           var instanceMethodName = $"{varInfo.StructTypeName}.{_tokens[_pos + 2].Value}";
-          if (_currentModule!.Functions.Any(f => f.Name == instanceMethodName)) {
-            ParseInstanceMethodCallStatement(varInfo, instanceMethodName);
+          var resolvedName = ResolveMethodName(instanceMethodName);
+          if (resolvedName != null) {
+            ParseInstanceMethodCallStatement(varInfo, resolvedName);
             return;
           }
         }
@@ -1448,6 +1615,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private void CheckReturnType(MaxonValue value, Token returnToken) {
     var returnType = _currentFunction?.ReturnType;
     if (returnType == null) return;
+
+    // Skip type checking for associated type placeholders (e.g., Element in generic types)
+    if (_currentTypeName != null && returnType is MlirStructType retSt
+        && _typeRegistry.TryGetValue(_currentTypeName, out var currentTypeInfo)
+        && currentTypeInfo is MlirStructType currentStruct
+        && currentStruct.AssociatedTypeNames.Contains(retSt.Name)) {
+      return;
+    }
 
     if (returnType is MlirStructType expectedStruct) {
       if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
@@ -1823,6 +1998,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private void ParseCallStatement() {
     var token = Advance(); // consume identifier
 
+    // Handle __managed_memory_* builtins
+    if (token.Value.StartsWith("__managed_memory_") || token.Value == "__element_size") {
+      Advance(); // consume '('
+      TryEmitManagedMemoryBuiltin(token);
+      return;
+    }
+
     if (TrySiblingMethodCall(token) != null)
       return;
 
@@ -1831,15 +2013,129 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     CreateFunctionCall(token, args);
   }
 
+  /// <summary>
+  /// Handles __managed_memory_* and __element_size builtin intrinsics.
+  /// Called after consuming '('. Returns the result value (or null for void builtins).
+  /// </summary>
+  private MaxonValue? TryEmitManagedMemoryBuiltin(Token token) {
+    const int ELEMENT_SIZE = 8; // all values are 8 bytes in current implementation
+
+    switch (token.Value) {
+      case "__element_size": {
+        Expect(TokenType.RightParen);
+        var lit = new MaxonLiteralOp((long)ELEMENT_SIZE);
+        _currentBlock!.AddOp(lit);
+        return lit.Result;
+      }
+
+      case "__managed_memory_len": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__managed_memory_capacity": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__managed_memory_set_length": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var newLen = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonFieldAssignOp(managed, "__ManagedMemory", "length", newLen);
+        _currentBlock!.AddOp(op);
+        return null;
+      }
+
+      case "__managed_memory_get_unchecked": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemGetOp(managed, index, ELEMENT_SIZE, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__managed_memory_set_at": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var value = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemSetOp(managed, index, value, ELEMENT_SIZE);
+        _currentBlock!.AddOp(op);
+        return null;
+      }
+
+      case "__managed_memory_create": {
+        var count = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        // second arg is element size, skip it (we use compile-time constant)
+        ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemCreateOp(count, ELEMENT_SIZE);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__managed_memory_grow": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var newCap = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemGrowOp(managed, newCap, ELEMENT_SIZE);
+        _currentBlock!.AddOp(op);
+        return null;
+      }
+
+      case "__managed_memory_shift_right": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var count = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemShiftOp(managed, index, count, ELEMENT_SIZE, shiftRight: true);
+        _currentBlock!.AddOp(op);
+        return null;
+      }
+
+      case "__managed_memory_shift_left": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var count = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemShiftOp(managed, index, count, ELEMENT_SIZE, shiftRight: false);
+        _currentBlock!.AddOp(op);
+        return null;
+      }
+
+      default:
+        throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unknown builtin '{token.Value}'", token.Line, token.Column);
+    }
+  }
+
   private MaxonCallOp? TrySiblingMethodCall(Token token) {
     if (_currentTypeName == null || !_variables.TryGetValue("self", out var selfInfo))
       return null;
     var siblingMethodName = $"{_currentTypeName}.{token.Value}";
-    if (!_currentModule!.Functions.Any(f => f.Name == siblingMethodName))
+    var resolvedSiblingName = ResolveMethodName(siblingMethodName);
+    if (resolvedSiblingName == null)
       return null;
     Advance(); // consume '('
     var structVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
-    var qualifiedFuncToken = new Token(TokenType.Identifier, siblingMethodName, token.Line, token.Column);
+    var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedSiblingName, token.Line, token.Column);
     var siblingArgs = ParseInstanceMethodCallArgs(qualifiedFuncToken, structVal);
     return CreateFunctionCall(qualifiedFuncToken, siblingArgs);
   }
@@ -1996,6 +2292,127 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     // Create exit block - this is where execution continues after the loop
+    var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
+    _currentBlock = exitBlock;
+  }
+
+  /// <summary>
+  /// Parse for-in loop: for varName in expr 'label' ... end 'label'
+  /// Desugars to a while loop using an index variable and managed memory operations.
+  /// </summary>
+  private void ParseForIn() {
+    var forToken = Advance(); // consume 'for'
+    var itemName = Expect(TokenType.Identifier).Value;
+    Expect(TokenType.In);
+    var iterableExpr = ParseExpression();
+    var iterableValue = ResolveExprValue(iterableExpr);
+    var loopSourceLabel = Expect(TokenType.CharacterLiteral).Value;
+    SkipNewlines();
+
+    var loopLabel = UniqueLabel(loopSourceLabel);
+    var headerLabel = $"{loopLabel}.header";
+    var bodyLabel = loopLabel;
+    var exitLabel = $"{loopLabel}.exit";
+
+    // Get the iterable's type info to access its managed field
+    var iterableTypeName = (iterableValue is MaxonStruct ms) ? ms.TypeName : _currentTypeName;
+    var iterableType = iterableTypeName != null && _typeRegistry.TryGetValue(iterableTypeName, out var regType)
+      ? regType as MlirStructType : null;
+
+    // Create an index variable: var __for_idx = 0
+    var idxVarName = $"__for_idx_{_blockCounter}";
+    var zeroLit = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(zeroLit);
+    var idxAssign = new MaxonAssignOp(idxVarName, zeroLit.Result, isDeclaration: true, isMutable: true, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(idxAssign);
+    _variables[idxVarName] = new VarInfo(MaxonValueKind.Integer, true, zeroLit.Result, _currentBlock!, null);
+
+    // Get the length of the iterable's managed memory
+    // Access the managed field of the iterable struct
+    MaxonValue managedValue;
+    if (iterableType != null && iterableType.Fields.Any(f => f.Name == "managed")) {
+      var managedAccess = new MaxonFieldAccessOp(iterableValue, iterableTypeName!, "managed", MaxonValueKind.Struct, "__ManagedMemory");
+      _currentBlock!.AddOp(managedAccess);
+      managedValue = managedAccess.Result;
+    } else {
+      managedValue = iterableValue;
+    }
+
+    // Get length: __managed_memory_len(managed)
+    var lenAccess = new MaxonFieldAccessOp(managedValue, "__ManagedMemory", "length", MaxonValueKind.Integer);
+    _currentBlock!.AddOp(lenAccess);
+    var lenVarName = $"__for_len_{_blockCounter}";
+    var lenAssign = new MaxonAssignOp(lenVarName, lenAccess.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(lenAssign);
+    _variables[lenVarName] = new VarInfo(MaxonValueKind.Integer, false, lenAccess.Result, _currentBlock!, null);
+
+    // Branch from entry to header
+    _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
+
+    // Create header block: check idx < len
+    var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
+    _currentBlock = headerBlock;
+
+    // Load current index
+    var idxLoad = new MaxonVarRefOp(idxVarName, MaxonValueKind.Integer);
+    headerBlock.AddOp(idxLoad);
+    // Load length
+    var lenLoad = new MaxonVarRefOp(lenVarName, MaxonValueKind.Integer);
+    headerBlock.AddOp(lenLoad);
+    // Compare: idx < len
+    var cmpOp = new MaxonBinOp(MaxonBinOperator.Lt, idxLoad.Result, lenLoad.Result, MaxonValueKind.Integer);
+    headerBlock.AddOp(cmpOp);
+    headerBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, bodyLabel, exitLabel));
+
+    // Create body block
+    var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
+    _currentBlock = bodyBlock;
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
+
+    // Load current index again in body
+    var bodyIdxLoad = new MaxonVarRefOp(idxVarName, MaxonValueKind.Integer);
+    bodyBlock.AddOp(bodyIdxLoad);
+
+    // Get element: __managed_memory_get_unchecked(managed, idx)
+    // Re-access managed field in body block
+    MaxonValue bodyManagedValue;
+    if (iterableType != null && iterableType.Fields.Any(f => f.Name == "managed")) {
+      var bodyManagedAccess = new MaxonFieldAccessOp(iterableValue, iterableTypeName!, "managed", MaxonValueKind.Struct, "__ManagedMemory");
+      bodyBlock.AddOp(bodyManagedAccess);
+      bodyManagedValue = bodyManagedAccess.Result;
+    } else {
+      bodyManagedValue = managedValue;
+    }
+
+    var getOp = new MaxonManagedMemGetOp(bodyManagedValue, bodyIdxLoad.Result, 8, MaxonValueKind.Integer);
+    bodyBlock.AddOp(getOp);
+
+    // Declare the loop variable
+    var itemAssign = new MaxonAssignOp(itemName, getOp.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Integer);
+    bodyBlock.AddOp(itemAssign);
+    _variables[itemName] = new VarInfo(MaxonValueKind.Integer, false, getOp.Result, bodyBlock, null);
+
+    // Increment index: idx = idx + 1
+    var idxLoad2 = new MaxonVarRefOp(idxVarName, MaxonValueKind.Integer);
+    bodyBlock.AddOp(idxLoad2);
+    var oneLit = new MaxonLiteralOp(1L);
+    bodyBlock.AddOp(oneLit);
+    var addOp = new MaxonBinOp(MaxonBinOperator.Add, idxLoad2.Result, oneLit.Result, MaxonValueKind.Integer);
+    bodyBlock.AddOp(addOp);
+    var idxUpdate = new MaxonAssignOp(idxVarName, addOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer);
+    bodyBlock.AddOp(idxUpdate);
+
+    // Parse the body
+    ParseBodyUntilEnd();
+    _loopStack.Pop();
+    ExpectEndLabel(loopSourceLabel);
+
+    // Branch back to header
+    if (!BlockEndsWithTerminator(_currentBlock!)) {
+      _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
+    }
+
+    // Create exit block
     var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
     _currentBlock = exitBlock;
   }
@@ -2597,6 +3014,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       return new ExprResult.Direct(subOp.Result);
     }
 
+    if (Check(TokenType.LeftBracket)) {
+      var arrayResult = ParseArrayLiteral();
+      // Handle chained member access: [1,2,3].get(0)
+      if (Check(TokenType.Dot)) {
+        var bracketToken = new Token(TokenType.LeftBracket, "[", Current().Line, Current().Column);
+        return ParseFieldAccessChain(arrayResult, bracketToken);
+      }
+      return arrayResult;
+    }
+
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
       var inner = ParseExpression();
@@ -2727,6 +3154,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           _currentBlock!.AddOp(op);
           return new ExprResult.Direct(result);
         }
+        // Handle __managed_memory_* and __element_size builtins in expression context
+        if (token.Value.StartsWith("__managed_memory_") || token.Value == "__element_size") {
+          Advance(); // consume '('
+          var builtinResult = TryEmitManagedMemoryBuiltin(token);
+          if (builtinResult != null)
+            return new ExprResult.Direct(builtinResult);
+          throw new CompileError(ErrorCode.ParserExpectedExpression, $"Builtin '{token.Value}' does not return a value", token.Line, token.Column);
+        }
         // Check for sibling method call: bare methodName() inside an instance method resolves to self.methodName()
         var siblingCallOp = TrySiblingMethodCall(token);
         if (siblingCallOp != null) {
@@ -2822,11 +3257,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       // Check for method call: expr.method(...)
       if (Check(TokenType.LeftParen)) {
         var qualifiedMethodName = $"{userTypeName}.{fieldName}";
-        var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedMethodName);
-        if (callee != null) {
+        var resolvedMethodName = ResolveMethodName(qualifiedMethodName);
+        if (resolvedMethodName != null) {
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
-          var qualifiedFuncToken = new Token(TokenType.Identifier, qualifiedMethodName, fieldToken.Line, fieldToken.Column);
+          var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedMethodName, fieldToken.Line, fieldToken.Column);
           var allArgs = ParseInstanceMethodCallArgs(qualifiedFuncToken, structVal);
           var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs);
           if (callOp.Result != null)
@@ -2868,6 +3303,72 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   /// Parse a struct literal: {field: value, ...} or TypeName{field: value, ...}
   /// The opening '{' has NOT been consumed yet.
   /// </summary>
+  /// <summary>
+  /// Parses an array literal: [expr, expr, ...].
+  /// Creates a stack-allocated __ManagedMemory struct and wraps it in an Array struct.
+  /// </summary>
+  private ExprResult.Direct ParseArrayLiteral() {
+    Advance(); // consume '['
+
+    // Parse element expressions
+    var elements = new List<MaxonValue>();
+    if (!Check(TokenType.RightBracket)) {
+      elements.Add(ResolveExprValue(ParseExpression()));
+      while (Check(TokenType.Comma)) {
+        Advance();
+        if (Check(TokenType.RightBracket)) break; // trailing comma
+        elements.Add(ResolveExprValue(ParseExpression()));
+      }
+    }
+    Expect(TokenType.RightBracket);
+
+    int count = elements.Count;
+
+    // Store elements in reverse order so element 0 ends up at the lowest stack address.
+    // Stack grows downward: first stored → highest address, last stored → lowest address.
+    // LEA finds the lowest address, so element 0 must be stored last.
+    var arrayTag = $"__arr_{_blockCounter++}";
+    for (int i = count - 1; i >= 0; i--) {
+      var elemVarName = $"{arrayTag}.{i}";
+      var assignOp = new MaxonAssignOp(elemVarName, elements[i], isDeclaration: true, isMutable: false, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(assignOp);
+    }
+
+    // Create __ManagedMemory struct: {buffer: <tag_id>, length: count, capacity: 0}
+    // buffer is represented as the array tag identifier (resolved during lowering)
+    var bufLit = new MaxonLiteralOp(0L); // buffer pointer placeholder (0 = will be set up during lowering)
+    _currentBlock!.AddOp(bufLit);
+    var lenLit = new MaxonLiteralOp((long)count);
+    _currentBlock!.AddOp(lenLit);
+    var capLit = new MaxonLiteralOp(0L); // capacity = 0 means stack-allocated
+    _currentBlock!.AddOp(capLit);
+
+    var managedFields = new List<(string Name, MaxonValue Value)> {
+      ("buffer", bufLit.Result),
+      ("length", lenLit.Result),
+      ("capacity", capLit.Result)
+    };
+    var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields);
+    _currentBlock!.AddOp(managedStruct);
+
+    // Create Array struct: {iterIndex: 0, managed: <managed>}
+    var iterIndexLit = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(iterIndexLit);
+
+    var arrayFields = new List<(string Name, MaxonValue Value)> {
+      ("iterIndex", iterIndexLit.Result),
+      ("managed", managedStruct.Result)
+    };
+    var arrayStruct = new MaxonStructLiteralOp("Array", arrayFields);
+    _currentBlock!.AddOp(arrayStruct);
+
+    // Record the element variable names for lowering to resolve the buffer
+    arrayStruct.ArrayLiteralTag = arrayTag;
+    arrayStruct.ArrayLiteralCount = count;
+
+    return new ExprResult.Direct(arrayStruct.Result);
+  }
+
   private ExprResult.Direct ParseStructLiteral(string typeName) {
     Advance(); // consume '{'
     var structType = (MlirStructType)_typeRegistry[typeName];
@@ -2888,14 +3389,28 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     foreach (var field in structType.Fields) {
       if (!providedFields.Contains(field.Name)) {
         if (field.DefaultValue == null) {
-          throw new CompileError(ErrorCode.ParserExpectedExpression,
-            $"Field '{field.Name}' of type '{typeName}' requires a value (no default defined)",
-            Current().Line, Current().Column);
+          // For struct-typed fields, emit a zero-initialized struct literal
+          if (field.Type is MlirStructType fieldStructType) {
+            var zeroFields = new List<(string Name, MaxonValue Value)>();
+            foreach (var subField in fieldStructType.Fields) {
+              var zeroLit = new MaxonLiteralOp(0L);
+              _currentBlock!.AddOp(zeroLit);
+              zeroFields.Add((subField.Name, zeroLit.Result));
+            }
+            var zeroStruct = new MaxonStructLiteralOp(fieldStructType.Name, zeroFields);
+            _currentBlock!.AddOp(zeroStruct);
+            fieldValues.Add((field.Name, zeroStruct.Result));
+          } else {
+            throw new CompileError(ErrorCode.ParserExpectedExpression,
+              $"Field '{field.Name}' of type '{typeName}' requires a value (no default defined)",
+              Current().Line, Current().Column);
+          }
+        } else {
+          var errorToken = new Token(TokenType.Identifier, field.Name, Current().Line, Current().Column);
+          var defaultValue = EmitDefaultLiteral(field.DefaultValue, field.Type, errorToken,
+            $"Unsupported default value type for field '{field.Name}'");
+          fieldValues.Add((field.Name, defaultValue));
         }
-        var errorToken = new Token(TokenType.Identifier, field.Name, Current().Line, Current().Column);
-        var defaultValue = EmitDefaultLiteral(field.DefaultValue, field.Type, errorToken,
-          $"Unsupported default value type for field '{field.Name}'");
-        fieldValues.Add((field.Name, defaultValue));
       }
     }
 

@@ -9,6 +9,7 @@ enum ComparisonKind { Integer, Float }
 public static class StandardToX86Conversion {
   public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
     var result = new MlirModule<X86Op>();
+    result.RdataEntries.AddRange(module.RdataEntries);
     result.Globals.AddRange(module.Globals);
 
     foreach (var func in module.Functions) {
@@ -312,6 +313,11 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdLeaRdataOp leaRdataOp: {
+            regManager.EmitLeaRipRelative(leaRdataOp.Result, leaRdataOp.RdataLabel, x86Block);
+            break;
+          }
+
           case StdStoreIndirectOp storeIndOp:
             regManager.EmitStoreIndirect(storeIndOp.Value, storeIndOp.BasePtr, storeIndOp.FieldOffset, storeIndOp.FieldType, x86Block);
             break;
@@ -373,6 +379,24 @@ public static class StandardToX86Conversion {
 
           case StdTryCallOp tryCallOp: {
             regManager.EmitTryCall(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result, tryCallOp.ErrorFlag, x86Block);
+            break;
+          }
+
+          case StdCallRuntimeOp runtimeCallOp: {
+            // Runtime calls use the same calling convention as regular calls
+            regManager.EmitCall(runtimeCallOp.Callee, runtimeCallOp.Args, runtimeCallOp.Result, x86Block);
+            break;
+          }
+
+          case StdPtrToI64Op ptrToI64Op: {
+            // Pointer is already in a GPR, just alias it as i64
+            regManager.EmitMovValueToValue(ptrToI64Op.Input, ptrToI64Op.Result, x86Block);
+            break;
+          }
+
+          case StdMemCopyOp memCopyOp: {
+            // Copy byteCount bytes from src to dst using rep movsb
+            regManager.EmitMemCopy(memCopyOp.SrcPtr, memCopyOp.DstPtr, memCopyOp.ByteCount, x86Block);
             break;
           }
 

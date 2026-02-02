@@ -48,6 +48,11 @@ equatable.md
 enums-simple.md
 match-simple.md
 error-handling.md
+runtime (HeapAlloc,HeapFree, etc)
+__chkstk
+closures
+arrays.md
+
 
 ## Hard (Significant Compiler Work)
 arrays.md - Array type, literals, methods
