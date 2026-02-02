@@ -1300,6 +1300,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       ParseCallStatement();
     } else if (Check(TokenType.Self) && PeekNext().Type == TokenType.Dot) {
       ParseSelfDotStatement();
+    } else if (Check(TokenType.Match)) {
+      ParseMatch();
     } else {
       throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"unexpected token: '{Current().Value}'", Current().Line, Current().Column);
     }
@@ -1770,6 +1772,480 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   }
 
   // ============================================================================
+  // Match statement / expression
+  // ============================================================================
+
+  private record MatchPattern(long RawValue, string DisplayName, int Line, int Column);
+
+  /// <summary>
+  /// Parses match case patterns (integer literals or enum member access like Color.red).
+  /// Multiple patterns can be separated by 'or'. Returns the list of parsed patterns.
+  /// Also tracks seen patterns for duplicate detection and enum cases for exhaustiveness.
+  /// </summary>
+  private List<MatchPattern> ParseMatchPatterns(
+      string? enumTypeName, MlirEnumType? enumType,
+      HashSet<long> seenPatterns, HashSet<string> seenEnumCases) {
+    var patterns = new List<MatchPattern>();
+    while (true) {
+      var patternLine = Current().Line;
+      var patternCol = Current().Column;
+
+      if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+        var enumTypeToken = Advance();
+        Advance(); // consume '.'
+        var caseNameToken = Expect(TokenType.Identifier);
+        var patternEnumName = enumTypeToken.Value;
+
+        if (enumTypeName == null || patternEnumName != enumTypeName) {
+          throw new CompileError(ErrorCode.ParserUnexpectedToken,
+            $"pattern type '{patternEnumName}' does not match scrutinee type",
+            enumTypeToken.Line, enumTypeToken.Column);
+        }
+
+        var enumCase = enumType!.GetCase(caseNameToken.Value)
+          ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+            $"unknown enum case: '{caseNameToken.Value}'",
+            caseNameToken.Line, caseNameToken.Column);
+
+        long rawValue;
+        if (enumType.BackingType == MlirType.F64) {
+          rawValue = BitConverter.DoubleToInt64Bits((double)enumCase.RawValue!);
+        } else if (enumType.BackingType == MlirType.I64) {
+          rawValue = (long)enumCase.RawValue!;
+        } else {
+          rawValue = enumCase.Ordinal;
+        }
+
+        var displayName = $"{patternEnumName}.{caseNameToken.Value}";
+        if (!seenPatterns.Add(rawValue)) {
+          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+            $"duplicate pattern in match: '{displayName}'",
+            patternLine, patternCol);
+        }
+        seenEnumCases.Add(caseNameToken.Value);
+        patterns.Add(new MatchPattern(rawValue, displayName, patternLine, patternCol));
+      } else if (Check(TokenType.IntegerLiteral)) {
+        var litToken = Advance();
+        var litValue = ParseIntegerLiteral(litToken);
+        if (!seenPatterns.Add(litValue)) {
+          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+            $"duplicate pattern in match: '{litValue}'",
+            patternLine, patternCol);
+        }
+        patterns.Add(new MatchPattern(litValue, litValue.ToString(), patternLine, patternCol));
+      } else if (Check(TokenType.Minus) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.IntegerLiteral) {
+        Advance(); // consume '-'
+        var litToken = Advance();
+        var litValue = -ParseIntegerLiteral(litToken);
+        if (!seenPatterns.Add(litValue)) {
+          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+            $"duplicate pattern in match: '{litValue}'",
+            patternLine, patternCol);
+        }
+        patterns.Add(new MatchPattern(litValue, litValue.ToString(), patternLine, patternCol));
+      } else {
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"Expected pattern value, got '{Current().Value}'",
+          Current().Line, Current().Column);
+      }
+
+      // 'or' separates patterns; 'then'/'gives' ends the pattern list
+      if (Check(TokenType.Or)) {
+        Advance(); // consume 'or'
+      } else {
+        break;
+      }
+    }
+    return patterns;
+  }
+
+  /// <summary>
+  /// Emits comparison ops for a set of patterns against the scrutinee value.
+  /// Multiple patterns are combined with logical OR.
+  /// Returns the combined boolean comparison result.
+  /// </summary>
+  private MaxonValue EmitPatternComparison(
+      List<MatchPattern> patterns, string scrutTempName,
+      MaxonValueKind compareKind) {
+    var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
+    _currentBlock!.AddOp(refOp);
+    var localCompareVal = refOp.Result;
+
+    MaxonValue? combinedCmp = null;
+    foreach (var pattern in patterns) {
+      MaxonLiteralOp patLit;
+      if (compareKind == MaxonValueKind.Float) {
+        patLit = new MaxonLiteralOp(BitConverter.Int64BitsToDouble(pattern.RawValue));
+      } else {
+        patLit = new MaxonLiteralOp(pattern.RawValue);
+      }
+      _currentBlock!.AddOp(patLit);
+
+      var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, localCompareVal, patLit.Result, compareKind);
+      _currentBlock!.AddOp(cmpOp);
+
+      if (combinedCmp == null) {
+        combinedCmp = cmpOp.Result;
+      } else {
+        var orOp = new MaxonBinOp(MaxonBinOperator.Or, combinedCmp, cmpOp.Result, MaxonValueKind.Bool);
+        _currentBlock!.AddOp(orOp);
+        combinedCmp = orOp.Result;
+      }
+    }
+    return combinedCmp!;
+  }
+
+  /// <summary>
+  /// Resolves scrutinee to a comparable value. For enums, extracts the raw backing value.
+  /// Returns the compare value, its kind, and enum metadata if applicable.
+  /// </summary>
+  private (MaxonValue CompareVal, MaxonValueKind CompareKind, string? EnumTypeName, MlirEnumType? EnumType)
+      ResolveScrutinee(MaxonValue scrutineeVal) {
+    if (scrutineeVal is MaxonEnum enumVal) {
+      var enumTypeName = enumVal.TypeName;
+      var enumType = (MlirEnumType)_typeRegistry[enumTypeName];
+      var backingKind = GetEnumBackingKind(enumType);
+      var rawOp = new MaxonEnumRawValueOp(scrutineeVal, enumTypeName, backingKind);
+      _currentBlock!.AddOp(rawOp);
+      return (rawOp.Result, backingKind, enumTypeName, enumType);
+    }
+    return (scrutineeVal, DetermineValueKind(scrutineeVal), null, null);
+  }
+
+  /// <summary>
+  /// Validates enum exhaustiveness when no default case is present.
+  /// </summary>
+  private static void ValidateEnumExhaustiveness(
+      MlirEnumType? enumType, string? enumTypeName,
+      bool hasDefault, HashSet<string> seenEnumCases, Token errorToken) {
+    if (enumType == null || hasDefault) return;
+    var missingCases = enumType.Cases
+      .Where(c => !seenEnumCases.Contains(c.Name))
+      .Select(c => c.Name)
+      .ToList();
+    if (missingCases.Count > 0) {
+      throw new CompileError(ErrorCode.ParserMatchNotExhaustive,
+        $"match on enum '{enumTypeName}' is not exhaustive, missing: {string.Join(", ", missingCases)}",
+        errorToken.Line, errorToken.Column);
+    }
+  }
+
+  /// <summary>
+  /// Expects 'end' followed by a matching block identifier for match statements.
+  /// </summary>
+  private Token ExpectMatchEndLabel(string expectedLabel) {
+    var endToken = Expect(TokenType.End);
+    if (Check(TokenType.CharacterLiteral)) {
+      var label = Advance().Value;
+      if (label != expectedLabel) {
+        throw new CompileError(ErrorCode.ParserMatchMismatchedBlockId,
+          $"block identifier mismatch: expected '{expectedLabel}', got '{label}'",
+          endToken.Line, endToken.Column);
+      }
+    }
+    return endToken;
+  }
+
+  /// <summary>
+  /// Patches the comparison chain after all cases are parsed.
+  /// Each comparison block's false branch goes to the next comparison, or default, or merge.
+  /// </summary>
+  private static void PatchComparisonChain(
+      MlirBlock<MaxonOp> entryBlock, string matchLabel,
+      List<MlirBlock<MaxonOp>?> cmpBlocks, List<bool> caseIsDefault,
+      string mergeLabel) {
+    int firstCmpIndex = -1;
+    int defaultIndex = -1;
+    for (int i = 0; i < caseIsDefault.Count; i++) {
+      if (!caseIsDefault[i] && firstCmpIndex < 0) firstCmpIndex = i;
+      if (caseIsDefault[i] && defaultIndex < 0) defaultIndex = i;
+    }
+
+    // Entry block branches to first comparison (or default body if only default)
+    if (firstCmpIndex >= 0) {
+      entryBlock.AddOp(new MaxonBrOp($"{matchLabel}.cmp{firstCmpIndex}"));
+    } else if (defaultIndex >= 0) {
+      entryBlock.AddOp(new MaxonBrOp($"{matchLabel}.case{defaultIndex}"));
+    }
+
+    // Patch each comparison block's false target
+    for (int i = 0; i < cmpBlocks.Count; i++) {
+      if (caseIsDefault[i]) continue;
+
+      var cmpBlock = cmpBlocks[i]!;
+      var condBr = (MaxonCondBrOp)cmpBlock.Operations[^1];
+
+      // Find next comparison or fall to default/merge
+      string falseTarget;
+      int nextCmpIndex = -1;
+      for (int j = i + 1; j < cmpBlocks.Count; j++) {
+        if (!caseIsDefault[j]) { nextCmpIndex = j; break; }
+      }
+
+      if (nextCmpIndex >= 0) {
+        falseTarget = $"{matchLabel}.cmp{nextCmpIndex}";
+      } else if (defaultIndex >= 0) {
+        falseTarget = $"{matchLabel}.case{defaultIndex}";
+      } else {
+        falseTarget = mergeLabel;
+      }
+
+      cmpBlock.Operations.RemoveAt(cmpBlock.Operations.Count - 1);
+      cmpBlock.AddOp(new MaxonCondBrOp(condBr.Condition, condBr.ThenBlock, falseTarget));
+    }
+  }
+
+  private void ParseMatch() {
+    Advance(); // consume 'match'
+
+    var scrutineeExpr = ParseExpression();
+
+    if (!Check(TokenType.CharacterLiteral)) {
+      throw new CompileError(ErrorCode.ParserMatchMissingBlockId, "missing block identifier", Current().Line, Current().Column);
+    }
+    var blockIdToken = Advance();
+    var sourceLabel = blockIdToken.Value;
+    var matchLabel = UniqueLabel(sourceLabel);
+    SkipNewlines();
+
+    var scrutineeVal = ResolveExprValue(scrutineeExpr);
+    var (compareVal, compareKind, enumTypeName, enumType) = ResolveScrutinee(scrutineeVal);
+
+    var entryBlock = _currentBlock!;
+
+    // Store scrutinee in a temp var so comparison blocks can reference it across blocks
+    var scrutTempName = $"__match_{matchLabel}";
+    entryBlock.AddOp(new MaxonAssignOp(scrutTempName, compareVal, isDeclaration: true, isMutable: false, compareKind));
+    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock);
+
+    var mergeLabel = $"{matchLabel}.merge";
+    var caseBlocks = new List<MlirBlock<MaxonOp>>();
+    var caseIsDefault = new List<bool>();
+    var caseFallthrough = new List<bool>();
+    // One entry per case: non-default cases have their comparison block, default has null
+    var cmpBlocks = new List<MlirBlock<MaxonOp>?>();
+    var seenPatterns = new HashSet<long>();
+    var seenEnumCases = new HashSet<string>();
+    bool hasDefault = false;
+    bool defaultSeen = false;
+
+    int caseIndex = 0;
+    while (!Check(TokenType.End) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End)) break;
+
+      var caseLine = Current().Line;
+      var caseCol = Current().Column;
+      bool isDefault = false;
+      var patterns = new List<MatchPattern>();
+
+      if (Check(TokenType.Default)) {
+        Advance(); // consume 'default'
+        isDefault = true;
+        hasDefault = true;
+        defaultSeen = true;
+      } else {
+        if (defaultSeen) {
+          throw new CompileError(ErrorCode.ParserMatchDefaultNotLast,
+            "'default' case must be the last case in match",
+            caseLine, caseCol);
+        }
+        patterns = ParseMatchPatterns(enumTypeName, enumType, seenPatterns, seenEnumCases);
+      }
+
+      Expect(TokenType.Then);
+
+      var caseBodyLabel = $"{matchLabel}.case{caseIndex}";
+      MlirBlock<MaxonOp> caseBodyBlock;
+
+      if (!isDefault) {
+        // Comparison block must be added before the case body block so that
+        // the cond_br's true target (case body) is the physical fall-through
+        var cmpLabel = $"{matchLabel}.cmp{caseIndex}";
+        var cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
+        caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
+        _currentBlock = cmpBlock;
+        var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind);
+        cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
+        cmpBlocks.Add(cmpBlock);
+      } else {
+        cmpBlocks.Add(null);
+        caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
+      }
+
+      _currentBlock = caseBodyBlock;
+      bool caseHasReturn = Check(TokenType.Return);
+      ParseStatement();
+
+      bool hasFallthrough = false;
+      if (Check(TokenType.And) && PeekNext().Type == TokenType.Fallthrough) {
+        var andToken = Advance(); // consume 'and'
+        Advance(); // consume 'fallthrough'
+        if (caseHasReturn) {
+          throw new CompileError(ErrorCode.ParserMatchFallthroughWithReturn,
+            "match fallthrough with return: 'cannot combine 'fallthrough' with 'return''",
+            andToken.Line, andToken.Column);
+        }
+        hasFallthrough = true;
+      }
+
+      caseBlocks.Add(caseBodyBlock);
+      caseIsDefault.Add(isDefault);
+      caseFallthrough.Add(hasFallthrough);
+
+      caseIndex++;
+      SkipNewlines();
+    }
+
+    var endToken = ExpectMatchEndLabel(sourceLabel);
+    ValidateEnumExhaustiveness(enumType, enumTypeName, hasDefault, seenEnumCases, endToken);
+
+    // Always create merge block - comparison chain needs a valid fallback target
+    var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
+
+    PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel);
+
+    // Wire case body blocks: branch to merge or fallthrough to next case body
+    bool allTerminate = true;
+    for (int i = 0; i < caseBlocks.Count; i++) {
+      var caseBlock = caseBlocks[i];
+      if (!BlockEndsWithTerminator(caseBlock)) {
+        allTerminate = false;
+        if (caseFallthrough[i] && i + 1 < caseBlocks.Count) {
+          caseBlock.AddOp(new MaxonBrOp($"{matchLabel}.case{i + 1}"));
+        } else {
+          caseBlock.AddOp(new MaxonBrOp(mergeLabel));
+        }
+      }
+    }
+
+    _variables.Remove(scrutTempName);
+
+    // If all cases terminate, there's no reachable code after the match
+    _currentBlock = allTerminate ? null : mergeBlock;
+  }
+
+  private ExprResult.Direct ParseMatchExpression() {
+    Advance(); // consume 'match'
+
+    var scrutineeExpr = ParseExpression();
+
+    if (!Check(TokenType.CharacterLiteral)) {
+      throw new CompileError(ErrorCode.ParserMatchMissingBlockId, "missing block identifier", Current().Line, Current().Column);
+    }
+    var blockIdToken = Advance();
+    var sourceLabel = blockIdToken.Value;
+    var matchLabel = UniqueLabel(sourceLabel);
+    SkipNewlines();
+
+    var scrutineeVal = ResolveExprValue(scrutineeExpr);
+    var (compareVal, compareKind, enumTypeName, enumType) = ResolveScrutinee(scrutineeVal);
+
+    var entryBlock = _currentBlock!;
+
+    // Create a mutable result variable to hold the match expression value.
+    // Initialized as Integer; the kind is updated when the first case value is parsed.
+    var resultVarName = $"__matchexpr_{matchLabel}";
+    var resultKind = MaxonValueKind.Integer;
+    var zeroLit = new MaxonLiteralOp(0L);
+    entryBlock.AddOp(zeroLit);
+    entryBlock.AddOp(new MaxonAssignOp(resultVarName, zeroLit.Result, isDeclaration: true, isMutable: true, resultKind));
+    _variables[resultVarName] = new VarInfo(resultKind, true, zeroLit.Result, entryBlock);
+
+    // Store scrutinee for cross-block access
+    var scrutTempName = $"__match_{matchLabel}";
+    entryBlock.AddOp(new MaxonAssignOp(scrutTempName, compareVal, isDeclaration: true, isMutable: false, compareKind));
+    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock);
+
+    var mergeLabel = $"{matchLabel}.merge";
+    var caseBlocks = new List<MlirBlock<MaxonOp>>();
+    var caseIsDefault = new List<bool>();
+    var cmpBlocks = new List<MlirBlock<MaxonOp>?>();
+    var seenPatterns = new HashSet<long>();
+    var seenEnumCases = new HashSet<string>();
+    bool hasDefault = false;
+    bool defaultSeen = false;
+
+    int caseIndex = 0;
+    while (!Check(TokenType.End) && !IsAtEnd()) {
+      SkipNewlines();
+      if (Check(TokenType.End)) break;
+
+      var caseLine = Current().Line;
+      var caseCol = Current().Column;
+      bool isDefault = false;
+      var patterns = new List<MatchPattern>();
+
+      if (Check(TokenType.Default)) {
+        Advance(); // consume 'default'
+        isDefault = true;
+        hasDefault = true;
+        defaultSeen = true;
+      } else {
+        if (defaultSeen) {
+          throw new CompileError(ErrorCode.ParserMatchDefaultNotLast,
+            "'default' case must be the last case in match",
+            caseLine, caseCol);
+        }
+        patterns = ParseMatchPatterns(enumTypeName, enumType, seenPatterns, seenEnumCases);
+      }
+
+      Expect(TokenType.Gives);
+
+      var caseBodyLabel = $"{matchLabel}.case{caseIndex}";
+
+      MlirBlock<MaxonOp> caseBodyBlock;
+      if (!isDefault) {
+        // Comparison block added first for correct fall-through ordering
+        var cmpLabel = $"{matchLabel}.cmp{caseIndex}";
+        var cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
+        caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
+        _currentBlock = cmpBlock;
+        var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind);
+        cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
+        cmpBlocks.Add(cmpBlock);
+      } else {
+        cmpBlocks.Add(null);
+        caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
+      }
+
+      _currentBlock = caseBodyBlock;
+      var caseValue = ResolveExprValue(ParseExpression());
+      resultKind = DetermineValueKind(caseValue);
+
+      if (Check(TokenType.And)) {
+        throw new CompileError(ErrorCode.ParserUnexpectedToken,
+          $"unexpected token: '{Current().Value}'",
+          Current().Line, Current().Column);
+      }
+
+      _currentBlock.AddOp(new MaxonAssignOp(resultVarName, caseValue, isDeclaration: false, isMutable: true, resultKind));
+      _currentBlock.AddOp(new MaxonBrOp(mergeLabel));
+
+      caseBlocks.Add(caseBodyBlock);
+      caseIsDefault.Add(isDefault);
+
+      caseIndex++;
+      SkipNewlines();
+    }
+
+    var endToken = ExpectMatchEndLabel(sourceLabel);
+    ValidateEnumExhaustiveness(enumType, enumTypeName, hasDefault, seenEnumCases, endToken);
+
+    var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
+    PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel);
+
+    _variables.Remove(scrutTempName);
+    _variables.Remove(resultVarName);
+
+    _currentBlock = mergeBlock;
+    var resultRef = new MaxonVarRefOp(resultVarName, resultKind);
+    _currentBlock.AddOp(resultRef);
+
+    return new ExprResult.Direct(resultRef.Result);
+  }
+
+  // ============================================================================
   // Expression parsing
   // ============================================================================
 
@@ -1789,6 +2265,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     while (BinaryOperators.TryGetValue(Current().Type, out var entry) && entry.Precedence >= minPrecedence) {
+      // 'and fallthrough' is match syntax, not a binary expression
+      if (Current().Type == TokenType.And && PeekNext().Type == TokenType.Fallthrough) break;
+
       var opToken = Advance(); // consume operator
       var rhs = ParseExpression(entry.Precedence + 1);
 
@@ -1829,6 +2308,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   }
 
   private ExprResult ParsePrimary() {
+    if (Check(TokenType.Match)) {
+      return ParseMatchExpression();
+    }
+
     if (Check(TokenType.Minus)) {
       Advance(); // consume '-'
       if (Check(TokenType.IntegerLiteral))

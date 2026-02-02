@@ -1,0 +1,71 @@
+// Test: match-statements.function-call
+function double(n int) returns int
+  return n * 2
+end 'double'
+
+function main() returns int
+  var x = 2
+  var result = 0
+  match x 'process'
+    1 then result = double(10)
+    2 then result = double(20)
+    default then result = 0
+  end 'process'
+  return result
+end 'main'
+---
+ExitCode: 40
+---
+module {
+  func @double(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 2
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.jmp main.process_0.cmp0
+  process_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.process_0.cmp1
+  process_0.case0:
+    x86.mov eax, 10
+    x86.mov ecx, eax
+    x86.call double
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.process_0.case2
+  process_0.case1:
+    x86.mov eax, 20
+    x86.mov ecx, eax
+    x86.call double
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.process_0.merge
+  process_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

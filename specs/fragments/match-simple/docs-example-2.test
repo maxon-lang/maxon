@@ -1,0 +1,68 @@
+// Test: docs-example-2
+function main() returns int
+  var input = 3
+  match input 'eval'
+    1 or 2 then return 10
+    3 or 4 or 5 then return 20
+    default then return 0
+  end 'eval'
+end 'main'
+
+---
+ExitCode: 20
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 3
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
+    x86.jmp main.eval_0.cmp0
+  eval_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 2
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je main.eval_0.cmp1
+  eval_0.case0:
+    x86.mov eax, 10
+    x86.epilogue
+    x86.ret
+  eval_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 4
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.mov edi, 5
+    x86.cmp eax, edi
+    x86.sete r8
+    x86.movzx r8, r8b
+    x86.or edx, r8
+    x86.test edx, edx
+    x86.je main.eval_0.case2
+  eval_0.case1:
+    x86.mov eax, 20
+    x86.epilogue
+    x86.ret
+  eval_0.case2:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  eval_0.merge:
+  }
+}
+---

@@ -32,6 +32,12 @@ public enum ErrorCode {
   ParserLiteralOverflow = 2011,
   ParserCircularDependency = 2012,
   ParserImmutableVariable = 2013,
+  ParserMatchFallthroughWithReturn = 2025,
+  ParserMatchNotExhaustive = 2026,
+  ParserMatchDuplicatePattern = 2027,
+  ParserMatchDefaultNotLast = 2029,
+  ParserMatchMissingBlockId = 2042,
+  ParserMatchMismatchedBlockId = 2043,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,

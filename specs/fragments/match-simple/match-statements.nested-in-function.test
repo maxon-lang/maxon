@@ -1,0 +1,81 @@
+// Test: match-statements.nested-in-function
+function categorize(n int) returns int
+  match n 'cat'
+    1 or 2 or 3 then return 1
+    4 or 5 or 6 then return 2
+    default then return 0
+  end 'cat'
+end 'categorize'
+
+function main() returns int
+  return categorize(5)
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @categorize(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp categorize.cat_0.cmp0
+  cat_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 2
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.mov edi, 3
+    x86.cmp eax, edi
+    x86.sete r8
+    x86.movzx r8, r8b
+    x86.or edx, r8
+    x86.test edx, edx
+    x86.je categorize.cat_0.cmp1
+  cat_0.case0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  cat_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 4
+    x86.cmp eax, ecx
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 5
+    x86.cmp eax, ebx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.mov edi, 6
+    x86.cmp eax, edi
+    x86.sete r8
+    x86.movzx r8, r8b
+    x86.or edx, r8
+    x86.test edx, edx
+    x86.je categorize.cat_0.case2
+  cat_0.case1:
+    x86.mov eax, 2
+    x86.epilogue
+    x86.ret
+  cat_0.case2:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  cat_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 5
+    x86.mov ecx, eax
+    x86.call categorize
+    x86.ret
+  }
+}
+---
