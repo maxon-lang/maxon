@@ -368,7 +368,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       var caseName = caseToken.Value;
 
       if (!caseNames.Add(caseName)) {
-        throw new CompileError(ErrorCode.EnumDuplicateCase,
+        throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
           $"duplicate enum case: '{caseName}'", caseToken.Line, caseToken.Column);
       }
 
@@ -388,7 +388,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           if (backingType == null) {
             backingType = MlirType.I64;
           } else if (backingType != MlirType.I64) {
-            throw new CompileError(ErrorCode.EnumRawValueTypeMismatch,
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
               $"raw value type mismatch: 'expected {(backingType == MlirType.F64 ? "float" : "int")}, got int'",
               caseToken.Line, caseToken.Column);
           }
@@ -396,7 +396,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           // Check for duplicate raw values
           foreach (var existing in cases) {
             if (existing.RawValue is long existingVal && existingVal == rawVal) {
-              throw new CompileError(ErrorCode.EnumDuplicateRawValue,
+              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
                 $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
             }
           }
@@ -409,7 +409,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           if (backingType == null) {
             backingType = MlirType.F64;
           } else if (backingType != MlirType.F64) {
-            throw new CompileError(ErrorCode.EnumRawValueTypeMismatch,
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
               $"raw value type mismatch: 'expected int, got float'",
               caseToken.Line, caseToken.Column);
           }
@@ -417,7 +417,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           // Check for duplicate raw values
           foreach (var existing in cases) {
             if (existing.RawValue is double existingVal && existingVal == rawVal) {
-              throw new CompileError(ErrorCode.EnumDuplicateRawValue,
+              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
                 $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
             }
           }
@@ -471,8 +471,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     Expect(TokenType.With);
     Expect(TokenType.LeftParen);
 
-    var concreteTypes = new List<MlirType>();
-    concreteTypes.Add(ParseTypeRef());
+    var concreteTypes = new List<MlirType> {
+      ParseTypeRef()
+    };
     while (Check(TokenType.Comma)) {
       Advance();
       concreteTypes.Add(ParseTypeRef());
@@ -562,28 +563,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       Advance();
     }
     // Skip end label if present
-    if (Check(TokenType.CharacterLiteral)) Advance();
-  }
-
-  private void SkipTopLevelBlock() {
-    // Skip to matching 'end' by tracking nesting depth
-    // For typealias, there's no end - just skip to end of line
-    if (Check(TokenType.TypeAlias)) {
-      SkipToEndOfLine();
-      return;
-    }
-
-    Advance(); // consume 'function' or 'type'
-    int depth = 1;
-    while (!IsAtEnd() && depth > 0) {
-      if (Check(TokenType.Function) || Check(TokenType.Type) || Check(TokenType.If) || Check(TokenType.While)) {
-        depth++;
-      } else if (Check(TokenType.End)) {
-        depth--;
-      }
-      Advance();
-    }
-    // Skip the end label if present
     if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
@@ -1546,7 +1525,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     if (!varInfo.Mutable) {
-      throw new CompileError(ErrorCode.ImmutableVariable,
+      throw new CompileError(ErrorCode.ParserImmutableVariable,
         $"cannot assign to immutable variable: '{name}'",
         nameToken.Line, nameToken.Column);
     }
@@ -1568,7 +1547,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     }
 
     if (!field.IsMutable) {
-      throw new CompileError(ErrorCode.ImmutableVariable,
+      throw new CompileError(ErrorCode.ParserImmutableVariable,
         $"cannot assign to field '{structType.Name}.{fieldToken.Value}' because it is immutable (declare with 'var' to make it mutable)",
         errorToken.Line, errorToken.Column);
     }
@@ -1957,7 +1936,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
           if (_pos + 2 >= _tokens.Count || _tokens[_pos + 2].Type != TokenType.LeftParen) {
             Advance(); // consume '.'
             Advance(); // consume member name
-            throw new CompileError(ErrorCode.EnumUnknownCase,
+            throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
               $"unknown enum case: '{memberName}'", token.Line, token.Column);
           }
         }

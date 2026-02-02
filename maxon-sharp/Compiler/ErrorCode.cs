@@ -11,9 +11,6 @@ namespace MaxonSharp.Compiler;
 /// - 6xxx: PE writer errors (Stage 6)
 /// </summary>
 public enum ErrorCode {
-  // General errors (0xxx)
-  Unknown = 0,
-
   // Lexer errors (1xxx) - Stage 1
   LexerUnexpectedCharacter = 1001,
   LexerUnterminatedString = 1002,
@@ -34,6 +31,7 @@ public enum ErrorCode {
   ParserExpectedToken = 2010,
   ParserLiteralOverflow = 2011,
   ParserCircularDependency = 2012,
+  ParserImmutableVariable = 2013,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,
@@ -50,10 +48,10 @@ public enum ErrorCode {
   SemanticMissingReturn = 3012,
   SemanticUnexportedFieldAccess = 3013,
   SemanticRedundantTypeAnnotation = 3014,
-  EnumDuplicateCase = 3030,
-  EnumDuplicateRawValue = 3031,
-  EnumRawValueTypeMismatch = 3032,
-  EnumUnknownCase = 3034,
+  SemanticEnumDuplicateCase = 3030,
+  SemanticEnumDuplicateRawValue = 3031,
+  SemanticEnumRawValueTypeMismatch = 3032,
+  SemanticEnumUnknownCase = 3034,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,
@@ -64,12 +62,11 @@ public enum ErrorCode {
   MlirInvalidFieldAccess = 4006,
   MlirInvalidMethodCall = 4007,
   MlirUnsupportedInstruction = 4008,
-  ImmutableVariable = 4009,
   // Ownership errors (checked in MLIR borrow checker pass)
-  OwnershipUseAfterMove = 4010,
-  OwnershipMoveFromImmutable = 4011,
-  OwnershipBranchConflict = 4012,
-  OwnershipMoveInLoop = 4013,
+  MlirOwnershipUseAfterMove = 4010,
+  MlirOwnershipMoveFromImmutable = 4011,
+  MlirOwnershipBranchConflict = 4012,
+  MlirOwnershipMoveInLoop = 4013,
 
   // Code emitter errors (5xxx) - Stage 5
   CodeEmitterNoMain = 5001,
