@@ -21,3 +21,4 @@ Run the spec tests and fix any failures by modifying the compiler code.
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.
 - Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=mlir:debug`).
 - Fix root causes, not symptoms. No workarounds.
+- Any old 3 digit error codes (ie E022) in the spec files need to updated to the new 4 digit error codes.

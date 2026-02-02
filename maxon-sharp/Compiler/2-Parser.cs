@@ -15,6 +15,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
   private readonly Stack<LoopContext> _loopStack = new();
+  private bool _inTryContext;
   private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
     ? new(seedModule.TypeDefs) : [];
   private string? _currentTypeName;
@@ -193,9 +194,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       returnType = ParseTypeRef();
     }
 
+    var throwsType = ParseThrowsClause();
+
     // Only register if not already known (avoid duplicates)
     if (!module.Functions.Any(f => f.Name == funcName)) {
-      var func = new MlirFunction<MaxonOp>(funcName, paramNames, paramTypes, returnType);
+      var func = new MlirFunction<MaxonOp>(funcName, paramNames, paramTypes, returnType, throwsType);
       module.AddFunction(func);
 
       if (paramDefaults.Count > 0) {
@@ -245,6 +248,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       names.Add(Expect(TokenType.Identifier).Value);
     }
     return names;
+  }
+
+  /// <summary>
+  /// Parse an optional 'throws ErrorType' clause after a return type.
+  /// Returns the error type if present, null otherwise.
+  /// </summary>
+  private MlirType? ParseThrowsClause() {
+    if (!Check(TokenType.Throws)) return null;
+    Advance(); // consume 'throws'
+    return ParseTypeRef();
   }
 
   private void RemoveAssociatedTypePlaceholders(List<string> associatedTypeNames) {
@@ -348,9 +361,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
 
+    var conformingInterfaces = ParseConformanceClause();
+
     // Temporary entry so ParseTypeRef can resolve forward references
-    if (!_typeRegistry.ContainsKey(enumName)) {
-      _typeRegistry[enumName] = new MlirEnumType(enumName, []);
+    if (!_typeRegistry.TryGetValue(enumName, out MlirType? value)) {
+      value = new MlirEnumType(enumName, [], null, conformingInterfaces);
+      _typeRegistry[enumName] = value;
     }
 
     SkipNewlines();
@@ -438,7 +454,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       SkipNewlines();
     }
 
-    _typeRegistry[enumName] = new MlirEnumType(enumName, cases, backingType);
+    var existingEnum = (MlirEnumType)value;
+    _typeRegistry[enumName] = new MlirEnumType(enumName, cases, backingType, existingEnum.ConformingInterfaces);
     _currentTypeName = null;
 
     // consume 'end'
@@ -517,6 +534,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       returnType = ParseTypeRef();
     }
 
+    var throwsType = ParseThrowsClause();
+
     // Instance method gets 'self' as first parameter
     var structType = _typeRegistry[typeName];
     var allParamNames = new List<string> { "self" };
@@ -526,7 +545,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
 
     // Only register if not already known
     if (!module.Functions.Any(f => f.Name == methodName)) {
-      var func = new MlirFunction<MaxonOp>(methodName, allParamNames, allParamTypes, returnType);
+      var func = new MlirFunction<MaxonOp>(methodName, allParamNames, allParamTypes, returnType, throwsType);
       module.AddFunction(func);
 
       if (paramDefaults.Count > 0) {
@@ -880,6 +899,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     _currentTypeName = enumName;
     Logger.Debug(LogCategory.Parser, $"Parsing enum: {enumName}");
 
+    // Skip conformance clause (already captured during pre-scan)
+    ParseConformanceClause();
+
     SkipNewlines();
 
     var enumType = (MlirEnumType)_typeRegistry[enumName];
@@ -917,6 +939,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       returnType = ParseTypeRef();
     }
 
+    var throwsType = ParseThrowsClause();
+
     SkipNewlines();
 
     // Instance method gets 'self' as first parameter (the enum type)
@@ -931,7 +955,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       offsetDefaults[idx + 1] = attr;
     }
 
-    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType);
+    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType, throwsType);
 
     // Emit self param as enum and register it
     var backingKind = GetEnumBackingKind(enumType);
@@ -998,8 +1022,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       returnType = ParseTypeRef();
     }
 
+    var throwsType = ParseThrowsClause();
+
     SkipNewlines();
-    SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType);
+    SetupFunctionParsing(module, methodName, paramNames, paramTypes, paramDefaults, returnType, throwsType);
     EmitParameters(paramNames, paramTypes, paramTokens);
 
     ParseBodyUntilEnd();
@@ -1022,6 +1048,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       returnType = ParseTypeRef();
     }
 
+    var throwsType = ParseThrowsClause();
+
     SkipNewlines();
 
     // Instance method gets 'self' as first parameter (the struct type)
@@ -1037,7 +1065,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       offsetDefaults[idx + 1] = attr;
     }
 
-    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType);
+    SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType, throwsType);
 
     // Emit self param (struct) and register fields as accessible variables
     var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
@@ -1068,13 +1096,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private MlirFunction<MaxonOp> SetupFunctionParsing(
       MlirModule<MaxonOp> module, string funcName,
       List<string> paramNames, List<MlirType> paramTypes,
-      Dictionary<int, MlirAttribute> paramDefaults, MlirType? returnType) {
+      Dictionary<int, MlirAttribute> paramDefaults, MlirType? returnType, MlirType? throwsType = null) {
     // Replace pre-registered stub with full function (or create new one)
     var existing = module.Functions.FirstOrDefault(f => f.Name == funcName);
     if (existing != null) {
       module.Functions.Remove(existing);
     }
-    var func = new MlirFunction<MaxonOp>(funcName, paramNames, paramTypes, returnType);
+    var func = new MlirFunction<MaxonOp>(funcName, paramNames, paramTypes, returnType, throwsType);
     module.AddFunction(func);
 
     // Store defaults
@@ -1188,8 +1216,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       returnType = ParseTypeRef();
     }
 
+    var throwsType = ParseThrowsClause();
+
     SkipNewlines();
-    SetupFunctionParsing(module, name, paramNames, paramTypes, paramDefaults, returnType);
+    var func = SetupFunctionParsing(module, name, paramNames, paramTypes, paramDefaults, returnType, throwsType);
+    func.SourceLine = nameToken.Line;
+    func.SourceColumn = nameToken.Column;
     EmitParameters(paramNames, paramTypes, paramTokens);
 
     ParseBodyUntilEnd();
@@ -1302,6 +1334,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
       ParseSelfDotStatement();
     } else if (Check(TokenType.Match)) {
       ParseMatch();
+    } else if (Check(TokenType.Throw)) {
+      ParseThrow();
+    } else if (Check(TokenType.Try)) {
+      ParseTryStatement();
     } else {
       throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"unexpected token: '{Current().Value}'", Current().Line, Current().Column);
     }
@@ -1441,6 +1477,231 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
         $"Cannot return '{KindDisplayName(valueKind)}' from function declared to return '{KindDisplayName(expectedKind)}'",
         returnToken.Line, returnToken.Column);
     }
+  }
+
+  private void ParseThrow() {
+    var throwToken = Advance(); // consume 'throw'
+    var expr = ParseExpression();
+    var errorValue = ResolveExprValue(expr);
+    if (errorValue is not MaxonEnum enumVal) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, "throw requires an error enum value", throwToken.Line, throwToken.Column);
+    }
+    _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+  }
+
+  /// <summary>
+  /// Parse a try statement (statement context, not expression).
+  /// Forms: try call() otherwise ignore
+  ///        try call() otherwise 'label' ... end 'label'
+  /// </summary>
+  private void ParseTryStatement() {
+    var tryToken = Advance(); // consume 'try'
+    ParseTryExpression(tryToken, isStatementContext: true);
+  }
+
+  /// <summary>
+  /// Core try/otherwise parsing shared between expression and statement contexts.
+  /// Returns the result value (for expression context) or null (for ignore/block in statement context).
+  /// </summary>
+  private ExprResult.Direct ParseTryExpression(Token tryToken, bool isStatementContext = false) {
+    // Parse the function call expression inside try
+    _inTryContext = true;
+    var callExpr = ParsePrimary();
+    _inTryContext = false;
+
+    // The callExpr should have generated a MaxonCallOp - we need to replace it with a MaxonTryCallOp
+    var lastOp = _currentBlock!.Operations[^1];
+    if (lastOp is not MaxonCallOp callOp) {
+      throw new CompileError(ErrorCode.SemanticUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
+    }
+
+    // Look up the callee to check it actually throws
+    var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == callOp.Callee);
+    if (callee != null && callee.ThrowsType == null) {
+      throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
+        $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
+        tryToken.Line, tryToken.Column);
+    }
+
+    // Replace the MaxonCallOp with a MaxonTryCallOp
+    _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
+    _currentBlock!.AddOp(tryCallOp);
+
+    // Check for 'otherwise' clause
+    if (!Check(TokenType.Otherwise)) {
+      // Propagation form: try func() - propagates error to caller
+      if (_currentFunction?.ThrowsType == null) {
+        throw new CompileError(ErrorCode.SemanticUnexpectedToken,
+          "try without otherwise requires the enclosing function to have 'throws'",
+          tryToken.Line, tryToken.Column);
+      }
+      return EmitTryPropagate(tryCallOp);
+    }
+
+    // Parse 'otherwise' clause
+    Advance(); // consume 'otherwise'
+
+    // Check for 'ignore' form
+    if (Check(TokenType.Ignore)) {
+      if (!isStatementContext) {
+        throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
+          "type mismatch: ''otherwise ignore' cannot be used in assignment'",
+          tryToken.Line, tryToken.Column);
+      }
+      Advance(); // consume 'ignore'
+      return new ExprResult.Direct(tryCallOp.ErrorFlag);
+    }
+
+    // Check for block handler form: otherwise 'label' ... end 'label'
+    if (Check(TokenType.CharacterLiteral)) {
+      return EmitTryOtherwiseBlock(tryCallOp, null);
+    }
+
+    // Check for '(e)' error binding before block label
+    if (Check(TokenType.LeftParen)) {
+      Advance(); // consume '('
+      var errorBindingToken = Expect(TokenType.Identifier);
+      Expect(TokenType.RightParen);
+      return EmitTryOtherwiseBlock(tryCallOp, errorBindingToken);
+    }
+
+    // Default value form: otherwise <expression>
+    return EmitTryOtherwiseDefault(tryCallOp);
+  }
+
+  /// <summary>
+  /// Stores try call error flag and result to mutable variables for cross-block access.
+  /// Returns (errorFlagVar, resultVar) names.
+  /// </summary>
+  private (string errorFlagVar, string? resultVar) StoreTryValuesForCrossBlockAccess(MaxonTryCallOp tryCallOp) {
+    var errorFlagVar = $"__try_error_{_blockCounter++}";
+    _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryCallOp.ErrorFlag, true, true, MaxonValueKind.Integer));
+    _variables[errorFlagVar] = new VarInfo(MaxonValueKind.Integer, true, tryCallOp.ErrorFlag, _currentBlock!, null);
+
+    string? resultVar = null;
+    if (tryCallOp.Result != null) {
+      resultVar = $"__try_result_{_blockCounter++}";
+      var resultKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
+      _currentBlock!.AddOp(new MaxonAssignOp(resultVar, tryCallOp.Result, true, true, resultKind));
+      _variables[resultVar] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, null);
+    }
+    return (errorFlagVar, resultVar);
+  }
+
+  /// <summary>
+  /// Emits error flag != 0 check and conditional branch.
+  /// </summary>
+  private void EmitErrorFlagCheck(MaxonValue errorFlag, string errorBlockLabel, string continueBlockLabel) {
+    var zeroOp = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(zeroOp);
+    var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, errorFlag, zeroOp.Result, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(cmpOp);
+    _currentBlock!.AddOp(new MaxonCondBrOp(cmpOp.Result, errorBlockLabel, continueBlockLabel));
+  }
+
+  /// <summary>
+  /// Creates the continue block after a try/otherwise and loads the result from a variable.
+  /// </summary>
+  private ExprResult.Direct EmitTryContinueBlock(string continueBlockLabel, string? resultVar, MaxonTryCallOp tryCallOp) {
+    var contBlock = _currentFunction!.Body.AddBlock(continueBlockLabel);
+    _currentBlock = contBlock;
+
+    if (resultVar != null) {
+      var resultKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
+      var loadResultOp = new MaxonVarRefOp(resultVar, resultKind);
+      _currentBlock!.AddOp(loadResultOp);
+      return new ExprResult.Direct(loadResultOp.Result);
+    }
+    return new ExprResult.Direct(tryCallOp.ErrorFlag);
+  }
+
+  private ExprResult.Direct EmitTryPropagate(MaxonTryCallOp tryCallOp) {
+    var propagateErrorBlock = UniqueLabel("propagate_error");
+    var continueBlock = UniqueLabel("try_continue");
+
+    var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryCallOp);
+    EmitErrorFlagCheck(tryCallOp.ErrorFlag, propagateErrorBlock, continueBlock);
+
+    // Propagation block: load error flag from variable and re-throw
+    var propBlock = _currentFunction!.Body.AddBlock(propagateErrorBlock);
+    _currentBlock = propBlock;
+    var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(loadErrorOp);
+    _currentBlock!.AddOp(new MaxonReturnOp(loadErrorOp.Result, isErrorPropagation: true));
+
+    return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
+  }
+
+  private ExprResult.Direct EmitTryOtherwiseBlock(MaxonTryCallOp tryCallOp, Token? errorBindingToken) {
+    var labelToken = Expect(TokenType.CharacterLiteral);
+    var blockLabel = labelToken.Value;
+
+    var errorBlock = UniqueLabel("otherwise_error");
+    var continueBlock = UniqueLabel("otherwise_continue");
+
+    var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryCallOp);
+    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, continueBlock);
+
+    // Error handling block
+    var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
+    _currentBlock = errBlock;
+
+    if (errorBindingToken != null) {
+      var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(loadErrorOp);
+      _variables[errorBindingToken.Value] = new VarInfo(MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!, null);
+    }
+
+    SkipNewlines();
+    ParseBodyUntilEnd();
+    if (!BlockEndsWithTerminator(errBlock)) {
+      _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+    }
+
+    ExpectEndLabel(blockLabel);
+
+    return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
+  }
+
+  private ExprResult.Direct EmitTryOtherwiseDefault(MaxonTryCallOp tryCallOp) {
+    var defaultExpr = ParseExpression();
+    var defaultValue = ResolveExprValue(defaultExpr);
+
+    var resultVarName = $"__try_result_{_blockCounter++}";
+    var resultKind = DetermineValueKind(defaultValue);
+
+    // Store the default value to a temp variable so it can be used across blocks
+    var defaultVarName = $"__try_default_{_blockCounter++}";
+    _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
+    _variables[defaultVarName] = new VarInfo(resultKind, true, defaultValue, _currentBlock!, null);
+
+    // Store the call result (success path value)
+    if (tryCallOp.Result != null) {
+      _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryCallOp.Result, true, true, resultKind));
+      _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, null);
+    }
+
+    var errorBlock = UniqueLabel("otherwise_default_error");
+    var continueBlock = UniqueLabel("otherwise_default_continue");
+
+    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, continueBlock);
+
+    // Error block: load default from temp variable and overwrite result
+    var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
+    _currentBlock = errBlock;
+    var loadDefaultOp = new MaxonVarRefOp(defaultVarName, resultKind);
+    _currentBlock!.AddOp(loadDefaultOp);
+    _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadDefaultOp.Result, false, true, resultKind));
+    _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+
+    // Continue block: load from result variable
+    var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
+    _currentBlock = contBlock;
+
+    var refOp = new MaxonVarRefOp(resultVarName, resultKind);
+    _currentBlock!.AddOp(refOp);
+    return new ExprResult.Direct(refOp.Result);
   }
 
   private void ParseVarDecl() {
@@ -1768,7 +2029,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private static bool BlockEndsWithTerminator(MlirBlock<MaxonOp> block) {
     if (block.Operations.Count == 0) return false;
     var lastOp = block.Operations[^1];
-    return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp;
+    return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonThrowOp;
   }
 
   // ============================================================================
@@ -2310,6 +2571,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
   private ExprResult ParsePrimary() {
     if (Check(TokenType.Match)) {
       return ParseMatchExpression();
+    }
+
+    if (Check(TokenType.Try)) {
+      var tryToken = Advance(); // consume 'try'
+      return ParseTryExpression(tryToken);
     }
 
     if (Check(TokenType.Minus)) {
@@ -2960,6 +3226,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null) 
     var functionName = functionNameToken.Value;
 
     var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{functionName}'", functionNameToken.Line, functionNameToken.Column);
+
+    // E057: calling a throwing function without try
+    if (callee.ThrowsType != null && !_inTryContext) {
+      throw new CompileError(ErrorCode.SemanticThrowingFunctionRequiresTry,
+        $"throwing function requires try: '{functionName}'",
+        functionNameToken.Line, functionNameToken.Column);
+    }
 
     MaxonValueKind? resultKind = null;
     string? resultStructTypeName = null;

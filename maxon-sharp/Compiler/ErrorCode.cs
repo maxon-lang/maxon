@@ -58,6 +58,11 @@ public enum ErrorCode {
   SemanticEnumDuplicateRawValue = 3031,
   SemanticEnumRawValueTypeMismatch = 3032,
   SemanticEnumUnknownCase = 3034,
+  SemanticMainCannotThrow = 3054,
+  SemanticTryRequiresThrowingFunction = 3055,
+  SemanticThrowingFunctionRequiresTry = 3057,
+  SemanticOtherwiseRequiresTry = 3058,
+  SemanticErrorTypeMismatch = 3059,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

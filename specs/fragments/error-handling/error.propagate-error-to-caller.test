@@ -1,0 +1,78 @@
+// Test: error.propagate-error-to-caller
+// Test error propagation: inner function throws, middle propagates, outer handles with otherwise
+enum MyError is Error
+  failed
+end 'MyError'
+
+function inner() returns int throws MyError
+  throw MyError.failed
+end 'inner'
+
+function middle() returns int throws MyError
+  let x = try inner()
+  return x
+end 'middle'
+
+function main() returns int
+  let x = try middle() otherwise 99
+  return x
+end 'main'
+---
+ExitCode: 99
+---
+module {
+  func @inner() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @middle() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.call inner
+    x86.mov [rbp-8], edx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je middle.try_continue_1
+  propagate_error_0:
+    x86.mov eax, [rbp-16]
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  try_continue_1:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.call middle
+    x86.mov [rbp-8], edx
+    x86.mov ecx, 99
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

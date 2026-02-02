@@ -25,6 +25,8 @@ public static class DeadFunctionElimination {
         foreach (var op in block.Operations) {
           if (op is MaxonCallOp call && reachable.Add(call.Callee))
             queue.Enqueue(call.Callee);
+          if (op is MaxonTryCallOp tryCall && reachable.Add(tryCall.Callee))
+            queue.Enqueue(tryCall.Callee);
         }
       }
     }

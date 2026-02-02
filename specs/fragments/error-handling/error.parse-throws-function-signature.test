@@ -1,0 +1,25 @@
+// Test: error.parse-throws-function-signature
+// Functions can declare they throw a specific error type
+enum MyError is Error
+  failed
+end 'MyError'
+
+// This function signature declares it throws MyError
+function mayFail() returns int throws MyError
+  return 10
+end 'mayFail'
+
+function main() returns int
+  return 42
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 42
+    x86.ret
+  }
+}
+---

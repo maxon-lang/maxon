@@ -20,7 +20,7 @@ public static class StandardToX86Conversion {
   }
 
   private static MlirFunction<X86Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<X86Op> outputModule) {
-    var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType);
+    var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType);
 
     // Pre-scan: calculate stack frame from store ops
     var varOffsets = new Dictionary<string, int>();
@@ -352,8 +352,27 @@ public static class StandardToX86Conversion {
                 regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
               }
             }
+            // In throwing functions, a normal return means success: set error flag (RDX) to 0
+            if (func.ThrowsType != null) {
+              x86Block.AddOp(new X86XorRegRegOp(X86Register.Edx, X86Register.Edx));
+            }
+
             x86Block.AddOp(new X86EpilogueOp());
             x86Block.AddOp(new X86RetOp());
+            break;
+          }
+
+          case StdErrorReturnOp errRetOp: {
+            // Put error flag into RDX, zero into RAX (dummy return value)
+            regManager.EnsureInSpecificRegister(errRetOp.ErrorFlag, X86Register.Edx, x86Block);
+            x86Block.AddOp(new X86XorRegRegOp(X86Register.Eax, X86Register.Eax));
+            x86Block.AddOp(new X86EpilogueOp());
+            x86Block.AddOp(new X86RetOp());
+            break;
+          }
+
+          case StdTryCallOp tryCallOp: {
+            regManager.EmitTryCall(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result, tryCallOp.ErrorFlag, x86Block);
             break;
           }
 

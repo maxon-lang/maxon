@@ -86,7 +86,7 @@ public static class MaxonToStandardConversion {
       } else {
         throw new InvalidOperationException($"Unhandled return type: {func.ReturnType.GetType().Name} in function '{func.Name}'");
       }
-      var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType);
+      var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType);
       var valueMap = new Dictionary<MaxonValue, StdValue>();
       var varTypes = new Dictionary<string, string>();
       // Maps MaxonStruct value IDs to their variable name prefix (for field access)
@@ -451,6 +451,12 @@ public static class MaxonToStandardConversion {
             case MaxonReturnOp retOp:
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames);
               break;
+            case MaxonThrowOp throwOp:
+              LowerThrow(throwOp, newBlock, valueMap);
+              break;
+            case MaxonTryCallOp tryCallOp:
+              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes);
+              break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }
@@ -579,9 +585,15 @@ public static class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames) {
+
+    // Error propagation: forward the error flag to the caller
+    if (retOp.IsErrorPropagation) {
+      var mappedErrFlag = valueMap[retOp.Value!];
+      block.AddOp(new StdErrorReturnOp(mappedErrFlag));
+      return;
+    }
+
     if (retStructType != null && retOp.Value != null) {
-      // Write struct fields through the sret pointer, reloaded from the
-      // stack variable where we saved it at entry time.
       var srcName = structVarNames[retOp.Value.Id];
       var sretLoad = new StdLoadI64Op("__sret");
       block.AddOp(sretLoad);
@@ -591,6 +603,73 @@ public static class MaxonToStandardConversion {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
       block.AddOp(new StdReturnOp(newRetVal));
     }
+  }
+
+  private static void LowerThrow(
+    MaxonThrowOp throwOp,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap) {
+    // The error value is the enum ordinal. Add 1 to make it non-zero (0 = success).
+    var errorVal = (StdI64)valueMap[throwOp.ErrorValue];
+    var oneOp = new StdConstI64Op(1);
+    block.AddOp(oneOp);
+    var addOp = new StdAddI64Op(errorVal, oneOp.Result);
+    block.AddOp(addOp);
+    block.AddOp(new StdErrorReturnOp(addOp.Result));
+  }
+
+  private static void LowerTryCall(
+    MaxonTryCallOp tryCallOp,
+    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes) {
+
+    var calleeFunc = funcLookup[tryCallOp.Callee];
+
+    // Build standard args (same logic as LowerCall)
+    var newArgs = new List<StdValue>();
+
+    bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
+
+    for (int i = 0; i < tryCallOp.Args.Count; i++) {
+      var arg = tryCallOp.Args[i];
+      if (calleeIsEnumInstance && i == 0) {
+        newArgs.Add(valueMap[arg]);
+      } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
+        newArgs.Add(valueMap[arg]);
+      } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
+        newArgs.Add(valueMap[arg]);
+      } else {
+        throw new InvalidOperationException($"Unhandled try_call argument type: {calleeFunc.ParamTypes[i].GetType().Name} for arg {i} in call to '{tryCallOp.Callee}'");
+      }
+    }
+
+    // Determine the standard-level result type
+    StdValue? stdResult = null;
+    if (tryCallOp.ResultKind == MaxonValueKind.Enum) {
+      var retEnumType = (MlirEnumType)calleeFunc.ReturnType!;
+      stdResult = retEnumType.BackingType == MlirType.F64
+        ? new StdF64(MlirContext.Current.NextId())
+        : new StdI64(MlirContext.Current.NextId());
+    } else if (tryCallOp.ResultKind != null) {
+      stdResult = tryCallOp.ResultKind.Value.CreateStdValue();
+    }
+
+    var stdTryCall = new StdTryCallOp(tryCallOp.Callee, newArgs, stdResult);
+    block.AddOp(stdTryCall);
+
+    // Map the result value
+    if (tryCallOp.Result != null && stdResult != null) {
+      valueMap[tryCallOp.Result] = stdResult;
+    }
+
+    // Map the error flag
+    valueMap[tryCallOp.ErrorFlag] = stdTryCall.ErrorFlag;
+
+    // Store the error flag so it can be loaded in other blocks
+    block.AddOp(new StdStoreI64Op(stdTryCall.ErrorFlag, "__error_flag"));
+    varTypes["__error_flag"] = "i64";
   }
 
   private static StdF64 PromoteToF64(StdValue value, MlirBlock<StandardOp> block) {

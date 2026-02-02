@@ -1,0 +1,55 @@
+// Test: error.otherwise-block-with-binding
+// Test try otherwise block with error binding
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+  var caught = 0
+  try mayFail() otherwise 'handler'
+    caught = 42
+  end 'handler'
+  return caught
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @mayFail() -> i64 {
+  entry:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.call mayFail
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.je main.otherwise_continue_1
+  otherwise_error_0:
+    x86.mov eax, 42
+    x86.mov [rbp-8], eax
+    x86.jmp main.otherwise_continue_1
+  otherwise_continue_1:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-8]
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

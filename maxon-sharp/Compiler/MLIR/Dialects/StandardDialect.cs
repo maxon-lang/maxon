@@ -400,6 +400,30 @@ public class StdReturnOp(StdValue? value = null) : StandardOp {
   public override List<StdValue> ReadValues => ReturnValue != null ? [ReturnValue] : [];
 }
 
+// === Error handling operations ===
+
+// Returns from a function with an error flag set (non-zero error ordinal in RDX, dummy value in RAX)
+public class StdErrorReturnOp(StdValue errorFlag) : StandardOp {
+  public override string Mnemonic => "func.error_return";
+  public StdValue ErrorFlag { get; } = errorFlag;
+  public override IReadOnlyList<string> PrintableOperands => [ErrorFlag.ToString()];
+  public override List<StdValue> ReadValues => [ErrorFlag];
+}
+
+// Calls a throwing function and captures both the result (RAX) and error flag (RDX)
+public class StdTryCallOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
+  public override string Mnemonic => $"func.try_call @{Callee}";
+  public string Callee { get; } = callee;
+  public List<StdValue> Args { get; } = args;
+  public StdValue? Result { get; } = result;
+  public StdI64 ErrorFlag { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+  public override IReadOnlyList<string> PrintableOperands =>
+    [.. Args.Select(a => a.ToString())];
+  public override List<StdValue> ReadValues => Args;
+}
+
 // === Struct pointer operations (for sret convention) ===
 
 // Gets the stack address of a named variable (for passing struct by pointer)

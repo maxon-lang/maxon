@@ -12,5 +12,10 @@ public static class SemanticCheckPass {
     if (mainFunc.ReturnType == null || mainFunc.ReturnType != MlirType.I64) {
       throw new CompileError(ErrorCode.SemanticMainWrongReturnType, "Function 'main' must return int");
     }
+
+    // E054: main cannot throw
+    if (mainFunc.ThrowsType != null) {
+      throw new CompileError(ErrorCode.SemanticMainCannotThrow, "main cannot throw: 'main'", mainFunc.SourceLine, mainFunc.SourceColumn);
+    }
   }
 }

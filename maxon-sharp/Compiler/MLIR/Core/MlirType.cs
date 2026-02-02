@@ -53,9 +53,10 @@ public class MlirEnumCase(string name, int ordinal, object? rawValue = null) {
   public object? RawValue { get; } = rawValue;
 }
 
-public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backingType = null) : MlirType(name, 8) {
+public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null) : MlirType(name, 8) {
   public List<MlirEnumCase> Cases { get; } = cases;
   public MlirType? BackingType { get; } = backingType;
+  public List<string> ConformingInterfaces { get; } = conformingInterfaces ?? [];
 
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }

@@ -551,6 +551,20 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit a try-call: same as EmitCall but also captures RDX as the error flag.
+  /// RDX must be captured before InvalidateCallerSavedRegisters clobbers it.
+  /// </summary>
+  public void EmitTryCall(string callee, List<StdValue> args, StdValue? result, StdValue errorFlag, MlirBlock<X86Op> block) {
+    EmitCall(callee, args, result, block);
+    // After EmitCall, the result is in EAX and RDX holds the error flag.
+    // But InvalidateCallerSavedRegisters already ran inside EmitCall.
+    // We need RDX to have been preserved. Since the call just happened and
+    // Assign(Eax, result) doesn't touch RDX, RDX still holds the callee's value.
+    // Re-assign it now.
+    Assign(X86Register.Edx, errorFlag);
+  }
+
+  /// <summary>
   /// Record that a function parameter has arrived in a calling convention register,
   /// or load it from the stack for 5th+ parameters.
   /// After push rbp / mov rbp, rsp: [rbp+16] = 5th param, [rbp+24] = 6th, etc.

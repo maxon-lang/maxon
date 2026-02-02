@@ -47,7 +47,7 @@ pair.md
 equatable.md
 enums-simple.md
 match-simple.md
-
+error-handling.md
 
 ## Hard (Significant Compiler Work)
 arrays.md - Array type, literals, methods
@@ -72,7 +72,6 @@ stdlib-set.md - Full stdlib Set implementation
 enums.md - Full enum system with associated values
 match-statements.md - Pattern matching on enums
 first-class-functions.md - Function pointers, closures
-error-handling.md - Try/catch/throw error system
 safe-ffi.md - FFI boundary safety
 
 ## Extremely Hard (Language Evolution)

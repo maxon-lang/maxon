@@ -1,0 +1,70 @@
+// Test: error.otherwise-block-success
+// Test try otherwise block when no error
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns int throws MyError
+  if shouldFail 'check'
+    throw MyError.failed
+  end 'check'
+  return 100
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  try mayFail(false) otherwise 'err'
+    result = 42
+  end 'err'
+  return result
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @mayFail(shouldFail: i1) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-1], ecx
+    x86.test ecx, ecx
+    x86.je mayFail.check_0.after
+  check_0:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, 100
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.call mayFail
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je main.otherwise_continue_1
+  otherwise_error_0:
+    x86.mov eax, 42
+    x86.mov [rbp-8], eax
+    x86.jmp main.otherwise_continue_1
+  otherwise_continue_1:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-8]
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

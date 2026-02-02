@@ -316,11 +316,55 @@ public class MaxonBrOp(string target) : MaxonOp {
   public string Target { get; } = target;
 }
 
-public class MaxonReturnOp(MaxonValue? value = null) : MaxonOp {
+public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
   public override string Mnemonic => "maxon.return";
   public MaxonValue? Value { get; } = value;
+  public bool IsErrorPropagation { get; } = isErrorPropagation;
   public override IReadOnlyList<string> PrintableOperands =>
     Value != null ? [Value.ToString()] : [];
+}
+
+// ============================================================================
+// Error handling operations
+// ============================================================================
+
+// Throws an error value and returns from the function
+public class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.throw @{ErrorTypeName}";
+  public MaxonValue ErrorValue { get; } = errorValue;
+  public string ErrorTypeName { get; } = errorTypeName;
+  public override IReadOnlyList<string> PrintableOperands => [ErrorValue.ToString()];
+}
+
+// Calls a throwing function and captures both the result and error flag.
+// ErrorFlag is non-zero if the callee threw an error.
+public class MaxonTryCallOp : MaxonOp {
+  public override string Mnemonic => $"maxon.try_call @{Callee}";
+  public string Callee { get; }
+  public List<MaxonValue> Args { get; }
+  public MaxonValue? Result { get; }
+  public MaxonValueKind? ResultKind { get; }
+  public string? ResultStructTypeName { get; }
+  public MaxonInteger ErrorFlag { get; }
+
+  public MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
+    Callee = callee;
+    Args = args;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    ErrorFlag = new MaxonInteger(MlirContext.Current.NextId());
+    if (resultKind == MaxonValueKind.Struct) {
+      Result = new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!);
+    } else if (resultKind == MaxonValueKind.Enum) {
+      Result = new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!);
+    } else {
+      Result = resultKind?.CreateValue();
+    }
+  }
+
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
 
 // ============================================================================

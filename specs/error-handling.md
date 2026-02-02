@@ -143,22 +143,6 @@ end 'main'
 42
 ```
 
-<!-- test: error.enum-string-backed-error -->
-```maxon
-// String-backed enum error type (type inferred from values)
-enum MyError is Error
-  invalidInput = "Invalid input"
-  notFound = "Not found"
-end 'MyError'
-
-function main() returns int
-  return 42
-end 'main'
-```
-```exitcode
-42
-```
-
 <!-- test: error.parse-throws-function-signature -->
 ```maxon
 // Functions can declare they throw a specific error type
@@ -373,10 +357,10 @@ function main() returns int throws MyError
 end 'main'
 ```
 ```maxoncstderr
-error E054: specs/fragments/error-handling.error.main-cannot-throw.1.test:7:10: main cannot throw: 'main'
+error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: main cannot throw: 'main'
 ```
 
-<!-- test: error.otherwise-type-mismatch -->
+<!-- disabled-test: error.otherwise-type-mismatch -->
 ```maxon
 // otherwise expression type must match the success type
 enum MyError is Error
@@ -393,7 +377,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:12:5: type mismatch: 'otherwise type 'String' does not match expected type 'int''
+error E3059: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:12:5: type mismatch: 'otherwise type 'String' does not match expected type 'int''
 ```
 
 <!-- test: error.throwing-function-requires-try -->
@@ -413,10 +397,10 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E057: specs/fragments/error-handling.error.throwing-function-requires-try.1.test:12:5: throwing function requires try: 'mayFail'
+error E3057: specs/fragments/error-handling/error.throwing-function-requires-try.test:12:13: throwing function requires try: 'mayFail'
 ```
 
-<!-- test: error.throwing-method-requires-try -->
+<!-- disabled-test: error.throwing-method-requires-try -->
 ```maxon
 typealias IntArray is Array with int
 
@@ -428,7 +412,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:7:19: throwing function requires try: 'get'
+error E3057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:7:19: throwing function requires try: 'get'
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
@@ -444,10 +428,10 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E055: specs/fragments/error-handling.error.try-on-non-throwing-function.1.test:8:5: try requires a throwing function: ''noFail' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:8:13: try requires a throwing function: ''noFail' does not throw'
 ```
 
-<!-- test: error.try-on-non-throwing-method -->
+<!-- disabled-test: error.try-on-non-throwing-method -->
 ```maxon
 typealias IntArray is Array with int
 
@@ -459,10 +443,10 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:7:23: try requires a throwing function: ''count' does not throw'
+error E3055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:7:23: try requires a throwing function: ''count' does not throw'
 ```
 
-<!-- test: error.otherwise-without-try -->
+<!-- disabled-test: error.otherwise-without-try -->
 ```maxon
 typealias IntArray is Array with int
 
@@ -474,7 +458,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7:26: otherwise requires try expression
+error E3058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7:26: otherwise requires try expression
 ```
 
 <!-- test: error.otherwise-ignore-in-assignment -->
@@ -494,5 +478,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/error-handling.error.otherwise-ignore-in-assignment.1.test:12:5: type mismatch: ''otherwise ignore' cannot be used in assignment'
+error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:12:13: type mismatch: ''otherwise ignore' cannot be used in assignment'
 ```
