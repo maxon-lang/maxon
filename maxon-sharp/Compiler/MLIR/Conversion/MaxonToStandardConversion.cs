@@ -67,10 +67,12 @@ public static class MaxonToStandardConversion {
             flatIdx++;
           }
           paramIndexMap[i] = fieldIndices;
-        } else {
+        } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(func.ParamTypes[i]);
           flatIdx++;
+        } else {
+          throw new InvalidOperationException($"Unhandled parameter type: {func.ParamTypes[i].GetType().Name} for param '{func.ParamNames[i]}'");
         }
       }
 
@@ -79,8 +81,10 @@ public static class MaxonToStandardConversion {
         newReturnType = null;
       } else if (func.ReturnType is MlirEnumType retEnumType) {
         newReturnType = retEnumType.BackingType == MlirType.F64 ? MlirType.F64 : MlirType.I64;
-      } else {
+      } else if (func.ReturnType is not MlirStructType and not MlirEnumType) {
         newReturnType = func.ReturnType;
+      } else {
+        throw new InvalidOperationException($"Unhandled return type: {func.ReturnType.GetType().Name} in function '{func.Name}'");
       }
       var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType);
       var valueMap = new Dictionary<MaxonValue, StdValue>();
@@ -143,10 +147,12 @@ public static class MaxonToStandardConversion {
                 var newOp = new StdConstF64Op(enumLitOp.FloatValue);
                 newBlock.AddOp(newOp);
                 valueMap[enumLitOp.Result] = newOp.Result;
-              } else {
+              } else if (enumLitOp.BackingKind == MaxonValueKind.Integer) {
                 var newOp = new StdConstI64Op(enumLitOp.IntValue);
                 newBlock.AddOp(newOp);
                 valueMap[enumLitOp.Result] = newOp.Result;
+              } else {
+                throw new InvalidOperationException($"Unsupported enum backing kind: {enumLitOp.BackingKind}");
               }
               break;
             }
@@ -157,11 +163,13 @@ public static class MaxonToStandardConversion {
                 newBlock.AddOp(new StdParamOp(adjustedIndex, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
-              } else {
+              } else if (enumParamOp.BackingKind == MaxonValueKind.Integer) {
                 var stdResult = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(adjustedIndex, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
+              } else {
+                throw new InvalidOperationException($"Unsupported enum backing kind: {enumParamOp.BackingKind}");
               }
               break;
             }
@@ -202,8 +210,8 @@ public static class MaxonToStandardConversion {
                   valueMap[litOp.Result] = newOp.Result;
                   break;
                 }
-                case MaxonValueKind.Struct:
-                  throw new InvalidOperationException("Struct literals are not MaxonLiteralOp");
+                default:
+                  throw new InvalidOperationException($"Unsupported literal kind: {litOp.ValueKind}");
               }
               break;
             }
@@ -390,10 +398,8 @@ public static class MaxonToStandardConversion {
                   }
                   break;
                 }
-                case MaxonValueKind.Bool:
-                  throw new InvalidOperationException("Cannot cast to bool");
-                case MaxonValueKind.Struct:
-                  throw new InvalidOperationException("Cannot cast to struct");
+                default:
+                  throw new InvalidOperationException($"Unsupported cast target kind: {castOp.TargetKind}");
               }
               break;
             }
@@ -417,8 +423,7 @@ public static class MaxonToStandardConversion {
                   valueMap[globalLoad.Result] = loadOp.Result;
                   break;
                 }
-                case MaxonValueKind.Byte:
-                case MaxonValueKind.Struct:
+                default:
                   throw new InvalidOperationException($"Unsupported global variable type: {globalLoad.ValueKind}");
               }
               break;
@@ -435,8 +440,7 @@ public static class MaxonToStandardConversion {
                 case MaxonValueKind.Bool:
                   newBlock.AddOp(new StdGlobalStoreI1Op((StdBool)mappedValue, globalStore.GlobalName));
                   break;
-                case MaxonValueKind.Byte:
-                case MaxonValueKind.Struct:
+                default:
                   throw new InvalidOperationException($"Unsupported global variable type: {globalStore.ValueKind}");
               }
               break;
@@ -473,8 +477,10 @@ public static class MaxonToStandardConversion {
         flatIdx += 1;
       } else if (func.ParamTypes[i] is MlirStructType st) {
         flatIdx += st.Fields.Count;
-      } else {
+      } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
         flatIdx += 1;
+      } else {
+        throw new InvalidOperationException($"Unhandled parameter type in flat index computation: {func.ParamTypes[i].GetType().Name}");
       }
     }
     return flatIdx;
@@ -528,8 +534,10 @@ public static class MaxonToStandardConversion {
           var loaded = EmitLoad(block, fieldVarName, varTypes);
           newArgs.Add(loaded);
         }
-      } else {
+      } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
         newArgs.Add(valueMap[arg]);
+      } else {
+        throw new InvalidOperationException($"Unhandled call argument type: {calleeFunc.ParamTypes[i].GetType().Name} for arg {i} in call to '{callOp.Callee}'");
       }
     }
 
@@ -632,10 +640,6 @@ public static class MaxonToStandardConversion {
         block.AddOp(new StdStoreI1Op(b, varName));
         varTypes[varName] = "i1";
         break;
-      case StdPtr:
-        throw new InvalidOperationException("Cannot store a pointer value directly - struct fields should be stored individually");
-      case StdI32:
-        throw new InvalidOperationException("Cannot store I32 values in variable slots");
       default:
         throw new InvalidOperationException($"Unsupported StdValue type for store: {value.GetType().Name}");
     }
