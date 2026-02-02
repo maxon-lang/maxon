@@ -86,7 +86,7 @@ public static class MaxonToStandardConversion {
       } else {
         throw new InvalidOperationException($"Unhandled return type: {func.ReturnType.GetType().Name} in function '{func.Name}'");
       }
-      var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType);
+      var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
       var valueMap = new Dictionary<MaxonValue, StdValue>();
       var varTypes = new Dictionary<string, string>();
       // Maps MaxonStruct value IDs to their variable name prefix (for field access)

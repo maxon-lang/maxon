@@ -19,14 +19,14 @@ public class MlirPipeline {
 
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {
-      var maxonIr = MlirPrinter.Print(module);
       if (returnIr) {
+        var ir = MlirPrinter.Print(module, f => !f.IsStdlib);
         irBuilder!.AppendLine($"=== {PipelineStages.Maxon}");
-        irBuilder.Append(maxonIr.TrimEnd());
+        irBuilder.Append(ir.TrimEnd());
         irBuilder.AppendLine();
       }
       if (dumpStagesBasePath != null) {
-        File.WriteAllText($"{dumpStagesBasePath}.1-maxon.mlir", maxonIr);
+        File.WriteAllText($"{dumpStagesBasePath}.1-maxon.mlir", MlirPrinter.Print(module));
       }
     }
 
@@ -36,14 +36,14 @@ public class MlirPipeline {
 
     // Capture standard stage
     if (returnIr || dumpStagesBasePath != null) {
-      var standardIr = MlirPrinter.Print(stdModule);
       if (returnIr) {
+        var ir = MlirPrinter.Print(stdModule, f => !f.IsStdlib);
         irBuilder!.AppendLine($"=== {PipelineStages.Standard}");
-        irBuilder.Append(standardIr.TrimEnd());
+        irBuilder.Append(ir.TrimEnd());
         irBuilder.AppendLine();
       }
       if (dumpStagesBasePath != null) {
-        File.WriteAllText($"{dumpStagesBasePath}.2-standard.mlir", standardIr);
+        File.WriteAllText($"{dumpStagesBasePath}.2-standard.mlir", MlirPrinter.Print(stdModule));
       }
     }
 
@@ -53,14 +53,14 @@ public class MlirPipeline {
 
     // Capture x86 stage
     if (returnIr || dumpStagesBasePath != null) {
-      var x86Ir = MlirPrinter.Print(x86Module);
       if (returnIr) {
+        var ir = MlirPrinter.Print(x86Module, f => !f.IsStdlib);
         irBuilder!.AppendLine($"=== {PipelineStages.X86}");
-        irBuilder.Append(x86Ir.TrimEnd());
+        irBuilder.Append(ir.TrimEnd());
         irBuilder.AppendLine();
       }
       if (dumpStagesBasePath != null) {
-        File.WriteAllText($"{dumpStagesBasePath}.3-x86.mlir", x86Ir);
+        File.WriteAllText($"{dumpStagesBasePath}.3-x86.mlir", MlirPrinter.Print(x86Module));
       }
     }
 

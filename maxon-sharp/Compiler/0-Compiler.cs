@@ -53,6 +53,9 @@ public class Compiler {
         module.Merge(parsed);
       }
 
+      foreach (var func in module.Functions)
+        func.IsStdlib = true;
+
       // Reset IDs so user code starts at %0
       _context.ResetIds();
 

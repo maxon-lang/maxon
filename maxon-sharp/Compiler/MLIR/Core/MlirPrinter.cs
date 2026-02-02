@@ -3,10 +3,11 @@ using System.Text;
 namespace MaxonSharp.Compiler.Mlir.Core;
 
 public static class MlirPrinter {
-  public static string Print<TOp>(MlirModule<TOp> module) where TOp : IPrintableOp {
+  public static string Print<TOp>(MlirModule<TOp> module, Func<MlirFunction<TOp>, bool>? filter = null) where TOp : IPrintableOp {
     var sb = new StringBuilder();
     sb.AppendLine("module {");
     foreach (var func in module.Functions) {
+      if (filter != null && !filter(func)) continue;
       PrintFunction(sb, func, "  ");
     }
     sb.AppendLine("}");

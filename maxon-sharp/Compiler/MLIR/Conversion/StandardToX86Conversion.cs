@@ -21,7 +21,7 @@ public static class StandardToX86Conversion {
   }
 
   private static MlirFunction<X86Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<X86Op> outputModule) {
-    var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType);
+    var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
 
     // Pre-scan: calculate stack frame from store ops
     var varOffsets = new Dictionary<string, int>();
