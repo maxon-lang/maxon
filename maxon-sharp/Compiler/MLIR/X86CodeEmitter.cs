@@ -703,6 +703,15 @@ public class X86CodeEmitter {
     return reg >= X86Register.R8 && reg <= X86Register.R15;
   }
 
+  // Registers with codes 4-7 (SP, BP, SI, DI) need a REX prefix for byte
+  // operations to access SPL/BPL/SIL/DIL instead of AH/CH/DH/BH.
+  private static bool NeedsRexForByte(X86Register reg) {
+    return reg is X86Register.Esp or X86Register.Rsp
+      or X86Register.Ebp or X86Register.Rbp
+      or X86Register.Esi or X86Register.Rsi
+      or X86Register.Edi or X86Register.Rdi;
+  }
+
   private static void Require64BitGpr(X86Register reg, string caller) {
     if (!Is64BitReg(reg))
       throw new ArgumentException($"{caller}: expected 64-bit register, got {reg}");
@@ -962,11 +971,12 @@ public class X86CodeEmitter {
 
   private void EmitSetcc(string condition, X86Register dest) {
     RequireGpr(dest, nameof(EmitSetcc));
-    // SETcc r/m8: 0F 9x /0 (with optional REX prefix for r8-r15)
     byte condOpcode = ConditionToOpcode(condition);
     byte setccOpcode = (byte)(0x90 | (condOpcode & 0x0F));
     if (NeedsRex(dest)) {
       EmitByte(0x41); // REX.B for extended registers
+    } else if (NeedsRexForByte(dest)) {
+      EmitByte(0x40); // REX prefix to access SIL/DIL/BPL/SPL instead of AH/CH/DH/BH
     }
     EmitByte(0x0F);
     EmitByte(setccOpcode);
@@ -1042,7 +1052,7 @@ public class X86CodeEmitter {
         // REX needed for extended regs (R8-R15) and to access sil/dil/bpl/spl (codes 4-7)
         byte rex1 = 0x40;
         if (NeedsRex(src)) rex1 |= 0x04; // REX.R for extended register
-        if (NeedsRex(src) || RegCode(src) >= 4) EmitByte(rex1);
+        if (NeedsRex(src) || NeedsRexForByte(src)) EmitByte(rex1);
         EmitByte(0x88);
         break;
       }

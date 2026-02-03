@@ -3761,18 +3761,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.True) || Check(TokenType.False))
       return EmitConstantLiteral(Advance().Type == TokenType.True);
 
-    if (Check(TokenType.StringLiteral)) {
+    if (Check(TokenType.StringLiteral) || Check(TokenType.StringInterp)) {
       var token = Advance();
-      var result = EmitStringLiteral(token);
-      if (Check(TokenType.Dot)) {
-        return ParseFieldAccessChain(new ExprResult.Direct(result), token);
-      }
-      return new ExprResult.Direct(result);
-    }
-
-    if (Check(TokenType.StringInterp)) {
-      var token = Advance();
-      var result = EmitStringInterpolation(token);
+      var result = EmitStringLiteralWithInterpolation(token);
       if (Check(TokenType.Dot)) {
         return ParseFieldAccessChain(new ExprResult.Direct(result), token);
       }
@@ -4143,21 +4134,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return result;
   }
 
-  /// <summary>
-  /// Emits a string literal. Finds the type implementing BuiltinStringLiteral and emits
-  /// a MaxonStringLiteralOp that will be lowered to rdata bytes + String struct creation.
-  /// </summary>
-  private MaxonStruct EmitStringLiteral(Token token) {
-    // Find the type implementing BuiltinStringLiteral
-    var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
-        "No type implements BuiltinStringLiteral (String type not found in stdlib)",
-        token.Line, token.Column);
-    var op = new MaxonStringLiteralOp(token.Value, stringTypeName);
-    _currentBlock!.AddOp(op);
-    return op.Result;
-  }
-
-  private MaxonStruct EmitStringInterpolation(Token token) {
+  private MaxonStruct EmitStringLiteralWithInterpolation(Token token) {
     var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
         "No type implements BuiltinStringLiteral (String type not found in stdlib)",
         token.Line, token.Column);

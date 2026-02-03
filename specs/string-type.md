@@ -285,7 +285,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: isEmpty-method -->
+<!-- test: isEmpty-method -->
 ```maxon
 function main() returns int
   var empty = ""
@@ -334,10 +334,10 @@ end 'main'
 function main() returns int
   var s = "hello world"
   if s.endsWith("world") 'c1'
-    print("{1}\n")
+    print("1\n")
   end 'c1'
   if s.endsWith("hello") 'c2'
-    print("{0}\n")
+    print("0\n")
   end 'c2'
   return 0
 end 'main'
@@ -354,10 +354,10 @@ end 'main'
 function main() returns int
   var s = "hello world"
   if s.contains("lo wo") 'c1'
-    print("{1}\n")
+    print("1\n")
   end 'c1'
   if s.contains("xyz") 'c2'
-    print("{0}\n")
+    print("0\n")
   end 'c2'
   return 0
 end 'main'
@@ -669,13 +669,13 @@ end 'main'
 function main() returns int
   // 0xD83D = 55357 (high surrogate for 😀)
   if utf16IsLeadSurrogate(55357) 'c1'
-    print("{1}\n")
+    print("1\n")
   end 'c1'
   if utf16IsLeadSurrogate(56832) 'c2'
-    print("{0}\n")
+    print("0\n")
   end 'c2'
   if utf16IsLeadSurrogate(65) 'c3'
-    print("{0}\n")
+    print("0\n")
   end 'c3'
   return 0
 end 'main'
@@ -692,13 +692,13 @@ end 'main'
 function main() returns int
   // 0xDE00 = 56832 (low surrogate for 😀)
   if utf16IsTrailSurrogate(56832) 'c4'
-    print("{1}\n")
+    print("1\n")
   end 'c4'
   if utf16IsTrailSurrogate(55357) 'c5'
-    print("{0}\n")
+    print("0\n")
   end 'c5'
   if utf16IsTrailSurrogate(65) 'c6'
-    print("{0}\n")
+    print("0\n")
   end 'c6'
   return 0
 end 'main'
@@ -714,13 +714,13 @@ end 'main'
 ```maxon
 function main() returns int
   if utf16IsSurrogate(55357) 'c7'
-    print("{1}\n")
+    print("1\n")
   end 'c7'
   if utf16IsSurrogate(56832) 'c8'
-    print("{2}\n")
+    print("2\n")
   end 'c8'
   if utf16IsSurrogate(65) 'c9'
-    print("{0}\n")
+    print("0\n")
   end 'c9'
   return 0
 end 'main'
@@ -788,16 +788,16 @@ end 'main'
 ```maxon
 function main() returns int
   if utf16IsBmp(65) 'c10'
-    print("{1}\n")       // ASCII
+    print("1\n")       // ASCII
   end 'c10'
   if utf16IsBmp(945) 'c11'
-    print("{2}\n")      // Greek α
+    print("2\n")      // Greek α
   end 'c11'
   if utf16IsBmp(65535) 'c12'
-    print("{3}\n")    // U+FFFF (last BMP)
+    print("3\n")    // U+FFFF (last BMP)
   end 'c12'
   if utf16IsBmp(128512) 'c13'
-    print("{0}\n")   // 😀 (not BMP)
+    print("0\n")   // 😀 (not BMP)
   end 'c13'
   return 0
 end 'main'
@@ -815,13 +815,13 @@ end 'main'
 ```maxon
 function main() returns int
   if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
-    print("{1}\n")  // valid pair
+    print("1\n")  // valid pair
   end 'c14'
   if utf16IsValidSurrogatePair(56832, low: 55357) 'c15'
-    print("{0}\n")  // reversed
+    print("0\n")  // reversed
   end 'c15'
   if utf16IsValidSurrogatePair(65, low: 66) 'c16'
-    print("{0}\n")        // not surrogates
+    print("0\n")        // not surrogates
   end 'c16'
   return 0
 end 'main'
@@ -885,9 +885,9 @@ function main() returns int
   var a = "This string is definitely longer than fifteen bytes"
   var b = "This string is definitely longer than fifteen bytes"
   if a == b 'check'
-    print("{1}\n")
+    print("1\n")
   end 'check' else 'not_equal'
-    print("{0}\n")
+    print("0\n")
   end 'not_equal'
   return 0
 end 'main'
@@ -905,9 +905,9 @@ function main() returns int
   var a = "This string is definitely longer than fifteen bytes"
   var b = "This string is definitely longer than fifteen chars"
   if a != b 'check'
-    print("{1}\n")
+    print("1\n")
   end 'check' else 'are_equal'
-    print("{0}\n")
+    print("0\n")
   end 'are_equal'
   return 0
 end 'main'
@@ -987,10 +987,10 @@ end 'main'
 function main() returns int
   var s = "This is a very long string that is heap allocated"
   if s.startsWith("This is") 'c17'
-    print("{1}\n")
+    print("1\n")
   end 'c17'
   if s.startsWith("That is") 'c18'
-    print("{0}\n")
+    print("0\n")
   end 'c18'
   return 0
 end 'main'
@@ -1007,10 +1007,10 @@ end 'main'
 function main() returns int
   var s = "This is a very long string that is heap allocated"
   if s.endsWith("heap allocated") 'c19'
-    print("{1}\n")
+    print("1\n")
   end 'c19'
   if s.endsWith("stack allocated") 'c20'
-    print("{0}\n")
+    print("0\n")
   end 'c20'
   return 0
 end 'main'
@@ -1027,10 +1027,10 @@ end 'main'
 function main() returns int
   var s = "This is a very long string that is heap allocated"
   if s.contains("long string") 'c21'
-    print("{1}\n")
+    print("1\n")
   end 'c21'
   if s.contains("short string") 'c22'
-    print("{0}\n")
+    print("0\n")
   end 'c22'
   return 0
 end 'main'
@@ -1069,7 +1069,7 @@ function main() returns int
   var small = "hello"
   var large = "This is a longer string"
   if small != large 'check'
-    print("{1}\n")
+    print("1\n")
   end 'check'
   return 0
 end 'main'
@@ -1086,8 +1086,8 @@ end 'main'
 ```maxon
 function main() returns int
   var a = "hello"
-  var b = " world"
-  var s = "{a}{b}"
+  var b = "world"
+  var s = "{a} {b}"
   print("{s.count()}\n")
   return 0
 end 'main'

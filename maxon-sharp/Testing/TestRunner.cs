@@ -304,8 +304,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           }
 
           if (successExpectation.Stdout != null) {
-            var expectedStdout = successExpectation.Stdout.Trim();
-            var actualStdout = Stdout.Trim();
+            var expectedStdout = successExpectation.Stdout.Replace("\r\n", "\n").Trim();
+            var actualStdout = Stdout.Replace("\r\n", "\n").Trim();
             if (expectedStdout != actualStdout) {
               return new TestResult {
                 TestName = fragment.TestName,
