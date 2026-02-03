@@ -21,6 +21,7 @@ public class LspServer {
         .WithInput(Console.OpenStandardInput())
         .WithOutput(Console.OpenStandardOutput())
         .ConfigureLogging(x => x.AddLanguageProtocolLogging())
+        .WithConfigurationSection("maxon")
         .WithHandler<TextDocumentSyncHandler>()
         .WithHandler<CompletionHandler>()
         .WithHandler<HoverHandler>()
