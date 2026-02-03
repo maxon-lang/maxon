@@ -3762,6 +3762,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return new ExprResult.Direct(result);
     }
 
+    if (Check(TokenType.CharacterLiteral)) {
+      var token = Advance();
+      var result = EmitCharLiteral(token);
+      if (Check(TokenType.Dot)) {
+        return ParseFieldAccessChain(new ExprResult.Direct(result), token);
+      }
+      return new ExprResult.Direct(result);
+    }
+
     if (Check(TokenType.Not)) {
       var token = Advance(); // consume 'not'
       var inner = ParsePrimary();
@@ -4127,6 +4136,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         "No type implements BuiltinStringLiteral (String type not found in stdlib)",
         token.Line, token.Column);
     var op = new MaxonStringLiteralOp(token.Value, stringTypeName);
+    _currentBlock!.AddOp(op);
+    return op.Result;
+  }
+
+  private MaxonStruct EmitCharLiteral(Token token) {
+    var charTypeName = FindTypeImplementingInterface("BuiltinCharLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "No type implements BuiltinCharLiteral (Character type not found in stdlib)",
+        token.Line, token.Column);
+    var op = new MaxonCharLiteralOp(token.Value, charTypeName);
     _currentBlock!.AddOp(op);
     return op.Result;
   }

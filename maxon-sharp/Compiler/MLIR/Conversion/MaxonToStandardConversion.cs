@@ -593,6 +593,9 @@ public static class MaxonToStandardConversion {
             case MaxonStringLiteralOp stringLitOp:
               LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result);
               break;
+            case MaxonCharLiteralOp charLitOp:
+              LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result);
+              break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }
@@ -1447,34 +1450,32 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// String literal: stores UTF-8 bytes in rdata and creates a String struct.
-  /// Produces __ManagedMemory{buffer: rdata_ptr, length: byte_count, capacity: 0}
-  /// wrapped in a String{_managed: managed, _iterPos: 0}.
+  /// Emits rdata storage and __ManagedMemory field initialization for a UTF-8 literal value.
+  /// Stores bytes in .rdata, emits LEA + buffer/length/capacity fields.
   /// </summary>
-  private static void LowerStringLiteral(
-    MaxonStringLiteralOp op,
+  private static string EmitManagedMemoryLiteral(
+    string value,
+    int resultId,
+    string rdataPrefix,
+    string tempPrefix,
     MlirBlock<StandardOp> block,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     MlirModule<StandardOp> result) {
-    var utf8Bytes = System.Text.Encoding.UTF8.GetBytes(op.Value);
-    var rdataLabel = $"__str_{op.Result.Id}";
+    var utf8Bytes = System.Text.Encoding.UTF8.GetBytes(value);
+    var rdataLabel = $"__{rdataPrefix}_{resultId}";
 
-    // Store UTF-8 bytes in .rdata (alignment 1 for byte data)
     result.RdataEntries.Add((rdataLabel, utf8Bytes, 1));
 
-    // LEA to get rdata address
     var leaRdataOp = new StdLeaRdataOp(rdataLabel);
     block.AddOp(leaRdataOp);
     var rdataPtrOp = new StdPtrToI64Op(leaRdataOp.Result);
     block.AddOp(rdataPtrOp);
 
-    // Create __ManagedMemory fields: buffer=rdata_ptr, length=byte_count, capacity=0
-    var tempName = $"__strtmp_{op.Result.Id}";
+    var tempName = $"__{tempPrefix}_{resultId}";
     var bufferVar = $"{tempName}._managed.buffer";
     var lengthVar = $"{tempName}._managed.length";
     var capacityVar = $"{tempName}._managed.capacity";
-    var iterPosVar = $"{tempName}._iterPos";
 
     block.AddOp(new StdStoreI64Op(rdataPtrOp.Result, bufferVar));
     varTypes[bufferVar] = "i64";
@@ -1489,12 +1490,32 @@ public static class MaxonToStandardConversion {
     block.AddOp(new StdStoreI64Op(capConst.Result, capacityVar));
     varTypes[capacityVar] = "i64";
 
+    structVarNames[resultId] = tempName;
+    return tempName;
+  }
+
+  private static void LowerStringLiteral(
+    MaxonStringLiteralOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    MlirModule<StandardOp> result) {
+    var tempName = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, structVarNames, result);
+
+    var iterPosVar = $"{tempName}._iterPos";
     var iterConst = new StdConstI64Op(0);
     block.AddOp(iterConst);
     block.AddOp(new StdStoreI64Op(iterConst.Result, iterPosVar));
     varTypes[iterPosVar] = "i64";
+  }
 
-    structVarNames[op.Result.Id] = tempName;
+  private static void LowerCharLiteral(
+    MaxonCharLiteralOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    MlirModule<StandardOp> result) {
+    EmitManagedMemoryLiteral(op.Value, op.Result.Id, "chr", "chrtmp", block, varTypes, structVarNames, result);
   }
 
   private static readonly Dictionary<(MaxonBinOperator, MaxonValueKind), Func<StdValue, StdValue, (StandardOp Op, StdValue Result)>> BinOpFactories = new() {

@@ -662,6 +662,15 @@ public class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// Character literal: stores UTF-8 bytes in rdata and creates a Character struct
+public class MaxonCharLiteralOp(string value, string charTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.char_literal '{Value}'";
+  public string Value { get; } = value;
+  public string CharTypeName { get; } = charTypeName;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), charTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
 // Concatenate two __ManagedMemory buffers into a new one
 public class MaxonManagedMemConcatOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_concat";

@@ -167,7 +167,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: empty-string -->
+<!-- test: empty-string -->
 ```maxon
 function main() returns int
   var s = ""
@@ -181,7 +181,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: long-string -->
+<!-- test: long-string -->
 ```maxon
 function main() returns int
   var s = "this string is longer than fifteen bytes"
@@ -195,7 +195,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: inequality -->
+<!-- test: inequality -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -209,7 +209,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: equality-with-logical-and -->
+<!-- test: equality-with-logical-and -->
 ```maxon
 function main() returns int
   var s = "hello"
