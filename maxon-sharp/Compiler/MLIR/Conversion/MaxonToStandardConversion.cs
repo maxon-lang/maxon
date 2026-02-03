@@ -22,7 +22,7 @@ public static class MaxonToStandardConversion {
         hasResetAfterStdlib = true;
       }
 
-      var retStructType = func.ReturnType as MlirStructType;
+      var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
@@ -540,7 +540,7 @@ public static class MaxonToStandardConversion {
             }
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, module.TypeDefs);
               break;
             case MaxonFunctionRefOp fnRefOp:
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
@@ -561,7 +561,7 @@ public static class MaxonToStandardConversion {
               LowerThrow(throwOp, newBlock, valueMap);
               break;
             case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
+              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames);
@@ -604,6 +604,9 @@ public static class MaxonToStandardConversion {
               break;
             case MaxonManagedMemSliceOp sliceOp:
               LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
+            case MaxonMakeCharFromBytesOp makeCharOp:
+              LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
@@ -675,9 +678,10 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     bool isStructInstanceMethod,
-    MlirStructType? selfStructType) {
+    MlirStructType? selfStructType,
+    Dictionary<string, MlirType> typeDefs) {
     var calleeFunc = funcLookup[callOp.Callee];
-    var calleeRetStructType = calleeFunc.ReturnType as MlirStructType;
+    var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
 
     var newArgs = new List<StdValue>();
 
@@ -760,10 +764,11 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     bool isStructInstanceMethod,
-    MlirStructType? selfStructType) {
+    MlirStructType? selfStructType,
+    Dictionary<string, MlirType> typeDefs) {
 
     var calleeFunc = funcLookup[tryCallOp.Callee];
-    var calleeRetStructType = calleeFunc.ReturnType as MlirStructType;
+    var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
     var newArgs = new List<StdValue>();
 
     // If callee returns struct, allocate local space and pass sret pointer
@@ -859,6 +864,19 @@ public static class MaxonToStandardConversion {
         args.Add(loaded);
       }
     }
+  }
+
+  /// <summary>
+  /// Resolve the canonical struct type for a function return type.
+  /// Function return types may reference stale stub types from pre-scanning;
+  /// this resolves to the full type definition from module.TypeDefs.
+  /// </summary>
+  private static MlirStructType? ResolveStructReturnType(MlirType? returnType, Dictionary<string, MlirType> typeDefs) {
+    if (returnType is not MlirStructType retStruct) return null;
+    if (typeDefs.TryGetValue(retStruct.Name, out var canonical) && canonical is MlirStructType canonicalStruct) {
+      return canonicalStruct;
+    }
+    return retStruct;
   }
 
   /// <summary>
@@ -1810,6 +1828,59 @@ public static class MaxonToStandardConversion {
     EmitStore(block, sliceLenOp.Result, $"{tempName}.length", varTypes);
     EmitStore(block, sliceLenOp.Result, $"{tempName}.capacity", varTypes);
     structVarNames[op.Result.Id] = tempName;
+  }
+
+  /// <summary>
+  /// __make_char_from_bytes(managed, pos, len): create a Character from bytes in managed memory.
+  /// Allocates a new buffer, copies len bytes from source at pos, and creates a Character struct.
+  /// </summary>
+  private static void LowerMakeCharFromBytes(
+    MaxonMakeCharFromBytesOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+
+    var srcVarName = ResolveManagedVarName(op.Managed, structVarNames);
+    var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
+    var pos = (StdI64)valueMap[op.Pos];
+    var len = (StdI64)valueMap[op.Len];
+
+    // Compute source address: srcBuffer + pos
+    var srcAddrOp = new StdAddI64Op(srcBuffer, pos);
+    block.AddOp(srcAddrOp);
+
+    // Store len, srcAddr, and dstBuf to stack vars so they survive calls and memcopy
+    var lenVar = $"__mkchar_len_{op.Result.Id}";
+    EmitStore(block, len, lenVar, varTypes);
+    var srcAddrVar = $"__mkchar_src_{op.Result.Id}";
+    EmitStore(block, srcAddrOp.Result, srcAddrVar, varTypes);
+
+    // Allocate new buffer
+    var newBuf = EmitAlloc(block, len);
+
+    // Store the new buffer pointer (alloc clobbers registers)
+    var dstBufVar = $"__mkchar_dst_{op.Result.Id}";
+    EmitStore(block, newBuf, dstBufVar, varTypes);
+
+    // Reload values for memcopy (alloc clobbers registers)
+    var reloadLen = (StdI64)EmitLoad(block, lenVar, varTypes);
+    var reloadSrc = (StdI64)EmitLoad(block, srcAddrVar, varTypes);
+    var reloadDst = (StdI64)EmitLoad(block, dstBufVar, varTypes);
+
+    // Copy bytes from source to new buffer
+    block.AddOp(new StdMemCopyOp(reloadSrc, reloadDst, reloadLen));
+
+    // Reload all values again after memcopy (rep movsb clobbers RSI/RDI/RCX)
+    var finalLen = (StdI64)EmitLoad(block, lenVar, varTypes);
+    var finalBuf = (StdI64)EmitLoad(block, dstBufVar, varTypes);
+
+    // Create Character struct: Character._managed = {buffer, length, capacity}
+    var charVarName = $"__char_{op.Result.Id}";
+    EmitStore(block, finalBuf, $"{charVarName}._managed.buffer", varTypes);
+    EmitStore(block, finalLen, $"{charVarName}._managed.length", varTypes);
+    EmitStore(block, finalLen, $"{charVarName}._managed.capacity", varTypes);
+    structVarNames[op.Result.Id] = charVarName;
   }
 
   private static readonly Dictionary<(MaxonBinOperator, MaxonValueKind), Func<StdValue, StdValue, (StandardOp Op, StdValue Result)>> BinOpFactories = new() {

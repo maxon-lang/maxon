@@ -406,7 +406,7 @@ end 'main'
 hello there
 ```
 
-<!-- disabled-test: replace-multiple -->
+<!-- test: replace-multiple -->
 ```maxon
 function main() returns int
   var s = "aaa bbb aaa"
@@ -422,7 +422,7 @@ end 'main'
 x bbb x
 ```
 
-<!-- disabled-test: replace-no-match -->
+<!-- test: replace-no-match -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -438,7 +438,7 @@ end 'main'
 hello world
 ```
 
-<!-- disabled-test: replace-empty-needle -->
+<!-- test: replace-empty-needle -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -454,7 +454,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: replace-with-empty -->
+<!-- test: replace-with-empty -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -470,7 +470,7 @@ end 'main'
 hell wrld
 ```
 
-<!-- disabled-test: replace-adjacent -->
+<!-- test: replace-adjacent -->
 ```maxon
 function main() returns int
   var s = "aaaa"
@@ -486,7 +486,7 @@ end 'main'
 bb
 ```
 
-<!-- disabled-test: replaceFirst-single -->
+<!-- test: replaceFirst-single -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -502,7 +502,7 @@ end 'main'
 hell0 world
 ```
 
-<!-- disabled-test: replaceFirst-multiple-occurrences -->
+<!-- test: replaceFirst-multiple-occurrences -->
 ```maxon
 function main() returns int
   var s = "aaa bbb aaa"
@@ -518,7 +518,7 @@ end 'main'
 x bbb aaa
 ```
 
-<!-- disabled-test: replaceFirst-no-match -->
+<!-- test: replaceFirst-no-match -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -534,7 +534,7 @@ end 'main'
 hello world
 ```
 
-<!-- disabled-test: for-in-string -->
+<!-- test: for-in-string -->
 ```maxon
 function main() returns int
   var s = "abc"

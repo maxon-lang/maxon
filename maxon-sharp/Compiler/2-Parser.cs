@@ -2998,7 +2998,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// <summary>
   /// Parse for-in loop: for varName in expr 'label' ... end 'label'
-  /// Desugars to a while loop using an index variable and managed memory operations.
+  /// Calls try next() each iteration and exits on IterationError.exhausted.
   /// </summary>
   private void ParseForIn() {
     var forToken = Advance(); // consume 'for'
@@ -3009,98 +3009,88 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var loopSourceLabel = Expect(TokenType.CharacterLiteral).Value;
     SkipNewlines();
 
+    var iterableTypeName = ((iterableValue is MaxonStruct ms) ? ms.TypeName : _currentTypeName) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        "Cannot determine type for 'for-in' iterable expression",
+        forToken.Line, forToken.Column);
+
+    var iterableType = _typeRegistry.TryGetValue(iterableTypeName, out var regType)
+      ? regType as MlirStructType : null;
+
+    // Resolve the next() method name
+    var nextMethodName = ResolveMethodName($"{iterableTypeName}.next") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Type '{iterableTypeName}' does not implement Iterable (missing next() method)",
+        forToken.Line, forToken.Column);
+
+    // Determine the element type from next()'s return type
+    var nextFunc = _currentModule!.Functions.First(f => f.Name == nextMethodName);
+    var elementMlirType = nextFunc.ReturnType;
+    // Resolve to canonical type (pre-scanned stubs may have 0 fields)
+    if (elementMlirType is MlirStructType retStruct
+        && _typeRegistry.TryGetValue(retStruct.Name, out var canonical)
+        && canonical is MlirStructType canonicalStruct) {
+      elementMlirType = canonicalStruct;
+    }
+    var elementIsStruct = elementMlirType is MlirStructType resolvedStruct && resolvedStruct.Fields.Count > 0;
+    var elementKind = elementIsStruct ? MaxonValueKind.Struct
+      : elementMlirType == MlirType.F64 ? MaxonValueKind.Float
+      : MaxonValueKind.Integer;
+    var elementStructTypeName = elementIsStruct ? elementMlirType!.Name : null;
+
     var loopLabel = UniqueLabel(loopSourceLabel);
     var headerLabel = $"{loopLabel}.header";
     var bodyLabel = loopLabel;
     var exitLabel = $"{loopLabel}.exit";
 
-    // Get the iterable's type info to access its managed field
-    var iterableTypeName = (iterableValue is MaxonStruct ms) ? ms.TypeName : _currentTypeName;
-    var iterableType = iterableTypeName != null && _typeRegistry.TryGetValue(iterableTypeName, out var regType)
-      ? regType as MlirStructType : null;
-
-    // Create an index variable: var __for_idx = 0
-    var idxVarName = $"__for_idx_{_blockCounter}";
-    var zeroLit = new MaxonLiteralOp(0L);
-    _currentBlock!.AddOp(zeroLit);
-    var idxAssign = new MaxonAssignOp(idxVarName, zeroLit.Result, isDeclaration: true, isMutable: true, MaxonValueKind.Integer);
-    _currentBlock!.AddOp(idxAssign);
-    _variables[idxVarName] = new VarInfo(MaxonValueKind.Integer, true, zeroLit.Result, _currentBlock!, null);
-
-    // Get the length of the iterable's managed memory
-    // Access the managed field of the iterable struct
-    MaxonValue managedValue;
-    if (iterableType != null && iterableType.Fields.Any(f => f.Name == "managed")) {
-      var managedAccess = new MaxonFieldAccessOp(iterableValue, iterableTypeName!, "managed", MaxonValueKind.Struct, "__ManagedMemory");
-      _currentBlock!.AddOp(managedAccess);
-      managedValue = managedAccess.Result;
-    } else {
-      managedValue = iterableValue;
-    }
-
-    // Get length: __managed_memory_len(managed)
-    var lenAccess = new MaxonFieldAccessOp(managedValue, "__ManagedMemory", "length", MaxonValueKind.Integer);
-    _currentBlock!.AddOp(lenAccess);
-    var lenVarName = $"__for_len_{_blockCounter}";
-    var lenAssign = new MaxonAssignOp(lenVarName, lenAccess.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Integer);
-    _currentBlock!.AddOp(lenAssign);
-    _variables[lenVarName] = new VarInfo(MaxonValueKind.Integer, false, lenAccess.Result, _currentBlock!, null);
+    // Create a mutable copy of the iterable so next() can update iteration state
+    var iterVarName = $"__for_iter_{_blockCounter}";
+    _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+    _variables[iterVarName] = new VarInfo(MaxonValueKind.Struct, true, iterableValue, _currentBlock!, iterableTypeName);
 
     // Branch from entry to header
     _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
 
-    // Create header block: check idx < len
+    // Header block: call try next() and check for exhaustion
     var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
     _currentBlock = headerBlock;
 
-    // Load current index
-    var idxLoad = new MaxonVarRefOp(idxVarName, MaxonValueKind.Integer);
-    headerBlock.AddOp(idxLoad);
-    // Load length
-    var lenLoad = new MaxonVarRefOp(lenVarName, MaxonValueKind.Integer);
-    headerBlock.AddOp(lenLoad);
-    // Compare: idx < len
-    var cmpOp = new MaxonBinOp(MaxonBinOperator.Lt, idxLoad.Result, lenLoad.Result, MaxonValueKind.Integer);
+    // Load the iterator struct
+    var iterRef = new MaxonStructVarRefOp(iterVarName, iterableTypeName);
+    headerBlock.AddOp(iterRef);
+
+    // Call try next(self) — next() throws IterationError.exhausted when done
+    var tryCallOp = new MaxonTryCallOp(nextMethodName, [iterRef.Result], elementKind, elementStructTypeName);
+    headerBlock.AddOp(tryCallOp);
+
+    // Store error flag and result for cross-block access
+    var errorFlagVar = $"__try_error_{_blockCounter++}";
+    headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, tryCallOp.ErrorFlag, true, true, MaxonValueKind.Integer));
+    _variables[errorFlagVar] = new VarInfo(MaxonValueKind.Integer, true, tryCallOp.ErrorFlag, headerBlock, null);
+
+    string? resultVar = null;
+    if (tryCallOp.Result != null) {
+      resultVar = $"__try_result_{_blockCounter++}";
+      headerBlock.AddOp(new MaxonAssignOp(resultVar, tryCallOp.Result, true, true, elementKind));
+      _variables[resultVar] = new VarInfo(elementKind, true, tryCallOp.Result, headerBlock, elementStructTypeName);
+    }
+
+    // Check error flag: zero means success → continue to body, non-zero → exit
+    // Block ordering requires then=fallthrough=body, else=jump=exit
+    var zeroOp = new MaxonLiteralOp(0L);
+    headerBlock.AddOp(zeroOp);
+    var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, tryCallOp.ErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
     headerBlock.AddOp(cmpOp);
     headerBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, bodyLabel, exitLabel));
 
-    // Create body block
+    // Body block: load the result as the loop variable
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
 
-    // Load current index again in body
-    var bodyIdxLoad = new MaxonVarRefOp(idxVarName, MaxonValueKind.Integer);
-    bodyBlock.AddOp(bodyIdxLoad);
-
-    // Get element: __managed_memory_get_unchecked(managed, idx)
-    // Re-access managed field in body block
-    MaxonValue bodyManagedValue;
-    if (iterableType != null && iterableType.Fields.Any(f => f.Name == "managed")) {
-      var bodyManagedAccess = new MaxonFieldAccessOp(iterableValue, iterableTypeName!, "managed", MaxonValueKind.Struct, "__ManagedMemory");
-      bodyBlock.AddOp(bodyManagedAccess);
-      bodyManagedValue = bodyManagedAccess.Result;
-    } else {
-      bodyManagedValue = managedValue;
+    if (resultVar != null) {
+      var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
+      _currentBlock!.AddOp(new MaxonAssignOp(itemName, loadedValue, isDeclaration: true, isMutable: false, elementKind));
+      _variables[itemName] = new VarInfo(elementKind, false, loadedValue, bodyBlock, elementStructTypeName);
     }
-
-    var getOp = new MaxonManagedMemGetOp(bodyManagedValue, bodyIdxLoad.Result, 8, MaxonValueKind.Integer);
-    bodyBlock.AddOp(getOp);
-
-    // Declare the loop variable
-    var itemAssign = new MaxonAssignOp(itemName, getOp.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Integer);
-    bodyBlock.AddOp(itemAssign);
-    _variables[itemName] = new VarInfo(MaxonValueKind.Integer, false, getOp.Result, bodyBlock, null);
-
-    // Increment index: idx = idx + 1
-    var idxLoad2 = new MaxonVarRefOp(idxVarName, MaxonValueKind.Integer);
-    bodyBlock.AddOp(idxLoad2);
-    var oneLit = new MaxonLiteralOp(1L);
-    bodyBlock.AddOp(oneLit);
-    var addOp = new MaxonBinOp(MaxonBinOperator.Add, idxLoad2.Result, oneLit.Result, MaxonValueKind.Integer);
-    bodyBlock.AddOp(addOp);
-    var idxUpdate = new MaxonAssignOp(idxVarName, addOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer);
-    bodyBlock.AddOp(idxUpdate);
 
     // Parse the body
     ParseBodyUntilEnd();
