@@ -855,6 +855,24 @@ public class RegisterManager {
     }
   }
 
+  /// <summary>
+  /// Emit byte load: MOVZX destReg, byte ptr [baseReg + offset]
+  /// </summary>
+  public void EmitLoadByteIndirect(StdValue result, StdValue basePtr, int fieldOffset, MlirBlock<X86Op> block) {
+    var baseReg = EnsureInRegister(basePtr, block);
+    var destGpr = AllocateRegister(result, block, protect1: baseReg);
+    block.AddOp(new X86MovzxRegByteIndirectOp(destGpr, baseReg, fieldOffset));
+  }
+
+  /// <summary>
+  /// Emit byte store: MOV byte ptr [baseReg + offset], srcReg_low8
+  /// </summary>
+  public void EmitStoreByteIndirect(StdValue value, StdValue basePtr, int fieldOffset, MlirBlock<X86Op> block) {
+    var baseReg = EnsureInRegister(basePtr, block);
+    var srcReg = EnsureInRegister(value, block, protect1: baseReg);
+    block.AddOp(new X86MovByteIndirectRegOp(baseReg, fieldOffset, srcReg));
+  }
+
   // --- Global variable support: RIP-relative addressing ---
 
   /// <summary>

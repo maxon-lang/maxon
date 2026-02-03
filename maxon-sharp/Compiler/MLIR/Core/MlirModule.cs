@@ -27,6 +27,9 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Populated by ConstantArrayAnalysisPass, consumed by MaxonToStandardConversion
   public Dictionary<int, ConstantArrayLiteralInfo> ConstantArrayLiterals { get; } = [];
 
+  // Interface associated type names (interfaceName -> list of 'uses' type names)
+  public Dictionary<string, List<string>> InterfaceAssociatedTypes { get; } = [];
+
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
   }
@@ -44,5 +47,6 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in other.ElementPolymorphicParams) ElementPolymorphicParams.TryAdd(k, v);
     foreach (var (k, v) in other.TypeAliasSources) TypeAliasSources.TryAdd(k, v);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);
+    foreach (var (k, v) in other.InterfaceAssociatedTypes) InterfaceAssociatedTypes.TryAdd(k, v);
   }
 }

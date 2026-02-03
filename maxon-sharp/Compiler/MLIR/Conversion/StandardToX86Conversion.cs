@@ -453,6 +453,14 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdLoadByteIndirectOp loadByteOp:
+            regManager.EmitLoadByteIndirect(loadByteOp.Result, loadByteOp.BasePtr, loadByteOp.FieldOffset, x86Block);
+            break;
+
+          case StdStoreByteIndirectOp storeByteOp:
+            regManager.EmitStoreByteIndirect(storeByteOp.Value, storeByteOp.BasePtr, storeByteOp.FieldOffset, x86Block);
+            break;
+
           default:
             throw new InvalidOperationException($"No StandardToX86 conversion for: {op.GetType().Name} ({op.Mnemonic})");
         }

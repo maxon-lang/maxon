@@ -254,6 +254,12 @@ public class X86CodeEmitter {
       case X86MovSdXmmIndirectMemOp movsdInd:
         EmitMovSdXmmIndirectMem(movsdInd.Dest, movsdInd.BaseReg, movsdInd.Displacement);
         break;
+      case X86MovzxRegByteIndirectOp movzxByte:
+        EmitMovzxRegByteIndirect(movzxByte.Dest, movzxByte.BaseReg, movzxByte.Displacement);
+        break;
+      case X86MovByteIndirectRegOp movByte:
+        EmitMovByteIndirectReg(movByte.BaseReg, movByte.Displacement, movByte.Src);
+        break;
       case X86GlobalLoadOp globalLoad:
         EmitGlobalLoadReg(globalLoad.Dest, globalLoad.GlobalName);
         break;
@@ -1223,6 +1229,30 @@ public class X86CodeEmitter {
     EmitByte(rex);
     EmitByte(0x8B);
     EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
+  private void EmitMovzxRegByteIndirect(X86Register dest, X86Register baseReg, int displacement) {
+    RequireGpr(dest, nameof(EmitMovzxRegByteIndirect));
+    RequireGpr(baseReg, nameof(EmitMovzxRegByteIndirect));
+    // MOVZX r64, byte ptr [baseReg+disp]: REX.W + 0F B6 /r
+    byte rex = 0x48; // REX.W
+    if (NeedsRex(dest)) rex |= 0x04; // REX.R
+    if (NeedsRex(baseReg)) rex |= 0x01; // REX.B
+    EmitByte(rex);
+    EmitBytes(0x0F, 0xB6);
+    EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
+  private void EmitMovByteIndirectReg(X86Register baseReg, int displacement, X86Register src) {
+    RequireGpr(baseReg, nameof(EmitMovByteIndirectReg));
+    RequireGpr(src, nameof(EmitMovByteIndirectReg));
+    // MOV byte ptr [baseReg+disp], src8: REX + 88 /r
+    byte rex = 0x40;
+    if (NeedsRex(src)) rex |= 0x04; // REX.R
+    if (NeedsRex(baseReg)) rex |= 0x01; // REX.B
+    EmitByte(rex);
+    EmitByte(0x88);
+    EmitModRmWithBase(baseReg, src, displacement);
   }
 
   private void EmitMovSdIndirectMemXmm(X86Register baseReg, int displacement, X86XmmRegister src) {

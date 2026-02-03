@@ -43,6 +43,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Also tracks return type: index -1 means return type is Element-polymorphic
   private readonly Dictionary<string, HashSet<int>> _elementPolymorphicParams = [];
 
+  // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
+  private readonly Dictionary<string, List<string>> _interfaceAssociatedTypes = [];
+
 
   /// <summary>
   /// Resolves a qualified method name, falling back to the source type for type aliases.
@@ -154,6 +157,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       foreach (var (name, params_) in seedModule.ElementPolymorphicParams) {
         _elementPolymorphicParams.TryAdd(name, params_);
       }
+      foreach (var (name, assocTypes) in seedModule.InterfaceAssociatedTypes) {
+        _interfaceAssociatedTypes.TryAdd(name, assocTypes);
+      }
     }
 
     // Pre-scan to collect and evaluate top-level constants and global variables
@@ -183,6 +189,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         typeParams = st.TypeParams.Count > 0 ? new Dictionary<string, MlirType>(st.TypeParams) : null;
       }
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams);
+    }
+    foreach (var (name, assocTypes) in _interfaceAssociatedTypes) {
+      module.InterfaceAssociatedTypes.TryAdd(name, assocTypes);
     }
 
     Logger.Debug(LogCategory.Parser, $"Parser complete: {module.Functions.Count} functions");
@@ -345,26 +354,53 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Parse an 'is' clause (e.g., 'is Equatable') for interface conformance.
   /// Returns the list of interface names the type conforms to.
   /// </summary>
-  private List<string> ParseConformanceClause() {
+  private (List<string> Interfaces, Dictionary<string, MlirType> TypeParams) ParseConformanceClause() {
     var names = new List<string>();
-    if (!Check(TokenType.Is)) return names;
+    var typeParams = new Dictionary<string, MlirType>();
+    if (!Check(TokenType.Is)) return (names, typeParams);
 
     Advance(); // consume 'is'
-    names.Add(Expect(TokenType.Identifier).Value);
-    // Skip optional 'with TypeArg' suffix (e.g., Iterable with Element)
+    var ifaceName = Expect(TokenType.Identifier).Value;
+    names.Add(ifaceName);
     if (Check(TokenType.With)) {
       Advance();
-      ParseTypeRef();
+      var withType = ParseTypeRef();
+      ResolveWithTypeParams(ifaceName, withType, typeParams);
     }
     while (Check(TokenType.Comma)) {
       Advance();
-      names.Add(Expect(TokenType.Identifier).Value);
+      ifaceName = Expect(TokenType.Identifier).Value;
+      names.Add(ifaceName);
       if (Check(TokenType.With)) {
         Advance();
-        ParseTypeRef();
+        var withType = ParseTypeRef();
+        ResolveWithTypeParams(ifaceName, withType, typeParams);
       }
     }
-    return names;
+    return (names, typeParams);
+  }
+
+  /// <summary>
+  /// Maps interface associated type names to the concrete types specified in 'with' clauses.
+  /// For example, 'Iterable with byte' maps Element -> byte.
+  /// </summary>
+  private void ResolveWithTypeParams(string ifaceName, MlirType withType, Dictionary<string, MlirType> typeParams) {
+    if (_typeRegistry.TryGetValue(ifaceName, out var ifaceTypeInfo) && ifaceTypeInfo is MlirInterfaceType) {
+      // Interface uses clause defines associated type names (e.g., "uses Element")
+      // The Iterable interface has an associated type list via its source definition
+      // For now, look up the interface's associated type names from the registry
+    }
+    // Check if the interface was defined with 'uses' clause by looking for placeholder types
+    // that were temporarily registered. The convention is that interfaces like "Iterable uses Element"
+    // have their associated type names stored when the interface is parsed.
+    // Since we can't easily query this from the parsed interface, we use a naming convention:
+    // the first 'with' arg maps to the first 'uses' name.
+    // For Iterable: uses Element -> with byte means Element = byte
+    if (_interfaceAssociatedTypes.TryGetValue(ifaceName, out var assocNames)) {
+      if (assocNames.Count > 0) {
+        typeParams[assocNames[0]] = withType;
+      }
+    }
   }
 
   /// <summary>
@@ -395,7 +431,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var associatedTypeNames = ParseUsesClause();
-    var conformingInterfaces = ParseConformanceClause();
+    var (conformingInterfaces, conformanceTypeParams) = ParseConformanceClause();
 
     // Builtin* interfaces are reserved for stdlib types
     if (!_isStdlib) {
@@ -483,11 +519,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     // Replace temporary entry with complete struct type
-    _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces);
+    _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
+      typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null);
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
 
     // Validate interface conformance: each required method must exist with matching signature
+    var structTypeParams = conformanceTypeParams;
     foreach (var ifaceName in conformingInterfaces) {
       if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceType) || ifaceType is not MlirInterfaceType iface)
         continue;
@@ -499,7 +537,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var func = module.Functions.FirstOrDefault(f => f.Name == qualifiedName);
         if (func == null) {
           missingMethods.Add(method.Format());
-        } else if (!SignatureMatches(method, func, ifaceName, typeName)) {
+        } else if (!SignatureMatches(method, func, ifaceName, typeName, structTypeParams)) {
           var actualSig = FormatFunctionSignature(method.Name, func);
           wrongSignatureMethods.Add($"{actualSig} (expected {method.Format()})");
         }
@@ -535,6 +573,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       "float" => MlirType.F64.Name,
       "bool" => MlirType.I1.Name,
       "byte" => MlirType.I8.Name,
+      "cstring" => MlirType.I64.Name,
       _ => sourceTypeName
     };
   }
@@ -544,7 +583,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Instance methods have 'self' as the first parameter which is skipped during comparison.
   /// Self-typed parameters in the interface (resolved to ifaceName) match the implementing typeName.
   /// </summary>
-  private static bool SignatureMatches(MlirInterfaceMethodSignature method, MlirFunction<MaxonOp> func, string ifaceName, string typeName) {
+  private static bool SignatureMatches(MlirInterfaceMethodSignature method, MlirFunction<MaxonOp> func, string ifaceName, string typeName, Dictionary<string, MlirType> typeParams) {
     // Instance methods have 'self' as first param; skip it
     var funcParamTypes = func.ParamTypes.Skip(1).ToList();
 
@@ -552,23 +591,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return false;
 
     for (int i = 0; i < method.ParamTypeNames.Count; i++) {
-      var expectedTypeName = method.ParamTypeNames[i];
-      // Self-typed parameters: interface stores the interface name, implementation uses the concrete type
-      if (expectedTypeName == ifaceName)
-        expectedTypeName = typeName;
-      if (ResolveTypeName(expectedTypeName) != funcParamTypes[i].Name)
+      var expectedTypeName = ResolveInterfaceTypeName(method.ParamTypeNames[i], ifaceName, typeName, typeParams);
+      if (expectedTypeName == null || ResolveTypeName(expectedTypeName) != funcParamTypes[i].Name)
         return false;
     }
 
-    var expectedReturnName = method.ReturnTypeName;
-    if (expectedReturnName == ifaceName)
-      expectedReturnName = typeName;
+    var expectedReturnName = ResolveInterfaceTypeName(method.ReturnTypeName, ifaceName, typeName, typeParams);
     var expectedReturn = expectedReturnName != null ? ResolveTypeName(expectedReturnName) : MlirType.Void.Name;
     var actualReturn = func.ReturnType?.Name ?? MlirType.Void.Name;
     if (expectedReturn != actualReturn)
       return false;
 
     return true;
+  }
+
+  /// <summary>
+  /// Resolves a type name in an interface method signature, handling Self references and associated types.
+  /// </summary>
+  private static string? ResolveInterfaceTypeName(string? name, string ifaceName, string typeName, Dictionary<string, MlirType> typeParams) {
+    if (name == null) return null;
+    if (name == ifaceName) return typeName;
+    // Resolve associated types (e.g., Element -> byte when struct declares 'with byte')
+    if (typeParams.TryGetValue(name, out var resolvedType))
+      return FormatTypeName(resolvedType);
+    return name;
   }
 
   /// <summary>
@@ -602,7 +648,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
 
-    var conformingInterfaces = ParseConformanceClause();
+    var (conformingInterfaces, _) = ParseConformanceClause();
 
     // Temporary entry so ParseTypeRef can resolve forward references
     if (!_typeRegistry.TryGetValue(enumName, out MlirType? value)) {
@@ -793,6 +839,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
     _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, methods);
+    if (associatedTypeNames.Count > 0) {
+      _interfaceAssociatedTypes[interfaceName] = associatedTypeNames;
+    }
   }
 
   /// <summary>
@@ -1748,6 +1797,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       "float" => MlirType.F64,
       "bool" => MlirType.I1,
       "byte" => MlirType.I8,
+      "cstring" => MlirType.I64, // raw pointer type for FFI
       _ => _typeRegistry.TryGetValue(typeName, out var structType)
         ? structType
         : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
@@ -1991,11 +2041,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var valueKind = DetermineValueKind(value);
 
     var expectedKind = returnType.ToValueKind();
-    if (valueKind != expectedKind) {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Cannot return '{KindDisplayName(valueKind)}' from function declared to return '{KindDisplayName(expectedKind)}'",
-        returnToken.Line, returnToken.Column);
-    }
+    if (valueKind == expectedKind || IsWideningCast(valueKind, expectedKind))
+      return;
+
+    throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"Cannot return '{KindDisplayName(valueKind)}' from function declared to return '{KindDisplayName(expectedKind)}'",
+      returnToken.Line, returnToken.Column);
   }
 
   private void ParseThrow() {
@@ -2402,8 +2453,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseCallStatement() {
     var token = Advance(); // consume identifier
 
-    // Handle __managed_memory_* builtins
-    if (token.Value.StartsWith("__managed_memory_") || token.Value == "__element_size") {
+    // Handle compiler builtins (__managed_memory_*, __element_size, __cstring_*, __make_char_*)
+    if (IsCompilerBuiltin(token.Value)) {
       Advance(); // consume '('
       TryEmitManagedMemoryBuiltin(token);
       return;
@@ -2417,8 +2468,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     CreateFunctionCall(token, args);
   }
 
+  private static bool IsCompilerBuiltin(string name) =>
+    name.StartsWith("__managed_memory_") || name.StartsWith("__cstring_") || name.StartsWith("__make_char_") || name == "__element_size";
+
   /// <summary>
-  /// Handles __managed_memory_* and __element_size builtin intrinsics.
+  /// Handles compiler builtin intrinsics.
   /// Called after consuming '('. Returns the result value (or null for void builtins).
   /// </summary>
   private MaxonValue? TryEmitManagedMemoryBuiltin(Token token) {
@@ -2536,6 +2590,78 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var op = new MaxonManagedMemShiftOp(managed, index, count, ELEMENT_SIZE, shiftRight: false);
         _currentBlock!.AddOp(op);
         return null;
+      }
+
+      case "__managed_memory_byte_at": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemByteGetOp(managed, index);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__managed_memory_set_byte": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var value = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemByteSetOp(managed, index, value);
+        _currentBlock!.AddOp(op);
+        return null;
+      }
+
+      case "__managed_memory_concat": {
+        var lhs = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var rhs = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemConcatOp(lhs, rhs);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__managed_memory_slice": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var start = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var end = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemSliceOp(managed, start, end);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__managed_memory_to_cstring": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__cstring_to_managed": {
+        var cstrPtr = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonCStringToManagedOp(cstrPtr);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
+      case "__make_char_from_bytes": {
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var pos = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        var len = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonMakeCharFromBytesOp(managed, pos, len);
+        _currentBlock!.AddOp(op);
+        return op.Result;
       }
 
       default:
@@ -3512,6 +3638,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
 
+      // Struct equality/inequality via Equatable interface
+      if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne
+          && lhsVal is MaxonStruct lhsStruct && rhsVal is MaxonStruct rhsStruct
+          && lhsStruct.TypeName == rhsStruct.TypeName) {
+        if (_typeRegistry[lhsStruct.TypeName] is MlirStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
+          var equalsMethodName = $"{lhsStruct.TypeName}.equals";
+          var equalsToken = new Token(TokenType.Identifier, equalsMethodName, opToken.Line, opToken.Column);
+          var callOp = CreateFunctionCall(equalsToken, [lhsVal, rhsVal]);
+          if (entry.Op == MaxonBinOperator.Ne) {
+            var trueOp = new MaxonLiteralOp(true);
+            _currentBlock!.AddOp(trueOp);
+            var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, callOp.Result!, trueOp.Result, MaxonValueKind.Bool);
+            _currentBlock!.AddOp(xorOp);
+            lhs = new ExprResult.Direct(xorOp.Result);
+          } else {
+            lhs = new ExprResult.Direct(callOp.Result!);
+          }
+          continue;
+        }
+      }
+
       MaxonValueKind kind;
       MaxonValue promotedLhs, promotedRhs;
 
@@ -3605,6 +3752,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (Check(TokenType.True) || Check(TokenType.False))
       return EmitConstantLiteral(Advance().Type == TokenType.True);
+
+    if (Check(TokenType.StringLiteral)) {
+      var token = Advance();
+      var result = EmitStringLiteral(token);
+      if (Check(TokenType.Dot)) {
+        return ParseFieldAccessChain(new ExprResult.Direct(result), token);
+      }
+      return new ExprResult.Direct(result);
+    }
 
     if (Check(TokenType.Not)) {
       var token = Advance(); // consume 'not'
@@ -3735,8 +3891,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           _currentBlock!.AddOp(op);
           return new ExprResult.Direct(result);
         }
-        // Handle __managed_memory_* and __element_size builtins in expression context
-        if (token.Value.StartsWith("__managed_memory_") || token.Value == "__element_size") {
+        // Handle compiler builtins in expression context
+        if (IsCompilerBuiltin(token.Value)) {
           Advance(); // consume '('
           var builtinResult = TryEmitManagedMemoryBuiltin(token);
           if (builtinResult != null)
@@ -3959,6 +4115,28 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     return result;
+  }
+
+  /// <summary>
+  /// Emits a string literal. Finds the type implementing BuiltinStringLiteral and emits
+  /// a MaxonStringLiteralOp that will be lowered to rdata bytes + String struct creation.
+  /// </summary>
+  private MaxonStruct EmitStringLiteral(Token token) {
+    // Find the type implementing BuiltinStringLiteral
+    var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "No type implements BuiltinStringLiteral (String type not found in stdlib)",
+        token.Line, token.Column);
+    var op = new MaxonStringLiteralOp(token.Value, stringTypeName);
+    _currentBlock!.AddOp(op);
+    return op.Result;
+  }
+
+  private string? FindTypeImplementingInterface(string interfaceName) {
+    foreach (var (name, type) in _typeRegistry) {
+      if (type is MlirStructType structType && structType.ConformingInterfaces.Contains(interfaceName))
+        return name;
+    }
+    return null;
   }
 
   private ExprResult.Direct EmitConstantLiteral(object constValue) {

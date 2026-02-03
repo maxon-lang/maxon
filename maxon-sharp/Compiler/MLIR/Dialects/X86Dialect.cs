@@ -342,6 +342,22 @@ public class X86MovSdXmmIndirectMemOp(X86XmmRegister dest, X86Register baseReg, 
   public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
 }
 
+// MOVZX dest64, byte ptr [baseReg+disp] - load byte and zero-extend to 64-bit
+public class X86MovzxRegByteIndirectOp(X86Register dest, X86Register baseReg, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x86.movzx {Dest.ToString().ToLower()}, byte ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
+// MOV byte ptr [baseReg+disp], src8 - store low byte of register to memory
+public class X86MovByteIndirectRegOp(X86Register baseReg, int displacement, X86Register src) : X86Op {
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.mov byte ptr [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}b";
+}
+
 // ============================================================================
 // Global variable operations (RIP-relative addressing)
 // ============================================================================

@@ -345,14 +345,14 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonStructVarRefOp structVarRef: {
-              // Look up the resolved prefix from prior assignments, or use the raw variable name
-              var resolvedName = varNameToStructPrefix.GetValueOrDefault(structVarRef.VarName, structVarRef.VarName);
-              // In struct instance methods, self field references must use "self.X"
-              // to avoid reading from bare-name variables that may not exist when
-              // conditional branches (like init_empty) are not taken at runtime.
-              if (resolvedName == structVarRef.VarName
-                  && IsSelfField(isStructInstanceMethod, selfStructType, structVarRef.VarName)) {
+              // Self fields always resolve to "self.X" — this takes priority over
+              // varNameToStructPrefix which can be overwritten by other parameters
+              // with same field names (e.g., both self and other have _managed)
+              string resolvedName;
+              if (IsSelfField(isStructInstanceMethod, selfStructType, structVarRef.VarName)) {
                 resolvedName = $"self.{structVarRef.VarName}";
+              } else {
+                resolvedName = varNameToStructPrefix.GetValueOrDefault(structVarRef.VarName, structVarRef.VarName);
               }
               structVarNames[structVarRef.Result.Id] = resolvedName;
               break;
@@ -583,6 +583,15 @@ public static class MaxonToStandardConversion {
               break;
             case MaxonManagedMemShiftOp memShiftOp:
               LowerManagedMemShift(memShiftOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
+            case MaxonManagedMemByteGetOp byteGetOp:
+              LowerManagedMemByteGet(byteGetOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
+            case MaxonManagedMemByteSetOp byteSetOp:
+              LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
+            case MaxonStringLiteralOp stringLitOp:
+              LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result);
               break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
@@ -1393,6 +1402,99 @@ public static class MaxonToStandardConversion {
       block.AddOp(bytesOp);
       block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
     }
+  }
+
+  /// <summary>
+  /// __managed_memory_byte_at(managed, index): load a single byte from the managed buffer.
+  /// Returns the byte zero-extended to i64.
+  /// </summary>
+  private static void LowerManagedMemByteGet(
+    MaxonManagedMemByteGetOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+    var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+    var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+    var index = (StdI64)valueMap[op.Index];
+    // Compute address: buffer + index (element size is 1 byte)
+    var addrOp = new StdAddI64Op(buffer, index);
+    block.AddOp(addrOp);
+    // Load byte and zero-extend to i64
+    var loadOp = new StdLoadByteIndirectOp(addrOp.Result, 0);
+    block.AddOp(loadOp);
+    valueMap[op.Result] = loadOp.Result;
+  }
+
+  /// <summary>
+  /// __managed_memory_set_byte(managed, index, value): store a single byte to the managed buffer.
+  /// </summary>
+  private static void LowerManagedMemByteSet(
+    MaxonManagedMemByteSetOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+    var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+    var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+    var index = (StdI64)valueMap[op.Index];
+    var value = valueMap[op.Value];
+    // Compute address: buffer + index (element size is 1 byte)
+    var addrOp = new StdAddI64Op(buffer, index);
+    block.AddOp(addrOp);
+    // Store byte (truncated from i64)
+    block.AddOp(new StdStoreByteIndirectOp(value, addrOp.Result, 0));
+  }
+
+  /// <summary>
+  /// String literal: stores UTF-8 bytes in rdata and creates a String struct.
+  /// Produces __ManagedMemory{buffer: rdata_ptr, length: byte_count, capacity: 0}
+  /// wrapped in a String{_managed: managed, _iterPos: 0}.
+  /// </summary>
+  private static void LowerStringLiteral(
+    MaxonStringLiteralOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    MlirModule<StandardOp> result) {
+    var utf8Bytes = System.Text.Encoding.UTF8.GetBytes(op.Value);
+    var rdataLabel = $"__str_{op.Result.Id}";
+
+    // Store UTF-8 bytes in .rdata (alignment 1 for byte data)
+    result.RdataEntries.Add((rdataLabel, utf8Bytes, 1));
+
+    // LEA to get rdata address
+    var leaRdataOp = new StdLeaRdataOp(rdataLabel);
+    block.AddOp(leaRdataOp);
+    var rdataPtrOp = new StdPtrToI64Op(leaRdataOp.Result);
+    block.AddOp(rdataPtrOp);
+
+    // Create __ManagedMemory fields: buffer=rdata_ptr, length=byte_count, capacity=0
+    var tempName = $"__strtmp_{op.Result.Id}";
+    var bufferVar = $"{tempName}._managed.buffer";
+    var lengthVar = $"{tempName}._managed.length";
+    var capacityVar = $"{tempName}._managed.capacity";
+    var iterPosVar = $"{tempName}._iterPos";
+
+    block.AddOp(new StdStoreI64Op(rdataPtrOp.Result, bufferVar));
+    varTypes[bufferVar] = "i64";
+
+    var lenConst = new StdConstI64Op(utf8Bytes.Length);
+    block.AddOp(lenConst);
+    block.AddOp(new StdStoreI64Op(lenConst.Result, lengthVar));
+    varTypes[lengthVar] = "i64";
+
+    var capConst = new StdConstI64Op(0);
+    block.AddOp(capConst);
+    block.AddOp(new StdStoreI64Op(capConst.Result, capacityVar));
+    varTypes[capacityVar] = "i64";
+
+    var iterConst = new StdConstI64Op(0);
+    block.AddOp(iterConst);
+    block.AddOp(new StdStoreI64Op(iterConst.Result, iterPosVar));
+    varTypes[iterPosVar] = "i64";
+
+    structVarNames[op.Result.Id] = tempName;
   }
 
   private static readonly Dictionary<(MaxonBinOperator, MaxonValueKind), Func<StdValue, StdValue, (StandardOp Op, StdValue Result)>> BinOpFactories = new() {

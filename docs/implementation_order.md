@@ -56,7 +56,6 @@ vector.md
 interface-conformance.md - Interface conformance checking
 if-try (without print or string)
 set.md - Hash set data structure with full runtime
-
 first-class-functions.md - Function pointers, closures
 challenge-struct-field-assign.md - Struct field assignment semantics
 strings

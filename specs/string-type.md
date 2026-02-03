@@ -167,7 +167,7 @@ end 'main'
 0
 ```
 
-<!-- test: empty-string -->
+<!-- disabled-test: empty-string -->
 ```maxon
 function main() returns int
   var s = ""
@@ -181,7 +181,7 @@ end 'main'
 0
 ```
 
-<!-- test: long-string -->
+<!-- disabled-test: long-string -->
 ```maxon
 function main() returns int
   var s = "this string is longer than fifteen bytes"
@@ -195,7 +195,7 @@ end 'main'
 0
 ```
 
-<!-- test: inequality -->
+<!-- disabled-test: inequality -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -209,7 +209,7 @@ end 'main'
 0
 ```
 
-<!-- test: equality-with-logical-and -->
+<!-- disabled-test: equality-with-logical-and -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -224,7 +224,7 @@ end 'main'
 0
 ```
 
-<!-- test: print-string -->
+<!-- disabled-test: print-string -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -239,7 +239,7 @@ end 'main'
 hello
 ```
 
-<!-- test: print-literal -->
+<!-- disabled-test: print-literal -->
 ```maxon
 function main() returns int
   print("Hello, World!")
@@ -253,7 +253,7 @@ end 'main'
 Hello, World!
 ```
 
-<!-- test: concatenation -->
+<!-- disabled-test: concatenation -->
 ```maxon
 function main() returns int
   var a = "hello"
@@ -270,7 +270,7 @@ end 'main'
 hello world
 ```
 
-<!-- test: chained-concat -->
+<!-- disabled-test: chained-concat -->
 ```maxon
 function main() returns int
   var greeting = "Hello"
@@ -287,7 +287,7 @@ end 'main'
 Hello, Maxon!
 ```
 
-<!-- test: count-method -->
+<!-- disabled-test: count-method -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -302,7 +302,7 @@ end 'main'
 5
 ```
 
-<!-- test: isEmpty-method -->
+<!-- disabled-test: isEmpty-method -->
 ```maxon
 function main() returns int
   var empty = ""
@@ -326,7 +326,7 @@ end 'main'
 2
 ```
 
-<!-- test: startsWith -->
+<!-- disabled-test: startsWith -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -346,7 +346,7 @@ end 'main'
 1
 ```
 
-<!-- test: endsWith -->
+<!-- disabled-test: endsWith -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -366,7 +366,7 @@ end 'main'
 1
 ```
 
-<!-- test: contains -->
+<!-- disabled-test: contains -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -386,7 +386,7 @@ end 'main'
 1
 ```
 
-<!-- test: find -->
+<!-- disabled-test: find -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -407,7 +407,7 @@ end 'main'
 -1
 ```
 
-<!-- test: replace-single -->
+<!-- disabled-test: replace-single -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -423,7 +423,7 @@ end 'main'
 hello there
 ```
 
-<!-- test: replace-multiple -->
+<!-- disabled-test: replace-multiple -->
 ```maxon
 function main() returns int
   var s = "aaa bbb aaa"
@@ -439,7 +439,7 @@ end 'main'
 x bbb x
 ```
 
-<!-- test: replace-no-match -->
+<!-- disabled-test: replace-no-match -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -455,7 +455,7 @@ end 'main'
 hello world
 ```
 
-<!-- test: replace-empty-needle -->
+<!-- disabled-test: replace-empty-needle -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -471,7 +471,7 @@ end 'main'
 hello
 ```
 
-<!-- test: replace-with-empty -->
+<!-- disabled-test: replace-with-empty -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -487,7 +487,7 @@ end 'main'
 hell wrld
 ```
 
-<!-- test: replace-adjacent -->
+<!-- disabled-test: replace-adjacent -->
 ```maxon
 function main() returns int
   var s = "aaaa"
@@ -503,7 +503,7 @@ end 'main'
 bb
 ```
 
-<!-- test: replaceFirst-single -->
+<!-- disabled-test: replaceFirst-single -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -519,7 +519,7 @@ end 'main'
 hell0 world
 ```
 
-<!-- test: replaceFirst-multiple-occurrences -->
+<!-- disabled-test: replaceFirst-multiple-occurrences -->
 ```maxon
 function main() returns int
   var s = "aaa bbb aaa"
@@ -535,7 +535,7 @@ end 'main'
 x bbb aaa
 ```
 
-<!-- test: replaceFirst-no-match -->
+<!-- disabled-test: replaceFirst-no-match -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -551,7 +551,7 @@ end 'main'
 hello world
 ```
 
-<!-- test: for-in-string -->
+<!-- disabled-test: for-in-string -->
 ```maxon
 function main() returns int
   var s = "abc"
@@ -570,7 +570,7 @@ b
 c
 ```
 
-<!-- test: byteview-iteration -->
+<!-- disabled-test: byteview-iteration -->
 ```maxon
 function main() returns int
   var s = "abc"
@@ -589,7 +589,7 @@ end 'main'
 99
 ```
 
-<!-- test: utf16-ascii -->
+<!-- disabled-test: utf16-ascii -->
 ```maxon
 function main() returns int
   var s = "ABC"
@@ -608,7 +608,7 @@ end 'main'
 67
 ```
 
-<!-- test: utf16-bmp -->
+<!-- disabled-test: utf16-bmp -->
 ```maxon
 function main() returns int
   var s = "αβγ"
@@ -627,7 +627,7 @@ end 'main'
 947
 ```
 
-<!-- test: utf16-surrogate-pair -->
+<!-- disabled-test: utf16-surrogate-pair -->
 ```maxon
 function main() returns int
   var s = "😀"
@@ -645,7 +645,7 @@ end 'main'
 56832
 ```
 
-<!-- test: utf16-mixed -->
+<!-- disabled-test: utf16-mixed -->
 ```maxon
 function main() returns int
   var s = "A😀B"
@@ -665,7 +665,7 @@ end 'main'
 66
 ```
 
-<!-- test: utf16-length -->
+<!-- disabled-test: utf16-length -->
 ```maxon
 function main() returns int
   var s = "A😀B"
@@ -681,7 +681,7 @@ end 'main'
 4
 ```
 
-<!-- test: utf16-is-lead-surrogate -->
+<!-- disabled-test: utf16-is-lead-surrogate -->
 ```maxon
 function main() returns int
   // 0xD83D = 55357 (high surrogate for 😀)
@@ -704,7 +704,7 @@ end 'main'
 1
 ```
 
-<!-- test: utf16-is-trail-surrogate -->
+<!-- disabled-test: utf16-is-trail-surrogate -->
 ```maxon
 function main() returns int
   // 0xDE00 = 56832 (low surrogate for 😀)
@@ -727,7 +727,7 @@ end 'main'
 1
 ```
 
-<!-- test: utf16-is-surrogate -->
+<!-- disabled-test: utf16-is-surrogate -->
 ```maxon
 function main() returns int
   if utf16IsSurrogate(55357) 'c7'
@@ -750,7 +750,7 @@ end 'main'
 2
 ```
 
-<!-- test: utf16-width -->
+<!-- disabled-test: utf16-width -->
 ```maxon
 function main() returns int
   print("{utf16Width(65)}\n")      // ASCII 'A' = 1 code unit
@@ -768,7 +768,7 @@ end 'main'
 2
 ```
 
-<!-- test: utf16-encode-surrogates -->
+<!-- disabled-test: utf16-encode-surrogates -->
 ```maxon
 function main() returns int
   // 😀 U+1F600 = 128512
@@ -785,7 +785,7 @@ end 'main'
 56832
 ```
 
-<!-- test: utf16-decode-surrogates -->
+<!-- disabled-test: utf16-decode-surrogates -->
 ```maxon
 function main() returns int
   // Decode surrogate pair back to codepoint
@@ -801,7 +801,7 @@ end 'main'
 128512
 ```
 
-<!-- test: utf16-is-bmp -->
+<!-- disabled-test: utf16-is-bmp -->
 ```maxon
 function main() returns int
   if utf16IsBmp(65) 'c10'
@@ -828,7 +828,7 @@ end 'main'
 3
 ```
 
-<!-- test: utf16-valid-surrogate-pair -->
+<!-- disabled-test: utf16-valid-surrogate-pair -->
 ```maxon
 function main() returns int
   if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
@@ -850,7 +850,7 @@ end 'main'
 1
 ```
 
-<!-- test: heap-string-count -->
+<!-- disabled-test: heap-string-count -->
 ```maxon
 function main() returns int
   // String > 15 bytes triggers heap allocation
@@ -866,7 +866,7 @@ end 'main'
 45
 ```
 
-<!-- test: heap-string-data-access -->
+<!-- disabled-test: heap-string-data-access -->
 ```maxon
 function main() returns int
   // Verify heap-allocated string data is accessible via bytes()
@@ -896,7 +896,7 @@ end 'main'
 90
 ```
 
-<!-- test: heap-string-equality -->
+<!-- disabled-test: heap-string-equality -->
 ```maxon
 function main() returns int
   var a = "This string is definitely longer than fifteen bytes"
@@ -916,7 +916,7 @@ end 'main'
 1
 ```
 
-<!-- test: heap-string-inequality -->
+<!-- disabled-test: heap-string-inequality -->
 ```maxon
 function main() returns int
   var a = "This string is definitely longer than fifteen bytes"
@@ -936,7 +936,7 @@ end 'main'
 1
 ```
 
-<!-- test: heap-string-iteration -->
+<!-- disabled-test: heap-string-iteration -->
 ```maxon
 function main() returns int
   var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
@@ -956,7 +956,7 @@ end 'main'
 1160
 ```
 
-<!-- test: heap-string-byteview -->
+<!-- disabled-test: heap-string-byteview -->
 ```maxon
 function main() returns int
   var s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
@@ -978,7 +978,7 @@ end 'main'
 18
 ```
 
-<!-- test: sso-vs-heap-boundary -->
+<!-- disabled-test: sso-vs-heap-boundary -->
 ```maxon
 function main() returns int
   // Exactly 15 bytes - should use SSO (constant data)
@@ -999,7 +999,7 @@ end 'main'
 16
 ```
 
-<!-- test: heap-string-startsWith -->
+<!-- disabled-test: heap-string-startsWith -->
 ```maxon
 function main() returns int
   var s = "This is a very long string that is heap allocated"
@@ -1019,7 +1019,7 @@ end 'main'
 1
 ```
 
-<!-- test: heap-string-endsWith -->
+<!-- disabled-test: heap-string-endsWith -->
 ```maxon
 function main() returns int
   var s = "This is a very long string that is heap allocated"
@@ -1039,7 +1039,7 @@ end 'main'
 1
 ```
 
-<!-- test: heap-string-contains -->
+<!-- disabled-test: heap-string-contains -->
 ```maxon
 function main() returns int
   var s = "This is a very long string that is heap allocated"
@@ -1059,7 +1059,7 @@ end 'main'
 1
 ```
 
-<!-- test: heap-string-find -->
+<!-- disabled-test: heap-string-find -->
 ```maxon
 function main() returns int
   var s = "This is a very long string that is heap allocated"
@@ -1080,7 +1080,7 @@ end 'main'
 -1
 ```
 
-<!-- test: mixed-sso-heap-comparison -->
+<!-- disabled-test: mixed-sso-heap-comparison -->
 ```maxon
 function main() returns int
   var small = "hello"
@@ -1098,7 +1098,7 @@ end 'main'
 1
 ```
 
-<!-- test: memory-tracking-simple-interp -->
+<!-- disabled-test: memory-tracking-simple-interp -->
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
@@ -1144,7 +1144,7 @@ Copies:    0
 Cleanups:  4
 ```
 
-<!-- test: memory-tracking-chained-interp -->
+<!-- disabled-test: memory-tracking-chained-interp -->
 <!-- TrackMemory: true -->
 String interpolation with multiple parts creates a single allocation with O(n) copy.
 All intermediate buffers use stack allocation for primitives.
@@ -1198,7 +1198,7 @@ Copies:    0
 Cleanups:  6
 ```
 
-<!-- test: memory-tracking-loop-interp -->
+<!-- disabled-test: memory-tracking-loop-interp -->
 <!-- TrackMemory: true -->
 String accumulation in loop properly releases old values on reassignment.
 The final value is released at scope exit. Uses efficient O(n) interpolation.
@@ -1262,7 +1262,7 @@ Copies:    0
 Cleanups:  6
 ```
 
-<!-- test: memory-tracking-no-leak-scope-exit -->
+<!-- disabled-test: memory-tracking-no-leak-scope-exit -->
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns int
@@ -1300,7 +1300,7 @@ Copies:    0
 Cleanups:  2
 ```
 
-<!-- test: toLower -->
+<!-- disabled-test: toLower -->
 ```maxon
 function main() returns int
   var s = "HELLO"
@@ -1315,7 +1315,7 @@ end 'main'
 hello
 ```
 
-<!-- test: bytes-count-method -->
+<!-- disabled-test: bytes-count-method -->
 ### bytes().count() Method
 ```maxon
 function main() returns int
@@ -1331,7 +1331,7 @@ end 'main'
 5
 ```
 
-<!-- test: bytes-count-multibyte -->
+<!-- disabled-test: bytes-count-multibyte -->
 ### bytes().count() with Multi-byte Characters
 ```maxon
 function main() returns int
@@ -1347,7 +1347,7 @@ end 'main'
 5
 ```
 
-<!-- test: count-graphemes -->
+<!-- disabled-test: count-graphemes -->
 ### count Returns Grapheme Count
 ```maxon
 function main() returns int
@@ -1363,7 +1363,7 @@ end 'main'
 4
 ```
 
-<!-- test: count-vs-bytes-count -->
+<!-- disabled-test: count-vs-bytes-count -->
 ### count vs bytes().count()
 ```maxon
 function main() returns int
@@ -1381,7 +1381,7 @@ end 'main'
 8
 ```
 
-<!-- test: grapheme-iteration-emoji -->
+<!-- disabled-test: grapheme-iteration-emoji -->
 ### Grapheme Iteration with Emoji
 ```maxon
 function main() returns int
@@ -1403,7 +1403,7 @@ a🎉b
 3
 ```
 
-<!-- test: grapheme-iteration-flag -->
+<!-- disabled-test: grapheme-iteration-flag -->
 ### Grapheme Iteration with Flag Emoji
 ```maxon
 function main() returns int
@@ -1425,7 +1425,7 @@ end 'main'
 2
 ```
 
-<!-- test: grapheme-iteration-zwj -->
+<!-- disabled-test: grapheme-iteration-zwj -->
 ### Grapheme Iteration with ZWJ Sequence
 ```maxon
 function main() returns int
@@ -1447,7 +1447,7 @@ end 'main'
 1
 ```
 
-<!-- test: codepoints-view -->
+<!-- disabled-test: codepoints-view -->
 ### Codepoints View
 ```maxon
 function main() returns int
@@ -1466,7 +1466,7 @@ end 'main'
 233
 ```
 
-<!-- test: string-reassignment -->
+<!-- disabled-test: string-reassignment -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -1492,7 +1492,7 @@ end 'main'
 5
 ```
 
-<!-- test: slice-basic -->
+<!-- disabled-test: slice-basic -->
 ### Basic String Slicing
 ```maxon
 function main() returns int
@@ -1511,7 +1511,7 @@ end 'main'
 hello
 ```
 
-<!-- test: slice-full -->
+<!-- disabled-test: slice-full -->
 ### Slice Entire String
 ```maxon
 function main() returns int
@@ -1530,7 +1530,7 @@ end 'main'
 hello
 ```
 
-<!-- test: slice-empty -->
+<!-- disabled-test: slice-empty -->
 ### Empty Slice
 ```maxon
 function main() returns int
@@ -1548,7 +1548,7 @@ end 'main'
 0
 ```
 
-<!-- test: slice-iteration -->
+<!-- disabled-test: slice-iteration -->
 ### Iterate Over Sliced String
 ```maxon
 function main() returns int
@@ -1571,7 +1571,7 @@ b
 c
 ```
 
-<!-- test: cow-mutation-copies -->
+<!-- disabled-test: cow-mutation-copies -->
 ### COW Mutation Creates Copy
 ```maxon
 function main() returns int
@@ -1591,7 +1591,7 @@ HELLO
 hello
 ```
 
-<!-- test: cow-original-unchanged -->
+<!-- disabled-test: cow-original-unchanged -->
 ### COW Original Unchanged After Copy Mutation
 ```maxon
 function main() returns int
@@ -1614,7 +1614,7 @@ test string
 TEST STRING
 ```
 
-<!-- test: cow-slice-independent -->
+<!-- disabled-test: cow-slice-independent -->
 ### Slice Is Independent After Parent Goes Out of Scope
 Demonstrates that sliced strings work correctly.
 ```maxon

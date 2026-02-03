@@ -190,7 +190,7 @@ public class MaxonIndirectCallOp : MaxonOp {
   public MaxonValueKind? ResultKind { get; }
   public string? ResultStructTypeName { get; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
-  public override IReadOnlyList<string> PrintableOperands => Args.Select(a => a.ToString()).Prepend(Callee.ToString()).ToList();
+  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString()).Prepend(Callee.ToString())];
 
   public MaxonIndirectCallOp(MaxonValue callee, MlirFunctionType calleeType, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
     Callee = callee;
@@ -632,4 +632,82 @@ public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, 
   public int ElementSize { get; } = elementSize;
   public bool ShiftRight { get; } = shiftRight;
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
+}
+
+// Get byte at index in managed buffer: __managed_memory_byte_at(managed, index) -> byte
+public class MaxonManagedMemByteGetOp(MaxonValue managedStruct, MaxonValue index) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_byte_get";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue Index { get; } = index;
+  public MaxonByte Result { get; } = new MaxonByte(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
+}
+
+// Set byte at index in managed buffer: __managed_memory_set_byte(managed, index, value)
+public class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_byte_set";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue Index { get; } = index;
+  public MaxonValue Value { get; } = value;
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
+}
+
+// String literal: stores UTF-8 bytes in rdata and creates a String struct
+public class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.string_literal \"{Value}\"";
+  public string Value { get; } = value;
+  public string StringTypeName { get; } = stringTypeName;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), stringTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Concatenate two __ManagedMemory buffers into a new one
+public class MaxonManagedMemConcatOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_concat";
+  public MaxonValue Lhs { get; } = lhs;
+  public MaxonValue Rhs { get; } = rhs;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Create a slice of a __ManagedMemory buffer (start/end byte positions)
+public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonValue end) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_slice";
+  public MaxonValue Managed { get; } = managed;
+  public MaxonValue Start { get; } = start;
+  public MaxonValue End { get; } = end;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
+  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString(), Start.ToString(), End.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Convert a C string pointer to __ManagedMemory
+public class MaxonCStringToManagedOp(MaxonValue cstrPtr) : MaxonOp {
+  public override string Mnemonic => "maxon.cstring_to_managed";
+  public MaxonValue CstrPtr { get; } = cstrPtr;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
+  public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Convert __ManagedMemory to a C string pointer
+public class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_to_cstring";
+  public MaxonValue Managed { get; } = managed;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Create a Character from bytes within a managed buffer
+public class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonValue len) : MaxonOp {
+  public override string Mnemonic => "maxon.make_char_from_bytes";
+  public MaxonValue Managed { get; } = managed;
+  public MaxonValue Pos { get; } = pos;
+  public MaxonValue Len { get; } = len;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "Character");
+  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString(), Pos.ToString(), Len.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }

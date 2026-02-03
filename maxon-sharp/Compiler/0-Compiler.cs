@@ -85,8 +85,13 @@ public class Compiler {
     }
   }
 
-  private static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] stdlibSources, bool isStdLib) {
-    foreach (var source in stdlibSources) {
+  private static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib) {
+    // Pre-register type names from all sources so cross-file references resolve
+    // (e.g., Character.maxon references String before String.maxon is parsed)
+    foreach (var source in sources)
+      PreRegisterTypeNames(module, source);
+
+    foreach (var source in sources) {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
@@ -99,6 +104,23 @@ public class Compiler {
       }
     }
   }
+
+  private static void PreRegisterTypeNames(MlirModule<MaxonOp> module, SourceFile source) {
+    var lexer = new Lexer(source.Content);
+    var tokens = lexer.Tokenize();
+    for (int i = 0; i < tokens.Count - 1; i++) {
+      var t = tokens[i];
+      if (t.Type == TokenType.Export && i + 2 < tokens.Count
+          && tokens[i + 1].Type == TokenType.Type
+          && tokens[i + 2].Type == TokenType.Identifier) {
+        module.TypeDefs.TryAdd(tokens[i + 2].Value, new MlirStructType(tokens[i + 2].Value, []));
+        i += 2;
+      } else if (t.Type == TokenType.Type && tokens[i + 1].Type == TokenType.Identifier) {
+        module.TypeDefs.TryAdd(tokens[i + 1].Value, new MlirStructType(tokens[i + 1].Value, []));
+        i += 1;
+      }
+    }
+  }
 }
 
 public static class StdlibLoader {
@@ -108,7 +130,15 @@ public static class StdlibLoader {
     "Vector.maxon",
     "Math.maxon",
     "Pair.maxon",
-    "Set.maxon"
+    "Set.maxon",
+    "helpers/string/_utf8.maxon",
+    "helpers/string/_hash.maxon",
+    "helpers/string/_grapheme.maxon",
+    "helpers/string/_search.maxon",
+    "helpers/string/_utf16.maxon",
+    "String.maxon",
+    "helpers/string/_views.maxon",
+    "Character.maxon"
   ];
 
   public static string? FindStdlibPath() {

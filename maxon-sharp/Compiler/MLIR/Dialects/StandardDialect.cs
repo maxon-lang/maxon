@@ -513,6 +513,25 @@ public static class StdValueFactory {
   }
 }
 
+// Load a single byte through a pointer, zero-extending to i64
+public class StdLoadByteIndirectOp(StdValue basePtr, int fieldOffset) : StandardOp {
+  public override string Mnemonic => $"memref.load_byte_indirect %{BasePtr.Id}+{FieldOffset}";
+  public StdValue BasePtr { get; } = basePtr;
+  public int FieldOffset { get; } = fieldOffset;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [BasePtr];
+}
+
+// Store a single byte through a pointer (truncates i64 to byte)
+public class StdStoreByteIndirectOp(StdValue value, StdValue basePtr, int fieldOffset) : StandardOp {
+  public override string Mnemonic => $"memref.store_byte_indirect %{Value.Id}, %{BasePtr.Id}+{FieldOffset}";
+  public StdValue Value { get; } = value;
+  public StdValue BasePtr { get; } = basePtr;
+  public int FieldOffset { get; } = fieldOffset;
+  public override List<StdValue> ReadValues => [Value, BasePtr];
+}
+
 // ============================================================================
 // Global variable operations
 // ============================================================================
