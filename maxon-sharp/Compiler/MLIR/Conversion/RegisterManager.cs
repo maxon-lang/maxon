@@ -815,6 +815,12 @@ public class RegisterManager {
   /// Uses RSI (src), RDI (dst), RCX (count).
   /// </summary>
   public void EmitMemCopy(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, MlirBlock<X86Op> block) {
+    // Spill any live values occupying RSI/RDI/RCX that aren't memcopy
+    // arguments, so they aren't silently clobbered during argument placement.
+    var memCopyArgs = new HashSet<StdValue> { srcPtr, dstPtr, byteCount };
+    SpillRegisterIfNotArg(X86Register.Esi, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Edi, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Ecx, memCopyArgs, block);
     // Ensure values are in the required registers for rep movsb
     EnsureInSpecificRegister(srcPtr, X86Register.Rsi, block);
     EnsureInSpecificRegister(dstPtr, X86Register.Rdi, block);
@@ -824,6 +830,12 @@ public class RegisterManager {
     Invalidate(X86Register.Esi);
     Invalidate(X86Register.Edi);
     Invalidate(X86Register.Ecx);
+  }
+
+  private void SpillRegisterIfNotArg(X86Register reg, HashSet<StdValue> args, MlirBlock<X86Op> block) {
+    if (_registerContents.TryGetValue(reg, out var value) && !args.Contains(value)) {
+      SpillRegisterIfOccupied(reg, block);
+    }
   }
 
   /// <summary>

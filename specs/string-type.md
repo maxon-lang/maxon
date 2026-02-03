@@ -390,11 +390,11 @@ end 'main'
 -1
 ```
 
-<!-- disabled-test: replace-single -->
+<!-- test: replace-single -->
 ```maxon
 function main() returns int
   var s = "hello world"
-  var result = s.replace("world", "there")
+  var result = s.replace("world", new: "there")
   print(result)
   return 0
 end 'main'
@@ -410,7 +410,7 @@ hello there
 ```maxon
 function main() returns int
   var s = "aaa bbb aaa"
-  var result = s.replace("aaa", "x")
+  var result = s.replace("aaa", new: "x")
   print(result)
   return 0
 end 'main'
@@ -426,7 +426,7 @@ x bbb x
 ```maxon
 function main() returns int
   var s = "hello world"
-  var result = s.replace("xyz", "abc")
+  var result = s.replace("xyz", new: "abc")
   print(result)
   return 0
 end 'main'
@@ -442,7 +442,7 @@ hello world
 ```maxon
 function main() returns int
   var s = "hello"
-  var result = s.replace("", "x")
+  var result = s.replace("", new: "x")
   print(result)
   return 0
 end 'main'
@@ -458,7 +458,7 @@ hello
 ```maxon
 function main() returns int
   var s = "hello world"
-  var result = s.replace("o", "")
+  var result = s.replace("o", new: "")
   print(result)
   return 0
 end 'main'
@@ -474,7 +474,7 @@ hell wrld
 ```maxon
 function main() returns int
   var s = "aaaa"
-  var result = s.replace("aa", "b")
+  var result = s.replace("aa", new: "b")
   print(result)
   return 0
 end 'main'
@@ -490,7 +490,7 @@ bb
 ```maxon
 function main() returns int
   var s = "hello world"
-  var result = s.replaceFirst("o", "0")
+  var result = s.replaceFirst("o", new: "0")
   print(result)
   return 0
 end 'main'
@@ -506,7 +506,7 @@ hell0 world
 ```maxon
 function main() returns int
   var s = "aaa bbb aaa"
-  var result = s.replaceFirst("aaa", "x")
+  var result = s.replaceFirst("aaa", new: "x")
   print(result)
   return 0
 end 'main'
@@ -522,7 +522,7 @@ x bbb aaa
 ```maxon
 function main() returns int
   var s = "hello world"
-  var result = s.replaceFirst("xyz", "abc")
+  var result = s.replaceFirst("xyz", new: "abc")
   print(result)
   return 0
 end 'main'

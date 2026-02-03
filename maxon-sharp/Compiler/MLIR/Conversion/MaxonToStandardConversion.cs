@@ -602,6 +602,9 @@ public static class MaxonToStandardConversion {
             case MaxonManagedMemConcatOp concatOp:
               LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames);
               break;
+            case MaxonManagedMemSliceOp sliceOp:
+              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }
@@ -1778,6 +1781,34 @@ public static class MaxonToStandardConversion {
     EmitStore(block, allocResult, $"{tempName}.buffer", varTypes);
     EmitStore(block, totalLenOp.Result, $"{tempName}.length", varTypes);
     EmitStore(block, totalLenOp.Result, $"{tempName}.capacity", varTypes);
+    structVarNames[op.Result.Id] = tempName;
+  }
+
+  private static void LowerManagedMemSlice(
+    MaxonManagedMemSliceOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+
+    var srcVarName = ResolveManagedVarName(op.Managed, structVarNames);
+    var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
+
+    var start = (StdI64)valueMap[op.Start];
+    var end = (StdI64)valueMap[op.End];
+
+    // Slice buffer points into the existing allocation at offset 'start'
+    var sliceBufferOp = new StdAddI64Op(srcBuffer, start);
+    block.AddOp(sliceBufferOp);
+
+    // Slice length is end - start
+    var sliceLenOp = new StdSubI64Op(end, start);
+    block.AddOp(sliceLenOp);
+
+    var tempName = $"__slice_{op.Result.Id}";
+    EmitStore(block, sliceBufferOp.Result, $"{tempName}.buffer", varTypes);
+    EmitStore(block, sliceLenOp.Result, $"{tempName}.length", varTypes);
+    EmitStore(block, sliceLenOp.Result, $"{tempName}.capacity", varTypes);
     structVarNames[op.Result.Id] = tempName;
   }
 
