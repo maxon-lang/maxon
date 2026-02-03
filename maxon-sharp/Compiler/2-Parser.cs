@@ -65,6 +65,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return null;
   }
 
+  /// Check if a type name is an associated type of the current struct being parsed.
+  private bool IsAssociatedTypeName(string typeName) {
+    if (_currentTypeName == null) return false;
+    if (!_typeRegistry.TryGetValue(_currentTypeName, out var currentType)) return false;
+    if (currentType is not MlirStructType currentStruct) return false;
+    return currentStruct.AssociatedTypeNames.Contains(typeName);
+  }
+
+  /// Find an interface method by name across all registered interfaces.
+  private MlirInterfaceMethodSignature? FindInterfaceMethod(string methodName) {
+    foreach (var (_, registeredType) in _typeRegistry) {
+      if (registeredType is MlirInterfaceType iface) {
+        var method = iface.Methods.FirstOrDefault(m => m.Name == methodName);
+        if (method != null) return method;
+      }
+    }
+    return null;
+  }
+
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
@@ -1503,6 +1522,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Emit remaining params (offset by 1 for 'self')
     EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
 
+    // Fix VarInfo for element-polymorphic parameters so method calls resolve through the associated type
+    foreach (var epIdx in elementParams) {
+      if (epIdx <= 0 || epIdx - 1 >= paramNames.Count) continue;
+      var pName = paramNames[epIdx - 1];
+      if (_variables.TryGetValue(pName, out var existingInfo)) {
+        var assocTypeName = structType.AssociatedTypeNames
+          .FirstOrDefault(n => _typeRegistry.ContainsKey(n));
+        if (assocTypeName != null) {
+          _variables[pName] = existingInfo with { StructTypeName = assocTypeName };
+        }
+      }
+    }
+
     ParseBodyUntilEnd();
     ExpectEndLabel(nameToken.Value);
     FinishFunctionBody(nameToken.Value, nameToken, returnType);
@@ -2457,6 +2489,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseIf() {
     Advance(); // consume 'if'
 
+    // Dispatch to if-try forms: `if try expr` or `if let name = try expr`
+    if (Check(TokenType.Try) || Check(TokenType.Let)) {
+      ParseIfTry();
+      return;
+    }
+
     var condition = ResolveExprValue(ParseExpression());
 
     // Parse then-block label
@@ -2498,7 +2536,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
-    // If either branch doesn't end with a return, create a merge block
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, elseLabel, elseBlock);
+  }
+
+  /// <summary>
+  /// Creates merge blocks and emits a conditional branch for if/if-try statements.
+  /// Handles the common logic of determining if branches need merge blocks and setting up control flow.
+  /// </summary>
+  private void EmitConditionalBranch(MlirBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, MlirBlock<MaxonOp> thenBlock, string? elseLabel, MlirBlock<MaxonOp>? elseBlock) {
     bool thenNeedsMerge = !BlockEndsWithTerminator(thenBlock);
     bool elseNeedsMerge = elseBlock != null && !BlockEndsWithTerminator(elseBlock);
 
@@ -2511,21 +2556,151 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (elseNeedsMerge)
         elseBlock!.AddOp(new MaxonBrOp(mergeLabel));
 
-      // Emit cond_br: if true go to then-block, if false go to else or merge
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel ?? mergeLabel));
       _currentBlock = mergeBlock;
     } else if (elseLabel != null) {
-      // Both branches terminate — cond_br dispatches directly, no after block needed.
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel));
       _currentBlock = null;
     } else {
-      // If-without-else where the then-block terminates — need an after block
-      // as the false target for the cond_br.
       var afterLabel = $"{thenLabel}.after";
       var afterBlock = _currentFunction!.Body.AddBlock(afterLabel);
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, afterLabel));
       _currentBlock = afterBlock;
     }
+  }
+
+  /// <summary>
+  /// Parses `if try expr 'label'` (boolean form) and `if let name = try expr 'label'` (binding form).
+  /// Called after 'if' has been consumed. Current token is 'try' or 'let'.
+  /// </summary>
+  private void ParseIfTry() {
+    // Determine form: binding (`if let name = try ...`) or boolean (`if try ...`)
+    string? bindingName = null;
+    if (Check(TokenType.Let)) {
+      Advance(); // consume 'let'
+      bindingName = Expect(TokenType.Identifier).Value;
+      Expect(TokenType.Equals);
+    }
+
+    // Parse the try call expression (shared logic with ParseTryExpression lines 1990-2011)
+    var tryToken = Expect(TokenType.Try);
+    _inTryContext = true;
+    var callExpr = ParsePrimary();
+    _inTryContext = false;
+
+    var lastOp = _currentBlock!.Operations[^1];
+    if (lastOp is not MaxonCallOp callOp) {
+      throw new CompileError(ErrorCode.SemanticUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
+    }
+
+    // Validate the callee actually throws
+    var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == callOp.Callee);
+    if (callee != null && callee.ThrowsType == null) {
+      throw new CompileError(ErrorCode.SemanticTryRequiresThrowingFunction,
+        $"try requires a throwing function: ''{callOp.Callee}' does not throw'",
+        tryToken.Line, tryToken.Column);
+    }
+
+    // Replace MaxonCallOp with MaxonTryCallOp
+    _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
+    _currentBlock!.AddOp(tryCallOp);
+
+    // Store error flag and result to mutable variables for cross-block access
+    var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryCallOp);
+
+    // Build condition: errorFlag == 0 means success (true = enter then-block)
+    var zeroOp = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(zeroOp);
+    var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, tryCallOp.ErrorFlag, zeroOp.Result, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(cmpOp);
+    var condition = cmpOp.Result;
+
+    // Parse block label
+    var thenSourceLabel = Expect(TokenType.CharacterLiteral).Value;
+    var thenLabel = UniqueLabel(thenSourceLabel);
+    SkipNewlines();
+
+    // Save entry block for the conditional branch
+    var entryBlock = _currentBlock!;
+
+    // Create the then-block
+    var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
+    _currentBlock = thenBlock;
+
+    // For binding form, load the result and create a let-binding inside the then-block
+    if (bindingName != null && resultVar != null) {
+      var resultKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
+      MaxonValue loadedValue;
+      if (resultKind == MaxonValueKind.Struct) {
+        var structRefOp = new MaxonStructVarRefOp(resultVar, tryCallOp.ResultStructTypeName!);
+        _currentBlock!.AddOp(structRefOp);
+        loadedValue = structRefOp.Result;
+      } else if (resultKind == MaxonValueKind.Enum) {
+        var enumType = (MlirEnumType)_typeRegistry[tryCallOp.ResultStructTypeName!];
+        var backingKind = GetEnumBackingKind(enumType);
+        var enumRefOp = new MaxonEnumVarRefOp(resultVar, tryCallOp.ResultStructTypeName!, backingKind);
+        _currentBlock!.AddOp(enumRefOp);
+        loadedValue = enumRefOp.Result;
+      } else {
+        var loadResultOp = new MaxonVarRefOp(resultVar, resultKind);
+        _currentBlock!.AddOp(loadResultOp);
+        loadedValue = loadResultOp.Result;
+      }
+
+      // Determine StructTypeName for the binding: use the try call's ResultStructTypeName,
+      // or resolve the associated type name for Element-polymorphic return types
+      string? bindingStructTypeName = tryCallOp.ResultStructTypeName;
+      if (bindingStructTypeName == null
+          && _elementPolymorphicParams.TryGetValue(callOp.Callee, out var epParams)
+          && epParams.Contains(-1)
+          && _currentTypeName != null
+          && _typeRegistry.TryGetValue(_currentTypeName, out var currentTypeReg)
+          && currentTypeReg is MlirStructType currentSt) {
+        bindingStructTypeName = currentSt.AssociatedTypeNames
+          .FirstOrDefault(n => _typeRegistry.ContainsKey(n));
+      }
+
+      _currentBlock!.AddOp(new MaxonAssignOp(bindingName, loadedValue, isDeclaration: true, isMutable: false, resultKind));
+      _variables[bindingName] = new VarInfo(resultKind, false, loadedValue, _currentBlock!, bindingStructTypeName);
+    }
+
+    ParseBodyUntilEnd();
+    ExpectEndLabel(thenSourceLabel);
+
+    // Check for else clause
+    MlirBlock<MaxonOp>? elseBlock = null;
+    string? elseLabel = null;
+    if (Check(TokenType.Else)) {
+      Advance(); // consume 'else'
+
+      // Check for error binding: else (e) 'label'
+      Token? errorBindingToken = null;
+      if (Check(TokenType.LeftParen)) {
+        Advance(); // consume '('
+        errorBindingToken = Expect(TokenType.Identifier);
+        Expect(TokenType.RightParen);
+      }
+
+      var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
+      elseLabel = UniqueLabel(elseSourceLabel);
+      SkipNewlines();
+
+      elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
+      _currentBlock = elseBlock;
+
+      // If error binding requested, load the error flag as a variable in the else block
+      if (errorBindingToken != null) {
+        var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(loadErrorOp);
+        _variables[errorBindingToken.Value] = new VarInfo(MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!, null);
+      }
+
+      ParseBodyUntilEnd();
+      ExpectEndLabel(elseSourceLabel);
+    }
+
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, elseLabel, elseBlock);
   }
 
   private void ParseWhile() {
@@ -3349,6 +3524,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return ParseFieldAccessChain(new ExprResult.VarRef("self", selfVarInfo), selfToken);
     }
 
+    if (Check(TokenType.SelfType)) {
+      var selfTypeToken = Advance(); // consume 'Self'
+      if (_currentTypeName == null) {
+        throw new CompileError(ErrorCode.ParserExpectedExpression, "'Self' can only be used inside a type declaration", selfTypeToken.Line, selfTypeToken.Column);
+      }
+      // Replace the SelfType token in the stream so the Identifier handler below processes it
+      _tokens[_pos - 1] = new Token(TokenType.Identifier, _currentTypeName, selfTypeToken.Line, selfTypeToken.Column);
+      _pos--; // back up so the Identifier check below picks it up
+    }
+
     if (Check(TokenType.Identifier)) {
       var token = Advance();
 
@@ -3561,6 +3746,43 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             return new ExprResult.Direct(callOp.Result);
           return new ExprResult.Direct(structVal);
         }
+
+        // Method call on associated type parameter - resolve through interface definitions
+        if (IsAssociatedTypeName(userTypeName)) {
+          var ifaceMethod = FindInterfaceMethod(fieldName);
+          if (ifaceMethod != null) {
+            Advance(); // consume '('
+            var selfVal = ResolveExprValue(result);
+            var args = new List<MaxonValue> { selfVal };
+            // Parse any arguments
+            if (!Check(TokenType.RightParen)) {
+              while (true) {
+                // Skip named argument labels (e.g., "element:")
+                if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+                  Advance(); // consume label
+                  Advance(); // consume ':'
+                }
+                args.Add(ResolveExprValue(ParseExpression()));
+                if (!Check(TokenType.Comma)) break;
+                Advance(); // consume ','
+              }
+            }
+            Expect(TokenType.RightParen);
+            var resultKind = ifaceMethod.ReturnTypeName switch {
+              "int" => MaxonValueKind.Integer,
+              "float" => MaxonValueKind.Float,
+              "bool" => MaxonValueKind.Bool,
+              "byte" => MaxonValueKind.Byte,
+              null => (MaxonValueKind?)null,
+              _ => MaxonValueKind.Integer // associated type returns are lowered to I64
+            };
+            var callOp2 = new MaxonCallOp(qualifiedMethodName, args, resultKind, null);
+            _currentBlock!.AddOp(callOp2);
+            if (callOp2.Result != null)
+              return new ExprResult.Direct(callOp2.Result);
+            return new ExprResult.Direct(selfVal);
+          }
+        }
       }
 
       var field = structType.GetField(fieldName)
@@ -3730,16 +3952,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             _currentBlock!.AddOp(managedStruct);
             fieldValues.Add((field.Name, managedStruct.Result));
           } else if (field.Type is MlirStructType fieldStructType) {
-            // For struct-typed fields, emit a zero-initialized struct literal
-            var zeroFields = new List<(string Name, MaxonValue Value)>();
-            foreach (var subField in fieldStructType.Fields) {
-              var zeroLit = new MaxonLiteralOp(0L);
-              _currentBlock!.AddOp(zeroLit);
-              zeroFields.Add((subField.Name, zeroLit.Result));
-            }
-            var zeroStruct = new MaxonStructLiteralOp(fieldStructType.Name, zeroFields);
-            _currentBlock!.AddOp(zeroStruct);
-            fieldValues.Add((field.Name, zeroStruct.Result));
+            // For struct-typed fields, emit a zero-initialized struct literal (recursively for nested structs)
+            var zeroResult = EmitZeroStructLiteral(fieldStructType);
+            fieldValues.Add((field.Name, zeroResult));
           } else {
             throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Field '{field.Name}' of type '{typeName}' requires a value (no default defined)",
@@ -3764,6 +3979,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     _currentBlock!.AddOp(structLiteral);
     return new ExprResult.Direct(structLiteral.Result);
+  }
+
+  /// Recursively creates a zero-initialized struct literal, handling nested struct fields.
+  private MaxonStruct EmitZeroStructLiteral(MlirStructType structType) {
+    var zeroFields = new List<(string Name, MaxonValue Value)>();
+    foreach (var subField in structType.Fields) {
+      if (subField.Type is MlirStructType nestedType) {
+        var nestedResult = EmitZeroStructLiteral(nestedType);
+        zeroFields.Add((subField.Name, nestedResult));
+      } else {
+        var zeroLit = new MaxonLiteralOp(0L);
+        _currentBlock!.AddOp(zeroLit);
+        zeroFields.Add((subField.Name, zeroLit.Result));
+      }
+    }
+    var zeroStruct = new MaxonStructLiteralOp(structType.Name, zeroFields);
+    _currentBlock!.AddOp(zeroStruct);
+    return zeroStruct.Result;
   }
 
   /// <summary>

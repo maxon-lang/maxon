@@ -54,6 +54,13 @@ closures
 arrays.md
 vector.md
 interface-conformance.md - Interface conformance checking
+if-try (without print or string)
+set.md - Hash set data structure with full runtime
+
+first-class-functions.md - Function pointers, closures
+challenge-struct-field-assign.md - Struct field assignment semantics
+strings
+
 
 
 ## Hard (Significant Compiler Work)
@@ -71,12 +78,10 @@ type-checking.md - Enhanced type checking
 ## Very Hard (Major Features)
 ownership.md - Ownership and borrow checking
 map.md - Hash map data structure with full runtime
-set.md - Hash set data structure with full runtime
 stdlib-array.md - Full stdlib Array implementation
 stdlib-set.md - Full stdlib Set implementation
 enums.md - Full enum system with associated values
 match-statements.md - Pattern matching on enums
-first-class-functions.md - Function pointers, closures
 safe-ffi.md - FFI boundary safety
 
 ## Extremely Hard (Language Evolution)
@@ -84,8 +89,6 @@ challenge-struct-ownership.md - Complex ownership scenarios
 challenge-struct-lifetime.md - Lifetime tracking
 challenge-nested-structs.md - Nested struct ownership
 challenge-array-of-structs.md - Array ownership with structs
-challenge-struct-field-assign.md - Struct field assignment semantics
-many-args.md - Large parameter lists (might need ABI work)
 optimizations.md - Optimization passes
 export-var-fields.md - Exporting mutable fields
 parsable-interface.md - Parse protocol

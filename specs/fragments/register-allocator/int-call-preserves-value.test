@@ -15,55 +15,55 @@ RequiredMLIR: ```
 module {
   func @getForty() -> i64 {
   entry:
-  %0 = maxon.literal {value = 40 : i64}
-  maxon.return %0
+    %0 = maxon.literal {value = 40 : i64}
+    maxon.return %0
   }
   func @main() -> i64 {
   entry:
-  %1 = maxon.literal {value = 2 : i64}
-  maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %2 = maxon.call @getForty
-  maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %3 = maxon.binop %1, %2 {op = add} {kind = i64}
-  maxon.return %3
+    %1 = maxon.literal {value = 2 : i64}
+    maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.call @getForty
+    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.binop %1, %2 {op = add} {kind = i64}
+    maxon.return %3
   }
 }
 === standard
 module {
   func @getForty() -> i64 {
   entry:
-  %4 = arith.constant {value = 40 : i64}
-  func.return %4
+    %0 = arith.constant {value = 40 : i64}
+    func.return %0
   }
   func @main() -> i64 {
   entry:
-  %5 = arith.constant {value = 2 : i64}
-  memref.store %5, x
-  %6 = func.call @getForty
-  memref.store %6, y
-  %7 = arith.addi %5, %6
-  func.return %7
+    %1 = arith.constant {value = 2 : i64}
+    memref.store %1, x
+    %2 = func.call @getForty
+    memref.store %2, y
+    %3 = arith.addi %1, %2
+    func.return %3
   }
 }
 === x86
 module {
   func @getForty() -> i64 {
   entry:
-  x86.mov eax, 40
-  x86.ret
+    x86.mov eax, 40
+    x86.ret
   }
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=16
-  x86.mov eax, 2
-  x86.mov [rbp-8], eax
-  x86.call getForty
-  x86.mov [rbp-16], eax
-  x86.mov ecx, [rbp-8]
-  x86.add ecx, eax
-  x86.mov eax, ecx
-  x86.epilogue
-  x86.ret
+    x86.prologue stack_size=16
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.call getForty
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
   }
 }
 ```

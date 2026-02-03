@@ -181,92 +181,92 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    %67 = arith.constant {value = 42 : i64}
-    memref.store %67, __arr_0.0
-    %68 = arith.constant {value = 0 : i64}
-    %69 = arith.constant {value = 1 : i64}
-    %70 = arith.constant {value = 0 : i64}
-    memref.store %68, __struct_4.buffer
-    memref.store %69, __struct_4.length
-    memref.store %70, __struct_4.capacity
-    %71 = arith.constant {value = 0 : i64}
-    memref.store %71, __struct_6.iterIndex
-    %72 = memref.load __struct_4.buffer : i64
-    memref.store %72, __struct_6.managed.buffer
-    %73 = memref.load __struct_4.length : i64
-    memref.store %73, __struct_6.managed.length
-    %74 = memref.load __struct_4.capacity : i64
-    memref.store %74, __struct_6.managed.capacity
-    %75 = memref.lea_rdata __const_array_main_arr
-    %76 = std.ptr_to_i64 %75
-    memref.store %76, __cow_rdata___const_array_main_arr
-    %77 = arith.constant {value = 8 : i64}
-    %78 = std.call_runtime @maxon_alloc %77
-    %79 = memref.load __cow_rdata___const_array_main_arr : i64
-    %80 = arith.constant {value = 8 : i64}
-    std.memcopy %79, %78, %80
-    memref.store %78, __struct_6.managed.buffer
-    %81 = memref.load __struct_6.iterIndex : i64
-    memref.store %81, arr.iterIndex
-    %82 = memref.load __struct_6.managed.buffer : i64
-    memref.store %82, arr.managed.buffer
-    %83 = memref.load __struct_6.managed.length : i64
-    memref.store %83, arr.managed.length
-    %84 = memref.load __struct_6.managed.capacity : i64
-    memref.store %84, arr.managed.capacity
-    %85 = arith.constant {value = 0 : i64}
-    %86 = arith.constant {value = 77 : i64}
-    %88 = memref.load arr.managed.capacity : i64
-    memref.store %88, __selfbuf_87.managed.capacity
-    %89 = memref.load arr.managed.length : i64
-    memref.store %89, __selfbuf_87.managed.length
-    %90 = memref.load arr.managed.buffer : i64
-    memref.store %90, __selfbuf_87.managed.buffer
-    %91 = memref.load arr.iterIndex : i64
-    memref.store %91, __selfbuf_87.iterIndex
-    %92 = memref.lea __selfbuf_87
-    func.call @Array.set %92, %85, %86
-    %93 = memref.load __selfbuf_87.iterIndex : i64
-    memref.store %93, arr.iterIndex
-    %94 = memref.load __selfbuf_87.managed.buffer : i64
-    memref.store %94, arr.managed.buffer
-    %95 = memref.load __selfbuf_87.managed.length : i64
-    memref.store %95, arr.managed.length
-    %96 = memref.load __selfbuf_87.managed.capacity : i64
-    memref.store %96, arr.managed.capacity
-    %97 = arith.constant {value = 0 : i64}
-    %99 = memref.load arr.managed.capacity : i64
-    memref.store %99, __selfbuf_98.managed.capacity
-    %100 = memref.load arr.managed.length : i64
-    memref.store %100, __selfbuf_98.managed.length
-    %101 = memref.load arr.managed.buffer : i64
-    memref.store %101, __selfbuf_98.managed.buffer
-    %102 = memref.load arr.iterIndex : i64
-    memref.store %102, __selfbuf_98.iterIndex
-    %103 = memref.lea __selfbuf_98
-    %104, %105 = func.try_call @Array.get %103, %97
-    memref.store %105, __error_flag
-    %106 = memref.load __selfbuf_98.iterIndex : i64
-    memref.store %106, arr.iterIndex
-    %107 = memref.load __selfbuf_98.managed.buffer : i64
-    memref.store %107, arr.managed.buffer
-    %108 = memref.load __selfbuf_98.managed.length : i64
-    memref.store %108, arr.managed.length
-    %109 = memref.load __selfbuf_98.managed.capacity : i64
-    memref.store %109, arr.managed.capacity
-    %110 = arith.constant {value = 0 : i64}
-    memref.store %110, __try_default_2
-    memref.store %104, __try_result_1
-    %111 = arith.constant {value = 0 : i64}
-    %112 = arith.cmpi ne %105, %111
-    cf.cond_br %112 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %0 = arith.constant {value = 42 : i64}
+    memref.store %0, __arr_0.0
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.constant {value = 1 : i64}
+    %3 = arith.constant {value = 0 : i64}
+    memref.store %1, __struct_4.buffer
+    memref.store %2, __struct_4.length
+    memref.store %3, __struct_4.capacity
+    %4 = arith.constant {value = 0 : i64}
+    memref.store %4, __struct_6.iterIndex
+    %5 = memref.load __struct_4.buffer : i64
+    memref.store %5, __struct_6.managed.buffer
+    %6 = memref.load __struct_4.length : i64
+    memref.store %6, __struct_6.managed.length
+    %7 = memref.load __struct_4.capacity : i64
+    memref.store %7, __struct_6.managed.capacity
+    %8 = memref.lea_rdata __const_array_main_arr
+    %9 = std.ptr_to_i64 %8
+    memref.store %9, __cow_rdata___const_array_main_arr
+    %10 = arith.constant {value = 8 : i64}
+    %11 = std.call_runtime @maxon_alloc %10
+    %12 = memref.load __cow_rdata___const_array_main_arr : i64
+    %13 = arith.constant {value = 8 : i64}
+    std.memcopy %12, %11, %13
+    memref.store %11, __struct_6.managed.buffer
+    %14 = memref.load __struct_6.iterIndex : i64
+    memref.store %14, arr.iterIndex
+    %15 = memref.load __struct_6.managed.buffer : i64
+    memref.store %15, arr.managed.buffer
+    %16 = memref.load __struct_6.managed.length : i64
+    memref.store %16, arr.managed.length
+    %17 = memref.load __struct_6.managed.capacity : i64
+    memref.store %17, arr.managed.capacity
+    %18 = arith.constant {value = 0 : i64}
+    %19 = arith.constant {value = 77 : i64}
+    %21 = memref.load arr.managed.capacity : i64
+    memref.store %21, __selfbuf_20.managed.capacity
+    %22 = memref.load arr.managed.length : i64
+    memref.store %22, __selfbuf_20.managed.length
+    %23 = memref.load arr.managed.buffer : i64
+    memref.store %23, __selfbuf_20.managed.buffer
+    %24 = memref.load arr.iterIndex : i64
+    memref.store %24, __selfbuf_20.iterIndex
+    %25 = memref.lea __selfbuf_20
+    func.call @Array.set %25, %18, %19
+    %26 = memref.load __selfbuf_20.iterIndex : i64
+    memref.store %26, arr.iterIndex
+    %27 = memref.load __selfbuf_20.managed.buffer : i64
+    memref.store %27, arr.managed.buffer
+    %28 = memref.load __selfbuf_20.managed.length : i64
+    memref.store %28, arr.managed.length
+    %29 = memref.load __selfbuf_20.managed.capacity : i64
+    memref.store %29, arr.managed.capacity
+    %30 = arith.constant {value = 0 : i64}
+    %32 = memref.load arr.managed.capacity : i64
+    memref.store %32, __selfbuf_31.managed.capacity
+    %33 = memref.load arr.managed.length : i64
+    memref.store %33, __selfbuf_31.managed.length
+    %34 = memref.load arr.managed.buffer : i64
+    memref.store %34, __selfbuf_31.managed.buffer
+    %35 = memref.load arr.iterIndex : i64
+    memref.store %35, __selfbuf_31.iterIndex
+    %36 = memref.lea __selfbuf_31
+    %37, %38 = func.try_call @Array.get %36, %30
+    memref.store %38, __error_flag
+    %39 = memref.load __selfbuf_31.iterIndex : i64
+    memref.store %39, arr.iterIndex
+    %40 = memref.load __selfbuf_31.managed.buffer : i64
+    memref.store %40, arr.managed.buffer
+    %41 = memref.load __selfbuf_31.managed.length : i64
+    memref.store %41, arr.managed.length
+    %42 = memref.load __selfbuf_31.managed.capacity : i64
+    memref.store %42, arr.managed.capacity
+    %43 = arith.constant {value = 0 : i64}
+    memref.store %43, __try_default_2
+    memref.store %37, __try_result_1
+    %44 = arith.constant {value = 0 : i64}
+    %45 = arith.cmpi ne %38, %44
+    cf.cond_br %45 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %113 = memref.load __try_default_2 : i64
-    memref.store %113, __try_result_1
+    %46 = memref.load __try_default_2 : i64
+    memref.store %46, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %114 = memref.load __try_result_1 : i64
-    func.return %114
+    %47 = memref.load __try_result_1 : i64
+    func.return %47
   }
 }
 === x86

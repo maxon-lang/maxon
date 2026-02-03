@@ -254,3 +254,21 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: empty-set -->
+Create an empty set and verify it starts empty.
+
+```maxon
+typealias IntSet is Set with int
+
+function main() returns int
+  var s = IntSet{}
+  if s.count() != 0 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+0
+```

@@ -588,13 +588,10 @@ public class X86CodeEmitter {
     if (!src64 && !src32)
       throw new ArgumentException($"EmitMovRegReg: unsupported src register size: {src}");
 
-    if (dest32 && src32) {
-      // MOV r32, r32: 89 /r (implicit zero-extension of upper 32 bits)
-      EmitByte(0x89);
-      EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
-    } else {
-      // MOV r64, r64: REX.W + 89 /r
-      // Handles both pure 64-bit and mixed 32/64 (promoted to 64-bit).
+    // Always use 64-bit MOV to preserve pointer values that flow through
+    // i64 registers (the register allocator uses 32-bit names from GprPool
+    // but values may be 64-bit pointers).
+    {
       byte rex = 0x48; // REX.W
       if (NeedsRex(src)) rex |= 0x04; // REX.R
       if (NeedsRex(dest)) rex |= 0x01; // REX.B

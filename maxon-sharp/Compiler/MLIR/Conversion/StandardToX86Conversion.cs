@@ -61,13 +61,45 @@ public static class StandardToX86Conversion {
     var sourceBlocks = func.Body.Blocks.ToList();
     int currentOpIndex = 0;
 
+    // Operations pre-handled by the entry block param save pass (skip in normal loop)
+    var preHandledOps = new HashSet<StandardOp>();
+
     for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
       var srcBlock = sourceBlocks[blockIdx];
       var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
       regManager.Reset();
 
+      // In the entry block, save register-based parameters to their stack slots
+      // immediately. This prevents later operations (e.g. LoadStructFieldsFromPointer)
+      // from clobbering parameter registers before the params are stored.
+      // Only params 0-3 are in registers; params >= 4 are on the caller's stack
+      // and can't be clobbered.
+      if (blockIdx == 0) {
+        var registerParams = srcBlock.Operations.OfType<StdParamOp>()
+          .Where(p => p.Index < 4).ToList();
+        foreach (var paramOp in registerParams) {
+          regManager.NoteParam(paramOp.Result, paramOp.Index, x86Block);
+          preHandledOps.Add(paramOp);
+        }
+        foreach (var paramOp in registerParams) {
+          var storeOp = srcBlock.Operations.OfType<StdStoreI64Op>()
+            .FirstOrDefault(s => s.Value == paramOp.Result);
+          if (storeOp != null && varOffsets.TryGetValue(storeOp.VarName, out int value)) {
+            regManager.EmitStoreToStack(paramOp.Result, value, 8, x86Block);
+            preHandledOps.Add(storeOp);
+          }
+          var storeF64 = srcBlock.Operations.OfType<StdStoreF64Op>()
+            .FirstOrDefault(s => s.Value == paramOp.Result);
+          if (storeF64 != null && varOffsets.TryGetValue(storeF64.VarName, out int value2)) {
+            regManager.EmitXmmStoreToStack(paramOp.Result, value2, x86Block);
+            preHandledOps.Add(storeF64);
+          }
+        }
+      }
+
       foreach (var op in srcBlock.Operations) {
+        if (preHandledOps.Contains(op)) { currentOpIndex++; continue; }
         // If there's a pending comparison result and this op is NOT a condBr
         // that uses it, materialize the comparison into a register via setcc.
         if (lastCmpResult != null && !(op is StdCondBrOp cb && cb.Condition == lastCmpResult)) {
@@ -285,6 +317,7 @@ public static class StandardToX86Conversion {
                   EmitFloatCondBranch(lastCmpPredicate!, scopedElse, x86Block);
                   break;
                 default:
+                  // this is a defensive check in case more ComparisonKind values are added later
                   throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {lastCmpKind}");
               }
             } else {

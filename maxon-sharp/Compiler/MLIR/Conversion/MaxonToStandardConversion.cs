@@ -13,7 +13,15 @@ public static class MaxonToStandardConversion {
     // Build a lookup of functions by name for struct-aware call lowering
     var funcLookup = module.Functions.ToDictionary(f => f.Name);
 
+    bool hasResetAfterStdlib = false;
+
     foreach (var func in module.Functions) {
+      // Reset IDs after stdlib for stable test output
+      if (!hasResetAfterStdlib && !func.IsStdlib) {
+        MlirContext.Current.ResetIds();
+        hasResetAfterStdlib = true;
+      }
+
       var retStructType = func.ReturnType as MlirStructType;
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
@@ -295,29 +303,57 @@ public static class MaxonToStandardConversion {
                 var structTypeName = ((MaxonStruct)assignOp.Value).TypeName;
                 var structType = (MlirStructType)module.TypeDefs[structTypeName];
                 CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
-                // After assignment, the struct value is now known by both names
-                structVarNames[assignOp.Value.Id] = dstName;
-                // Record variable name mapping for cross-block references
-                varNameToStructPrefix[assignOp.VarName] = dstName;
+                // In struct instance methods, assigning to a self field struct must also
+                // update the self.X variables, write through __self_ptr, and use
+                // "self.X" as the canonical name so later method calls read from
+                // the self-prefixed variables (which always exist).
+                if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
+                  var selfDstName = $"self.{assignOp.VarName}";
+                  CopyStructFields(newBlock, dstName, selfDstName, structType, varTypes);
+                  EmitStructWriteThrough(newBlock, selfDstName, assignOp.VarName, structType, selfStructType!, varTypes);
+                  structVarNames[assignOp.Value.Id] = selfDstName;
+                  varNameToStructPrefix[assignOp.VarName] = selfDstName;
+                } else {
+                  structVarNames[assignOp.Value.Id] = dstName;
+                  varNameToStructPrefix[assignOp.VarName] = dstName;
+                }
               } else {
                 var mappedValue = valueMap[assignOp.Value];
-                EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
-                // In struct instance methods, writing to a self field variable must also
-                // write through the self pointer so changes propagate to the caller.
-                if (isStructInstanceMethod && selfStructType != null) {
-                  EmitSelfFieldWriteThrough(newBlock, mappedValue, assignOp.VarName, selfStructType);
+                // In struct instance methods, self field assignments store to the self-prefixed
+                // variable and write through __self_ptr. Using only "self.X" avoids divergence
+                // between "X" and "self.X" when conditional blocks assign to "X".
+                if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
+                  EmitStore(newBlock, mappedValue, $"self.{assignOp.VarName}", varTypes);
+                  EmitSelfFieldWriteThrough(newBlock, mappedValue, assignOp.VarName, selfStructType!);
+                } else {
+                  EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
                 }
               }
               break;
             }
             case MaxonVarRefOp varRef: {
-              var loaded = EmitLoad(newBlock, varRef.VarName, varTypes);
+              // In instance methods, cross-block references to self fields use bare names
+              // but varTypes stores them with "self." prefix from LoadStructFieldsFromPointer
+              var resolvedVarName = varRef.VarName;
+              if (!varTypes.ContainsKey(resolvedVarName) && isStructInstanceMethod) {
+                var selfPrefixed = $"self.{resolvedVarName}";
+                if (varTypes.ContainsKey(selfPrefixed))
+                  resolvedVarName = selfPrefixed;
+              }
+              var loaded = EmitLoad(newBlock, resolvedVarName, varTypes);
               valueMap[varRef.Result] = loaded;
               break;
             }
             case MaxonStructVarRefOp structVarRef: {
               // Look up the resolved prefix from prior assignments, or use the raw variable name
               var resolvedName = varNameToStructPrefix.GetValueOrDefault(structVarRef.VarName, structVarRef.VarName);
+              // In struct instance methods, self field references must use "self.X"
+              // to avoid reading from bare-name variables that may not exist when
+              // conditional branches (like init_empty) are not taken at runtime.
+              if (resolvedName == structVarRef.VarName
+                  && IsSelfField(isStructInstanceMethod, selfStructType, structVarRef.VarName)) {
+                resolvedName = $"self.{structVarRef.VarName}";
+              }
               structVarNames[structVarRef.Result.Id] = resolvedName;
               break;
             }
@@ -509,6 +545,7 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonCallOp callOp:
+              if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
               LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
               break;
             case MaxonReturnOp retOp:
@@ -568,6 +605,33 @@ public static class MaxonToStandardConversion {
       }
     }
     return flatIdx;
+  }
+
+  /// <summary>
+  /// Handles method calls on primitive types as intrinsics (e.g. i64.hash, i8.hash).
+  /// Returns true if the call was handled, false to fall through to normal LowerCall.
+  /// </summary>
+  private static bool TryLowerPrimitiveMethod(
+    MaxonCallOp callOp,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap) {
+    switch (callOp.Callee) {
+      case "i64.hash" or "i8.hash" or "i1.hash": {
+        // Integer/byte/bool hash is the identity function
+        var selfVal = valueMap[callOp.Args[0]];
+        if (callOp.Result != null) valueMap[callOp.Result] = selfVal;
+        return true;
+      }
+      case "f64.hash": {
+        // Float hash: truncate to integer
+        var selfVal = valueMap[callOp.Args[0]];
+        var truncOp = new StdFpToSiOp((StdF64)selfVal);
+        block.AddOp(truncOp);
+        if (callOp.Result != null) valueMap[callOp.Result] = truncOp.Result;
+        return true;
+      }
+    }
+    return false;
   }
 
   private static void LowerCall(
@@ -885,6 +949,9 @@ public static class MaxonToStandardConversion {
     && func.ParamNames[0] == "self"
     && func.ParamTypes[0] is MlirStructType;
 
+  private static bool IsSelfField(bool isStructInstanceMethod, MlirStructType? selfStructType, string name) =>
+    isStructInstanceMethod && selfStructType != null && selfStructType.GetField(name) != null;
+
   private static bool IsEnumInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"
@@ -1065,6 +1132,37 @@ public static class MaxonToStandardConversion {
     var selfPtrLoad = new StdLoadI64Op("__self_ptr");
     block.AddOp(selfPtrLoad);
     block.AddOp(new StdStoreIndirectOp(value, selfPtrLoad.Result, totalOffset, leafField.Type));
+  }
+
+  /// <summary>
+  /// Write all leaf fields of a struct through the self pointer.
+  /// Used when assigning a struct value to a self field (e.g. elements = newElements).
+  /// </summary>
+  private static void EmitStructWriteThrough(
+    MlirBlock<StandardOp> block, string varPrefix, string selfFieldName,
+    MlirStructType structType, MlirStructType selfStructType,
+    Dictionary<string, string> varTypes) {
+    var selfField = selfStructType.GetField(selfFieldName);
+    if (selfField == null) return;
+    int baseOffset = selfField.Offset;
+    var selfPtrLoad = new StdLoadI64Op("__self_ptr");
+    block.AddOp(selfPtrLoad);
+    EmitStructWriteThroughRecursive(block, varPrefix, structType, baseOffset, selfPtrLoad.Result, varTypes);
+  }
+
+  private static void EmitStructWriteThroughRecursive(
+    MlirBlock<StandardOp> block, string varPrefix,
+    MlirStructType structType, int baseOffset, StdValue selfPtr,
+    Dictionary<string, string> varTypes) {
+    foreach (var field in structType.Fields) {
+      var fieldVar = $"{varPrefix}.{field.Name}";
+      if (field.Type is MlirStructType nestedType) {
+        EmitStructWriteThroughRecursive(block, fieldVar, nestedType, baseOffset + field.Offset, selfPtr, varTypes);
+      } else {
+        var loaded = EmitLoad(block, fieldVar, varTypes);
+        block.AddOp(new StdStoreIndirectOp(loaded, selfPtr, baseOffset + field.Offset, field.Type));
+      }
+    }
   }
 
   // ============================================================================

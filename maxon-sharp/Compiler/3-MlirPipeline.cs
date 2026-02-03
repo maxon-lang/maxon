@@ -20,6 +20,9 @@ public class MlirPipeline {
     // Monomorphize generic type methods for concrete aliases
     MonomorphizationPass.Run(module);
 
+    // Remove original generic functions that were fully monomorphized
+    DeadFunctionElimination.Run(module);
+
     // Analyze constant array literals for .rdata placement (after monomorphization)
     ConstantArrayAnalysisPass.Run(module);
 

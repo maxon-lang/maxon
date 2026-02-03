@@ -15,100 +15,100 @@ RequiredMLIR: ```
 module {
   func @main() -> i64 {
   entry:
-  %0 = maxon.literal {value = 0 : i64}
-  maxon.assign %0 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  %1 = maxon.literal {value = 0 : i64}
-  maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-  maxon.br loop_0.header
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
   loop_0.header:
-  %2 = maxon.literal {value = 10 : i64}
-  %3 = maxon.var_ref {var = i} {type = i64}
-  %4 = maxon.binop %3, %2 {op = lt} {kind = i64}
-  maxon.cond_br %4 [then: loop_0, else: loop_0.exit]
+    %2 = maxon.literal {value = 10 : i64}
+    %3 = maxon.var_ref {var = i} {type = i64}
+    %4 = maxon.binop %3, %2 {op = lt} {kind = i64}
+    maxon.cond_br %4 [then: loop_0, else: loop_0.exit]
   loop_0:
-  %5 = maxon.var_ref {var = sum} {type = i64}
-  %6 = maxon.var_ref {var = i} {type = i64}
-  %7 = maxon.binop %5, %6 {op = add} {kind = i64}
-  maxon.assign %7 {var = sum} {kind = i64} {mut = 1 : i1}
-  %8 = maxon.literal {value = 1 : i64}
-  %9 = maxon.var_ref {var = i} {type = i64}
-  %10 = maxon.binop %9, %8 {op = add} {kind = i64}
-  maxon.assign %10 {var = i} {kind = i64} {mut = 1 : i1}
-  maxon.br loop_0.header
+    %5 = maxon.var_ref {var = sum} {type = i64}
+    %6 = maxon.var_ref {var = i} {type = i64}
+    %7 = maxon.binop %5, %6 {op = add} {kind = i64}
+    maxon.assign %7 {var = sum} {kind = i64} {mut = 1 : i1}
+    %8 = maxon.literal {value = 1 : i64}
+    %9 = maxon.var_ref {var = i} {type = i64}
+    %10 = maxon.binop %9, %8 {op = add} {kind = i64}
+    maxon.assign %10 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.br loop_0.header
   loop_0.exit:
-  %11 = maxon.literal {value = 256 : i64}
-  %12 = maxon.var_ref {var = sum} {type = i64}
-  %13 = maxon.binop %12, %11 {op = mod} {kind = i64}
-  maxon.return %13
+    %11 = maxon.literal {value = 256 : i64}
+    %12 = maxon.var_ref {var = sum} {type = i64}
+    %13 = maxon.binop %12, %11 {op = mod} {kind = i64}
+    maxon.return %13
   }
 }
 === standard
 module {
   func @main() -> i64 {
   entry:
-  %14 = arith.constant {value = 0 : i64}
-  memref.store %14, sum
-  %15 = arith.constant {value = 0 : i64}
-  memref.store %15, i
-  cf.br loop_0.header
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, sum
+    %1 = arith.constant {value = 0 : i64}
+    memref.store %1, i
+    cf.br loop_0.header
   loop_0.header:
-  %16 = arith.constant {value = 10 : i64}
-  %17 = memref.load i : i64
-  %18 = arith.cmpi lt %17, %16
-  cf.cond_br %18 [then: loop_0, else: loop_0.exit]
+    %2 = arith.constant {value = 10 : i64}
+    %3 = memref.load i : i64
+    %4 = arith.cmpi lt %3, %2
+    cf.cond_br %4 [then: loop_0, else: loop_0.exit]
   loop_0:
-  %19 = memref.load sum : i64
-  %20 = memref.load i : i64
-  %21 = arith.addi %19, %20
-  memref.store %21, sum
-  %22 = arith.constant {value = 1 : i64}
-  %23 = memref.load i : i64
-  %24 = arith.addi %23, %22
-  memref.store %24, i
-  cf.br loop_0.header
+    %5 = memref.load sum : i64
+    %6 = memref.load i : i64
+    %7 = arith.addi %5, %6
+    memref.store %7, sum
+    %8 = arith.constant {value = 1 : i64}
+    %9 = memref.load i : i64
+    %10 = arith.addi %9, %8
+    memref.store %10, i
+    cf.br loop_0.header
   loop_0.exit:
-  %25 = arith.constant {value = 256 : i64}
-  %26 = memref.load sum : i64
-  %27 = arith.remsi %26, %25
-  func.return %27
+    %11 = arith.constant {value = 256 : i64}
+    %12 = memref.load sum : i64
+    %13 = arith.remsi %12, %11
+    func.return %13
   }
 }
 === x86
 module {
   func @main() -> i64 {
   entry:
-  x86.prologue stack_size=32
-  x86.xor eax, eax
-  x86.mov [rbp-8], eax
-  x86.xor ecx, ecx
-  x86.mov [rbp-16], ecx
-  x86.jmp main.loop_0.header
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp main.loop_0.header
   loop_0.header:
-  x86.mov eax, 10
-  x86.mov ecx, [rbp-16]
-  x86.cmp ecx, eax
-  x86.jge main.loop_0.exit
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-16]
+    x86.cmp ecx, eax
+    x86.jge main.loop_0.exit
   loop_0:
-  x86.mov eax, [rbp-8]
-  x86.mov ecx, [rbp-16]
-  x86.add eax, ecx
-  x86.mov [rbp-8], eax
-  x86.mov edx, 1
-  x86.mov ebx, [rbp-16]
-  x86.add ebx, edx
-  x86.mov [rbp-16], ebx
-  x86.jmp main.loop_0.header
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.add eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-16]
+    x86.add ebx, edx
+    x86.mov [rbp-16], ebx
+    x86.jmp main.loop_0.header
   loop_0.exit:
-  x86.mov eax, 256
-  x86.mov ecx, [rbp-8]
-  x86.mov ebx, eax
-  x86.mov [rbp-24], eax
-  x86.mov eax, ecx
-  x86.cqo
-  x86.idiv ebx
-  x86.mov eax, edx
-  x86.epilogue
-  x86.ret
+    x86.mov eax, 256
+    x86.mov ecx, [rbp-8]
+    x86.mov ebx, eax
+    x86.mov [rbp-24], eax
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
   }
 }
 ```

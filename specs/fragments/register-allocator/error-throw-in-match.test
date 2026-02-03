@@ -91,72 +91,72 @@ module {
 module {
   func @lookup(key: i64) -> i64 {
   entry:
-    %32 = func.param key : StdI64
-    memref.store %32, key
-    memref.store %32, __match_dispatch_0
+    %0 = func.param key : StdI64
+    memref.store %0, key
+    memref.store %0, __match_dispatch_0
     cf.br dispatch_0.cmp0
   dispatch_0.cmp0:
-    %33 = memref.load __match_dispatch_0 : i64
-    %34 = arith.constant {value = 1 : i64}
-    %35 = arith.cmpi eq %33, %34
-    cf.cond_br %35 [then: dispatch_0.case0, else: dispatch_0.cmp1]
+    %1 = memref.load __match_dispatch_0 : i64
+    %2 = arith.constant {value = 1 : i64}
+    %3 = arith.cmpi eq %1, %2
+    cf.cond_br %3 [then: dispatch_0.case0, else: dispatch_0.cmp1]
   dispatch_0.case0:
-    %36 = arith.constant {value = 100 : i64}
-    func.return %36
+    %4 = arith.constant {value = 100 : i64}
+    func.return %4
   dispatch_0.cmp1:
-    %37 = memref.load __match_dispatch_0 : i64
-    %38 = arith.constant {value = 2 : i64}
-    %39 = arith.cmpi eq %37, %38
-    cf.cond_br %39 [then: dispatch_0.case1, else: dispatch_0.case2]
+    %5 = memref.load __match_dispatch_0 : i64
+    %6 = arith.constant {value = 2 : i64}
+    %7 = arith.cmpi eq %5, %6
+    cf.cond_br %7 [then: dispatch_0.case1, else: dispatch_0.case2]
   dispatch_0.case1:
-    %40 = arith.constant {value = 200 : i64}
-    func.return %40
+    %8 = arith.constant {value = 200 : i64}
+    func.return %8
   dispatch_0.case2:
-    %41 = arith.constant {value = 1 : i64}
-    %42 = arith.constant {value = 1 : i64}
-    %43 = arith.addi %41, %42
-    func.error_return %43
+    %9 = arith.constant {value = 1 : i64}
+    %10 = arith.constant {value = 1 : i64}
+    %11 = arith.addi %9, %10
+    func.error_return %11
   dispatch_0.merge:
   }
   func @main() -> i64 {
   entry:
-    %44 = arith.constant {value = 2 : i64}
-    %45, %46 = func.try_call @lookup %44
-    memref.store %46, __error_flag
-    %47 = arith.constant {value = 0 : i64}
-    memref.store %47, __try_default_1
-    memref.store %45, __try_result_0
-    %48 = arith.constant {value = 0 : i64}
-    %49 = arith.cmpi ne %46, %48
-    cf.cond_br %49 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    %12 = arith.constant {value = 2 : i64}
+    %13, %14 = func.try_call @lookup %12
+    memref.store %14, __error_flag
+    %15 = arith.constant {value = 0 : i64}
+    memref.store %15, __try_default_1
+    memref.store %13, __try_result_0
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.cmpi ne %14, %16
+    cf.cond_br %17 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
-    %50 = memref.load __try_default_1 : i64
-    memref.store %50, __try_result_0
+    %18 = memref.load __try_default_1 : i64
+    memref.store %18, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %51 = memref.load __try_result_0 : i64
-    memref.store %51, a
-    %52 = arith.constant {value = 99 : i64}
-    %53, %54 = func.try_call @lookup %52
-    memref.store %54, __error_flag
-    %55 = arith.constant {value = 42 : i64}
-    memref.store %55, __try_default_5
-    memref.store %53, __try_result_4
-    %56 = arith.constant {value = 0 : i64}
-    %57 = arith.cmpi ne %54, %56
-    cf.cond_br %57 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+    %19 = memref.load __try_result_0 : i64
+    memref.store %19, a
+    %20 = arith.constant {value = 99 : i64}
+    %21, %22 = func.try_call @lookup %20
+    memref.store %22, __error_flag
+    %23 = arith.constant {value = 42 : i64}
+    memref.store %23, __try_default_5
+    memref.store %21, __try_result_4
+    %24 = arith.constant {value = 0 : i64}
+    %25 = arith.cmpi ne %22, %24
+    cf.cond_br %25 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
-    %58 = memref.load __try_default_5 : i64
-    memref.store %58, __try_result_4
+    %26 = memref.load __try_default_5 : i64
+    memref.store %26, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %59 = memref.load __try_result_4 : i64
-    memref.store %59, b
-    %60 = arith.constant {value = 256 : i64}
-    %61 = arith.remsi %59, %60
-    %62 = memref.load a : i64
-    %63 = arith.addi %62, %61
-    func.return %63
+    %27 = memref.load __try_result_4 : i64
+    memref.store %27, b
+    %28 = arith.constant {value = 256 : i64}
+    %29 = arith.remsi %27, %28
+    %30 = memref.load a : i64
+    %31 = arith.addi %30, %29
+    func.return %31
   }
 }
 === x86

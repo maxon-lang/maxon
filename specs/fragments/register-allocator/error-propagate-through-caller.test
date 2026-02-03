@@ -65,46 +65,46 @@ module {
 module {
   func @inner() -> i64 {
   entry:
-    %16 = arith.constant {value = 0 : i64}
-    %17 = arith.constant {value = 1 : i64}
-    %18 = arith.addi %16, %17
-    func.error_return %18
+    %0 = arith.constant {value = 0 : i64}
+    %1 = arith.constant {value = 1 : i64}
+    %2 = arith.addi %0, %1
+    func.error_return %2
   }
   func @middle() -> i64 {
   entry:
-    %19, %20 = func.try_call @inner
-    memref.store %20, __error_flag
-    memref.store %20, __try_error_2
-    memref.store %19, __try_result_3
-    %21 = arith.constant {value = 0 : i64}
-    %22 = arith.cmpi ne %20, %21
-    cf.cond_br %22 [then: propagate_error_0, else: try_continue_1]
+    %3, %4 = func.try_call @inner
+    memref.store %4, __error_flag
+    memref.store %4, __try_error_2
+    memref.store %3, __try_result_3
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.cmpi ne %4, %5
+    cf.cond_br %6 [then: propagate_error_0, else: try_continue_1]
   propagate_error_0:
-    %23 = memref.load __try_error_2 : i64
-    func.error_return %23
+    %7 = memref.load __try_error_2 : i64
+    func.error_return %7
   try_continue_1:
-    %24 = memref.load __try_result_3 : i64
-    memref.store %24, x
-    func.return %24
+    %8 = memref.load __try_result_3 : i64
+    memref.store %8, x
+    func.return %8
   }
   func @main() -> i64 {
   entry:
-    %25, %26 = func.try_call @middle
-    memref.store %26, __error_flag
-    %27 = arith.constant {value = 99 : i64}
-    memref.store %27, __try_default_1
-    memref.store %25, __try_result_0
-    %28 = arith.constant {value = 0 : i64}
-    %29 = arith.cmpi ne %26, %28
-    cf.cond_br %29 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    %9, %10 = func.try_call @middle
+    memref.store %10, __error_flag
+    %11 = arith.constant {value = 99 : i64}
+    memref.store %11, __try_default_1
+    memref.store %9, __try_result_0
+    %12 = arith.constant {value = 0 : i64}
+    %13 = arith.cmpi ne %10, %12
+    cf.cond_br %13 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
-    %30 = memref.load __try_default_1 : i64
-    memref.store %30, __try_result_0
+    %14 = memref.load __try_default_1 : i64
+    memref.store %14, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %31 = memref.load __try_result_0 : i64
-    memref.store %31, x
-    func.return %31
+    %15 = memref.load __try_result_0 : i64
+    memref.store %15, x
+    func.return %15
   }
 }
 === x86

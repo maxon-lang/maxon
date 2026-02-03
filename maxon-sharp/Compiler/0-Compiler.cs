@@ -45,13 +45,7 @@ public class Compiler {
       var module = new MlirModule<MaxonOp>();
 
       var stdlibSources = StdlibLoader.LoadStdlibModules();
-      foreach (var source in stdlibSources) {
-        var lexer = new Lexer(source.Content);
-        var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: true);
-        var parsed = parser.Parse();
-        module.Merge(parsed);
-      }
+      CompileSources(module, stdlibSources, true);
 
       foreach (var func in module.Functions)
         func.IsStdlib = true;
@@ -59,13 +53,7 @@ public class Compiler {
       // Reset IDs so user code starts at %0
       _context.ResetIds();
 
-      foreach (var source in sources) {
-        var lexer = new Lexer(source.Content);
-        var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module);
-        var parsed = parser.Parse();
-        module.Merge(parsed);
-      }
+      CompileSources(module, sources, false);
 
       // Remove unreachable functions (e.g. unused stdlib functions)
       DeadFunctionElimination.Run(module);
@@ -96,6 +84,21 @@ public class Compiler {
       return new CompileResult(false, $"{ex.Message}\n{ex.StackTrace}");
     }
   }
+
+  private static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] stdlibSources, bool isStdLib) {
+    foreach (var source in stdlibSources) {
+      try {
+        var lexer = new Lexer(source.Content);
+        var tokens = lexer.Tokenize();
+        var parser = new Parser(tokens, module, isStdlib: isStdLib);
+        var parsed = parser.Parse();
+        module.Merge(parsed);
+      } catch (CompileError ex) {
+        ex.FilePath ??= source.Path;
+        throw;
+      }
+    }
+  }
 }
 
 public static class StdlibLoader {
@@ -104,7 +107,8 @@ public static class StdlibLoader {
     "Array.maxon",
     "Vector.maxon",
     "Math.maxon",
-    "Pair.maxon"
+    "Pair.maxon",
+    "Set.maxon"
   ];
 
   public static string? FindStdlibPath() {
