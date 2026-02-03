@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using MaxonSharp.Compiler;
+using MaxonSharp.Lsp;
 using MaxonSharp.Testing;
 
 namespace MaxonSharp;
 
 class Program {
-  static int Main(string[] args) {
+  static async Task<int> Main(string[] args) {
     if (args.Length == 0) {
       PrintUsage();
       return 1;
@@ -18,6 +19,7 @@ class Program {
       "build" => RunBuild(args[1..]),
       "run" => RunRun(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
+      "lsp-server" => await RunLspAsync(),
       _ => Fail()
     };
   }
@@ -30,6 +32,7 @@ class Program {
     Console.WriteLine("  build [<directory>]      Build a project (default: current directory)");
     Console.WriteLine("  run <file|directory>     Compile and run");
     Console.WriteLine("  spec-test [options]      Run spec tests");
+    Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine();
     Console.WriteLine("Build options (compile, build, run):");
     Console.WriteLine("  --emit-ir                Write .mlir file");
@@ -384,6 +387,12 @@ class Program {
       Logger.Error(LogCategory.Testing, $"Tests: {summary.Passed} passed, {summary.Failed} failed (total: {summary.Total}) in {summary.TotalDuration.TotalMilliseconds:F0}ms");
       return 1;
     }
+  }
+
+  static async Task<int> RunLspAsync() {
+    var server = new LspServer();
+    await server.RunAsync();
+    return 0;
   }
 
 }

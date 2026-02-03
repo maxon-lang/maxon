@@ -383,8 +383,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
 
     // Process exited normally - wait for async reads to complete
+    // Suppressing VSTHRD002: This runs in Parallel.ForEach worker threads, not on a UI thread
+#pragma warning disable VSTHRD002
     var stdout = stdoutTask.GetAwaiter().GetResult();
     var stderr = stderrTask.GetAwaiter().GetResult();
+#pragma warning restore VSTHRD002
 
     return (process.ExitCode, stdout, stderr);
   }
