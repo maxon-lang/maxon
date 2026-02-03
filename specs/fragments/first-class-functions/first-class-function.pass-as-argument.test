@@ -1,0 +1,47 @@
+// Test: first-class-function.pass-as-argument
+function apply(f (int) returns int, x int) returns int
+  return f(x)
+end 'apply'
+
+function triple(n int) returns int
+  return n * 3
+end 'triple'
+
+function main() returns int
+  return apply(triple, x: 10)
+end 'main'
+---
+ExitCode: 30
+---
+module {
+  func @apply(f: fn(i64) returns i64, x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], edx
+    x86.mov r10, ecx
+    x86.mov rcx, rdx
+    x86.call r10
+    x86.epilogue
+    x86.ret
+  }
+  func @triple(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 3
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.lea_func eax, [triple]
+    x86.mov ecx, 10
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call apply
+    x86.ret
+  }
+}
+---

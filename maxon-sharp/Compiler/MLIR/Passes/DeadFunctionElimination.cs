@@ -27,6 +27,8 @@ public static class DeadFunctionElimination {
             queue.Enqueue(call.Callee);
           if (op is MaxonTryCallOp tryCall && reachable.Add(tryCall.Callee))
             queue.Enqueue(tryCall.Callee);
+          if (op is MaxonFunctionRefOp fnRef && reachable.Add(fnRef.FunctionName))
+            queue.Enqueue(fnRef.FunctionName);
         }
       }
     }

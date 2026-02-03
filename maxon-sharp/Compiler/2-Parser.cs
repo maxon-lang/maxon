@@ -15,6 +15,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly Dictionary<string, VarInfo> _variables = [];
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
+  private int _closureCounter;
   private readonly Stack<LoopContext> _loopStack = new();
   private bool _inTryContext;
   private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
@@ -121,8 +122,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     { "max", (a, b) => { var op = new MaxonMaxOp(a, b); return (op, op.Result); } },
   };
 
-  // VarInfo now tracks struct type name for struct variables
-  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null);
+  // VarInfo now tracks struct type name for struct variables, or function type for function variables
+  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null, MlirFunctionType? FnTypeName = null);
 
   // Tracks parameter locations for unused parameter error reporting
   private readonly List<(string Name, int Line, int Column)> _paramLocations = [];
@@ -1590,6 +1591,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var enumParamOp = new MaxonEnumParamOp(i + paramOffset, paramNames[i], enumType.Name, backingKind);
         _currentBlock!.AddOp(enumParamOp);
         _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, false, enumParamOp.Result, _currentBlock!, enumType.Name);
+      } else if (paramType is MlirFunctionType fnType) {
+        var fnParamOp = new MaxonFunctionParamOp(i + paramOffset, paramNames[i], fnType);
+        _currentBlock!.AddOp(fnParamOp);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, false, fnParamOp.Result, _currentBlock!, FnTypeName: fnType);
       } else {
         var kind = paramType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
@@ -1718,16 +1723,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Function type: (ParamType, ...) returns ReturnType
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
+      var paramTypes = new List<MlirType>();
       while (!Check(TokenType.RightParen) && !IsAtEnd()) {
-        ParseTypeRef();
+        // Check if this is a named parameter (name Type) or just a type
+        if (Check(TokenType.Identifier) && PeekNext().Type != TokenType.Comma && PeekNext().Type != TokenType.RightParen) {
+          // This looks like "name Type" - skip the name
+          Advance(); // consume name
+        }
+        paramTypes.Add(ParseTypeRef());
         if (Check(TokenType.Comma)) Advance();
       }
       Expect(TokenType.RightParen);
+      MlirType? returnType = null;
       if (Check(TokenType.Returns)) {
         Advance();
-        ParseTypeRef();
+        returnType = ParseTypeRef();
       }
-      return MlirType.Fn; // sentinel for function-typed parameters
+      return new MlirFunctionType(paramTypes, returnType);
     }
 
     var typeName = ExpectTypeName();
@@ -2210,11 +2222,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var kind = MaxonValueKind.Enum;
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, enumVal.TypeName);
+    } else if (initValue is MaxonFunctionPtr) {
+      var kind = MaxonValueKind.Function;
+      var fnType = GetFunctionTypeFromLastOp();
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, FnTypeName: fnType);
     } else {
       var kind = DetermineValueKind(initValue);
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!);
     }
+  }
+
+  private MlirFunctionType GetFunctionTypeFromLastOp() {
+    var lastOp = _currentBlock!.Operations.LastOrDefault();
+    return lastOp switch {
+      MaxonFunctionRefOp fnRefOp => fnRefOp.FunctionType,
+      MaxonFunctionParamOp fnParamOp => fnParamOp.FunctionType,
+      MaxonFunctionVarRefOp fnVarRefOp => fnVarRefOp.FunctionType,
+      _ => throw new InvalidOperationException($"Cannot determine function type from {lastOp?.GetType().Name}")
+    };
   }
 
   private void ParseAssignment() {
@@ -2237,8 +2264,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var newVal = ResolveExprValue(ParseExpression());
+    // Capture function type before adding the assign op (which would change the last op)
+    MlirFunctionType? fnType = null;
+    if (varInfo.Kind == MaxonValueKind.Function) {
+      fnType = GetFunctionTypeFromLastOp();
+    }
     _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
-    _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName);
+    // Preserve function type if reassigning a function variable
+    if (varInfo.Kind == MaxonValueKind.Function) {
+      _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, FnTypeName: fnType);
+    } else {
+      _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName);
+    }
   }
 
   private void ParseQualifiedAssignment() {
@@ -3488,6 +3525,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     if (Check(TokenType.LeftParen)) {
+      // Need to distinguish between:
+      // 1. Parenthesized expression: (expr)
+      // 2. Closure: (param type, ...) gives expr
+      if (IsClosure()) {
+        return ParseClosure();
+      }
       Advance(); // consume '('
       var inner = ParseExpression();
       Expect(TokenType.RightParen);
@@ -3648,6 +3691,46 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Method '{token.Value}' does not return a value", token.Line, token.Column);
         }
 
+        // Check for indirect call through function-typed variable
+        if (_variables.TryGetValue(token.Value, out var fnVarInfo) && fnVarInfo.Kind == MaxonValueKind.Function) {
+          Logger.Debug(LogCategory.Parser, $"  Indirect call through function variable: {token.Value}");
+          _referencedVars.Add(token.Value);
+          var fnType = fnVarInfo.FnTypeName!;
+          Advance(); // consume '('
+          var indirectArgs = ParseIndirectCallArgs(token, fnType);
+
+          // Get the function pointer value
+          MaxonValue calleeValue;
+          if (fnVarInfo.DefinedInBlock == _currentBlock) {
+            calleeValue = fnVarInfo.Value;
+          } else {
+            var fnVarRefOp = new MaxonFunctionVarRefOp(token.Value, fnType);
+            _currentBlock!.AddOp(fnVarRefOp);
+            calleeValue = fnVarRefOp.Result;
+          }
+
+          // Determine result kind from function type
+          MaxonValueKind? resultKind = null;
+          string? resultStructTypeName = null;
+          if (fnType.ReturnType != null) {
+            if (fnType.ReturnType is MlirStructType retStructType) {
+              resultKind = MaxonValueKind.Struct;
+              resultStructTypeName = retStructType.Name;
+            } else if (fnType.ReturnType is MlirEnumType retEnumType) {
+              resultKind = MaxonValueKind.Enum;
+              resultStructTypeName = retEnumType.Name;
+            } else {
+              resultKind = fnType.ReturnType.ToValueKind();
+            }
+          }
+
+          var indirectCallOp = new MaxonIndirectCallOp(calleeValue, fnType, indirectArgs, resultKind, resultStructTypeName);
+          _currentBlock!.AddOp(indirectCallOp);
+          if (indirectCallOp.Result != null)
+            return new ExprResult.Direct(indirectCallOp.Result);
+          throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function variable '{token.Value}' does not return a value", token.Line, token.Column);
+        }
+
         Advance(); // consume '('
         var args = ParseCallArgs(token);
         var callOp = CreateFunctionCall(token, args);
@@ -3673,10 +3756,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _referencedVars.Add(token.Value);
         return ParseFieldAccessChain(new ExprResult.VarRef(token.Value, varInfo), token);
       }
+
+      // Function reference (bare function name without parentheses = function pointer)
+      var referencedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == token.Value);
+      if (referencedFunc != null) {
+        var fnType = GetFunctionType(referencedFunc);
+        var fnRefOp = new MaxonFunctionRefOp(token.Value, fnType);
+        _currentBlock!.AddOp(fnRefOp);
+        return new ExprResult.Direct(fnRefOp.Result);
+      }
+
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
     }
 
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got '{Current().Value}'", Current().Line, Current().Column);
+  }
+
+  private static MlirFunctionType GetFunctionType(MlirFunction<MaxonOp> func) {
+    var paramTypes = func.ParamTypes.ToList();
+    return new MlirFunctionType(paramTypes, func.ReturnType);
   }
 
   private ExprResult ParseFieldAccessChain(ExprResult result, Token originToken) {
@@ -4160,6 +4258,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonByte => MaxonValueKind.Byte,
       MaxonStruct => MaxonValueKind.Struct,
       MaxonEnum => MaxonValueKind.Enum,
+      MaxonFunctionPtr => MaxonValueKind.Function,
       _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Cannot determine kind of {value.GetType().Name}",
         Current().Line, Current().Column)
@@ -4304,6 +4403,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return FillDefaultArgs(functionNameToken, callee, args);
   }
 
+  /// <summary>
+  /// Parses arguments for an indirect call (call through function pointer).
+  /// Uses the function type to determine expected number of arguments.
+  /// </summary>
+  private List<MaxonValue> ParseIndirectCallArgs(Token varNameToken, MlirFunctionType fnType) {
+    var args = new List<MaxonValue>();
+    if (!Check(TokenType.RightParen)) {
+      do {
+        // For indirect calls, we parse positional arguments only for now
+        // (named arguments would require knowing parameter names from the function type)
+        var argExpr = ParseExpression();
+        var argValue = ResolveExprValue(argExpr);
+        args.Add(argValue);
+      } while (Check(TokenType.Comma) && Advance() != null);
+    }
+    Expect(TokenType.RightParen);
+
+    // Validate argument count
+    if (args.Count != fnType.ParameterTypes.Count) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Expected {fnType.ParameterTypes.Count} argument(s), got {args.Count}",
+        varNameToken.Line, varNameToken.Column);
+    }
+
+    return args;
+  }
+
   private List<MaxonValue> FillDefaultArgs(Token functionNameToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args) {
     // Fill in defaults for missing arguments
     _functionDefaults.TryGetValue(callee.Name, out var defaults);
@@ -4379,6 +4505,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (type == MlirType.I1) return MaxonValueKind.Bool;
     if (type == MlirType.I8) return MaxonValueKind.Byte;
     if (type is MlirEnumType) return MaxonValueKind.Enum;
+    if (type is MlirFunctionType) return MaxonValueKind.Function;
     throw new InvalidOperationException($"Cannot map MlirType '{type}' to MaxonValueKind");
   }
 
@@ -4590,6 +4717,130 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         $"Float literal '{token.Value}' is outside the range of float",
         token.Line, token.Column);
     }
+  }
+
+  /// <summary>
+  /// Checks if the current position is the start of a closure expression.
+  /// Closures look like: (param type, ...) gives expr
+  /// vs parenthesized expression: (expr)
+  /// </summary>
+  private bool IsClosure() {
+    // Look ahead without consuming tokens
+    int lookahead = 0;
+
+    // Must start with '('
+    if (_pos + lookahead >= _tokens.Count || _tokens[_pos + lookahead].Type != TokenType.LeftParen)
+      return false;
+    lookahead++;
+
+    // Empty params: () gives expr
+    if (_pos + lookahead < _tokens.Count && _tokens[_pos + lookahead].Type == TokenType.RightParen) {
+      lookahead++;
+      return _pos + lookahead < _tokens.Count && _tokens[_pos + lookahead].Type == TokenType.Gives;
+    }
+
+    // Non-empty params: (name type, ...) gives expr
+    // First param: identifier followed by type (identifier, int, float, bool, byte, or function type)
+    if (_pos + lookahead >= _tokens.Count || _tokens[_pos + lookahead].Type != TokenType.Identifier)
+      return false;
+    lookahead++;
+
+    // After param name, must see a type token
+    if (_pos + lookahead >= _tokens.Count)
+      return false;
+    var afterName = _tokens[_pos + lookahead].Type;
+    return afterName == TokenType.Identifier || afterName == TokenType.Int || afterName == TokenType.Float ||
+           afterName == TokenType.Bool || afterName == TokenType.Byte || afterName == TokenType.LeftParen;
+  }
+
+  /// <summary>
+  /// Parses a closure expression: (param type, ...) gives expr
+  /// Creates an anonymous function and returns a reference to it.
+  /// </summary>
+  private ExprResult.Direct ParseClosure() {
+    Expect(TokenType.LeftParen);
+
+    // Parse closure parameters
+    var paramNames = new List<string>();
+    var paramTypes = new List<MlirType>();
+
+    if (!Check(TokenType.RightParen)) {
+      do {
+        var paramName = Expect(TokenType.Identifier).Value;
+        var paramType = ParseTypeRef();
+        paramNames.Add(paramName);
+        paramTypes.Add(paramType);
+      } while (Check(TokenType.Comma) && Advance() != null);
+    }
+    Expect(TokenType.RightParen);
+    Expect(TokenType.Gives);
+
+    // Determine return type from expression (we'll infer it after parsing)
+    // Create a unique name for the closure
+    var closureName = $"__closure_{_closureCounter++}";
+
+    // Save current parsing state
+    var savedVars = new Dictionary<string, VarInfo>(_variables);
+    var savedBlock = _currentBlock;
+    var savedFunction = _currentFunction;
+    var savedReferencedVars = new HashSet<string>(_referencedVars);
+
+    // We'll determine the return type after parsing, use a placeholder for now
+    var closureFunc = new MlirFunction<MaxonOp>(closureName, paramNames, paramTypes, null, null) {
+      IsStdlib = false,
+    };
+
+    _currentFunction = closureFunc;
+    _currentBlock = closureFunc.Body.AddBlock("entry");
+    _variables.Clear();
+    _referencedVars.Clear();
+
+    // Add closure parameters to scope
+    for (int i = 0; i < paramNames.Count; i++) {
+      var pKind = paramTypes[i].ToValueKind();
+      var paramOp = new MaxonParamOp(i, paramNames[i], pKind);
+      _currentBlock.AddOp(paramOp);
+      _variables[paramNames[i]] = new VarInfo(pKind, false, paramOp.Result, _currentBlock);
+    }
+
+    // Parse the closure body expression
+    var bodyExpr = ParseExpression();
+    var bodyValue = ResolveExprValue(bodyExpr);
+
+    // Emit return
+    var returnOp = new MaxonReturnOp(bodyValue);
+    _currentBlock.AddOp(returnOp);
+
+    // Determine return type from the body value
+    var returnKind = DetermineValueKind(bodyValue);
+    var returnType = returnKind.ToMlirType();
+
+    // Create the final function with proper return type
+    var finalClosureFunc = new MlirFunction<MaxonOp>(closureName, paramNames, paramTypes, returnType, null) {
+      IsStdlib = false,
+    };
+    // Copy the body from the temporary function
+    foreach (var block in closureFunc.Body.Blocks) {
+      finalClosureFunc.Body.Blocks.Add(block);
+    }
+
+    // Add closure function to module
+    _currentModule!.Functions.Add(finalClosureFunc);
+
+    // Restore parsing state
+    _variables.Clear();
+    foreach (var kv in savedVars) _variables[kv.Key] = kv.Value;
+    _currentBlock = savedBlock;
+    _currentFunction = savedFunction;
+    _referencedVars.Clear();
+    foreach (var v in savedReferencedVars) _referencedVars.Add(v);
+
+    // Create a function reference to the closure
+    var fnType = new MlirFunctionType(paramTypes, returnType);
+    var fnRefOp = new MaxonFunctionRefOp(closureName, fnType);
+    _currentBlock!.AddOp(fnRefOp);
+
+    return new ExprResult.Direct(fnRefOp.Result);
   }
 
   private int ExpectEndLabel(string expectedLabel) {

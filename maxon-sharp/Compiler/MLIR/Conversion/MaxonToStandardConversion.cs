@@ -548,6 +548,18 @@ public static class MaxonToStandardConversion {
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
               LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
               break;
+            case MaxonFunctionRefOp fnRefOp:
+              LowerFunctionRef(fnRefOp, newBlock, valueMap);
+              break;
+            case MaxonFunctionParamOp fnParamOp:
+              LowerFunctionParam(fnParamOp, newBlock, valueMap, retStructType != null, func);
+              break;
+            case MaxonFunctionVarRefOp fnVarRefOp:
+              LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap);
+              break;
+            case MaxonIndirectCallOp indirectCallOp:
+              LowerIndirectCall(indirectCallOp, newBlock, valueMap);
+              break;
             case MaxonReturnOp retOp:
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames);
               break;
@@ -898,6 +910,11 @@ public static class MaxonToStandardConversion {
         block.AddOp(new StdStoreI1Op(b, varName));
         varTypes[varName] = "i1";
         break;
+      case StdPtr ptr:
+        // Function pointers are stored as 64-bit values
+        block.AddOp(new StdStorePtrOp(ptr, varName));
+        varTypes[varName] = "ptr";
+        break;
       default:
         throw new InvalidOperationException($"Unsupported StdValue type for store: {value.GetType().Name}");
     }
@@ -918,6 +935,11 @@ public static class MaxonToStandardConversion {
       }
       case "i1": {
         var loadOp = new StdLoadI1Op(varName);
+        block.AddOp(loadOp);
+        return loadOp.Result;
+      }
+      case "ptr": {
+        var loadOp = new StdLoadPtrOp(varName);
         block.AddOp(loadOp);
         return loadOp.Result;
       }
@@ -1439,6 +1461,75 @@ public static class MaxonToStandardConversion {
         scalarParams.Add((flatIdx, fieldPath, field.Type));
         flatIdx++;
       }
+    }
+  }
+
+  // ============================================================================
+  // Function pointer operations
+  // ============================================================================
+
+  private static void LowerFunctionRef(
+      MaxonFunctionRefOp fnRefOp,
+      MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap) {
+    var refOp = new StdFuncRefOp(fnRefOp.FunctionName);
+    block.AddOp(refOp);
+    valueMap[fnRefOp.Result] = refOp.Result;
+  }
+
+  private static void LowerFunctionParam(
+      MaxonFunctionParamOp fnParamOp,
+      MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap,
+      bool hasSret,
+      MlirFunction<MaxonOp> func) {
+    int flatIdx = ComputeFlatParamIndex(fnParamOp.Index, func, hasSret);
+    var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(MlirContext.Current.NextId()));
+    block.AddOp(paramOp);
+    valueMap[fnParamOp.Result] = paramOp.Result;
+  }
+
+  private static void LowerFunctionVarRef(
+      MaxonFunctionVarRefOp fnVarRefOp,
+      MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap) {
+    // Function pointers are stored as 8-byte integers (pointers)
+    var loadOp = new StdLoadI64Op(fnVarRefOp.VarName);
+    block.AddOp(loadOp);
+    // Wrap as StdPtr for consistency
+    valueMap[fnVarRefOp.Result] = loadOp.Result;
+  }
+
+  private static void LowerIndirectCall(
+      MaxonIndirectCallOp indirectCallOp,
+      MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap) {
+    var calleeValue = valueMap[indirectCallOp.Callee];
+    var newArgs = new List<StdValue>();
+
+    foreach (var arg in indirectCallOp.Args) {
+      newArgs.Add(valueMap[arg]);
+    }
+
+    StdValue? resultValue = null;
+    if (indirectCallOp.ResultKind != null) {
+      resultValue = indirectCallOp.ResultKind switch {
+        MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
+        MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
+        MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
+        MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
+        MaxonValueKind.Struct => throw new NotImplementedException("Struct return from indirect call not yet implemented"),
+        MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
+        MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
+        _ => throw new InvalidOperationException($"Unsupported result kind for indirect call: {indirectCallOp.ResultKind}")
+      };
+    }
+
+    var callOp = new StdIndirectCallOp(calleeValue, newArgs, resultValue);
+    block.AddOp(callOp);
+
+    if (indirectCallOp.Result != null && callOp.Result != null) {
+      valueMap[indirectCallOp.Result] = callOp.Result;
     }
   }
 

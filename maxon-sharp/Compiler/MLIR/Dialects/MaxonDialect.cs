@@ -2,7 +2,7 @@ using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
 
-public enum MaxonValueKind { Integer, Float, Bool, Byte, Struct, Enum }
+public enum MaxonValueKind { Integer, Float, Bool, Byte, Struct, Enum, Function }
 
 public static class MaxonValueKindExtensions {
   public static MlirType ToMlirType(this MaxonValueKind kind) => kind switch {
@@ -12,6 +12,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Byte => MlirType.I8,
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require lookup via type registry, not ToMlirType()"),
     MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require lookup via type registry, not ToMlirType()"),
+    MaxonValueKind.Function => throw new InvalidOperationException("Function kinds require lookup via function type, not ToMlirType()"),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -22,6 +23,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Byte => new MaxonByte(MlirContext.Current.NextId()),
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require a type name, use CreateStructValue() instead"),
     MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require a type name, use MaxonEnumLiteralOp instead"),
+    MaxonValueKind.Function => new MaxonFunctionPtr(MlirContext.Current.NextId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -32,6 +34,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.I8) return MaxonValueKind.Byte;
     if (type is MlirEnumType) return MaxonValueKind.Enum;
     if (type is MlirStructType) return MaxonValueKind.Struct;
+    if (type is MlirFunctionType) return MaxonValueKind.Function;
     throw new ArgumentOutOfRangeException(nameof(type), $"No MaxonValueKind for MlirType: {type}");
   }
 
@@ -42,6 +45,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
     MaxonValueKind.Struct => new StdPtr(MlirContext.Current.NextId()),
     MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
+    MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 }
@@ -111,7 +115,7 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
       var attrs = new Dictionary<string, MlirAttribute> {
         ["var"] = new StringAttr(VarName),
       };
-      if (ValueKind != MaxonValueKind.Struct && ValueKind != MaxonValueKind.Enum) {
+      if (ValueKind != MaxonValueKind.Struct && ValueKind != MaxonValueKind.Enum && ValueKind != MaxonValueKind.Function) {
         attrs["kind"] = new TypeAttr(ValueKind.ToMlirType());
       }
       if (IsDeclaration) attrs["decl"] = new IntegerAttr(1, MlirType.I1);
@@ -146,6 +150,60 @@ public class MaxonStructParamOp(int index, string name, string structTypeName) :
   public string StructTypeName { get; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), structTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Function parameter op: represents a function pointer being received as a function parameter.
+public class MaxonFunctionParamOp(int index, string name, MlirFunctionType functionType) : MaxonOp {
+  public override string Mnemonic => $"maxon.function_param";
+  public int Index { get; } = index;
+  public string Name { get; } = name;
+  public MlirFunctionType FunctionType { get; } = functionType;
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Function reference op: gets a pointer to a named function
+public class MaxonFunctionRefOp(string functionName, MlirFunctionType functionType) : MaxonOp {
+  public override string Mnemonic => $"maxon.function_ref @{FunctionName}";
+  public string FunctionName { get; } = functionName;
+  public MlirFunctionType FunctionType { get; } = functionType;
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Function var ref: loads a function pointer from a variable in a different block
+public class MaxonFunctionVarRefOp(string varName, MlirFunctionType functionType) : MaxonOp {
+  public override string Mnemonic => $"maxon.function_var_ref {VarName}";
+  public string VarName { get; } = varName;
+  public MlirFunctionType FunctionType { get; } = functionType;
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Indirect call op: calls a function through a function pointer
+public class MaxonIndirectCallOp : MaxonOp {
+  public override string Mnemonic => "maxon.indirect_call";
+  public MaxonValue Callee { get; }
+  public MlirFunctionType CalleeType { get; }
+  public List<MaxonValue> Args { get; }
+  public MaxonValue? Result { get; }
+  public MaxonValueKind? ResultKind { get; }
+  public string? ResultStructTypeName { get; }
+  public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
+  public override IReadOnlyList<string> PrintableOperands => Args.Select(a => a.ToString()).Prepend(Callee.ToString()).ToList();
+
+  public MaxonIndirectCallOp(MaxonValue callee, MlirFunctionType calleeType, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
+    Callee = callee;
+    CalleeType = calleeType;
+    Args = args;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    if (resultKind != null) {
+      Result = resultKind == MaxonValueKind.Struct
+        ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!)
+        : resultKind.Value.CreateValue();
+    }
+  }
 }
 
 public class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {

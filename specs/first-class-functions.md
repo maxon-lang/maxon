@@ -45,6 +45,9 @@ function main() returns int
   return f(21)        // calls double(21), returns 42
 end 'main'
 ```
+```exitcode
+42
+```
 
 ## Passing Functions as Arguments
 
@@ -63,6 +66,9 @@ function main() returns int
   return apply(triple, x: 10)  // returns 30
 end 'main'
 ```
+```exitcode
+30
+```
 
 ## Closures
 
@@ -73,6 +79,9 @@ function main() returns int
   var f = (x int) gives x * 2
   return f(21)  // returns 42
 end 'main'
+```
+```exitcode
+42
 ```
 
 Closures can be passed directly to higher-order functions:
@@ -85,6 +94,9 @@ end 'apply'
 function main() returns int
   return apply((n int) gives n + 5, x: 10)  // returns 15
 end 'main'
+```
+```exitcode
+15
 ```
 
 ## Tests

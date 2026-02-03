@@ -124,6 +124,11 @@ public class X86CallDirectOp(string target) : X86Op {
   public override string Mnemonic => $"x86.call {Target}";
 }
 
+public class X86CallIndirectOp(X86Register target) : X86Op {
+  public X86Register Target { get; } = target;
+  public override string Mnemonic => $"x86.call {Target.ToString().ToLower()}";
+}
+
 public class X86MovMemRegOp(int displacement, X86Register src, int sizeInBytes = 8) : X86Op {
   public int Displacement { get; } = displacement;
   public X86Register Src { get; } = src;
@@ -296,6 +301,13 @@ public class X86LeaRipRelOp(X86Register dest, string rdataLabel) : X86Op {
   public X86Register Dest { get; } = dest;
   public string RdataLabel { get; } = rdataLabel;
   public override string Mnemonic => $"x86.lea_rdata {Dest.ToString().ToLower()}, [{RdataLabel}]";
+}
+
+// LEA dest, [rip+disp] - load effective address of a function
+public class X86LeaFuncAddrOp(X86Register dest, string functionName) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public string FunctionName { get; } = functionName;
+  public override string Mnemonic => $"x86.lea_func {Dest.ToString().ToLower()}, [{FunctionName}]";
 }
 
 // MOV [baseReg+disp], srcReg - store through register-indirect addressing

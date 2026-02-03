@@ -353,6 +353,22 @@ public class StdLoadF64Op(string varName) : StandardOp {
   public override List<StdValue> ReadValues => [];
 }
 
+public class StdStorePtrOp(StdPtr value, string varName) : StandardOp, IStoreOp {
+  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public StdPtr Value { get; } = value;
+  public string VarName { get; } = varName;
+  public MlirType StoredType => MlirType.I64; // Function pointers are 64-bit
+  public override List<StdValue> ReadValues => [Value];
+}
+
+public class StdLoadPtrOp(string varName) : StandardOp {
+  public override string Mnemonic => $"memref.load {VarName} : ptr";
+  public string VarName { get; } = varName;
+  public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+}
+
 // === Control Flow ===
 
 public class StdCondBrOp(StdBool condition, string thenBlock, string elseBlock) : StandardOp {
@@ -390,6 +406,28 @@ public class StdCallOp(string callee, List<StdValue> args, StdValue? result = nu
   public override IReadOnlyList<string> PrintableOperands =>
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
+}
+
+// Gets the address of a function (function reference/pointer)
+public class StdFuncRefOp(string functionName) : StandardOp {
+  public override string Mnemonic => $"func.ref @{FunctionName}";
+  public string FunctionName { get; } = functionName;
+  public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+}
+
+// Calls a function indirectly through a function pointer
+public class StdIndirectCallOp(StdValue callee, List<StdValue> args, StdValue? result = null) : StandardOp {
+  public override string Mnemonic => "func.indirect_call";
+  public StdValue Callee { get; } = callee;
+  public List<StdValue> Args { get; } = args;
+  public StdValue? Result { get; } = result;
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString()] : [];
+  public override IReadOnlyList<string> PrintableOperands =>
+    [Callee.ToString(), .. Args.Select(a => a.ToString())];
+  public override List<StdValue> ReadValues => [Callee, .. Args];
 }
 
 public class StdReturnOp(StdValue? value = null) : StandardOp {

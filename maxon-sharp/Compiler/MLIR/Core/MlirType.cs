@@ -86,3 +86,14 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
 
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }
+
+public class MlirFunctionType(List<MlirType> parameterTypes, MlirType? returnType) : MlirType(FormatName(parameterTypes, returnType), 8) {
+  public List<MlirType> ParameterTypes { get; } = parameterTypes;
+  public MlirType? ReturnType { get; } = returnType;
+
+  private static string FormatName(List<MlirType> parameterTypes, MlirType? returnType) {
+    var paramsStr = string.Join(", ", parameterTypes.Select(t => t.Name));
+    var returnStr = returnType != null ? $" returns {returnType.Name}" : "";
+    return $"fn({paramsStr}){returnStr}";
+  }
+}

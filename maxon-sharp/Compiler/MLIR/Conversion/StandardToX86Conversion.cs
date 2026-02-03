@@ -292,6 +292,14 @@ public static class StandardToX86Conversion {
             regManager.EmitLoadFromStack(loadBoolOp.Result, varOffsets[loadBoolOp.VarName], 1, x86Block);
             break;
 
+          case StdStorePtrOp storePtrOp:
+            regManager.EmitStoreToStack(storePtrOp.Value, varOffsets[storePtrOp.VarName], 8, x86Block);
+            break;
+
+          case StdLoadPtrOp loadPtrOp:
+            regManager.EmitLoadFromStack(loadPtrOp.Result, varOffsets[loadPtrOp.VarName], 8, x86Block);
+            break;
+
           case StdCmpI64Op cmpI64Op:
             regManager.EmitIntegerCompare(cmpI64Op.Lhs, cmpI64Op.Rhs, x86Block);
             lastCmpResult = cmpI64Op.Result;
@@ -430,6 +438,18 @@ public static class StandardToX86Conversion {
           case StdMemCopyOp memCopyOp: {
             // Copy byteCount bytes from src to dst using rep movsb
             regManager.EmitMemCopy(memCopyOp.SrcPtr, memCopyOp.DstPtr, memCopyOp.ByteCount, x86Block);
+            break;
+          }
+
+          case StdFuncRefOp funcRefOp: {
+            // Load the address of a function (LEA RIP-relative to function)
+            regManager.EmitFuncRef(funcRefOp.FunctionName, funcRefOp.Result, x86Block);
+            break;
+          }
+
+          case StdIndirectCallOp indirectCallOp: {
+            // Call through a function pointer
+            regManager.EmitIndirectCall(indirectCallOp.Callee, indirectCallOp.Args, indirectCallOp.Result, x86Block);
             break;
           }
 

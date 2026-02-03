@@ -427,18 +427,30 @@ public class RegisterManager {
   private static readonly X86Register[] CallConvRegs = [X86Register.Ecx, X86Register.Edx, X86Register.R8, X86Register.R9];
 
   /// <summary>
-  /// Emit a function call, placing arguments in calling convention registers
-  /// (and on the stack for 5th+ args), invalidating caller-saved registers,
-  /// and recording the result (if any) in Eax.
+  /// Shared implementation for direct and indirect calls.
+  /// Handles argument placement, caller-saved spilling, GPR arg shuffling,
+  /// stack cleanup, register invalidation, and result assignment.
   /// </summary>
-  public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
+  /// <param name="args">Call arguments.</param>
+  /// <param name="result">Optional result value.</param>
+  /// <param name="block">Target X86 block.</param>
+  /// <param name="spillProtect">Values to protect from spilling (args, and optionally the callee).</param>
+  /// <param name="preGprPlacement">Optional callback invoked after GPR arg snapshot but before
+  /// placement. Used by indirect calls to secure the callee in a non-arg register.</param>
+  /// <param name="emitCallOp">Callback invoked after GPR arg placement; returns the call op to emit.</param>
+  private void EmitCallShared(
+      List<StdValue> args,
+      StdValue? result,
+      MlirBlock<X86Op> block,
+      HashSet<StdValue> spillProtect,
+      Action? preGprPlacement,
+      Func<X86Op> emitCallOp) {
     int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
     int stackArgCount = args.Count - regArgCount;
 
     // Spill caller-saved registers that hold live values without a stack home.
     // This must happen before argument placement overwrites those registers.
-    var argSet = new HashSet<StdValue>(args);
-    SpillCallerSavedRegisters(block, argSet);
+    SpillCallerSavedRegisters(block, spillProtect);
 
     // Allocate stack space for overflow args (aligned to 16 bytes)
     int stackArgBytes = stackArgCount > 0 ? ((stackArgCount * 8 + 15) & ~15) : 0;
@@ -480,11 +492,14 @@ public class RegisterManager {
         throw new InvalidOperationException($"RegisterManager: call arg %{args[i].Id} has no register and no stack home");
     }
 
+    // For indirect calls, secure the callee in a non-arg register before
+    // GPR placement overwrites arg registers.
+    preGprPlacement?.Invoke();
+
     // Move GPR args to their target calling convention registers.
     // We track the actual current physical state of registers throughout
     // the placement process.
     var placed = new bool[regArgCount];
-    // Mark float args as already placed
     for (int i = 0; i < regArgCount; i++) {
       if (args[i] is StdF64) placed[i] = true;
     }
@@ -531,7 +546,6 @@ public class RegisterManager {
     foreach (int i in gprArgs) {
       if (placed[i]) continue;
       block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, targetRegs[i]));
-      // Update the other arg that was in the target register
       foreach (int j in gprArgs) {
         if (j != i && SamePhysicalRegister(argSources[j], targetRegs[i])) {
           argSources[j] = argSources[i];
@@ -541,7 +555,7 @@ public class RegisterManager {
       placed[i] = true;
     }
 
-    block.AddOp(new X86CallDirectOp(callee));
+    block.AddOp(emitCallOp());
 
     // Clean up stack args
     if (stackArgBytes > 0)
@@ -560,6 +574,20 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit a function call, placing arguments in calling convention registers
+  /// (and on the stack for 5th+ args), invalidating caller-saved registers,
+  /// and recording the result (if any) in Eax.
+  /// </summary>
+  public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
+    EmitCallShared(
+      args, result, block,
+      spillProtect: [.. args],
+      preGprPlacement: null,
+      emitCallOp: () => new X86CallDirectOp(callee)
+    );
+  }
+
+  /// <summary>
   /// Emit a try-call: same as EmitCall but also captures RDX as the error flag.
   /// RDX must be captured before InvalidateCallerSavedRegisters clobbers it.
   /// </summary>
@@ -571,6 +599,35 @@ public class RegisterManager {
     // Assign(Eax, result) doesn't touch RDX, RDX still holds the callee's value.
     // Re-assign it now.
     Assign(X86Register.Edx, errorFlag);
+  }
+
+  /// <summary>
+  /// Emit a function reference (get address of a function).
+  /// Uses LEA with RIP-relative addressing to get the function's address.
+  /// </summary>
+  public void EmitFuncRef(string functionName, StdValue result, MlirBlock<X86Op> block) {
+    var reg = AllocateRegister(result, block);
+    block.AddOp(new X86LeaFuncAddrOp(reg, functionName));
+  }
+
+  /// <summary>
+  /// Emit an indirect call through a function pointer.
+  /// </summary>
+  public void EmitIndirectCall(StdValue callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
+    X86Register calleeReg = default;
+    EmitCallShared(
+      args, result, block,
+      spillProtect: [.. args, callee],
+      preGprPlacement: () => {
+        // Ensure callee is in a register not used for arg passing
+        calleeReg = EnsureInRegister(callee, block);
+        if (Array.Exists(CallConvRegs, r => SamePhysicalRegister(r, calleeReg))) {
+          block.AddOp(new X86MovRegRegOp(X86Register.R10, calleeReg));
+          calleeReg = X86Register.R10;
+        }
+      },
+      emitCallOp: () => new X86CallIndirectOp(calleeReg)
+    );
   }
 
   /// <summary>

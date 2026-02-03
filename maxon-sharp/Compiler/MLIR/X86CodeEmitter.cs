@@ -34,6 +34,9 @@ public class X86CodeEmitter {
   // Global names: name -> offset within data section
   private readonly Dictionary<string, int> _globalLabels = [];
 
+  // Function address fixups: code offset -> function name (for LEA of function addresses)
+  private readonly List<(int offset, string funcName)> _funcAddrFixups = [];
+
   // Chkstk call sites for patching
   private readonly List<int> _chkstkCallSites = [];
 
@@ -146,6 +149,9 @@ public class X86CodeEmitter {
         _relCallFixups.Add((_code.Count, call.Target));
         EmitDword(0); // placeholder, patched by ResolveLabels
         break;
+      case X86CallIndirectOp callIndirect:
+        EmitCallIndirect(callIndirect.Target);
+        break;
       case X86MovMemRegOp movMem:
         EmitMovMemReg(movMem.Displacement, movMem.Src, movMem.SizeInBytes);
         break;
@@ -232,6 +238,9 @@ public class X86CodeEmitter {
         break;
       case X86LeaRipRelOp leaRip:
         EmitLeaRegRipRel(leaRip.Dest, leaRip.RdataLabel);
+        break;
+      case X86LeaFuncAddrOp leaFunc:
+        EmitLeaFuncAddr(leaFunc.Dest, leaFunc.FunctionName);
         break;
       case X86MovIndirectMemRegOp movInd:
         EmitMovIndirectMemReg(movInd.BaseReg, movInd.Displacement, movInd.Src);
@@ -416,6 +425,13 @@ public class X86CodeEmitter {
         throw new InvalidOperationException($"Unresolved jump target: {target}");
       }
       var rel = targetOffset - (offset + 4);
+      PatchDword(offset, rel);
+    }
+    foreach (var (offset, funcName) in _funcAddrFixups) {
+      if (!_labels.TryGetValue(funcName, out var funcOffset)) {
+        throw new InvalidOperationException($"Unresolved function address: {funcName}");
+      }
+      var rel = funcOffset - (offset + 4);
       PatchDword(offset, rel);
     }
   }
@@ -839,6 +855,17 @@ public class X86CodeEmitter {
     EmitByte((byte)(0xC0 | (RegCode(dest) << 3) | RegCode(src)));
   }
 
+  private void EmitCallIndirect(X86Register target) {
+    RequireGpr(target, nameof(EmitCallIndirect));
+    // CALL r/m64: FF /2 (call near, absolute indirect)
+    // ModR/M byte: 11 010 rrr (mod=11 for register, /2=010, r/m=register code)
+    byte rex = 0x40;
+    if (NeedsRex(target)) rex |= 0x01; // REX.B for extended register
+    if (rex != 0x40) EmitByte(rex);
+    EmitByte(0xFF);
+    EmitByte((byte)(0xD0 | RegCode(target))); // 11 010 rrr = 0xD0 | reg
+  }
+
   private void EmitIdivReg(X86Register divisor) {
     RequireGpr(divisor, nameof(EmitIdivReg));
     // IDIV r/m64: REX.W + F7 /7 (REX.W promotes 32-bit register names)
@@ -1158,6 +1185,19 @@ public class X86CodeEmitter {
     EmitByte(0x8D);
     EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
     _rdataFixups.Add((_code.Count, rdataLabel));
+    EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  private void EmitLeaFuncAddr(X86Register dest, string functionName) {
+    RequireGpr(dest, nameof(EmitLeaFuncAddr));
+    // LEA r64, [rip+disp32]: REX.W + 8D /r (mod=00, r/m=101 for RIP-relative)
+    // Uses function address fixup instead of rdata fixup
+    byte rex = 0x48; // REX.W
+    if (NeedsRex(dest)) rex |= 0x04; // REX.R
+    EmitByte(rex);
+    EmitByte(0x8D);
+    EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
+    _funcAddrFixups.Add((_code.Count, functionName));
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 

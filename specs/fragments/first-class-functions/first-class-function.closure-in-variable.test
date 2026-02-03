@@ -1,0 +1,31 @@
+// Test: first-class-function.closure-in-variable
+function main() returns int
+  var f = (x int) gives x * 5
+  return f(8)
+end 'main'
+---
+ExitCode: 40
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.lea_func eax, [__closure_0]
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 8
+    x86.call eax
+    x86.epilogue
+    x86.ret
+  }
+  func @__closure_0(x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 5
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---
