@@ -398,6 +398,52 @@ public class X86CodeEmitter {
     EmitPopReg(X86Register.Rbp);
     _code[jzPatchPos] = (byte)(_code.Count - (jzPatchPos + 1));
     EmitByte(0xC3); // ret
+
+    // maxon_write_stdout(cstr_ptr_in_rcx) -> bytes_written_in_rax
+    // Stack layout: [rbp-8]=cstr_ptr, [rbp-16]=length, [rbp-24]=handle, [rbp-32]=bytesWritten
+    DefineLabel("maxon_write_stdout");
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x40); // shadow space + locals
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = cstr_ptr
+    // strlen: RDX = ptr copy, RAX = counter
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx); // RDX = ptr
+    EmitMovRegImm(X86Register.Rax, 0); // RAX = 0 (counter)
+    int strlenLoopPos = _code.Count;
+    // movzx ecx, byte ptr [rdx+rax]: 0F B6 0C 02
+    EmitBytes(0x0F, 0xB6, 0x0C, 0x02);
+    // TEST CL, CL
+    EmitBytes(0x84, 0xC9);
+    // JZ done_strlen
+    EmitByte(0x74);
+    int jzStrlenDone = _code.Count;
+    EmitByte(0x00); // placeholder
+    // INC RAX
+    EmitBytes(0x48, 0xFF, 0xC0);
+    // JMP strlen_loop
+    EmitByte(0xEB);
+    EmitByte((byte)((strlenLoopPos - _code.Count) - 1));
+    // done_strlen:
+    _code[jzStrlenDone] = (byte)(_code.Count - (jzStrlenDone + 1));
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = length
+    // GetStdHandle(STD_OUTPUT_HANDLE = -11)
+    EmitMovRegImm(X86Register.Rcx, -11);
+    EmitCallImport("kernel32.dll", "GetStdHandle");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = handle
+    // WriteFile(handle, buffer, nNumberOfBytesToWrite, &lpNumberOfBytesWritten, lpOverlapped)
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);  // arg1: handle
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);  // arg2: buffer
+    EmitMovRegMem(X86Register.R8, -0x10, 8);   // arg3: length
+    // arg4: LEA R9, [rbp-0x20] (&bytesWritten)
+    EmitBytes(0x4C, 0x8D, 0x4D, 0xE0);
+    // arg5: lpOverlapped = NULL at [rsp+0x20]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "WriteFile");
+    // Return bytes written
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
   }
 
   private void EmitCallImport(string dllName, string functionName) {

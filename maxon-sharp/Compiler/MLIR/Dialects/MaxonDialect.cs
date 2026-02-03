@@ -710,6 +710,15 @@ public class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// Write a C string to stdout, returns number of bytes written
+public class MaxonCStringWriteStdoutOp(MaxonValue cstrPtr) : MaxonOp {
+  public override string Mnemonic => "maxon.cstring_write_stdout";
+  public MaxonValue CstrPtr { get; } = cstrPtr;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
 // Create a Character from bytes within a managed buffer
 public class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonValue len) : MaxonOp {
   public override string Mnemonic => "maxon.make_char_from_bytes";

@@ -138,7 +138,8 @@ public static class StdlibLoader {
     "helpers/string/_utf16.maxon",
     "String.maxon",
     "helpers/string/_views.maxon",
-    "Character.maxon"
+    "Character.maxon",
+    "Print.maxon"
   ];
 
   public static string? FindStdlibPath() {

@@ -590,6 +590,12 @@ public static class MaxonToStandardConversion {
             case MaxonManagedMemByteSetOp byteSetOp:
               LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
+            case MaxonManagedToCStringOp toCStringOp:
+              LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
+            case MaxonCStringWriteStdoutOp writeStdoutOp:
+              LowerCStringWriteStdout(writeStdoutOp, newBlock, valueMap);
+              break;
             case MaxonStringLiteralOp stringLitOp:
               LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result);
               break;
@@ -1450,6 +1456,36 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// __managed_memory_to_cstring(managed): return the buffer pointer from a managed memory struct.
+  /// The buffer already points to valid UTF-8 data (null-terminated for SSO/rdata strings).
+  /// </summary>
+  private static void LowerManagedToCString(
+    MaxonManagedToCStringOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+    var managedVarName = ResolveManagedVarName(op.Managed, structVarNames);
+    var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+    valueMap[op.Result] = buffer;
+  }
+
+  /// <summary>
+  /// __cstring_write_stdout(cstrPtr): write a null-terminated C string to stdout.
+  /// Calls maxon_write_stdout runtime function which uses GetStdHandle + WriteFile.
+  /// Returns the number of bytes written.
+  /// </summary>
+  private static void LowerCStringWriteStdout(
+    MaxonCStringWriteStdoutOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap) {
+    var cstrPtr = (StdI64)valueMap[op.CstrPtr];
+    var result = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_write_stdout", [cstrPtr], result));
+    valueMap[op.Result] = result;
+  }
+
+  /// <summary>
   /// Emits rdata storage and __ManagedMemory field initialization for a UTF-8 literal value.
   /// Stores bytes in .rdata, emits LEA + buffer/length/capacity fields.
   /// </summary>
@@ -1463,9 +1499,12 @@ public static class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     MlirModule<StandardOp> result) {
     var utf8Bytes = System.Text.Encoding.UTF8.GetBytes(value);
+    // Append null terminator so cstr() can return a valid C string pointer directly
+    var nullTerminated = new byte[utf8Bytes.Length + 1];
+    Array.Copy(utf8Bytes, nullTerminated, utf8Bytes.Length);
     var rdataLabel = $"__{rdataPrefix}_{resultId}";
 
-    result.RdataEntries.Add((rdataLabel, utf8Bytes, 1));
+    result.RdataEntries.Add((rdataLabel, nullTerminated, 1));
 
     var leaRdataOp = new StdLeaRdataOp(rdataLabel);
     block.AddOp(leaRdataOp);

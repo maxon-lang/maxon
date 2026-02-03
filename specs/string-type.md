@@ -224,7 +224,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: print-string -->
+<!-- test: print-string -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -239,7 +239,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: print-literal -->
+<!-- test: print-literal -->
 ```maxon
 function main() returns int
   print("Hello, World!")

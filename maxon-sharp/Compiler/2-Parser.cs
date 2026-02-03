@@ -2652,6 +2652,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return op.Result;
       }
 
+      case "__cstring_write_stdout": {
+        var cstrPtr = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonCStringWriteStdoutOp(cstrPtr);
+        _currentBlock!.AddOp(op);
+        return op.Result;
+      }
+
       case "__make_char_from_bytes": {
         var managed = ResolveExprValue(ParseExpression());
         Expect(TokenType.Comma);
