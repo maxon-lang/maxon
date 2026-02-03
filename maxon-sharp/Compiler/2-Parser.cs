@@ -1850,6 +1850,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return;
       }
 
+      if (afterIdent.Type == TokenType.Dot) {
+        // Nested field access chain: o.inner.x = ... or o.inner.method(...)
+        // Scan ahead to find what terminates the chain
+        if (IsNestedFieldAssignment()) {
+          ParseFieldAssignment();
+          return;
+        }
+      }
+
       if (afterIdent.Type == TokenType.LeftParen) {
         // Check for static/qualified function call: Type.method(...)
         if (_currentModule!.Functions.Any(f => f.Name == qualifiedName)) {
@@ -1873,6 +1882,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ParseFieldAssignment();
   }
 
+  private bool IsNestedFieldAssignment() {
+    // Scan from _pos forward through identifier.identifier.identifier... pattern
+    // Returns true if the chain ends with '='
+    var i = _pos;
+    while (i < _tokens.Count) {
+      if (_tokens[i].Type != TokenType.Identifier) return false;
+      i++;
+      if (i >= _tokens.Count) return false;
+      if (_tokens[i].Type == TokenType.Equals) return true;
+      if (_tokens[i].Type != TokenType.Dot) return false;
+      i++;
+    }
+    return false;
+  }
+
   private void ParseSelfDotStatement() {
     var selfToken = Advance(); // consume 'self'
     Advance(); // consume '.'
@@ -1885,7 +1909,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.Equals)) {
       // self.field = value
       Advance(); // consume '='
-      EmitFieldAssignment("self", selfInfo, fieldToken, selfToken);
+      var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
+      EmitFieldAssignment(selfInfo.StructTypeName!, selfVal, fieldToken, selfToken);
     } else if (Check(TokenType.LeftParen)) {
       // self.method(...)
       var methodName = $"{selfInfo.StructTypeName}.{fieldToken.Value}";
@@ -2300,7 +2325,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var name = nameToken.Value;
     Expect(TokenType.Dot);
     var fieldToken = Expect(TokenType.Identifier);
-    Expect(TokenType.Equals);
 
     if (!_variables.TryGetValue(name, out var varInfo)) {
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
@@ -2312,11 +2336,48 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         nameToken.Line, nameToken.Column);
     }
 
-    EmitFieldAssignment(name, varInfo, fieldToken, nameToken);
+    // Parse chain of intermediate field accesses: o.inner.inner2...fieldN = value
+    // Emit MaxonFieldAccessOp for each intermediate struct-typed field,
+    // then MaxonFieldAssignOp for the final field.
+    var currentStructTypeName = varInfo.StructTypeName!;
+    var currentValue = ResolveExprValue(new ExprResult.VarRef(name, varInfo));
+
+    while (Check(TokenType.Dot)) {
+      // This is an intermediate field - it must be struct-typed so we can continue the chain
+      var structType = (MlirStructType)_typeRegistry[currentStructTypeName];
+      var field = structType.GetField(fieldToken.Value)
+        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+          $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
+          fieldToken.Line, fieldToken.Column);
+
+      if (!field.IsExported && _currentTypeName != structType.Name) {
+        throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess,
+          $"cannot access unexported field: '{fieldToken.Value}' outside of type '{structType.Name}'",
+          fieldToken.Line, fieldToken.Column);
+      }
+
+      var fieldKind = field.Type.ToValueKind();
+      var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
+      var accessOp = new MaxonFieldAccessOp(currentValue, currentStructTypeName, fieldToken.Value, fieldKind, fieldStructName);
+      _currentBlock!.AddOp(accessOp);
+      currentValue = accessOp.Result;
+      currentStructTypeName = fieldStructName
+        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+          $"Cannot access nested field on non-struct field '{fieldToken.Value}'",
+          fieldToken.Line, fieldToken.Column);
+
+      Advance(); // consume '.'
+      fieldToken = Expect(TokenType.Identifier);
+    }
+
+    Expect(TokenType.Equals);
+
+    // Now emit the final field assignment
+    EmitFieldAssignment(currentStructTypeName, currentValue, fieldToken, nameToken);
   }
 
-  private void EmitFieldAssignment(string varName, VarInfo varInfo, Token fieldToken, Token errorToken) {
-    var structType = (MlirStructType)_typeRegistry[varInfo.StructTypeName!];
+  private void EmitFieldAssignment(string structTypeName, MaxonValue structVal, Token fieldToken, Token errorToken) {
+    var structType = (MlirStructType)_typeRegistry[structTypeName];
     var field = structType.GetField(fieldToken.Value)
       ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
         $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
@@ -2335,8 +2396,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var newValue = ResolveExprValue(ParseExpression());
-    var structVal = ResolveExprValue(new ExprResult.VarRef(varName, varInfo));
-    _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, varInfo.StructTypeName!, fieldToken.Value, newValue));
+    _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, structTypeName, fieldToken.Value, newValue));
   }
 
   private void ParseCallStatement() {

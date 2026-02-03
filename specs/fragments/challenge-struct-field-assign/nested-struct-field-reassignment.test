@@ -1,0 +1,39 @@
+// Test: nested-struct-field-reassignment
+type Inner
+  export var x int
+end 'Inner'
+
+type Outer
+  export var inner Inner
+end 'Outer'
+
+function main() returns int
+  var i = Inner{x: 10}
+  var o = Outer{inner: i}
+  o.inner.x = 42
+  return o.inner.x
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-24]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 42
+    x86.mov [rbp-32], esi
+    x86.mov edi, [rbp-32]
+    x86.mov eax, edi
+    x86.epilogue
+    x86.ret
+  }
+}
+---

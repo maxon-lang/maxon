@@ -46,7 +46,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E009: specs/fragments/challenge-struct-field-assign.immutable-field-assign-error.1.test:9:5: cannot assign to immutable variable: 'id'
+error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assign-error.test:9:3: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: nested-struct-field-reassignment -->
