@@ -444,6 +444,112 @@ public class X86CodeEmitter {
     EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
     EmitPopReg(X86Register.Rbp);
     EmitByte(0xC3); // ret
+
+    // maxon_i64_to_string(value_in_rcx, buffer_ptr_in_rdx) -> length_in_rax
+    // Converts a signed 64-bit integer to its decimal string representation.
+    // Writes into caller-provided buffer (must be >= 21 bytes). Returns byte count.
+    // Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=write_pos (end of buffer working backwards)
+    DefineLabel("maxon_i64_to_string");
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x30);
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = value
+    EmitMovMemReg(-0x10, X86Register.Rdx, 8); // [rbp-16] = buffer
+
+    // Special case: value == 0
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitByte(0x75); // JNZ not_zero
+    int jnzNotZero = _code.Count;
+    EmitByte(0x00); // placeholder
+    // Write '0' to buffer[0], null to buffer[1]
+    EmitBytes(0xC6, 0x02, 0x30); // MOV byte [rdx], '0'
+    EmitBytes(0xC6, 0x42, 0x01, 0x00); // MOV byte [rdx+1], 0
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitByte(0xEB); // JMP epilogue
+    int jmpZeroEpilogue = _code.Count;
+    EmitByte(0x00); // placeholder
+
+    // not_zero: check for negative
+    _code[jnzNotZero] = (byte)(_code.Count - (jnzNotZero + 1));
+    // R8 = 0 (is_negative flag)
+    EmitBytes(0x4D, 0x31, 0xC0); // XOR r8, r8
+    // TEST rcx, rcx / JS negative
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitByte(0x79); // JNS positive
+    int jnsPositive = _code.Count;
+    EmitByte(0x00); // placeholder
+    // Negate: rcx = -rcx
+    EmitBytes(0x48, 0xF7, 0xD9); // NEG rcx
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // update stored value
+    // R8 = 1 (is_negative)
+    EmitMovRegImm(X86Register.R8, 1);
+
+    // positive: R9 = buffer + 20 (write position, work backwards from end)
+    _code[jnsPositive] = (byte)(_code.Count - (jnsPositive + 1));
+    EmitMovRegReg(X86Register.R9, X86Register.Rdx); // R9 = buffer
+    EmitAddRegImm(X86Register.R9, 20); // R9 = buffer + 20
+    EmitBytes(0x41, 0xC6, 0x01, 0x00); // MOV byte [r9], 0 (null terminator)
+
+    // Save is_negative flag to stack
+    EmitMovMemReg(-0x18, X86Register.R8, 8); // [rbp-24] = is_negative
+
+    // digit_loop: divide rcx by 10, write remainder as digit
+    int digitLoopPos = _code.Count;
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9 (move write position back)
+    // RAX = value (for IDIV), RDX:RAX = sign-extended value
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = value
+    EmitMovRegImm(X86Register.Rcx, 10);
+    // Zero RDX before DIV (unsigned division since we already handled sign)
+    EmitBytes(0x48, 0x31, 0xD2); // XOR rdx, rdx
+    EmitBytes(0x48, 0xF7, 0xF1); // DIV rcx (RAX = quotient, RDX = remainder)
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // store quotient back
+    // Convert remainder to ASCII digit: RDX + '0'
+    EmitAddRegImm(X86Register.Rdx, 0x30); // RDX += '0'
+    // Write digit: MOV byte [r9], dl
+    EmitBytes(0x41, 0x88, 0x11); // MOV byte [r9], dl
+    // Check if quotient is zero
+    EmitBytes(0x48, 0x83, 0x7D, 0xF8, 0x00); // CMP qword [rbp-8], 0
+    EmitByte(0x75); // JNZ digit_loop
+    EmitByte((byte)((digitLoopPos - _code.Count) - 1));
+
+    // If negative, prepend '-'
+    EmitMovRegMem(X86Register.R8, -0x18, 8); // R8 = is_negative
+    EmitBytes(0x4D, 0x85, 0xC0); // TEST r8, r8
+    EmitByte(0x74); // JZ no_sign
+    int jzNoSign = _code.Count;
+    EmitByte(0x00); // placeholder
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+    EmitBytes(0x41, 0xC6, 0x01, 0x2D); // MOV byte [r9], '-'
+
+    // no_sign: copy from R9 to buffer start, compute length
+    _code[jzNoSign] = (byte)(_code.Count - (jzNoSign + 1));
+    // Length = (buffer + 20) - R9
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitAddRegImm(X86Register.Rax, 20);
+    EmitBytes(0x4C, 0x29, 0xC8); // SUB rax, r9 => RAX = length
+
+    // Now copy the digits from R9 to buffer start
+    // RSI = R9 (src), RDI = buffer (dst), RCX = length
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // save length to [rbp-24]
+    EmitBytes(0x4C, 0x89, 0xCE); // MOV rsi, r9
+    EmitMovRegMem(X86Register.Rdi, -0x10, 8); // RDI = buffer
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = length
+    EmitBytes(0xF3, 0xA4); // REP MOVSB
+
+    // Null-terminate at buffer[length]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = length
+    EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx
+    EmitBytes(0xC6, 0x00, 0x00); // MOV byte [rax], 0
+
+    // Return length
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+
+    // epilogue (zero and non-zero paths converge here)
+    _code[jmpZeroEpilogue] = (byte)(_code.Count - (jmpZeroEpilogue + 1));
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
   }
 
   private void EmitCallImport(string dllName, string functionName) {

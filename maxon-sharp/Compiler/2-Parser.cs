@@ -4221,7 +4221,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var exprText = text[exprStart..pos];
         if (pos < text.Length) pos++; // skip closing '}'
 
-        var exprValue = ParseInterpolationExpression(exprText, token);
+        var exprValue = ParseInterpolationExpression(exprText);
         parts.Add((false, null, exprValue));
       } else {
         literalBuf.Append(text[pos]);
@@ -4246,7 +4246,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return interpOp.Result;
   }
 
-  private MaxonValue ParseInterpolationExpression(string exprText, Token contextToken) {
+  private MaxonValue ParseInterpolationExpression(string exprText) {
     var lexer = new Lexer(exprText);
     var exprTokens = lexer.Tokenize();
 

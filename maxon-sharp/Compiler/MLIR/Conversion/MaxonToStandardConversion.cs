@@ -109,8 +109,7 @@ public static class MaxonToStandardConversion {
         if (retStructType != null && !sretParamEmitted) {
           var sretParam = new StdI64(MlirContext.Current.NextId());
           newBlock.AddOp(new StdParamOp(0, "__sret", sretParam));
-          newBlock.AddOp(new StdStoreI64Op(sretParam, "__sret"));
-          varTypes["__sret"] = "i64";
+          EmitStore(newBlock, sretParam, "__sret", varTypes);
           sretParamEmitted = true;
         }
 
@@ -132,8 +131,7 @@ public static class MaxonToStandardConversion {
                 int selfFlatIdx = retStructType != null ? 1 : 0;
                 var selfPtrVal = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(selfFlatIdx, "__self_ptr", selfPtrVal));
-                newBlock.AddOp(new StdStoreI64Op(selfPtrVal, "__self_ptr"));
-                varTypes["__self_ptr"] = "i64";
+                EmitStore(newBlock, selfPtrVal, "__self_ptr", varTypes);
                 // Load each field from the self pointer into named variables
                 LoadStructFieldsFromPointer(newBlock, selfPtrVal, "self", selfStructType!, varTypes);
                 structVarNames[structParamOp.Result.Id] = "self";
@@ -263,13 +261,9 @@ public static class MaxonToStandardConversion {
                     // COW: allocate heap buffer and copy rdata contents into it
                     // Store rdata ptr and reload after call (call clobbers registers)
                     var rdataPtrVar = $"__cow_rdata_{constArrayInfo.RdataLabel}";
-                    newBlock.AddOp(new StdStoreI64Op(rdataPtrOp.Result, rdataPtrVar));
-                    varTypes[rdataPtrVar] = "i64";
+                    EmitStore(newBlock, rdataPtrOp.Result, rdataPtrVar, varTypes);
 
-                    var allocSizeOp = new StdConstI64Op(rdataBytes.Length);
-                    newBlock.AddOp(allocSizeOp);
-                    var heapBuf = new StdI64(MlirContext.Current.NextId());
-                    newBlock.AddOp(new StdCallRuntimeOp("maxon_alloc", [allocSizeOp.Result], heapBuf));
+                    var heapBuf = EmitAlloc(newBlock, rdataBytes.Length);
 
                     // Reload rdata ptr and byte count for memcopy (clobbered by call)
                     var rdataPtrReload = (StdI64)EmitLoad(newBlock, rdataPtrVar, varTypes);
@@ -603,7 +597,7 @@ public static class MaxonToStandardConversion {
               LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result);
               break;
             case MaxonStringInterpOp interpOp:
-              LowerStringInterp(interpOp, newBlock, varTypes, structVarNames, result);
+              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result);
               break;
             case MaxonManagedMemConcatOp concatOp:
               LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames);
@@ -779,8 +773,7 @@ public static class MaxonToStandardConversion {
     }
 
     valueMap[tryCallOp.ErrorFlag] = stdTryCall.ErrorFlag;
-    block.AddOp(new StdStoreI64Op(stdTryCall.ErrorFlag, "__error_flag"));
-    varTypes["__error_flag"] = "i64";
+    EmitStore(block, stdTryCall.ErrorFlag, "__error_flag", varTypes);
 
     ReadBackSelfFields(tryCallOp.Args, calleeFunc, selfBufName, block, varTypes,
       structVarNames, isStructInstanceMethod, selfStructType);
@@ -942,6 +935,18 @@ public static class MaxonToStandardConversion {
       default:
         throw new InvalidOperationException($"Unsupported StdValue type for store: {value.GetType().Name}");
     }
+  }
+
+  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, StdI64 size) {
+    var result = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_alloc", [size], result));
+    return result;
+  }
+
+  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, long constSize) {
+    var sizeOp = new StdConstI64Op(constSize);
+    block.AddOp(sizeOp);
+    return EmitAlloc(block, sizeOp.Result);
   }
 
   private static StdValue EmitLoad(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes) {
@@ -1310,9 +1315,7 @@ public static class MaxonToStandardConversion {
     block.AddOp(sizeOp);
     var byteSizeOp = new StdMulI64Op(count, sizeOp.Result);
     block.AddOp(byteSizeOp);
-    // Call maxon_alloc(byteSize)
-    var allocResult = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("maxon_alloc", [byteSizeOp.Result], allocResult));
+    var allocResult = EmitAlloc(block, byteSizeOp.Result);
     // Store as a __ManagedMemory struct: buffer=ptr, length=count, capacity=count
     var tempName = $"__managed_create_{op.Result.Id}";
     EmitStore(block, allocResult, $"{tempName}.buffer", varTypes);
@@ -1536,16 +1539,12 @@ public static class MaxonToStandardConversion {
     var lengthVar = $"{tempName}._managed.length";
     var capacityVar = $"{tempName}._managed.capacity";
 
-    block.AddOp(new StdStoreI64Op(bufferPtr, bufferVar));
-    varTypes[bufferVar] = "i64";
-
-    block.AddOp(new StdStoreI64Op(lengthVal, lengthVar));
-    varTypes[lengthVar] = "i64";
+    EmitStore(block, bufferPtr, bufferVar, varTypes);
+    EmitStore(block, lengthVal, lengthVar, varTypes);
 
     var capConst = new StdConstI64Op(0);
     block.AddOp(capConst);
-    block.AddOp(new StdStoreI64Op(capConst.Result, capacityVar));
-    varTypes[capacityVar] = "i64";
+    EmitStore(block, capConst.Result, capacityVar, varTypes);
 
     structVarNames[resultId] = tempName;
     return tempName;
@@ -1559,11 +1558,9 @@ public static class MaxonToStandardConversion {
     MlirModule<StandardOp> result) {
     var tempName = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, structVarNames, result);
 
-    var iterPosVar = $"{tempName}._iterPos";
     var iterConst = new StdConstI64Op(0);
     block.AddOp(iterConst);
-    block.AddOp(new StdStoreI64Op(iterConst.Result, iterPosVar));
-    varTypes[iterPosVar] = "i64";
+    EmitStore(block, iterConst.Result, $"{tempName}._iterPos", varTypes);
   }
 
   private static void LowerCharLiteral(
@@ -1578,6 +1575,7 @@ public static class MaxonToStandardConversion {
   private static void LowerStringInterp(
     MaxonStringInterpOp op,
     MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     MlirModule<StandardOp> result) {
@@ -1593,32 +1591,37 @@ public static class MaxonToStandardConversion {
         partInfos.Add(EmitRdataLiteral(LiteralValue!, rdataLabel, block, result));
       } else {
         var exprValue = ExprValue!;
-        var managedVarName = structVarNames.TryGetValue(exprValue.Id, out var name) ? name
-          : throw new InvalidOperationException($"String interpolation: expression value %{exprValue.Id} not found in struct variable names");
 
-        string bufferVar, lengthVar;
-        if (varTypes.ContainsKey($"{managedVarName}._managed.buffer")) {
-          bufferVar = $"{managedVarName}._managed.buffer";
-          lengthVar = $"{managedVarName}._managed.length";
+        if (structVarNames.TryGetValue(exprValue.Id, out var managedVarName)) {
+          // String/struct expression: read buffer and length from managed memory fields
+          string bufferVar, lengthVar;
+          if (varTypes.ContainsKey($"{managedVarName}._managed.buffer")) {
+            bufferVar = $"{managedVarName}._managed.buffer";
+            lengthVar = $"{managedVarName}._managed.length";
+          } else {
+            bufferVar = $"{managedVarName}.buffer";
+            lengthVar = $"{managedVarName}.length";
+          }
+
+          var bufLoad = (StdI64)EmitLoad(block, bufferVar, varTypes);
+          var lenLoad = (StdI64)EmitLoad(block, lengthVar, varTypes);
+
+          partInfos.Add((bufLoad, lenLoad));
+        } else if (exprValue is MaxonInteger) {
+          // Integer expression: convert to string via runtime function
+          partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
         } else {
-          bufferVar = $"{managedVarName}.buffer";
-          lengthVar = $"{managedVarName}.length";
+          throw new InvalidOperationException(
+            $"String interpolation: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
         }
-
-        var bufLoad = (StdI64)EmitLoad(block, bufferVar, varTypes);
-        var lenLoad = (StdI64)EmitLoad(block, lengthVar, varTypes);
-
-        partInfos.Add((bufLoad, lenLoad));
       }
     }
 
     if (partInfos.Count == 0) {
       var tempName = EmitManagedMemoryLiteral("", op.Result.Id, "interp", "interptmp", block, varTypes, structVarNames, result);
-      var iterPosVar = $"{tempName}._iterPos";
       var iterConst = new StdConstI64Op(0);
       block.AddOp(iterConst);
-      block.AddOp(new StdStoreI64Op(iterConst.Result, iterPosVar));
-      varTypes[iterPosVar] = "i64";
+      EmitStore(block, iterConst.Result, $"{tempName}._iterPos", varTypes);
       return;
     }
 
@@ -1643,8 +1646,7 @@ public static class MaxonToStandardConversion {
     var allocSize = new StdAddI64Op(totalLen, oneOp.Result);
     block.AddOp(allocSize);
 
-    var allocResult = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("maxon_alloc", [allocSize.Result], allocResult));
+    var allocResult = EmitAlloc(block, allocSize.Result);
 
     // Store all values to stack variables since rep movsb clobbers RSI, RDI, RCX
     var interpOffsetVar = $"__interp_offset_{op.Result.Id}";
@@ -1652,12 +1654,9 @@ public static class MaxonToStandardConversion {
     var interpTotalLenVar = $"__interp_totallen_{op.Result.Id}";
     var zeroOp = new StdConstI64Op(0);
     block.AddOp(zeroOp);
-    block.AddOp(new StdStoreI64Op(zeroOp.Result, interpOffsetVar));
-    varTypes[interpOffsetVar] = "i64";
-    block.AddOp(new StdStoreI64Op(allocResult, interpBufVar));
-    varTypes[interpBufVar] = "i64";
-    block.AddOp(new StdStoreI64Op(totalLen, interpTotalLenVar));
-    varTypes[interpTotalLenVar] = "i64";
+    EmitStore(block, zeroOp.Result, interpOffsetVar, varTypes);
+    EmitStore(block, allocResult, interpBufVar, varTypes);
+    EmitStore(block, totalLen, interpTotalLenVar, varTypes);
 
     // Store each part's buffer and length to stack variables
     var partBufVars = new string[partInfos.Count];
@@ -1665,10 +1664,8 @@ public static class MaxonToStandardConversion {
     for (int i = 0; i < partInfos.Count; i++) {
       partBufVars[i] = $"__interp_partbuf_{op.Result.Id}_{i}";
       partLenVars[i] = $"__interp_partlen_{op.Result.Id}_{i}";
-      block.AddOp(new StdStoreI64Op(partInfos[i].Buffer, partBufVars[i]));
-      varTypes[partBufVars[i]] = "i64";
-      block.AddOp(new StdStoreI64Op(partInfos[i].Length, partLenVars[i]));
-      varTypes[partLenVars[i]] = "i64";
+      EmitStore(block, partInfos[i].Buffer, partBufVars[i], varTypes);
+      EmitStore(block, partInfos[i].Length, partLenVars[i], varTypes);
     }
 
     for (int i = 0; i < partInfos.Count; i++) {
@@ -1686,30 +1683,46 @@ public static class MaxonToStandardConversion {
       var partLen = (StdI64)EmitLoad(block, partLenVars[i], varTypes);
       var newOffset = new StdAddI64Op(curOff2, partLen);
       block.AddOp(newOffset);
-      block.AddOp(new StdStoreI64Op(newOffset.Result, interpOffsetVar));
+      EmitStore(block, newOffset.Result, interpOffsetVar, varTypes);
     }
 
     // Create String struct - reload from stack variables
     var tempName2 = $"__interptmp_{op.Result.Id}";
 
     var finalBuf = (StdI64)EmitLoad(block, interpBufVar, varTypes);
-    block.AddOp(new StdStoreI64Op(finalBuf, $"{tempName2}._managed.buffer"));
-    varTypes[$"{tempName2}._managed.buffer"] = "i64";
+    EmitStore(block, finalBuf, $"{tempName2}._managed.buffer", varTypes);
 
     var finalLen = (StdI64)EmitLoad(block, interpTotalLenVar, varTypes);
-    block.AddOp(new StdStoreI64Op(finalLen, $"{tempName2}._managed.length"));
-    varTypes[$"{tempName2}._managed.length"] = "i64";
-
-    var finalLen2 = (StdI64)EmitLoad(block, interpTotalLenVar, varTypes);
-    block.AddOp(new StdStoreI64Op(finalLen2, $"{tempName2}._managed.capacity"));
-    varTypes[$"{tempName2}._managed.capacity"] = "i64";
+    EmitStore(block, finalLen, $"{tempName2}._managed.length", varTypes);
+    EmitStore(block, finalLen, $"{tempName2}._managed.capacity", varTypes);
 
     var iterPosConst = new StdConstI64Op(0);
     block.AddOp(iterPosConst);
-    block.AddOp(new StdStoreI64Op(iterPosConst.Result, $"{tempName2}._iterPos"));
-    varTypes[$"{tempName2}._iterPos"] = "i64";
+    EmitStore(block, iterPosConst.Result, $"{tempName2}._iterPos", varTypes);
 
     structVarNames[op.Result.Id] = tempName2;
+  }
+
+  /// <summary>
+  /// Allocates a 21-byte buffer and calls maxon_i64_to_string runtime to convert
+  /// an integer value to its decimal string representation. Returns (buffer, length).
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitI64ToString(
+    StdI64 intValue,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes) {
+
+    var bufResult = EmitAlloc(block, 21);
+
+    // Store buffer pointer so it survives the i64_to_string call
+    var bufVarName = $"__i64tostr_buf_{bufResult.Id}";
+    EmitStore(block, bufResult, bufVarName, varTypes);
+
+    var lenResult = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_i64_to_string", [intValue, bufResult], lenResult));
+
+    var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
+    return (finalBuf, lenResult);
   }
 
   private static void LowerManagedMemConcat(
@@ -1734,8 +1747,7 @@ public static class MaxonToStandardConversion {
     var allocSizeOp = new StdAddI64Op(totalLenOp.Result, oneOp.Result);
     block.AddOp(allocSizeOp);
 
-    var allocResult = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("maxon_alloc", [allocSizeOp.Result], allocResult));
+    var allocResult = EmitAlloc(block, allocSizeOp.Result);
 
     block.AddOp(new StdMemCopyOp(lhsBuf, allocResult, lhsLen));
 

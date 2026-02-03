@@ -270,7 +270,7 @@ end 'main'
 hello world
 ```
 
-<!-- disabled-test: count-method -->
+<!-- test: count-method -->
 ```maxon
 function main() returns int
   var s = "hello"

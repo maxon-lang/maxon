@@ -5,14 +5,10 @@ using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
 namespace MaxonSharp.Lsp;
 
-public class CompletionHandler : CompletionHandlerBase {
-  private readonly LspServer _server;
+public class CompletionHandler(LspServer server) : CompletionHandlerBase {
+  private readonly LspServer _server = server;
 
   private readonly TextDocumentSelector _documentSelector = TextDocumentSelector.ForLanguage("maxon");
-
-  public CompletionHandler(LspServer server) {
-    _server = server;
-  }
 
   public override Task<CompletionList> Handle(CompletionParams request, CancellationToken cancellationToken) {
     var completions = LspServer.GetCompletions(request.TextDocument.Uri, request.Position);
