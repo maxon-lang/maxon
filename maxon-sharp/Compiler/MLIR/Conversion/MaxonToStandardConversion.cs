@@ -1647,8 +1647,8 @@ public static class MaxonToStandardConversion {
           var lenLoad = (StdI64)EmitLoad(block, lengthVar, varTypes);
 
           partInfos.Add((bufLoad, lenLoad));
-        } else if (exprValue is MaxonInteger) {
-          // Integer expression: convert to string via runtime function
+        } else if (exprValue is MaxonInteger or MaxonByte) {
+          // Integer/byte expression: convert to string via runtime function
           partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
         } else {
           throw new InvalidOperationException(

@@ -1,0 +1,108 @@
+// Test: utf16-is-lead-surrogate
+function main() returns int
+  // 0xD83D = 55357 (high surrogate for 😀)
+  if utf16IsLeadSurrogate(55357) 'c1'
+    print("1\n")
+  end 'c1'
+  if utf16IsLeadSurrogate(56832) 'c2'
+    print("0\n")
+  end 'c2'
+  if utf16IsLeadSurrogate(65) 'c3'
+    print("0\n")
+  end 'c3'
+  return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+1
+```
+---
+module {
+  func @main() -> i64 {
+  entry:
+    x86.prologue stack_size=96
+    x86.mov eax, 55357
+    x86.mov rcx, rax
+    x86.call utf16IsLeadSurrogate
+    x86.test eax, eax
+    x86.je main.c1_0.merge
+  c1_0:
+    x86.lea_rdata rax, [__str_2]
+    x86.mov rcx, rax
+    x86.mov edx, 2
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-24], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-32], esi
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [rbp-16]
+    x86.mov r9, [rbp-24]
+    x86.mov eax, [rbp-32]
+    x86.mov rcx, rdi
+    x86.mov rdx, r8
+    x86.mov r8, r9
+    x86.mov r9, rax
+    x86.call print
+    x86.jmp main.c1_0.merge
+  c1_0.merge:
+    x86.mov eax, 56832
+    x86.mov rcx, rax
+    x86.call utf16IsLeadSurrogate
+    x86.test eax, eax
+    x86.je main.c2_1.merge
+  c2_1:
+    x86.lea_rdata rax, [__str_6]
+    x86.mov rcx, rax
+    x86.mov edx, 2
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-56], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-64], esi
+    x86.mov edi, [rbp-40]
+    x86.mov r8, [rbp-48]
+    x86.mov r9, [rbp-56]
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, rdi
+    x86.mov rdx, r8
+    x86.mov r8, r9
+    x86.mov r9, rax
+    x86.call print
+    x86.jmp main.c2_1.merge
+  c2_1.merge:
+    x86.mov eax, 65
+    x86.mov rcx, rax
+    x86.call utf16IsLeadSurrogate
+    x86.test eax, eax
+    x86.je main.c3_2.merge
+  c3_2:
+    x86.lea_rdata rax, [__str_10]
+    x86.mov rcx, rax
+    x86.mov edx, 2
+    x86.mov [rbp-72], ecx
+    x86.mov [rbp-80], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-88], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-96], esi
+    x86.mov edi, [rbp-72]
+    x86.mov r8, [rbp-80]
+    x86.mov r9, [rbp-88]
+    x86.mov eax, [rbp-96]
+    x86.mov rcx, rdi
+    x86.mov rdx, r8
+    x86.mov r8, r9
+    x86.mov r9, rax
+    x86.call print
+    x86.jmp main.c3_2.merge
+  c3_2.merge:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

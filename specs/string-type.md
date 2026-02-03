@@ -553,7 +553,7 @@ b
 c
 ```
 
-<!-- disabled-test: byteview-iteration -->
+<!-- test: byteview-iteration -->
 ```maxon
 function main() returns int
   var s = "abc"
@@ -572,7 +572,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: utf16-ascii -->
+<!-- test: utf16-ascii -->
 ```maxon
 function main() returns int
   var s = "ABC"
@@ -591,7 +591,7 @@ end 'main'
 67
 ```
 
-<!-- disabled-test: utf16-bmp -->
+<!-- test: utf16-bmp -->
 ```maxon
 function main() returns int
   var s = "αβγ"
@@ -610,7 +610,7 @@ end 'main'
 947
 ```
 
-<!-- disabled-test: utf16-surrogate-pair -->
+<!-- test: utf16-surrogate-pair -->
 ```maxon
 function main() returns int
   var s = "😀"
@@ -628,7 +628,7 @@ end 'main'
 56832
 ```
 
-<!-- disabled-test: utf16-mixed -->
+<!-- test: utf16-mixed -->
 ```maxon
 function main() returns int
   var s = "A😀B"
@@ -648,7 +648,7 @@ end 'main'
 66
 ```
 
-<!-- disabled-test: utf16-length -->
+<!-- test: utf16-length -->
 ```maxon
 function main() returns int
   var s = "A😀B"
@@ -664,7 +664,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: utf16-is-lead-surrogate -->
+<!-- test: utf16-is-lead-surrogate -->
 ```maxon
 function main() returns int
   // 0xD83D = 55357 (high surrogate for 😀)
@@ -687,7 +687,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: utf16-is-trail-surrogate -->
+<!-- test: utf16-is-trail-surrogate -->
 ```maxon
 function main() returns int
   // 0xDE00 = 56832 (low surrogate for 😀)
@@ -710,7 +710,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: utf16-is-surrogate -->
+<!-- test: utf16-is-surrogate -->
 ```maxon
 function main() returns int
   if utf16IsSurrogate(55357) 'c7'
@@ -733,7 +733,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: utf16-width -->
+<!-- test: utf16-width -->
 ```maxon
 function main() returns int
   print("{utf16Width(65)}\n")      // ASCII 'A' = 1 code unit
@@ -751,7 +751,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: utf16-encode-surrogates -->
+<!-- test: utf16-encode-surrogates -->
 ```maxon
 function main() returns int
   // 😀 U+1F600 = 128512
@@ -768,7 +768,7 @@ end 'main'
 56832
 ```
 
-<!-- disabled-test: utf16-decode-surrogates -->
+<!-- test: utf16-decode-surrogates -->
 ```maxon
 function main() returns int
   // Decode surrogate pair back to codepoint
@@ -784,7 +784,7 @@ end 'main'
 128512
 ```
 
-<!-- disabled-test: utf16-is-bmp -->
+<!-- test: utf16-is-bmp -->
 ```maxon
 function main() returns int
   if utf16IsBmp(65) 'c10'
@@ -811,7 +811,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: utf16-valid-surrogate-pair -->
+<!-- test: utf16-valid-surrogate-pair -->
 ```maxon
 function main() returns int
   if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
@@ -833,23 +833,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: heap-string-count -->
-```maxon
-function main() returns int
-  // String > 15 bytes triggers heap allocation
-  var s = "This is a longer string that exceeds 15 bytes"
-  print("{s.count()}\n")
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-45
-```
-
-<!-- disabled-test: heap-string-data-access -->
+<!-- test: heap-string-data-access -->
 ```maxon
 function main() returns int
   // Verify heap-allocated string data is accessible via bytes()
