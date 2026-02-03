@@ -2171,6 +2171,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Emits the correct var ref op for loading a variable, handling struct/enum/primitive types.
+  /// </summary>
+  private MaxonValue EmitVarRefOp(string varName, MaxonValueKind kind, string? structTypeName) {
+    if (kind == MaxonValueKind.Struct) {
+      var structRefOp = new MaxonStructVarRefOp(varName, structTypeName!);
+      _currentBlock!.AddOp(structRefOp);
+      return structRefOp.Result;
+    }
+    if (kind == MaxonValueKind.Enum) {
+      var enumType = (MlirEnumType)_typeRegistry[structTypeName!];
+      var backingKind = GetEnumBackingKind(enumType);
+      var enumRefOp = new MaxonEnumVarRefOp(varName, structTypeName!, backingKind);
+      _currentBlock!.AddOp(enumRefOp);
+      return enumRefOp.Result;
+    }
+    var loadOp = new MaxonVarRefOp(varName, kind);
+    _currentBlock!.AddOp(loadOp);
+    return loadOp.Result;
+  }
+
+  /// <summary>
   /// Creates the continue block after a try/otherwise and loads the result from a variable.
   /// </summary>
   private ExprResult.Direct EmitTryContinueBlock(string continueBlockLabel, string? resultVar, MaxonTryCallOp tryCallOp) {
@@ -2179,9 +2200,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (resultVar != null) {
       var resultKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
-      var loadResultOp = new MaxonVarRefOp(resultVar, resultKind);
-      _currentBlock!.AddOp(loadResultOp);
-      return new ExprResult.Direct(loadResultOp.Result);
+      var loadedValue = EmitVarRefOp(resultVar, resultKind, tryCallOp.ResultStructTypeName);
+      return new ExprResult.Direct(loadedValue);
     }
     return new ExprResult.Direct(tryCallOp.ErrorFlag);
   }
@@ -2240,16 +2260,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var resultVarName = $"__try_result_{_blockCounter++}";
     var resultKind = DetermineValueKind(defaultValue);
+    var structTypeName = tryCallOp.ResultStructTypeName
+      ?? (defaultValue is MaxonStruct s ? s.TypeName : null)
+      ?? (defaultValue is MaxonEnum e ? e.TypeName : null);
 
     // Store the default value to a temp variable so it can be used across blocks
     var defaultVarName = $"__try_default_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
-    _variables[defaultVarName] = new VarInfo(resultKind, true, defaultValue, _currentBlock!, null);
+    _variables[defaultVarName] = new VarInfo(resultKind, true, defaultValue, _currentBlock!, structTypeName);
 
     // Store the call result (success path value)
     if (tryCallOp.Result != null) {
       _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryCallOp.Result, true, true, resultKind));
-      _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, null);
+      _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, structTypeName);
     }
 
     var errorBlock = UniqueLabel("otherwise_default_error");
@@ -2260,18 +2283,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Error block: load default from temp variable and overwrite result
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
-    var loadDefaultOp = new MaxonVarRefOp(defaultVarName, resultKind);
-    _currentBlock!.AddOp(loadDefaultOp);
-    _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadDefaultOp.Result, false, true, resultKind));
+    var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
+    _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
 
     // Continue block: load from result variable
     var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
     _currentBlock = contBlock;
 
-    var refOp = new MaxonVarRefOp(resultVarName, resultKind);
-    _currentBlock!.AddOp(refOp);
-    return new ExprResult.Direct(refOp.Result);
+    var loadedResult = EmitVarRefOp(resultVarName, resultKind, structTypeName);
+    return new ExprResult.Direct(loadedResult);
   }
 
   private void ParseVarDecl() {
@@ -2862,22 +2883,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // For binding form, load the result and create a let-binding inside the then-block
     if (bindingName != null && resultVar != null) {
       var resultKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
-      MaxonValue loadedValue;
-      if (resultKind == MaxonValueKind.Struct) {
-        var structRefOp = new MaxonStructVarRefOp(resultVar, tryCallOp.ResultStructTypeName!);
-        _currentBlock!.AddOp(structRefOp);
-        loadedValue = structRefOp.Result;
-      } else if (resultKind == MaxonValueKind.Enum) {
-        var enumType = (MlirEnumType)_typeRegistry[tryCallOp.ResultStructTypeName!];
-        var backingKind = GetEnumBackingKind(enumType);
-        var enumRefOp = new MaxonEnumVarRefOp(resultVar, tryCallOp.ResultStructTypeName!, backingKind);
-        _currentBlock!.AddOp(enumRefOp);
-        loadedValue = enumRefOp.Result;
-      } else {
-        var loadResultOp = new MaxonVarRefOp(resultVar, resultKind);
-        _currentBlock!.AddOp(loadResultOp);
-        loadedValue = loadResultOp.Result;
-      }
+      var loadedValue = EmitVarRefOp(resultVar, resultKind, tryCallOp.ResultStructTypeName);
 
       // Determine StructTypeName for the binding: use the try call's ResultStructTypeName,
       // or resolve the associated type name for Element-polymorphic return types

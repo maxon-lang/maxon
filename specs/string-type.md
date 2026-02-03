@@ -309,7 +309,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: startsWith -->
+<!-- test: startsWith -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -329,7 +329,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: endsWith -->
+<!-- test: endsWith -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -349,7 +349,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: contains -->
+<!-- test: contains -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -369,7 +369,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: find -->
+<!-- test: find -->
 ```maxon
 function main() returns int
   var s = "hello world"

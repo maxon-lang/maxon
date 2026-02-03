@@ -760,16 +760,35 @@ public static class MaxonToStandardConversion {
     MlirStructType? selfStructType) {
 
     var calleeFunc = funcLookup[tryCallOp.Callee];
+    var calleeRetStructType = calleeFunc.ReturnType as MlirStructType;
     var newArgs = new List<StdValue>();
+
+    // If callee returns struct, allocate local space and pass sret pointer
+    string? sretVarName = null;
+    if (calleeRetStructType != null) {
+      sretVarName = $"__sret_{tryCallOp.Result!.Id}";
+      AllocateStructOnStack(block, sretVarName, calleeRetStructType, varTypes);
+      var leaOp = new StdLeaOp(sretVarName);
+      block.AddOp(leaOp);
+      newArgs.Add(leaOp.Result);
+    }
 
     var selfBufName = FlattenCallArgs(tryCallOp.Args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, tryCallOp.Callee);
 
-    var stdResult = ResolveCallResultType(tryCallOp.ResultKind, calleeFunc.ReturnType);
-    var stdTryCall = new StdTryCallOp(tryCallOp.Callee, newArgs, stdResult);
-    block.AddOp(stdTryCall);
-
-    if (tryCallOp.Result != null && stdResult != null) {
-      valueMap[tryCallOp.Result] = stdResult;
+    StdTryCallOp stdTryCall;
+    if (calleeRetStructType != null) {
+      stdTryCall = new StdTryCallOp(tryCallOp.Callee, newArgs);
+      block.AddOp(stdTryCall);
+      if (tryCallOp.Result != null) {
+        structVarNames[tryCallOp.Result.Id] = sretVarName!;
+      }
+    } else {
+      var stdResult = ResolveCallResultType(tryCallOp.ResultKind, calleeFunc.ReturnType);
+      stdTryCall = new StdTryCallOp(tryCallOp.Callee, newArgs, stdResult);
+      block.AddOp(stdTryCall);
+      if (tryCallOp.Result != null && stdResult != null) {
+        valueMap[tryCallOp.Result] = stdResult;
+      }
     }
 
     valueMap[tryCallOp.ErrorFlag] = stdTryCall.ErrorFlag;
