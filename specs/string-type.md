@@ -253,12 +253,12 @@ end 'main'
 Hello, World!
 ```
 
-<!-- disabled-test: concatenation -->
+<!-- test: string-interpolation-concatenation -->
 ```maxon
 function main() returns int
   var a = "hello"
-  var b = " world"
-  var c = "{a}{b}"
+  var b = "world"
+  var c = "{a} {b}"
   print(c)
   return 0
 end 'main'
@@ -268,23 +268,6 @@ end 'main'
 ```
 ```stdout
 hello world
-```
-
-<!-- disabled-test: chained-concat -->
-```maxon
-function main() returns int
-  var greeting = "Hello"
-  var name = "Maxon"
-  var full = "{greeting}, {name}!"
-  print(full)
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-Hello, Maxon!
 ```
 
 <!-- disabled-test: count-method -->
@@ -308,12 +291,12 @@ function main() returns int
   var empty = ""
   var nonempty = "hello"
   if empty.isEmpty() 'check1'
-    print("{1}\n")
+    print("1\n")
   end 'check1'
   if nonempty.isEmpty() 'check2'
-    print("{0}\n")
+    print("0\n")
   end 'check2' else 'not_empty'
-    print("{2}\n")
+    print("2\n")
   end 'not_empty'
   return 0
 end 'main'
@@ -331,10 +314,10 @@ end 'main'
 function main() returns int
   var s = "hello world"
   if s.startsWith("hello") 'c1'
-    print("{1}\n")
+    print("1\n")
   end 'c1'
   if s.startsWith("world") 'c2'
-    print("{0}\n")
+    print("0\n")
   end 'c2'
   return 0
 end 'main'

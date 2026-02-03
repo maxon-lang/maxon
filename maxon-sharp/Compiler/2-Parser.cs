@@ -3770,6 +3770,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return new ExprResult.Direct(result);
     }
 
+    if (Check(TokenType.StringInterp)) {
+      var token = Advance();
+      var result = EmitStringInterpolation(token);
+      if (Check(TokenType.Dot)) {
+        return ParseFieldAccessChain(new ExprResult.Direct(result), token);
+      }
+      return new ExprResult.Direct(result);
+    }
+
     if (Check(TokenType.CharacterLiteral)) {
       var token = Advance();
       var result = EmitCharLiteral(token);
@@ -4146,6 +4155,117 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var op = new MaxonStringLiteralOp(token.Value, stringTypeName);
     _currentBlock!.AddOp(op);
     return op.Result;
+  }
+
+  private MaxonStruct EmitStringInterpolation(Token token) {
+    var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "No type implements BuiltinStringLiteral (String type not found in stdlib)",
+        token.Line, token.Column);
+
+    var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue)>();
+    var text = token.Value;
+    var pos = 0;
+    var literalBuf = new System.Text.StringBuilder();
+
+    while (pos < text.Length) {
+      if (text[pos] == '\\' && pos + 1 < text.Length) {
+        var nextChar = text[pos + 1];
+        switch (nextChar) {
+          case '{':
+          case '}':
+            literalBuf.Append(nextChar);
+            pos += 2;
+            break;
+          case 'n':
+            literalBuf.Append('\n');
+            pos += 2;
+            break;
+          case 't':
+            literalBuf.Append('\t');
+            pos += 2;
+            break;
+          case '\\':
+            literalBuf.Append('\\');
+            pos += 2;
+            break;
+          case '0':
+            literalBuf.Append('\0');
+            pos += 2;
+            break;
+          case 'r':
+            literalBuf.Append('\r');
+            pos += 2;
+            break;
+          case '"':
+            literalBuf.Append('"');
+            pos += 2;
+            break;
+          default:
+            throw new CompileError(ErrorCode.LexerInvalidEscape,
+                $"Invalid escape sequence '\\{nextChar}' in string interpolation",
+                token.Line, token.Column + pos);
+        }
+      } else if (text[pos] == '{') {
+        if (literalBuf.Length > 0) {
+          parts.Add((true, literalBuf.ToString(), null));
+          literalBuf.Clear();
+        }
+        pos++; // skip '{'
+        var exprStart = pos;
+        var braceDepth = 1;
+        while (pos < text.Length && braceDepth > 0) {
+          if (text[pos] == '{') braceDepth++;
+          else if (text[pos] == '}') braceDepth--;
+          if (braceDepth > 0) pos++;
+        }
+        var exprText = text[exprStart..pos];
+        if (pos < text.Length) pos++; // skip closing '}'
+
+        var exprValue = ParseInterpolationExpression(exprText, token);
+        parts.Add((false, null, exprValue));
+      } else {
+        literalBuf.Append(text[pos]);
+        pos++;
+      }
+    }
+
+    if (literalBuf.Length > 0) {
+      parts.Add((true, literalBuf.ToString(), null));
+    }
+
+    // If no expression parts, emit a regular string literal with escaped content
+    if (parts.All(p => p.IsLiteral)) {
+      var fullText = string.Concat(parts.Where(p => p.IsLiteral).Select(p => p.LiteralValue));
+      var op = new MaxonStringLiteralOp(fullText, stringTypeName);
+      _currentBlock!.AddOp(op);
+      return op.Result;
+    }
+
+    var interpOp = new MaxonStringInterpOp(parts, stringTypeName);
+    _currentBlock!.AddOp(interpOp);
+    return interpOp.Result;
+  }
+
+  private MaxonValue ParseInterpolationExpression(string exprText, Token contextToken) {
+    var lexer = new Lexer(exprText);
+    var exprTokens = lexer.Tokenize();
+
+    // Save and swap parser token state
+    var savedTokens = new List<Token>(_tokens);
+    var savedPos = _pos;
+
+    _tokens.Clear();
+    _tokens.AddRange(exprTokens);
+    _pos = 0;
+
+    try {
+      var exprResult = ParseExpression();
+      return ResolveExprValue(exprResult);
+    } finally {
+      _tokens.Clear();
+      _tokens.AddRange(savedTokens);
+      _pos = savedPos;
+    }
   }
 
   private MaxonStruct EmitCharLiteral(Token token) {

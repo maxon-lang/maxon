@@ -681,6 +681,15 @@ public class MaxonManagedMemConcatOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// String interpolation: concatenates literal parts and expression values into a new String
+public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue)> parts, string stringTypeName) : MaxonOp {
+  public override string Mnemonic => "maxon.string_interp";
+  public List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue)> Parts { get; } = parts;
+  public string StringTypeName { get; } = stringTypeName;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), stringTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
 // Create a slice of a __ManagedMemory buffer (start/end byte positions)
 public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonValue end) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_slice";
