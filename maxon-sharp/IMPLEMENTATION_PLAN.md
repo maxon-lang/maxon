@@ -208,12 +208,12 @@
 Run spec tests after each phase:
 ```powershell
 cd maxon-sharp
-.\bin\Debug\net8.0\win-x64\maxonsharp.exe spec-test
+.\bin\Debug\net8.0\win-x64\maxon.exe spec-test
 ```
 
 Or run filtered spec tests:
 ```powershell
-.\bin\Debug\net8.0\win-x64\maxonsharp.exe spec-test --filter=floor
+.\bin\Debug\net8.0\win-x64\maxon.exe spec-test --filter=floor
 ```
 
 ### Debugging Tips

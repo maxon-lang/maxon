@@ -8,7 +8,7 @@ Run the spec tests and fix any failures by modifying the compiler code.
 
 ## Steps
 
-1. Run the spec tests: `./maxon-sharp/bin/Debug/net8.0/win-x64/maxonsharp.exe spec-test`
+1. Run the spec tests: `./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test`
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-sharp/` to make the failing tests pass.
 4. Rebuild and re-run spec tests to verify the fixes.

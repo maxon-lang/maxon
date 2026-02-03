@@ -10,7 +10,7 @@ Run the spec tests and fix any failures by modifying the compiler code.
 ## Steps
 
 1. Find the next disabled test in this spec file (labeled with 'disabled-test') and enable it by removing 'disabled-'.
-2. Run the spec tests: `maxonsharp.exe spec-test --update-requiredmlir`
+2. Run the spec tests: `maxon.exe spec-test --update-requiredmlir`
 3. Analyze the output to identify which tests are failing and why.
 4. Fix the compiler code in `maxon-sharp/` to make the failing tests pass.
 5. Rebuild and re-run spec tests to verify the fixes.

@@ -25,7 +25,7 @@ class Program {
   }
 
   static void PrintUsage() {
-    Console.WriteLine("Usage: maxonsharp <command> [options]");
+    Console.WriteLine("Usage: maxon <command> [options]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
     Console.WriteLine("  compile <file>           Compile a single .maxon file");

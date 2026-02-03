@@ -44,7 +44,7 @@ Each spec contains:
 
 Workflow for new features:
 1. Create `/specs/feature-name.md` with frontmatter, notes, docs, and tests
-2. Run `maxonsharp spec-test` to extract and run test fragments
+2. Run `maxon spec-test` to extract and run test fragments
 3. Implement until tests pass
 
 See `docs/SPECS.md` for the complete spec file format and detailed workflow.
@@ -70,17 +70,17 @@ If you are implementing a plan then you must finish the plan.
 
 ## Development Notes
 - Build: `cd maxon-sharp && dotnet build`
-- The compiler executable is at `maxon-sharp/bin/Debug/net8.0/win-x64/maxonsharp.exe`
+- The compiler executable is at `maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe`
 
 ## Running Tests
-- **Spec tests**: `maxonsharp spec-test` - Extracts and runs tests from spec files
+- **Spec tests**: `maxon spec-test` - Extracts and runs tests from spec files
 - **VSCode extension tests**: `cd vscode-extension && npm test` - Runs extension tests
 
 ## Compiler Commands
-- `maxonsharp compile <file>` - Compile a single .maxon file
-- `maxonsharp build [<directory>]` - Build a project
-- `maxonsharp run <file|directory>` - Compile and run
-- `maxonsharp spec-test [--filter=PATTERN]` - Run spec tests
+- `maxon compile <file>` - Compile a single .maxon file
+- `maxon build [<directory>]` - Build a project
+- `maxon run <file|directory>` - Compile and run
+- `maxon spec-test [--filter=PATTERN]` - Run spec tests
 
 ## Logging
 Use `--log=LEVEL` or `--log=CATEGORY:LEVEL` for debugging:
