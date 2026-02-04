@@ -1,56 +1,4 @@
----
-feature: advent of compiler optimization
-status: stable
-keywords: abs, absolute value, math
-category: math-intrinsic
----
-# advent of compiler optimization
-
-## Documentation
-
-Matt Godbolt's Advent of Compiler Optimizations 2025
-https://www.youtube.com/playlist?list=PL2HVqYf7If8cY4wLk7JUQ2f0JXY_xMQm2
-
-## Tests
-
-<!-- test: day1 -->
-```maxon
-function main() returns int
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```RequiredMLIR
-=== maxon
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 0 : i64}
-    maxon.return %0
-  }
-}
-=== standard
-module {
-  func @main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 0 : i64}
-    func.return %0
-  }
-}
-=== x86
-module {
-  func @main() -> i64 {
-  entry:
-    x86.xor eax, eax
-    x86.ret
-  }
-}
-```
-
-<!-- test: day2 -->
-```maxon
+// Test: day2
 function add(x int, y int) returns int
     return x + y
 end 'add'
@@ -58,11 +6,9 @@ end 'add'
 function main() returns int
   return add(3, y: 4)
 end 'main'
-```
-```exitcode
-7
-```
-```RequiredMLIR
+---
+ExitCode: 7
+RequiredMLIR: ```
 === maxon
 module {
   func @add(x: i64, y: i64) -> i64 {
@@ -122,3 +68,26 @@ module {
   }
 }
 ```
+---
+module {
+  func @add(x: i64, y: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.add ecx, edx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> i64 {
+  entry:
+    x86.mov eax, 3
+    x86.mov ecx, 4
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call add
+    x86.ret
+  }
+}
+---
