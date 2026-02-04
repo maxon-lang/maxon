@@ -4048,9 +4048,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var qualifiedFuncToken = new Token(TokenType.Identifier, qualifiedMethodName, fieldToken.Line, fieldToken.Column);
             var allArgs = ParseInstanceMethodCallArgs(qualifiedFuncToken, enumVal);
             var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs);
-            if (callOp.Result != null)
-              return new ExprResult.Direct(callOp.Result);
-            return new ExprResult.Direct(enumVal);
+            result = new ExprResult.Direct(callOp.Result ?? enumVal);
+            continue;
           }
         }
 
@@ -4069,9 +4068,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedMethodName, fieldToken.Line, fieldToken.Column);
           var allArgs = ParseInstanceMethodCallArgs(qualifiedFuncToken, structVal);
           var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs);
-          if (callOp.Result != null)
-            return new ExprResult.Direct(callOp.Result);
-          return new ExprResult.Direct(structVal);
+          result = new ExprResult.Direct(callOp.Result ?? structVal);
+          continue;
         }
 
         // Method call on associated type parameter - resolve through interface definitions
@@ -4105,9 +4103,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             };
             var callOp2 = new MaxonCallOp(qualifiedMethodName, args, resultKind, null);
             _currentBlock!.AddOp(callOp2);
-            if (callOp2.Result != null)
-              return new ExprResult.Direct(callOp2.Result);
-            return new ExprResult.Direct(selfVal);
+            result = new ExprResult.Direct(callOp2.Result ?? selfVal);
+            continue;
           }
         }
       }

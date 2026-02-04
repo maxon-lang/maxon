@@ -677,6 +677,15 @@ public class RegisterManager {
         _valueStackHome[value] = _nextSpillOffset;
       }
     }
+    foreach (var xmm in CallerSavedXmmRegisters) {
+      if (_xmmContents.TryGetValue(xmm, out var value)
+        && !_valueXmmStackHome.ContainsKey(value)
+        && !callArgs.Contains(value)) {
+        _nextSpillOffset -= 8;
+        block.AddOp(new X86MovSdMemXmmOp(_nextSpillOffset, xmm));
+        _valueXmmStackHome[value] = _nextSpillOffset;
+      }
+    }
   }
 
   // Windows x64 caller-saved XMM: xmm0-xmm5

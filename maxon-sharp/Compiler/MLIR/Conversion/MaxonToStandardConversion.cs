@@ -257,24 +257,9 @@ public static class MaxonToStandardConversion {
                   var rdataPtrOp = new StdPtrToI64Op(leaRdataOp.Result);
                   newBlock.AddOp(rdataPtrOp);
 
-                  if (constArrayInfo.IsMutable) {
-                    // COW: allocate heap buffer and copy rdata contents into it
-                    // Store rdata ptr and reload after call (call clobbers registers)
-                    var rdataPtrVar = $"__cow_rdata_{constArrayInfo.RdataLabel}";
-                    EmitStore(newBlock, rdataPtrOp.Result, rdataPtrVar, varTypes);
-
-                    var heapBuf = EmitAlloc(newBlock, rdataBytes.Length);
-
-                    // Reload rdata ptr and byte count for memcopy (clobbered by call)
-                    var rdataPtrReload = (StdI64)EmitLoad(newBlock, rdataPtrVar, varTypes);
-                    var copySizeOp = new StdConstI64Op(rdataBytes.Length);
-                    newBlock.AddOp(copySizeOp);
-                    newBlock.AddOp(new StdMemCopyOp(rdataPtrReload, heapBuf, copySizeOp.Result));
-                    newBlock.AddOp(new StdStoreI64Op(heapBuf, bufferVarName));
-                  } else {
-                    // Immutable: point directly to rdata
-                    newBlock.AddOp(new StdStoreI64Op(rdataPtrOp.Result, bufferVarName));
-                  }
+                  // Point buffer to rdata; capacity stays 0 (read-only).
+                  // Runtime COW check will copy to heap on first write.
+                  newBlock.AddOp(new StdStoreI64Op(rdataPtrOp.Result, bufferVarName));
                 } else {
                   // Non-constant array: LEA to get address of the element buffer on stack
                   var leaOp = new StdLeaOp(structLitOp.ArrayLiteralTag);
@@ -567,7 +552,7 @@ public static class MaxonToStandardConversion {
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonManagedMemSetOp memSetOp:
-              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
               break;
             case MaxonManagedMemCreateOp memCreateOp:
               LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames);
@@ -576,13 +561,13 @@ public static class MaxonToStandardConversion {
               LowerManagedMemGrow(memGrowOp, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
               break;
             case MaxonManagedMemShiftOp memShiftOp:
-              LowerManagedMemShift(memShiftOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemShift(memShiftOp, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
               break;
             case MaxonManagedMemByteGetOp byteGetOp:
               LowerManagedMemByteGet(byteGetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonManagedMemByteSetOp byteSetOp:
-              LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
               break;
             case MaxonManagedToCStringOp toCStringOp:
               LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1328,8 +1313,11 @@ public static class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<int, string> structVarNames,
+    bool isStructInstanceMethod,
+    MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, op.ElementSize);
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var index = (StdI64)valueMap[op.Index];
     var value = valueMap[op.Value];
@@ -1377,9 +1365,10 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, op.ElementSize);
     var newCap = (StdI64)valueMap[op.NewCapacity];
 
-    // Load old buffer pointer
+    // Load buffer pointer (now guaranteed to be heap-allocated after COW check)
     var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
     // Compute new byte size = newCap * elementSize
@@ -1414,8 +1403,11 @@ public static class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<int, string> structVarNames,
+    bool isStructInstanceMethod,
+    MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, op.ElementSize);
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var index = (StdI64)valueMap[op.Index];
     var count = (StdI64)valueMap[op.Count];
@@ -1485,22 +1477,63 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// Emit a COW (copy-on-write) check for a managed memory struct.
+  /// If capacity == 0, the buffer is read-only (rdata) and must be copied to a writable heap allocation.
+  /// Updates buffer and capacity fields on the managed struct (and writes through to self if needed).
+  /// elementSize: bytes per element (1 for strings, 8 for i64/f64 arrays).
+  /// </summary>
+  private static void EmitCowCheck(
+    MlirBlock<StandardOp> block,
+    string managedVarName,
+    Dictionary<string, string> varTypes,
+    bool isStructInstanceMethod,
+    MlirStructType? selfStructType,
+    int elementSize) {
+    var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
+    var capacity = (StdI64)EmitLoad(block, $"{managedVarName}.capacity", varTypes);
+    var length = (StdI64)EmitLoad(block, $"{managedVarName}.length", varTypes);
+
+    var elemSizeConst = new StdConstI64Op(elementSize);
+    block.AddOp(elemSizeConst);
+
+    var uid = MlirContext.Current.NextId();
+    var cowLenVar = $"__cow_len_{uid}";
+    EmitStore(block, length, cowLenVar, varTypes);
+
+    var newBuffer = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, length, elemSizeConst.Result], newBuffer));
+
+    EmitStore(block, newBuffer, $"{managedVarName}.buffer", varTypes);
+    var lenReload = (StdI64)EmitLoad(block, cowLenVar, varTypes);
+    EmitStore(block, lenReload, $"{managedVarName}.capacity", varTypes);
+
+    if (isStructInstanceMethod && selfStructType != null && managedVarName.StartsWith("self.")) {
+      EmitNestedSelfFieldWriteThrough(block, newBuffer, managedVarName, "buffer", selfStructType);
+      EmitNestedSelfFieldWriteThrough(block, lenReload, managedVarName, "capacity", selfStructType);
+    }
+  }
+
+  /// <summary>
   /// __managed_memory_set_byte(managed, index, value): store a single byte to the managed buffer.
+  /// Performs COW check before writing.
   /// </summary>
   private static void LowerManagedMemByteSet(
     MaxonManagedMemByteSetOp op,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<int, string> structVarNames,
+    bool isStructInstanceMethod,
+    MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
-    var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, 1);
+
+    // Now perform the actual byte write using the writable buffer
+    var bufReload = (StdI64)EmitLoad(block, $"{managedVarName}.buffer", varTypes);
     var index = (StdI64)valueMap[op.Index];
     var value = valueMap[op.Value];
-    // Compute address: buffer + index (element size is 1 byte)
-    var addrOp = new StdAddI64Op(buffer, index);
+    var addrOp = new StdAddI64Op(bufReload, index);
     block.AddOp(addrOp);
-    // Store byte (truncated from i64)
     block.AddOp(new StdStoreByteIndirectOp(value, addrOp.Result, 0));
   }
 

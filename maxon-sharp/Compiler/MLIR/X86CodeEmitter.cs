@@ -399,6 +399,49 @@ public class X86CodeEmitter {
     _code[jzPatchPos] = (byte)(_code.Count - (jzPatchPos + 1));
     EmitByte(0xC3); // ret
 
+    // maxon_cow_check(buffer_in_rcx, capacity_in_rdx, length_in_r8, elemSize_in_r9) -> new_buffer_in_rax
+    // If capacity != 0, buffer is already writable — return it as-is.
+    // If capacity == 0, allocate length*elemSize bytes, copy from old buffer, return new buffer.
+    DefineLabel("maxon_cow_check");
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x40);
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = old buffer
+    EmitMovMemReg(-0x10, X86Register.Rdx, 8); // [rbp-16] = capacity
+    EmitMovMemReg(-0x18, X86Register.R8, 8);  // [rbp-24] = length
+    EmitMovMemReg(-0x20, X86Register.R9, 8);  // [rbp-32] = elemSize
+    // TEST rdx, rdx (check capacity)
+    EmitBytes(0x48, 0x85, 0xD2);
+    EmitByte(0x75); // JNZ already_writable
+    int jnzWritable = _code.Count;
+    EmitByte(0x00); // placeholder
+    // COW path: compute byteLen = length * elemSize, allocate, copy, return new buffer
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = length
+    EmitBytes(0x49, 0x0F, 0xAF, 0xC1);       // IMUL RAX, R9 (byteLen = length * elemSize)
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = byteLen
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // RCX = byteLen (alloc size)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    // Save new buffer
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new buffer
+    // rep movsb: RSI=src, RDI=dst, RCX=count
+    EmitMovRegMem(X86Register.Rsi, -0x08, 8);  // RSI = old buffer
+    EmitMovRegMem(X86Register.Rdi, -0x30, 8);  // RDI = new buffer
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);  // RCX = byteLen
+    EmitBytes(0xF3, 0xA4); // REP MOVSB
+    // Return new buffer
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitByte(0xEB); // JMP epilogue
+    int jmpCowEpilogue = _code.Count;
+    EmitByte(0x00); // placeholder
+    // already_writable: return old buffer
+    _code[jnzWritable] = (byte)(_code.Count - (jnzWritable + 1));
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    // epilogue
+    _code[jmpCowEpilogue] = (byte)(_code.Count - (jmpCowEpilogue + 1));
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
+
     // maxon_write_stdout(cstr_ptr_in_rcx) -> bytes_written_in_rax
     // Stack layout: [rbp-8]=cstr_ptr, [rbp-16]=length, [rbp-24]=handle, [rbp-32]=bytesWritten
     DefineLabel("maxon_write_stdout");

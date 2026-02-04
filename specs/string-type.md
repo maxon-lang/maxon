@@ -863,7 +863,7 @@ end 'main'
 90
 ```
 
-<!-- disabled-test: heap-string-equality -->
+<!-- test: heap-string-equality -->
 ```maxon
 function main() returns int
   var a = "This string is definitely longer than fifteen bytes"
@@ -883,7 +883,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: heap-string-inequality -->
+<!-- test: heap-string-inequality -->
 ```maxon
 function main() returns int
   var a = "This string is definitely longer than fifteen bytes"
@@ -903,7 +903,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: heap-string-iteration -->
+<!-- test: heap-string-iteration -->
 ```maxon
 function main() returns int
   var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
@@ -923,7 +923,7 @@ end 'main'
 1160
 ```
 
-<!-- disabled-test: heap-string-byteview -->
+<!-- test: heap-string-byteview -->
 ```maxon
 function main() returns int
   var s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
@@ -943,126 +943,6 @@ end 'main'
 ```
 ```stdout
 18
-```
-
-<!-- disabled-test: sso-vs-heap-boundary -->
-```maxon
-function main() returns int
-  // Exactly 15 bytes - should use SSO (constant data)
-  var sso = "123456789012345"
-  print("{sso.count()}\n")
-
-  // 16 bytes - should use heap
-  var heap = "1234567890123456"
-  print("{heap.count()}\n")
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-15
-16
-```
-
-<!-- disabled-test: heap-string-startsWith -->
-```maxon
-function main() returns int
-  var s = "This is a very long string that is heap allocated"
-  if s.startsWith("This is") 'c17'
-    print("1\n")
-  end 'c17'
-  if s.startsWith("That is") 'c18'
-    print("0\n")
-  end 'c18'
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1
-```
-
-<!-- disabled-test: heap-string-endsWith -->
-```maxon
-function main() returns int
-  var s = "This is a very long string that is heap allocated"
-  if s.endsWith("heap allocated") 'c19'
-    print("1\n")
-  end 'c19'
-  if s.endsWith("stack allocated") 'c20'
-    print("0\n")
-  end 'c20'
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1
-```
-
-<!-- disabled-test: heap-string-contains -->
-```maxon
-function main() returns int
-  var s = "This is a very long string that is heap allocated"
-  if s.contains("long string") 'c21'
-    print("1\n")
-  end 'c21'
-  if s.contains("short string") 'c22'
-    print("0\n")
-  end 'c22'
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1
-```
-
-<!-- disabled-test: heap-string-find -->
-```maxon
-function main() returns int
-  var s = "This is a very long string that is heap allocated"
-  var idx = try s.find("very") otherwise s.endIndex()
-  print("{idx.charIndex()}\n")
-  var idx2 = try s.find("missing") otherwise s.endIndex()
-  if idx2 == s.endIndex() 'not_found'
-    print("-1\n")
-  end 'not_found'
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-10
--1
-```
-
-<!-- disabled-test: mixed-sso-heap-comparison -->
-```maxon
-function main() returns int
-  var small = "hello"
-  var large = "This is a longer string"
-  if small != large 'check'
-    print("1\n")
-  end 'check'
-  return 0
-end 'main'
-```
-```exitcode
-0
-```
-```stdout
-1
 ```
 
 <!-- disabled-test: memory-tracking-simple-interp -->
@@ -1267,7 +1147,7 @@ Copies:    0
 Cleanups:  2
 ```
 
-<!-- disabled-test: toLower -->
+<!-- test: toLower -->
 ```maxon
 function main() returns int
   var s = "HELLO"
@@ -1282,7 +1162,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: bytes-count-method -->
+<!-- test: bytes-count-method -->
 ### bytes().count() Method
 ```maxon
 function main() returns int
