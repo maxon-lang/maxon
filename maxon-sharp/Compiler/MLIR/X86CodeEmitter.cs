@@ -336,9 +336,7 @@ public class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
     EmitMovRegMem(X86Register.R8, -0x08, 8);
     EmitCallImport("kernel32.dll", "HeapAlloc");
-    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
-    EmitPopReg(X86Register.Rbp);
-    EmitByte(0xC3); // ret
+    EmitEpilogue();
 
     // maxon_realloc(ptr_in_rcx, new_size_in_rdx) -> new_ptr_in_rax
     // If ptr is NULL, falls back to HeapAlloc (HeapReAlloc doesn't accept NULL).
@@ -351,39 +349,29 @@ public class X86CodeEmitter {
     EmitMovMemReg(-0x10, X86Register.Rdx, 8); // [rbp-16] = new_size
     // If ptr == 0, use HeapAlloc instead
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x75); // JNZ realloc_path
-    int jnzPatchPos = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jnzReallocPath = EmitJccForward("nz");
     // Alloc path: HeapAlloc(heap, HEAP_ZERO_MEMORY, new_size)
     EmitCallImport("kernel32.dll", "GetProcessHeap");
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
     EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
     EmitMovRegMem(X86Register.R8, -0x10, 8);
     EmitCallImport("kernel32.dll", "HeapAlloc");
-    EmitByte(0xEB); // JMP epilogue
-    int jmpEpiloguePatchPos = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jmpEpilogue = EmitJmpForward();
     // Realloc path: HeapReAlloc(heap, HEAP_ZERO_MEMORY, ptr, new_size)
-    _code[jnzPatchPos] = (byte)(_code.Count - (jnzPatchPos + 1));
+    PatchForwardJump(jnzReallocPath);
     EmitCallImport("kernel32.dll", "GetProcessHeap");
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
     EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
     EmitMovRegMem(X86Register.R8, -0x08, 8); // ptr
     EmitMovRegMem(X86Register.R9, -0x10, 8); // new_size
     EmitCallImport("kernel32.dll", "HeapReAlloc");
-    // Epilogue (both paths converge here with result in RAX)
-    _code[jmpEpiloguePatchPos] = (byte)(_code.Count - (jmpEpiloguePatchPos + 1));
-    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
-    EmitPopReg(X86Register.Rbp);
-    EmitByte(0xC3); // ret
+    EmitEpilogue(jmpEpilogue);
 
     // maxon_free(ptr_in_rcx)
     DefineLabel("maxon_free");
     // If ptr is 0, just return (noop)
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x74); // JZ skip
-    int jzPatchPos = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jzSkip = EmitJccForward("z");
     EmitPushReg(X86Register.Rbp);
     EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
     EmitSubRegImm(X86Register.Rsp, 0x30);
@@ -396,7 +384,7 @@ public class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "HeapFree");
     EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
     EmitPopReg(X86Register.Rbp);
-    _code[jzPatchPos] = (byte)(_code.Count - (jzPatchPos + 1));
+    PatchForwardJump(jzSkip);
     EmitByte(0xC3); // ret
 
     // maxon_cow_check(buffer_in_rcx, capacity_in_rdx, length_in_r8, elemSize_in_r9) -> new_buffer_in_rax
@@ -412,9 +400,7 @@ public class X86CodeEmitter {
     EmitMovMemReg(-0x20, X86Register.R9, 8);  // [rbp-32] = elemSize
     // TEST rdx, rdx (check capacity)
     EmitBytes(0x48, 0x85, 0xD2);
-    EmitByte(0x75); // JNZ already_writable
-    int jnzWritable = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jnzWritable = EmitJccForward("nz");
     // COW path: compute byteLen = length * elemSize, allocate, copy, return new buffer
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = length
     EmitBytes(0x49, 0x0F, 0xAF, 0xC1);       // IMUL RAX, R9 (byteLen = length * elemSize)
@@ -430,17 +416,11 @@ public class X86CodeEmitter {
     EmitBytes(0xF3, 0xA4); // REP MOVSB
     // Return new buffer
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
-    EmitByte(0xEB); // JMP epilogue
-    int jmpCowEpilogue = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jmpCowEpilogue = EmitJmpForward();
     // already_writable: return old buffer
-    _code[jnzWritable] = (byte)(_code.Count - (jnzWritable + 1));
+    PatchForwardJump(jnzWritable);
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    // epilogue
-    _code[jmpCowEpilogue] = (byte)(_code.Count - (jmpCowEpilogue + 1));
-    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
-    EmitPopReg(X86Register.Rbp);
-    EmitByte(0xC3); // ret
+    EmitEpilogue(jmpCowEpilogue);
 
     // maxon_write_stdout(cstr_ptr_in_rcx) -> bytes_written_in_rax
     // Stack layout: [rbp-8]=cstr_ptr, [rbp-16]=length, [rbp-24]=handle, [rbp-32]=bytesWritten
@@ -457,17 +437,14 @@ public class X86CodeEmitter {
     EmitBytes(0x0F, 0xB6, 0x0C, 0x02);
     // TEST CL, CL
     EmitBytes(0x84, 0xC9);
-    // JZ done_strlen
-    EmitByte(0x74);
-    int jzStrlenDone = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jzStrlenDone = EmitJccForward("z");
     // INC RAX
     EmitBytes(0x48, 0xFF, 0xC0);
-    // JMP strlen_loop
-    EmitByte(0xEB);
-    EmitByte((byte)((strlenLoopPos - _code.Count) - 1));
+    // JMP strlen_loop (backward)
+    EmitByte(0xE9);
+    EmitDword(strlenLoopPos - (_code.Count + 4));
     // done_strlen:
-    _code[jzStrlenDone] = (byte)(_code.Count - (jzStrlenDone + 1));
+    PatchForwardJump(jzStrlenDone);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = length
     // GetStdHandle(STD_OUTPUT_HANDLE = -11)
     EmitMovRegImm(X86Register.Rcx, -11);
@@ -484,9 +461,7 @@ public class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "WriteFile");
     // Return bytes written
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
-    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
-    EmitPopReg(X86Register.Rbp);
-    EmitByte(0xC3); // ret
+    EmitEpilogue();
 
     // maxon_i64_to_string(value_in_rcx, buffer_ptr_in_rdx) -> length_in_rax
     // Converts a signed 64-bit integer to its decimal string representation.
@@ -501,26 +476,20 @@ public class X86CodeEmitter {
 
     // Special case: value == 0
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x75); // JNZ not_zero
-    int jnzNotZero = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jnzNotZero = EmitJccForward("nz");
     // Write '0' to buffer[0], null to buffer[1]
     EmitBytes(0xC6, 0x02, 0x30); // MOV byte [rdx], '0'
     EmitBytes(0xC6, 0x42, 0x01, 0x00); // MOV byte [rdx+1], 0
     EmitMovRegImm(X86Register.Rax, 1);
-    EmitByte(0xEB); // JMP epilogue
-    int jmpZeroEpilogue = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jmpZeroEpilogue = EmitJmpForward();
 
     // not_zero: check for negative
-    _code[jnzNotZero] = (byte)(_code.Count - (jnzNotZero + 1));
+    PatchForwardJump(jnzNotZero);
     // R8 = 0 (is_negative flag)
     EmitBytes(0x4D, 0x31, 0xC0); // XOR r8, r8
     // TEST rcx, rcx / JS negative
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x79); // JNS positive
-    int jnsPositive = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jnsPositive = EmitJccForward("ns");
     // Negate: rcx = -rcx
     EmitBytes(0x48, 0xF7, 0xD9); // NEG rcx
     EmitMovMemReg(-0x08, X86Register.Rcx, 8); // update stored value
@@ -528,7 +497,7 @@ public class X86CodeEmitter {
     EmitMovRegImm(X86Register.R8, 1);
 
     // positive: R9 = buffer + 20 (write position, work backwards from end)
-    _code[jnsPositive] = (byte)(_code.Count - (jnsPositive + 1));
+    PatchForwardJump(jnsPositive);
     EmitMovRegReg(X86Register.R9, X86Register.Rdx); // R9 = buffer
     EmitAddRegImm(X86Register.R9, 20); // R9 = buffer + 20
     EmitBytes(0x41, 0xC6, 0x01, 0x00); // MOV byte [r9], 0 (null terminator)
@@ -552,20 +521,20 @@ public class X86CodeEmitter {
     EmitBytes(0x41, 0x88, 0x11); // MOV byte [r9], dl
     // Check if quotient is zero
     EmitBytes(0x48, 0x83, 0x7D, 0xF8, 0x00); // CMP qword [rbp-8], 0
-    EmitByte(0x75); // JNZ digit_loop
-    EmitByte((byte)((digitLoopPos - _code.Count) - 1));
+    // JNZ digit_loop (backward)
+    EmitByte(0x0F);
+    EmitByte(0x85);
+    EmitDword(digitLoopPos - (_code.Count + 4));
 
     // If negative, prepend '-'
     EmitMovRegMem(X86Register.R8, -0x18, 8); // R8 = is_negative
     EmitBytes(0x4D, 0x85, 0xC0); // TEST r8, r8
-    EmitByte(0x74); // JZ no_sign
-    int jzNoSign = _code.Count;
-    EmitByte(0x00); // placeholder
+    var jzNoSign = EmitJccForward("z");
     EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
     EmitBytes(0x41, 0xC6, 0x01, 0x2D); // MOV byte [r9], '-'
 
     // no_sign: copy from R9 to buffer start, compute length
-    _code[jzNoSign] = (byte)(_code.Count - (jzNoSign + 1));
+    PatchForwardJump(jzNoSign);
     // Length = (buffer + 20) - R9
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
     EmitAddRegImm(X86Register.Rax, 20);
@@ -589,10 +558,7 @@ public class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
 
     // epilogue (zero and non-zero paths converge here)
-    _code[jmpZeroEpilogue] = (byte)(_code.Count - (jmpZeroEpilogue + 1));
-    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
-    EmitPopReg(X86Register.Rbp);
-    EmitByte(0xC3); // ret
+    EmitEpilogue(jmpZeroEpilogue);
   }
 
   private void EmitCallImport(string dllName, string functionName) {
@@ -1031,6 +997,8 @@ public class X86CodeEmitter {
     "ae" or "nc" => 0x83,
     "be" => 0x86,
     "a" => 0x87,
+    "s" => 0x88,
+    "ns" => 0x89,
     "p" or "pe" => 0x8A,
     "np" or "po" => 0x8B,
     "l" => 0x8C,
@@ -1309,6 +1277,37 @@ public class X86CodeEmitter {
     EmitByte(0xE9);
     _jumpFixups.Add((_code.Count, target));
     EmitDword(0); // placeholder
+  }
+
+  // --- Forward jump helpers for runtime stubs ---
+
+  private int EmitJmpForward() {
+    EmitByte(0xE9); // JMP rel32
+    var patchOffset = _code.Count;
+    EmitDword(0);
+    return patchOffset;
+  }
+
+  private int EmitJccForward(string condition) {
+    byte opcode = ConditionToOpcode(condition);
+    EmitByte(0x0F);
+    EmitByte(opcode);
+    var patchOffset = _code.Count;
+    EmitDword(0);
+    return patchOffset;
+  }
+
+  private void PatchForwardJump(int patchOffset) {
+    var rel = _code.Count - (patchOffset + 4);
+    PatchDword(patchOffset, rel);
+  }
+
+  private void EmitEpilogue(params int[] forwardJumps) {
+    foreach (var patchOffset in forwardJumps)
+      PatchForwardJump(patchOffset);
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
   }
 
   // --- Struct support: LEA and indirect memory operations ---
