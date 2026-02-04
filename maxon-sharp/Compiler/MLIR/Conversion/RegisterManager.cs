@@ -567,8 +567,14 @@ public class RegisterManager {
     if (result != null) {
       if (result is StdF64) {
         AssignXmm(X86XmmRegister.Xmm0, result);
+      } else if (result is StdPtr) {
+        // Pointers use 64-bit RAX
+        Assign(X86Register.Rax, result);
+      } else if (result is StdI64 or StdI32 or StdBool) {
+        // All integer types use 32-bit EAX (even i64, for compatibility with existing codegen)
+        Assign(X86Register.Eax, result);
       } else {
-        Assign(result is StdPtr ? X86Register.Rax : X86Register.Eax, result);
+        throw new InvalidOperationException($"RegisterManager: unsupported result type {result.GetType().Name}");
       }
     }
   }
@@ -642,17 +648,35 @@ public class RegisterManager {
     if (paramIndex < CallConvRegs.Length) {
       if (paramValue is StdF64) {
         AssignXmm(CallConvXmmRegs[paramIndex], paramValue);
-      } else {
+      } else if (paramValue is StdPtr or StdI64) {
+        // Pointers and 64-bit integers use full 64-bit register
         Assign(CallConvRegs[paramIndex], paramValue);
+      } else if (paramValue is StdI32) {
+        // 32-bit integers use 32-bit register
+        Assign(CallConvRegs[paramIndex], paramValue);
+      } else if (paramValue is StdBool) {
+        // Bool uses 8-bit but is passed in full register, just assign the register
+        Assign(CallConvRegs[paramIndex], paramValue);
+      } else {
+        throw new InvalidOperationException($"RegisterManager: unsupported parameter type {paramValue.GetType().Name}");
       }
     } else {
       int stackOffset = 16 + (paramIndex - CallConvRegs.Length) * 8;
       if (paramValue is StdF64) {
         var xmm = AllocateXmmRegister(paramValue);
         block.AddOp(new X86MovSdXmmMemOp(xmm, stackOffset));
-      } else {
+      } else if (paramValue is StdPtr or StdI64) {
         var gpr = AllocateRegister(paramValue, block);
-        block.AddOp(new X86MovRegMemOp(gpr, stackOffset));
+        block.AddOp(new X86MovRegMemOp(gpr, stackOffset, sizeInBytes: 8));
+      } else if (paramValue is StdI32) {
+        var gpr = AllocateRegister(paramValue, block);
+        block.AddOp(new X86MovRegMemOp(gpr, stackOffset, sizeInBytes: 4));
+      } else if (paramValue is StdBool) {
+        var gpr = AllocateRegister(paramValue, block);
+        // Bool parameters from stack need 1-byte load (zero-extended)
+        block.AddOp(new X86MovRegMemOp(gpr, stackOffset, sizeInBytes: 1));
+      } else {
+        throw new InvalidOperationException($"RegisterManager: unsupported parameter type {paramValue.GetType().Name}");
       }
     }
   }

@@ -437,10 +437,20 @@ public static class MaxonToStandardConversion {
                   StdI64 intInput;
                   if (input is StdI64 alreadyI64) {
                     intInput = alreadyI64;
+                  } else if (input is StdI32 i32Input) {
+                    // i32 to i64: sign-extend (TODO: implement proper conversion op if needed)
+                    // For now, treat as already compatible since both are integer types
+                    throw new InvalidOperationException("i32 to byte conversion not yet implemented");
                   } else if (input is StdF64 f64Input) {
                     var fpToSi = new StdFpToSiOp(f64Input);
                     newBlock.AddOp(fpToSi);
                     intInput = fpToSi.Result;
+                  } else if (input is StdBool boolInput) {
+                    // Bool to byte: bool is already 0 or 1, just reinterpret as i64
+                    // Create a StdI64 that shares the same ID (reinterpretation)
+                    intInput = new StdI64(boolInput.Id);
+                  } else if (input is StdPtr) {
+                    throw new InvalidOperationException("Cannot cast pointer to byte");
                   } else {
                     throw new InvalidOperationException($"Cannot cast {input.GetType().Name} to byte");
                   }
@@ -455,10 +465,18 @@ public static class MaxonToStandardConversion {
                   // Byte/int to int: pass through (bytes are already stored as I64)
                   if (input is StdI64 i64) {
                     valueMap[castOp.Result] = i64;
+                  } else if (input is StdI32 i32) {
+                    // i32 to i64: for now pass through (TODO: implement proper sign-extension if needed)
+                    throw new InvalidOperationException("i32 to int conversion not yet implemented");
                   } else if (input is StdF64 f64) {
                     var fpToSi = new StdFpToSiOp(f64);
                     newBlock.AddOp(fpToSi);
                     valueMap[castOp.Result] = fpToSi.Result;
+                  } else if (input is StdBool boolInput) {
+                    // Bool to int: bool is already 0 or 1, reinterpret as i64
+                    valueMap[castOp.Result] = new StdI64(boolInput.Id);
+                  } else if (input is StdPtr) {
+                    throw new InvalidOperationException("Cannot cast pointer to int (use explicit ptr_to_i64 operation)");
                   } else {
                     throw new InvalidOperationException($"Unsupported cast to int from: {input.GetType().Name}");
                   }
@@ -469,8 +487,19 @@ public static class MaxonToStandardConversion {
                     var siToFp = new StdSiToFpOp(i64);
                     newBlock.AddOp(siToFp);
                     valueMap[castOp.Result] = siToFp.Result;
+                  } else if (input is StdI32 i32) {
+                    // i32 to float: need to convert i32 to i64 first, then to float
+                    throw new InvalidOperationException("i32 to float conversion not yet implemented");
                   } else if (input is StdF64 f64) {
                     valueMap[castOp.Result] = f64;
+                  } else if (input is StdBool boolInput) {
+                    // Bool to float: convert bool (0 or 1) to float
+                    var asI64 = new StdI64(boolInput.Id);
+                    var siToFp = new StdSiToFpOp(asI64);
+                    newBlock.AddOp(siToFp);
+                    valueMap[castOp.Result] = siToFp.Result;
+                  } else if (input is StdPtr) {
+                    throw new InvalidOperationException("Cannot cast pointer to float");
                   } else {
                     throw new InvalidOperationException($"Unsupported cast to float from: {input.GetType().Name}");
                   }
@@ -906,13 +935,15 @@ public static class MaxonToStandardConversion {
   }
 
   private static StdF64 PromoteToF64(StdValue value, MlirBlock<StandardOp> block) {
-    if (value is StdF64 f64) return f64;
-    if (value is StdI64 i64) {
+    if (value is StdF64 f64) {
+      return f64;
+    } else if (value is StdI64 i64) {
       var conv = new StdSiToFpOp(i64);
       block.AddOp(conv);
       return conv.Result;
+    } else {
+      throw new InvalidOperationException($"Cannot promote {value.GetType().Name} to F64");
     }
-    throw new InvalidOperationException($"Cannot promote {value.GetType().Name} to F64");
   }
 
   private static void LowerUnaryF64(
@@ -944,6 +975,8 @@ public static class MaxonToStandardConversion {
         block.AddOp(new StdStoreI64Op(i64, varName));
         varTypes[varName] = "i64";
         break;
+      case StdI32:
+        throw new InvalidOperationException("StdI32 store not yet implemented (no StdStoreI32Op)");
       case StdF64 f64:
         block.AddOp(new StdStoreF64Op(f64, varName));
         varTypes[varName] = "f64";
@@ -1011,10 +1044,22 @@ public static class MaxonToStandardConversion {
       var zeroOp = new StdConstI1Op(false);
       block.AddOp(zeroOp);
       EmitStore(block, zeroOp.Result, varName, varTypes);
-    } else if (fieldType == MlirType.I64) {
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.I8) {
+      // I64 and I8 (byte) both use I64 constants
       var zeroOp = new StdConstI64Op(0);
       block.AddOp(zeroOp);
       EmitStore(block, zeroOp.Result, varName, varTypes);
+    } else if (fieldType == MlirType.I32) {
+      throw new InvalidOperationException("I32 zero-store not yet implemented (StdConstI32Op needed)");
+    } else if (fieldType == MlirType.Fn) {
+      // Function pointer uses null pointer (reinterpret zero I64 as StdPtr)
+      var zeroOp = new StdConstI64Op(0);
+      block.AddOp(zeroOp);
+      // Reinterpret the zero I64 as a StdPtr (null pointer)
+      var nullPtr = new StdPtr(zeroOp.Result.Id);
+      EmitStore(block, nullPtr, varName, varTypes);
+    } else if (fieldType is MlirStructType) {
+      throw new InvalidOperationException("Struct zero-store not yet implemented (need recursive field initialization)");
     } else {
       throw new InvalidOperationException($"Unsupported field type for zero-store: {fieldType}");
     }
