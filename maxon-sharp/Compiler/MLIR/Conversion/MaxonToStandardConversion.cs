@@ -638,6 +638,18 @@ public static class MaxonToStandardConversion {
   /// Instance method self (param 0 with struct type named "self") is passed as
   /// a single pointer, not flattened.
   /// </summary>
+  private static int CountFlattenedFields(MlirStructType structType) {
+    int count = 0;
+    foreach (var field in structType.Fields) {
+      if (field.Type is MlirStructType nestedStruct) {
+        count += CountFlattenedFields(nestedStruct);
+      } else {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   private static int ComputeFlatParamIndex(int originalIndex, MlirFunction<MaxonOp> func, bool hasSret) {
     bool isStructMethod = IsStructInstanceMethod(func);
     bool isEnumMethod = IsEnumInstanceMethod(func);
@@ -647,7 +659,7 @@ public static class MaxonToStandardConversion {
         // Self is passed as a single param (pointer for struct, scalar for enum)
         flatIdx += 1;
       } else if (func.ParamTypes[i] is MlirStructType st) {
-        flatIdx += st.Fields.Count;
+        flatIdx += CountFlattenedFields(st);
       } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
         flatIdx += 1;
       } else {
