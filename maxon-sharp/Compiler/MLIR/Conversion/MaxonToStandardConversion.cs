@@ -695,16 +695,12 @@ public static class MaxonToStandardConversion {
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs) {
     // Try exact match first, then suffix match (for namespace-qualified names)
-    MlirFunction<MaxonOp>? calleeFunc;
-    if (funcLookup.TryGetValue(callOp.Callee, out calleeFunc)) {
+    if (funcLookup.TryGetValue(callOp.Callee, out MlirFunction<MaxonOp>? calleeFunc)) {
       // Exact match found
     } else {
       // Try suffix match
       var suffixPattern = $".{callOp.Callee}";
-      calleeFunc = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern));
-      if (calleeFunc == null) {
-        throw new InvalidOperationException($"Function '{callOp.Callee}' not found in module");
-      }
+      calleeFunc = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern)) ?? throw new InvalidOperationException($"Function '{callOp.Callee}' not found in module");
     }
     var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
 

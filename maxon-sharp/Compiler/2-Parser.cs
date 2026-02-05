@@ -4128,9 +4128,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var qualifiedFuncName = string.IsNullOrEmpty(currentNamespace) ? token.Value : $"{currentNamespace}.{token.Value}";
 
       var referencedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedFuncName);
-      if (referencedFunc == null) {
-        referencedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == token.Value);
-      }
+      referencedFunc ??= _currentModule!.Functions.FirstOrDefault(f => f.Name == token.Value);
       if (referencedFunc == null) {
         var suffixPattern = $".{token.Value}";
         var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
