@@ -298,6 +298,10 @@ public class Lexer(string source) {
         Advance();
         return new Token(TokenType.Plus, "+", startLine, startColumn);
       case '-':
+        if (Peek(1) == '-' && Peek(2) == '-' && IsLineSeparator(3)) {
+          _pos = _source.Length;
+          return null;
+        }
         Advance();
         return new Token(TokenType.Minus, "-", startLine, startColumn);
       case '*':
@@ -555,6 +559,16 @@ public class Lexer(string source) {
   }
 
   private bool IsAtEnd(int offset = 0) => _pos + offset >= _source.Length;
+
+  /// Only whitespace (or nothing) remains until end-of-line or end-of-file.
+  private bool IsLineSeparator(int offset) {
+    for (var i = _pos + offset; i < _source.Length; i++) {
+      var ch = _source[i];
+      if (ch == '\n' || ch == '\r') return true;
+      if (ch != ' ' && ch != '\t') return false;
+    }
+    return true;
+  }
 
   private static bool IsHexDigit(char c) =>
     (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
