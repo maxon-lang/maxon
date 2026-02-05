@@ -14,6 +14,7 @@ public static class StandardToX86Conversion {
 
     foreach (var func in module.Functions) {
       var newFunc = ConvertFunction(func, result);
+      PeepholeOptimize(newFunc);
       result.AddFunction(newFunc);
     }
 
@@ -23,15 +24,74 @@ public static class StandardToX86Conversion {
   private static MlirFunction<X86Op> ConvertFunction(MlirFunction<StandardOp> func, MlirModule<X86Op> outputModule) {
     var newFunc = new MlirFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
 
-    // Pre-scan: calculate stack frame from store ops
+    // Pre-scan: find which variables are actually loaded (read back from stack).
+    // A variable is "live" if it appears in a load op, or if it's referenced
+    // by a LEA op (struct base address). Struct fields (e.g. "__arr_0.buffer")
+    // are live if their parent struct (e.g. "__arr_0") is referenced by LEA.
+    var loadedVariables = new HashSet<string>();
+    var leaVariables = new HashSet<string>();
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        switch (op) {
+          case StdLoadI64Op load: loadedVariables.Add(load.VarName); break;
+          case StdLoadI1Op load: loadedVariables.Add(load.VarName); break;
+          case StdLoadF64Op load: loadedVariables.Add(load.VarName); break;
+          case StdLoadPtrOp load: loadedVariables.Add(load.VarName); break;
+          case StdLeaOp lea: leaVariables.Add(lea.VarName); break;
+        }
+      }
+    }
+    // Struct fields are live if their parent struct is referenced by LEA
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is IStoreOp store) {
+          var dotIdx = store.VarName.IndexOf('.');
+          if (dotIdx >= 0 && leaVariables.Contains(store.VarName[..dotIdx]))
+            loadedVariables.Add(store.VarName);
+        }
+      }
+    }
+
+    // Pre-scan: calculate stack frame from store ops, skipping dead stores.
+    // A store is "dead" if the variable is never loaded (not in loadedVariables).
+    // The stored value may have other uses — those uses keep it alive in registers
+    // independently. The register allocator handles spilling if needed.
     var varOffsets = new Dictionary<string, int>();
+    var deadStoreOps = new HashSet<StandardOp>();
     int varStackSize = 0;
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         if (op is not IStoreOp store) continue;
+        if (!loadedVariables.Contains(store.VarName)) {
+          deadStoreOps.Add(op);
+          continue;
+        }
         if (!varOffsets.ContainsKey(store.VarName)) {
           varStackSize += store.StoredType.SizeInBytes;
           varOffsets[store.VarName] = -varStackSize;
+        }
+      }
+    }
+
+    // Pre-scan: detect tail calls (StdCallOp immediately followed by StdReturnOp
+    // whose return value is the call's result). Excludes runtime calls, throwing
+    // functions, and calls with more args than register slots.
+    // Also excluded when the function contains StdLeaOp — those create stack
+    // addresses that may flow (as i64 via PtrToI64) into the tail call args,
+    // which would dangle after the epilogue tears down the caller's frame.
+    var tailCalls = new Dictionary<StandardOp, StdCallOp>();
+    bool hasStackAddresses = func.Body.Blocks
+      .SelectMany(b => b.Operations).Any(op => op is StdLeaOp);
+    if (func.ThrowsType == null && !hasStackAddresses) {
+      foreach (var block in func.Body.Blocks) {
+        var ops = block.Operations;
+        for (int i = 0; i < ops.Count - 1; i++) {
+          if (ops[i] is StdCallOp callOp && callOp.Result != null
+              && callOp.Args.Count <= RegisterManager.RegisterParamCount
+              && ops[i + 1] is StdReturnOp retOp
+              && retOp.ReturnValue == callOp.Result) {
+            tailCalls[ops[i + 1]] = callOp;
+          }
         }
       }
     }
@@ -45,6 +105,20 @@ public static class StandardToX86Conversion {
           lastUseOfValue[val] = scanIdx;
         }
         scanIdx++;
+      }
+    }
+    // For tail calls, extend arg lifetimes to the return op (where the tail jmp happens).
+    // The call op is skipped, so args must stay live until the return op processes them.
+    foreach (var (retOp, callOp) in tailCalls) {
+      int retIdx = 0;
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op == retOp) {
+            foreach (var arg in callOp.Args)
+              lastUseOfValue[arg] = retIdx;
+          }
+          retIdx++;
+        }
       }
     }
 
@@ -73,11 +147,9 @@ public static class StandardToX86Conversion {
       // In the entry block, save register-based parameters to their stack slots
       // immediately. This prevents later operations (e.g. LoadStructFieldsFromPointer)
       // from clobbering parameter registers before the params are stored.
-      // Only params 0-3 are in registers; params >= 4 are on the caller's stack
-      // and can't be clobbered.
       if (blockIdx == 0) {
         var registerParams = srcBlock.Operations.OfType<StdParamOp>()
-          .Where(p => p.Index < 4).ToList();
+          .Where(p => p.Index < RegisterManager.RegisterParamCount).ToList();
         foreach (var paramOp in registerParams) {
           regManager.NoteParam(paramOp.Result, paramOp.Index, x86Block);
           preHandledOps.Add(paramOp);
@@ -137,7 +209,8 @@ public static class StandardToX86Conversion {
           case StdAddI64Op addOp:
             regManager.EmitBinaryRegReg(addOp.Lhs, addOp.Rhs, addOp.Result, x86Block,
               (l, r) => new X86AddRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, addOp.Lhs, currentOpIndex));
+              lhsConsumed: IsLastUse(lastUseOfValue, addOp.Lhs, currentOpIndex),
+              useLeaForAdd: true);
             break;
 
           case StdSubI64Op subOp:
@@ -276,11 +349,13 @@ public static class StandardToX86Conversion {
           }
 
           case StdStoreI64Op storeOp:
-            regManager.EmitStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], 8, x86Block);
+            if (!deadStoreOps.Contains(op))
+              regManager.EmitStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], 8, x86Block);
             break;
 
           case StdStoreF64Op storeOp:
-            regManager.EmitXmmStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], x86Block);
+            if (!deadStoreOps.Contains(op))
+              regManager.EmitXmmStoreToStack(storeOp.Value, varOffsets[storeOp.VarName], x86Block);
             break;
 
           case StdLoadI64Op loadOp:
@@ -292,7 +367,8 @@ public static class StandardToX86Conversion {
             break;
 
           case StdStoreI1Op storeBoolOp:
-            regManager.EmitStoreToStack(storeBoolOp.Value, varOffsets[storeBoolOp.VarName], 1, x86Block);
+            if (!deadStoreOps.Contains(op))
+              regManager.EmitStoreToStack(storeBoolOp.Value, varOffsets[storeBoolOp.VarName], 1, x86Block);
             break;
 
           case StdLoadI1Op loadBoolOp:
@@ -300,7 +376,8 @@ public static class StandardToX86Conversion {
             break;
 
           case StdStorePtrOp storePtrOp:
-            regManager.EmitStoreToStack(storePtrOp.Value, varOffsets[storePtrOp.VarName], 8, x86Block);
+            if (!deadStoreOps.Contains(op))
+              regManager.EmitStoreToStack(storePtrOp.Value, varOffsets[storePtrOp.VarName], 8, x86Block);
             break;
 
           case StdLoadPtrOp loadPtrOp:
@@ -350,7 +427,9 @@ public static class StandardToX86Conversion {
             break;
 
           case StdCallOp callOp:
-            regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, x86Block);
+            if (!tailCalls.ContainsValue(callOp))
+              regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, x86Block,
+                ConsumedArgs(callOp.Args, lastUseOfValue, currentOpIndex));
             break;
 
           case StdLeaOp leaOp: {
@@ -399,6 +478,10 @@ public static class StandardToX86Conversion {
             break;
 
           case StdReturnOp retOp: {
+            if (tailCalls.TryGetValue(op, out var tailCallOp)) {
+              regManager.EmitTailCall(tailCallOp.Callee, tailCallOp.Args, x86Block);
+              break;
+            }
             if (retOp.ReturnValue != null) {
               if (retOp.ReturnValue is StdF64) {
                 regManager.EnsureInXmm0ForReturn(retOp.ReturnValue, x86Block);
@@ -432,13 +515,15 @@ public static class StandardToX86Conversion {
           }
 
           case StdTryCallOp tryCallOp: {
-            regManager.EmitTryCall(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result, tryCallOp.ErrorFlag, x86Block);
+            regManager.EmitTryCall(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result, tryCallOp.ErrorFlag, x86Block,
+              ConsumedArgs(tryCallOp.Args, lastUseOfValue, currentOpIndex));
             break;
           }
 
           case StdCallRuntimeOp runtimeCallOp: {
             // Runtime calls use the same calling convention as regular calls
-            regManager.EmitCall(runtimeCallOp.Callee, runtimeCallOp.Args, runtimeCallOp.Result, x86Block);
+            regManager.EmitCall(runtimeCallOp.Callee, runtimeCallOp.Args, runtimeCallOp.Result, x86Block,
+              ConsumedArgs(runtimeCallOp.Args, lastUseOfValue, currentOpIndex));
             break;
           }
 
@@ -462,7 +547,8 @@ public static class StandardToX86Conversion {
 
           case StdIndirectCallOp indirectCallOp: {
             // Call through a function pointer
-            regManager.EmitIndirectCall(indirectCallOp.Callee, indirectCallOp.Args, indirectCallOp.Result, x86Block);
+            regManager.EmitIndirectCall(indirectCallOp.Callee, indirectCallOp.Args, indirectCallOp.Result, x86Block,
+              ConsumedArgs(indirectCallOp.Args, lastUseOfValue, currentOpIndex));
             break;
           }
 
@@ -501,6 +587,19 @@ public static class StandardToX86Conversion {
 
   private static bool IsLastUse(Dictionary<StdValue, int> lastUseOfValue, StdValue value, int currentOpIndex) {
     return lastUseOfValue.TryGetValue(value, out var lastUse) && lastUse == currentOpIndex;
+  }
+
+  /// <summary>
+  /// Compute the set of call args whose last use is this call. These args are
+  /// consumed by the call and don't need pre-call spilling.
+  /// </summary>
+  private static HashSet<StdValue>? ConsumedArgs(List<StdValue> args, Dictionary<StdValue, int> lastUseOfValue, int currentOpIndex) {
+    HashSet<StdValue>? result = null;
+    foreach (var arg in args) {
+      if (IsLastUse(lastUseOfValue, arg, currentOpIndex))
+        (result ??= []).Add(arg);
+    }
+    return result;
   }
 
   private static void FreeDeadValues(
@@ -638,5 +737,126 @@ public static class StandardToX86Conversion {
       module.RdataEntries.Add((label, mask, 16));
     }
     return label;
+  }
+
+  /// <summary>
+  /// Peephole optimization: fuse add+mov into lea.
+  /// Pattern: add rX, rY; mov rZ, rX (where rX is dead after) → lea rZ, [rX + rY]
+  /// </summary>
+  private static void PeepholeOptimize(MlirFunction<X86Op> func) {
+    foreach (var block in func.Body.Blocks) {
+      var ops = block.Operations;
+      for (int i = 0; i < ops.Count - 1; i++) {
+        if (ops[i] is X86AddRegRegOp add && ops[i + 1] is X86MovRegRegOp mov
+            && mov.Src == add.Dest && mov.Dest != add.Dest) {
+          // Check that add.Dest (rX) is not read after the mov
+          if (!IsRegReadAfter(ops, i + 2, add.Dest)) {
+            ops[i] = new X86LeaRegRegRegOp(mov.Dest, add.Dest, add.Src);
+            ops.RemoveAt(i + 1);
+          }
+        }
+      }
+    }
+  }
+
+  /// <summary>
+  /// Check if a register is read by any op from startIndex to end of the op list.
+  /// </summary>
+  private static bool IsRegReadAfter(List<X86Op> ops, int startIndex, X86Register reg) {
+    var reg64 = To64Bit(reg);
+    for (int i = startIndex; i < ops.Count; i++) {
+      foreach (var r in GetReadRegisters(ops[i])) {
+        if (To64Bit(r) == reg64) return true;
+      }
+    }
+    return false;
+  }
+
+  private static X86Register To64Bit(X86Register reg) => reg switch {
+    X86Register.Eax => X86Register.Rax,
+    X86Register.Ecx => X86Register.Rcx,
+    X86Register.Edx => X86Register.Rdx,
+    X86Register.Ebx => X86Register.Rbx,
+    X86Register.Esp => X86Register.Rsp,
+    X86Register.Ebp => X86Register.Rbp,
+    X86Register.Esi => X86Register.Rsi,
+    X86Register.Edi => X86Register.Rdi,
+    _ => reg
+  };
+
+  /// <summary>
+  /// Return the GPR registers read (used as sources) by an X86 op.
+  /// Unrecognized ops conservatively return all GPRs to prevent unsafe optimizations.
+  /// </summary>
+  private static IEnumerable<X86Register> GetReadRegisters(X86Op op) {
+    switch (op) {
+      // Pure writes (no GPR reads)
+      case X86PrologueOp:
+      case X86EpilogueOp:
+      case X86MovRegImmOp:
+      case X86MovRegMemOp:
+      case X86LeaRegMemOp:
+      case X86LeaRipRelOp:
+      case X86LeaFuncAddrOp:
+      case X86SetccOp:
+      case X86JccOp:
+      case X86JmpOp:
+      case X86RetOp:
+      case X86GlobalLoadOp:
+      case X86CvttSd2SiOp:
+        break;
+      // Single GPR read
+      case X86MovRegRegOp mov: yield return mov.Src; break;
+      case X86PushRegOp push: yield return push.Register; break;
+      case X86PopRegOp: break;
+      case X86AddRegImmOp addImm: yield return addImm.Dest; break;
+      case X86SubRegImmOp subImm: yield return subImm.Dest; break;
+      case X86MovzxRegOp movzx: yield return movzx.Dest; break;
+      case X86MovMemRegOp store: yield return store.Src; break;
+      case X86MovMemRspRegOp storeRsp: yield return storeRsp.Src; break;
+      case X86GlobalStoreOp gs: yield return gs.Src; break;
+      case X86CallIndirectOp callInd: yield return callInd.Target; break;
+      case X86CvtSi2SdOp cvt: yield return cvt.Src; break;
+      // Two GPR reads
+      case X86AddRegRegOp add: yield return add.Dest; yield return add.Src; break;
+      case X86SubRegRegOp sub: yield return sub.Dest; yield return sub.Src; break;
+      case X86AndRegRegOp and: yield return and.Dest; yield return and.Src; break;
+      case X86OrRegRegOp or: yield return or.Dest; yield return or.Src; break;
+      case X86XorRegRegOp xor: yield return xor.Dest; yield return xor.Src; break;
+      case X86ImulRegRegOp imul: yield return imul.Dest; yield return imul.Src; break;
+      case X86XchgRegRegOp xchg: yield return xchg.A; yield return xchg.B; break;
+      case X86CmpRegRegOp cmp: yield return cmp.Lhs; yield return cmp.Rhs; break;
+      case X86TestRegRegOp test: yield return test.Lhs; yield return test.Rhs; break;
+      case X86LeaRegRegRegOp lea: yield return lea.BaseReg; yield return lea.Index; break;
+      case X86MovIndirectMemRegOp storeInd: yield return storeInd.BaseReg; yield return storeInd.Src; break;
+      case X86MovRegIndirectMemOp loadInd: yield return loadInd.BaseReg; break;
+      case X86MovzxRegByteIndirectOp movzxInd: yield return movzxInd.BaseReg; break;
+      case X86MovByteIndirectRegOp storeByteInd: yield return storeByteInd.BaseReg; yield return storeByteInd.Src; break;
+      // Shift reads dest + implicit ECX
+      case X86ShlRegClOp shl: yield return shl.Dest; yield return X86Register.Ecx; break;
+      case X86SarRegClOp sar: yield return sar.Dest; yield return X86Register.Ecx; break;
+      // IDIV reads RAX, RDX, and divisor
+      case X86CqoOp: yield return X86Register.Rax; break;
+      case X86IdivRegOp idiv: yield return X86Register.Rax; yield return X86Register.Rdx; yield return idiv.Divisor; break;
+      // REP MOVSB reads RSI, RDI, RCX
+      case X86RepMovsbOp: yield return X86Register.Rsi; yield return X86Register.Rdi; yield return X86Register.Rcx; break;
+      // XMM ops that read GPR base registers
+      case X86MovSdIndirectMemXmmOp sdStoreInd: yield return sdStoreInd.BaseReg; break;
+      case X86MovSdXmmIndirectMemOp sdLoadInd: yield return sdLoadInd.BaseReg; break;
+      // Calls/imports: conservatively assume all caller-saved registers are read
+      case X86CallDirectOp:
+      case X86CallImportOp:
+        yield return X86Register.Rcx; yield return X86Register.Rdx;
+        yield return X86Register.R8; yield return X86Register.R9;
+        break;
+      // Conservative default: assume all GPRs are read
+      default:
+        yield return X86Register.Rax; yield return X86Register.Rcx;
+        yield return X86Register.Rdx; yield return X86Register.Rbx;
+        yield return X86Register.Rsi; yield return X86Register.Rdi;
+        yield return X86Register.R8; yield return X86Register.R9;
+        yield return X86Register.R10; yield return X86Register.R11;
+        break;
+    }
   }
 }

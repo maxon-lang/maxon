@@ -137,10 +137,12 @@ public class RegisterManager {
   /// Emit a two-operand register-register instruction (e.g. add, sub).
   /// When lhsConsumed is true, reuses the LHS register directly (no extra mov).
   /// When false, allocates a separate result register and copies LHS into it first.
+  /// When useLeaForAdd is true and the result needs a separate register, emits a single
+  /// LEA instead of mov+add.
   /// </summary>
   public void EmitBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,
     MlirBlock<X86Op> block, Func<X86Register, X86Register, X86Op> makeOp,
-    bool lhsConsumed = false) {
+    bool lhsConsumed = false, bool useLeaForAdd = false) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
     if (lhsConsumed) {
@@ -149,6 +151,10 @@ public class RegisterManager {
     } else {
       var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: rhsReg);
       if (resultReg != lhsReg) {
+        if (useLeaForAdd) {
+          block.AddOp(new X86LeaRegRegRegOp(resultReg, lhsReg, rhsReg));
+          return;
+        }
         block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
       }
       block.AddOp(makeOp(resultReg, rhsReg));
@@ -423,34 +429,31 @@ public class RegisterManager {
     }
   }
 
-  // Windows x64 integer parameter registers (rcx, rdx, r8, r9)
-  private static readonly X86Register[] CallConvRegs = [X86Register.Ecx, X86Register.Edx, X86Register.R8, X86Register.R9];
+  // Internal calling convention: pass up to 8 integer parameters in registers
+  private static readonly X86Register[] CallConvRegs = [
+    X86Register.Ecx, X86Register.Edx, X86Register.R8, X86Register.R9,
+    X86Register.Esi, X86Register.Edi, X86Register.Eax, X86Register.Ebx
+  ];
+  public static int RegisterParamCount => CallConvRegs.Length;
 
   /// <summary>
   /// Shared implementation for direct and indirect calls.
   /// Handles argument placement, caller-saved spilling, GPR arg shuffling,
   /// stack cleanup, register invalidation, and result assignment.
   /// </summary>
-  /// <param name="args">Call arguments.</param>
-  /// <param name="result">Optional result value.</param>
-  /// <param name="block">Target X86 block.</param>
-  /// <param name="spillProtect">Values to protect from spilling (args, and optionally the callee).</param>
-  /// <param name="preGprPlacement">Optional callback invoked after GPR arg snapshot but before
-  /// placement. Used by indirect calls to secure the callee in a non-arg register.</param>
-  /// <param name="emitCallOp">Callback invoked after GPR arg placement; returns the call op to emit.</param>
   private void EmitCallShared(
       List<StdValue> args,
       StdValue? result,
       MlirBlock<X86Op> block,
-      HashSet<StdValue> spillProtect,
       Action? preGprPlacement,
-      Func<X86Op> emitCallOp) {
+      Func<X86Op> emitCallOp,
+      HashSet<StdValue>? consumedByCall = null) {
     int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
     int stackArgCount = args.Count - regArgCount;
 
     // Spill caller-saved registers that hold live values without a stack home.
     // This must happen before argument placement overwrites those registers.
-    SpillCallerSavedRegisters(block, spillProtect);
+    SpillCallerSavedRegisters(block, consumedByCall);
 
     // Allocate stack space for overflow args (aligned to 16 bytes)
     int stackArgBytes = stackArgCount > 0 ? ((stackArgCount * 8 + 15) & ~15) : 0;
@@ -545,9 +548,13 @@ public class RegisterManager {
     // Pass 3: resolve remaining conflicts with xchg (only register-register cycles)
     foreach (int i in gprArgs) {
       if (placed[i]) continue;
+      if (SamePhysicalRegister(argSources[i], targetRegs[i])) {
+        placed[i] = true;
+        continue;
+      }
       block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, targetRegs[i]));
       foreach (int j in gprArgs) {
-        if (j != i && SamePhysicalRegister(argSources[j], targetRegs[i])) {
+        if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
           argSources[j] = argSources[i];
           break;
         }
@@ -584,21 +591,112 @@ public class RegisterManager {
   /// (and on the stack for 5th+ args), invalidating caller-saved registers,
   /// and recording the result (if any) in Eax.
   /// </summary>
-  public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
+  public void EmitCall(string callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block,
+      HashSet<StdValue>? consumedByCall = null) {
     EmitCallShared(
       args, result, block,
-      spillProtect: [.. args],
       preGprPlacement: null,
-      emitCallOp: () => new X86CallDirectOp(callee)
+      emitCallOp: () => new X86CallDirectOp(callee),
+      consumedByCall: consumedByCall
     );
+  }
+
+  /// <summary>
+  /// Emit a tail call: place arguments in registers, emit epilogue, then jmp.
+  /// No caller-saved spilling or stack cleanup — the callee's ret will return
+  /// directly to our caller.
+  /// </summary>
+  public void EmitTailCall(string callee, List<StdValue> args, MlirBlock<X86Op> block) {
+    int regArgCount = Math.Min(args.Count, CallConvRegs.Length);
+
+    // Ensure all args are materialized in registers before placement
+    foreach (var arg in args) {
+      if (arg is StdF64)
+        EnsureInXmmRegister(arg, block);
+      else
+        EnsureInRegister(arg, block);
+    }
+
+    // Snapshot where each GPR arg currently lives
+    var gprArgs = new List<int>();
+    var argSources = new X86Register?[regArgCount];
+    for (int i = 0; i < regArgCount; i++) {
+      if (args[i] is StdF64) continue;
+      gprArgs.Add(i);
+      argSources[i] = To64Bit(_valueToRegister[args[i]]);
+    }
+
+    // Place float args into their target XMM registers
+    var placed = new bool[regArgCount];
+    for (int i = 0; i < regArgCount; i++) {
+      if (args[i] is StdF64) {
+        var srcXmm = EnsureInXmmRegister(args[i], block);
+        if (srcXmm != CallConvXmmRegs[i])
+          block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], srcXmm));
+        placed[i] = true;
+      }
+    }
+
+    var targetRegs = new X86Register[regArgCount];
+    for (int i = 0; i < regArgCount; i++)
+      targetRegs[i] = To64Bit(CallConvRegs[i]);
+
+    // Pass 1: mark GPR args already in their target register
+    foreach (int i in gprArgs) {
+      if (SamePhysicalRegister(argSources[i], targetRegs[i]))
+        placed[i] = true;
+    }
+
+    // Pass 2: place register args whose target is free (all args guaranteed in registers)
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      foreach (int i in gprArgs) {
+        if (placed[i]) continue;
+        bool targetBlocked = false;
+        foreach (int j in gprArgs) {
+          if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
+            targetBlocked = true;
+            break;
+          }
+        }
+        if (!targetBlocked) {
+          block.AddOp(new X86MovRegRegOp(targetRegs[i], argSources[i]!.Value));
+          placed[i] = true;
+          progress = true;
+        }
+      }
+    }
+
+    // Pass 3: resolve remaining conflicts with xchg
+    foreach (int i in gprArgs) {
+      if (placed[i]) continue;
+      if (SamePhysicalRegister(argSources[i], targetRegs[i])) {
+        placed[i] = true;
+        continue;
+      }
+      block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, targetRegs[i]));
+      foreach (int j in gprArgs) {
+        if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
+          argSources[j] = argSources[i];
+          break;
+        }
+      }
+      placed[i] = true;
+    }
+
+    // Epilogue tears down the stack frame, then jmp reuses our caller's return address
+    block.AddOp(new X86EpilogueOp());
+    block.AddOp(new X86JmpOp(callee));
   }
 
   /// <summary>
   /// Emit a try-call: same as EmitCall but also captures RDX as the error flag.
   /// RDX must be captured before InvalidateCallerSavedRegisters clobbers it.
   /// </summary>
-  public void EmitTryCall(string callee, List<StdValue> args, StdValue? result, StdValue errorFlag, MlirBlock<X86Op> block) {
-    EmitCall(callee, args, result, block);
+  public void EmitTryCall(string callee, List<StdValue> args, StdValue? result, StdValue errorFlag, MlirBlock<X86Op> block,
+      HashSet<StdValue>? consumedByCall = null) {
+    EmitCall(callee, args, result, block, consumedByCall);
     // After EmitCall, the result is in EAX and RDX holds the error flag.
     // But InvalidateCallerSavedRegisters already ran inside EmitCall.
     // We need RDX to have been preserved. Since the call just happened and
@@ -619,11 +717,11 @@ public class RegisterManager {
   /// <summary>
   /// Emit an indirect call through a function pointer.
   /// </summary>
-  public void EmitIndirectCall(StdValue callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block) {
+  public void EmitIndirectCall(StdValue callee, List<StdValue> args, StdValue? result, MlirBlock<X86Op> block,
+      HashSet<StdValue>? consumedByCall = null) {
     X86Register calleeReg = default;
     EmitCallShared(
       args, result, block,
-      spillProtect: [.. args, callee],
       preGprPlacement: () => {
         // Ensure callee is in a register not used for arg passing
         calleeReg = EnsureInRegister(callee, block);
@@ -632,7 +730,8 @@ public class RegisterManager {
           calleeReg = X86Register.R10;
         }
       },
-      emitCallOp: () => new X86CallIndirectOp(calleeReg)
+      emitCallOp: () => new X86CallIndirectOp(calleeReg),
+      consumedByCall: consumedByCall
     );
   }
 
@@ -641,8 +740,11 @@ public class RegisterManager {
   /// or load it from the stack for 5th+ parameters.
   /// After push rbp / mov rbp, rsp: [rbp+16] = 5th param, [rbp+24] = 6th, etc.
   /// </summary>
-  // Windows x64 float parameter registers (xmm0, xmm1, xmm2, xmm3)
-  private static readonly X86XmmRegister[] CallConvXmmRegs = [X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, X86XmmRegister.Xmm2, X86XmmRegister.Xmm3];
+  // Internal calling convention: pass up to 8 float parameters in XMM registers
+  private static readonly X86XmmRegister[] CallConvXmmRegs = [
+    X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, X86XmmRegister.Xmm2, X86XmmRegister.Xmm3,
+    X86XmmRegister.Xmm4, X86XmmRegister.Xmm5, X86XmmRegister.Xmm6, X86XmmRegister.Xmm7
+  ];
 
   public void NoteParam(StdValue paramValue, int paramIndex, MlirBlock<X86Op> block) {
     if (paramIndex < CallConvRegs.Length) {
@@ -683,19 +785,20 @@ public class RegisterManager {
 
   private static readonly X86Register[] CallerSavedRegisters = [
     X86Register.Eax, X86Register.Ecx, X86Register.Edx,
+    X86Register.Ebx, X86Register.Esi, X86Register.Edi,
     X86Register.R8, X86Register.R9, X86Register.R10, X86Register.R11
   ];
 
   /// <summary>
   /// Before a call, spill any caller-saved register values that don't have
-  /// a stack home yet, skipping values that are call arguments (they will
-  /// be consumed by the call and don't need preserving).
+  /// a stack home yet. Values in consumedByCall are args whose last use is
+  /// this call — they don't need spilling since they won't be read after.
   /// </summary>
-  private void SpillCallerSavedRegisters(MlirBlock<X86Op> block, HashSet<StdValue> callArgs) {
+  private void SpillCallerSavedRegisters(MlirBlock<X86Op> block, HashSet<StdValue>? consumedByCall = null) {
     foreach (var reg in CallerSavedRegisters) {
       if (_registerContents.TryGetValue(reg, out var value)
         && !_valueStackHome.ContainsKey(value)
-        && !callArgs.Contains(value)) {
+        && !(consumedByCall != null && consumedByCall.Contains(value))) {
         _nextSpillOffset -= 8;
         block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg));
         _valueStackHome[value] = _nextSpillOffset;
@@ -704,7 +807,7 @@ public class RegisterManager {
     foreach (var xmm in CallerSavedXmmRegisters) {
       if (_xmmContents.TryGetValue(xmm, out var value)
         && !_valueXmmStackHome.ContainsKey(value)
-        && !callArgs.Contains(value)) {
+        && !(consumedByCall != null && consumedByCall.Contains(value))) {
         _nextSpillOffset -= 8;
         block.AddOp(new X86MovSdMemXmmOp(_nextSpillOffset, xmm));
         _valueXmmStackHome[value] = _nextSpillOffset;
@@ -712,10 +815,11 @@ public class RegisterManager {
     }
   }
 
-  // Windows x64 caller-saved XMM: xmm0-xmm5
+  // All XMM registers are caller-saved in our internal convention
   private static readonly X86XmmRegister[] CallerSavedXmmRegisters = [
     X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, X86XmmRegister.Xmm2,
-    X86XmmRegister.Xmm3, X86XmmRegister.Xmm4, X86XmmRegister.Xmm5
+    X86XmmRegister.Xmm3, X86XmmRegister.Xmm4, X86XmmRegister.Xmm5,
+    X86XmmRegister.Xmm6, X86XmmRegister.Xmm7
   ];
 
   /// <summary>
