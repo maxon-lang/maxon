@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using MaxonSharp.Compiler;
 using MaxonSharp.Lsp;
 using MaxonSharp.Testing;
@@ -7,6 +8,9 @@ namespace MaxonSharp;
 
 class Program {
   static async Task<int> Main(string[] args) {
+    Console.OutputEncoding = Encoding.UTF8;
+    Console.InputEncoding = Encoding.UTF8;
+
     if (args.Length == 0) {
       PrintUsage();
       return 1;

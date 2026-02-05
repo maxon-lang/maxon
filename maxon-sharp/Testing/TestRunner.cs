@@ -360,7 +360,9 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       RedirectStandardOutput = true,
       RedirectStandardError = true,
       UseShellExecute = false,
-      CreateNoWindow = true
+      CreateNoWindow = true,
+      StandardOutputEncoding = Encoding.UTF8,
+      StandardErrorEncoding = Encoding.UTF8
     };
 
     // Use a job object to ensure child processes are killed on timeout

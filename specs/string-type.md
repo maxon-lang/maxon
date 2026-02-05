@@ -1228,7 +1228,7 @@ end 'main'
 8
 ```
 
-<!-- disabled-test: grapheme-iteration-emoji -->
+<!-- test: grapheme-iteration-emoji -->
 ### Grapheme Iteration with Emoji
 ```maxon
 function main() returns int
