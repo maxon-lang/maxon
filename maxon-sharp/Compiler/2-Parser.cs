@@ -34,6 +34,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable);
   private readonly Dictionary<string, GlobalVarInfo> _globalVars = [];
 
+  private const int ELEMENT_SIZE = 8; // all values are 8 bytes in current implementation
+
   // Default parameter values (funcName -> index -> value)
   private readonly Dictionary<string, Dictionary<int, MlirAttribute>> _functionDefaults = [];
 
@@ -2615,214 +2617,234 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     CreateFunctionCall(token, args);
   }
 
-  private static bool IsCompilerBuiltin(string name) =>
-    name.StartsWith("__managed_memory_") || name.StartsWith("__cstring_") || name.StartsWith("__make_char_") || name == "__element_size";
+  private static bool IsCompilerBuiltin(string name) => CompilerBuiltins.ContainsKey(name);
+
+  public record BuiltinInfo(string HelpText, Func<Parser, MaxonValue?> Handler);
+
+  public static readonly Dictionary<string, BuiltinInfo> CompilerBuiltins = new() {
+    ["__element_size"] = new(
+      "Returns the compile-time element size in bytes (currently 8).\n\n`__element_size() returns int`",
+      p => {
+        p.Expect(TokenType.RightParen);
+        var lit = new MaxonLiteralOp((long)ELEMENT_SIZE);
+        p._currentBlock!.AddOp(lit);
+        return lit.Result;
+      }),
+    ["__managed_memory_len"] = new(
+      "Returns the length (number of elements) of a managed memory buffer.\n\n`__managed_memory_len(memory) returns int`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_capacity"] = new(
+      "Returns the capacity of a managed memory buffer.\n\n`__managed_memory_capacity(memory) returns int`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_set_length"] = new(
+      "Sets the length of a managed memory buffer.\n\n`__managed_memory_set_length(memory, length)`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var newLen = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonFieldAssignOp(managed, "__ManagedMemory", "length", newLen);
+        p._currentBlock!.AddOp(op);
+        return null;
+      }),
+    ["__managed_memory_get_unchecked"] = new(
+      "Gets the element at the given index without bounds checking.\n\n`__managed_memory_get_unchecked(memory, index) returns Element`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var index = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemGetOp(managed, index, ELEMENT_SIZE, p.GetElementKind());
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_set_at"] = new(
+      "Sets the element at the given index in a managed memory buffer.\n\n`__managed_memory_set_at(memory, index, value)`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var index = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var value = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var elementKind = p.DetermineValueKind(value);
+        var op = new MaxonManagedMemSetOp(managed, index, value, ELEMENT_SIZE, elementKind);
+        p._currentBlock!.AddOp(op);
+        return null;
+      }),
+    ["__managed_memory_create"] = new(
+      "Allocates a new heap-backed managed memory buffer with the given initial capacity.\n\n`__managed_memory_create(capacity, element_size) returns __ManagedMemory`",
+      p => {
+        var count = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        // second arg is element size, skip it (we use compile-time constant)
+        p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemCreateOp(count, ELEMENT_SIZE);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_grow"] = new(
+      "Grows a managed memory buffer to a new capacity using realloc.\n\n`__managed_memory_grow(memory, new_capacity)`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var newCap = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemGrowOp(managed, newCap, ELEMENT_SIZE);
+        p._currentBlock!.AddOp(op);
+        return null;
+      }),
+    ["__managed_memory_shift_right"] = new(
+      "Shifts elements right in the buffer starting at the given index, creating a gap.\n\n`__managed_memory_shift_right(memory, index, count)`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var index = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var count = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemShiftOp(managed, index, count, ELEMENT_SIZE, shiftRight: true);
+        p._currentBlock!.AddOp(op);
+        return null;
+      }),
+    ["__managed_memory_shift_left"] = new(
+      "Shifts elements left in the buffer starting at the given index, closing a gap.\n\n`__managed_memory_shift_left(memory, index, count)`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var index = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var count = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemShiftOp(managed, index, count, ELEMENT_SIZE, shiftRight: false);
+        p._currentBlock!.AddOp(op);
+        return null;
+      }),
+    ["__managed_memory_byte_at"] = new(
+      "Gets a single byte at the given index, zero-extended to int.\n\n`__managed_memory_byte_at(memory, index) returns int`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var index = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemByteGetOp(managed, index);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_set_byte"] = new(
+      "Sets a single byte at the given index in a managed memory buffer.\n\n`__managed_memory_set_byte(memory, index, value)`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var index = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var value = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemByteSetOp(managed, index, value);
+        p._currentBlock!.AddOp(op);
+        return null;
+      }),
+    ["__managed_memory_concat"] = new(
+      "Concatenates two managed memory buffers into a new buffer.\n\n`__managed_memory_concat(lhs, rhs) returns __ManagedMemory`",
+      p => {
+        var lhs = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var rhs = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemConcatOp(lhs, rhs);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_slice"] = new(
+      "Creates a new buffer from a slice of the source buffer [start, end).\n\n`__managed_memory_slice(memory, start, end) returns __ManagedMemory`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var start = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var end = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemSliceOp(managed, start, end);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_to_cstring"] = new(
+      "Returns the raw buffer pointer from a managed memory struct as a C string.\n\n`__managed_memory_to_cstring(memory) returns int`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonManagedToCStringOp(managed);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__cstring_to_managed"] = new(
+      "Converts a null-terminated C string pointer to a managed memory buffer.\n\n`__cstring_to_managed(cstring_ptr) returns __ManagedMemory`",
+      p => {
+        var cstrPtr = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonCStringToManagedOp(cstrPtr);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__cstring_write_stdout"] = new(
+      "Writes a null-terminated C string to stdout.\n\n`__cstring_write_stdout(cstring_ptr) returns int`",
+      p => {
+        var cstrPtr = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonCStringWriteStdoutOp(cstrPtr);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__make_char_from_bytes"] = new(
+      "Creates a Character value from bytes in a managed memory buffer at the given position.\n\n`__make_char_from_bytes(memory, position, length) returns int`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var pos = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var len = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonMakeCharFromBytesOp(managed, pos, len);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+  };
+
+  /// <summary>
+  /// Get the element type from the current struct's type parameters (e.g., Element for Array/Vector)
+  /// </summary>
+  private MaxonValueKind GetElementKind() {
+    if (_currentTypeName != null
+        && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
+        && typeInfo is MlirStructType structType
+        && structType.TypeParams.TryGetValue("Element", out var elementType)) {
+      if (elementType == MlirType.F64) return MaxonValueKind.Float;
+      return MaxonValueKind.Integer;
+    }
+    return MaxonValueKind.Integer;
+  }
 
   /// <summary>
   /// Handles compiler builtin intrinsics.
   /// Called after consuming '('. Returns the result value (or null for void builtins).
   /// </summary>
   private MaxonValue? TryEmitManagedMemoryBuiltin(Token token) {
-    const int ELEMENT_SIZE = 8; // all values are 8 bytes in current implementation
-
-    // Get the element type from the current struct's type parameters (e.g., Element for Array/Vector)
-    MaxonValueKind GetElementKind() {
-      if (_currentTypeName != null
-          && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
-          && typeInfo is MlirStructType structType
-          && structType.TypeParams.TryGetValue("Element", out var elementType)) {
-        if (elementType == MlirType.F64) return MaxonValueKind.Float;
-        return MaxonValueKind.Integer;
-      }
-      return MaxonValueKind.Integer;
-    }
-
-    switch (token.Value) {
-      case "__element_size": {
-        Expect(TokenType.RightParen);
-        var lit = new MaxonLiteralOp((long)ELEMENT_SIZE);
-        _currentBlock!.AddOp(lit);
-        return lit.Result;
-      }
-
-      case "__managed_memory_len": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__managed_memory_capacity": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__managed_memory_set_length": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var newLen = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonFieldAssignOp(managed, "__ManagedMemory", "length", newLen);
-        _currentBlock!.AddOp(op);
-        return null;
-      }
-
-      case "__managed_memory_get_unchecked": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGetOp(managed, index, ELEMENT_SIZE, GetElementKind());
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__managed_memory_set_at": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var value = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        // Determine element kind from the value being stored (for Element-polymorphic types)
-        var elementKind = DetermineValueKind(value);
-        var op = new MaxonManagedMemSetOp(managed, index, value, ELEMENT_SIZE, elementKind);
-        _currentBlock!.AddOp(op);
-        return null;
-      }
-
-      case "__managed_memory_create": {
-        var count = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        // second arg is element size, skip it (we use compile-time constant)
-        ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemCreateOp(count, ELEMENT_SIZE);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__managed_memory_grow": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var newCap = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGrowOp(managed, newCap, ELEMENT_SIZE);
-        _currentBlock!.AddOp(op);
-        return null;
-      }
-
-      case "__managed_memory_shift_right": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var count = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemShiftOp(managed, index, count, ELEMENT_SIZE, shiftRight: true);
-        _currentBlock!.AddOp(op);
-        return null;
-      }
-
-      case "__managed_memory_shift_left": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var count = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemShiftOp(managed, index, count, ELEMENT_SIZE, shiftRight: false);
-        _currentBlock!.AddOp(op);
-        return null;
-      }
-
-      case "__managed_memory_byte_at": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemByteGetOp(managed, index);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__managed_memory_set_byte": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var value = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemByteSetOp(managed, index, value);
-        _currentBlock!.AddOp(op);
-        return null;
-      }
-
-      case "__managed_memory_concat": {
-        var lhs = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var rhs = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemConcatOp(lhs, rhs);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__managed_memory_slice": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var start = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var end = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemSliceOp(managed, start, end);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__managed_memory_to_cstring": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonManagedToCStringOp(managed);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__cstring_to_managed": {
-        var cstrPtr = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonCStringToManagedOp(cstrPtr);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__cstring_write_stdout": {
-        var cstrPtr = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonCStringWriteStdoutOp(cstrPtr);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      case "__make_char_from_bytes": {
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var pos = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        var len = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var op = new MaxonMakeCharFromBytesOp(managed, pos, len);
-        _currentBlock!.AddOp(op);
-        return op.Result;
-      }
-
-      default:
-        throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unknown builtin '{token.Value}'", token.Line, token.Column);
-    }
+    if (CompilerBuiltins.TryGetValue(token.Value, out var info))
+      return info.Handler(this);
+    throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unknown builtin '{token.Value}'", token.Line, token.Column);
   }
 
   private MaxonCallOp? TrySiblingMethodCall(Token token) {

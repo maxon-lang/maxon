@@ -114,6 +114,16 @@ public class LspServer {
     items.Add(new CompletionItem { Label = "bool", Kind = CompletionItemKind.TypeParameter, Detail = "Boolean type" });
     items.Add(new CompletionItem { Label = "byte", Kind = CompletionItemKind.TypeParameter, Detail = "8-bit unsigned integer" });
 
+    // Add compiler builtins
+    foreach (var (name, info) in Parser.CompilerBuiltins) {
+      items.Add(new CompletionItem {
+        Label = name,
+        Kind = CompletionItemKind.Function,
+        Detail = info.HelpText,
+        InsertText = name
+      });
+    }
+
     return new CompletionList(items, isIncomplete: false);
   }
 
@@ -142,6 +152,19 @@ public class LspServer {
           new MarkupContent {
             Kind = MarkupKind.Markdown,
             Value = $"**{word}** (keyword)\n\n{keywordInfo.HelpText}"
+          }
+        ),
+        Range = GetWordRange(position, line, word)
+      };
+    }
+
+    // Check if it's a compiler builtin
+    if (Parser.CompilerBuiltins.TryGetValue(word, out var builtinInfo)) {
+      return new Hover {
+        Contents = new MarkedStringsOrMarkupContent(
+          new MarkupContent {
+            Kind = MarkupKind.Markdown,
+            Value = $"**{word}** (builtin)\n\n{builtinInfo.HelpText}"
           }
         ),
         Range = GetWordRange(position, line, word)
