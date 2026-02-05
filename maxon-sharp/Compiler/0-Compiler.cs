@@ -85,6 +85,38 @@ public class Compiler {
     }
   }
 
+  public static List<CompileError> Check(string filePath, string content) {
+    var context = new MlirContext();
+    using var _ = context.PushScope();
+    var errors = new List<CompileError>();
+
+    try {
+      var module = new MlirModule<MaxonOp>();
+      var stdlibSources = StdlibLoader.LoadStdlibModules();
+
+      // If checking a stdlib file, replace its content in the stdlib sources
+      var normalizedPath = Path.GetFullPath(filePath);
+      var stdlibIndex = Array.FindIndex(stdlibSources,
+        s => Path.GetFullPath(s.Path) == normalizedPath);
+
+      if (stdlibIndex >= 0) {
+        stdlibSources[stdlibIndex] = new SourceFile(filePath, content);
+        CompileSources(module, stdlibSources, true);
+      } else {
+        CompileSources(module, stdlibSources, true);
+        foreach (var func in module.Functions)
+          func.IsStdlib = true;
+        context.ResetIds();
+        CompileSources(module, [new SourceFile(filePath, content)], false);
+      }
+    } catch (CompileError ex) {
+      ex.FilePath ??= filePath;
+      errors.Add(ex);
+    }
+
+    return errors;
+  }
+
   private static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib) {
     // Pre-register type names from all sources so cross-file references resolve
     // (e.g., Character.maxon references String before String.maxon is parsed)

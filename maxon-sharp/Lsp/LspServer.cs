@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
 using MaxonSharp.Compiler;
-using MaxonSharp.Compiler.Mlir.Core;
-using MaxonSharp.Compiler.Mlir.Dialects;
 using Microsoft.Extensions.DependencyInjection;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
@@ -52,36 +50,16 @@ public class LspServer {
   }
 
   public Container<Diagnostic> GetDiagnostics(DocumentUri uri) {
-    if (!_documents.TryGetValue(uri, out var content)) {
+    if (!_documents.TryGetValue(uri, out var content))
       return new Container<Diagnostic>();
-    }
 
-    var diagnostics = new List<Diagnostic>();
+    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
 
+    List<CompileError> errors;
     try {
-      var lexer = new Lexer(content);
-      var tokens = lexer.Tokenize();
-
-      // Try parsing to catch more errors
-      var parser = new Parser(tokens);
-      parser.Parse();
-    } catch (CompileError error) {
-      var line = (error.Line ?? 1) - 1;
-      var column = (error.Column ?? 1) - 1;
-
-      diagnostics.Add(new Diagnostic {
-        Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
-          new Position(line, column),
-          new Position(line, column + 1)
-        ),
-        Severity = DiagnosticSeverity.Error,
-        Source = "maxon",
-        Message = error.Message,
-        Code = error.Code.Format()
-      });
+      errors = MaxonSharp.Compiler.Compiler.Check(filePath, content);
     } catch (Exception ex) {
-      // Catch any other parsing errors
-      diagnostics.Add(new Diagnostic {
+      return new Container<Diagnostic>(new Diagnostic {
         Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
           new Position(0, 0),
           new Position(0, 1)
@@ -91,6 +69,17 @@ public class LspServer {
         Message = ex.Message
       });
     }
+
+    var diagnostics = errors.Select(error => new Diagnostic {
+      Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+        new Position((error.Line ?? 1) - 1, (error.Column ?? 1) - 1),
+        new Position((error.Line ?? 1) - 1, (error.Column ?? 1))
+      ),
+      Severity = DiagnosticSeverity.Error,
+      Source = "maxon",
+      Message = error.Message,
+      Code = error.Code.Format()
+    }).ToList();
 
     return new Container<Diagnostic>(diagnostics);
   }
@@ -119,7 +108,7 @@ public class LspServer {
       items.Add(new CompletionItem {
         Label = name,
         Kind = CompletionItemKind.Function,
-        Detail = info.HelpText,
+        Detail = "Stdlib only. " + info.HelpText,
         InsertText = name
       });
     }
@@ -164,7 +153,7 @@ public class LspServer {
         Contents = new MarkedStringsOrMarkupContent(
           new MarkupContent {
             Kind = MarkupKind.Markdown,
-            Value = $"**{word}** (builtin)\n\n{builtinInfo.HelpText}"
+            Value = $"**{word}** (builtin, stdlib only)\n\n{builtinInfo.HelpText}"
           }
         ),
         Range = GetWordRange(position, line, word)
