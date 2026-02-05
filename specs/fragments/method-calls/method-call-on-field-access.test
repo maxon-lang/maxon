@@ -26,29 +26,27 @@ module {
   func @Inner.get(__self_ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, [ecx+0]
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
     x86.mov eax, ecx
     x86.epilogue
     x86.ret
   }
   func @Outer.getInnerValue(__self_ptr: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
+    x86.prologue stack_size=16
     x86.xor eax, eax
     x86.add ecx, eax
     x86.mov eax, [ecx+0]
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov [rbp-24], ecx
-    x86.lea rdx, [rbp-24]
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-16], ecx
+    x86.lea rdx, [rbp-16]
     x86.mov rcx, rdx
     x86.call Inner.get
-    x86.mov ebx, [rbp-24]
-    x86.mov [rbp-16], ebx
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-8], ebx
     x86.epilogue
     x86.ret
   }

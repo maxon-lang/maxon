@@ -89,10 +89,7 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 99
-    x86.mov [rbp-8], eax
-    x86.epilogue
     x86.ret
   }
 }
@@ -182,13 +179,9 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 30
-    x86.mov [rbp-8], eax
     x86.mov ecx, 12
-    x86.mov [rbp-16], ecx
     x86.add eax, ecx
-    x86.epilogue
     x86.ret
   }
 }
@@ -229,11 +222,8 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 21
-    x86.mov [rbp-8], eax
     x86.add eax, eax
-    x86.epilogue
     x86.ret
   }
 }
@@ -293,19 +283,13 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
     x86.mov ecx, 5
     x86.add eax, ecx
-    x86.mov [rbp-16], eax
     x86.mov edx, 7
     x86.add eax, edx
-    x86.mov [rbp-24], eax
     x86.mov ebx, 20
     x86.add eax, ebx
-    x86.mov [rbp-32], eax
-    x86.epilogue
     x86.ret
   }
 }
@@ -358,17 +342,12 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 100
-    x86.mov [rbp-8], eax
     x86.mov ecx, 80
     x86.sub eax, ecx
-    x86.mov [rbp-16], eax
     x86.mov edx, 22
-    x86.mov [rbp-8], edx
     x86.add edx, eax
     x86.mov eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -444,25 +423,17 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=48
     x86.mov eax, 1
-    x86.mov [rbp-8], eax
     x86.mov ecx, 2
-    x86.mov [rbp-16], ecx
     x86.mov edx, 3
-    x86.mov [rbp-24], edx
     x86.mov ebx, 4
-    x86.mov [rbp-32], ebx
     x86.mov esi, 5
-    x86.mov [rbp-40], esi
     x86.mov edi, 6
-    x86.mov [rbp-48], edi
     x86.add eax, ecx
     x86.add eax, edx
     x86.add eax, ebx
     x86.add eax, esi
     x86.add eax, edi
-    x86.epilogue
     x86.ret
   }
 }
@@ -564,28 +535,22 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=32
     x86.mov eax, 1
-    x86.mov [rbp-8], eax
     x86.mov ecx, 2
-    x86.mov [rbp-16], ecx
     x86.mov edx, 3
-    x86.mov [rbp-24], edx
     x86.mov ebx, 4
-    x86.mov [rbp-32], ebx
     x86.mov esi, 5
-    x86.mov [rbp-40], esi
     x86.mov edi, 6
-    x86.mov [rbp-48], edi
     x86.mov r8, 7
-    x86.mov [rbp-56], r8
     x86.mov r9, 8
-    x86.mov [rbp-64], r9
+    x86.mov [rbp-8], eax
     x86.mov eax, 9
-    x86.mov [rbp-72], eax
+    x86.mov [rbp-16], ecx
     x86.mov ecx, 10
-    x86.mov [rbp-80], ecx
+    x86.mov [rbp-24], edx
     x86.mov edx, [rbp-16]
+    x86.mov [rbp-32], ebx
     x86.mov ebx, [rbp-8]
     x86.add ebx, edx
     x86.mov edx, [rbp-24]
@@ -747,40 +712,34 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=144
+    x86.prologue stack_size=96
     x86.mov eax, 1
-    x86.mov [rbp-8], eax
     x86.mov ecx, 2
-    x86.mov [rbp-16], ecx
     x86.mov edx, 3
-    x86.mov [rbp-24], edx
     x86.mov ebx, 4
-    x86.mov [rbp-32], ebx
     x86.mov esi, 5
-    x86.mov [rbp-40], esi
     x86.mov edi, 6
-    x86.mov [rbp-48], edi
     x86.mov r8, 7
-    x86.mov [rbp-56], r8
     x86.mov r9, 8
-    x86.mov [rbp-64], r9
+    x86.mov [rbp-8], eax
     x86.mov eax, 9
-    x86.mov [rbp-72], eax
+    x86.mov [rbp-16], ecx
     x86.mov ecx, 10
-    x86.mov [rbp-80], ecx
+    x86.mov [rbp-24], edx
     x86.mov edx, 11
-    x86.mov [rbp-88], edx
+    x86.mov [rbp-32], ebx
     x86.mov ebx, 12
-    x86.mov [rbp-96], ebx
+    x86.mov [rbp-40], esi
     x86.mov esi, 13
-    x86.mov [rbp-104], esi
+    x86.mov [rbp-48], edi
     x86.mov edi, 14
-    x86.mov [rbp-112], edi
+    x86.mov [rbp-56], r8
     x86.mov r8, 15
-    x86.mov [rbp-120], r8
+    x86.mov [rbp-64], r9
     x86.mov r9, 16
-    x86.mov [rbp-128], r9
+    x86.mov [rbp-72], eax
     x86.mov eax, [rbp-16]
+    x86.mov [rbp-80], ecx
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov eax, [rbp-24]
@@ -807,7 +766,7 @@ module {
     x86.add ecx, r9
     x86.mov eax, 256
     x86.mov ebx, eax
-    x86.mov [rbp-136], eax
+    x86.mov [rbp-88], eax
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
@@ -988,48 +947,42 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=176
+    x86.prologue stack_size=128
     x86.mov eax, 1
-    x86.mov [rbp-8], eax
     x86.mov ecx, 2
-    x86.mov [rbp-16], ecx
     x86.mov edx, 3
-    x86.mov [rbp-24], edx
     x86.mov ebx, 4
-    x86.mov [rbp-32], ebx
     x86.mov esi, 5
-    x86.mov [rbp-40], esi
     x86.mov edi, 6
-    x86.mov [rbp-48], edi
     x86.mov r8, 7
-    x86.mov [rbp-56], r8
     x86.mov r9, 8
-    x86.mov [rbp-64], r9
+    x86.mov [rbp-8], eax
     x86.mov eax, 9
-    x86.mov [rbp-72], eax
+    x86.mov [rbp-16], ecx
     x86.mov ecx, 10
-    x86.mov [rbp-80], ecx
+    x86.mov [rbp-24], edx
     x86.mov edx, 11
-    x86.mov [rbp-88], edx
+    x86.mov [rbp-32], ebx
     x86.mov ebx, 12
-    x86.mov [rbp-96], ebx
+    x86.mov [rbp-40], esi
     x86.mov esi, 13
-    x86.mov [rbp-104], esi
+    x86.mov [rbp-48], edi
     x86.mov edi, 14
-    x86.mov [rbp-112], edi
+    x86.mov [rbp-56], r8
     x86.mov r8, 15
-    x86.mov [rbp-120], r8
+    x86.mov [rbp-64], r9
     x86.mov r9, 16
-    x86.mov [rbp-128], r9
+    x86.mov [rbp-72], eax
     x86.mov eax, 17
-    x86.mov [rbp-136], eax
+    x86.mov [rbp-80], ecx
     x86.mov ecx, 18
-    x86.mov [rbp-144], ecx
+    x86.mov [rbp-88], edx
     x86.mov edx, 19
-    x86.mov [rbp-152], edx
+    x86.mov [rbp-96], ebx
     x86.mov ebx, 20
-    x86.mov [rbp-160], ebx
+    x86.mov [rbp-104], esi
     x86.mov esi, [rbp-16]
+    x86.mov [rbp-112], edi
     x86.mov edi, [rbp-8]
     x86.add edi, esi
     x86.mov esi, [rbp-24]
@@ -1064,7 +1017,7 @@ module {
     x86.add edi, ebx
     x86.mov eax, 256
     x86.mov ecx, eax
-    x86.mov [rbp-168], eax
+    x86.mov [rbp-120], eax
     x86.mov eax, edi
     x86.cqo
     x86.idiv ecx
@@ -1159,29 +1112,20 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=16
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
     x86.mov ecx, 20
-    x86.mov [rbp-16], ecx
     x86.add eax, ecx
-    x86.mov [rbp-24], eax
     x86.mov edx, 30
-    x86.mov [rbp-32], edx
     x86.mov ebx, 40
-    x86.mov [rbp-40], ebx
     x86.add edx, ebx
-    x86.mov [rbp-48], edx
     x86.mov esi, 50
-    x86.mov [rbp-56], esi
     x86.mov edi, 60
-    x86.mov [rbp-64], edi
     x86.add esi, edi
-    x86.mov [rbp-72], esi
     x86.add eax, edx
     x86.add eax, esi
-    x86.mov [rbp-80], eax
     x86.mov r8, 256
+    x86.mov [rbp-8], eax
     x86.cqo
     x86.idiv r8
     x86.mov eax, edx
@@ -1280,34 +1224,23 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
     x86.xor edx, edx
-    x86.mov [rbp-24], edx
     x86.mov ebx, 10
     x86.add eax, ebx
-    x86.mov [rbp-8], eax
     x86.mov esi, 20
     x86.add ecx, esi
-    x86.mov [rbp-16], ecx
     x86.mov edi, 30
     x86.add edx, edi
-    x86.mov [rbp-24], edx
     x86.mov r8, 5
     x86.add eax, r8
-    x86.mov [rbp-8], eax
     x86.mov r9, 10
     x86.add ecx, r9
-    x86.mov [rbp-16], ecx
     x86.mov ebx, 15
     x86.add edx, ebx
-    x86.mov [rbp-24], edx
     x86.add eax, ecx
     x86.add eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -1378,7 +1311,6 @@ module {
     x86.mov eax, 2
     x86.mov [rbp-8], eax
     x86.call getForty
-    x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov eax, ecx
@@ -1484,11 +1416,10 @@ module {
     x86.mov eax, 5
     x86.mov [rbp-8], eax
     x86.call getTen
-    x86.mov [rbp-16], eax
     x86.mov ecx, 7
+    x86.mov [rbp-16], eax
     x86.mov [rbp-24], ecx
     x86.call getTwo
-    x86.mov [rbp-32], eax
     x86.mov edx, [rbp-16]
     x86.mov ebx, [rbp-8]
     x86.add ebx, edx
@@ -1565,16 +1496,15 @@ module {
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.call compute
     x86.mov [rbp-8], eax
     x86.call compute
-    x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov eax, 256
     x86.mov ebx, eax
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-16], eax
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
@@ -1631,18 +1561,14 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 126
-    x86.mov [rbp-8], eax
     x86.mov ecx, 3
-    x86.mov [rbp-16], ecx
     x86.cvtsi2sd xmm0, eax
     x86.cvtsi2sd xmm1, ecx
     x86.movsd xmm2, xmm0
     x86.divsd xmm2, xmm1
     x86.cvttsd2si edx, xmm2
     x86.mov eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -1706,24 +1632,18 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
     x86.mov ecx, 84
-    x86.mov [rbp-16], ecx
     x86.mov edx, 2
-    x86.mov [rbp-24], edx
     x86.cvtsi2sd xmm0, ecx
     x86.cvtsi2sd xmm1, edx
     x86.movsd xmm2, xmm0
     x86.divsd xmm2, xmm1
-    x86.movsd [rbp-32], xmm2
     x86.cvtsi2sd xmm3, eax
     x86.movsd xmm4, xmm2
     x86.subsd xmm4, xmm3
     x86.cvttsd2si ebx, xmm4
     x86.mov eax, ebx
-    x86.epilogue
     x86.ret
   }
 }
@@ -1783,12 +1703,8 @@ module {
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
     x86.add ecx, edx
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
@@ -1797,8 +1713,7 @@ module {
     x86.mov ecx, 12
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call add
-    x86.ret
+    x86.jmp add
   }
 }
 ```
@@ -1863,25 +1778,16 @@ module {
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
     x86.add ecx, edx
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 20
-    x86.mov [rbp-8], eax
     x86.mov ecx, 22
-    x86.mov [rbp-16], ecx
     x86.mov rdx, rax
-    x86.call add
-    x86.epilogue
-    x86.ret
+    x86.jmp add
   }
 }
 ```
@@ -1941,19 +1847,15 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
     x86.mov ecx, 10
     x86.cmp eax, ecx
     x86.jne main.other_1
   check_0:
     x86.mov eax, 42
-    x86.epilogue
     x86.ret
   other_1:
     x86.xor eax, eax
-    x86.epilogue
     x86.ret
   }
 }
@@ -2037,27 +1939,26 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 40
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
-    x86.mov [rbp-16], ecx
     x86.xor edx, edx
-    x86.mov [rbp-24], edx
+    x86.mov [rbp-16], edx
     x86.mov ebx, 1
     x86.cmp ecx, ebx
     x86.jne main.other_1
   check_0:
     x86.mov eax, 2
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-16], eax
     x86.jmp main.check_0.merge
   other_1:
     x86.mov eax, 100
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-16], eax
     x86.jmp main.check_0.merge
   check_0.merge:
     x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-24]
+    x86.mov ecx, [rbp-16]
     x86.add eax, ecx
     x86.epilogue
     x86.ret
@@ -3056,12 +2957,9 @@ module {
 module {
   func @double(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, 2
     x86.imul ecx, eax
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
@@ -3219,19 +3117,13 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
     x86.mov eax, 3
-    x86.mov [rbp-8], eax
     x86.mov ecx, 5
-    x86.mov [rbp-16], ecx
     x86.mov edx, 7
-    x86.mov [rbp-24], edx
     x86.mov ebx, 2
-    x86.mov [rbp-32], ebx
     x86.add eax, ecx
     x86.sub edx, ebx
     x86.imul eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -3312,19 +3204,11 @@ module {
 module {
   func @sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], r8
-    x86.mov [rbp-32], r9
-    x86.mov eax, [rbp+16]
-    x86.mov [rbp-40], eax
     x86.add ecx, edx
     x86.add ecx, r8
     x86.add ecx, r9
-    x86.add ecx, eax
+    x86.add ecx, esi
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
@@ -3334,15 +3218,11 @@ module {
     x86.mov edx, 8
     x86.mov ebx, 12
     x86.mov esi, 7
-    x86.sub rsp, 16
-    x86.mov [rsp+0], esi
     x86.mov r8, rdx
     x86.mov r9, rbx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call sum5
-    x86.add rsp, 16
-    x86.ret
+    x86.jmp sum5
   }
 }
 ```
@@ -3450,30 +3330,19 @@ module {
 module {
   func @sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], r8
-    x86.mov [rbp-32], r9
-    x86.mov eax, [rbp+16]
-    x86.mov [rbp-40], eax
-    x86.mov ebx, [rbp+24]
-    x86.mov [rbp-48], ebx
-    x86.mov esi, [rbp+32]
-    x86.mov [rbp-56], esi
-    x86.mov edi, [rbp+40]
-    x86.mov [rbp-64], edi
-    x86.mov ecx, [rbp+48]
-    x86.mov [rbp-72], ecx
+    x86.mov ecx, [rbp+16]
+    x86.mov [rbp-16], r8
     x86.mov r8, [rbp-8]
     x86.add r8, edx
-    x86.mov edx, [rbp-24]
+    x86.mov edx, [rbp-16]
     x86.add r8, edx
     x86.add r8, r9
-    x86.add r8, eax
-    x86.add r8, ebx
     x86.add r8, esi
     x86.add r8, edi
+    x86.add r8, eax
+    x86.add r8, ebx
     x86.add r8, ecx
     x86.mov eax, r8
     x86.epilogue
@@ -3492,18 +3361,15 @@ module {
     x86.mov r9, 8
     x86.mov [rbp-8], eax
     x86.mov eax, 9
-    x86.sub rsp, 48
-    x86.mov [rsp+0], esi
-    x86.mov [rsp+8], edi
-    x86.mov [rsp+16], r8
-    x86.mov [rsp+24], r9
-    x86.mov [rsp+32], eax
+    x86.sub rsp, 16
+    x86.mov [rsp+0], eax
+    x86.mov rax, r8
     x86.mov r8, rdx
-    x86.mov r9, rbx
     x86.mov rdx, rcx
     x86.mov rcx, [rbp-8]
+    x86.xchg rbx, r9
     x86.call sum9
-    x86.add rsp, 48
+    x86.add rsp, 16
     x86.epilogue
     x86.ret
   }
@@ -3789,10 +3655,7 @@ module {
 module {
   func @identity(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
@@ -3925,24 +3788,16 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=48
     x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd [rbp-8], xmm0
     x86.movsd xmm1, [rip+__float_2.86]
-    x86.movsd [rbp-16], xmm1
     x86.movsd xmm2, xmm0
     x86.addsd xmm2, xmm1
-    x86.movsd [rbp-24], xmm2
     x86.mov eax, 10
-    x86.mov [rbp-32], eax
     x86.mov ecx, 20
-    x86.mov [rbp-40], ecx
     x86.add eax, ecx
-    x86.mov [rbp-48], eax
     x86.cvttsd2si edx, xmm2
     x86.add edx, eax
     x86.mov eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -4248,7 +4103,6 @@ module {
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
     x86.add eax, ecx
-    x86.mov [rbp-32], eax
     x86.mov edx, [rbp-16]
     x86.mov [rbp-8], edx
     x86.mov [rbp-16], eax
@@ -4353,23 +4207,14 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=64
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
     x86.mov ecx, 20
-    x86.mov [rbp-16], ecx
     x86.mov edx, 30
-    x86.mov [rbp-24], edx
     x86.mov ebx, 40
-    x86.mov [rbp-32], ebx
     x86.mov esi, 50
-    x86.mov [rbp-40], esi
     x86.mov edi, 60
-    x86.mov [rbp-48], edi
     x86.mov r8, 70
-    x86.mov [rbp-56], r8
     x86.mov r9, 2
-    x86.mov [rbp-64], r9
     x86.add eax, ecx
     x86.add eax, edx
     x86.add eax, ebx
@@ -4381,7 +4226,6 @@ module {
     x86.movsd xmm2, xmm0
     x86.divsd xmm2, xmm1
     x86.cvttsd2si eax, xmm2
-    x86.epilogue
     x86.ret
   }
 }
@@ -4474,34 +4318,24 @@ module {
 module {
   func @useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
-    x86.prologue stack_size=64
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], r8
-    x86.mov [rbp-32], r9
     x86.add ecx, edx
-    x86.mov [rbp-40], ecx
     x86.add r8, r9
-    x86.mov [rbp-48], r8
     x86.add ecx, r8
-    x86.mov [rbp-56], ecx
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 42
-    x86.mov [rbp-8], eax
     x86.mov ecx, 1
     x86.mov edx, 2
     x86.mov ebx, 3
     x86.mov esi, 4
+    x86.mov [rbp-8], eax
     x86.mov r8, rbx
     x86.mov r9, rsi
     x86.call useRegs
-    x86.mov [rbp-16], eax
     x86.mov edi, [rbp-8]
     x86.add edi, eax
     x86.mov eax, edi
@@ -4576,7 +4410,6 @@ module {
     x86.movsd xmm0, [rip+__float_3.14]
     x86.movsd [rbp-8], xmm0
     x86.call getInt
-    x86.mov [rbp-16], eax
     x86.movsd xmm0, [rbp-8]
     x86.cvttsd2si ecx, xmm0
     x86.add ecx, eax
@@ -4651,15 +4484,10 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
     x86.mov eax, 100
-    x86.mov [rbp-8], eax
     x86.mov ecx, 5
-    x86.mov [rbp-16], ecx
     x86.mov edx, 84
-    x86.mov [rbp-24], edx
     x86.mov ebx, 4
-    x86.mov [rbp-32], ebx
     x86.cvtsi2sd xmm0, eax
     x86.cvtsi2sd xmm1, ecx
     x86.movsd xmm2, xmm0
@@ -4672,7 +4500,6 @@ module {
     x86.addsd xmm6, xmm5
     x86.cvttsd2si esi, xmm6
     x86.mov eax, esi
-    x86.epilogue
     x86.ret
   }
 }
@@ -4728,17 +4555,15 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 100
-    x86.mov [rbp-8], eax
     x86.mov ecx, 7
-    x86.mov [rbp-16], ecx
     x86.mov edx, 10
-    x86.mov [rbp-24], edx
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], edx
     x86.cqo
     x86.idiv ecx
-    x86.mov [rbp-32], edx
-    x86.mov ebx, [rbp-24]
+    x86.mov ebx, [rbp-16]
     x86.imul edx, ebx
     x86.mov eax, edx
     x86.epilogue
@@ -4814,27 +4639,18 @@ module {
 module {
   func @sub(a: i64, b: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
     x86.sub ecx, edx
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
     x86.mov ecx, 3
-    x86.mov [rbp-16], ecx
     x86.mov rdx, rax
     x86.call sub
-    x86.mov [rbp-24], eax
     x86.mov edx, 45
     x86.add eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -4922,23 +4738,14 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=64
     x86.mov eax, 100
-    x86.mov [rbp-8], eax
     x86.mov ecx, 1
-    x86.mov [rbp-16], ecx
     x86.mov edx, 2
-    x86.mov [rbp-24], edx
     x86.mov ebx, 3
-    x86.mov [rbp-32], ebx
     x86.mov esi, 4
-    x86.mov [rbp-40], esi
     x86.mov edi, 5
-    x86.mov [rbp-48], edi
     x86.mov r8, 6
-    x86.mov [rbp-56], r8
     x86.mov r9, 7
-    x86.mov [rbp-64], r9
     x86.sub eax, ecx
     x86.sub eax, edx
     x86.sub eax, ebx
@@ -4946,7 +4753,6 @@ module {
     x86.sub eax, edi
     x86.sub eax, r8
     x86.sub eax, r9
-    x86.epilogue
     x86.ret
   }
 }
@@ -5179,10 +4985,9 @@ module {
     x86.prologue stack_size=16
     x86.mov eax, 2
     x86.mov [rbp-8], eax
-    x86.mov [rbp-16], eax
     x86.jmp main.check_0.cmp0
   check_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne main.check_0.cmp1
@@ -5191,7 +4996,7 @@ module {
     x86.epilogue
     x86.ret
   check_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne main.check_0.case2
@@ -5303,37 +5108,36 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.jmp main.process_0.cmp0
   process_0.cmp0:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne main.process_0.cmp1
   process_0.case0:
     x86.mov eax, 100
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.process_0.merge
   process_0.cmp1:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne main.process_0.case2
   process_0.case1:
     x86.mov eax, 200
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.process_0.merge
   process_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.process_0.merge
   process_0.merge:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -5434,10 +5238,9 @@ module {
     x86.prologue stack_size=16
     x86.mov eax, 3
     x86.mov [rbp-8], eax
-    x86.mov [rbp-16], eax
     x86.jmp main.check_0.cmp0
   check_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.sete edx
@@ -5454,7 +5257,7 @@ module {
     x86.epilogue
     x86.ret
   check_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 3
     x86.cmp eax, ecx
     x86.sete edx
@@ -5605,52 +5408,51 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 1
-    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.jmp main.cascade_0.cmp0
   cascade_0.cmp0:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne main.cascade_0.cmp1
   cascade_0.case0:
     x86.mov eax, 10
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.add ecx, eax
-    x86.mov [rbp-16], ecx
+    x86.mov [rbp-8], ecx
     x86.jmp main.cascade_0.case1
   cascade_0.cmp1:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne main.cascade_0.cmp2
   cascade_0.case1:
     x86.mov eax, 20
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.add ecx, eax
-    x86.mov [rbp-16], ecx
+    x86.mov [rbp-8], ecx
     x86.jmp main.cascade_0.case2
   cascade_0.cmp2:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 3
     x86.cmp eax, ecx
     x86.jne main.cascade_0.case3
   cascade_0.case2:
     x86.mov eax, 30
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.add ecx, eax
-    x86.mov [rbp-16], ecx
+    x86.mov [rbp-8], ecx
     x86.jmp main.cascade_0.merge
   cascade_0.case3:
     x86.mov eax, 100
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.cascade_0.merge
   cascade_0.merge:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -5753,38 +5555,36 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.jmp main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -5899,15 +5699,14 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 4
-    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.jmp main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.sete edx
@@ -5921,10 +5720,10 @@ module {
     x86.je main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 3
     x86.cmp eax, ecx
     x86.sete edx
@@ -5938,15 +5737,14 @@ module {
     x86.je main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -6053,40 +5851,38 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.jmp main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.imul eax, ecx
-    x86.mov [rbp-32], eax
     x86.epilogue
     x86.ret
   }
@@ -6211,25 +6007,21 @@ module {
 module {
   func @double(n: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, 2
     x86.imul ecx, eax
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.jmp main.process_0.cmp0
   process_0.cmp0:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne main.process_0.cmp1
@@ -6237,10 +6029,10 @@ module {
     x86.mov eax, 10
     x86.mov rcx, rax
     x86.call double
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.process_0.merge
   process_0.cmp1:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne main.process_0.case2
@@ -6248,14 +6040,14 @@ module {
     x86.mov eax, 20
     x86.mov rcx, rax
     x86.call double
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.process_0.merge
   process_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp main.process_0.merge
   process_0.merge:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -6327,12 +6119,9 @@ module {
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.call mayFail
-    x86.mov [rbp-8], edx
     x86.mov ecx, 42
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
 }
@@ -6430,13 +6219,11 @@ module {
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call mayFail
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], edx
-    x86.mov [rbp-32], eax
+    x86.mov [rbp-16], eax
     x86.xor ecx, ecx
     x86.cmp edx, ecx
     x86.je main.otherwise_continue_1
@@ -6445,7 +6232,7 @@ module {
     x86.mov [rbp-8], eax
     x86.jmp main.otherwise_continue_1
   otherwise_continue_1:
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, [rbp-8]
     x86.mov eax, ecx
     x86.epilogue
@@ -6579,45 +6366,41 @@ module {
   }
   func @middle() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.call inner
     x86.mov [rbp-8], edx
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-16], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je middle.try_continue_1
   propagate_error_0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov edx, eax
     x86.xor eax, eax
     x86.epilogue
     x86.ret
   try_continue_1:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-16]
     x86.xor edx, edx
     x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.call middle
-    x86.mov [rbp-8], edx
     x86.mov ecx, 99
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
     x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -6819,54 +6602,50 @@ module {
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.call getA
-    x86.mov [rbp-8], edx
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
     x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
     x86.call getB
-    x86.mov [rbp-8], edx
     x86.xor ecx, ecx
-    x86.mov [rbp-40], ecx
-    x86.mov [rbp-48], eax
+    x86.mov [rbp-32], ecx
+    x86.mov [rbp-40], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov eax, [rbp-40]
-    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
     x86.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
     x86.call getC
-    x86.mov [rbp-8], edx
     x86.mov ecx, 12
-    x86.mov [rbp-64], ecx
-    x86.mov [rbp-72], eax
+    x86.mov [rbp-56], ecx
+    x86.mov [rbp-64], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je main.otherwise_default_continue_11
   otherwise_default_error_10:
-    x86.mov eax, [rbp-64]
-    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-64], eax
     x86.jmp main.otherwise_default_continue_11
   otherwise_default_continue_11:
-    x86.mov eax, [rbp-72]
-    x86.mov [rbp-80], eax
-    x86.mov ecx, [rbp-32]
-    x86.mov edx, [rbp-56]
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [rbp-48]
     x86.add ecx, edx
     x86.add ecx, eax
     x86.mov eax, ecx
@@ -7046,10 +6825,9 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], ecx
     x86.jmp lookup.dispatch_0.cmp0
   dispatch_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne lookup.dispatch_0.cmp1
@@ -7059,7 +6837,7 @@ module {
     x86.epilogue
     x86.ret
   dispatch_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne lookup.dispatch_0.case2
@@ -7080,44 +6858,42 @@ module {
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=48
     x86.mov eax, 2
     x86.mov rcx, rax
     x86.call lookup
-    x86.mov [rbp-8], edx
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
     x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
     x86.mov ecx, 99
     x86.call lookup
-    x86.mov [rbp-8], edx
     x86.mov ecx, 42
-    x86.mov [rbp-40], ecx
-    x86.mov [rbp-48], eax
+    x86.mov [rbp-32], ecx
+    x86.mov [rbp-40], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov eax, [rbp-40]
-    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
     x86.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-40]
     x86.mov ecx, 256
+    x86.mov [rbp-48], eax
     x86.cqo
     x86.idiv ecx
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-24]
     x86.add eax, edx
     x86.epilogue
     x86.ret

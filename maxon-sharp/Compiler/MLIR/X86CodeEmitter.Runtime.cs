@@ -3,8 +3,11 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir;
 
 public partial class X86CodeEmitter {
-  private static readonly X86Register[] _abiArgRegs =
-    [X86Register.Rcx, X86Register.Rdx, X86Register.R8, X86Register.R9];
+  // Internal calling convention parameter registers (must match RegisterManager.CallConvRegs)
+  private static readonly X86Register[] _abiArgRegs = [
+    X86Register.Rcx, X86Register.Rdx, X86Register.R8, X86Register.R9,
+    X86Register.Rsi, X86Register.Rdi, X86Register.Rax, X86Register.Rbx
+  ];
 
   public void EmitRuntimeFunctions() {
     EmitMaxonAlloc();

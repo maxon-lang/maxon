@@ -32,45 +32,41 @@ module {
   }
   func @middle() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.call inner
     x86.mov [rbp-8], edx
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-16], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je middle.try_continue_1
   propagate_error_0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov edx, eax
     x86.xor eax, eax
     x86.epilogue
     x86.ret
   try_continue_1:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-16]
     x86.xor edx, edx
     x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.call middle
-    x86.mov [rbp-8], edx
     x86.mov ecx, 99
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
     x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

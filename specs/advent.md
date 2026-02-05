@@ -103,12 +103,8 @@ module {
 module {
   func @add(x: i64, y: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
     x86.add ecx, edx
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @main() -> i64 {
@@ -117,8 +113,7 @@ module {
     x86.mov ecx, 4
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call add
-    x86.ret
+    x86.jmp add
   }
 }
 ```

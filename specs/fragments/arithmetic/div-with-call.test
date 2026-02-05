@@ -18,29 +18,23 @@ ExitCode: 15
 module {
   func @helper(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, 2
     x86.imul ecx, eax
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @divCall(a: i64, b: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
+    x86.prologue stack_size=16
     x86.cvtsi2sd xmm0, ecx
     x86.cvtsi2sd xmm1, edx
     x86.movsd xmm2, xmm0
     x86.divsd xmm2, xmm1
     x86.cvttsd2si eax, xmm2
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], eax
     x86.mov rcx, rax
     x86.call helper
-    x86.mov [rbp-32], eax
-    x86.mov ecx, [rbp-24]
+    x86.mov ecx, [rbp-8]
     x86.add eax, ecx
     x86.epilogue
     x86.ret
@@ -51,8 +45,7 @@ module {
     x86.mov ecx, 2
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call divCall
-    x86.ret
+    x86.jmp divCall
   }
 }
 ---

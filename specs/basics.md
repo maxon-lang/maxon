@@ -106,8 +106,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    x86.call getValue
-    x86.ret
+    x86.jmp getValue
   }
 }
 ```
@@ -168,20 +167,16 @@ module {
 module {
   func @main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd [rbp-8], xmm0
     x86.movsd xmm1, [rip+__float_3.14]
     x86.ucomisd xmm0, xmm1
     x86.jne main.other_1
     x86.jp main.other_1
   check_0:
     x86.mov eax, 1
-    x86.epilogue
     x86.ret
   other_1:
     x86.xor eax, eax
-    x86.epilogue
     x86.ret
   }
 }
