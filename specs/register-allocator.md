@@ -346,8 +346,7 @@ module {
     x86.mov ecx, 80
     x86.sub eax, ecx
     x86.mov edx, 22
-    x86.add edx, eax
-    x86.mov eax, edx
+    x86.lea eax, [edx + eax]
     x86.ret
   }
 }
@@ -562,8 +561,7 @@ module {
     x86.add ebx, r8
     x86.add ebx, r9
     x86.add ebx, eax
-    x86.add ebx, ecx
-    x86.mov eax, ebx
+    x86.lea eax, [ebx + ecx]
     x86.epilogue
     x86.ret
   }
@@ -1312,8 +1310,7 @@ module {
     x86.mov [rbp-8], eax
     x86.call getForty
     x86.mov ecx, [rbp-8]
-    x86.add ecx, eax
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret
   }
@@ -1425,8 +1422,7 @@ module {
     x86.add ebx, edx
     x86.mov esi, [rbp-24]
     x86.add ebx, esi
-    x86.add ebx, eax
-    x86.mov eax, ebx
+    x86.lea eax, [ebx + eax]
     x86.epilogue
     x86.ret
   }
@@ -1703,8 +1699,7 @@ module {
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-    x86.add ecx, edx
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + edx]
     x86.ret
   }
   func @main() -> i64 {
@@ -1778,8 +1773,7 @@ module {
 module {
   func @add(a: i64, b: i64) -> i64 {
   entry:
-    x86.add ecx, edx
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + edx]
     x86.ret
   }
   func @main() -> i64 {
@@ -3207,8 +3201,7 @@ module {
     x86.add ecx, edx
     x86.add ecx, r8
     x86.add ecx, r9
-    x86.add ecx, esi
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + esi]
     x86.ret
   }
   func @main() -> i64 {
@@ -3343,8 +3336,7 @@ module {
     x86.add r8, edi
     x86.add r8, eax
     x86.add r8, ebx
-    x86.add r8, ecx
-    x86.mov eax, r8
+    x86.lea eax, [r8 + ecx]
     x86.epilogue
     x86.ret
   }
@@ -3796,8 +3788,7 @@ module {
     x86.mov ecx, 20
     x86.add eax, ecx
     x86.cvttsd2si edx, xmm2
-    x86.add edx, eax
-    x86.mov eax, edx
+    x86.lea eax, [edx + eax]
     x86.ret
   }
 }
@@ -4320,8 +4311,7 @@ module {
   entry:
     x86.add ecx, edx
     x86.add r8, r9
-    x86.add ecx, r8
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + r8]
     x86.ret
   }
   func @main() -> i64 {
@@ -4337,8 +4327,7 @@ module {
     x86.mov r9, rsi
     x86.call useRegs
     x86.mov edi, [rbp-8]
-    x86.add edi, eax
-    x86.mov eax, edi
+    x86.lea eax, [edi + eax]
     x86.epilogue
     x86.ret
   }
@@ -4412,8 +4401,7 @@ module {
     x86.call getInt
     x86.movsd xmm0, [rbp-8]
     x86.cvttsd2si ecx, xmm0
-    x86.add ecx, eax
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret
   }
@@ -6647,8 +6635,7 @@ module {
     x86.mov ecx, [rbp-24]
     x86.mov edx, [rbp-48]
     x86.add ecx, edx
-    x86.add ecx, eax
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret
   }

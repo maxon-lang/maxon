@@ -310,6 +310,14 @@ public class X86LeaFuncAddrOp(X86Register dest, string functionName) : X86Op {
   public override string Mnemonic => $"x86.lea_func {Dest.ToString().ToLower()}, [{FunctionName}]";
 }
 
+// LEA dest, [base + index] - fused add+mov (non-destructive three-register add)
+public class X86LeaRegRegRegOp(X86Register dest, X86Register baseReg, X86Register index) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public X86Register Index { get; } = index;
+  public override string Mnemonic => $"x86.lea {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()} + {Index.ToString().ToLower()}]";
+}
+
 // MOV [baseReg+disp], srcReg - store through register-indirect addressing
 public class X86MovIndirectMemRegOp(X86Register baseReg, int displacement, X86Register src) : X86Op {
   public X86Register BaseReg { get; } = baseReg;

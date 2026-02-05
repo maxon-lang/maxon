@@ -242,6 +242,9 @@ public partial class X86CodeEmitter {
       case X86LeaFuncAddrOp leaFunc:
         EmitLeaFuncAddr(leaFunc.Dest, leaFunc.FunctionName);
         break;
+      case X86LeaRegRegRegOp leaRRR:
+        EmitLeaRegRegReg(leaRRR.Dest, leaRRR.BaseReg, leaRRR.Index);
+        break;
       case X86MovIndirectMemRegOp movInd:
         EmitMovIndirectMemReg(movInd.BaseReg, movInd.Displacement, movInd.Src);
         break;
@@ -481,6 +484,12 @@ public partial class X86CodeEmitter {
     // ModRM.r/m field (REX.B bit)
     public Rex Rm(X86Register reg) {
       if (IsExtended(reg)) { _rex |= 0x01; _needed = true; }
+      return this;
+    }
+
+    // SIB index field (REX.X bit)
+    public Rex Index(X86Register reg) {
+      if (IsExtended(reg)) { _rex |= 0x02; _needed = true; }
       return this;
     }
 
@@ -1069,6 +1078,27 @@ public partial class X86CodeEmitter {
     EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
     _funcAddrFixups.Add((_code.Count, functionName));
     EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  private void EmitLeaRegRegReg(X86Register dest, X86Register baseReg, X86Register index) {
+    RequireGpr(dest, nameof(EmitLeaRegRegReg));
+    RequireGpr(baseReg, nameof(EmitLeaRegRegReg));
+    RequireGpr(index, nameof(EmitLeaRegRegReg));
+    // LEA r64, [base + index*1]: REX.W + 8D /r with SIB
+    Rex.W().Reg(dest).Index(index).Rm(baseReg).Emit(this);
+    EmitByte(0x8D);
+    var baseCode = RegCode(baseReg);
+    var indexCode = RegCode(index);
+    var destCode = RegCode(dest);
+    if (baseCode == 5) {
+      // RBP/R13 as base with mod=00 means [RIP+disp32], so use mod=01 with disp8=0
+      EmitByte((byte)(0x44 | (destCode << 3))); // mod=01, r/m=100 (SIB)
+      EmitByte((byte)(indexCode << 3 | baseCode)); // scale=00, index, base
+      EmitByte(0x00); // disp8 = 0
+    } else {
+      EmitByte((byte)(0x04 | (destCode << 3))); // mod=00, r/m=100 (SIB)
+      EmitByte((byte)(indexCode << 3 | baseCode)); // scale=00, index, base
+    }
   }
 
   private void EmitMovIndirectMemReg(X86Register baseReg, int displacement, X86Register src) {

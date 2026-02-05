@@ -137,10 +137,12 @@ public class RegisterManager {
   /// Emit a two-operand register-register instruction (e.g. add, sub).
   /// When lhsConsumed is true, reuses the LHS register directly (no extra mov).
   /// When false, allocates a separate result register and copies LHS into it first.
+  /// When useLeaForAdd is true and the result needs a separate register, emits a single
+  /// LEA instead of mov+add.
   /// </summary>
   public void EmitBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,
     MlirBlock<X86Op> block, Func<X86Register, X86Register, X86Op> makeOp,
-    bool lhsConsumed = false) {
+    bool lhsConsumed = false, bool useLeaForAdd = false) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
     if (lhsConsumed) {
@@ -149,6 +151,10 @@ public class RegisterManager {
     } else {
       var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: rhsReg);
       if (resultReg != lhsReg) {
+        if (useLeaForAdd) {
+          block.AddOp(new X86LeaRegRegRegOp(resultReg, lhsReg, rhsReg));
+          return;
+        }
         block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
       }
       block.AddOp(makeOp(resultReg, rhsReg));
