@@ -18,14 +18,14 @@ ExitCode: 40
 RequiredMLIR: ```
 === maxon
 module {
-  func @double(n: i64) -> i64 {
+  func @register-allocator.double(n: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
     %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
     maxon.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = maxon.literal {value = 2 : i64}
     maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -40,7 +40,7 @@ module {
     maxon.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %8 = maxon.literal {value = 10 : i64}
-    %9 = maxon.call @double %8
+    %9 = maxon.call @register-allocator.double %8
     maxon.assign %9 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br process_0.merge
   process_0.cmp1:
@@ -50,7 +50,7 @@ module {
     maxon.cond_br %12 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %13 = maxon.literal {value = 20 : i64}
-    %14 = maxon.call @double %13
+    %14 = maxon.call @register-allocator.double %13
     maxon.assign %14 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br process_0.merge
   process_0.case2:
@@ -64,7 +64,7 @@ module {
 }
 === standard
 module {
-  func @double(n: i64) -> i64 {
+  func @register-allocator.double(n: i64) -> i64 {
   entry:
     %0 = func.param n : StdI64
     memref.store %0, n
@@ -72,7 +72,7 @@ module {
     %2 = arith.muli %0, %1
     func.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = arith.constant {value = 2 : i64}
     memref.store %3, x
@@ -87,7 +87,7 @@ module {
     cf.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %8 = arith.constant {value = 10 : i64}
-    %9 = func.call @double %8
+    %9 = func.call @register-allocator.double %8
     memref.store %9, result
     cf.br process_0.merge
   process_0.cmp1:
@@ -97,7 +97,7 @@ module {
     cf.cond_br %12 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %13 = arith.constant {value = 20 : i64}
-    %14 = func.call @double %13
+    %14 = func.call @register-allocator.double %13
     memref.store %14, result
     cf.br process_0.merge
   process_0.case2:
@@ -111,7 +111,7 @@ module {
 }
 === x86
 module {
-  func @double(n: i64) -> i64 {
+  func @register-allocator.double(n: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -121,7 +121,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=32
     x86.mov eax, 2
@@ -129,33 +129,33 @@ module {
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.mov [rbp-24], eax
-    x86.jmp main.process_0.cmp0
+    x86.jmp register-allocator.main.process_0.cmp0
   process_0.cmp0:
     x86.mov eax, [rbp-24]
     x86.mov ecx, 1
     x86.cmp eax, ecx
-    x86.jne main.process_0.cmp1
+    x86.jne register-allocator.main.process_0.cmp1
   process_0.case0:
     x86.mov eax, 10
     x86.mov rcx, rax
-    x86.call double
+    x86.call register-allocator.double
     x86.mov [rbp-16], eax
-    x86.jmp main.process_0.merge
+    x86.jmp register-allocator.main.process_0.merge
   process_0.cmp1:
     x86.mov eax, [rbp-24]
     x86.mov ecx, 2
     x86.cmp eax, ecx
-    x86.jne main.process_0.case2
+    x86.jne register-allocator.main.process_0.case2
   process_0.case1:
     x86.mov eax, 20
     x86.mov rcx, rax
-    x86.call double
+    x86.call register-allocator.double
     x86.mov [rbp-16], eax
-    x86.jmp main.process_0.merge
+    x86.jmp register-allocator.main.process_0.merge
   process_0.case2:
     x86.xor eax, eax
     x86.mov [rbp-16], eax
-    x86.jmp main.process_0.merge
+    x86.jmp register-allocator.main.process_0.merge
   process_0.merge:
     x86.mov eax, [rbp-16]
     x86.epilogue
@@ -165,7 +165,7 @@ module {
 ```
 ---
 module {
-  func @double(n: i64) -> i64 {
+  func @register-allocator.double(n: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -175,7 +175,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=32
     x86.mov eax, 2
@@ -183,33 +183,33 @@ module {
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.mov [rbp-24], eax
-    x86.jmp main.process_0.cmp0
+    x86.jmp register-allocator.main.process_0.cmp0
   process_0.cmp0:
     x86.mov eax, [rbp-24]
     x86.mov ecx, 1
     x86.cmp eax, ecx
-    x86.jne main.process_0.cmp1
+    x86.jne register-allocator.main.process_0.cmp1
   process_0.case0:
     x86.mov eax, 10
     x86.mov rcx, rax
-    x86.call double
+    x86.call register-allocator.double
     x86.mov [rbp-16], eax
-    x86.jmp main.process_0.merge
+    x86.jmp register-allocator.main.process_0.merge
   process_0.cmp1:
     x86.mov eax, [rbp-24]
     x86.mov ecx, 2
     x86.cmp eax, ecx
-    x86.jne main.process_0.case2
+    x86.jne register-allocator.main.process_0.case2
   process_0.case1:
     x86.mov eax, 20
     x86.mov rcx, rax
-    x86.call double
+    x86.call register-allocator.double
     x86.mov [rbp-16], eax
-    x86.jmp main.process_0.merge
+    x86.jmp register-allocator.main.process_0.merge
   process_0.case2:
     x86.xor eax, eax
     x86.mov [rbp-16], eax
-    x86.jmp main.process_0.merge
+    x86.jmp register-allocator.main.process_0.merge
   process_0.merge:
     x86.mov eax, [rbp-16]
     x86.epilogue

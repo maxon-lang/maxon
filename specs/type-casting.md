@@ -40,7 +40,7 @@ var g = 100 as float     // int -> float widening (OK)
 
 ### Unsafe Casts (Compile Error E3008)
 
-Narrowing casts and lossy conversions are not allowed. The compiler reports error E3008:
+Narrowing casts and lossy conversions are not allowed. The compiler reports error E3009:
 
 ```text
 var x = 5
@@ -215,7 +215,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.int-var-to-byte.test:4:13: Cannot cast from int to byte
+error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:4:13: Cannot cast from int to byte
 ```
 
 <!-- test: error.int-literal-out-of-range -->
@@ -226,7 +226,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.int-literal-out-of-range.test:3:15: Cannot cast from int to byte
+error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:3:15: Cannot cast from int to byte
 ```
 
 <!-- test: error.negative-literal-to-byte -->
@@ -237,7 +237,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.negative-literal-to-byte.test:3:14: Cannot cast from int to byte
+error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:3:14: Cannot cast from int to byte
 ```
 
 <!-- test: error.float-to-int -->
@@ -248,7 +248,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.float-to-int.test:3:15: Cannot cast from float to int
+error E3009: specs/fragments/type-casting/error.float-to-int.test:3:15: Cannot cast from float to int
 ```
 
 <!-- test: error.float-to-byte -->
@@ -259,7 +259,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.float-to-byte.test:3:15: Cannot cast from float to byte
+error E3009: specs/fragments/type-casting/error.float-to-byte.test:3:15: Cannot cast from float to byte
 ```
 
 <!-- test: error.bool-to-int -->
@@ -271,7 +271,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.bool-to-int.test:4:13: Cannot cast from bool to int
+error E3009: specs/fragments/type-casting/error.bool-to-int.test:4:13: Cannot cast from bool to int
 ```
 
 <!-- test: error.bool-to-float -->
@@ -283,7 +283,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.bool-to-float.test:4:13: Cannot cast from bool to float
+error E3009: specs/fragments/type-casting/error.bool-to-float.test:4:13: Cannot cast from bool to float
 ```
 
 <!-- test: error.bool-to-byte -->
@@ -295,7 +295,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.bool-to-byte.test:4:13: Cannot cast from bool to byte
+error E3009: specs/fragments/type-casting/error.bool-to-byte.test:4:13: Cannot cast from bool to byte
 ```
 
 <!-- test: error.int-to-bool -->
@@ -306,7 +306,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.int-to-bool.test:3:13: Cannot cast from int to bool
+error E3009: specs/fragments/type-casting/error.int-to-bool.test:3:13: Cannot cast from int to bool
 ```
 
 <!-- test: error.float-to-bool -->
@@ -317,7 +317,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.float-to-bool.test:3:15: Cannot cast from float to bool
+error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:15: Cannot cast from float to bool
 ```
 
 <!-- test: error.byte-to-bool -->
@@ -329,5 +329,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3008: specs/fragments/type-casting/error.byte-to-bool.test:4:13: Cannot cast from byte to bool
+error E3009: specs/fragments/type-casting/error.byte-to-bool.test:4:13: Cannot cast from byte to bool
 ```

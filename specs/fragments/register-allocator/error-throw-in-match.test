@@ -22,7 +22,7 @@ ExitCode: 242
 RequiredMLIR: ```
 === maxon
 module {
-  func @lookup(key: i64) -> i64 {
+  func @register-allocator.lookup(key: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = key} {type = i64}
     maxon.assign %0 {var = __match_dispatch_0} {kind = i64} {decl = 1 : i1}
@@ -48,10 +48,10 @@ module {
     maxon.throw @MyError %9
   dispatch_0.merge:
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %10 = maxon.literal {value = 2 : i64}
-    %13, %12 = maxon.try_call @lookup %10
+    %13, %12 = maxon.try_call @register-allocator.lookup %10
     %14 = maxon.literal {value = 0 : i64}
     maxon.assign %14 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -66,7 +66,7 @@ module {
     %18 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
     %19 = maxon.literal {value = 99 : i64}
-    %22, %21 = maxon.try_call @lookup %19
+    %22, %21 = maxon.try_call @register-allocator.lookup %19
     %23 = maxon.literal {value = 42 : i64}
     maxon.assign %23 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %22 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -89,7 +89,7 @@ module {
 }
 === standard
 module {
-  func @lookup(key: i64) -> i64 {
+  func @register-allocator.lookup(key: i64) -> i64 {
   entry:
     %0 = func.param key : StdI64
     memref.store %0, key
@@ -118,10 +118,10 @@ module {
     func.error_return %11
   dispatch_0.merge:
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %12 = arith.constant {value = 2 : i64}
-    %13, %14 = func.try_call @lookup %12
+    %13, %14 = func.try_call @register-allocator.lookup %12
     memref.store %14, __error_flag
     %15 = arith.constant {value = 0 : i64}
     memref.store %15, __try_default_1
@@ -137,7 +137,7 @@ module {
     %19 = memref.load __try_result_0 : i64
     memref.store %19, a
     %20 = arith.constant {value = 99 : i64}
-    %21, %22 = func.try_call @lookup %20
+    %21, %22 = func.try_call @register-allocator.lookup %20
     memref.store %22, __error_flag
     %23 = arith.constant {value = 42 : i64}
     memref.store %23, __try_default_5
@@ -161,17 +161,17 @@ module {
 }
 === x86
 module {
-  func @lookup(key: i64) -> i64 {
+  func @register-allocator.lookup(key: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
     x86.mov [rbp-16], ecx
-    x86.jmp lookup.dispatch_0.cmp0
+    x86.jmp register-allocator.lookup.dispatch_0.cmp0
   dispatch_0.cmp0:
     x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
-    x86.jne lookup.dispatch_0.cmp1
+    x86.jne register-allocator.lookup.dispatch_0.cmp1
   dispatch_0.case0:
     x86.mov eax, 100
     x86.xor edx, edx
@@ -181,7 +181,7 @@ module {
     x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.cmp eax, ecx
-    x86.jne lookup.dispatch_0.case2
+    x86.jne register-allocator.lookup.dispatch_0.case2
   dispatch_0.case1:
     x86.mov eax, 200
     x86.xor edx, edx
@@ -197,39 +197,39 @@ module {
     x86.ret
   dispatch_0.merge:
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=64
     x86.mov eax, 2
     x86.mov rcx, rax
-    x86.call lookup
+    x86.call register-allocator.lookup
     x86.mov [rbp-8], edx
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.mov [rbp-24], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_3
+    x86.je register-allocator.main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov eax, [rbp-16]
     x86.mov [rbp-24], eax
-    x86.jmp main.otherwise_default_continue_3
+    x86.jmp register-allocator.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-24]
     x86.mov [rbp-32], eax
     x86.mov ecx, 99
-    x86.call lookup
+    x86.call register-allocator.lookup
     x86.mov [rbp-8], edx
     x86.mov ecx, 42
     x86.mov [rbp-40], ecx
     x86.mov [rbp-48], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_7
+    x86.je register-allocator.main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov eax, [rbp-40]
     x86.mov [rbp-48], eax
-    x86.jmp main.otherwise_default_continue_7
+    x86.jmp register-allocator.main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov eax, [rbp-48]
     x86.mov [rbp-56], eax
@@ -245,17 +245,17 @@ module {
 ```
 ---
 module {
-  func @lookup(key: i64) -> i64 {
+  func @register-allocator.lookup(key: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
     x86.mov [rbp-16], ecx
-    x86.jmp lookup.dispatch_0.cmp0
+    x86.jmp register-allocator.lookup.dispatch_0.cmp0
   dispatch_0.cmp0:
     x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
-    x86.jne lookup.dispatch_0.cmp1
+    x86.jne register-allocator.lookup.dispatch_0.cmp1
   dispatch_0.case0:
     x86.mov eax, 100
     x86.xor edx, edx
@@ -265,7 +265,7 @@ module {
     x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.cmp eax, ecx
-    x86.jne lookup.dispatch_0.case2
+    x86.jne register-allocator.lookup.dispatch_0.case2
   dispatch_0.case1:
     x86.mov eax, 200
     x86.xor edx, edx
@@ -281,39 +281,39 @@ module {
     x86.ret
   dispatch_0.merge:
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=64
     x86.mov eax, 2
     x86.mov rcx, rax
-    x86.call lookup
+    x86.call register-allocator.lookup
     x86.mov [rbp-8], edx
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.mov [rbp-24], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_3
+    x86.je register-allocator.main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov eax, [rbp-16]
     x86.mov [rbp-24], eax
-    x86.jmp main.otherwise_default_continue_3
+    x86.jmp register-allocator.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-24]
     x86.mov [rbp-32], eax
     x86.mov ecx, 99
-    x86.call lookup
+    x86.call register-allocator.lookup
     x86.mov [rbp-8], edx
     x86.mov ecx, 42
     x86.mov [rbp-40], ecx
     x86.mov [rbp-48], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_7
+    x86.je register-allocator.main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov eax, [rbp-40]
     x86.mov [rbp-48], eax
-    x86.jmp main.otherwise_default_continue_7
+    x86.jmp register-allocator.main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov eax, [rbp-48]
     x86.mov [rbp-56], eax

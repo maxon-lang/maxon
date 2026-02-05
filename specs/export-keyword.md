@@ -233,6 +233,6 @@ function main() returns int
   return 0
 end 'main'
 ```
-```stderr
-error E006: unknown type: 'UnknownType'
+```maxoncstderr
+error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:45: Unknown type: UnknownType
 ```

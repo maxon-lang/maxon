@@ -73,40 +73,40 @@ end 'main'
 ```RequiredMLIR
 === maxon
 module {
-  func @getValue() -> i64 {
+  func @basics.getValue() -> i64 {
   entry:
     %0 = maxon.literal {value = 42 : i64}
     maxon.return %0
   }
-  func @main() -> i64 {
+  func @basics.main() -> i64 {
   entry:
-    %1 = maxon.call @getValue
+    %1 = maxon.call @basics.getValue
     maxon.return %1
   }
 }
 === standard
 module {
-  func @getValue() -> i64 {
+  func @basics.getValue() -> i64 {
   entry:
     %0 = arith.constant {value = 42 : i64}
     func.return %0
   }
-  func @main() -> i64 {
+  func @basics.main() -> i64 {
   entry:
-    %1 = func.call @getValue
+    %1 = func.call @basics.getValue
     func.return %1
   }
 }
 === x86
 module {
-  func @getValue() -> i64 {
+  func @basics.getValue() -> i64 {
   entry:
     x86.mov eax, 42
     x86.ret
   }
-  func @main() -> i64 {
+  func @basics.main() -> i64 {
   entry:
-    x86.call getValue
+    x86.call basics.getValue
     x86.ret
   }
 }
@@ -132,7 +132,7 @@ f64 3.14
 ```RequiredMLIR
 === maxon
 module {
-  func @main() -> i64 {
+  func @basics.main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3.14 : f64}
     maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -149,7 +149,7 @@ module {
 }
 === standard
 module {
-  func @main() -> i64 {
+  func @basics.main() -> i64 {
   entry:
     %0 = arith.float_constant {value = 3.14 : f64}
     memref.store %0, x
@@ -166,15 +166,15 @@ module {
 }
 === x86
 module {
-  func @main() -> i64 {
+  func @basics.main() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
     x86.movsd [rbp-8], xmm0
     x86.movsd xmm1, [rip+__float_3.14]
     x86.ucomisd xmm0, xmm1
-    x86.jne main.other_1
-    x86.jp main.other_1
+    x86.jne basics.main.other_1
+    x86.jp basics.main.other_1
   check_0:
     x86.mov eax, 1
     x86.epilogue

@@ -151,7 +151,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/function-declaration/missing-returns-keyword-error.test:2:16: unexpected token: 'int'
+error E3010: specs/fragments/function-declaration/missing-returns-keyword-error.test:2:16: unexpected token: 'int'
 ```
 
 

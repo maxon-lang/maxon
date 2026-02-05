@@ -428,7 +428,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:8:13: try requires a throwing function: ''noFail' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:8:13: try requires a throwing function: ''error-handling.noFail' does not throw'
 ```
 
 <!-- disabled-test: error.try-on-non-throwing-method -->

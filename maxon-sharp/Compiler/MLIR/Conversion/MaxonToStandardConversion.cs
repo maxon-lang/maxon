@@ -569,7 +569,7 @@ public static class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
               break;
             case MaxonThrowOp throwOp:
               LowerThrow(throwOp, newBlock, valueMap);
@@ -694,7 +694,18 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs) {
-    var calleeFunc = funcLookup[callOp.Callee];
+    // Try exact match first, then suffix match (for namespace-qualified names)
+    MlirFunction<MaxonOp>? calleeFunc;
+    if (funcLookup.TryGetValue(callOp.Callee, out calleeFunc)) {
+      // Exact match found
+    } else {
+      // Try suffix match
+      var suffixPattern = $".{callOp.Callee}";
+      calleeFunc = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern));
+      if (calleeFunc == null) {
+        throw new InvalidOperationException($"Function '{callOp.Callee}' not found in module");
+      }
+    }
     var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
 
     var newArgs = new List<StdValue>();
@@ -736,13 +747,22 @@ public static class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<int, string> structVarNames,
+    bool isStructInstanceMethod,
+    MlirStructType? selfStructType) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
       var mappedErrFlag = valueMap[retOp.Value!];
       block.AddOp(new StdErrorReturnOp(mappedErrFlag));
       return;
+    }
+
+    // For instance methods, write self fields back to __self_ptr before returning
+    if (isStructInstanceMethod && selfStructType != null) {
+      var selfPtrLoad = new StdLoadI64Op("__self_ptr");
+      block.AddOp(selfPtrLoad);
+      WriteStructFieldsToPointer(block, "self", selfPtrLoad.Result, selfStructType, varTypes);
     }
 
     if (retStructType != null && retOp.Value != null) {

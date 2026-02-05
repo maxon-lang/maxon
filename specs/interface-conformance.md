@@ -137,7 +137,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/interface-conformance/conformance-missing-method.test:7:6: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
+error E3016: specs/fragments/interface-conformance/conformance-missing-method.test:7:6: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
   - increment() returns void
 ```
 
@@ -158,7 +158,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/interface-conformance/conformance-wrong-param-type.test:6:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
+error E3016: specs/fragments/interface-conformance/conformance-wrong-param-type.test:6:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
   - process(value float) returns int (expected process(value int) returns int)
 ```
 
@@ -179,7 +179,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/interface-conformance/conformance-wrong-return-type.test:6:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
+error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type.test:6:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
   - provide() returns float (expected provide() returns int)
 ```
 

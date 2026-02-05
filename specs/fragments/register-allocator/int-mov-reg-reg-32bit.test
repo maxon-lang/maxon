@@ -13,26 +13,26 @@ ExitCode: 42
 RequiredMLIR: ```
 === maxon
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
     %2 = maxon.binop %0, %1 {op = add} {kind = i64}
     maxon.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = maxon.literal {value = 20 : i64}
     maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %4 = maxon.literal {value = 22 : i64}
     maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.call @add %4, %3
+    %5 = maxon.call @register-allocator.add %4, %3
     maxon.return %5
   }
 }
 === standard
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     memref.store %0, a
@@ -41,19 +41,19 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = arith.constant {value = 20 : i64}
     memref.store %3, x
     %4 = arith.constant {value = 22 : i64}
     memref.store %4, y
-    %5 = func.call @add %4, %3
+    %5 = func.call @register-allocator.add %4, %3
     func.return %5
   }
 }
 === x86
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -63,7 +63,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 20
@@ -71,7 +71,7 @@ module {
     x86.mov ecx, 22
     x86.mov [rbp-16], ecx
     x86.mov rdx, rax
-    x86.call add
+    x86.call register-allocator.add
     x86.epilogue
     x86.ret
   }
@@ -79,7 +79,7 @@ module {
 ```
 ---
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -89,7 +89,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 20
@@ -97,7 +97,7 @@ module {
     x86.mov ecx, 22
     x86.mov [rbp-16], ecx
     x86.mov rdx, rax
-    x86.call add
+    x86.call register-allocator.add
     x86.epilogue
     x86.ret
   }

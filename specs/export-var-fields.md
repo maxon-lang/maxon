@@ -189,7 +189,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3013: specs/fragments/export-var-fields/error.unexported-field-read.test:12:12: cannot access unexported field: 'private' outside of type 'Value'
+error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:12:12: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: error.unexported-field-write -->
@@ -209,7 +209,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3013: specs/fragments/export-var-fields/error.unexported-field-write.test:12:5: cannot access unexported field: 'private' outside of type 'Value'
+error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test:12:5: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: all-fields-private-by-default -->

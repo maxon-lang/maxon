@@ -31,14 +31,20 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   public Dictionary<string, List<string>> InterfaceAssociatedTypes { get; } = [];
 
   public void AddFunction(MlirFunction<TOp> func) {
+    if (func.Name.Contains("ensureCapacity")) {
+      Logger.Debug(LogCategory.Parser, $"AddFunction: {func.Name}");
+    }
     Functions.Add(func);
   }
 
   public void Merge(MlirModule<TOp> other) {
+    // Add functions, skipping any that were seeded (already exist with same name)
     var existingNames = new HashSet<string>(Functions.Select(f => f.Name));
     foreach (var func in other.Functions) {
-      if (existingNames.Add(func.Name))
+      if (existingNames.Add(func.Name)) {
         Functions.Add(func);
+      }
+      // Note: duplicates are silently skipped (they were seeded from this module)
     }
     RdataEntries.AddRange(other.RdataEntries);
     Globals.AddRange(other.Globals);

@@ -46,16 +46,17 @@ public class CodeEmitter {
       emitter.DefineGlobal(global.Name, size, initValue);
     }
 
+    // Verify main exists (check for exact match or suffix match)
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main" || f.Name.EndsWith(".main"))
+      ?? throw new InvalidOperationException("No 'main' function found at code emission stage — semantic check should have caught this");
+
     // Emit _start wrapper first (entry point at offset 0)
     // _start calls main and then ExitProcess
-    emitter.EmitStartWrapper();
-
-    // Verify main exists
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main") ?? throw new InvalidOperationException("No 'main' function found at code emission stage — semantic check should have caught this");
+    emitter.EmitStartWrapper(mainFunc.Name);
 
     // Emit all functions (main and others)
     EmitFunction(emitter, mainFunc);
-    foreach (var func in module.Functions.Where(f => f.Name != "main")) {
+    foreach (var func in module.Functions.Where(f => f != mainFunc)) {
       EmitFunction(emitter, func);
     }
 

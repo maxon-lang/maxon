@@ -285,7 +285,7 @@ public class X86CodeEmitter {
 
   // --- Start wrapper (_start entry point) ---
 
-  public void EmitStartWrapper() {
+  public void EmitStartWrapper(string mainFunctionName) {
     DefineLabel("_start");
 
     // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
@@ -293,7 +293,7 @@ public class X86CodeEmitter {
 
     // call main (relative call, patched later)
     EmitByte(0xE8);
-    _relCallFixups.Add((_code.Count, "main"));
+    _relCallFixups.Add((_code.Count, mainFunctionName));
     EmitDword(0); // placeholder
 
     // mov ecx, eax (move return value to first arg for ExitProcess)

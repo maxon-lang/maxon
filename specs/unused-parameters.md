@@ -45,7 +45,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/unused-parameters/single-unused.test:2:21: unused variable: 'b'
+error E3012: specs/fragments/unused-parameters/single-unused.test:2:21: unused variable: 'b'
 ```
 
 <!-- test: multiple-unused -->
@@ -59,7 +59,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/unused-parameters/multiple-unused.test:2:22: unused variable: 'b'
+error E3012: specs/fragments/unused-parameters/multiple-unused.test:2:22: unused variable: 'b'
 ```
 
 <!-- test: all-used-ok -->
@@ -104,5 +104,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3011: specs/fragments/unused-parameters/void-function-unused.test:2:20: unused variable: 'x'
+error E3012: specs/fragments/unused-parameters/void-function-unused.test:2:20: unused variable: 'x'
 ```

@@ -4,9 +4,10 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false) {
+public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null) {
   private readonly List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
+  private readonly string? _sourceFilePath = sourceFilePath;
   private int _pos;
 
   private MlirModule<MaxonOp>? _currentModule;
@@ -50,20 +51,41 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// <summary>
   /// Resolves a qualified method name, falling back to the source type for type aliases.
   /// E.g., "ByteArray.push" → looks for "ByteArray.push" first, then "Array.push".
+  /// Also supports suffix matching for namespace-qualified names.
   /// Returns the resolved function name if found, null otherwise.
   /// </summary>
   private string? ResolveMethodName(string qualifiedName) {
+    // Check for exact match
     if (_currentModule!.Functions.Any(f => f.Name == qualifiedName))
       return qualifiedName;
+
+    // Try suffix match (for namespace-qualified names)
+    var suffixPattern = $".{qualifiedName}";
+    var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
+    if (suffixMatches.Count == 1)
+      return suffixMatches[0].Name;
+    if (suffixMatches.Count > 1) {
+      // Ambiguous - caller will need to handle this
+      return null;
+    }
+
     // Try alias fallback: ByteArray.push → Array.push
     var dotIdx = qualifiedName.IndexOf('.');
     if (dotIdx > 0) {
       var typePart = qualifiedName[..dotIdx];
       var methodPart = qualifiedName[(dotIdx + 1)..];
       if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
+        Logger.Debug(LogCategory.Parser, $"  Type alias: {typePart} -> {sourceType}");
         var aliasedName = $"{sourceType}.{methodPart}";
+        Logger.Debug(LogCategory.Parser, $"  Trying aliased name: {aliasedName}");
         if (_currentModule!.Functions.Any(f => f.Name == aliasedName))
           return aliasedName;
+        // Try suffix match on aliased name too
+        var aliasSuffixPattern = $".{aliasedName}";
+        var aliasSuffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(aliasSuffixPattern)).ToList();
+        Logger.Debug(LogCategory.Parser, $"  Alias suffix matches: {aliasSuffixMatches.Count} - {string.Join(", ", aliasSuffixMatches.Select(f => f.Name))}");
+        if (aliasSuffixMatches.Count == 1)
+          return aliasSuffixMatches[0].Name;
       }
     }
     return null;
@@ -130,6 +152,69 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   // Tracks parameter locations for unused parameter error reporting
   private readonly List<(string Name, int Line, int Column)> _paramLocations = [];
+
+  /// <summary>
+  /// Derives the namespace from the source file path.
+  /// For stdlib files, prefixes with "stdlib." and uses path after "stdlib/".
+  /// For user files, uses just the filename (since they're all in the same directory for build).
+  /// Examples (includeFilename=true):
+  ///   - stdlib/Math.maxon -> "stdlib.Math"
+  ///   - stdlib/helpers/string/_utf8.maxon -> "stdlib.helpers.string._utf8"
+  ///   - /path/to/project/main.maxon -> "main"
+  ///   - /path/to/project/utils.maxon -> "utils"
+  ///   - specs/fragments/register-allocator/int-nine-params-function.test -> "register-allocator"
+  /// Examples (includeFilename=false):
+  ///   - stdlib/Math.maxon -> "stdlib"
+  ///   - stdlib/helpers/string/_utf8.maxon -> "stdlib.helpers.string"
+  ///   - /path/to/project/main.maxon -> ""
+  ///   - /path/to/project/utils.maxon -> ""
+  /// </summary>
+  private string DeriveNamespace(bool includeFilename = true) {
+    if (_sourceFilePath == null) return "";
+
+    var fileName = Path.GetFileNameWithoutExtension(_sourceFilePath);
+
+    if (!_isStdlib) {
+      // For spec test fragments, use the parent directory name as the namespace
+      // but ONLY when includeFilename is true (for top-level functions)
+      if (includeFilename) {
+        var normalizedPath = _sourceFilePath.Replace('\\', '/');
+        if (normalizedPath.Contains("/specs/fragments/")) {
+          var parentDirName = Path.GetFileName(Path.GetDirectoryName(_sourceFilePath));
+          return parentDirName ?? fileName;
+        }
+      }
+
+      // For user code, just use the filename as the namespace (if includeFilename is true)
+      return includeFilename ? fileName : "";
+    }
+
+    // For stdlib, derive from path after "stdlib/" and prefix with "stdlib."
+    var dirName = Path.GetDirectoryName(_sourceFilePath) ?? "";
+    dirName = dirName.Replace('\\', '/');
+
+    var parts = new List<string> { "stdlib" };
+    var pathSegments = dirName.Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+    // Collect path segments after "stdlib"
+    bool foundStdlib = false;
+    for (int i = 0; i < pathSegments.Length; i++) {
+      if (pathSegments[i] == "stdlib") {
+        foundStdlib = true;
+        continue;
+      }
+      if (foundStdlib) {
+        parts.Add(pathSegments[i]);
+      }
+    }
+
+    // Add the filename if requested
+    if (includeFilename) {
+      parts.Add(fileName);
+    }
+
+    return string.Join(".", parts);
+  }
 
   public MlirModule<MaxonOp> Parse() {
     Logger.Debug(LogCategory.Parser, "Starting parser");
@@ -300,7 +385,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
-    var funcName = owningType != null ? $"{owningType}.{nameToken.Value}" : nameToken.Value;
+    var baseName = nameToken.Value;
+
+    // Construct function name with namespace
+    string funcName;
+    if (owningType != null) {
+      // Static/instance method: prepend namespace to type name
+      // Don't include filename in namespace since owningType is already the type name
+      var namespace_ = DeriveNamespace(includeFilename: false);
+      var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? owningType : $"{namespace_}.{owningType}";
+      funcName = $"{qualifiedTypeName}.{baseName}";
+    } else {
+      // Top-level function: prepend file-based namespace
+      var namespace_ = DeriveNamespace();
+      funcName = string.IsNullOrEmpty(namespace_) ? baseName : $"{namespace_}.{baseName}";
+    }
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -315,6 +414,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Only register if not already known (avoid duplicates)
     if (!module.Functions.Any(f => f.Name == funcName)) {
+      Logger.Debug(LogCategory.Parser, $"PreScanFunction: registering {funcName} (owningType={owningType ?? "null"})");
       var func = new MlirFunction<MaxonOp>(funcName, paramNames, paramTypes, returnType, throwsType);
       module.AddFunction(func);
 
@@ -526,6 +626,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Validate interface conformance: each required method must exist with matching signature
     var structTypeParams = conformanceTypeParams;
+
+    // Construct namespace-qualified type name for method lookup
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+
     foreach (var ifaceName in conformingInterfaces) {
       if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceType) || ifaceType is not MlirInterfaceType iface)
         continue;
@@ -533,7 +638,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var missingMethods = new List<string>();
       var wrongSignatureMethods = new List<string>();
       foreach (var method in iface.Methods) {
-        var qualifiedName = $"{typeName}.{method.Name}";
+        var qualifiedName = $"{qualifiedTypeName}.{method.Name}";
         var func = module.Functions.FirstOrDefault(f => f.Name == qualifiedName);
         if (func == null) {
           missingMethods.Add(method.Format());
@@ -920,13 +1025,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
       constParams: constParams,
       typeParams: substitution.Count > 0 ? substitution : null);
+    Logger.Debug(LogCategory.Parser, $"Registering type alias: {aliasName} -> {sourceName}");
     _typeAliasSources[aliasName] = sourceName;
   }
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
-    var methodName = $"{typeName}.{nameToken.Value}";
+
+    // Construct qualified method name with namespace
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+    var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -1471,7 +1581,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseStaticMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = Expect(TokenType.Identifier);
-    var methodName = $"{typeName}.{nameToken.Value}";
+
+    // Construct qualified method name: namespace.TypeName.methodName
+    // Don't include filename in namespace since typeName is already the type
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+    var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
     Logger.Debug(LogCategory.Parser, $"Parsing static method: {methodName}");
 
     Expect(TokenType.LeftParen);
@@ -1497,7 +1612,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
     var nameToken = Expect(TokenType.Identifier);
-    var methodName = $"{typeName}.{nameToken.Value}";
+
+    // Construct qualified method name: namespace.TypeName.methodName
+    // Don't include filename in namespace since typeName is already the type
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+    var methodName = $"{qualifiedTypeName}.{nameToken.Value}";
     Logger.Debug(LogCategory.Parser, $"Parsing instance method: {methodName}");
 
     Expect(TokenType.LeftParen);
@@ -1709,8 +1829,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseFunction(MlirModule<MaxonOp> module) {
     Expect(TokenType.Function);
     var nameToken = Expect(TokenType.Identifier);
-    var name = nameToken.Value;
-    Logger.Debug(LogCategory.Parser, $"Parsing function: {name}");
+    var baseName = nameToken.Value;
+
+    // Top-level functions get qualified with file-based namespace
+    var namespace_ = DeriveNamespace();
+    var name = string.IsNullOrEmpty(namespace_) ? baseName : $"{namespace_}.{baseName}";
+
+    Logger.Debug(LogCategory.Parser, $"Parsing function: {name} (base: {baseName}, namespace: {namespace_})");
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -1730,13 +1855,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     EmitParameters(paramNames, paramTypes, paramTokens);
 
     // Emit deferred top-level array lets at start of main
-    if (name == "main") {
+    if (baseName == "main") {
       EmitDeferredArrayLets();
     }
 
     ParseBodyUntilEnd();
-    ExpectEndLabel(name);
-    FinishFunctionBody(name, nameToken, returnType);
+    ExpectEndLabel(baseName);
+    FinishFunctionBody(baseName, nameToken, returnType);
   }
 
   // ============================================================================
@@ -2701,7 +2826,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MaxonCallOp? TrySiblingMethodCall(Token token) {
     if (_currentTypeName == null || !_variables.TryGetValue("self", out var selfInfo))
       return null;
-    var siblingMethodName = $"{_currentTypeName}.{token.Value}";
+
+    // Construct namespace-qualified type name for sibling method lookup
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? _currentTypeName : $"{namespace_}.{_currentTypeName}";
+    var siblingMethodName = $"{qualifiedTypeName}.{token.Value}";
+
     var resolvedSiblingName = ResolveMethodName(siblingMethodName);
     if (resolvedSiblingName == null)
       return null;
@@ -3870,7 +4000,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // Check for qualified function call: TypeName.method(...)
         // _pos is at '.', _pos+1 is 'method', _pos+2 should be '('
         if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftParen) {
-          if (_currentModule!.Functions.Any(f => f.Name == qualifiedName)) {
+          // Find all matches (exact or suffix) - any ambiguity will be caught by ResolveFunctionName
+          var exactMatches = _currentModule!.Functions.Where(f => f.Name == qualifiedName).ToList();
+          var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith($".{qualifiedName}")).ToList();
+          var totalMatches = exactMatches.Count + suffixMatches.Count;
+
+          if (totalMatches > 0) {
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
             Advance(); // consume '('
@@ -3987,10 +4122,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       // Function reference (bare function name without parentheses = function pointer)
-      var referencedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == token.Value);
+      // Try to resolve as a function using the same logic as function calls
+      // First check local namespace, then exact match, then suffix match
+      var currentNamespace = DeriveNamespace();
+      var qualifiedFuncName = string.IsNullOrEmpty(currentNamespace) ? token.Value : $"{currentNamespace}.{token.Value}";
+
+      var referencedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedFuncName);
+      if (referencedFunc == null) {
+        referencedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == token.Value);
+      }
+      if (referencedFunc == null) {
+        var suffixPattern = $".{token.Value}";
+        var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
+        if (suffixMatches.Count == 1) {
+          referencedFunc = suffixMatches[0];
+        } else if (suffixMatches.Count > 1) {
+          var candidates = string.Join(", ", suffixMatches.Select(f => f.Name));
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Ambiguous function reference '{token.Value}': multiple candidates found: {candidates}. Use a qualified name to disambiguate.",
+            token.Line, token.Column);
+        }
+      }
+
       if (referencedFunc != null) {
         var fnType = GetFunctionType(referencedFunc);
-        var fnRefOp = new MaxonFunctionRefOp(token.Value, fnType);
+        var fnRefOp = new MaxonFunctionRefOp(referencedFunc.Name, fnType);
         _currentBlock!.AddOp(fnRefOp);
         return new ExprResult.Direct(fnRefOp.Result);
       }
@@ -4061,7 +4217,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // Check for method call: expr.method(...)
       if (Check(TokenType.LeftParen)) {
         var qualifiedMethodName = $"{userTypeName}.{fieldName}";
+        Logger.Debug(LogCategory.Parser, $"Resolving method: {qualifiedMethodName}");
         var resolvedMethodName = ResolveMethodName(qualifiedMethodName);
+        Logger.Debug(LogCategory.Parser, $"Resolved to: {resolvedMethodName}");
         if (resolvedMethodName != null) {
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
@@ -4530,16 +4688,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var sourceTypeName = _typeAliasSources.TryGetValue(concreteTypeName, out var src) ? src : concreteTypeName;
     var initMethodName = $"{sourceTypeName}.init";
 
-    var initFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == initMethodName) ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
-        $"Type '{typeName}' does not have a valid init method (no '{initMethodName}' found)",
-        typeToken.Line, typeToken.Column);
+    var resolvedInitName = ResolveMethodName(initMethodName);
+    var initFunc = resolvedInitName != null
+      ? _currentModule!.Functions.First(f => f.Name == resolvedInitName)
+      : throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+          $"Type '{typeName}' does not have a valid init method (no '{initMethodName}' found)",
+          typeToken.Line, typeToken.Column);
 
     // Determine return type - init returns Self which is the struct type
     MaxonValueKind? resultKind = MaxonValueKind.Struct;
     string resultStructTypeName = concreteTypeName;
 
-    // Create the call to init — pass either __ManagedMemory or Array depending on interface
-    var callOp = new MaxonCallOp(initMethodName, [initArg], resultKind, resultStructTypeName);
+    // Create the call to init using the resolved name (e.g., "stdlib.Vector.init")
+    var callOp = new MaxonCallOp(resolvedInitName, [initArg], resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
 
     if (callOp.Result == null) {
@@ -4732,23 +4893,75 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Resolves a function name by finding all matches (exact or suffix).
+  /// Errors if no matches or multiple matches (ambiguous).
+  /// Examples:
+  ///   - "helpers.greet" finds exact match "helpers.greet"
+  ///   - "greet" finds suffix matches like "helpers.greet", "utils.greet"
+  ///   - If multiple matches exist, it's ambiguous and errors
+  /// </summary>
+  private MlirFunction<MaxonOp> ResolveFunctionName(string functionName, Token functionNameToken) {
+    // First, try to find a function in the current file's namespace
+    var currentNamespace = DeriveNamespace();
+    var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
+
+    // Check for exact match with current namespace (local function)
+    var localMatch = _currentModule!.Functions.FirstOrDefault(f => f.Name == qualifiedName);
+    if (localMatch != null) {
+      return localMatch;
+    }
+
+    // Find all other matches: exact match OR suffix match
+    var exactMatches = _currentModule!.Functions.Where(f => f.Name == functionName).ToList();
+    var suffixPattern = $".{functionName}";
+    var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
+
+    Logger.Debug(LogCategory.Parser, $"ResolveFunctionName: '{functionName}'");
+    Logger.Debug(LogCategory.Parser, $"  Local match ('{qualifiedName}'): {(localMatch != null ? "found" : "not found")}");
+    Logger.Debug(LogCategory.Parser, $"  Exact matches: {exactMatches.Count} - {string.Join(", ", exactMatches.Select(f => f.Name))}");
+    Logger.Debug(LogCategory.Parser, $"  Suffix matches: {suffixMatches.Count} - {string.Join(", ", suffixMatches.Select(f => f.Name))}");
+
+    // Prefer exact matches - they take precedence over suffix matches
+    if (exactMatches.Count == 1) {
+      return exactMatches[0];
+    } else if (exactMatches.Count > 1) {
+      var candidates = string.Join(", ", exactMatches.Select(f => f.Name));
+      throw new CompileError(ErrorCode.SemanticAmbiguousFunctionCall,
+        $"Ambiguous function call '{functionName}': multiple exact candidates found: {candidates}. Use a qualified name to disambiguate.",
+        functionNameToken.Line, functionNameToken.Column);
+    }
+
+    // No exact matches - try suffix matches
+    if (suffixMatches.Count == 0) {
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        $"Undefined function '{functionName}'",
+        functionNameToken.Line, functionNameToken.Column);
+    } else if (suffixMatches.Count > 1) {
+      var candidates = string.Join(", ", suffixMatches.Select(f => f.Name));
+      throw new CompileError(ErrorCode.SemanticAmbiguousFunctionCall,
+        $"Ambiguous function call '{functionName}': multiple candidates found: {candidates}. Use a qualified name to disambiguate.",
+        functionNameToken.Line, functionNameToken.Column);
+    }
+
+    return suffixMatches[0];
+  }
+
+  /// <summary>
   /// Parses call arguments. The first argument can be positional or named.
   /// Second and subsequent arguments MUST be named (name: value syntax),
   /// unless a function has 2+ params and a second positional arg is given (error).
   /// Handles default parameter values for omitted arguments.
   /// </summary>
   private List<MaxonValue> ParseCallArgs(Token functionNameToken) {
+    var callee = ResolveFunctionName(functionNameToken.Value, functionNameToken);
+
     if (Check(TokenType.RightParen)) {
       Advance();
-      var callee0 = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionNameToken.Value);
-      if (callee0 != null && callee0.ParamTypes.Count > 0) {
-        return FillDefaultArgs(functionNameToken, callee0, new MaxonValue?[callee0.ParamTypes.Count]);
+      if (callee.ParamTypes.Count > 0) {
+        return FillDefaultArgs(functionNameToken, callee, new MaxonValue?[callee.ParamTypes.Count]);
       }
       return [];
     }
-
-    var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionNameToken.Value)
-      ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{functionNameToken.Value}'", functionNameToken.Line, functionNameToken.Column);
 
     var args = new MaxonValue?[callee.ParamTypes.Count];
     ParseArgList(functionNameToken, callee, args, firstPositionalIndex: 0);
@@ -4933,8 +5146,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// The first explicit argument is positional (maps to index 1), subsequent args must be named.
   /// </summary>
   private List<MaxonValue> ParseInstanceMethodCallArgs(Token methodNameToken, MaxonValue selfValue) {
-    var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == methodNameToken.Value)
-      ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{methodNameToken.Value}'", methodNameToken.Line, methodNameToken.Column);
+    var callee = ResolveFunctionName(methodNameToken.Value, methodNameToken);
 
     var args = new MaxonValue?[callee.ParamTypes.Count];
     args[0] = selfValue;
@@ -4953,8 +5165,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args) {
     var functionName = functionNameToken.Value;
-
-    var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined function '{functionName}'", functionNameToken.Line, functionNameToken.Column);
+    var callee = ResolveFunctionName(functionName, functionNameToken);
 
     // E057: calling a throwing function without try
     if (callee.ThrowsType != null && !_inTryContext) {
@@ -4998,7 +5209,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
-    var callOp = new MaxonCallOp(functionName, args, resultKind, resultStructTypeName);
+    // Use the resolved function's qualified name for the call op
+    var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
     return callOp;
   }

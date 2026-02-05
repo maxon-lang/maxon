@@ -17,14 +17,14 @@ ExitCode: 20
 RequiredMLIR: ```
 === maxon
 module {
-  func @double(x: i64) -> i64 {
+  func @register-allocator.double(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
     %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
     maxon.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = maxon.literal {value = 0 : i64}
     maxon.assign %3 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -38,7 +38,7 @@ module {
     maxon.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
     %8 = maxon.var_ref {var = i} {type = i64}
-    %9 = maxon.call @double %8
+    %9 = maxon.call @register-allocator.double %8
     %10 = maxon.var_ref {var = sum} {type = i64}
     %11 = maxon.binop %10, %9 {op = add} {kind = i64}
     maxon.assign %11 {var = sum} {kind = i64} {mut = 1 : i1}
@@ -54,7 +54,7 @@ module {
 }
 === standard
 module {
-  func @double(x: i64) -> i64 {
+  func @register-allocator.double(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     memref.store %0, x
@@ -62,7 +62,7 @@ module {
     %2 = arith.muli %0, %1
     func.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, sum
@@ -76,7 +76,7 @@ module {
     cf.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
     %8 = memref.load i : i64
-    %9 = func.call @double %8
+    %9 = func.call @register-allocator.double %8
     %10 = memref.load sum : i64
     %11 = arith.addi %10, %9
     memref.store %11, sum
@@ -92,7 +92,7 @@ module {
 }
 === x86
 module {
-  func @double(x: i64) -> i64 {
+  func @register-allocator.double(x: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -102,23 +102,23 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.header:
     x86.mov eax, 5
     x86.mov ecx, [rbp-16]
     x86.cmp ecx, eax
-    x86.jge main.loop_0.exit
+    x86.jge register-allocator.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call double
+    x86.call register-allocator.double
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov [rbp-8], ecx
@@ -126,7 +126,7 @@ module {
     x86.mov ebx, [rbp-16]
     x86.add ebx, edx
     x86.mov [rbp-16], ebx
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
     x86.epilogue
@@ -136,7 +136,7 @@ module {
 ```
 ---
 module {
-  func @double(x: i64) -> i64 {
+  func @register-allocator.double(x: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -146,23 +146,23 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.header:
     x86.mov eax, 5
     x86.mov ecx, [rbp-16]
     x86.cmp ecx, eax
-    x86.jge main.loop_0.exit
+    x86.jge register-allocator.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call double
+    x86.call register-allocator.double
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov [rbp-8], ecx
@@ -170,7 +170,7 @@ module {
     x86.mov ebx, [rbp-16]
     x86.add ebx, edx
     x86.mov [rbp-16], ebx
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
     x86.epilogue

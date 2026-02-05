@@ -25,7 +25,7 @@ end 'main'
 ```RequiredMLIR
 === maxon
 module {
-  func @main() -> i64 {
+  func @advent.main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.return %0
@@ -33,7 +33,7 @@ module {
 }
 === standard
 module {
-  func @main() -> i64 {
+  func @advent.main() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     func.return %0
@@ -41,7 +41,7 @@ module {
 }
 === x86
 module {
-  func @main() -> i64 {
+  func @advent.main() -> i64 {
   entry:
     x86.xor eax, eax
     x86.ret
@@ -65,24 +65,24 @@ end 'main'
 ```RequiredMLIR
 === maxon
 module {
-  func @add(x: i64, y: i64) -> i64 {
+  func @advent.add(x: i64, y: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = y} {type = i64}
     %2 = maxon.binop %0, %1 {op = add} {kind = i64}
     maxon.return %2
   }
-  func @main() -> i64 {
+  func @advent.main() -> i64 {
   entry:
     %3 = maxon.literal {value = 3 : i64}
     %4 = maxon.literal {value = 4 : i64}
-    %5 = maxon.call @add %3, %4
+    %5 = maxon.call @advent.add %3, %4
     maxon.return %5
   }
 }
 === standard
 module {
-  func @add(x: i64, y: i64) -> i64 {
+  func @advent.add(x: i64, y: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     memref.store %0, x
@@ -91,17 +91,17 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @main() -> i64 {
+  func @advent.main() -> i64 {
   entry:
     %3 = arith.constant {value = 3 : i64}
     %4 = arith.constant {value = 4 : i64}
-    %5 = func.call @add %3, %4
+    %5 = func.call @advent.add %3, %4
     func.return %5
   }
 }
 === x86
 module {
-  func @add(x: i64, y: i64) -> i64 {
+  func @advent.add(x: i64, y: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -111,13 +111,13 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @advent.main() -> i64 {
   entry:
     x86.mov eax, 3
     x86.mov ecx, 4
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call add
+    x86.call advent.add
     x86.ret
   }
 }

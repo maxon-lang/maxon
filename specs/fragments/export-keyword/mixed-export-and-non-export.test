@@ -1,0 +1,35 @@
+// Test: mixed-export-and-non-export
+export function publicFunc() returns int
+  return privateFunc() + 20
+end 'publicFunc'
+
+function privateFunc() returns int
+  return 22
+end 'privateFunc'
+
+function main() returns int
+  return publicFunc()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @export-keyword.publicFunc() -> i64 {
+  entry:
+    x86.call export-keyword.privateFunc
+    x86.mov ecx, 20
+    x86.add eax, ecx
+    x86.ret
+  }
+  func @export-keyword.privateFunc() -> i64 {
+  entry:
+    x86.mov eax, 22
+    x86.ret
+  }
+  func @export-keyword.main() -> i64 {
+  entry:
+    x86.call export-keyword.publicFunc
+    x86.ret
+  }
+}
+---

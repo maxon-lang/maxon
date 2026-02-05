@@ -84,16 +84,23 @@ public static class StandardToX86Conversion {
         }
         foreach (var paramOp in registerParams) {
           var storeOp = srcBlock.Operations.OfType<StdStoreI64Op>()
-            .FirstOrDefault(s => s.Value == paramOp.Result);
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result));
           if (storeOp != null && varOffsets.TryGetValue(storeOp.VarName, out int value)) {
             regManager.EmitStoreToStack(paramOp.Result, value, 8, x86Block);
             preHandledOps.Add(storeOp);
           }
           var storeF64 = srcBlock.Operations.OfType<StdStoreF64Op>()
-            .FirstOrDefault(s => s.Value == paramOp.Result);
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result));
           if (storeF64 != null && varOffsets.TryGetValue(storeF64.VarName, out int value2)) {
             regManager.EmitXmmStoreToStack(paramOp.Result, value2, x86Block);
             preHandledOps.Add(storeF64);
+          }
+          // Handle bool (i1) parameters - must also be stored immediately
+          var storeI1 = srcBlock.Operations.OfType<StdStoreI1Op>()
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result));
+          if (storeI1 != null && varOffsets.TryGetValue(storeI1.VarName, out int value3)) {
+            regManager.EmitStoreToStack(paramOp.Result, value3, 1, x86Block);
+            preHandledOps.Add(storeI1);
           }
         }
       }
@@ -395,8 +402,14 @@ public static class StandardToX86Conversion {
             if (retOp.ReturnValue != null) {
               if (retOp.ReturnValue is StdF64) {
                 regManager.EnsureInXmm0ForReturn(retOp.ReturnValue, x86Block);
-              } else {
+              } else if (retOp.ReturnValue is StdPtr) {
+                // Pointers use 64-bit RAX
+                regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Rax, x86Block);
+              } else if (retOp.ReturnValue is StdI64 or StdI32 or StdBool) {
+                // All integer types use 32-bit EAX (even i64, for compatibility with existing codegen)
                 regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
+              } else {
+                throw new InvalidOperationException($"StandardToX86: unsupported return type {retOp.ReturnValue.GetType().Name}");
               }
             }
             // In throwing functions, a normal return means success: set error flag (RDX) to 0

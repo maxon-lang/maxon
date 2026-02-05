@@ -46,15 +46,16 @@ public enum ErrorCode {
   SemanticUndefinedFunction = 3004,
   SemanticTypeMismatch = 3005,
   SemanticDuplicateDefinition = 3006,
-  SemanticSymbolNotExported = 3007,
-  SemanticUnsafeCast = 3008,
-  SemanticUnexpectedToken = 3009,
-  SemanticUnknownType = 3010,
-  SemanticUnusedVariable = 3011,
-  SemanticMissingReturn = 3012,
-  SemanticUnexportedFieldAccess = 3013,
-  SemanticRedundantTypeAnnotation = 3014,
-  SemanticPartialInterfaceImpl = 3015,
+  SemanticAmbiguousFunctionCall = 3007,
+  SemanticSymbolNotExported = 3008,
+  SemanticUnsafeCast = 3009,
+  SemanticUnexpectedToken = 3010,
+  SemanticUnknownType = 3011,
+  SemanticUnusedVariable = 3012,
+  SemanticMissingReturn = 3013,
+  SemanticUnexportedFieldAccess = 3014,
+  SemanticRedundantTypeAnnotation = 3015,
+  SemanticPartialInterfaceImpl = 3016,
   SemanticEnumDuplicateCase = 3030,
   SemanticEnumDuplicateRawValue = 3031,
   SemanticEnumRawValueTypeMismatch = 3032,
@@ -96,6 +97,6 @@ public static class ErrorCodeExtensions {
   /// Formats an error code as "E1001", "E2001", etc.
   /// </summary>
   public static string Format(this ErrorCode code) {
-    return $"E{(int)code:D3}";
+    return $"E{(int)code:D4}";
   }
 }

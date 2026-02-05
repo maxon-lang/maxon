@@ -22,12 +22,12 @@ end 'main'
 ExitCode: 0
 ---
 module {
-  func @mayFail(shouldFail: i1) -> i64 {
+  func @error-handling.mayFail(shouldFail: i1) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-1], ecx
     x86.test ecx, ecx
-    x86.je mayFail.check_0.after
+    x86.je error-handling.mayFail.check_0.after
   check_0:
     x86.xor eax, eax
     x86.mov ecx, 1
@@ -42,23 +42,23 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @error-handling.main() -> i64 {
   entry:
     x86.prologue stack_size=32
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
-    x86.call mayFail
+    x86.call error-handling.mayFail
     x86.mov [rbp-16], edx
     x86.mov [rbp-24], edx
     x86.mov [rbp-32], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_continue_1
+    x86.je error-handling.main.otherwise_continue_1
   otherwise_error_0:
     x86.mov eax, 42
     x86.mov [rbp-8], eax
-    x86.jmp main.otherwise_continue_1
+    x86.jmp error-handling.main.otherwise_continue_1
   otherwise_continue_1:
     x86.mov eax, [rbp-32]
     x86.mov ecx, [rbp-8]

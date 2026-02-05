@@ -44,7 +44,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/missing-return-error/no-return.test:2:10: missing return statement: 'main'
+error E3013: specs/fragments/missing-return-error/no-return.test:2:10: missing return statement: 'main'
 ```
 
 <!-- test: missing-else-return -->
@@ -61,7 +61,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/missing-return-error/missing-else-return.test:2:10: missing return statement: 'test'
+error E3013: specs/fragments/missing-return-error/missing-else-return.test:2:10: missing return statement: 'test'
 ```
 
 <!-- test: valid-all-paths -->

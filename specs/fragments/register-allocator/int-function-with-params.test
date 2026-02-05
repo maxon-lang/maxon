@@ -11,24 +11,24 @@ ExitCode: 42
 RequiredMLIR: ```
 === maxon
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
     %2 = maxon.binop %0, %1 {op = add} {kind = i64}
     maxon.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = maxon.literal {value = 30 : i64}
     %4 = maxon.literal {value = 12 : i64}
-    %5 = maxon.call @add %3, %4
+    %5 = maxon.call @register-allocator.add %3, %4
     maxon.return %5
   }
 }
 === standard
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
     memref.store %0, a
@@ -37,17 +37,17 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %3 = arith.constant {value = 30 : i64}
     %4 = arith.constant {value = 12 : i64}
-    %5 = func.call @add %3, %4
+    %5 = func.call @register-allocator.add %3, %4
     func.return %5
   }
 }
 === x86
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -57,20 +57,20 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.mov eax, 30
     x86.mov ecx, 12
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call add
+    x86.call register-allocator.add
     x86.ret
   }
 }
 ```
 ---
 module {
-  func @add(a: i64, b: i64) -> i64 {
+  func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -80,13 +80,13 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.mov eax, 30
     x86.mov ecx, 12
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call add
+    x86.call register-allocator.add
     x86.ret
   }
 }

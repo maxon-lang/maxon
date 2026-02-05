@@ -65,15 +65,28 @@ public static class MonomorphizationPass {
       var typeSubstitution = BuildTypeSubstitution(sourceStruct, aliasInfo.TypeParams, aliasName, module);
 
       // Find methods on the source type that need specialization
+      // Support both exact prefix match (Set.insert) and suffix match (stdlib.Set.insert)
       var sourcePrefix = $"{sourceTypeName}.";
+      var sourceSuffix = $".{sourceTypeName}.";
       foreach (var func in module.Functions) {
-        if (!func.Name.StartsWith(sourcePrefix)) continue;
+        bool isSourceMethod = func.Name.StartsWith(sourcePrefix);
+        bool isSuffixMatch = !isSourceMethod && func.Name.Contains(sourceSuffix);
+
+        if (!isSourceMethod && !isSuffixMatch) continue;
 
         // Check if function uses associated types in params or return
         if (!NeedsSpecialization(func, sourceStruct, module)) continue;
 
-        // Check if we already have a specialization for this (alias, method) pair
-        var methodName = func.Name[sourcePrefix.Length..];
+        // Extract method name (last component after TypeName)
+        string methodName;
+        if (isSourceMethod) {
+          methodName = func.Name[sourcePrefix.Length..];
+        } else {
+          // For suffix match like "stdlib.Set.insert", extract "insert"
+          var idx = func.Name.LastIndexOf(sourceSuffix);
+          methodName = func.Name[(idx + sourceSuffix.Length)..];
+        }
+
         var specializedName = $"{aliasName}.{methodName}";
         if (module.Functions.Any(f => f.Name == specializedName)) continue;
         if (specializations.Any(s => s.ConcreteTypeName == aliasName && s.SourceFunc == func)) continue;
@@ -197,7 +210,8 @@ public static class MonomorphizationPass {
                ?? concreteTypeName;
 
     // Compute new function name
-    var dotIdx = sourceFunc.Name.IndexOf('.');
+    // Use LastIndexOf to handle namespace-qualified names like "stdlib.Array.push"
+    var dotIdx = sourceFunc.Name.LastIndexOf('.');
     var methodName = dotIdx >= 0 ? sourceFunc.Name[(dotIdx + 1)..] : sourceFunc.Name;
     var newFuncName = $"{concreteTypeName}.{methodName}";
 
@@ -631,7 +645,7 @@ public static class MonomorphizationPass {
 
   private static string SubstituteCallee(string callee, Dictionary<string, string> substitution) {
     // Check if callee is TypeName.MethodName where TypeName needs substitution
-    var dotIdx = callee.IndexOf('.');
+    var dotIdx = callee.LastIndexOf('.');
     if (dotIdx > 0) {
       var typePart = callee[..dotIdx];
       var methodPart = callee[(dotIdx + 1)..];
@@ -657,7 +671,7 @@ public static class MonomorphizationPass {
     // Build a map of (original callee, concrete type) -> new callee
     var calleeMap = new Dictionary<(string, string), string>();
     foreach (var spec in specializations) {
-      var dotIdx = spec.SourceFunc.Name.IndexOf('.');
+      var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
       var methodName = dotIdx >= 0 ? spec.SourceFunc.Name[(dotIdx + 1)..] : spec.SourceFunc.Name;
       var newCallee = $"{spec.ConcreteTypeName}.{methodName}";
       calleeMap[(spec.SourceFunc.Name, spec.ConcreteTypeName)] = newCallee;

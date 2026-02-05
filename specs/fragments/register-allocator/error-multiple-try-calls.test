@@ -26,24 +26,24 @@ ExitCode: 42
 RequiredMLIR: ```
 === maxon
 module {
-  func @getA() -> i64 {
+  func @register-allocator.getA() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     maxon.return %0
   }
-  func @getB() -> i64 {
+  func @register-allocator.getB() -> i64 {
   entry:
     %1 = maxon.literal {value = 20 : i64}
     maxon.return %1
   }
-  func @getC() -> i64 {
+  func @register-allocator.getC() -> i64 {
   entry:
     %2 = maxon.enum_literal @MyError.failed
     maxon.throw @MyError %2
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
-    %5, %4 = maxon.try_call @getA
+    %5, %4 = maxon.try_call @register-allocator.getA
     %6 = maxon.literal {value = 0 : i64}
     maxon.assign %6 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %5 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -57,7 +57,7 @@ module {
   otherwise_default_continue_3:
     %10 = maxon.var_ref {var = __try_result_0} {type = i64}
     maxon.assign %10 {var = a} {kind = i64} {decl = 1 : i1}
-    %13, %12 = maxon.try_call @getB
+    %13, %12 = maxon.try_call @register-allocator.getB
     %14 = maxon.literal {value = 0 : i64}
     maxon.assign %14 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %13 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -71,7 +71,7 @@ module {
   otherwise_default_continue_7:
     %18 = maxon.var_ref {var = __try_result_4} {type = i64}
     maxon.assign %18 {var = b} {kind = i64} {decl = 1 : i1}
-    %21, %20 = maxon.try_call @getC
+    %21, %20 = maxon.try_call @register-allocator.getC
     %22 = maxon.literal {value = 12 : i64}
     maxon.assign %22 {var = __try_default_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -94,26 +94,26 @@ module {
 }
 === standard
 module {
-  func @getA() -> i64 {
+  func @register-allocator.getA() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     func.return %0
   }
-  func @getB() -> i64 {
+  func @register-allocator.getB() -> i64 {
   entry:
     %1 = arith.constant {value = 20 : i64}
     func.return %1
   }
-  func @getC() -> i64 {
+  func @register-allocator.getC() -> i64 {
   entry:
     %2 = arith.constant {value = 0 : i64}
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.addi %2, %3
     func.error_return %4
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
-    %5, %6 = func.try_call @getA
+    %5, %6 = func.try_call @register-allocator.getA
     memref.store %6, __error_flag
     %7 = arith.constant {value = 0 : i64}
     memref.store %7, __try_default_1
@@ -128,7 +128,7 @@ module {
   otherwise_default_continue_3:
     %11 = memref.load __try_result_0 : i64
     memref.store %11, a
-    %12, %13 = func.try_call @getB
+    %12, %13 = func.try_call @register-allocator.getB
     memref.store %13, __error_flag
     %14 = arith.constant {value = 0 : i64}
     memref.store %14, __try_default_5
@@ -143,7 +143,7 @@ module {
   otherwise_default_continue_7:
     %18 = memref.load __try_result_4 : i64
     memref.store %18, b
-    %19, %20 = func.try_call @getC
+    %19, %20 = func.try_call @register-allocator.getC
     memref.store %20, __error_flag
     %21 = arith.constant {value = 12 : i64}
     memref.store %21, __try_default_9
@@ -167,19 +167,19 @@ module {
 }
 === x86
 module {
-  func @getA() -> i64 {
+  func @register-allocator.getA() -> i64 {
   entry:
     x86.mov eax, 10
     x86.xor edx, edx
     x86.ret
   }
-  func @getB() -> i64 {
+  func @register-allocator.getB() -> i64 {
   entry:
     x86.mov eax, 20
     x86.xor edx, edx
     x86.ret
   }
-  func @getC() -> i64 {
+  func @register-allocator.getC() -> i64 {
   entry:
     x86.xor eax, eax
     x86.mov ecx, 1
@@ -188,51 +188,51 @@ module {
     x86.xor eax, eax
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=80
-    x86.call getA
+    x86.call register-allocator.getA
     x86.mov [rbp-8], edx
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.mov [rbp-24], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_3
+    x86.je register-allocator.main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov eax, [rbp-16]
     x86.mov [rbp-24], eax
-    x86.jmp main.otherwise_default_continue_3
+    x86.jmp register-allocator.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-24]
     x86.mov [rbp-32], eax
-    x86.call getB
+    x86.call register-allocator.getB
     x86.mov [rbp-8], edx
     x86.xor ecx, ecx
     x86.mov [rbp-40], ecx
     x86.mov [rbp-48], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_7
+    x86.je register-allocator.main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov eax, [rbp-40]
     x86.mov [rbp-48], eax
-    x86.jmp main.otherwise_default_continue_7
+    x86.jmp register-allocator.main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov eax, [rbp-48]
     x86.mov [rbp-56], eax
-    x86.call getC
+    x86.call register-allocator.getC
     x86.mov [rbp-8], edx
     x86.mov ecx, 12
     x86.mov [rbp-64], ecx
     x86.mov [rbp-72], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_11
+    x86.je register-allocator.main.otherwise_default_continue_11
   otherwise_default_error_10:
     x86.mov eax, [rbp-64]
     x86.mov [rbp-72], eax
-    x86.jmp main.otherwise_default_continue_11
+    x86.jmp register-allocator.main.otherwise_default_continue_11
   otherwise_default_continue_11:
     x86.mov eax, [rbp-72]
     x86.mov [rbp-80], eax
@@ -248,19 +248,19 @@ module {
 ```
 ---
 module {
-  func @getA() -> i64 {
+  func @register-allocator.getA() -> i64 {
   entry:
     x86.mov eax, 10
     x86.xor edx, edx
     x86.ret
   }
-  func @getB() -> i64 {
+  func @register-allocator.getB() -> i64 {
   entry:
     x86.mov eax, 20
     x86.xor edx, edx
     x86.ret
   }
-  func @getC() -> i64 {
+  func @register-allocator.getC() -> i64 {
   entry:
     x86.xor eax, eax
     x86.mov ecx, 1
@@ -269,51 +269,51 @@ module {
     x86.xor eax, eax
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=80
-    x86.call getA
+    x86.call register-allocator.getA
     x86.mov [rbp-8], edx
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
     x86.mov [rbp-24], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_3
+    x86.je register-allocator.main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov eax, [rbp-16]
     x86.mov [rbp-24], eax
-    x86.jmp main.otherwise_default_continue_3
+    x86.jmp register-allocator.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-24]
     x86.mov [rbp-32], eax
-    x86.call getB
+    x86.call register-allocator.getB
     x86.mov [rbp-8], edx
     x86.xor ecx, ecx
     x86.mov [rbp-40], ecx
     x86.mov [rbp-48], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_7
+    x86.je register-allocator.main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov eax, [rbp-40]
     x86.mov [rbp-48], eax
-    x86.jmp main.otherwise_default_continue_7
+    x86.jmp register-allocator.main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov eax, [rbp-48]
     x86.mov [rbp-56], eax
-    x86.call getC
+    x86.call register-allocator.getC
     x86.mov [rbp-8], edx
     x86.mov ecx, 12
     x86.mov [rbp-64], ecx
     x86.mov [rbp-72], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_11
+    x86.je register-allocator.main.otherwise_default_continue_11
   otherwise_default_error_10:
     x86.mov eax, [rbp-64]
     x86.mov [rbp-72], eax
-    x86.jmp main.otherwise_default_continue_11
+    x86.jmp register-allocator.main.otherwise_default_continue_11
   otherwise_default_continue_11:
     x86.mov eax, [rbp-72]
     x86.mov [rbp-80], eax

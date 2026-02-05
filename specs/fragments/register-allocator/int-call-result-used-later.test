@@ -13,16 +13,16 @@ ExitCode: 200
 RequiredMLIR: ```
 === maxon
 module {
-  func @compute() -> i64 {
+  func @register-allocator.compute() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
     maxon.return %0
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
-    %1 = maxon.call @compute
+    %1 = maxon.call @register-allocator.compute
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.call @compute
+    %2 = maxon.call @register-allocator.compute
     maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.binop %1, %2 {op = add} {kind = i64}
     %4 = maxon.literal {value = 256 : i64}
@@ -32,16 +32,16 @@ module {
 }
 === standard
 module {
-  func @compute() -> i64 {
+  func @register-allocator.compute() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
     func.return %0
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
-    %1 = func.call @compute
+    %1 = func.call @register-allocator.compute
     memref.store %1, a
-    %2 = func.call @compute
+    %2 = func.call @register-allocator.compute
     memref.store %2, b
     %3 = arith.addi %1, %2
     %4 = arith.constant {value = 256 : i64}
@@ -51,17 +51,17 @@ module {
 }
 === x86
 module {
-  func @compute() -> i64 {
+  func @register-allocator.compute() -> i64 {
   entry:
     x86.mov eax, 100
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.call compute
+    x86.call register-allocator.compute
     x86.mov [rbp-8], eax
-    x86.call compute
+    x86.call register-allocator.compute
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
@@ -79,17 +79,17 @@ module {
 ```
 ---
 module {
-  func @compute() -> i64 {
+  func @register-allocator.compute() -> i64 {
   entry:
     x86.mov eax, 100
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.call compute
+    x86.call register-allocator.compute
     x86.mov [rbp-8], eax
-    x86.call compute
+    x86.call register-allocator.compute
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax

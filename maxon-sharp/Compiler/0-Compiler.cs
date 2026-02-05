@@ -95,7 +95,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: isStdLib);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path);
         var parsed = parser.Parse();
         module.Merge(parsed);
       } catch (CompileError ex) {

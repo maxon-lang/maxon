@@ -39,10 +39,13 @@ module {
     x86.cmp ecx, eax
     x86.sete eax
     x86.movzx eax, eaxb
+    x86.mov ecx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov [ecx+0], ebx
     x86.epilogue
     x86.ret
   }
-  func @areEqual(a.n: i64, b.n: i64) -> i1 {
+  func @equatable.areEqual(a.n: i64, b.n: i64) -> i1 {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
@@ -59,7 +62,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @equatable.main() -> i64 {
   entry:
     x86.prologue stack_size=48
     x86.mov eax, 5
@@ -78,17 +81,17 @@ module {
     x86.mov r9, [rbp-32]
     x86.mov rcx, r8
     x86.mov rdx, r9
-    x86.call areEqual
+    x86.call equatable.areEqual
     x86.test eax, eax
-    x86.je main.eq_0.after
+    x86.je equatable.main.eq_0.after
   eq_0:
     x86.mov eax, [rbp-16]
     x86.mov ecx, [rbp-48]
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call areEqual
+    x86.call equatable.areEqual
     x86.test eax, eax
-    x86.je main.neq_1.after
+    x86.je equatable.main.neq_1.after
   neq_1:
     x86.mov eax, 1
     x86.epilogue

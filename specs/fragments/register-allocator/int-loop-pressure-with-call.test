@@ -24,12 +24,12 @@ ExitCode: 55
 RequiredMLIR: ```
 === maxon
 module {
-  func @identity(x: i64) -> i64 {
+  func @register-allocator.identity(x: i64) -> i64 {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     maxon.return %0
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %1 = maxon.literal {value = 1 : i64}
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -53,17 +53,17 @@ module {
     maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
     %11 = maxon.var_ref {var = b} {type = i64}
-    %12 = maxon.call @identity %11
+    %12 = maxon.call @register-allocator.identity %11
     %13 = maxon.var_ref {var = a} {type = i64}
     %14 = maxon.binop %13, %12 {op = add} {kind = i64}
     maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
     %15 = maxon.var_ref {var = d} {type = i64}
-    %16 = maxon.call @identity %15
+    %16 = maxon.call @register-allocator.identity %15
     %17 = maxon.var_ref {var = c} {type = i64}
     %18 = maxon.binop %17, %16 {op = add} {kind = i64}
     maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
     %19 = maxon.var_ref {var = f} {type = i64}
-    %20 = maxon.call @identity %19
+    %20 = maxon.call @register-allocator.identity %19
     %21 = maxon.var_ref {var = e} {type = i64}
     %22 = maxon.binop %21, %20 {op = add} {kind = i64}
     maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
@@ -89,13 +89,13 @@ module {
 }
 === standard
 module {
-  func @identity(x: i64) -> i64 {
+  func @register-allocator.identity(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
     memref.store %0, x
     func.return %0
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     %1 = arith.constant {value = 1 : i64}
     memref.store %1, a
@@ -119,17 +119,17 @@ module {
     cf.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
     %11 = memref.load b : i64
-    %12 = func.call @identity %11
+    %12 = func.call @register-allocator.identity %11
     %13 = memref.load a : i64
     %14 = arith.addi %13, %12
     memref.store %14, a
     %15 = memref.load d : i64
-    %16 = func.call @identity %15
+    %16 = func.call @register-allocator.identity %15
     %17 = memref.load c : i64
     %18 = arith.addi %17, %16
     memref.store %18, c
     %19 = memref.load f : i64
-    %20 = func.call @identity %19
+    %20 = func.call @register-allocator.identity %19
     %21 = memref.load e : i64
     %22 = arith.addi %21, %20
     memref.store %22, e
@@ -155,7 +155,7 @@ module {
 }
 === x86
 module {
-  func @identity(x: i64) -> i64 {
+  func @register-allocator.identity(x: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -163,7 +163,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=64
     x86.mov eax, 1
@@ -180,28 +180,28 @@ module {
     x86.mov [rbp-48], edi
     x86.xor r8, r8
     x86.mov [rbp-56], r8
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.header:
     x86.mov eax, 3
     x86.mov ecx, [rbp-56]
     x86.cmp ecx, eax
-    x86.jge main.loop_0.exit
+    x86.jge register-allocator.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call identity
+    x86.call register-allocator.identity
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov [rbp-8], ecx
     x86.mov edx, [rbp-32]
     x86.mov rcx, rdx
-    x86.call identity
+    x86.call register-allocator.identity
     x86.mov ebx, [rbp-24]
     x86.add ebx, eax
     x86.mov [rbp-24], ebx
     x86.mov esi, [rbp-48]
     x86.mov rcx, rsi
-    x86.call identity
+    x86.call register-allocator.identity
     x86.mov edi, [rbp-40]
     x86.add edi, eax
     x86.mov [rbp-40], edi
@@ -209,7 +209,7 @@ module {
     x86.mov r9, [rbp-56]
     x86.add r9, r8
     x86.mov [rbp-56], r9
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-24]
@@ -232,7 +232,7 @@ module {
 ```
 ---
 module {
-  func @identity(x: i64) -> i64 {
+  func @register-allocator.identity(x: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -240,7 +240,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> i64 {
+  func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=64
     x86.mov eax, 1
@@ -257,28 +257,28 @@ module {
     x86.mov [rbp-48], edi
     x86.xor r8, r8
     x86.mov [rbp-56], r8
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.header:
     x86.mov eax, 3
     x86.mov ecx, [rbp-56]
     x86.cmp ecx, eax
-    x86.jge main.loop_0.exit
+    x86.jge register-allocator.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call identity
+    x86.call register-allocator.identity
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov [rbp-8], ecx
     x86.mov edx, [rbp-32]
     x86.mov rcx, rdx
-    x86.call identity
+    x86.call register-allocator.identity
     x86.mov ebx, [rbp-24]
     x86.add ebx, eax
     x86.mov [rbp-24], ebx
     x86.mov esi, [rbp-48]
     x86.mov rcx, rsi
-    x86.call identity
+    x86.call register-allocator.identity
     x86.mov edi, [rbp-40]
     x86.add edi, eax
     x86.mov [rbp-40], edi
@@ -286,7 +286,7 @@ module {
     x86.mov r9, [rbp-56]
     x86.add r9, r8
     x86.mov [rbp-56], r9
-    x86.jmp main.loop_0.header
+    x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-24]

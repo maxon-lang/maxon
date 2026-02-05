@@ -146,7 +146,7 @@ i64 42
 ```RequiredMLIR
 === maxon
 module {
-  func @main() -> i64 {
+  func @codegen-internals.main() -> i64 {
   entry:
     %0 = maxon.literal {value = 42 : i64}
     maxon.assign %0 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
@@ -159,9 +159,9 @@ module {
     maxon.assign %6 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
     %7 = maxon.literal {value = 0 : i64}
     %8 = maxon.literal {value = 77 : i64}
-    maxon.call @Array.set %6, %7, %8
+    maxon.call @stdlib.Array.set %6, %7, %8
     %9 = maxon.literal {value = 0 : i64}
-    %12, %11 = maxon.try_call @Array.get %6, %9
+    %12, %11 = maxon.try_call @stdlib.Array.get %6, %9
     %13 = maxon.literal {value = 0 : i64}
     maxon.assign %13 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %12 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -179,7 +179,7 @@ module {
 }
 === standard
 module {
-  func @main() -> i64 {
+  func @codegen-internals.main() -> i64 {
   entry:
     %0 = arith.constant {value = 42 : i64}
     memref.store %0, __arr_0.0
@@ -197,7 +197,7 @@ module {
     memref.store %6, __struct_6.managed.length
     %7 = memref.load __struct_4.capacity : i64
     memref.store %7, __struct_6.managed.capacity
-    %8 = memref.lea_rdata __const_array_main_arr
+    %8 = memref.lea_rdata __const_array_codegen-internals.main_arr
     %9 = std.ptr_to_i64 %8
     memref.store %9, __struct_6.managed.buffer
     %10 = memref.load __struct_6.iterIndex : i64
@@ -219,7 +219,7 @@ module {
     %20 = memref.load arr.iterIndex : i64
     memref.store %20, __selfbuf_16.iterIndex
     %21 = memref.lea __selfbuf_16
-    func.call @Array.set %21, %14, %15
+    func.call @stdlib.Array.set %21, %14, %15
     %22 = memref.load __selfbuf_16.iterIndex : i64
     memref.store %22, arr.iterIndex
     %23 = memref.load __selfbuf_16.managed.buffer : i64
@@ -238,7 +238,7 @@ module {
     %31 = memref.load arr.iterIndex : i64
     memref.store %31, __selfbuf_27.iterIndex
     %32 = memref.lea __selfbuf_27
-    %33, %34 = func.try_call @Array.get %32, %26
+    %33, %34 = func.try_call @stdlib.Array.get %32, %26
     memref.store %34, __error_flag
     %35 = memref.load __selfbuf_27.iterIndex : i64
     memref.store %35, arr.iterIndex
@@ -265,7 +265,7 @@ module {
 }
 === x86
 module {
-  func @main() -> i64 {
+  func @codegen-internals.main() -> i64 {
   entry:
     x86.prologue stack_size=192
     x86.mov eax, 42
@@ -284,7 +284,7 @@ module {
     x86.mov [rbp-56], r8
     x86.mov r9, [rbp-32]
     x86.mov [rbp-64], r9
-    x86.lea_rdata rax, [__const_array_main_arr]
+    x86.lea_rdata rax, [__const_array_codegen-internals.main_arr]
     x86.mov rcx, rax
     x86.mov [rbp-48], ecx
     x86.mov eax, [rbp-40]
@@ -309,7 +309,7 @@ module {
     x86.mov r8, rcx
     x86.mov rcx, rdx
     x86.mov rdx, rax
-    x86.call Array.set
+    x86.call stdlib.Array.set
     x86.mov eax, [rbp-128]
     x86.mov [rbp-72], eax
     x86.mov eax, [rbp-120]
@@ -329,7 +329,7 @@ module {
     x86.mov [rbp-160], ecx
     x86.lea rcx, [rbp-160]
     x86.mov rdx, rax
-    x86.call Array.get
+    x86.call stdlib.Array.get
     x86.mov [rbp-168], edx
     x86.mov ecx, [rbp-160]
     x86.mov [rbp-72], ecx
@@ -344,11 +344,11 @@ module {
     x86.mov [rbp-184], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_4
+    x86.je codegen-internals.main.otherwise_default_continue_4
   otherwise_default_error_3:
     x86.mov eax, [rbp-176]
     x86.mov [rbp-184], eax
-    x86.jmp main.otherwise_default_continue_4
+    x86.jmp codegen-internals.main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov eax, [rbp-184]
     x86.epilogue

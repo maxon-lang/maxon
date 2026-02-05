@@ -10,11 +10,12 @@ public static class DeadFunctionElimination {
     foreach (var func in module.Functions)
       funcByName[func.Name] = func;
 
-    // BFS from main
+    // BFS from main (check for exact match or suffix match)
     var queue = new Queue<string>();
-    if (funcByName.ContainsKey("main")) {
-      queue.Enqueue("main");
-      reachable.Add("main");
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main" || f.Name.EndsWith(".main"));
+    if (mainFunc != null) {
+      queue.Enqueue(mainFunc.Name);
+      reachable.Add(mainFunc.Name);
     }
 
     while (queue.Count > 0) {
