@@ -106,7 +106,7 @@ module {
   }
   func @basics.main() -> i64 {
   entry:
-    x86.jmp getValue
+    x86.jmp basics.getValue
   }
 }
 ```

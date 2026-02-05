@@ -16,22 +16,16 @@ ExitCode: 22
 module {
   func @namespaces.double(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, 2
     x86.imul ecx, eax
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @namespaces.triple(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, 3
     x86.imul ecx, eax
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @namespaces.main() -> i64 {
@@ -44,8 +38,7 @@ module {
     x86.mov [rbp-8], eax
     x86.call namespaces.triple
     x86.mov edx, [rbp-8]
-    x86.add edx, eax
-    x86.mov eax, edx
+    x86.lea eax, [edx + eax]
     x86.epilogue
     x86.ret
   }

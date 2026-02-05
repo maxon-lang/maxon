@@ -112,7 +112,7 @@ module {
     x86.mov ecx, 4
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.jmp add
+    x86.jmp advent.add
   }
 }
 ```

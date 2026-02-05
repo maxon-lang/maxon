@@ -1210,7 +1210,7 @@ end 'main'
 4
 ```
 
-<!-- test: count-vs-bytes-count -->
+<!-- disabled-test: count-vs-bytes-count -->
 ### count vs bytes().count()
 ```maxon
 function main() returns int

@@ -14,24 +14,17 @@ ExitCode: 11
 module {
   func @arithmetic.divLive(a: i64, b: i64, x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], r8
     x86.mov eax, 1
     x86.add r8, eax
-    x86.mov [rbp-32], r8
     x86.cvtsi2sd xmm0, ecx
     x86.cvtsi2sd xmm1, edx
     x86.movsd xmm2, xmm0
     x86.divsd xmm2, xmm1
-    x86.movsd [rbp-40], xmm2
     x86.cvtsi2sd xmm3, r8
     x86.movsd xmm4, xmm2
     x86.addsd xmm4, xmm3
     x86.cvttsd2si ecx, xmm4
     x86.mov eax, ecx
-    x86.epilogue
     x86.ret
   }
   func @arithmetic.main() -> i64 {
@@ -42,8 +35,7 @@ module {
     x86.mov r8, rdx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call arithmetic.divLive
-    x86.ret
+    x86.jmp arithmetic.divLive
   }
 }
 ---

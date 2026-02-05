@@ -13,21 +13,14 @@ ExitCode: 42
 module {
   func @implicit-type-conversion.takeFloat(x: f64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.movsd [rbp-8], xmm0
     x86.cvttsd2si eax, xmm0
-    x86.epilogue
     x86.ret
   }
   func @implicit-type-conversion.main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 42
-    x86.mov [rbp-8], eax
     x86.cvtsi2sd xmm0, eax
-    x86.call implicit-type-conversion.takeFloat
-    x86.epilogue
-    x86.ret
+    x86.jmp implicit-type-conversion.takeFloat
   }
 }
 ---

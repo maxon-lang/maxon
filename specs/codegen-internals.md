@@ -283,7 +283,7 @@ module {
     x86.mov [rbp-48], r8
     x86.mov r9, [rbp-24]
     x86.mov [rbp-56], r9
-    x86.lea_rdata rax, [__const_array_main_arr]
+    x86.lea_rdata rax, [__const_array_codegen-internals.main_arr]
     x86.mov rcx, rax
     x86.mov [rbp-40], ecx
     x86.mov eax, [rbp-32]
@@ -308,7 +308,7 @@ module {
     x86.mov r8, rcx
     x86.mov rcx, rdx
     x86.mov rdx, rax
-    x86.call Array.set
+    x86.call stdlib.Array.set
     x86.mov eax, [rbp-120]
     x86.mov [rbp-64], eax
     x86.mov eax, [rbp-112]
@@ -328,7 +328,7 @@ module {
     x86.mov [rbp-152], ecx
     x86.lea rcx, [rbp-152]
     x86.mov rdx, rax
-    x86.call Array.get
+    x86.call stdlib.Array.get
     x86.mov ecx, [rbp-152]
     x86.mov [rbp-64], ecx
     x86.mov ecx, [rbp-144]
@@ -342,11 +342,11 @@ module {
     x86.mov [rbp-168], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je main.otherwise_default_continue_4
+    x86.je codegen-internals.main.otherwise_default_continue_4
   otherwise_default_error_3:
     x86.mov eax, [rbp-160]
     x86.mov [rbp-168], eax
-    x86.jmp main.otherwise_default_continue_4
+    x86.jmp codegen-internals.main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov eax, [rbp-168]
     x86.epilogue

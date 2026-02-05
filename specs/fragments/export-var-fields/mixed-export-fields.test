@@ -22,16 +22,14 @@ ExitCode: 42
 module {
   func @Box.create(__sret: i64, v: i64, s: i64) {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
     x86.mov [rbp-16], edx
     x86.mov [rbp-24], r8
-    x86.mov [rbp-32], edx
-    x86.mov [rbp-40], r8
     x86.mov eax, [rbp-8]
-    x86.mov edx, [rbp-32]
+    x86.mov edx, [rbp-16]
     x86.mov [eax+0], edx
-    x86.mov edx, [rbp-40]
+    x86.mov edx, [rbp-24]
     x86.mov [eax+8], edx
     x86.epilogue
     x86.ret
@@ -87,8 +85,7 @@ module {
     x86.mov ecx, [rbp-40]
     x86.mov [rbp-32], ecx
     x86.mov ecx, [rbp-56]
-    x86.add ecx, eax
-    x86.mov eax, ecx
+    x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret
   }
