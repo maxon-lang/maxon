@@ -42,59 +42,61 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @Value.add(__self_ptr: i64, other.n: i64) -> i64 {
+  func @Value.add(__self_ptr: i64, other: i64) -> i64 {
   entry:
     x86.prologue stack_size=48
     x86.mov [rbp-8], ecx
-    x86.mov [rbp-24], edx
     x86.mov eax, [ecx+0]
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-16]
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
-    x86.lea rax, [rbp-32]
+    x86.mov eax, [edx+0]
+    x86.mov [rbp-24], eax
+    x86.mov edx, [rbp-24]
+    x86.mov [rbp-32], edx
+    x86.lea rbx, [rbp-32]
     x86.mov [rbp-40], ecx
-    x86.mov rcx, rax
+    x86.mov rcx, rbx
     x86.call Value.get
-    x86.mov edx, [rbp-32]
-    x86.mov [rbp-24], edx
-    x86.mov ebx, [rbp-40]
-    x86.add ebx, eax
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-16]
-    x86.mov [esi+0], edi
-    x86.mov eax, ebx
+    x86.mov esi, [rbp-32]
+    x86.mov [rbp-24], esi
+    x86.mov edi, [rbp-40]
+    x86.add edi, eax
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [rbp-16]
+    x86.mov [r8+0], r9
+    x86.mov eax, edi
     x86.epilogue
     x86.ret
   }
-  func @Value.multiply(__self_ptr: i64, other.n: i64) -> i64 {
+  func @Value.multiply(__self_ptr: i64, other: i64) -> i64 {
   entry:
     x86.prologue stack_size=48
     x86.mov [rbp-8], ecx
-    x86.mov [rbp-24], edx
     x86.mov eax, [ecx+0]
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-16]
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
-    x86.lea rax, [rbp-32]
+    x86.mov eax, [edx+0]
+    x86.mov [rbp-24], eax
+    x86.mov edx, [rbp-24]
+    x86.mov [rbp-32], edx
+    x86.lea rbx, [rbp-32]
     x86.mov [rbp-40], ecx
-    x86.mov rcx, rax
+    x86.mov rcx, rbx
     x86.call Value.get
-    x86.mov edx, [rbp-32]
-    x86.mov [rbp-24], edx
-    x86.mov ebx, [rbp-40]
-    x86.imul ebx, eax
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-16]
-    x86.mov [esi+0], edi
-    x86.mov eax, ebx
+    x86.mov esi, [rbp-32]
+    x86.mov [rbp-24], esi
+    x86.mov edi, [rbp-40]
+    x86.imul edi, eax
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [rbp-16]
+    x86.mov [r8+0], r9
+    x86.mov eax, edi
     x86.epilogue
     x86.ret
   }
   func @method-call-on-parameter.main() -> i64 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=96
     x86.mov eax, 5
     x86.mov [rbp-8], eax
     x86.mov ecx, [rbp-8]
@@ -111,20 +113,24 @@ module {
     x86.mov [rbp-56], r8
     x86.lea r9, [rbp-56]
     x86.mov eax, [rbp-32]
+    x86.mov [rbp-64], eax
+    x86.lea rax, [rbp-64]
     x86.mov rcx, r9
     x86.mov rdx, rax
     x86.call Value.add
     x86.mov ecx, [rbp-56]
     x86.mov [rbp-16], ecx
     x86.mov ecx, [rbp-16]
-    x86.mov [rbp-64], ecx
-    x86.lea rcx, [rbp-64]
+    x86.mov [rbp-72], ecx
+    x86.lea rcx, [rbp-72]
     x86.mov edx, [rbp-48]
-    x86.mov [rbp-72], eax
+    x86.mov [rbp-80], edx
+    x86.lea rdx, [rbp-80]
+    x86.mov [rbp-88], eax
     x86.call Value.multiply
-    x86.mov ecx, [rbp-64]
-    x86.mov [rbp-16], ecx
     x86.mov ecx, [rbp-72]
+    x86.mov [rbp-16], ecx
+    x86.mov ecx, [rbp-88]
     x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret

@@ -984,9 +984,14 @@ public class RegisterManager {
     if (fieldType == MlirType.F64) {
       var srcXmm = EnsureInXmmRegister(value, block);
       block.AddOp(new X86MovSdIndirectMemXmmOp(baseReg, fieldOffset, srcXmm));
-    } else {
+    } else if (fieldType == MlirType.I1 || fieldType == MlirType.I8) {
+      var srcReg = EnsureInRegister(value, block, protect1: baseReg);
+      block.AddOp(new X86MovByteIndirectRegOp(baseReg, fieldOffset, srcReg));
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovIndirectMemRegOp(baseReg, fieldOffset, srcReg));
+    } else {
+      throw new InvalidOperationException($"EmitStoreIndirect: unhandled field type: {fieldType}");
     }
   }
 
@@ -998,29 +1003,17 @@ public class RegisterManager {
     if (fieldType == MlirType.F64) {
       var destXmm = AllocateXmmRegister(result);
       block.AddOp(new X86MovSdXmmIndirectMemOp(destXmm, baseReg, fieldOffset));
-    } else {
+    } else if (fieldType == MlirType.I1 || fieldType == MlirType.I8) {
+      var destGpr = AllocateRegister(result, block, protect1: baseReg);
+      block.AddOp(new X86MovzxRegByteIndirectOp(destGpr, baseReg, fieldOffset));
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn) {
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovRegIndirectMemOp(destGpr, baseReg, fieldOffset));
+    } else {
+      throw new InvalidOperationException($"EmitLoadIndirect: unhandled field type: {fieldType}");
     }
   }
 
-  /// <summary>
-  /// Emit byte load: MOVZX destReg, byte ptr [baseReg + offset]
-  /// </summary>
-  public void EmitLoadByteIndirect(StdValue result, StdValue basePtr, int fieldOffset, MlirBlock<X86Op> block) {
-    var baseReg = EnsureInRegister(basePtr, block);
-    var destGpr = AllocateRegister(result, block, protect1: baseReg);
-    block.AddOp(new X86MovzxRegByteIndirectOp(destGpr, baseReg, fieldOffset));
-  }
-
-  /// <summary>
-  /// Emit byte store: MOV byte ptr [baseReg + offset], srcReg_low8
-  /// </summary>
-  public void EmitStoreByteIndirect(StdValue value, StdValue basePtr, int fieldOffset, MlirBlock<X86Op> block) {
-    var baseReg = EnsureInRegister(basePtr, block);
-    var srcReg = EnsureInRegister(value, block, protect1: baseReg);
-    block.AddOp(new X86MovByteIndirectRegOp(baseReg, fieldOffset, srcReg));
-  }
 
   // --- Global variable support: RIP-relative addressing ---
 

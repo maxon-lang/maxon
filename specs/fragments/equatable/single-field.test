@@ -23,27 +23,29 @@ end 'main'
 ExitCode: 0
 ---
 module {
-  func @Wrapper.equals(__self_ptr: i64, other.value: i64) -> i1 {
+  func @Wrapper.equals(__self_ptr: i64, other: i64) -> i1 {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov [rbp-24], edx
     x86.mov eax, [ecx+0]
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-16]
-    x86.mov eax, [rbp-24]
-    x86.cmp ecx, eax
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.mov ecx, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.mov [ecx+0], ebx
+    x86.mov eax, [edx+0]
+    x86.mov [rbp-24], eax
+    x86.mov edx, [rbp-24]
+    x86.cmp ecx, edx
+    x86.sete ebx
+    x86.movzx ebx, ebxb
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-16]
+    x86.mov [esi+0], edi
+    x86.mov eax, ebx
     x86.epilogue
     x86.ret
   }
   func @equatable.main() -> i64 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.mov eax, 42
     x86.mov [rbp-8], eax
     x86.mov ecx, [rbp-8]
@@ -60,6 +62,8 @@ module {
     x86.mov [rbp-56], r8
     x86.lea r9, [rbp-56]
     x86.mov eax, [rbp-32]
+    x86.mov [rbp-64], eax
+    x86.lea rax, [rbp-64]
     x86.mov rcx, r9
     x86.mov rdx, rax
     x86.call Wrapper.equals
@@ -69,12 +73,15 @@ module {
     x86.je equatable.main.eq_0.after
   eq_0:
     x86.mov eax, [rbp-16]
-    x86.mov [rbp-64], eax
-    x86.lea rcx, [rbp-64]
+    x86.mov [rbp-72], eax
+    x86.lea rcx, [rbp-72]
     x86.mov edx, [rbp-48]
+    x86.mov [rbp-80], edx
+    x86.lea rbx, [rbp-80]
+    x86.mov rdx, rbx
     x86.call Wrapper.equals
-    x86.mov ebx, [rbp-64]
-    x86.mov [rbp-16], ebx
+    x86.mov esi, [rbp-72]
+    x86.mov [rbp-16], esi
     x86.test eax, eax
     x86.je equatable.main.neq_1.after
   neq_1:

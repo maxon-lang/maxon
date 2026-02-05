@@ -1544,7 +1544,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private static MaxonValueKind GetEnumBackingKind(MlirEnumType enumType) {
     if (enumType.BackingType == MlirType.F64) return MaxonValueKind.Float;
-    return MaxonValueKind.Integer;
+    if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MaxonValueKind.Integer;
+    throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
 
   private void ParseStaticField(MlirModule<MaxonOp> module, string typeName) {
@@ -2630,7 +2631,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
           && typeInfo is MlirStructType structType
           && structType.TypeParams.TryGetValue("Element", out var elementType)) {
-        return elementType == MlirType.F64 ? MaxonValueKind.Float : MaxonValueKind.Integer;
+        if (elementType == MlirType.F64) return MaxonValueKind.Float;
+        return MaxonValueKind.Integer;
       }
       return MaxonValueKind.Integer;
     }
@@ -3310,8 +3312,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           rawValue = BitConverter.DoubleToInt64Bits((double)enumCase.RawValue!);
         } else if (enumType.BackingType == MlirType.I64) {
           rawValue = (long)enumCase.RawValue!;
-        } else {
+        } else if (enumType.BackingType == null) {
           rawValue = enumCase.Ordinal;
+        } else {
+          throw new InvalidOperationException($"Unsupported enum backing type in match pattern: {enumType.BackingType}");
         }
 
         var displayName = $"{patternEnumName}.{caseNameToken.Value}";
@@ -3981,8 +3985,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (double)enumCase.RawValue!);
             } else if (enumType.BackingType == MlirType.I64) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.RawValue!);
-            } else {
+            } else if (enumType.BackingType == null) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
+            } else {
+              throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
             }
             _currentBlock!.AddOp(enumLitOp);
             return ParseFieldAccessChain(new ExprResult.Direct(enumLitOp.Result), token);

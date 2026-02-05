@@ -1045,37 +1045,6 @@ public partial class X86CodeEmitter {
     EmitDword(0); // placeholder
   }
 
-  // --- Forward jump helpers for runtime stubs ---
-
-  private int EmitJmpForward() {
-    EmitByte(0xE9); // JMP rel32
-    var patchOffset = _code.Count;
-    EmitDword(0);
-    return patchOffset;
-  }
-
-  private int EmitJccForward(string condition) {
-    byte opcode = ConditionToOpcode(condition);
-    EmitByte(0x0F);
-    EmitByte(opcode);
-    var patchOffset = _code.Count;
-    EmitDword(0);
-    return patchOffset;
-  }
-
-  private void PatchForwardJump(int patchOffset) {
-    var rel = _code.Count - (patchOffset + 4);
-    PatchDword(patchOffset, rel);
-  }
-
-  private void EmitEpilogue(params int[] forwardJumps) {
-    foreach (var patchOffset in forwardJumps)
-      PatchForwardJump(patchOffset);
-    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
-    EmitPopReg(X86Register.Rbp);
-    EmitByte(0xC3); // ret
-  }
-
   // --- Struct support: LEA and indirect memory operations ---
 
   private void EmitLeaRegMem(X86Register dest, int displacement) {

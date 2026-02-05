@@ -32,7 +32,7 @@ public static class MaxonToStandardConversion {
       // Build the new function signature:
       // - Struct instance method 'self' param is passed as a pointer (by reference)
       // - Enum instance method 'self' param is passed as a scalar
-      // - Other struct params are flattened to individual scalar params
+      // - Other struct params are passed as pointers (caller allocates stack copy)
       // - Enum params are passed as scalars
       // - Struct return adds a hidden sret pointer as first param
       var newParamNames = new List<string>();
@@ -43,8 +43,8 @@ public static class MaxonToStandardConversion {
         newParamTypes.Add(MlirType.I64);
       }
 
-      // Map from original param index to flattened scalar params (with full path for nested structs)
-      var paramIndexMap = new Dictionary<int, List<(int flatIndex, string path, MlirType scalarType)>>();
+      // Map from original struct param index to its flat param index (pointer slot)
+      var structParamPtrIndex = new Dictionary<int, int>();
       int flatIdx = newParamNames.Count;
 
       for (int i = 0; i < func.ParamNames.Count; i++) {
@@ -56,20 +56,22 @@ public static class MaxonToStandardConversion {
         } else if (isEnumInstanceMethod && i == 0) {
           // Enum instance method self param: pass as scalar
           var enumType = (MlirEnumType)func.ParamTypes[0];
-          var backingMlirType = enumType.BackingType == MlirType.F64 ? MlirType.F64 : MlirType.I64;
+          var backingMlirType = ResolveEnumBackingMlirType(enumType);
           newParamNames.Add("self");
           newParamTypes.Add(backingMlirType);
           flatIdx++;
         } else if (func.ParamTypes[i] is MlirEnumType enumParamType) {
           // Enum param: pass as scalar
-          var backingMlirType = enumParamType.BackingType == MlirType.F64 ? MlirType.F64 : MlirType.I64;
+          var backingMlirType = ResolveEnumBackingMlirType(enumParamType);
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(backingMlirType);
           flatIdx++;
-        } else if (func.ParamTypes[i] is MlirStructType structType) {
-          var scalarParams = new List<(int, string, MlirType)>();
-          FlattenStructParams(func.ParamNames[i], structType, scalarParams, newParamNames, newParamTypes, ref flatIdx);
-          paramIndexMap[i] = scalarParams;
+        } else if (func.ParamTypes[i] is MlirStructType) {
+          // Non-self struct param: pass as pointer (i64)
+          structParamPtrIndex[i] = flatIdx;
+          newParamNames.Add(func.ParamNames[i]);
+          newParamTypes.Add(MlirType.I64);
+          flatIdx++;
         } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(func.ParamTypes[i]);
@@ -83,7 +85,7 @@ public static class MaxonToStandardConversion {
       if (retStructType != null) {
         newReturnType = null;
       } else if (func.ReturnType is MlirEnumType retEnumType) {
-        newReturnType = retEnumType.BackingType == MlirType.F64 ? MlirType.F64 : MlirType.I64;
+        newReturnType = ResolveEnumBackingMlirType(retEnumType);
       } else if (func.ReturnType is not MlirStructType and not MlirEnumType) {
         newReturnType = func.ReturnType;
       } else {
@@ -117,9 +119,7 @@ public static class MaxonToStandardConversion {
           switch (op) {
             case MaxonParamOp paramOp: {
               var stdResult = paramOp.ValueKind.CreateStdValue();
-              // Adjust index: if this function has sret, scalar params shift by 1.
-              // Also account for struct params that were flattened before this one.
-              int adjustedIndex = ComputeFlatParamIndex(paramOp.Index, func, retStructType != null);
+              int adjustedIndex = paramOp.Index + (retStructType != null ? 1 : 0);
               newBlock.AddOp(new StdParamOp(adjustedIndex, paramOp.Name, stdResult));
               valueMap[paramOp.Result] = stdResult;
               EmitStore(newBlock, stdResult, paramOp.Name, varTypes);
@@ -136,13 +136,14 @@ public static class MaxonToStandardConversion {
                 LoadStructFieldsFromPointer(newBlock, selfPtrVal, "self", selfStructType!, varTypes);
                 structVarNames[structParamOp.Result.Id] = "self";
               } else {
-                // Non-self struct param: flattened to individual scalar params (recursively for nested structs)
-                var scalarMappings = paramIndexMap[structParamOp.Index];
-                foreach (var (paramFlatIdx, fieldPath, scalarType) in scalarMappings) {
-                  var fieldResult = StdValueFactory.CreateStdValueForType(scalarType);
-                  newBlock.AddOp(new StdParamOp(paramFlatIdx, fieldPath, fieldResult));
-                  EmitStore(newBlock, fieldResult, fieldPath, varTypes);
-                }
+                // Non-self struct param: receive as pointer, load fields from it
+                int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
+                var structType = (MlirStructType)func.ParamTypes[structParamOp.Index];
+                var ptrVarName = $"__{structParamOp.Name}_ptr";
+                var ptrVal = new StdI64(MlirContext.Current.NextId());
+                newBlock.AddOp(new StdParamOp(ptrFlatIdx, ptrVarName, ptrVal));
+                EmitStore(newBlock, ptrVal, ptrVarName, varTypes);
+                LoadStructFieldsFromPointer(newBlock, ptrVal, structParamOp.Name, structType, varTypes);
                 structVarNames[structParamOp.Result.Id] = structParamOp.Name;
               }
               break;
@@ -162,7 +163,7 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumParamOp enumParamOp: {
-              int adjustedIndex = ComputeFlatParamIndex(enumParamOp.Index, func, retStructType != null);
+              int adjustedIndex = enumParamOp.Index + (retStructType != null ? 1 : 0);
               if (enumParamOp.BackingKind == MaxonValueKind.Float) {
                 var stdResult = new StdF64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(adjustedIndex, enumParamOp.Name, stdResult));
@@ -560,7 +561,7 @@ public static class MaxonToStandardConversion {
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
               break;
             case MaxonFunctionParamOp fnParamOp:
-              LowerFunctionParam(fnParamOp, newBlock, valueMap, retStructType != null, func);
+              LowerFunctionParam(fnParamOp, newBlock, valueMap, retStructType != null);
               break;
             case MaxonFunctionVarRefOp fnVarRefOp:
               LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap);
@@ -632,41 +633,10 @@ public static class MaxonToStandardConversion {
     return result;
   }
 
-  /// <summary>
-  /// Compute the flat parameter index for a scalar param, accounting for
-  /// sret offset and preceding struct params that expanded to multiple flat params.
-  /// Instance method self (param 0 with struct type named "self") is passed as
-  /// a single pointer, not flattened.
-  /// </summary>
-  private static int CountFlattenedFields(MlirStructType structType) {
-    int count = 0;
-    foreach (var field in structType.Fields) {
-      if (field.Type is MlirStructType nestedStruct) {
-        count += CountFlattenedFields(nestedStruct);
-      } else {
-        count += 1;
-      }
-    }
-    return count;
-  }
-
-  private static int ComputeFlatParamIndex(int originalIndex, MlirFunction<MaxonOp> func, bool hasSret) {
-    bool isStructMethod = IsStructInstanceMethod(func);
-    bool isEnumMethod = IsEnumInstanceMethod(func);
-    int flatIdx = hasSret ? 1 : 0;
-    for (int i = 0; i < originalIndex; i++) {
-      if ((isStructMethod || isEnumMethod) && i == 0) {
-        // Self is passed as a single param (pointer for struct, scalar for enum)
-        flatIdx += 1;
-      } else if (func.ParamTypes[i] is MlirStructType st) {
-        flatIdx += CountFlattenedFields(st);
-      } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
-        flatIdx += 1;
-      } else {
-        throw new InvalidOperationException($"Unhandled parameter type in flat index computation: {func.ParamTypes[i].GetType().Name}");
-      }
-    }
-    return flatIdx;
+  private static MlirType ResolveEnumBackingMlirType(MlirEnumType enumType) {
+    if (enumType.BackingType == MlirType.F64) return MlirType.F64;
+    if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MlirType.I64;
+    throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
 
   /// <summary>
@@ -849,7 +819,8 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Flatten call/try_call arguments for the standard calling convention.
+  /// Lower call/try_call arguments for the standard calling convention.
+  /// Struct args are passed as pointers to stack copies.
   /// Returns the self buffer name if a struct instance method self arg was allocated.
   /// </summary>
   private static string? FlattenCallArgs(
@@ -877,8 +848,10 @@ public static class MaxonToStandardConversion {
       } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirStructType argStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
-        // Recursively flatten struct args (including nested structs)
-        LoadFlattenedStructArgs(block, argStructName, argStructType, newArgs, varTypes);
+        // Allocate stack copy and pass pointer
+        var bufName = $"__argbuf_{MlirContext.Current.NextId()}";
+        var argPtr = AllocateAndCopyStructToStack(block, argStructName, bufName, argStructType, varTypes);
+        newArgs.Add(argPtr);
       } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
         newArgs.Add(valueMap[arg]);
       } else {
@@ -886,26 +859,6 @@ public static class MaxonToStandardConversion {
       }
     }
     return selfBufName;
-  }
-
-  /// <summary>
-  /// Recursively load struct fields as call arguments, flattening nested structs.
-  /// </summary>
-  private static void LoadFlattenedStructArgs(
-      MlirBlock<StandardOp> block,
-      string basePath,
-      MlirStructType structType,
-      List<StdValue> args,
-      Dictionary<string, string> varTypes) {
-    foreach (var field in structType.Fields) {
-      var fieldVarName = $"{basePath}.{field.Name}";
-      if (field.Type is MlirStructType nestedStruct) {
-        LoadFlattenedStructArgs(block, fieldVarName, nestedStruct, args, varTypes);
-      } else {
-        var loaded = EmitLoad(block, fieldVarName, varTypes);
-        args.Add(loaded);
-      }
-    }
   }
 
   /// <summary>
@@ -926,9 +879,9 @@ public static class MaxonToStandardConversion {
   /// </summary>
   private static StdValue? ResolveCallResultType(MaxonValueKind? resultKind, MlirType? calleeReturnType) {
     if (resultKind == MaxonValueKind.Enum && calleeReturnType is MlirEnumType retEnumType) {
-      return retEnumType.BackingType == MlirType.F64
-        ? new StdF64(MlirContext.Current.NextId())
-        : new StdI64(MlirContext.Current.NextId());
+      var backingType = ResolveEnumBackingMlirType(retEnumType);
+      if (backingType == MlirType.F64) return new StdF64(MlirContext.Current.NextId());
+      return new StdI64(MlirContext.Current.NextId());
     }
     return resultKind?.CreateStdValue();
   }
@@ -1543,8 +1496,7 @@ public static class MaxonToStandardConversion {
     // Compute address: buffer + index (element size is 1 byte)
     var addrOp = new StdAddI64Op(buffer, index);
     block.AddOp(addrOp);
-    // Load byte and zero-extend to i64
-    var loadOp = new StdLoadByteIndirectOp(addrOp.Result, 0);
+    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, MlirType.I8);
     block.AddOp(loadOp);
     valueMap[op.Result] = loadOp.Result;
   }
@@ -1607,7 +1559,7 @@ public static class MaxonToStandardConversion {
     var value = valueMap[op.Value];
     var addrOp = new StdAddI64Op(bufReload, index);
     block.AddOp(addrOp);
-    block.AddOp(new StdStoreByteIndirectOp(value, addrOp.Result, 0));
+    block.AddOp(new StdStoreIndirectOp(value, addrOp.Result, 0, MlirType.I8));
   }
 
   /// <summary>
@@ -2032,32 +1984,6 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.BitXor, MaxonValueKind.Bool), (l, r) => { var op = new StdXorI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
   };
 
-  /// <summary>
-  /// Recursively flattens a struct type into scalar parameters.
-  /// Handles nested structs by expanding them to their leaf scalar fields.
-  /// </summary>
-  private static void FlattenStructParams(
-      string basePath,
-      MlirStructType structType,
-      List<(int flatIndex, string path, MlirType scalarType)> scalarParams,
-      List<string> newParamNames,
-      List<MlirType> newParamTypes,
-      ref int flatIdx) {
-    foreach (var field in structType.Fields) {
-      var fieldPath = $"{basePath}.{field.Name}";
-      if (field.Type is MlirStructType nestedStruct) {
-        // Recurse into nested struct
-        FlattenStructParams(fieldPath, nestedStruct, scalarParams, newParamNames, newParamTypes, ref flatIdx);
-      } else {
-        // Scalar field - add it directly
-        newParamNames.Add(fieldPath);
-        newParamTypes.Add(field.Type);
-        scalarParams.Add((flatIdx, fieldPath, field.Type));
-        flatIdx++;
-      }
-    }
-  }
-
   // ============================================================================
   // Function pointer operations
   // ============================================================================
@@ -2075,9 +2001,8 @@ public static class MaxonToStandardConversion {
       MaxonFunctionParamOp fnParamOp,
       MlirBlock<StandardOp> block,
       Dictionary<MaxonValue, StdValue> valueMap,
-      bool hasSret,
-      MlirFunction<MaxonOp> func) {
-    int flatIdx = ComputeFlatParamIndex(fnParamOp.Index, func, hasSret);
+      bool hasSret) {
+    int flatIdx = fnParamOp.Index + (hasSret ? 1 : 0);
     var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(MlirContext.Current.NextId()));
     block.AddOp(paramOp);
     valueMap[fnParamOp.Result] = paramOp.Result;
