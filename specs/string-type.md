@@ -131,7 +131,7 @@ Create a substring view that shares storage with the original string:
 var s = "hello world"
 var start = s.startIndex()
 var spaceIdx = try s.find(" ") otherwise return  // find throws StringError.notFound if not found
-var sub = s.slice(start, end_ = spaceIdx)  // "hello" - shares storage with s
+var sub = s.slice(start, endIndex: spaceIdx)  // "hello" - shares storage with s
 print(sub)
 ```
 
@@ -1250,7 +1250,7 @@ a🎉b
 3
 ```
 
-<!-- disabled-test: grapheme-iteration-flag -->
+<!-- test: grapheme-iteration-flag -->
 ### Grapheme Iteration with Flag Emoji
 ```maxon
 function main() returns int
@@ -1272,7 +1272,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: grapheme-iteration-zwj -->
+<!-- test: grapheme-iteration-zwj -->
 ### Grapheme Iteration with ZWJ Sequence
 ```maxon
 function main() returns int
@@ -1294,7 +1294,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: codepoints-view -->
+<!-- test: codepoints-view -->
 ### Codepoints View
 ```maxon
 function main() returns int
@@ -1313,7 +1313,7 @@ end 'main'
 233
 ```
 
-<!-- disabled-test: string-reassignment -->
+<!-- test: string-reassignment -->
 ```maxon
 function main() returns int
   var s = "hello"
@@ -1339,7 +1339,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: slice-basic -->
+<!-- test: slice-basic -->
 ### Basic String Slicing
 ```maxon
 function main() returns int

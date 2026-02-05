@@ -1563,8 +1563,10 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// __managed_memory_to_cstring(managed): return the buffer pointer from a managed memory struct.
-  /// The buffer already points to valid UTF-8 data (null-terminated for SSO/rdata strings).
+  /// __managed_memory_to_cstring(managed): return a null-terminated C string pointer.
+  /// Calls maxon_to_cstring runtime which checks if buffer[length] is already '\0'.
+  /// If so, returns the buffer directly (no allocation). Otherwise, allocates a copy
+  /// with null terminator appended. This avoids unnecessary copying for non-slice strings.
   /// </summary>
   private static void LowerManagedToCString(
     MaxonManagedToCStringOp op,
@@ -1574,7 +1576,11 @@ public static class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames) {
     var managedVarName = ResolveManagedVarName(op.Managed, structVarNames);
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
-    valueMap[op.Result] = buffer;
+    var length = (StdI64)EmitLoad(block, $"{managedVarName}.length", varTypes);
+
+    var result = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_to_cstring", [buffer, length], result));
+    valueMap[op.Result] = result;
   }
 
   /// <summary>

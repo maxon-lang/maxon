@@ -14,6 +14,7 @@ public partial class X86CodeEmitter {
     EmitMaxonRealloc();
     EmitMaxonFree();
     EmitMaxonCowCheck();
+    EmitMaxonToCString();
     EmitMaxonWriteStdout();
     EmitMaxonI64ToString();
   }
@@ -94,6 +95,49 @@ public partial class X86CodeEmitter {
     _code[jnzWritable] = (byte)(_code.Count - (jnzWritable + 1));
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitRuntimeFunctionEnd(jmpCowEpilogue);
+  }
+
+  /// <summary>
+  /// maxon_to_cstring(buffer_in_rcx, length_in_rdx) -> cstr_in_rax
+  /// If buffer[length] == '\0', buffer is already null-terminated — return it as-is.
+  /// Otherwise, allocate length+1 bytes, copy, append '\0', return new buffer.
+  /// </summary>
+  private void EmitMaxonToCString() {
+    EmitRuntimeFunctionStart("maxon_to_cstring", 2, 0x40);
+    // [rbp-8] = buffer (RCX), [rbp-16] = length (RDX) — saved by prologue
+    // Check if buffer[length] == 0
+    // movzx eax, byte ptr [rcx+rdx]: 0F B6 04 11
+    EmitBytes(0x0F, 0xB6, 0x04, 0x11);
+    // TEST AL, AL
+    EmitBytes(0x84, 0xC0);
+    EmitByte(0x74); // JZ already_terminated
+    int jzTerminated = _code.Count;
+    EmitByte(0x00); // placeholder
+
+    // Copy path: allocate length+1, copy, null-terminate
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);  // RCX = length
+    // LEA RCX, [RCX+1] for alloc size
+    EmitBytes(0x48, 0x8D, 0x49, 0x01); // LEA RCX, [RCX+1]
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    // Save new buffer at [rbp-24]
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    // rep movsb: RSI=src, RDI=dst, RCX=count
+    EmitMovRegMem(X86Register.Rsi, -0x08, 8);  // RSI = old buffer
+    EmitMovRegMem(X86Register.Rdi, -0x18, 8);  // RDI = new buffer
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);  // RCX = length
+    EmitBytes(0xF3, 0xA4); // REP MOVSB
+    // Null-terminate: mov byte ptr [rdi], 0 (RDI points past the copied bytes after REP MOVSB)
+    EmitBytes(0xC6, 0x07, 0x00);
+    // Return new buffer
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitByte(0xEB); // JMP epilogue
+    int jmpEpilogue = _code.Count;
+    EmitByte(0x00); // placeholder
+
+    // already_terminated: return old buffer
+    _code[jzTerminated] = (byte)(_code.Count - (jzTerminated + 1));
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitRuntimeFunctionEnd(jmpEpilogue);
   }
 
   /// <summary>maxon_write_stdout(cstr_ptr_in_rcx) -> bytes_written_in_rax</summary>
