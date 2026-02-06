@@ -157,7 +157,7 @@ public static class MonomorphizationPass {
     // The struct type "ElementArray" should map to base struct "Array"
     foreach (var assocTypeName in sourceStruct.AssociatedTypeNames) {
       var aliasedTypeName = $"{assocTypeName}Array"; // Convention: ElementArray, ElementSet, etc.
-      if (module.TypeDefs.TryGetValue(aliasedTypeName, out var aliasedType)) {
+      if (module.TypeDefs.TryGetValue(aliasedTypeName, out _)) {
         // Check if this is an alias of a generic struct instantiated with the associated type
         // e.g., ElementArray is Array with Element
         // Substitute ElementArray -> Array

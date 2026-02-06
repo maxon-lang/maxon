@@ -1358,7 +1358,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: slice-full -->
+<!-- test: slice-full -->
 ### Slice Entire String
 ```maxon
 function main() returns int
@@ -1377,7 +1377,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: slice-empty -->
+<!-- test: slice-empty -->
 ### Empty Slice
 ```maxon
 function main() returns int

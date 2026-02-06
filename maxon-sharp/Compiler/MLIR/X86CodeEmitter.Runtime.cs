@@ -35,29 +35,24 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_realloc", 2);
     // If ptr == 0, use HeapAlloc instead
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x75); // JNZ realloc_path
-    int jnzPatchPos = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("nz", "rt_realloc_realloc_path");
     // Alloc path
     EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x10); // HEAP_ZERO_MEMORY
-    EmitByte(0xEB); // JMP epilogue
-    int jmpEpiloguePatchPos = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJmp("rt_realloc_epilogue");
     // Realloc path
-    _code[jnzPatchPos] = (byte)(_code.Count - (jnzPatchPos + 1));
+    DefineLabel("rt_realloc_realloc_path");
     EmitHeapCall("HeapReAlloc", 0x08, rbpSlotR8: -0x08, rbpSlotR9: -0x10); // HEAP_ZERO_MEMORY
-    EmitRuntimeFunctionEnd(jmpEpiloguePatchPos);
+    DefineLabel("rt_realloc_epilogue");
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>maxon_free(ptr_in_rcx) — null-safe, skips free if ptr is 0</summary>
   private void EmitMaxonFree() {
     EmitRuntimeFunctionStart("maxon_free", 1);
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x74); // JZ skip
-    int jzPatchPos = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("z", "rt_free_skip");
     EmitHeapCall("HeapFree", 0, rbpSlotR8: -0x08);
-    _code[jzPatchPos] = (byte)(_code.Count - (jzPatchPos + 1));
+    DefineLabel("rt_free_skip");
     EmitRuntimeFunctionEnd();
   }
 
@@ -70,9 +65,7 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_cow_check", 4, 0x40);
     // TEST rdx, rdx (check capacity)
     EmitBytes(0x48, 0x85, 0xD2);
-    EmitByte(0x75); // JNZ already_writable
-    int jnzWritable = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("nz", "rt_cow_writable");
     // COW path: compute byteLen = length * elemSize, allocate, copy, return new buffer
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = length
     EmitBytes(0x49, 0x0F, 0xAF, 0xC1);       // IMUL RAX, R9 (byteLen = length * elemSize)
@@ -88,13 +81,12 @@ public partial class X86CodeEmitter {
     EmitBytes(0xF3, 0xA4); // REP MOVSB
     // Return new buffer
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
-    EmitByte(0xEB); // JMP epilogue
-    int jmpCowEpilogue = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJmp("rt_cow_epilogue");
     // already_writable: return old buffer
-    _code[jnzWritable] = (byte)(_code.Count - (jnzWritable + 1));
+    DefineLabel("rt_cow_writable");
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitRuntimeFunctionEnd(jmpCowEpilogue);
+    DefineLabel("rt_cow_epilogue");
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
@@ -110,9 +102,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x0F, 0xB6, 0x04, 0x11);
     // TEST AL, AL
     EmitBytes(0x84, 0xC0);
-    EmitByte(0x74); // JZ already_terminated
-    int jzTerminated = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("z", "rt_tocstr_terminated");
 
     // Copy path: allocate length+1, copy, null-terminate
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);  // RCX = length
@@ -130,14 +120,13 @@ public partial class X86CodeEmitter {
     EmitBytes(0xC6, 0x07, 0x00);
     // Return new buffer
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
-    EmitByte(0xEB); // JMP epilogue
-    int jmpEpilogue = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJmp("rt_tocstr_epilogue");
 
     // already_terminated: return old buffer
-    _code[jzTerminated] = (byte)(_code.Count - (jzTerminated + 1));
+    DefineLabel("rt_tocstr_terminated");
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitRuntimeFunctionEnd(jmpEpilogue);
+    DefineLabel("rt_tocstr_epilogue");
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>maxon_write_stdout(cstr_ptr_in_rcx) -> bytes_written_in_rax</summary>
@@ -147,22 +136,17 @@ public partial class X86CodeEmitter {
     // strlen: RDX = ptr copy, RAX = counter
     EmitMovRegReg(X86Register.Rdx, X86Register.Rcx); // RDX = ptr
     EmitMovRegImm(X86Register.Rax, 0); // RAX = 0 (counter)
-    int strlenLoopPos = _code.Count;
+    DefineLabel("rt_stdout_strlen_loop");
     // movzx ecx, byte ptr [rdx+rax]: 0F B6 0C 02
     EmitBytes(0x0F, 0xB6, 0x0C, 0x02);
     // TEST CL, CL
     EmitBytes(0x84, 0xC9);
-    // JZ done_strlen
-    EmitByte(0x74);
-    int jzStrlenDone = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("z", "rt_stdout_strlen_done");
     // INC RAX
     EmitBytes(0x48, 0xFF, 0xC0);
-    // JMP strlen_loop
-    EmitByte(0xEB);
-    EmitByte((byte)((strlenLoopPos - _code.Count) - 1));
+    EmitJmp("rt_stdout_strlen_loop");
     // done_strlen:
-    _code[jzStrlenDone] = (byte)(_code.Count - (jzStrlenDone + 1));
+    DefineLabel("rt_stdout_strlen_done");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = length
     // GetStdHandle(STD_OUTPUT_HANDLE = -11)
     EmitMovRegImm(X86Register.Rcx, -11);
@@ -193,26 +177,20 @@ public partial class X86CodeEmitter {
 
     // Special case: value == 0
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x75); // JNZ not_zero
-    int jnzNotZero = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("nz", "rt_i64str_not_zero");
     // Write '0' to buffer[0], null to buffer[1]
     EmitBytes(0xC6, 0x02, 0x30); // MOV byte [rdx], '0'
     EmitBytes(0xC6, 0x42, 0x01, 0x00); // MOV byte [rdx+1], 0
     EmitMovRegImm(X86Register.Rax, 1);
-    EmitByte(0xEB); // JMP epilogue
-    int jmpZeroEpilogue = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJmp("rt_i64str_epilogue");
 
     // not_zero: check for negative
-    _code[jnzNotZero] = (byte)(_code.Count - (jnzNotZero + 1));
+    DefineLabel("rt_i64str_not_zero");
     // R8 = 0 (is_negative flag)
     EmitBytes(0x4D, 0x31, 0xC0); // XOR r8, r8
     // TEST rcx, rcx / JS negative
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitByte(0x79); // JNS positive
-    int jnsPositive = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("ns", "rt_i64str_positive");
     // Negate: rcx = -rcx
     EmitBytes(0x48, 0xF7, 0xD9); // NEG rcx
     EmitMovMemReg(-0x08, X86Register.Rcx, 8); // update stored value
@@ -220,7 +198,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.R8, 1);
 
     // positive: R9 = buffer + 20 (write position, work backwards from end)
-    _code[jnsPositive] = (byte)(_code.Count - (jnsPositive + 1));
+    DefineLabel("rt_i64str_positive");
     EmitMovRegReg(X86Register.R9, X86Register.Rdx); // R9 = buffer
     EmitAddRegImm(X86Register.R9, 20); // R9 = buffer + 20
     EmitBytes(0x41, 0xC6, 0x01, 0x00); // MOV byte [r9], 0 (null terminator)
@@ -229,7 +207,7 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x18, X86Register.R8, 8); // [rbp-24] = is_negative
 
     // digit_loop: divide rcx by 10, write remainder as digit
-    int digitLoopPos = _code.Count;
+    DefineLabel("rt_i64str_digit_loop");
     EmitBytes(0x49, 0xFF, 0xC9); // DEC r9 (move write position back)
     // RAX = value (for IDIV), RDX:RAX = sign-extended value
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = value
@@ -244,20 +222,17 @@ public partial class X86CodeEmitter {
     EmitBytes(0x41, 0x88, 0x11); // MOV byte [r9], dl
     // Check if quotient is zero
     EmitBytes(0x48, 0x83, 0x7D, 0xF8, 0x00); // CMP qword [rbp-8], 0
-    EmitByte(0x75); // JNZ digit_loop
-    EmitByte((byte)((digitLoopPos - _code.Count) - 1));
+    EmitJcc("nz", "rt_i64str_digit_loop");
 
     // If negative, prepend '-'
     EmitMovRegMem(X86Register.R8, -0x18, 8); // R8 = is_negative
     EmitBytes(0x4D, 0x85, 0xC0); // TEST r8, r8
-    EmitByte(0x74); // JZ no_sign
-    int jzNoSign = _code.Count;
-    EmitByte(0x00); // placeholder
+    EmitJcc("z", "rt_i64str_no_sign");
     EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
     EmitBytes(0x41, 0xC6, 0x01, 0x2D); // MOV byte [r9], '-'
 
     // no_sign: copy from R9 to buffer start, compute length
-    _code[jzNoSign] = (byte)(_code.Count - (jzNoSign + 1));
+    DefineLabel("rt_i64str_no_sign");
     // Length = (buffer + 20) - R9
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
     EmitAddRegImm(X86Register.Rax, 20);
@@ -280,7 +255,8 @@ public partial class X86CodeEmitter {
     // Return length
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
 
-    EmitRuntimeFunctionEnd(jmpZeroEpilogue);
+    DefineLabel("rt_i64str_epilogue");
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
@@ -296,12 +272,8 @@ public partial class X86CodeEmitter {
       EmitMovMemReg(-(i + 1) * 0x08, _abiArgRegs[i], 8);
   }
 
-  /// <summary>
-  /// Patch any short jumps targeting the epilogue, then emit mov rsp,rbp / pop rbp / ret.
-  /// </summary>
-  private void EmitRuntimeFunctionEnd(params int[] patchPositions) {
-    foreach (var pos in patchPositions)
-      _code[pos] = (byte)(_code.Count - (pos + 1));
+  /// <summary>Emit the standard epilogue: mov rsp,rbp / pop rbp / ret.</summary>
+  private void EmitRuntimeFunctionEnd() {
     EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
     EmitPopReg(X86Register.Rbp);
     EmitByte(0xC3); // ret
