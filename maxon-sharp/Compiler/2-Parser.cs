@@ -40,10 +40,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Type alias source tracking (aliasName -> sourceTypeName)
   private readonly Dictionary<string, string> _typeAliasSources = [];
 
-  // Element-polymorphic parameter tracking (funcName -> set of param indices that are Element type)
-  // Also tracks return type: index -1 means return type is Element-polymorphic
-  private readonly Dictionary<string, HashSet<int>> _elementPolymorphicParams = [];
-
   // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
   private readonly Dictionary<string, List<string>> _interfaceAssociatedTypes = [];
 
@@ -73,8 +69,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// <summary>
   /// Detects overloads for a function being registered and returns the mangled registration name.
   /// If existing functions with the same base name exist, retroactively mangles them
-  /// and returns a mangled name for the new function. Updates _functionDefaults and
-  /// _elementPolymorphicParams dictionaries when renaming existing functions.
+  /// and returns a mangled name for the new function. Updates _functionDefaults
+  /// dictionary when renaming existing functions.
   /// </summary>
   private string ResolveOverloadRegistrationName(MlirModule<MaxonOp> module, string baseName, List<string> paramNames) {
     var existingOverloads = module.Functions.Where(f => f.Name == baseName || UnmangleName(f.Name) == baseName).ToList();
@@ -108,9 +104,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         existing.Name = mangledExisting;
         if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
           _functionDefaults[mangledExisting] = existingDefaults;
-        }
-        if (_elementPolymorphicParams.Remove(oldName, out var existingPolyParams)) {
-          _elementPolymorphicParams[mangledExisting] = existingPolyParams;
         }
       }
     }
@@ -183,10 +176,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// Check if a type name is an associated type of the current struct being parsed.
   private bool IsAssociatedTypeName(string typeName) {
-    if (_currentTypeName == null) return false;
-    if (!_typeRegistry.TryGetValue(_currentTypeName, out var currentType)) return false;
-    if (currentType is not MlirStructType currentStruct) return false;
-    return currentStruct.AssociatedTypeNames.Contains(typeName);
+    return _typeRegistry.TryGetValue(typeName, out var type) && type is MlirTypeParameterType;
   }
 
   /// Find an interface method by name across all registered interfaces.
@@ -373,8 +363,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     foreach (var (name, defaults) in source.FunctionDefaults)
       _functionDefaults.TryAdd(name, defaults);
-    foreach (var (name, params_) in source.ElementPolymorphicParams)
-      _elementPolymorphicParams.TryAdd(name, params_);
     foreach (var (name, assocTypes) in source.InterfaceAssociatedTypes)
       _interfaceAssociatedTypes.TryAdd(name, assocTypes);
     foreach (var (aliasName, aliasInfo) in source.TypeAliasSources)
@@ -390,8 +378,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.TypeDefs[name] = type;
     foreach (var (name, defaults) in _functionDefaults)
       module.FunctionDefaults.TryAdd(name, defaults);
-    foreach (var (name, params_) in _elementPolymorphicParams)
-      module.ElementPolymorphicParams.TryAdd(name, params_);
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
       Dictionary<string, MlirType>? typeParams = null;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType) && aliasType is MlirStructType st)
@@ -565,7 +551,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       names.Add(Expect(TokenType.Identifier).Value);
     }
     foreach (var name in names) {
-      _typeRegistry[name] = new MlirStructType(name, []);
+      _typeRegistry[name] = new MlirTypeParameterType(name);
     }
     return names;
   }
@@ -891,16 +877,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return false;
 
     // Get the implementing type's associated type names for erasure detection
-    var assocTypeNames = _typeRegistry.TryGetValue(typeName, out var implType) && implType is MlirStructType st
+    _ = _typeRegistry.TryGetValue(typeName, out var implType) && implType is MlirStructType st
       ? st.AssociatedTypeNames : [];
 
     for (int i = 0; i < method.ParamTypeNames.Count; i++) {
-      var expectedTypeName = ResolveInterfaceTypeName(method.ParamTypeNames[i], ifaceName, typeName, typeParams, assocTypeNames);
+      var expectedTypeName = ResolveInterfaceTypeName(method.ParamTypeNames[i], ifaceName, typeName, typeParams);
       if (expectedTypeName == null || ResolveTypeName(expectedTypeName) != funcParamTypes[i].Name)
         return false;
     }
 
-    var expectedReturnName = ResolveInterfaceTypeName(method.ReturnTypeName, ifaceName, typeName, typeParams, assocTypeNames);
+    var expectedReturnName = ResolveInterfaceTypeName(method.ReturnTypeName, ifaceName, typeName, typeParams);
     var expectedReturn = expectedReturnName != null ? ResolveTypeName(expectedReturnName) : MlirType.Void.Name;
     var actualReturn = func.ReturnType?.Name ?? MlirType.Void.Name;
     if (expectedReturn != actualReturn)
@@ -911,18 +897,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// <summary>
   /// Resolves a type name in an interface method signature, handling Self references and associated types.
-  /// Associated types that belong to the implementing type are erased to i64.
+  /// Associated types that belong to the implementing type are kept as type parameter names.
   /// </summary>
-  private static string? ResolveInterfaceTypeName(string? name, string ifaceName, string typeName, Dictionary<string, MlirType> typeParams, List<string> assocTypeNames) {
+  private static string? ResolveInterfaceTypeName(string? name, string ifaceName, string typeName, Dictionary<string, MlirType> typeParams) {
     if (name == null) return null;
     if (name == ifaceName) return typeName;
     // Resolve associated types (e.g., Element -> byte when struct declares 'with byte')
     if (typeParams.TryGetValue(name, out var resolvedType)) {
-      var resolved = FormatTypeName(resolvedType);
-      // If resolved to an associated type of the implementing type, it's erased to int
-      if (assocTypeNames.Contains(resolved))
-        return "int";
-      return resolved;
+      return FormatTypeName(resolvedType);
     }
     return name;
   }
@@ -1267,23 +1249,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Instance method gets 'self' as first parameter
     var structType = _typeRegistry[typeName];
 
-    // Track element-polymorphic parameters BEFORE replacing with I64
-    var elementParams = new HashSet<int>();
-    if (structType is MlirStructType st && st.AssociatedTypeNames.Count > 0) {
-      // Check return type (index -1)
-      if (returnType is MlirStructType retSt && st.AssociatedTypeNames.Contains(retSt.Name)) {
-        elementParams.Add(-1);
-        returnType = MlirType.I64;
-      }
-      // Check parameters (offset by 1 for 'self')
-      for (int i = 0; i < paramTypes.Count; i++) {
-        if (paramTypes[i] is MlirStructType paramSt && st.AssociatedTypeNames.Contains(paramSt.Name)) {
-          elementParams.Add(i + 1); // +1 for 'self' at index 0
-          paramTypes[i] = MlirType.I64;
-        }
-      }
-    }
-
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
     var allParamTypes = new List<MlirType> { (MlirType)structType };
@@ -1296,11 +1261,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames);
-
-    // Register element-polymorphic params under the (possibly mangled) registration name
-    if (elementParams.Count > 0) {
-      _elementPolymorphicParams[registrationName] = elementParams;
-    }
 
     // Register if not already present (by mangled name)
     if (!module.Functions.Any(f => f.Name == registrationName)) {
@@ -1868,26 +1828,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Instance method gets 'self' as first parameter (the struct type)
     var structType = (MlirStructType)_typeRegistry[typeName];
 
-    // Track element-polymorphic parameters BEFORE replacing with I64
-    var elementParams = new HashSet<int>();
-    if (structType.AssociatedTypeNames.Count > 0) {
-      // Check return type (index -1)
-      if (returnType is MlirStructType retSt && structType.AssociatedTypeNames.Contains(retSt.Name)) {
-        elementParams.Add(-1);
-        returnType = MlirType.I64;
-      }
-      // Check parameters (offset by 1 for 'self')
-      for (int i = 0; i < paramTypes.Count; i++) {
-        if (paramTypes[i] is MlirStructType paramSt && structType.AssociatedTypeNames.Contains(paramSt.Name)) {
-          elementParams.Add(i + 1); // +1 for 'self' at index 0
-          paramTypes[i] = MlirType.I64;
-        }
-      }
-      if (elementParams.Count > 0) {
-        _elementPolymorphicParams[methodName] = elementParams;
-      }
-    }
-
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
     var allParamTypes = new List<MlirType> { structType };
@@ -1917,19 +1857,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Emit remaining params (offset by 1 for 'self')
     EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
-
-    // Fix VarInfo for element-polymorphic parameters so method calls resolve through the associated type
-    foreach (var epIdx in elementParams) {
-      if (epIdx <= 0 || epIdx - 1 >= paramNames.Count) continue;
-      var pName = paramNames[epIdx - 1];
-      if (_variables.TryGetValue(pName, out var existingInfo)) {
-        var assocTypeName = structType.AssociatedTypeNames
-          .FirstOrDefault(n => _typeRegistry.ContainsKey(n));
-        if (assocTypeName != null) {
-          _variables[pName] = existingInfo with { StructTypeName = assocTypeName };
-        }
-      }
-    }
 
     ParseBodyUntilEnd();
     ExpectEndLabel(nameToken.Value);
@@ -1998,6 +1925,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var fnParamOp = new MaxonFunctionParamOp(i + paramOffset, paramNames[i], fnType);
         _currentBlock!.AddOp(fnParamOp);
         _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, false, fnParamOp.Result, _currentBlock!, FnTypeName: fnType);
+      } else if (paramType is MlirTypeParameterType tp) {
+        var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.Integer);
+        _currentBlock!.AddOp(paramOp);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Integer, false, paramOp.Result, _currentBlock!, tp.ParameterName);
       } else {
         var kind = paramType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
@@ -2365,13 +2296,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var returnType = _currentFunction?.ReturnType;
     if (returnType == null) return;
 
-    // Skip type checking for associated type placeholders (e.g., Element in generic types)
-    if (_currentTypeName != null && returnType is MlirStructType retSt
-        && _typeRegistry.TryGetValue(_currentTypeName, out var currentTypeInfo)
-        && currentTypeInfo is MlirStructType currentStruct
-        && currentStruct.AssociatedTypeNames.Contains(retSt.Name)) {
-      return;
-    }
+    // Skip type checking for type parameter return types (e.g., Element in generic types)
+    if (returnType is MlirTypeParameterType) return;
 
     if (returnType is MlirStructType expectedStruct) {
       if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
@@ -3398,11 +3324,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var loadedValue = EmitVarRefOp(resultVar, resultKind, tryCallOp.ResultStructTypeName);
 
       // Determine StructTypeName for the binding: use the try call's ResultStructTypeName,
-      // or resolve the associated type name for Element-polymorphic return types
+      // or resolve the associated type name for type-parameter return types
       string? bindingStructTypeName = tryCallOp.ResultStructTypeName;
       if (bindingStructTypeName == null
-          && _elementPolymorphicParams.TryGetValue(callOp.Callee, out var epParams)
-          && epParams.Contains(-1)
+          && callee?.ReturnType is MlirTypeParameterType
           && _currentTypeName != null
           && _typeRegistry.TryGetValue(_currentTypeName, out var currentTypeReg)
           && currentTypeReg is MlirStructType currentSt) {
@@ -4603,6 +4528,46 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Enum type '{userTypeName}' has no property or method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
+      // Type parameter: only method calls are allowed, resolved through interface definitions
+      if (registeredType is MlirTypeParameterType) {
+        if (Check(TokenType.LeftParen)) {
+          var qualifiedMethodName = $"{userTypeName}.{fieldName}";
+          var ifaceMethod = FindInterfaceMethod(fieldName);
+          if (ifaceMethod != null) {
+            Advance(); // consume '('
+            var selfVal = ResolveExprValue(result);
+            var args = new List<MaxonValue> { selfVal };
+            if (!Check(TokenType.RightParen)) {
+              while (true) {
+                if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+                  Advance(); // consume label
+                  Advance(); // consume ':'
+                }
+                args.Add(ResolveExprValue(ParseExpression()));
+                if (!Check(TokenType.Comma)) break;
+                Advance(); // consume ','
+              }
+            }
+            Expect(TokenType.RightParen);
+            var resultKind = ifaceMethod.ReturnTypeName switch {
+              "int" => MaxonValueKind.Integer,
+              "float" => MaxonValueKind.Float,
+              "bool" => MaxonValueKind.Bool,
+              "byte" => MaxonValueKind.Byte,
+              null => (MaxonValueKind?)null,
+              // Type parameter return types (e.g. Element) are treated as Integer pre-monomorphization
+              { } name when IsAssociatedTypeName(name) => MaxonValueKind.Integer,
+              { } name => throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Unsupported return type '{name}' in interface method '{fieldName}'", fieldToken.Line, fieldToken.Column)
+            };
+            var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, null);
+            _currentBlock!.AddOp(callOp);
+            result = new ExprResult.Direct(callOp.Result ?? selfVal);
+            continue;
+          }
+        }
+        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type parameter '{userTypeName}' has no method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+      }
+
       var structType = (MlirStructType)registeredType;
 
       // Check for method call: expr.method(...)
@@ -4621,41 +4586,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           continue;
         }
 
-        // Method call on associated type parameter - resolve through interface definitions
-        if (IsAssociatedTypeName(userTypeName)) {
-          var ifaceMethod = FindInterfaceMethod(fieldName);
-          if (ifaceMethod != null) {
-            Advance(); // consume '('
-            var selfVal = ResolveExprValue(result);
-            var args = new List<MaxonValue> { selfVal };
-            // Parse any arguments
-            if (!Check(TokenType.RightParen)) {
-              while (true) {
-                // Skip named argument labels (e.g., "element:")
-                if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
-                  Advance(); // consume label
-                  Advance(); // consume ':'
-                }
-                args.Add(ResolveExprValue(ParseExpression()));
-                if (!Check(TokenType.Comma)) break;
-                Advance(); // consume ','
-              }
-            }
-            Expect(TokenType.RightParen);
-            var resultKind = ifaceMethod.ReturnTypeName switch {
-              "int" => MaxonValueKind.Integer,
-              "float" => MaxonValueKind.Float,
-              "bool" => MaxonValueKind.Bool,
-              "byte" => MaxonValueKind.Byte,
-              null => (MaxonValueKind?)null,
-              _ => MaxonValueKind.Integer // associated type returns are lowered to I64
-            };
-            var callOp2 = new MaxonCallOp(qualifiedMethodName, args, resultKind, null);
-            _currentBlock!.AddOp(callOp2);
-            result = new ExprResult.Direct(callOp2.Result ?? selfVal);
-            continue;
-          }
-        }
       }
 
       var field = structType.GetField(fieldName)
@@ -5058,8 +4988,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Recursively creates a zero-initialized struct literal, handling nested struct fields.
   /// For __ManagedMemory, element_size is determined from the parent's Element type parameter.
   private MaxonStruct EmitZeroStructLiteral(MlirStructType structType, Dictionary<string, MlirType>? parentTypeParams = null) {
-    // Merge type params: use struct's own, falling back to parent's
-    var typeParams = structType.TypeParams.Count > 0 ? structType.TypeParams : parentTypeParams ?? [];
+    // Merge type params: use struct's own, resolving type parameters through parent's.
+    // Unresolved type parameters (no parent to resolve through) are dropped.
+    var typeParams = new Dictionary<string, MlirType>();
+    var source = structType.TypeParams.Count > 0 ? structType.TypeParams : parentTypeParams ?? [];
+    foreach (var (key, value) in source) {
+      if (value is MlirTypeParameterType tp) {
+        if (parentTypeParams != null && parentTypeParams.TryGetValue(tp.ParameterName, out var resolved)
+            && resolved is not MlirTypeParameterType) {
+          typeParams[key] = resolved;
+        }
+      } else {
+        typeParams[key] = value;
+      }
+    }
 
     var zeroFields = new List<(string Name, MaxonValue Value)>();
     foreach (var subField in structType.Fields) {
@@ -5072,11 +5014,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (structType.Name == "__ManagedMemory" && subField.Name == "element_size") {
           if (typeParams.TryGetValue("Element", out var elemType)) {
             value = elemType.ElementSize;
-          } else {
-            // No Element type available - this happens in generic types like Set<Element>.
-            // Use 0 as a sentinel; MonomorphizationPass will substitute the correct value
-            // when the generic type is instantiated with a concrete Element type.
-            value = 0L;
           }
         }
         var lit = new MaxonLiteralOp(value);
@@ -5599,24 +5536,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - callerElementType={elemType}");
     }
 
-    // Get Element-polymorphic param indices for this function (or its source via alias)
-    if (_elementPolymorphicParams.TryGetValue(callee.Name, out HashSet<int>? elementParams)) {
-      Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - found elementParams directly: [{string.Join(",", elementParams)}]");
-    } else {
-      // Check if callee is from an aliased type (Vec2F.set → Vector.set)
-      var dotIdx = callee.Name.IndexOf('.');
-      if (dotIdx > 0) {
-        var typePart = callee.Name[..dotIdx];
-        var methodPart = callee.Name[(dotIdx + 1)..];
-        if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
-          var sourceMethodName = $"{sourceType}.{methodPart}";
-          if (_elementPolymorphicParams.TryGetValue(sourceMethodName, out elementParams)) {
-            Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - found elementParams via alias {sourceMethodName}: [{string.Join(",", elementParams)}]");
-          }
-        }
-      }
-    }
-
     // Implicit type conversion for function arguments
     for (int i = 0; i < args.Length; i++) {
       var argKind = DetermineValueKind(args[i]!);
@@ -5624,13 +5543,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (paramType is MlirStructType) continue;
       if (paramType is MlirEnumType) continue;
 
+      // Skip type conversion for type-parameter params
+      if (paramType is MlirTypeParameterType) continue;
+
       var paramKind = MlirTypeToValueKind(paramType);
       if (argKind == paramKind) continue;
-
-      // Skip type conversion for Element-polymorphic parameters (type was erased to i64 during pre-scan)
-      if (elementParams != null && elementParams.Contains(i)) {
-        continue;
-      }
 
       args[i] = ConvertArgToParamType(args[i]!, argKind, paramKind, callee.ParamNames[i], functionNameToken);
     }
@@ -5756,6 +5673,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     } else if (callee.ReturnType is MlirEnumType retEnumType) {
       resultKind = MaxonValueKind.Enum;
       resultStructTypeName = retEnumType.Name;
+    } else if (callee.ReturnType is MlirTypeParameterType) {
+      resultKind = MaxonValueKind.Integer;
+      resultKind = OverrideResultKindForElementType(resultKind.Value, args);
     } else if (callee.ReturnType != null) {
       resultKind = callee.ReturnType switch {
         { } t when t == MlirType.I64 => MaxonValueKind.Integer,
@@ -5796,6 +5716,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     } else if (callee.ReturnType is MlirEnumType retEnumType) {
       resultKind = MaxonValueKind.Enum;
       resultStructTypeName = retEnumType.Name;
+    } else if (callee.ReturnType is MlirTypeParameterType) {
+      resultKind = MaxonValueKind.Integer;
+      resultKind = OverrideResultKindForElementType(resultKind.Value, args);
     } else if (callee.ReturnType != null) {
       resultKind = callee.ReturnType switch {
         { } t when t == MlirType.I64 => MaxonValueKind.Integer,

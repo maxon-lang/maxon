@@ -48,6 +48,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.I1) return MaxonValueKind.Bool;
     if (type == MlirType.I8) return MaxonValueKind.Byte;
     if (type is MlirEnumType) return MaxonValueKind.Enum;
+    if (type is MlirTypeParameterType) return MaxonValueKind.Integer;
     if (type is MlirStructType) return MaxonValueKind.Struct;
     if (type is MlirFunctionType) return MaxonValueKind.Function;
     throw new ArgumentOutOfRangeException(nameof(type), $"No MaxonValueKind for MlirType: {type}");

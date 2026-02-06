@@ -25,7 +25,7 @@ public static class MonomorphizationPass {
     // Clone functions with type substitutions
     var newFunctions = new List<MlirFunction<MaxonOp>>();
     foreach (var spec in specializations) {
-      var clonedFunc = CloneAndSpecialize(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution, module);
+      var clonedFunc = CloneAndSpecialize(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution);
       newFunctions.Add(clonedFunc);
       Logger.Debug(LogCategory.Mlir, $"Monomorphized {spec.SourceFunc.Name} -> {clonedFunc.Name}");
     }
@@ -75,7 +75,7 @@ public static class MonomorphizationPass {
         if (!isSourceMethod && !isSuffixMatch) continue;
 
         // Check if function uses associated types in params or return
-        if (!NeedsSpecialization(func, sourceStruct, module)) continue;
+        if (!NeedsSpecialization(func, sourceStruct)) continue;
 
         // Extract method name (last component after TypeName)
         string methodName;
@@ -170,19 +170,15 @@ public static class MonomorphizationPass {
     return substitution;
   }
 
-  private static bool NeedsSpecialization(MlirFunction<MaxonOp> func, MlirStructType sourceStruct, MlirModule<MaxonOp> module) {
-    // Check if function has Element-polymorphic params/return (tracked during parsing)
-    if (module.ElementPolymorphicParams.TryGetValue(func.Name, out var elementParams)) {
-      // If there are any element-polymorphic params (or return type at index -1), needs specialization
-      if (elementParams.Count > 0) return true;
-    }
-
-    // Check if any param type is an associated type or alias thereof
+  private static bool NeedsSpecialization(MlirFunction<MaxonOp> func, MlirStructType sourceStruct) {
+    // Check if any param type is a type parameter
     foreach (var paramType in func.ParamTypes) {
+      if (paramType is MlirTypeParameterType) return true;
       if (IsAssociatedType(paramType, sourceStruct)) return true;
     }
 
     // Check return type
+    if (func.ReturnType is MlirTypeParameterType) return true;
     if (func.ReturnType != null && IsAssociatedType(func.ReturnType, sourceStruct)) return true;
 
     return false;
@@ -190,9 +186,6 @@ public static class MonomorphizationPass {
 
   private static bool IsAssociatedType(MlirType type, MlirStructType sourceStruct) {
     if (type is not MlirStructType st) return false;
-
-    // Direct associated type (e.g., Element)
-    if (sourceStruct.AssociatedTypeNames.Contains(st.Name)) return true;
 
     // Self type
     if (st.Name == sourceStruct.Name || st.Name == "Self") return true;
@@ -209,8 +202,7 @@ public static class MonomorphizationPass {
   private static MlirFunction<MaxonOp> CloneAndSpecialize(
     MlirFunction<MaxonOp> sourceFunc,
     string concreteTypeName,
-    Dictionary<string, MlirType> typeSubstitution,
-    MlirModule<MaxonOp> module) {
+    Dictionary<string, MlirType> typeSubstitution) {
 
     var sourceTypeName = typeSubstitution.FirstOrDefault(kv => kv.Value.Name == concreteTypeName && kv.Key != "Self").Key
                ?? concreteTypeName;
@@ -221,8 +213,13 @@ public static class MonomorphizationPass {
     var methodName = dotIdx >= 0 ? sourceFunc.Name[(dotIdx + 1)..] : sourceFunc.Name;
     var newFuncName = $"{concreteTypeName}.{methodName}";
 
-    // Get Element-polymorphic params info for this function
-    module.ElementPolymorphicParams.TryGetValue(sourceFunc.Name, out HashSet<int>? elementPolymorphicIndices);
+    // Derive element-polymorphic param indices from function signature types
+    var elementPolymorphicIndices = new HashSet<int>();
+    for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
+      if (sourceFunc.ParamTypes[i] is MlirTypeParameterType) {
+        elementPolymorphicIndices.Add(i);
+      }
+    }
 
     // Get the concrete Element type from the substitution
     MlirType? concreteElementType = typeSubstitution.GetValueOrDefault("Element");
@@ -232,24 +229,23 @@ public static class MonomorphizationPass {
       Logger.Debug(LogCategory.Mlir, $"  No Element type in substitution. TypeSubstitution keys: [{string.Join(", ", typeSubstitution.Keys)}]");
     }
 
-    // Clone param types with substitution, handling Element-polymorphic params
+    // Clone param types with substitution
     var newParamTypes = new List<MlirType>();
     for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
       var paramType = sourceFunc.ParamTypes[i];
-      // If this param is Element-polymorphic and we have a concrete Element type, use it
-      if (elementPolymorphicIndices != null && elementPolymorphicIndices.Contains(i) && concreteElementType != null) {
-        newParamTypes.Add(concreteElementType);
+      if (paramType is MlirTypeParameterType tp
+          && typeSubstitution.TryGetValue(tp.ParameterName, out var concreteType)) {
+        newParamTypes.Add(concreteType);
       } else {
         newParamTypes.Add(SubstituteType(paramType, typeSubstitution));
       }
     }
 
-    // Clone return type with substitution, handling Element-polymorphic return
+    // Clone return type with substitution
     MlirType? newReturnType;
-    if (elementPolymorphicIndices != null && elementPolymorphicIndices.Contains(-1) && concreteElementType != null) {
-      // Return type is Element-polymorphic
-      newReturnType = concreteElementType;
-
+    if (sourceFunc.ReturnType is MlirTypeParameterType retTp
+        && typeSubstitution.TryGetValue(retTp.ParameterName, out var concreteRetType)) {
+      newReturnType = concreteRetType;
     } else {
       newReturnType = sourceFunc.ReturnType != null
         ? SubstituteType(sourceFunc.ReturnType, typeSubstitution)
@@ -294,6 +290,9 @@ public static class MonomorphizationPass {
   }
 
   private static MlirType SubstituteType(MlirType type, Dictionary<string, MlirType> substitution) {
+    if (type is MlirTypeParameterType tp) {
+      return substitution.TryGetValue(tp.ParameterName, out var newType) ? newType : type;
+    }
     if (type is MlirStructType st) {
       if (substitution.TryGetValue(st.Name, out var newType)) {
         return newType;
@@ -317,6 +316,8 @@ public static class MonomorphizationPass {
       if (elementType == MlirType.I1) return MaxonValueKind.Bool;
       // Struct type means the element is a user-defined type, keep as Integer
       if (elementType is MlirStructType or MlirEnumType) return MaxonValueKind.Integer;
+      // Type parameter means the element hasn't been resolved to a concrete type yet
+      if (elementType is MlirTypeParameterType) return MaxonValueKind.Integer;
       throw new InvalidOperationException($"SubstituteValueKind: unsupported element type '{elementType.Name}'");
     }
     return kind;

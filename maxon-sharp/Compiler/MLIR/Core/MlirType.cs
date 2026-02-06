@@ -1,8 +1,17 @@
 namespace MaxonSharp.Compiler.Mlir.Core;
 
-public class MlirType(string name, int sizeInBytes) {
-  public string Name { get; } = name;
-  public int SizeInBytes { get; } = sizeInBytes;
+public class MlirType {
+  public string Name { get; }
+  public virtual int SizeInBytes { get; }
+
+  public MlirType(string name, int sizeInBytes) {
+    Name = name;
+    SizeInBytes = sizeInBytes;
+  }
+
+  protected MlirType(string name) {
+    Name = name;
+  }
 
   public static MlirType I8 { get; } = new("i8", 1);
   public static MlirType I32 { get; } = new("i32", 4);
@@ -93,6 +102,11 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
   public List<string> ConformingInterfaces { get; } = conformingInterfaces ?? [];
 
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
+}
+
+public class MlirTypeParameterType(string parameterName) : MlirType(parameterName) {
+  public string ParameterName { get; } = parameterName;
+  public override int SizeInBytes => throw new InvalidOperationException($"Type parameter '{ParameterName}' has no size");
 }
 
 public class MlirFunctionType(List<MlirType> parameterTypes, MlirType? returnType) : MlirType(FormatName(parameterTypes, returnType), 8) {

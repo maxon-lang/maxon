@@ -18,8 +18,6 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   public List<MlirGlobal> Globals { get; } = [];
   public Dictionary<string, MlirType> TypeDefs { get; } = [];
   public Dictionary<string, Dictionary<int, MlirAttribute>> FunctionDefaults { get; } = [];
-  public Dictionary<string, HashSet<int>> ElementPolymorphicParams { get; } = [];
-
   // Type alias tracking: aliasName -> TypeAliasInfo (sourceTypeName + typeParams)
   public Dictionary<string, TypeAliasInfo> TypeAliasSources { get; } = [];
 
@@ -41,7 +39,6 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     clone.Globals.AddRange(Globals);
     foreach (var (k, v) in TypeDefs) clone.TypeDefs[k] = v;
     foreach (var (k, v) in FunctionDefaults) clone.FunctionDefaults[k] = v;
-    foreach (var (k, v) in ElementPolymorphicParams) clone.ElementPolymorphicParams[k] = v;
     foreach (var (k, v) in TypeAliasSources) clone.TypeAliasSources[k] = v;
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
@@ -67,7 +64,6 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     Globals.AddRange(other.Globals);
     foreach (var (k, v) in other.TypeDefs) TypeDefs[k] = v;
     foreach (var (k, v) in other.FunctionDefaults) FunctionDefaults.TryAdd(k, v);
-    foreach (var (k, v) in other.ElementPolymorphicParams) ElementPolymorphicParams.TryAdd(k, v);
     foreach (var (k, v) in other.TypeAliasSources) TypeAliasSources.TryAdd(k, v);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);
     foreach (var (k, v) in other.InterfaceAssociatedTypes) InterfaceAssociatedTypes.TryAdd(k, v);
