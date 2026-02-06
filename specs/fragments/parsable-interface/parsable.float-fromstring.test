@@ -1,0 +1,58 @@
+// Test: parsable.float-fromstring
+function main() returns int
+  var f = try float.fromString("3.14") otherwise 0.0
+  var check = f * 100.0
+  return trunc(check)
+end 'main'
+---
+ExitCode: 314
+---
+module {
+  func @parsable-interface.main() -> i64 {
+  entry:
+    x86.prologue stack_size=96
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.mov edx, 4
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-24], ebx
+    x86.mov esi, 1
+    x86.mov [rbp-32], esi
+    x86.xor edi, edi
+    x86.mov [rbp-40], edi
+    x86.mov r8, [rbp-40]
+    x86.mov [rbp-48], r8
+    x86.mov r9, [rbp-32]
+    x86.mov [rbp-56], r9
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-80], eax
+    x86.lea rax, [rbp-80]
+    x86.mov rcx, rax
+    x86.call stdlib.Parsing.__float_fromString
+    x86.movsd xmm1, [rip+__float_0]
+    x86.movsd [rbp-88], xmm1
+    x86.movsd [rbp-96], xmm0
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je parsable-interface.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.movsd xmm0, [rbp-88]
+    x86.movsd [rbp-96], xmm0
+    x86.jmp parsable-interface.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.movsd xmm0, [rbp-96]
+    x86.movsd xmm1, [rip+__float_100]
+    x86.movsd xmm2, xmm0
+    x86.mulsd xmm2, xmm1
+    x86.cvttsd2si eax, xmm2
+    x86.epilogue
+    x86.ret
+  }
+}
+---

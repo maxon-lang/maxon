@@ -72,3 +72,47 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: sqrt.rt-basic -->
+<!-- Args: 16.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(sqrt(x))
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: sqrt.rt-precision -->
+<!-- Args: 2.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var check = sqrt(x) * sqrt(x)
+  return trunc(check)
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: sqrt.rt-zero -->
+<!-- Args: 0.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var result = sqrt(x)
+  if result == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```

@@ -113,3 +113,105 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: max.rt-basic -->
+<!-- Args: 3.0 5.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+  return trunc(max(a, b))
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: max.rt-first-larger -->
+<!-- Args: 10.0 2.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+  return trunc(max(a, b))
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: max.rt-negative -->
+<!-- Args: -5.0 3.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+  return trunc(max(a, b))
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: max.rt-both-negative -->
+<!-- Args: -2.0 -8.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+  return trunc(max(a, b)) + 10
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: max.rt-equal -->
+<!-- Args: 7.0 7.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+  return trunc(max(a, b))
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: max.rt-fractional -->
+<!-- Args: 3.5 5.2 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+  return trunc(max(a, b))
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: max.rt-zero -->
+<!-- Args: 0.0 -5.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
+  var result = max(a, b)
+  if result == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```

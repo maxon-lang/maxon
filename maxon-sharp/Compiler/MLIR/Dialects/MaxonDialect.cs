@@ -756,7 +756,7 @@ public class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool
   public List<MaxonValue> Args { get; } = args;
   public MaxonInteger? Result { get; } = hasResult ? new MaxonInteger(MlirContext.Current.NextId()) : null;
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
-  public override IReadOnlyList<string> PrintableOperands => Args.Select(a => a.ToString()).ToList();
+  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
 
 // Create a Character from bytes within a managed buffer

@@ -74,3 +74,44 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: floor.rt-positive -->
+<!-- Args: 3.9 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(floor(x))
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: floor.rt-negative -->
+<!-- Args: -3.2 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(floor(x)) + 10
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: floor.rt-with-ceil -->
+<!-- Args: 3.7 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var a = trunc(floor(x))
+  var b = trunc(ceil(x))
+  return a + b
+end 'main'
+```
+```exitcode
+7
+```

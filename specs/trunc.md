@@ -70,3 +70,42 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: trunc.rt-negative -->
+<!-- Args: -3.7 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(x) + 10
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: trunc.rt-positive -->
+<!-- Args: 7.9 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(x)
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: trunc.rt-zero -->
+<!-- Args: 0.5 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(x)
+end 'main'
+```
+```exitcode
+0
+```

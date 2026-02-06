@@ -1,7 +1,7 @@
 ---
 feature: parsable-interface
-status: experimental
-keywords: [Parsable, interface, fromString, parsing, error, throws, static]
+status: stable
+keywords: [Parsable, interface, fromString, parsing, error, throws, static, int, float, bool, byte]
 category: interfaces
 ---
 
@@ -13,9 +13,20 @@ category: interfaces
 
 The `Parsable` interface provides a standardized way for types to be constructed from string input. Types implementing `Parsable` provide a static `fromString` method that can throw parsing errors.
 
+### Builtin Type Parsing
+
+Builtin types (`int`, `float`, `bool`, `byte`) support `fromString` as static methods. These throw `ParseError.invalidFormat` on invalid input.
+
+```maxon
+var n = try int.fromString("42") otherwise 0
+var f = try float.fromString("3.14") otherwise 0.0
+var b = try bool.fromString("true") otherwise false
+var y = try byte.fromString("255") otherwise 0
+```
+
 ### Implementing Parsable
 
-Types implement `Parsable` by providing a static `fromString` method that:
+User-defined types implement `Parsable` by providing a static `fromString` method that:
 - Takes a `String` input
 - Returns `Self` (the implementing type)
 - Throws a specific error type on parse failure
@@ -236,7 +247,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/parsable-interface.error.missing-throws.1.test:1:1: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
+error E3016: specs/fragments/parsable-interface/error.missing-throws.test:3:6: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
 ```
 
 <!-- test: error.throws-non-error-type -->
@@ -259,5 +270,89 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/parsable-interface.error.throws-non-error-type.1.test:1:1: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
+error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test:7:6: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
+```
+
+<!-- test: parsable.int-fromstring -->
+```maxon
+function main() returns int
+  var n = try int.fromString("42") otherwise 0
+  return n
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: parsable.int-fromstring-negative -->
+```maxon
+function main() returns int
+  var n = try int.fromString("-7") otherwise 0
+  return n + 10
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: parsable.int-fromstring-invalid -->
+```maxon
+function main() returns int
+  var n = try int.fromString("abc") otherwise 99
+  return n
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: parsable.float-fromstring -->
+```maxon
+function main() returns int
+  var f = try float.fromString("3.14") otherwise 0.0
+  var check = f * 100.0
+  return trunc(check)
+end 'main'
+```
+```exitcode
+314
+```
+
+<!-- test: parsable.float-fromstring-negative -->
+```maxon
+function main() returns int
+  var f = try float.fromString("-2.5") otherwise 0.0
+  return trunc(f) + 10
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: parsable.bool-fromstring-true -->
+```maxon
+function main() returns int
+  var b = try bool.fromString("true") otherwise false
+  if b 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: parsable.bool-fromstring-false -->
+```maxon
+function main() returns int
+  var b = try bool.fromString("false") otherwise true
+  if b 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+0
 ```

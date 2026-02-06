@@ -2,9 +2,6 @@
 You *Are* Going To Read It
 
 ## Priorities
-- implement command line params then do "fix for later" below
-- add new tests that actually test builtins at runtime (abs, trunc, etc) because the
-  current tests get optimized to nothing
 - range()
 - return {errors: [], hasErrors: false} gives a confusing error
 - change "typealias foo is bar" to "typealias foo = bar"
@@ -18,26 +15,17 @@ You *Are* Going To Read It
 ## TODO
 - test for __chkstk
 - advent of compiler optimization
-- register allocator
 - add FilePath to stdlib
 - iterators with index
 - 2 types of Stringable, formatted and not formatted
 - // Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
-- implement swift inspired stdlib File support
-- see if we can/should get rid of MIR arrays, and also strings use StaticArray
 - platform specific optimization for runtime
 - warnings as errors in release mode
-- compiler error codes
-- extensive math function tests
-- centralize help text from the lsp server analyzer
 - cross compiling
-- DeadCodeEliminationPass::isPureFunction has hardcoded list of pure functions. Can analyzer determine if its pure? isPureFunction
 - Extra Inhabitants to optimize memory layout
 - toLower/toUpper need to be unicode aware, maybe other string functions too
 - add "implement interface" code action
 - code actions should be directly linked to the errors that made them needed
-- type aliases
-- lsp is lowercasing paths on windows for comparison which isn't really correct
 - oh god locales
 - optimize stack arrays (simd, bitmask filtering)
 - extensions
@@ -58,6 +46,7 @@ You *Are* Going To Read It
 - have a command line options stdlib that supplies all the common CLI features (flags, parameters, validation)
   and you just get a type back with everything filled in
 - precompile stdlib and link it
+- can't instantiate vars with built in types. you have to create a user defined type that defines its range
 
 
 - how to have the language prevent users doing this
@@ -100,47 +89,11 @@ add tests for compiler will all kinds of malformed inputs
 \\ for multiline strings (zig)
 
 
-## Future Enhancements
-
-1. **More numeric types:** f32 (single precision), i64 (long), u32 (unsigned), etc.
-3. **String type:** Proper string handling beyond char arrays
-4. **Array return values:** Transfer ownership when returning arrays from functions
-5. **Reference counting:** For complex ownership scenarios
-6. **Generics:** Type-parameterized functions
-7. **SIMD support:** Vector operations for performance
-8. **Array slicing:** Sub-array references without copying
-
-
-can't instantiate vars with built in types. you have to create a user defined type that defines its range
-
-Struct literal can only be used as an initializer in variable declarations
-
-Rust defaults to Deep Immutability for everything.
-
-	
-oh god what about error handling
-	- defined error handling block
-
-debugging
-
-
-Higher RAII - Linear Types
 
 
 
 
-Implement Phi elimination pass in maxon-bin/mir/optimizer.cpp: Create a new pass that inserts Copy instructions at predecessor block ends for each phiIncoming value, then removes the Phi instruction.
 
-Review register allocation liveness analysis at [x86_codegen.cpp:390-500[](c:\Users\Eric\Dev\maxon\maxon-bin\backend\x86_codegen.cpp): The cross-block liveness analysis is conservative but incomplete—it doesn't do full dataflow for values defined in predecessor blocks and used after calls. Compare against LLVM's ](http://_vscodecontentref_/0)LiveIntervals.cpp.
-
-Complete float parameter spilling at x86_codegen.cpp:605: There's a TODO comment indicating float parameters aren't properly spilled to stack when callee-saved XMM registers are exhausted.
-
-Verify large type return handling at x86_codegen.cpp:380-390: The hidden return pointer logic shifts all parameters right by one register—verify this matches Windows x64 ABI exactly and test with functions that have 4+ parameters.
-
-Audit GEP instruction at [x86_codegen.cpp[ genGEP function](c:\Users\Eric\Dev\maxon\maxon-bin\backend\x86_codegen.cpp): Complex index calculation with multiple code paths for arrays vs structs—compare against LLVM's ](http://_vscodecontentref_/1)X86ISelLowering.cpp for GetElementPtr lowering.
-
-backend tests coverage
-profiling
 
 
 
@@ -199,57 +152,3 @@ Requirement: Requires "Canonical Loop Form" (which passes like LoopRotate and In
 SLP Vectorizer (Superword-Level Parallelism):
 
 Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = a[1] + b[1];, SLP packs these into a single vector instruction.
-
-
-## Potential optimizations
-- xor eax,eax to zero register. Done
-- use LEA for adds. Planned
-
-Phase 7: Interface conformance checking (verify types implement required methods)
-Phase 9: Export keyword enforcement (visibility rules)
-Phase 11: Interface declarations (parsing interface definitions)
-
-
-## fix for later 
-Fix for ClobberedRegisters in Peephole Optimizer
-The Problem
-The peephole optimizer's constant propagation pass tracks mov reg, imm instructions and later replaces mov destReg, srcReg with mov destReg, imm when beneficial. However, it only invalidated the constant mapping when an instruction explicitly wrote to a register as its first operand.
-
-This missed cases where instructions implicitly clobber registers without writing to them as an explicit operand. For example:
-
-call foo clobbers RAX, RCX, RDX, R8, R9, R10, R11 per Windows x64 ABI
-rep movsb clobbers RCX, RSI, RDI
-imul dst, src (2-operand form) clobbers RDX
-shl dst, count with variable count clobbers RCX
-The Fix
-Added code to invalidate constant mappings for all registers in ClobberedRegisters:
-
-
-// Invalidate for clobbered registers (e.g., calls clobber RAX, RCX, RDX, etc.)
-foreach (var clobbered in x86Op.ClobberedRegisters) {
-    regToImm.Remove(clobbered);
-}
-Test Case
-A test that would fail without this fix:
-
-
-// Test: peephole-clobber-invalidation
-// Verifies that constant propagation doesn't propagate across calls
-
-function identity(x int) returns int
-    return x
-end 'identity'
-
-function main() returns int
-    var a = 42
-    var b = identity(a)  // Call clobbers registers
-    // If peephole incorrectly propagates, it might use stale constant
-    return a + b
-end 'main'
-
-84
-However, this specific test would likely be optimized away by inlining. A more robust test would need to:
-
-Prevent inlining (e.g., recursive function or export to force preservation)
-Have a pattern where mov rcx, imm happens, then a call, then mov r9, rcx
-The fix is defensive - it ensures correctness if such patterns emerge from future code generation changes. The existing tests pass with it, and it adds no measurable overhead since ClobberedRegisters is typically empty or small.

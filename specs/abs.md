@@ -76,3 +76,46 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: abs.rt-float -->
+<!-- Args: -5.5 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(abs(x))
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: abs.rt-negative-int -->
+<!-- Args: -42.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(abs(x))
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: abs.rt-zero -->
+<!-- Args: 0.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  var result = abs(x)
+  if result == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```

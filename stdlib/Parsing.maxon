@@ -1,0 +1,121 @@
+/// Parsing functions for converting strings to builtin types.
+/// These are called by the compiler when rewriting int.fromString(...) etc.
+/// @category Core
+
+export function __int_fromString(input String) returns int throws ParseError
+  var result = 0
+  var negative = false
+  var hasDigits = false
+
+  for cp in input.codepoints() 'chars'
+    if cp == 45 'minus'
+      if hasDigits 'minus_after_digits'
+        throw ParseError.invalidFormat
+      end 'minus_after_digits'
+      negative = true
+    end 'minus' else 'not_minus'
+      if cp >= 48 'maybe_digit'
+        if cp <= 57 'is_digit'
+          hasDigits = true
+          result = result * 10 + (cp - 48)
+        end 'is_digit' else 'not_digit'
+          throw ParseError.invalidFormat
+        end 'not_digit'
+      end 'maybe_digit' else 'below_zero'
+        throw ParseError.invalidFormat
+      end 'below_zero'
+    end 'not_minus'
+  end 'chars'
+
+  if not hasDigits 'empty'
+    throw ParseError.invalidFormat
+  end 'empty'
+
+  if negative 'negate'
+    result = 0 - result
+  end 'negate'
+
+  return result
+end '__int_fromString'
+
+export function __float_fromString(input String) returns float throws ParseError
+  var intPart = 0
+  var fracPart = 0.0
+  var fracDiv = 1.0
+  var pastDot = false
+  var negative = false
+  var hasDigits = false
+
+  for cp in input.codepoints() 'chars'
+    if cp == 46 'dot'
+      if pastDot 'double_dot'
+        throw ParseError.invalidFormat
+      end 'double_dot'
+      pastDot = true
+    end 'dot' else 'not_dot'
+      if cp == 45 'minus'
+        if hasDigits 'minus_after_digits'
+          throw ParseError.invalidFormat
+        end 'minus_after_digits'
+        if pastDot 'minus_after_dot'
+          throw ParseError.invalidFormat
+        end 'minus_after_dot'
+        negative = true
+      end 'minus' else 'not_minus'
+        if cp >= 48 'maybe_digit'
+          if cp <= 57 'is_digit'
+            hasDigits = true
+            var digit = cp - 48
+            if pastDot 'after_dot'
+              fracDiv = fracDiv * 10.0
+              fracPart = fracPart + (digit as float) / fracDiv
+            end 'after_dot' else 'before_dot'
+              intPart = intPart * 10 + digit
+            end 'before_dot'
+          end 'is_digit' else 'not_digit'
+            throw ParseError.invalidFormat
+          end 'not_digit'
+        end 'maybe_digit' else 'below_zero'
+          throw ParseError.invalidFormat
+        end 'below_zero'
+      end 'not_minus'
+    end 'not_dot'
+  end 'chars'
+
+  if not hasDigits 'empty'
+    throw ParseError.invalidFormat
+  end 'empty'
+
+  var result = (intPart as float) + fracPart
+  if negative 'negate'
+    result = 0.0 - result
+  end 'negate'
+
+  return result
+end '__float_fromString'
+
+export function __bool_fromString(input String) returns bool throws ParseError
+  if input == "true" 'is_true'
+    return true
+  end 'is_true'
+  if input == "false" 'is_false'
+    return false
+  end 'is_false'
+  throw ParseError.invalidFormat
+end '__bool_fromString'
+
+export function __byte_fromString(input String) returns int throws ParseError
+  var result = try __int_fromString(input) otherwise 'err'
+    throw ParseError.invalidFormat
+  end 'err'
+
+  if result < 0 'too_low'
+    throw ParseError.invalidFormat
+  end 'too_low'
+
+  if result > 255 'too_high'
+    throw ParseError.invalidFormat
+  end 'too_high'
+
+  return result
+end '__byte_fromString'

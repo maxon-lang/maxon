@@ -1,0 +1,296 @@
+// Test: parsable.otherwise-fallthrough
+// otherwise blocks execute code when error occurs, then continue execution
+enum ParseError is Error
+  Invalid = 1
+end 'ParseError'
+
+type Value is Parsable
+  export var n int
+
+  static function fromString(input String) returns Self throws ParseError
+    if input.startsWith("x") 'check'
+      throw ParseError.Invalid
+    end 'check'
+    return {n: input.byteLength()}
+  end 'fromString'
+end 'Value'
+
+function main() returns int
+  var result = 0
+
+  // First call succeeds - handler not executed
+  var v = try Value.fromString("hello") otherwise Value{n: 0}
+  result = result + v.n  // adds 5
+
+  // Second call fails - use default value
+  var v2 = try Value.fromString("xbad") otherwise Value{n: 0}
+  result = result + v2.n  // adds 0
+
+  // Third call succeeds
+  var v3 = try Value.fromString("world") otherwise Value{n: 0}
+  result = result + v3.n  // adds 5
+
+  return result
+end 'main'
+---
+ExitCode: 10
+---
+module {
+  func @Value.fromString(__sret: i64, input: i64) {
+  entry:
+    x86.prologue stack_size=224
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.lea ebx, [edx + eax]
+    x86.mov eax, [ebx+0]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [ebx+8]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [ebx+16]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [ebx+24]
+    x86.mov [rbp-40], eax
+    x86.mov eax, [edx+32]
+    x86.mov [rbp-48], eax
+    x86.lea_rdata rax, [__str_2]
+    x86.mov rdx, rax
+    x86.mov eax, 1
+    x86.mov [rbp-56], edx
+    x86.mov [rbp-64], eax
+    x86.xor eax, eax
+    x86.mov [rbp-72], eax
+    x86.mov eax, 1
+    x86.mov [rbp-80], eax
+    x86.xor eax, eax
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-112], eax
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-120], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-128], eax
+    x86.lea rax, [rbp-128]
+    x86.mov edx, [rbp-88]
+    x86.mov [rbp-136], edx
+    x86.mov edx, [rbp-80]
+    x86.mov [rbp-144], edx
+    x86.mov edx, [rbp-72]
+    x86.mov [rbp-152], edx
+    x86.mov edx, [rbp-64]
+    x86.mov [rbp-160], edx
+    x86.mov edx, [rbp-56]
+    x86.mov [rbp-168], edx
+    x86.lea rdx, [rbp-168]
+    x86.mov rcx, rax
+    x86.call stdlib.String.startsWith
+    x86.mov ecx, [rbp-128]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-120]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-112]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-104]
+    x86.mov [rbp-40], esi
+    x86.mov edi, [rbp-96]
+    x86.mov [rbp-48], edi
+    x86.test eax, eax
+    x86.je Value.fromString.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-176], eax
+    x86.mov ecx, [rbp-40]
+    x86.mov [rbp-184], ecx
+    x86.mov edx, [rbp-32]
+    x86.mov [rbp-192], edx
+    x86.mov ebx, [rbp-24]
+    x86.mov [rbp-200], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov [rbp-208], esi
+    x86.lea rdi, [rbp-208]
+    x86.mov rcx, rdi
+    x86.call stdlib.String.byteLength
+    x86.mov r8, [rbp-208]
+    x86.mov [rbp-16], r8
+    x86.mov r9, [rbp-200]
+    x86.mov [rbp-24], r9
+    x86.mov ecx, [rbp-192]
+    x86.mov [rbp-32], ecx
+    x86.mov ecx, [rbp-184]
+    x86.mov [rbp-40], ecx
+    x86.mov ecx, [rbp-176]
+    x86.mov [rbp-48], ecx
+    x86.mov [rbp-216], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-216]
+    x86.mov [eax+0], ecx
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @parsable-interface.main() -> i64 {
+  entry:
+    x86.prologue stack_size=368
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.lea_rdata rcx, [__str_9]
+    x86.mov rdx, rcx
+    x86.mov ebx, 5
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-32], esi
+    x86.mov edi, 1
+    x86.mov [rbp-40], edi
+    x86.xor r8, r8
+    x86.mov [rbp-48], r8
+    x86.xor r9, r9
+    x86.mov [rbp-56], r9
+    x86.lea rax, [rbp-56]
+    x86.mov ecx, [rbp-48]
+    x86.mov [rbp-64], ecx
+    x86.mov ecx, [rbp-40]
+    x86.mov [rbp-72], ecx
+    x86.mov ecx, [rbp-32]
+    x86.mov [rbp-80], ecx
+    x86.mov ecx, [rbp-24]
+    x86.mov [rbp-88], ecx
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-96], ecx
+    x86.lea rcx, [rbp-96]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Value.fromString
+    x86.xor eax, eax
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-104]
+    x86.mov [rbp-112], eax
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-120], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je parsable-interface.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-112]
+    x86.mov [rbp-120], eax
+    x86.jmp parsable-interface.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-120]
+    x86.mov [rbp-128], eax
+    x86.mov ecx, [rbp-128]
+    x86.mov edx, [rbp-8]
+    x86.add edx, ecx
+    x86.mov [rbp-8], edx
+    x86.lea_rdata rbx, [__str_23]
+    x86.mov rsi, rbx
+    x86.mov edi, 4
+    x86.mov [rbp-136], esi
+    x86.mov [rbp-144], edi
+    x86.xor r8, r8
+    x86.mov [rbp-152], r8
+    x86.mov r9, 1
+    x86.mov [rbp-160], r9
+    x86.xor eax, eax
+    x86.mov [rbp-168], eax
+    x86.xor eax, eax
+    x86.mov [rbp-176], eax
+    x86.lea rax, [rbp-176]
+    x86.mov ecx, [rbp-168]
+    x86.mov [rbp-184], ecx
+    x86.mov ecx, [rbp-160]
+    x86.mov [rbp-192], ecx
+    x86.mov ecx, [rbp-152]
+    x86.mov [rbp-200], ecx
+    x86.mov ecx, [rbp-144]
+    x86.mov [rbp-208], ecx
+    x86.mov ecx, [rbp-136]
+    x86.mov [rbp-216], ecx
+    x86.lea rcx, [rbp-216]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Value.fromString
+    x86.xor eax, eax
+    x86.mov [rbp-224], eax
+    x86.mov eax, [rbp-224]
+    x86.mov [rbp-232], eax
+    x86.mov eax, [rbp-176]
+    x86.mov [rbp-240], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je parsable-interface.main.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x86.mov eax, [rbp-232]
+    x86.mov [rbp-240], eax
+    x86.jmp parsable-interface.main.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x86.mov eax, [rbp-240]
+    x86.mov [rbp-248], eax
+    x86.mov ecx, [rbp-248]
+    x86.mov edx, [rbp-8]
+    x86.add edx, ecx
+    x86.mov [rbp-8], edx
+    x86.lea_rdata rbx, [__str_37]
+    x86.mov rsi, rbx
+    x86.mov edi, 5
+    x86.mov [rbp-256], esi
+    x86.mov [rbp-264], edi
+    x86.xor r8, r8
+    x86.mov [rbp-272], r8
+    x86.mov r9, 1
+    x86.mov [rbp-280], r9
+    x86.xor eax, eax
+    x86.mov [rbp-288], eax
+    x86.xor eax, eax
+    x86.mov [rbp-296], eax
+    x86.lea rax, [rbp-296]
+    x86.mov ecx, [rbp-288]
+    x86.mov [rbp-304], ecx
+    x86.mov ecx, [rbp-280]
+    x86.mov [rbp-312], ecx
+    x86.mov ecx, [rbp-272]
+    x86.mov [rbp-320], ecx
+    x86.mov ecx, [rbp-264]
+    x86.mov [rbp-328], ecx
+    x86.mov ecx, [rbp-256]
+    x86.mov [rbp-336], ecx
+    x86.lea rcx, [rbp-336]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Value.fromString
+    x86.xor eax, eax
+    x86.mov [rbp-344], eax
+    x86.mov eax, [rbp-344]
+    x86.mov [rbp-352], eax
+    x86.mov eax, [rbp-296]
+    x86.mov [rbp-360], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je parsable-interface.main.otherwise_default_continue_11
+  otherwise_default_error_10:
+    x86.mov eax, [rbp-352]
+    x86.mov [rbp-360], eax
+    x86.jmp parsable-interface.main.otherwise_default_continue_11
+  otherwise_default_continue_11:
+    x86.mov eax, [rbp-360]
+    x86.mov [rbp-368], eax
+    x86.mov ecx, [rbp-368]
+    x86.mov edx, [rbp-8]
+    x86.add edx, ecx
+    x86.mov [rbp-8], edx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

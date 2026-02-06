@@ -73,3 +73,42 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: round.rt-basic -->
+<!-- Args: 3.7 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(round(x))
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: round.rt-negative -->
+<!-- Args: -2.3 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(round(x)) + 10
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: round.rt-halfway -->
+<!-- Args: 2.5 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(round(x))
+end 'main'
+```
+```exitcode
+2
+```

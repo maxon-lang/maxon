@@ -73,3 +73,42 @@ end 'main'
 ```exitcode
 5
 ```
+
+<!-- test: ceil.rt-positive -->
+<!-- Args: 3.1 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(ceil(x))
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: ceil.rt-negative -->
+<!-- Args: -3.9 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(ceil(x)) + 10
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: ceil.rt-exact -->
+<!-- Args: 5.0 -->
+```maxon
+function main() returns int
+  let args = CommandLine.args()
+  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+  return trunc(ceil(x))
+end 'main'
+```
+```exitcode
+5
+```

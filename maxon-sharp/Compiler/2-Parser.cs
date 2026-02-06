@@ -803,11 +803,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       foreach (var method in iface.Methods) {
         var qualifiedName = $"{qualifiedTypeName}.{method.Name}";
         var func = module.Functions.FirstOrDefault(f => f.Name == qualifiedName);
+
+        // Static method signatures are handled by the compiler directly —
+        // only validate throws conformance
+        if (method.IsStatic) {
+          if (func != null && method.ThrowsTypeName != null)
+            ValidateThrowsConformance(func, typeName, method.Name, ifaceName, method.ThrowsTypeName, typeNameToken);
+          continue;
+        }
+
         if (func == null) {
           missingMethods.Add(method.Format());
         } else if (!SignatureMatches(method, func, ifaceName, typeName, structTypeParams)) {
           var actualSig = FormatFunctionSignature(method.Name, func);
           wrongSignatureMethods.Add($"{actualSig} (expected {method.Format()})");
+        } else if (method.ThrowsTypeName != null) {
+          ValidateThrowsConformance(func, typeName, method.Name, ifaceName, method.ThrowsTypeName, typeNameToken);
         }
       }
 
@@ -830,6 +841,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.End)) Advance();
     // Skip end label
     if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  /// <summary>
+  /// Validates that a function's throws clause conforms to the interface requirement:
+  /// must throw, and the thrown type must conform to Error.
+  /// </summary>
+  private void ValidateThrowsConformance(MlirFunction<MaxonOp> func, string typeName, string methodName, string ifaceName, string requiredThrowsType, Token typeNameToken) {
+    if (func.ThrowsType == null) {
+      throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
+        $"Method '{typeName}.{methodName}' must throw '{requiredThrowsType}' as required by interface '{ifaceName}'",
+        typeNameToken.Line, typeNameToken.Column);
+    }
+    var throwsName = func.ThrowsType.Name;
+    if (_typeRegistry.TryGetValue(throwsName, out var throwsTypeEntry)
+        && throwsTypeEntry is MlirEnumType throwsEnum
+        && !throwsEnum.ConformingInterfaces.Contains("Error")) {
+      throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
+        $"Method '{typeName}.{methodName}' throws '{throwsName}' which does not conform to Error",
+        typeNameToken.Line, typeNameToken.Column);
+    }
   }
 
   /// <summary>
@@ -932,6 +963,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Temporary entry so ParseTypeRef can resolve forward references
     if (!_typeRegistry.TryGetValue(enumName, out MlirType? value)) {
       value = new MlirEnumType(enumName, [], null, conformingInterfaces);
+      _typeRegistry[enumName] = value;
+    } else if (value is MlirEnumType existingPre && existingPre.ConformingInterfaces.Count == 0 && conformingInterfaces.Count > 0) {
+      // Pre-registered entry had no conforming interfaces; update with parsed ones
+      value = new MlirEnumType(enumName, [.. existingPre.Cases], existingPre.BackingType, conformingInterfaces);
       _typeRegistry[enumName] = value;
     }
 
@@ -1061,11 +1096,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // Skip 'export' on members
       if (Check(TokenType.Export)) Advance();
 
-      // Skip static function declarations (factory methods, not instance requirements)
+      // Track static methods (factory methods, static requirements)
+      bool isStatic = false;
       if (Check(TokenType.Static)) {
-        SkipToEndOfLine();
-        SkipNewlines();
-        continue;
+        Advance();
+        isStatic = true;
       }
 
       // Skip typealias declarations inside interfaces
@@ -1103,10 +1138,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         returnTypeName = ExpectTypeName();
       }
 
-      // Skip rest of line (handles throws clause and any other trailing tokens)
+      string? throwsTypeName = null;
+      if (Check(TokenType.Throws)) {
+        Advance();
+        throwsTypeName = ExpectTypeName();
+      }
+
+      // Skip rest of line
       SkipToEndOfLine();
 
-      methods.Add(new MlirInterfaceMethodSignature(methodName, paramTypeNames, paramNames, returnTypeName));
+      methods.Add(new MlirInterfaceMethodSignature(methodName, paramTypeNames, paramNames, returnTypeName, isStatic, throwsTypeName));
       SkipNewlines();
     }
 
@@ -2174,6 +2215,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ParseBreak();
     } else if (Check(TokenType.Continue)) {
       ParseContinue();
+    } else if (TryRewritePrimitiveStaticMethod()) {
+      ParseCallStatement();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
       // Could be: field assignment (p.x = 30), qualified name assignment (Counter.count = 42),
       // or qualified name call (Counter.increment())
@@ -2387,9 +2430,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private ExprResult.Direct ParseTryExpression(Token tryToken, bool isStatementContext = false) {
     // Parse the function call expression inside try
+    var savedTryContext = _inTryContext;
     _inTryContext = true;
     var callExpr = ParsePrimary();
-    _inTryContext = false;
+    _inTryContext = savedTryContext;
 
     // The callExpr should have generated a MaxonCallOp - we need to replace it with a MaxonTryCallOp
     var lastOp = _currentBlock!.Operations[^1];
@@ -3218,12 +3262,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
     _currentBlock = thenBlock;
     ParseBodyUntilEnd();
+    var thenEndBlock = _currentBlock; // may differ from thenBlock after nested if/else
 
     // Parse: end 'thenLabel'
     ExpectEndLabel(thenSourceLabel);
 
     // Check for else or else-if
     MlirBlock<MaxonOp>? elseBlock = null;
+    MlirBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
     if (Check(TokenType.Else)) {
       Advance(); // consume 'else'
@@ -3233,6 +3279,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
         ParseIf();
+        elseEndBlock = _currentBlock;
       } else {
         var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
         elseLabel = UniqueLabel(elseSourceLabel);
@@ -3241,29 +3288,37 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
         ParseBodyUntilEnd();
+        elseEndBlock = _currentBlock;
         ExpectEndLabel(elseSourceLabel);
       }
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, elseLabel, elseBlock);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, elseLabel, elseBlock, elseEndBlock);
   }
 
   /// <summary>
   /// Creates merge blocks and emits a conditional branch for if/if-try statements.
   /// Handles the common logic of determining if branches need merge blocks and setting up control flow.
+  /// thenEndBlock/elseEndBlock are the final blocks after parsing each branch body
+  /// (may differ from initial blocks due to nested if/else creating merge blocks).
   /// </summary>
-  private void EmitConditionalBranch(MlirBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, MlirBlock<MaxonOp> thenBlock, string? elseLabel, MlirBlock<MaxonOp>? elseBlock) {
-    bool thenNeedsMerge = !BlockEndsWithTerminator(thenBlock);
-    bool elseNeedsMerge = elseBlock != null && !BlockEndsWithTerminator(elseBlock);
+  private void EmitConditionalBranch(MlirBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, MlirBlock<MaxonOp> thenBlock, MlirBlock<MaxonOp>? thenEndBlock, string? elseLabel, MlirBlock<MaxonOp>? elseBlock, MlirBlock<MaxonOp>? elseEndBlock) {
+    // Use the end blocks for merge decisions — the end block is where control flow
+    // actually is after parsing each branch (may be a merge block from nested if/else)
+    bool thenTerminated = thenEndBlock == null || BlockEndsWithTerminator(thenEndBlock);
+    bool elseTerminated = elseEndBlock != null ? BlockEndsWithTerminator(elseEndBlock) : (elseBlock != null);
+
+    bool thenNeedsMerge = !thenTerminated;
+    bool elseNeedsMerge = elseBlock != null && !elseTerminated;
 
     if (thenNeedsMerge || elseNeedsMerge) {
       var mergeLabel = $"{thenLabel}.merge";
       var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
 
       if (thenNeedsMerge)
-        thenBlock.AddOp(new MaxonBrOp(mergeLabel));
+        (thenEndBlock ?? thenBlock).AddOp(new MaxonBrOp(mergeLabel));
       if (elseNeedsMerge)
-        elseBlock!.AddOp(new MaxonBrOp(mergeLabel));
+        (elseEndBlock ?? elseBlock!).AddOp(new MaxonBrOp(mergeLabel));
 
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel ?? mergeLabel));
       _currentBlock = mergeBlock;
@@ -3360,10 +3415,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     ParseBodyUntilEnd();
+    var thenEndBlock = _currentBlock;
     ExpectEndLabel(thenSourceLabel);
 
     // Check for else clause
     MlirBlock<MaxonOp>? elseBlock = null;
+    MlirBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
     if (Check(TokenType.Else)) {
       Advance(); // consume 'else'
@@ -3391,10 +3448,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       ParseBodyUntilEnd();
+      elseEndBlock = _currentBlock;
       ExpectEndLabel(elseSourceLabel);
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, elseLabel, elseBlock);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, elseLabel, elseBlock, elseEndBlock);
   }
 
   private void ParseWhile() {
@@ -3444,8 +3502,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // At end of body, branch back to header
     // _currentBlock may differ from bodyBlock (e.g. if/else merge block)
-    if (!BlockEndsWithTerminator(_currentBlock!)) {
-      _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
+    // _currentBlock can be null if all paths in the body terminated
+    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonBrOp(headerLabel));
     }
 
     // Create exit block - this is where execution continues after the loop
@@ -3555,9 +3614,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
-    // Branch back to header
-    if (!BlockEndsWithTerminator(_currentBlock!)) {
-      _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
+    // Branch back to header (skip if all paths in the body terminated)
+    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonBrOp(headerLabel));
     }
 
     // Create exit block
@@ -4265,6 +4324,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _tokens[_pos - 1] = new Token(TokenType.Identifier, _currentTypeName, selfTypeToken.Line, selfTypeToken.Column);
       _pos--; // back up so the Identifier check below picks it up
     }
+
+    TryRewritePrimitiveStaticMethod();
 
     if (Check(TokenType.Identifier)) {
       var token = Advance();
@@ -5530,14 +5591,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
-    // Check if we're calling an Element-polymorphic method and get caller's Element type
-    MlirType? callerElementType = null;
     if (args.Length > 0 && args[0] is MaxonStruct selfStruct
         && _typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
         && selfType is MlirStructType selfStructType
         && selfStructType.TypeParams.TryGetValue("Element", out var elemType)) {
-      callerElementType = elemType;
-      Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - callerElementType={callerElementType}");
+      // Check if we're calling an Element-polymorphic method and get caller's Element type
+      Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - callerElementType={elemType}");
     }
 
     // Get Element-polymorphic param indices for this function (or its source via alias)
@@ -5976,6 +6035,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private Token PeekNext() => _pos + 1 < _tokens.Count ? _tokens[_pos + 1] : new Token(TokenType.Eof, "", 0, 0);
+
+  /// <summary>
+  /// Detects `int.fromString(...)` and similar primitive type static method calls,
+  /// and rewrites the tokens so the identifier handler sees `__int_fromString(...)`.
+  /// Returns true if a rewrite was performed.
+  /// </summary>
+  private bool TryRewritePrimitiveStaticMethod() {
+    if (!(Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Bool) || Check(TokenType.Byte)))
+      return false;
+    if (PeekNext().Type != TokenType.Dot
+        || _pos + 2 >= _tokens.Count || _tokens[_pos + 2].Type != TokenType.Identifier
+        || _pos + 3 >= _tokens.Count || _tokens[_pos + 3].Type != TokenType.LeftParen)
+      return false;
+
+    var typeToken = Advance();
+    Advance(); // consume '.'
+    var methodToken = _tokens[_pos];
+    _tokens[_pos] = new Token(TokenType.Identifier, $"__{typeToken.Value}_{methodToken.Value}", methodToken.Line, methodToken.Column);
+    return true;
+  }
 
   private void SkipNewlines() {
     while (Check(TokenType.Newline) || Check(TokenType.DocComment)) {
