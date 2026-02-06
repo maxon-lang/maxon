@@ -2,7 +2,6 @@
 You *Are* Going To Read It
 
 ## Priorities
-- should be compile error on name collision
 - implement command line params then do "fix for later" below
 - add new tests that actually test builtins at runtime (abs, trunc, etc) because the
   current tests get optimized to nothing

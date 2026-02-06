@@ -10,7 +10,7 @@ public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = n
 public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>? TypeParams);
 
 // Metadata for constant array literals that can be placed in .rdata
-public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable);
+public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);
 
 public class MlirModule<TOp> where TOp : IPrintableOp {
   public List<MlirFunction<TOp>> Functions { get; } = [];

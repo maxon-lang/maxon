@@ -504,6 +504,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           }
           break;
         }
+        case "i8[]": {
+          var parts = value.Split(',');
+          foreach (var part in parts) {
+            if (!byte.TryParse(part.Trim(), out var b)) return null;
+            result.Add(b);
+          }
+          break;
+        }
         case "utf8": {
           if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
           var str = ProcessEscapes(value[1..^1]);

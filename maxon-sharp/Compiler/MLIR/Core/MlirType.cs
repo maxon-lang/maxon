@@ -13,6 +13,11 @@ public class MlirType(string name, int sizeInBytes) {
   // Sentinel type for function-typed parameters (higher-order functions)
   public static MlirType Fn { get; } = new("fn", 8);
 
+  /// <summary>
+  /// Returns the element size in bytes for the type.
+  /// </summary>
+  public virtual int ElementSize => SizeInBytes;
+
   public override string ToString() => Name;
 }
 

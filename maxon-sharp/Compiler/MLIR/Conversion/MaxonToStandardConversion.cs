@@ -246,12 +246,17 @@ public static class MaxonToStandardConversion {
                   : $"{tempName}.managed.buffer";
 
                 if (module.ConstantArrayLiterals.TryGetValue(structLitOp.Result.Id, out var constArrayInfo)) {
-                  // Constant array: store element data in .rdata
-                  var rdataBytes = new byte[constArrayInfo.Values.Length * 8];
+                  // Constant array: store element data in .rdata with correct element size
+                  int elemSize = constArrayInfo.ElementSize;
+                  var rdataBytes = new byte[constArrayInfo.Values.Length * elemSize];
                   for (int i = 0; i < constArrayInfo.Values.Length; i++) {
-                    BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * 8);
+                    if (elemSize == 1) {
+                      rdataBytes[i] = (byte)constArrayInfo.Values[i];
+                    } else {
+                      BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                    }
                   }
-                  result.RdataEntries.Add((constArrayInfo.RdataLabel, rdataBytes, 8));
+                  result.RdataEntries.Add((constArrayInfo.RdataLabel, rdataBytes, elemSize));
 
                   var leaRdataOp = new StdLeaRdataOp(constArrayInfo.RdataLabel);
                   newBlock.AddOp(leaRdataOp);
@@ -1294,16 +1299,14 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Compute address: buffer + index * elementSize
+  /// Compute address: buffer + index * elementSize (runtime element size)
   /// </summary>
   private static StdI64 ComputeElementAddress(
     MlirBlock<StandardOp> block,
     StdI64 buffer,
     StdI64 index,
-    int elementSize) {
-    var sizeOp = new StdConstI64Op(elementSize);
-    block.AddOp(sizeOp);
-    var offsetOp = new StdMulI64Op(index, sizeOp.Result);
+    StdI64 elementSize) {
+    var offsetOp = new StdMulI64Op(index, elementSize);
     block.AddOp(offsetOp);
     var addrOp = new StdAddI64Op(buffer, offsetOp.Result);
     block.AddOp(addrOp);
@@ -1313,6 +1316,7 @@ public static class MaxonToStandardConversion {
   /// <summary>
   /// __managed_memory_get_unchecked(managed, index): load element from heap buffer.
   /// buffer[index] = *(buffer + index * elementSize)
+  /// Element size is read from the managed struct's element_size field.
   /// </summary>
   private static void LowerManagedMemGet(
     MaxonManagedMemGetOp op,
@@ -1321,11 +1325,14 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+    var elemSize = (StdI64)EmitLoad(block, $"{managedVarName}.element_size", varTypes);
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var index = (StdI64)valueMap[op.Index];
-    var addr = ComputeElementAddress(block, buffer, index, op.ElementSize);
-    // Determine type based on result kind (F64 for floats, I64 for integers/bools)
-    var elemType = op.ResultKind == MaxonValueKind.Float ? MlirType.F64 : MlirType.I64;
+    var addr = ComputeElementAddress(block, buffer, index, elemSize);
+
+    // Determine load type based on result kind
+    // For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen
+    var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemGet");
     var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
     block.AddOp(loadOp);
     valueMap[op.Result] = loadOp.Result;
@@ -1333,6 +1340,7 @@ public static class MaxonToStandardConversion {
 
   /// <summary>
   /// __managed_memory_set_at(managed, index, value): store element into heap buffer.
+  /// Element size is read from the managed struct's element_size field.
   /// </summary>
   private static void LowerManagedMemSet(
     MaxonManagedMemSetOp op,
@@ -1343,19 +1351,20 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
-    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, op.ElementSize);
+    var elemSize = (StdI64)EmitLoad(block, $"{managedVarName}.element_size", varTypes);
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, elemSize);
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var index = (StdI64)valueMap[op.Index];
     var value = valueMap[op.Value];
-    var addr = ComputeElementAddress(block, buffer, index, op.ElementSize);
-    // Use ElementKind from the op to determine type
-    var elemType = op.ElementKind == MaxonValueKind.Float ? MlirType.F64 : MlirType.I64;
+    var addr = ComputeElementAddress(block, buffer, index, elemSize);
+    // Determine store type based on element kind
+    var elemType = GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
     block.AddOp(new StdStoreIndirectOp(value, addr, 0, elemType));
   }
 
   /// <summary>
   /// __managed_memory_create(count, elementSize): allocate heap buffer.
-  /// Returns new __ManagedMemory struct (buffer, length, capacity).
+  /// Returns new __ManagedMemory struct (buffer, length, capacity, element_size).
   /// </summary>
   private static void LowerManagedMemCreate(
     MaxonManagedMemCreateOp op,
@@ -1370,17 +1379,19 @@ public static class MaxonToStandardConversion {
     var byteSizeOp = new StdMulI64Op(count, sizeOp.Result);
     block.AddOp(byteSizeOp);
     var allocResult = EmitAlloc(block, byteSizeOp.Result);
-    // Store as a __ManagedMemory struct: buffer=ptr, length=count, capacity=count
+    // Store as a __ManagedMemory struct: buffer=ptr, length=count, capacity=count, element_size
     var tempName = $"__managed_create_{op.Result.Id}";
     EmitStore(block, allocResult, $"{tempName}.buffer", varTypes);
     EmitStore(block, count, $"{tempName}.length", varTypes);
     EmitStore(block, count, $"{tempName}.capacity", varTypes);
+    EmitStore(block, sizeOp.Result, $"{tempName}.element_size", varTypes);
     structVarNames[op.Result.Id] = tempName;
   }
 
   /// <summary>
   /// __managed_memory_grow(managed, newCapacity): grow heap buffer to new capacity.
   /// Uses realloc to grow (or allocate) the buffer, then updates managed struct fields.
+  /// Element size is read from the managed struct's element_size field.
   /// </summary>
   private static void LowerManagedMemGrow(
     MaxonManagedMemGrowOp op,
@@ -1391,16 +1402,18 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
-    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, op.ElementSize);
+
+    // Load element_size from the managed struct
+    var elemSize = (StdI64)EmitLoad(block, $"{managedVarName}.element_size", varTypes);
+
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, elemSize);
     var newCap = (StdI64)valueMap[op.NewCapacity];
 
     // Load buffer pointer (now guaranteed to be heap-allocated after COW check)
     var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
     // Compute new byte size = newCap * elementSize
-    var elemSizeOp = new StdConstI64Op(op.ElementSize);
-    block.AddOp(elemSizeOp);
-    var newByteSizeOp = new StdMulI64Op(newCap, elemSizeOp.Result);
+    var newByteSizeOp = new StdMulI64Op(newCap, elemSize);
     block.AddOp(newByteSizeOp);
 
     // Realloc: grows buffer in-place or allocates new, copies old data, frees old
@@ -1423,6 +1436,7 @@ public static class MaxonToStandardConversion {
   /// For shift_right: move elements [index..index+count-1] to [index+1..index+count] (backwards copy)
   /// For shift_left: move elements [index+1..index+count] to [index..index+count-1] (forward copy)
   /// Implemented as element-by-element copy using indirect load/store.
+  /// Element size is read from the managed struct's element_size field.
   /// </summary>
   private static void LowerManagedMemShift(
     MaxonManagedMemShiftOp op,
@@ -1433,30 +1447,25 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
-    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, op.ElementSize);
+    var elemSize = (StdI64)EmitLoad(block, $"{managedVarName}.element_size", varTypes);
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, elemSize);
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var index = (StdI64)valueMap[op.Index];
     var count = (StdI64)valueMap[op.Count];
-
-    // Compute base address = buffer + index * elementSize
-    var elemSizeConst = new StdConstI64Op(op.ElementSize);
-    block.AddOp(elemSizeConst);
 
     if (op.ShiftRight) {
       // Shift right: copy from [index+count-1] down to [index], moving each one position right
       // Effectively: for i in (count-1)..0: buffer[index+i+1] = buffer[index+i]
       // We implement this as a memcopy of count elements starting at index, shifted by +1
-      var totalOffsetOp = new StdMulI64Op(index, elemSizeConst.Result);
+      var totalOffsetOp = new StdMulI64Op(index, elemSize);
       block.AddOp(totalOffsetOp);
       var srcAddr = new StdAddI64Op(buffer, totalOffsetOp.Result);
       block.AddOp(srcAddr);
       // Dest is src + elementSize (one position to the right)
-      var oneElemOp = new StdConstI64Op(op.ElementSize);
-      block.AddOp(oneElemOp);
-      var dstAddr = new StdAddI64Op(srcAddr.Result, oneElemOp.Result);
+      var dstAddr = new StdAddI64Op(srcAddr.Result, elemSize);
       block.AddOp(dstAddr);
       // Byte count
-      var bytesOp = new StdMulI64Op(count, elemSizeConst.Result);
+      var bytesOp = new StdMulI64Op(count, elemSize);
       block.AddOp(bytesOp);
       // Use memmove-style copy (handles overlapping regions)
       block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
@@ -1466,15 +1475,15 @@ public static class MaxonToStandardConversion {
       block.AddOp(oneConst);
       var srcIndex = new StdAddI64Op(index, oneConst.Result);
       block.AddOp(srcIndex);
-      var srcOffset = new StdMulI64Op(srcIndex.Result, elemSizeConst.Result);
+      var srcOffset = new StdMulI64Op(srcIndex.Result, elemSize);
       block.AddOp(srcOffset);
       var srcAddr = new StdAddI64Op(buffer, srcOffset.Result);
       block.AddOp(srcAddr);
-      var dstOffset = new StdMulI64Op(index, elemSizeConst.Result);
+      var dstOffset = new StdMulI64Op(index, elemSize);
       block.AddOp(dstOffset);
       var dstAddr = new StdAddI64Op(buffer, dstOffset.Result);
       block.AddOp(dstAddr);
-      var bytesOp = new StdMulI64Op(count, elemSizeConst.Result);
+      var bytesOp = new StdMulI64Op(count, elemSize);
       block.AddOp(bytesOp);
       block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
     }
@@ -1505,7 +1514,7 @@ public static class MaxonToStandardConversion {
   /// Emit a COW (copy-on-write) check for a managed memory struct.
   /// If capacity == 0, the buffer is read-only (rdata) and must be copied to a writable heap allocation.
   /// Updates buffer and capacity fields on the managed struct (and writes through to self if needed).
-  /// elementSize: bytes per element (1 for strings, 8 for i64/f64 arrays).
+  /// Element size is passed dynamically (read from the struct's element_size field).
   /// </summary>
   private static void EmitCowCheck(
     MlirBlock<StandardOp> block,
@@ -1513,20 +1522,17 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
-    int elementSize) {
+    StdI64 elemSize) {
     var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var capacity = (StdI64)EmitLoad(block, $"{managedVarName}.capacity", varTypes);
     var length = (StdI64)EmitLoad(block, $"{managedVarName}.length", varTypes);
-
-    var elemSizeConst = new StdConstI64Op(elementSize);
-    block.AddOp(elemSizeConst);
 
     var uid = MlirContext.Current.NextId();
     var cowLenVar = $"__cow_len_{uid}";
     EmitStore(block, length, cowLenVar, varTypes);
 
     var newBuffer = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, length, elemSizeConst.Result], newBuffer));
+    block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, length, elemSize], newBuffer));
 
     EmitStore(block, newBuffer, $"{managedVarName}.buffer", varTypes);
     var lenReload = (StdI64)EmitLoad(block, cowLenVar, varTypes);
@@ -1540,7 +1546,7 @@ public static class MaxonToStandardConversion {
 
   /// <summary>
   /// __managed_memory_set_byte(managed, index, value): store a single byte to the managed buffer.
-  /// Performs COW check before writing.
+  /// Performs COW check before writing. Element size is read from the struct for COW allocation.
   /// </summary>
   private static void LowerManagedMemByteSet(
     MaxonManagedMemByteSetOp op,
@@ -1551,7 +1557,8 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
-    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, 1);
+    var elemSize = (StdI64)EmitLoad(block, $"{managedVarName}.element_size", varTypes);
+    EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, elemSize);
 
     // Now perform the actual byte write using the writable buffer
     var bufReload = (StdI64)EmitLoad(block, $"{managedVarName}.buffer", varTypes);
@@ -1642,6 +1649,7 @@ public static class MaxonToStandardConversion {
     var bufferVar = $"{tempName}._managed.buffer";
     var lengthVar = $"{tempName}._managed.length";
     var capacityVar = $"{tempName}._managed.capacity";
+    var elemSizeVar = $"{tempName}._managed.element_size";
 
     EmitStore(block, bufferPtr, bufferVar, varTypes);
     EmitStore(block, lengthVal, lengthVar, varTypes);
@@ -1649,6 +1657,11 @@ public static class MaxonToStandardConversion {
     var capConst = new StdConstI64Op(0);
     block.AddOp(capConst);
     EmitStore(block, capConst.Result, capacityVar, varTypes);
+
+    // Strings use byte-level elements, so element_size = 1
+    var elemSizeConst = new StdConstI64Op(1);
+    block.AddOp(elemSizeConst);
+    EmitStore(block, elemSizeConst.Result, elemSizeVar, varTypes);
 
     structVarNames[resultId] = tempName;
     return tempName;
@@ -1800,6 +1813,11 @@ public static class MaxonToStandardConversion {
     EmitStore(block, finalLen, $"{tempName2}._managed.length", varTypes);
     EmitStore(block, finalLen, $"{tempName2}._managed.capacity", varTypes);
 
+    // String interpolation creates byte-level managed memory
+    var elemSizeConst2 = new StdConstI64Op(1);
+    block.AddOp(elemSizeConst2);
+    EmitStore(block, elemSizeConst2.Result, $"{tempName2}._managed.element_size", varTypes);
+
     var iterPosConst = new StdConstI64Op(0);
     block.AddOp(iterPosConst);
     EmitStore(block, iterPosConst.Result, $"{tempName2}._iterPos", varTypes);
@@ -1863,6 +1881,9 @@ public static class MaxonToStandardConversion {
     EmitStore(block, allocResult, $"{tempName}.buffer", varTypes);
     EmitStore(block, totalLenOp.Result, $"{tempName}.length", varTypes);
     EmitStore(block, totalLenOp.Result, $"{tempName}.capacity", varTypes);
+    // Copy element_size from lhs (both operands must have same element_size)
+    var lhsElemSize = (StdI64)EmitLoad(block, $"{lhsVarName}.element_size", varTypes);
+    EmitStore(block, lhsElemSize, $"{tempName}.element_size", varTypes);
     structVarNames[op.Result.Id] = tempName;
   }
 
@@ -1891,6 +1912,9 @@ public static class MaxonToStandardConversion {
     EmitStore(block, sliceBufferOp.Result, $"{tempName}.buffer", varTypes);
     EmitStore(block, sliceLenOp.Result, $"{tempName}.length", varTypes);
     EmitStore(block, sliceLenOp.Result, $"{tempName}.capacity", varTypes);
+    // Copy element_size from source
+    var srcElemSize = (StdI64)EmitLoad(block, $"{srcVarName}.element_size", varTypes);
+    EmitStore(block, srcElemSize, $"{tempName}.element_size", varTypes);
     structVarNames[op.Result.Id] = tempName;
   }
 
@@ -1939,11 +1963,15 @@ public static class MaxonToStandardConversion {
     var finalLen = (StdI64)EmitLoad(block, lenVar, varTypes);
     var finalBuf = (StdI64)EmitLoad(block, dstBufVar, varTypes);
 
-    // Create Character struct: Character._managed = {buffer, length, capacity}
+    // Create Character struct: Character._managed = {buffer, length, capacity, element_size}
     var charVarName = $"__char_{op.Result.Id}";
     EmitStore(block, finalBuf, $"{charVarName}._managed.buffer", varTypes);
     EmitStore(block, finalLen, $"{charVarName}._managed.length", varTypes);
     EmitStore(block, finalLen, $"{charVarName}._managed.capacity", varTypes);
+    // Characters are byte-level
+    var elemSizeConst = new StdConstI64Op(1);
+    block.AddOp(elemSizeConst);
+    EmitStore(block, elemSizeConst.Result, $"{charVarName}._managed.element_size", varTypes);
     structVarNames[op.Result.Id] = charVarName;
   }
 
@@ -2058,4 +2086,20 @@ public static class MaxonToStandardConversion {
     }
   }
 
+  /// <summary>
+  /// Maps MaxonValueKind to the MlirType used for managed memory element access.
+  /// Struct, Enum, and Function kinds are stored as pointers (I64).
+  /// </summary>
+  private static MlirType GetManagedMemElementType(MaxonValueKind kind, string context) {
+    return kind switch {
+      MaxonValueKind.Integer => MlirType.I64,
+      MaxonValueKind.Float => MlirType.F64,
+      MaxonValueKind.Byte => MlirType.I8,
+      MaxonValueKind.Bool => MlirType.I8,
+      MaxonValueKind.Enum => MlirType.I64,
+      MaxonValueKind.Struct => MlirType.I64, // struct references are pointers
+      MaxonValueKind.Function => MlirType.I64, // function pointers
+      _ => throw new InvalidOperationException($"{context}: unsupported element kind '{kind}'")
+    };
+  }
 }

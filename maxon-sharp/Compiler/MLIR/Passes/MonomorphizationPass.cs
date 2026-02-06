@@ -43,7 +43,7 @@ public static class MonomorphizationPass {
     MlirFunction<MaxonOp> SourceFunc,
     string SourceTypeName,
     string ConcreteTypeName,
-    Dictionary<string, string> TypeSubstitution);
+    Dictionary<string, MlirType> TypeSubstitution);
 
   private static List<Specialization> CollectNeededSpecializations(MlirModule<MaxonOp> module) {
     var specializations = new List<Specialization>();
@@ -98,15 +98,20 @@ public static class MonomorphizationPass {
     return specializations;
   }
 
-  private static Dictionary<string, string> BuildTypeSubstitution(
+  private static Dictionary<string, MlirType> BuildTypeSubstitution(
     MlirStructType sourceStruct,
     Dictionary<string, MlirType> typeParams,
     string concreteAliasName,
     MlirModule<MaxonOp> module) {
-    var substitution = new Dictionary<string, string> {
+    // Get or create the concrete alias type
+    MlirType concreteAliasType = module.TypeDefs.TryGetValue(concreteAliasName, out var existing)
+      ? existing
+      : new MlirStructType(concreteAliasName, []);
+
+    var substitution = new Dictionary<string, MlirType> {
       // Self/Vector -> __Vector_3_i64
-      [sourceStruct.Name] = concreteAliasName,
-      ["Self"] = concreteAliasName
+      [sourceStruct.Name] = concreteAliasType,
+      ["Self"] = concreteAliasType
     };
 
     // Look for typealias definitions in the source struct (e.g., ElementArray -> Array)
@@ -114,8 +119,7 @@ public static class MonomorphizationPass {
     foreach (var assocTypeName in sourceStruct.AssociatedTypeNames) {
       // The associated type name (e.g., "Element") maps to a concrete type
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
-        substitution[assocTypeName] = concreteType.Name;
-
+        substitution[assocTypeName] = concreteType;
       }
     }
 
@@ -153,11 +157,13 @@ public static class MonomorphizationPass {
     // The struct type "ElementArray" should map to base struct "Array"
     foreach (var assocTypeName in sourceStruct.AssociatedTypeNames) {
       var aliasedTypeName = $"{assocTypeName}Array"; // Convention: ElementArray, ElementSet, etc.
-      if (module.TypeDefs.ContainsKey(aliasedTypeName)) {
+      if (module.TypeDefs.TryGetValue(aliasedTypeName, out var aliasedType)) {
         // Check if this is an alias of a generic struct instantiated with the associated type
         // e.g., ElementArray is Array with Element
         // Substitute ElementArray -> Array
-        substitution[aliasedTypeName] = "Array";
+        if (module.TypeDefs.TryGetValue("Array", out var arrayType)) {
+          substitution[aliasedTypeName] = arrayType;
+        }
       }
     }
 
@@ -203,10 +209,10 @@ public static class MonomorphizationPass {
   private static MlirFunction<MaxonOp> CloneAndSpecialize(
     MlirFunction<MaxonOp> sourceFunc,
     string concreteTypeName,
-    Dictionary<string, string> typeSubstitution,
+    Dictionary<string, MlirType> typeSubstitution,
     MlirModule<MaxonOp> module) {
 
-    var sourceTypeName = typeSubstitution.FirstOrDefault(kv => kv.Value == concreteTypeName && kv.Key != "Self").Key
+    var sourceTypeName = typeSubstitution.FirstOrDefault(kv => kv.Value.Name == concreteTypeName && kv.Key != "Self").Key
                ?? concreteTypeName;
 
     // Compute new function name
@@ -219,16 +225,9 @@ public static class MonomorphizationPass {
     module.ElementPolymorphicParams.TryGetValue(sourceFunc.Name, out HashSet<int>? elementPolymorphicIndices);
 
     // Get the concrete Element type from the substitution
-    MlirType? concreteElementType = null;
-    if (typeSubstitution.TryGetValue("Element", out string? elementTypeName)) {
-      Logger.Debug(LogCategory.Mlir, $"  Element type substitution: Element -> {elementTypeName}");
-      concreteElementType = elementTypeName switch {
-        "i64" => MlirType.I64,
-        "f64" => MlirType.F64,
-        "i8" => MlirType.I8,
-        "i1" => MlirType.I1,
-        _ => module.TypeDefs.TryGetValue(elementTypeName, out var et) ? et : null
-      };
+    MlirType? concreteElementType = typeSubstitution.GetValueOrDefault("Element");
+    if (concreteElementType != null) {
+      Logger.Debug(LogCategory.Mlir, $"  Element type substitution: Element -> {concreteElementType.Name}");
     } else {
       Logger.Debug(LogCategory.Mlir, $"  No Element type in substitution. TypeSubstitution keys: [{string.Join(", ", typeSubstitution.Keys)}]");
     }
@@ -241,7 +240,7 @@ public static class MonomorphizationPass {
       if (elementPolymorphicIndices != null && elementPolymorphicIndices.Contains(i) && concreteElementType != null) {
         newParamTypes.Add(concreteElementType);
       } else {
-        newParamTypes.Add(SubstituteType(paramType, typeSubstitution, module));
+        newParamTypes.Add(SubstituteType(paramType, typeSubstitution));
       }
     }
 
@@ -253,7 +252,7 @@ public static class MonomorphizationPass {
 
     } else {
       newReturnType = sourceFunc.ReturnType != null
-        ? SubstituteType(sourceFunc.ReturnType, typeSubstitution, module)
+        ? SubstituteType(sourceFunc.ReturnType, typeSubstitution)
         : null;
     }
 
@@ -277,11 +276,16 @@ public static class MonomorphizationPass {
     var floatVars = new HashSet<string>();
 
     // Clone all blocks and operations
+    var extraOps = new List<MaxonOp>();
     foreach (var block in sourceFunc.Body.Blocks) {
       var newBlock = newFunc.Body.AddBlock(block.Name);
 
       foreach (var op in block.Operations) {
-        var clonedOp = CloneOp(op, typeSubstitution, valueMap, floatVars, elementPolymorphicIndices, elementTypeName);
+        extraOps.Clear();
+        var clonedOp = CloneOp(op, typeSubstitution, valueMap, floatVars, elementPolymorphicIndices, concreteElementType, extraOps);
+        foreach (var extra in extraOps) {
+          newBlock.AddOp(extra);
+        }
         newBlock.AddOp(clonedOp);
       }
     }
@@ -289,26 +293,10 @@ public static class MonomorphizationPass {
     return newFunc;
   }
 
-  private static MlirType SubstituteType(MlirType type, Dictionary<string, string> substitution, MlirModule<MaxonOp> module) {
-
+  private static MlirType SubstituteType(MlirType type, Dictionary<string, MlirType> substitution) {
     if (type is MlirStructType st) {
-      if (substitution.TryGetValue(st.Name, out var newName)) {
-
-        // Check if newName is a primitive type
-        if (newName == "i64") return MlirType.I64;
-        if (newName == "f64") return MlirType.F64;
-        if (newName == "i8") return MlirType.I8;
-        if (newName == "i1") return MlirType.I1;
-
-        if (module.TypeDefs.TryGetValue(newName, out var newType)) {
-          return newType;
-        }
-        // If not found in TypeDefs, create a simple substitute
-        return new MlirStructType(newName, [.. st.Fields],
-          [.. st.AssociatedTypeNames],
-          [.. st.ConformingInterfaces],
-          st.ConstParams.Count > 0 ? new Dictionary<string, long>(st.ConstParams) : null,
-          st.TypeParams.Count > 0 ? new Dictionary<string, MlirType>(st.TypeParams) : null);
+      if (substitution.TryGetValue(st.Name, out var newType)) {
+        return newType;
       }
     }
     return type;
@@ -317,27 +305,34 @@ public static class MonomorphizationPass {
   /// <summary>
   /// Substitutes Element-polymorphic value kinds based on the type substitution.
   /// If Element is substituted to f64, Integer becomes Float.
+  /// If Element is substituted to i8, Integer becomes Byte.
+  /// If Element is substituted to i1, Integer becomes Bool.
   /// </summary>
-  private static MaxonValueKind SubstituteValueKind(MaxonValueKind kind, Dictionary<string, string> substitution) {
-    // Only substitute Integer kind if Element is mapped to a float type
+  private static MaxonValueKind SubstituteValueKind(MaxonValueKind kind, Dictionary<string, MlirType> substitution) {
+    // Substitute Integer kind if Element is mapped to a different type
     if (kind == MaxonValueKind.Integer && substitution.TryGetValue("Element", out var elementType)) {
-      if (elementType == "f64") {
-        return MaxonValueKind.Float;
-      }
+      if (elementType == MlirType.I64) return MaxonValueKind.Integer;
+      if (elementType == MlirType.F64) return MaxonValueKind.Float;
+      if (elementType == MlirType.I8) return MaxonValueKind.Byte;
+      if (elementType == MlirType.I1) return MaxonValueKind.Bool;
+      // Struct type means the element is a user-defined type, keep as Integer
+      if (elementType is MlirStructType) return MaxonValueKind.Integer;
+      throw new InvalidOperationException($"SubstituteValueKind: unsupported element type '{elementType.Name}'");
     }
     return kind;
   }
 
   private static MaxonOp CloneOp(
     MaxonOp op,
-    Dictionary<string, string> typeSubstitution,
+    Dictionary<string, MlirType> typeSubstitution,
     Dictionary<int, MaxonValue> valueMap,
     HashSet<string> floatVars,
     HashSet<int>? elementPolymorphicIndices,
-    string? concreteElementType) {
+    MlirType? concreteElementType,
+    List<MaxonOp> extraOps) {
 
     // Determine if we're substituting Element to a float type
-    bool substituteToFloat = concreteElementType == "f64";
+    bool substituteToFloat = concreteElementType == MlirType.F64;
 
     // Helper to check if a param index is Element-polymorphic
     bool IsElementPolymorphic(int paramIndex) =>
@@ -478,6 +473,26 @@ public static class MonomorphizationPass {
 
       case MaxonStructLiteralOp structLit: {
         var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, MapValue(fv.Value))).ToList();
+
+        // For __ManagedMemory structs, substitute element_size based on the Element type substitution.
+        // When parsing generic types like Set<Element>, ElementArray{} gets element_size=0 because
+        // the Element type is unknown. During monomorphization, we need to patch this to the correct
+        // element size based on the concrete Element type.
+        if (structLit.TypeName == "__ManagedMemory" && concreteElementType != null) {
+          // Find and update the element_size field
+          for (int i = 0; i < newFieldValues.Count; i++) {
+            if (newFieldValues[i].FieldName == "element_size") {
+              // Determine the correct element size from the concrete Element type
+              int elementSize = concreteElementType?.SizeInBytes ?? 8;
+              // Create a new literal with the correct element size
+              var elementSizeLitOp = new MaxonLiteralOp((long)elementSize);
+              extraOps.Add(elementSizeLitOp);
+              newFieldValues[i] = ("element_size", elementSizeLitOp.Result);
+              break;
+            }
+          }
+        }
+
         var cloned = new MaxonStructLiteralOp(SubName(structLit.TypeName), newFieldValues) {
           ArrayLiteralTag = structLit.ArrayLiteralTag,
           ArrayLiteralCount = structLit.ArrayLiteralCount
@@ -610,7 +625,7 @@ public static class MonomorphizationPass {
       case MaxonManagedMemGetOp memGet: {
         // Substitute result kind if Element type was substituted
         var resultKind = SubstituteValueKind(memGet.ResultKind, typeSubstitution);
-        var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), memGet.ElementSize, resultKind);
+        var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind);
         RegisterResult(memGet.Result, cloned.Result);
         return cloned;
       }
@@ -619,7 +634,7 @@ public static class MonomorphizationPass {
         // Substitute element kind if Element type was substituted
         var elementKind = SubstituteValueKind(memSet.ElementKind, typeSubstitution);
         var mappedValue = MapValue(memSet.Value);
-        return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, memSet.ElementSize, elementKind);
+        return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, elementKind);
       }
 
       case MaxonManagedMemCreateOp memCreate: {
@@ -629,28 +644,28 @@ public static class MonomorphizationPass {
       }
 
       case MaxonManagedMemGrowOp memGrow:
-        return new MaxonManagedMemGrowOp(MapValue(memGrow.ManagedStruct), MapValue(memGrow.NewCapacity), memGrow.ElementSize);
+        return new MaxonManagedMemGrowOp(MapValue(memGrow.ManagedStruct), MapValue(memGrow.NewCapacity));
 
       case MaxonManagedMemShiftOp memShift:
-        return new MaxonManagedMemShiftOp(MapValue(memShift.ManagedStruct), MapValue(memShift.Index), MapValue(memShift.Count), memShift.ElementSize, memShift.ShiftRight);
+        return new MaxonManagedMemShiftOp(MapValue(memShift.ManagedStruct), MapValue(memShift.Index), MapValue(memShift.Count), memShift.ShiftRight);
 
       default:
         throw new InvalidOperationException($"Monomorphization: unhandled op type {op.GetType().Name}");
     }
   }
 
-  private static string SubstituteName(string name, Dictionary<string, string> substitution) {
-    return substitution.TryGetValue(name, out var newName) ? newName : name;
+  private static string SubstituteName(string name, Dictionary<string, MlirType> substitution) {
+    return substitution.TryGetValue(name, out var newType) ? newType.Name : name;
   }
 
-  private static string SubstituteCallee(string callee, Dictionary<string, string> substitution) {
+  private static string SubstituteCallee(string callee, Dictionary<string, MlirType> substitution) {
     // Check if callee is TypeName.MethodName where TypeName needs substitution
     var dotIdx = callee.LastIndexOf('.');
     if (dotIdx > 0) {
       var typePart = callee[..dotIdx];
       var methodPart = callee[(dotIdx + 1)..];
-      if (substitution.TryGetValue(typePart, out var newTypeName)) {
-        return $"{newTypeName}.{methodPart}";
+      if (substitution.TryGetValue(typePart, out var newType)) {
+        return $"{newType.Name}.{methodPart}";
       }
     }
     return callee;

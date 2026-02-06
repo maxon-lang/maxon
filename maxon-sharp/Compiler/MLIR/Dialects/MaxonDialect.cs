@@ -16,6 +16,21 @@ public static class MaxonValueKindExtensions {
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
+  /// <summary>
+  /// Returns the element size in bytes for the value kind.
+  /// Bool and Byte use 1 byte; Integer, Float, Struct refs, Enum, Function use 8 bytes.
+  /// </summary>
+  public static int ElementSize(this MaxonValueKind kind) => kind switch {
+    MaxonValueKind.Bool => 1,
+    MaxonValueKind.Byte => 1,
+    MaxonValueKind.Integer => 8,
+    MaxonValueKind.Float => 8,
+    MaxonValueKind.Struct => 8, // Struct references are pointers (8 bytes)
+    MaxonValueKind.Enum => 8,   // Enums stored as i64
+    MaxonValueKind.Function => 8, // Function pointers are 8 bytes
+    _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+  };
+
   public static MaxonValue CreateValue(this MaxonValueKind kind) => kind switch {
     MaxonValueKind.Integer => new MaxonInteger(MlirContext.Current.NextId()),
     MaxonValueKind.Float => new MaxonFloat(MlirContext.Current.NextId()),
@@ -582,11 +597,11 @@ public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueK
 // ============================================================================
 
 // Get element at index from managed buffer: __managed_memory_get_unchecked(managed, index)
-public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, int elementSize, MaxonValueKind resultKind) : MaxonOp {
+// Element size is read from the managed struct's element_size field at runtime.
+public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_get";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
-  public int ElementSize { get; } = elementSize;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public MaxonValue Result { get; } = resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
@@ -594,12 +609,12 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, in
 }
 
 // Set element at index in managed buffer: __managed_memory_set_at(managed, index, value)
-public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, int elementSize, MaxonValueKind elementKind = MaxonValueKind.Integer) : MaxonOp {
+// Element size is read from the managed struct's element_size field at runtime.
+public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, MaxonValueKind elementKind = MaxonValueKind.Integer) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_set";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
   public MaxonValue Value { get; } = value;
-  public int ElementSize { get; } = elementSize;
   public MaxonValueKind ElementKind { get; } = elementKind;
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
 }
@@ -615,21 +630,21 @@ public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonO
 }
 
 // Grow managed memory to new capacity: __managed_memory_grow(managed, newCap)
-public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapacity, int elementSize) : MaxonOp {
+// Element size is read from the managed struct's element_size field at runtime.
+public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapacity) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_grow";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue NewCapacity { get; } = newCapacity;
-  public int ElementSize { get; } = elementSize;
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewCapacity.ToString()];
 }
 
 // Shift elements right/left in managed buffer
-public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, MaxonValue count, int elementSize, bool shiftRight) : MaxonOp {
+// Element size is read from the managed struct's element_size field at runtime.
+public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, MaxonValue count, bool shiftRight) : MaxonOp {
   public override string Mnemonic => ShiftRight ? "maxon.managed_mem_shift_right" : "maxon.managed_mem_shift_left";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
   public MaxonValue Count { get; } = count;
-  public int ElementSize { get; } = elementSize;
   public bool ShiftRight { get; } = shiftRight;
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
 }
