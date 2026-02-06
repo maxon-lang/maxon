@@ -78,6 +78,28 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
   end 'set'
 
   // =========================================================================
+  // Slicing
+  // =========================================================================
+
+  /// Create a new array from elements [start, endIndex)
+  export function slice(start int, endIndex int) returns Self
+    var len = __managed_memory_len(managed)
+    var s = start
+    var e = endIndex
+    // Clamp to valid range
+    if s < 0 'clamp_start'
+      s = 0
+    end 'clamp_start'
+    if e > len 'clamp_end'
+      e = len
+    end 'clamp_end'
+    if s >= e 'empty_slice'
+      return {managed: __managed_memory_slice(managed, 0, 0), iterIndex: 0}
+    end 'empty_slice'
+    return {managed: __managed_memory_slice(managed, s, e), iterIndex: 0}
+  end 'slice'
+
+  // =========================================================================
   // Mutating Operations
   // =========================================================================
 
@@ -107,17 +129,7 @@ export type Array uses Element is BuiltinArrayLiteral, Sized, Iterable with Elem
 
   /// Append all elements from another array
   export function append(other Self)
-    var otherLen = other.count()
-    if otherLen == 0 'empty'
-      return
-    end 'empty'
-    var len = __managed_memory_len(managed)
-    ensureCapacity(len + otherLen)
-    for item in other 'copy'
-      __managed_memory_set_at(managed, len, item)
-      len = len + 1
-    end 'copy'
-    __managed_memory_set_length(managed, len)
+    managed = __managed_memory_concat(managed, other.managed)
   end 'append'
 
   /// Remove and return last element, throws if empty

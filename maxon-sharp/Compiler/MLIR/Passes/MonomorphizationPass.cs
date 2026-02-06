@@ -649,6 +649,18 @@ public static class MonomorphizationPass {
       case MaxonManagedMemShiftOp memShift:
         return new MaxonManagedMemShiftOp(MapValue(memShift.ManagedStruct), MapValue(memShift.Index), MapValue(memShift.Count), memShift.ShiftRight);
 
+      case MaxonManagedMemConcatOp memConcat: {
+        var cloned = new MaxonManagedMemConcatOp(MapValue(memConcat.Lhs), MapValue(memConcat.Rhs));
+        RegisterResult(memConcat.Result, cloned.Result);
+        return cloned;
+      }
+
+      case MaxonManagedMemSliceOp memSlice: {
+        var cloned = new MaxonManagedMemSliceOp(MapValue(memSlice.Managed), MapValue(memSlice.Start), MapValue(memSlice.End));
+        RegisterResult(memSlice.Result, cloned.Result);
+        return cloned;
+      }
+
       default:
         throw new InvalidOperationException($"Monomorphization: unhandled op type {op.GetType().Name}");
     }

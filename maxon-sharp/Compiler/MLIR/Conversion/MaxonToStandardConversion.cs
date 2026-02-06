@@ -1861,28 +1861,39 @@ public static class MaxonToStandardConversion {
     var rhsBuf = LoadManagedBuffer(block, rhsVarName, varTypes);
     var rhsLen = (StdI64)EmitLoad(block, $"{rhsVarName}.length", varTypes);
 
-    var totalLenOp = new StdAddI64Op(lhsLen, rhsLen);
-    block.AddOp(totalLenOp);
+    // element_size needed to convert element counts to byte counts
+    var lhsElemSize = (StdI64)EmitLoad(block, $"{lhsVarName}.element_size", varTypes);
+
+    // Compute byte sizes: elementCount * elementSize
+    var lhsBytesOp = new StdMulI64Op(lhsLen, lhsElemSize);
+    block.AddOp(lhsBytesOp);
+    var rhsBytesOp = new StdMulI64Op(rhsLen, lhsElemSize);
+    block.AddOp(rhsBytesOp);
+
+    var totalBytesOp = new StdAddI64Op(lhsBytesOp.Result, rhsBytesOp.Result);
+    block.AddOp(totalBytesOp);
 
     var oneOp = new StdConstI64Op(1);
     block.AddOp(oneOp);
-    var allocSizeOp = new StdAddI64Op(totalLenOp.Result, oneOp.Result);
+    var allocSizeOp = new StdAddI64Op(totalBytesOp.Result, oneOp.Result);
     block.AddOp(allocSizeOp);
 
     var allocResult = EmitAlloc(block, allocSizeOp.Result);
 
-    block.AddOp(new StdMemCopyOp(lhsBuf, allocResult, lhsLen));
+    block.AddOp(new StdMemCopyOp(lhsBuf, allocResult, lhsBytesOp.Result));
 
-    var dstAddr = new StdAddI64Op(allocResult, lhsLen);
+    var dstAddr = new StdAddI64Op(allocResult, lhsBytesOp.Result);
     block.AddOp(dstAddr);
-    block.AddOp(new StdMemCopyOp(rhsBuf, dstAddr.Result, rhsLen));
+    block.AddOp(new StdMemCopyOp(rhsBuf, dstAddr.Result, rhsBytesOp.Result));
+
+    // Store element counts (not byte counts) for length/capacity
+    var totalLenOp = new StdAddI64Op(lhsLen, rhsLen);
+    block.AddOp(totalLenOp);
 
     var tempName = $"__concat_{op.Result.Id}";
     EmitStore(block, allocResult, $"{tempName}.buffer", varTypes);
     EmitStore(block, totalLenOp.Result, $"{tempName}.length", varTypes);
     EmitStore(block, totalLenOp.Result, $"{tempName}.capacity", varTypes);
-    // Copy element_size from lhs (both operands must have same element_size)
-    var lhsElemSize = (StdI64)EmitLoad(block, $"{lhsVarName}.element_size", varTypes);
     EmitStore(block, lhsElemSize, $"{tempName}.element_size", varTypes);
     structVarNames[op.Result.Id] = tempName;
   }
@@ -1896,24 +1907,31 @@ public static class MaxonToStandardConversion {
 
     var srcVarName = ResolveManagedVarName(op.Managed, structVarNames);
     var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
+    var srcElemSize = (StdI64)EmitLoad(block, $"{srcVarName}.element_size", varTypes);
 
     var start = (StdI64)valueMap[op.Start];
     var end = (StdI64)valueMap[op.End];
 
-    // Slice buffer points into the existing allocation at offset 'start'
-    var sliceBufferOp = new StdAddI64Op(srcBuffer, start);
+    // Convert element index to byte offset: start * element_size
+    var startBytesOp = new StdMulI64Op(start, srcElemSize);
+    block.AddOp(startBytesOp);
+
+    // Slice buffer points into the existing allocation at byte offset
+    var sliceBufferOp = new StdAddI64Op(srcBuffer, startBytesOp.Result);
     block.AddOp(sliceBufferOp);
 
-    // Slice length is end - start
+    // Slice length in elements is end - start
     var sliceLenOp = new StdSubI64Op(end, start);
     block.AddOp(sliceLenOp);
+
+    // capacity=0 marks the slice as read-only so COW triggers on mutation
+    var zeroOp = new StdConstI64Op(0);
+    block.AddOp(zeroOp);
 
     var tempName = $"__slice_{op.Result.Id}";
     EmitStore(block, sliceBufferOp.Result, $"{tempName}.buffer", varTypes);
     EmitStore(block, sliceLenOp.Result, $"{tempName}.length", varTypes);
-    EmitStore(block, sliceLenOp.Result, $"{tempName}.capacity", varTypes);
-    // Copy element_size from source
-    var srcElemSize = (StdI64)EmitLoad(block, $"{srcVarName}.element_size", varTypes);
+    EmitStore(block, zeroOp.Result, $"{tempName}.capacity", varTypes);
     EmitStore(block, srcElemSize, $"{tempName}.element_size", varTypes);
     structVarNames[op.Result.Id] = tempName;
   }

@@ -445,3 +445,188 @@ end 'main'
 ```exitcode
 60
 ```
+
+### Slice
+
+<!-- test: slice-basic -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30, 40, 50]
+  var sub = arr.slice(1, endIndex: 4)
+  var a = try sub.get(0) otherwise 0
+  var b = try sub.get(1) otherwise 0
+  var c = try sub.get(2) otherwise 0
+  return a + b + c
+end 'main'
+```
+```exitcode
+90
+```
+
+<!-- test: slice-from-start -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30, 40, 50]
+  var sub = arr.slice(0, endIndex: 3)
+  return sub.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: slice-to-end -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30, 40, 50]
+  var sub = arr.slice(3, endIndex: 5)
+  var a = try sub.get(0) otherwise 0
+  var b = try sub.get(1) otherwise 0
+  return a + b
+end 'main'
+```
+```exitcode
+90
+```
+
+<!-- test: slice-empty -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30]
+  var sub = arr.slice(1, endIndex: 1)
+  return sub.count()
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-full -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30]
+  var sub = arr.slice(0, endIndex: 3)
+  var a = try sub.get(0) otherwise 0
+  var b = try sub.get(1) otherwise 0
+  var c = try sub.get(2) otherwise 0
+  return a + b + c
+end 'main'
+```
+```exitcode
+60
+```
+
+### Append
+
+<!-- test: append-basic -->
+```maxon
+function main() returns int
+  var a = [1, 2, 3]
+  var b = [4, 5, 6]
+  a.append(b)
+  var sum = 0
+  var i = 0
+  while i < a.count() 'loop'
+    sum = sum + (try a.get(i) otherwise 0)
+    i = i + 1
+  end 'loop'
+  return sum
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: append-empty-to-nonempty -->
+```maxon
+typealias IntArray is Array with int
+
+function main() returns int
+  var a = [1, 2, 3]
+  var b = IntArray{}
+  a.append(b)
+  return a.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: append-nonempty-to-empty -->
+```maxon
+typealias IntArray is Array with int
+
+function main() returns int
+  var a = IntArray{}
+  var b = [10, 20]
+  a.append(b)
+  var first = try a.get(0) otherwise 0
+  var second = try a.get(1) otherwise 0
+  return first + second
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: append-preserves-originals -->
+```maxon
+function main() returns int
+  var a = [1, 2]
+  var b = [3, 4]
+  a.append(b)
+  // b should still have its original elements
+  var b0 = try b.get(0) otherwise 0
+  var b1 = try b.get(1) otherwise 0
+  return b0 + b1
+end 'main'
+```
+```exitcode
+7
+```
+
+### Copy-on-Write
+
+<!-- test: slice-cow-modify-slice -->
+Modifying a slice must not affect the original array.
+```maxon
+function main() returns int
+  var arr = [10, 20, 30, 40, 50]
+  var sub = arr.slice(1, endIndex: 4)
+  sub.set(0, value: 99)
+  // Original should be unchanged
+  var original = try arr.get(1) otherwise 0
+  var modified = try sub.get(0) otherwise 0
+  if original == 20 'check'
+    if modified == 99 'check2'
+      return 0
+    end 'check2'
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-cow-modify-original -->
+Modifying the original array must not affect an existing slice.
+```maxon
+function main() returns int
+  var arr = [10, 20, 30, 40, 50]
+  var sub = arr.slice(1, endIndex: 4)
+  arr.set(1, value: 99)
+  // Slice should be unchanged
+  var sliceVal = try sub.get(0) otherwise 0
+  var origVal = try arr.get(1) otherwise 0
+  if sliceVal == 20 'check'
+    if origVal == 99 'check2'
+      return 0
+    end 'check2'
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
