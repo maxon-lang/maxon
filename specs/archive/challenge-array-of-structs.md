@@ -66,7 +66,7 @@ type Item
   export var color Color
 end 'Item'
 
-typealias ItemArray is Array with Item
+typealias ItemArray = Array with Item
 
 function main() returns int
   var items = ItemArray{}
@@ -100,7 +100,7 @@ type Task
   export var status Status
 end 'Task'
 
-typealias TaskArray is Array with Task
+typealias TaskArray = Array with Task
 
 function main() returns int
   var tasks = TaskArray{}

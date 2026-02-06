@@ -43,7 +43,7 @@ Leaked:    0 bytes
 <!-- test: dynamic-array-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   let size = 10
@@ -100,7 +100,7 @@ Cleanups:  0
 <!-- test: multiple-arrays -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   let size1 = 5
@@ -145,7 +145,7 @@ Cleanups:  2
 <!-- test: array-early-return-true -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   let size = 5
@@ -182,7 +182,7 @@ Cleanups:  1
 <!-- test: array-early-return-false -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   let size = 5
@@ -219,7 +219,7 @@ Cleanups:  1
 <!-- test: array-passed-to-function -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function sum_first(arr IntArray) returns int
   return try arr.get(0) otherwise 0
@@ -257,7 +257,7 @@ Cleanups:  1
 <!-- test: array-computed-size -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   let a = 2
@@ -292,7 +292,7 @@ Cleanups:  1
 <!-- test: array-borrow-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function readFirst(arr IntArray) returns int
   return try arr.get(0) otherwise 0
@@ -332,7 +332,7 @@ Cleanups:  1
 <!-- test: array-borrow-multiple-times -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function getElement(arr IntArray, idx int) returns int
   return try arr.get(idx) otherwise 0
@@ -375,7 +375,7 @@ Cleanups:  1
 <!-- test: array-in-loop -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var i = 0
@@ -428,7 +428,7 @@ Cleanups:  3
 Array of strings should be properly cleaned up in a void main function.
 
 ```maxon
-typealias StringArray is Array with String
+typealias StringArray = Array with String
 
 function main()
   var arr = StringArray{}
@@ -462,7 +462,7 @@ Cleanups:  3
 ```<!-- test: array-move-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function mutateFirst(arr IntArray) returns int
   arr.set(0, value: 100)
@@ -502,7 +502,7 @@ Cleanups:  1
 <!-- test: array-move-chain -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function addTen(arr IntArray) returns int
   var val = try arr.get(0) otherwise 0
@@ -550,7 +550,7 @@ Cleanups:  1
 <!-- test: two-arrays-one-moved-one-borrowed -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function readIt(arr IntArray) returns int
   return try arr.get(0) otherwise 0
@@ -606,7 +606,7 @@ Cleanups:  2
 Zero-size arrays don't allocate memory.
 
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   let size = 0
@@ -640,7 +640,7 @@ Cleanups:  1
 Reassigning a heap array frees the old memory and allocates new memory.
 
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   let size = 5
@@ -684,7 +684,7 @@ Cleanups:  2
 Array of strings should be properly cleaned up when going out of scope.
 
 ```maxon
-typealias StringArray is Array with String
+typealias StringArray = Array with String
 
 function main() returns int
   var arr = StringArray{}

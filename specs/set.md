@@ -259,7 +259,7 @@ end 'main'
 Create an empty set and verify it starts empty.
 
 ```maxon
-typealias IntSet is Set with int
+typealias IntSet = Set with int
 
 function main() returns int
   var s = IntSet{}

@@ -385,7 +385,7 @@ enum MyError is Error
   failed
 end 'MyError'
 
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 type MultiManaged
   export var numbers IntArray
@@ -479,8 +479,8 @@ enum MyError is Error
   failed
 end 'MyError'
 
-typealias IntArray is Array with int
-typealias StringArray is Array with String
+typealias IntArray = Array with int
+typealias StringArray = Array with String
 
 type Inner
   export var name String

@@ -27,7 +27,7 @@ end 'Pair'
 Create a concrete Pair type using `typealias` with specific types:
 
 ```text
-typealias IntPair is Pair with (int, int)
+typealias IntPair = Pair with (int, int)
 var p = IntPair{key: 1, value: 2}
 ```
 
@@ -46,7 +46,7 @@ p.value = 20
 
 <!-- test: int-pair-basic -->
 ```maxon
-typealias IntPair is Pair with (int, int)
+typealias IntPair = Pair with (int, int)
 
 function main() returns int
   var p = IntPair{key: 10, value: 32}
@@ -59,7 +59,7 @@ end 'main'
 
 <!-- test: int-pair-field-write -->
 ```maxon
-typealias IntPair is Pair with (int, int)
+typealias IntPair = Pair with (int, int)
 
 function main() returns int
   var p = IntPair{key: 0, value: 0}
@@ -74,7 +74,7 @@ end 'main'
 
 <!-- test: int-pair-as-param -->
 ```maxon
-typealias IntPair is Pair with (int, int)
+typealias IntPair = Pair with (int, int)
 
 function sum(p IntPair) returns int
   return p.key + p.value
@@ -91,7 +91,7 @@ end 'main'
 
 <!-- test: int-pair-as-return -->
 ```maxon
-typealias IntPair is Pair with (int, int)
+typealias IntPair = Pair with (int, int)
 
 function makePair(k int, v int) returns IntPair
   return {key: k, value: v}
@@ -108,7 +108,7 @@ end 'main'
 
 <!-- test: mixed-type-pair -->
 ```maxon
-typealias MixedPair is Pair with (int, float)
+typealias MixedPair = Pair with (int, float)
 
 function main() returns int
   var p = MixedPair{key: 40, value: 2.5}

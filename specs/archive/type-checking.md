@@ -14,7 +14,7 @@ The compiler validates that function and method arguments match the expected par
 
 <!-- test: method-call-wrong-self-type -->
 ```maxon
-typealias StringArray is Array with String
+typealias StringArray = Array with String
 
 function main() returns int
   var arr = StringArray{}
@@ -28,7 +28,7 @@ error E022: specs/fragments/type-checking.method-call-wrong-self-type.1.test:6:6
 
 <!-- test: method-call-wrong-element-type -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var arr = IntArray{}
@@ -57,7 +57,7 @@ error E022: specs/fragments/type-checking.function-call-string-where-int-expecte
 
 <!-- test: function-call-primitive-where-struct-expected -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function takeArray(arr IntArray) returns int
   return arr.count()
@@ -111,7 +111,7 @@ error E022: specs/fragments/type-checking.stdlib-function-call-wrong-type.1.test
 
 <!-- test: implicit-method-call-wrong-type -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 type Container
   var items IntArray
@@ -131,8 +131,8 @@ error E022: specs/fragments/type-checking.implicit-method-call-wrong-type.1.test
 
 <!-- test: array-of-different-element-types -->
 ```maxon
-typealias IntArray is Array with int
-typealias StringArray is Array with String
+typealias IntArray = Array with int
+typealias StringArray = Array with String
 
 function main() returns int
   var ints = IntArray{}
@@ -147,7 +147,7 @@ error E022: specs/fragments/type-checking.array-of-different-element-types.1.tes
 
 <!-- test: typealias-forward-reference -->
 ```maxon
-typealias FooArray is Array with Foo
+typealias FooArray = Array with Foo
 
 type Foo
   let value int

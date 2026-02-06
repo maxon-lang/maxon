@@ -1576,7 +1576,7 @@ end 'Level2'
 
 #### 5. Array of primitives
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 var arr = [1, 2, 3]
 ```
 - Declare, use, cleanup (frees buffer)
@@ -1590,7 +1590,7 @@ type Item
     var name String
 end 'Item'
 
-typealias ItemArray is Array with Item
+typealias ItemArray = Array with Item
 var items = ItemArray{}
 ```
 - Cleanup array → cleanup each struct element first
@@ -1599,8 +1599,8 @@ var items = ItemArray{}
 
 #### 7. Array of arrays (nested arrays)
 ```maxon
-typealias IntArray is Array with int
-typealias Matrix is Array with IntArray
+typealias IntArray = Array with int
+typealias Matrix = Array with IntArray
 
 var matrix = Matrix{}
 matrix.push([1, 2, 3])
@@ -1616,7 +1616,7 @@ type Row
     var cells IntArray
 end 'Row'
 
-typealias Table is Array with Row
+typealias Table = Array with Row
 var table = Table{}
 ```
 - 3-level cleanup: cell arrays → Row structs → Table array
@@ -1629,7 +1629,7 @@ type Inner
     var value int
 end 'Inner'
 
-typealias InnerArray is Array with Inner
+typealias InnerArray = Array with Inner
 
 type Outer
     var items InnerArray
@@ -1674,7 +1674,7 @@ var p = Person{name: "Alice", age: 30}
 
 #### 12. Array of strings
 ```maxon
-typealias StringArray is Array with String
+typealias StringArray = Array with String
 var names = ["Alice", "Bob", "Charlie"]
 ```
 - Cleanup array → cleanup each string first (free all string buffers)
@@ -1699,13 +1699,13 @@ type Level4
     var value int
 end 'Level4'
 
-typealias L4Array is Array with Level4
+typealias L4Array = Array with Level4
 
 type Level3
     var items L4Array
 end 'Level3'
 
-typealias L3Array is Array with Level3
+typealias L3Array = Array with Level3
 
 type Level2
     var nested L3Array

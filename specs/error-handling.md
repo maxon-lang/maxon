@@ -402,7 +402,7 @@ error E3057: specs/fragments/error-handling/error.throwing-function-requires-try
 
 <!-- disabled-test: error.throwing-method-requires-try -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 // Calling a throwing method without try is an error
 function main() returns int
@@ -433,7 +433,7 @@ error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.t
 
 <!-- disabled-test: error.try-on-non-throwing-method -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 // Using try on a non-throwing method is an error
 function main() returns int
@@ -448,7 +448,7 @@ error E3055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.t
 
 <!-- disabled-test: error.otherwise-without-try -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 // Using otherwise without try is an error
 function main() returns int

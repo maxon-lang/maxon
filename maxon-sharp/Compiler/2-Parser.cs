@@ -1147,7 +1147,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Pre-scan a typealias declaration: typealias Name is SourceType with (Type1, Type2, ...)
+  /// Pre-scan a typealias declaration: typealias Name = SourceType with (Type1, Type2, ...)
   /// Creates a concrete struct type by substituting associated type parameters.
   /// Also supports "with N Type" form where N is an integer capacity hint (e.g., Vector with 3 int).
   /// </summary>
@@ -1155,7 +1155,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
     var aliasName = aliasNameToken.Value;
-    Expect(TokenType.Is);
+    Expect(TokenType.Equals);
     var sourceNameToken = Expect(TokenType.Identifier);
     var sourceName = sourceNameToken.Value;
 

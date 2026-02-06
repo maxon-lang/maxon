@@ -53,7 +53,7 @@ end 'main'
 
 <!-- disabled-test: managed-memory-heap-array-generates-free -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var arr = IntArray{}
@@ -68,7 +68,7 @@ end 'main'
 
 <!-- disabled-test: managed-memory-scope-cleanup-generates-free -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   if true 'outer'
@@ -88,7 +88,7 @@ end 'main'
 
 <!-- disabled-test: managed-memory-loop-growth-generates-realloc -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var arr = IntArray{}
@@ -162,7 +162,7 @@ i8[] 1, 0, 1, 0
 
 <!-- test: rdata-byte-array-uses-i8 -->
 ```maxon
-typealias ByteArray is Array with byte
+typealias ByteArray = Array with byte
 
 function main() returns int
   let arr = [10 as byte, 20 as byte, 30 as byte]

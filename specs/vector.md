@@ -18,7 +18,7 @@ category: stdlib
 Create a concrete vector type using `typealias` with element type and size:
 
 ```text
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 var v = Vec3{}  // zero-initialized, 3 elements on the stack
 ```
 
@@ -35,7 +35,7 @@ var v = Vector from [10, 20, 30]  // inferred as Vector with 3 int
 The inferred type is compatible with a typealias of the same element type and size, so a `Vector from [...]` can be passed to a function expecting the typealias:
 
 ```text
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function process(v Vec3) returns int
   return try v.get(0) otherwise 0
@@ -64,7 +64,7 @@ v.set(0, value: 42)
 The `.count()` method always returns the fixed size of the vector:
 
 ```text
-typealias Vec4 is Vector with 4 int
+typealias Vec4 = Vector with 4 int
 var v = Vec4{}
 var n = v.count()  // always 4
 ```
@@ -74,8 +74,8 @@ var n = v.count()  // always 4
 Vectors are designed for small, fixed-size data. The compiler places the storage on the stack when the total byte size (element size x count) is 8192 bytes or less. Larger vectors are automatically heap-allocated.
 
 ```text
-typealias SmallVec is Vector with 100 int    // 800 bytes → stack
-typealias LargeVec is Vector with 2000 int   // 16000 bytes → heap
+typealias SmallVec = Vector with 100 int    // 800 bytes → stack
+typealias LargeVec = Vector with 2000 int   // 16000 bytes → heap
 ```
 
 ### Use Cases
@@ -86,9 +86,9 @@ Vectors are ideal for:
 - Types with a known compile-time size
 
 ```text
-typealias Point3D is Vector with 3 float
-typealias Color is Vector with 4 byte      // RGBA
-typealias Mat2x2 is Vector with 4 float    // 2x2 matrix stored flat
+typealias Point3D = Vector with 3 float
+typealias Color = Vector with 4 byte      // RGBA
+typealias Mat2x2 = Vector with 4 float    // 2x2 matrix stored flat
 ```
 
 ### Iteration
@@ -96,7 +96,7 @@ typealias Mat2x2 is Vector with 4 float    // 2x2 matrix stored flat
 Vectors support `for-in` loops:
 
 ```text
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 var v = Vec3{}
 v.set(0, value: 10)
 v.set(1, value: 20)
@@ -111,7 +111,7 @@ end 'loop'
 
 <!-- test: create-zero-initialized -->
 ```maxon
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function main() returns int
   var v = Vec3{}
@@ -124,7 +124,7 @@ end 'main'
 
 <!-- test: count -->
 ```maxon
-typealias Vec4 is Vector with 4 int
+typealias Vec4 = Vector with 4 int
 
 function main() returns int
   var v = Vec4{}
@@ -137,7 +137,7 @@ end 'main'
 
 <!-- test: set-and-get -->
 ```maxon
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function main() returns int
   var v = Vec3{}
@@ -151,7 +151,7 @@ end 'main'
 
 <!-- test: set-all-elements -->
 ```maxon
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function main() returns int
   var v = Vec3{}
@@ -171,7 +171,7 @@ end 'main'
 <!-- test: get-out-of-bounds -->
 Accessing an index beyond the fixed size throws ArrayError.
 ```maxon
-typealias Vec2 is Vector with 2 int
+typealias Vec2 = Vector with 2 int
 
 function main() returns int
   var v = Vec2{}
@@ -186,7 +186,7 @@ end 'main'
 
 <!-- test: get-negative-index -->
 ```maxon
-typealias Vec2 is Vector with 2 int
+typealias Vec2 = Vector with 2 int
 
 function main() returns int
   var v = Vec2{}
@@ -202,7 +202,7 @@ end 'main'
 <!-- test: set-out-of-bounds-noop -->
 Setting an out-of-bounds index is a no-op, matching Array behavior.
 ```maxon
-typealias Vec2 is Vector with 2 int
+typealias Vec2 = Vector with 2 int
 
 function main() returns int
   var v = Vec2{}
@@ -217,7 +217,7 @@ end 'main'
 
 <!-- test: single-element -->
 ```maxon
-typealias Vec1 is Vector with 1 int
+typealias Vec1 = Vector with 1 int
 
 function main() returns int
   var v = Vec1{}
@@ -231,7 +231,7 @@ end 'main'
 
 <!-- test: larger-vector -->
 ```maxon
-typealias Vec10 is Vector with 10 int
+typealias Vec10 = Vector with 10 int
 
 function main() returns int
   var v = Vec10{}
@@ -251,7 +251,7 @@ end 'main'
 
 <!-- test: count-single -->
 ```maxon
-typealias Vec1 is Vector with 1 int
+typealias Vec1 = Vector with 1 int
 
 function main() returns int
   var v = Vec1{}
@@ -264,7 +264,7 @@ end 'main'
 
 <!-- test: overwrite-element -->
 ```maxon
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function main() returns int
   var v = Vec3{}
@@ -279,7 +279,7 @@ end 'main'
 
 <!-- test: float-vector -->
 ```maxon
-typealias Vec2F is Vector with 2 float
+typealias Vec2F = Vector with 2 float
 
 function main() returns int
   var v = Vec2F{}
@@ -296,7 +296,7 @@ end 'main'
 
 <!-- test: byte-vector -->
 ```maxon
-typealias ByteVec4 is Vector with 4 byte
+typealias ByteVec4 = Vector with 4 byte
 
 function main() returns int
   var v = ByteVec4{}
@@ -315,7 +315,7 @@ end 'main'
 
 <!-- test: pass-to-function -->
 ```maxon
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function sum(v Vec3) returns int
   var a = try v.get(0) otherwise 0
@@ -338,7 +338,7 @@ end 'main'
 
 <!-- test: return-from-function -->
 ```maxon
-typealias Vec2 is Vector with 2 int
+typealias Vec2 = Vector with 2 int
 
 function makeVec(a int, b int) returns Vec2
   var v = Vec2{}
@@ -360,7 +360,7 @@ end 'main'
 
 <!-- test: iterate -->
 ```maxon
-typealias Vec4 is Vector with 4 int
+typealias Vec4 = Vector with 4 int
 
 function main() returns int
   var v = Vec4{}
@@ -381,7 +381,7 @@ end 'main'
 
 <!-- test: let-vector-read -->
 ```maxon
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function makeVec() returns Vec3
   var v = Vec3{}
@@ -470,7 +470,7 @@ end 'main'
 <!-- test: from-literal-typealias-compatible -->
 The inferred type from a literal is compatible with a typealias of the same element type and size.
 ```maxon
-typealias Vec3 is Vector with 3 int
+typealias Vec3 = Vector with 3 int
 
 function sum(v Vec3) returns int
   var a = try v.get(0) otherwise 0
@@ -490,7 +490,7 @@ end 'main'
 
 <!-- test: accumulate-sum -->
 ```maxon
-typealias Vec5 is Vector with 5 int
+typealias Vec5 = Vector with 5 int
 
 function main() returns int
   var v = Vec5{}

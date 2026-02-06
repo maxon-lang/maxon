@@ -141,7 +141,7 @@ end 'main'
 
 <!-- test: export-typealias-basic -->
 ```maxon
-export typealias IntArray is Array with int
+export typealias IntArray = Array with int
 
 function main() returns int
   var arr = IntArray{}
@@ -155,7 +155,7 @@ end 'main'
 
 <!-- test: export-typealias-in-type-field -->
 ```maxon
-export typealias IntArray is Array with int
+export typealias IntArray = Array with int
 
 type Container
   export var items IntArray
@@ -190,7 +190,7 @@ end 'main'
 
 <!-- test: export-typealias-as-return-type -->
 ```maxon
-export typealias IntArray is Array with int
+export typealias IntArray = Array with int
 
 function makeArray() returns IntArray
   var arr = IntArray{}
@@ -209,7 +209,7 @@ end 'main'
 
 <!-- test: non-export-typealias-in-same-file -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var arr = IntArray{}
@@ -223,7 +223,7 @@ end 'main'
 
 <!-- test: error.typealias-with-unknown-element-type -->
 ```maxon
-typealias BadArray is Array with UnknownType
+typealias BadArray = Array with UnknownType
 
 type Container
   var items BadArray
@@ -234,5 +234,5 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:45: Unknown type: UnknownType
+error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:44: Unknown type: UnknownType
 ```

@@ -236,7 +236,7 @@ File not found
 
 <!-- test: write-and-read-binary -->
 ```maxon
-typealias ByteArray is Array with byte
+typealias ByteArray = Array with byte
 
 function main() returns int
   // Create a byte array with known values

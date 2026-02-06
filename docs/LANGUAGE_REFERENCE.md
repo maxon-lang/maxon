@@ -923,7 +923,7 @@ arr.set(0, value: 100)  // First positional, second named
 
 Create an empty typed array using a type alias:
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 var numbers = IntArray{}         // Empty array
 numbers.push(42)                 // Add elements with push
@@ -931,7 +931,7 @@ numbers.push(42)                 // Add elements with push
 
 To preallocate with a specific length (elements zero-initialized):
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 var buffer = IntArray{}
 buffer.resize(100)               // Length is now 100
@@ -940,7 +940,7 @@ buffer.set(0, value: 42)         // Can set any index 0-99
 
 To preallocate capacity without changing length (for performance):
 ```maxon
-type IntArray is Array with int
+typealias IntArray = Array with int
 
 var buffer = IntArray{}
 buffer.reserve(100)              // Capacity is 100, length is 0

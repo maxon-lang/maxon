@@ -32,7 +32,7 @@ type Item
   export var value int
 end 'Item'
 
-typealias ItemArray is Array with Item
+typealias ItemArray = Array with Item
 
 function main() returns int
   var items = ItemArray{}
@@ -93,7 +93,7 @@ type Pair
   export var second String
 end 'Pair'
 
-typealias PairArray is Array with Pair
+typealias PairArray = Array with Pair
 
 function main() returns int
   var pairs = PairArray{}
@@ -142,7 +142,7 @@ type MultiField
   export var e String
 end 'MultiField'
 
-typealias MultiArray is Array with MultiField
+typealias MultiArray = Array with MultiField
 
 function main() returns int
   var items = MultiArray{}

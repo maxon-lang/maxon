@@ -33,7 +33,7 @@ var x = try constants.get(1) otherwise 0  // Can read elements
 Create an array with preallocated capacity and length using `.resize()`:
 
 ```text
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 var buffer = IntArray{}
 buffer.resize(10)   // Length is now 10, elements are zero-initialized
@@ -43,7 +43,7 @@ buffer.set(0, value: 42)
 Use `.reserve()` to allocate capacity without changing length (for performance when appending):
 
 ```text
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 var buffer = IntArray{}
 buffer.reserve(100)  // Capacity is 100, length is still 0
@@ -244,7 +244,7 @@ end 'main'
 <!-- test: array-with-reserve -->
 Test that arrays can be created with `.reserve()` for preallocated capacity.
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var arr = IntArray{}
@@ -259,7 +259,7 @@ end 'main'
 <!-- test: array-with-resize -->
 Test that arrays can be created with `.resize()` for preallocated length.
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -275,7 +275,7 @@ end 'main'
 <!-- test: array-growth-realloc -->
 Test that arrays grow correctly when pushing many elements (triggers multiple reallocs).
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
     var arr = IntArray{}
@@ -295,7 +295,7 @@ end 'main'
 
 <!-- test: byte-array-push-get -->
 ```maxon
-typealias ByteArray is Array with byte
+typealias ByteArray = Array with byte
 
 function main() returns int
   var arr = ByteArray{}
@@ -318,7 +318,7 @@ end 'main'
 
 <!-- test: byte-array-initialized -->
 ```maxon
-typealias ByteArray is Array with byte
+typealias ByteArray = Array with byte
 
 function main() returns int
   var arr = ByteArray{}
@@ -341,7 +341,7 @@ end 'main'
 
 <!-- test: byte-array-set -->
 ```maxon
-typealias ByteArray is Array with byte
+typealias ByteArray = Array with byte
 
 function main() returns int
   var arr = ByteArray{}
@@ -363,7 +363,7 @@ end 'main'
 
 <!-- test: byte-array-max-values -->
 ```maxon
-typealias ByteArray is Array with byte
+typealias ByteArray = Array with byte
 
 function main() returns int
   var arr = ByteArray{}
@@ -396,7 +396,7 @@ end 'main'
 
 <!-- test: byte-array-count -->
 ```maxon
-typealias ByteArray is Array with byte
+typealias ByteArray = Array with byte
 
 function main() returns int
   var arr = ByteArray{}
@@ -539,7 +539,7 @@ end 'main'
 
 <!-- test: append-empty-to-nonempty -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var a = [1, 2, 3]
@@ -554,7 +554,7 @@ end 'main'
 
 <!-- test: append-nonempty-to-empty -->
 ```maxon
-typealias IntArray is Array with int
+typealias IntArray = Array with int
 
 function main() returns int
   var a = IntArray{}
