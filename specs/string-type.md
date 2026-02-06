@@ -1395,7 +1395,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: slice-iteration -->
+<!-- test: slice-iteration -->
 ### Iterate Over Sliced String
 ```maxon
 function main() returns int
@@ -1418,7 +1418,7 @@ b
 c
 ```
 
-<!-- disabled-test: cow-mutation-copies -->
+<!-- test: cow-mutation-copies -->
 ### COW Mutation Creates Copy
 ```maxon
 function main() returns int

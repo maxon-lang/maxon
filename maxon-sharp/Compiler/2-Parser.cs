@@ -4945,10 +4945,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       case ExprResult.Direct d:
         return d.Value;
       case ExprResult.VarRef v:
-        if (v.Info.DefinedInBlock == _currentBlock) {
-          return v.Info.Value;
-        }
-        // Cross-block reference: emit a var_ref, struct_var_ref, or enum_var_ref op
+        // Struct/enum variables always need a fresh var_ref op so each reference
+        // gets a unique SSA value ID (prevents aliasing in structVarNames when
+        // multiple variables share the same underlying value).
         if (v.Info.Kind == MaxonValueKind.Struct) {
           var structRefOp = new MaxonStructVarRefOp(v.VarName, v.Info.StructTypeName!);
           _currentBlock!.AddOp(structRefOp);
@@ -4961,6 +4960,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           _currentBlock!.AddOp(enumRefOp);
           return enumRefOp.Result;
         }
+        if (v.Info.DefinedInBlock == _currentBlock) {
+          return v.Info.Value;
+        }
+        // Cross-block reference for non-struct/enum types
         var refOp = new MaxonVarRefOp(v.VarName, v.Info.Kind);
         _currentBlock!.AddOp(refOp);
         return refOp.Result;
