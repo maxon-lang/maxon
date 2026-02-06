@@ -37,6 +37,20 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     Functions.Add(func);
   }
 
+  public MlirModule<TOp> Clone() {
+    var clone = new MlirModule<TOp>();
+    clone.Functions.AddRange(Functions);
+    clone.RdataEntries.AddRange(RdataEntries);
+    clone.Globals.AddRange(Globals);
+    foreach (var (k, v) in TypeDefs) clone.TypeDefs[k] = v;
+    foreach (var (k, v) in FunctionDefaults) clone.FunctionDefaults[k] = v;
+    foreach (var (k, v) in ElementPolymorphicParams) clone.ElementPolymorphicParams[k] = v;
+    foreach (var (k, v) in TypeAliasSources) clone.TypeAliasSources[k] = v;
+    foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
+    foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
+    return clone;
+  }
+
   public void Merge(MlirModule<TOp> other) {
     // Add functions, skipping any that were seeded (already exist with same name)
     var existingNames = new HashSet<string>(Functions.Select(f => f.Name));

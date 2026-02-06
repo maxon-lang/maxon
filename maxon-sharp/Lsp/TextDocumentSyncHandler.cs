@@ -20,7 +20,6 @@ public class TextDocumentSyncHandler(LspServer server, ILanguageServerFacade fac
 
   public override Task<Unit> Handle(DidOpenTextDocumentParams request, CancellationToken cancellationToken) {
     _server.UpdateDocument(request.TextDocument.Uri, request.TextDocument.Text);
-    PublishDiagnostics(request.TextDocument.Uri);
     return Unit.Task;
   }
 
@@ -28,12 +27,10 @@ public class TextDocumentSyncHandler(LspServer server, ILanguageServerFacade fac
     // We use full sync, so just take the last change
     var text = request.ContentChanges.LastOrDefault()?.Text ?? "";
     _server.UpdateDocument(request.TextDocument.Uri, text);
-    PublishDiagnostics(request.TextDocument.Uri);
     return Unit.Task;
   }
 
   public override Task<Unit> Handle(DidSaveTextDocumentParams request, CancellationToken cancellationToken) {
-    PublishDiagnostics(request.TextDocument.Uri);
     return Unit.Task;
   }
 
@@ -45,14 +42,6 @@ public class TextDocumentSyncHandler(LspServer server, ILanguageServerFacade fac
       Diagnostics = new Container<Diagnostic>()
     });
     return Unit.Task;
-  }
-
-  private void PublishDiagnostics(DocumentUri uri) {
-    var diagnostics = _server.GetDiagnostics(uri);
-    _facade.TextDocument.PublishDiagnostics(new PublishDiagnosticsParams {
-      Uri = uri,
-      Diagnostics = diagnostics
-    });
   }
 
   protected override TextDocumentSyncRegistrationOptions CreateRegistrationOptions(

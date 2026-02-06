@@ -117,7 +117,7 @@ public class Compiler {
     return errors;
   }
 
-  private static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib) {
+  internal static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib) {
     // Pre-register type names from all sources so cross-file references resolve
     // (e.g., Character.maxon references String before String.maxon is parsed)
     foreach (var source in sources)

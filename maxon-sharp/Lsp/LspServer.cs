@@ -1,17 +1,21 @@
 using System.Collections.Concurrent;
 using MaxonSharp.Compiler;
+using MaxonSharp.Compiler.Mlir.Core;
+using MaxonSharp.Compiler.Mlir.Dialects;
 using Microsoft.Extensions.DependencyInjection;
 using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server;
-using OmniSharp.Extensions.LanguageServer.Protocol.Server.Capabilities;
 using OmniSharp.Extensions.LanguageServer.Server;
 
 namespace MaxonSharp.Lsp;
 
 public class LspServer {
   private readonly ConcurrentDictionary<DocumentUri, string> _documents = new();
+  private ProjectManager? _projectManager;
+
+  public ProjectManager ProjectManager =>
+    _projectManager ?? throw new InvalidOperationException("LSP not initialized");
 
   public async Task RunAsync() {
     var server = await LanguageServer.From(options =>
@@ -27,6 +31,11 @@ public class LspServer {
           services.AddSingleton(this);
         })
         .OnInitialize((server, request, token) => {
+          _projectManager = new ProjectManager(
+            (uri, diags) => server.TextDocument.PublishDiagnostics(
+              new PublishDiagnosticsParams { Uri = uri, Diagnostics = diags }
+            )
+          );
           return Task.CompletedTask;
         })
         .OnInitialized((server, request, response, token) => {
@@ -39,52 +48,172 @@ public class LspServer {
 
   public void UpdateDocument(DocumentUri uri, string content) {
     _documents[uri] = content;
+    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    var project = ProjectManager.GetOrCreateProject(filePath);
+    project.NotifyFileChanged(filePath, content);
   }
 
   public void RemoveDocument(DocumentUri uri) {
     _documents.TryRemove(uri, out _);
+    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    ProjectManager.RemoveFileFromProject(filePath);
   }
 
   public string? GetDocument(DocumentUri uri) {
     return _documents.TryGetValue(uri, out var content) ? content : null;
   }
 
-  public Container<Diagnostic> GetDiagnostics(DocumentUri uri) {
-    if (!_documents.TryGetValue(uri, out var content))
-      return new Container<Diagnostic>();
+  public CompletionList GetCompletions(DocumentUri uri, Position position) {
+    var content = GetDocument(uri);
+    if (content != null) {
+      var dotTarget = GetDotCompletionTarget(content, position);
+      if (dotTarget != null) {
+        return GetMemberCompletions(uri, dotTarget);
+      }
+    }
 
+    return GetDefaultCompletions();
+  }
+
+  private static string? GetDotCompletionTarget(string content, Position position) {
+    var lines = content.Split('\n');
+    if (position.Line >= lines.Length) return null;
+
+    var line = lines[position.Line];
+    var col = (int)position.Character;
+
+    // The cursor is right after the dot, so find the dot
+    // col points to after the dot. We need to find the identifier before it.
+    if (col <= 0 || col > line.Length) return null;
+
+    // Walk back to find the dot
+    var dotPos = col - 1;
+    if (dotPos < 0 || dotPos >= line.Length || line[dotPos] != '.') return null;
+
+    // Walk back from dot to find the identifier
+    var end = dotPos;
+    var start = end - 1;
+    while (start >= 0 && IsWordChar(line[start])) {
+      start--;
+    }
+    start++;
+
+    if (start >= end) return null;
+    return line[start..end];
+  }
+
+  private CompletionList GetMemberCompletions(DocumentUri uri, string targetName) {
     var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    var project = ProjectManager.FindProjectForFile(filePath);
+    var info = project?.GetCompletionInfo();
 
-    List<CompileError> errors;
-    try {
-      errors = MaxonSharp.Compiler.Compiler.Check(filePath, content);
-    } catch (Exception ex) {
-      return new Container<Diagnostic>(new Diagnostic {
-        Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
-          new Position(0, 0),
-          new Position(0, 1)
-        ),
-        Severity = DiagnosticSeverity.Error,
-        Source = "maxon",
-        Message = ex.Message
+    if (info == null)
+      return GetDefaultCompletions();
+
+    // Extract parameter types from parsed functions (no re-lexing needed)
+    var variableTypes = ExtractParamTypes(info.Functions);
+    info = new CompletionInfo(info.TypeDefs, info.Functions, variableTypes);
+
+    return BuildMemberCompletionList(info, targetName);
+  }
+
+  private static Dictionary<string, string> ExtractParamTypes(
+    List<Compiler.Mlir.Core.MlirFunction<Compiler.Mlir.Dialects.MaxonOp>> functions
+  ) {
+    var result = new Dictionary<string, string>();
+    foreach (var func in functions) {
+      for (int i = 0; i < func.ParamNames.Count && i < func.ParamTypes.Count; i++) {
+        var paramName = func.ParamNames[i];
+        var paramType = func.ParamTypes[i];
+        if (paramName != "self" && paramType is Compiler.Mlir.Core.MlirStructType structType) {
+          result.TryAdd(paramName, structType.Name);
+        }
+      }
+    }
+    return result;
+  }
+
+  private static CompletionList BuildMemberCompletionList(CompletionInfo info, string targetName) {
+    // Resolve the type name: check if target is a variable or a type name directly
+    string? typeName = null;
+    if (info.VariableTypes.TryGetValue(targetName, out var varType)) {
+      typeName = varType;
+    } else if (info.TypeDefs.ContainsKey(targetName)) {
+      // Direct type access like String.init()
+      typeName = targetName;
+    }
+
+    if (typeName == null) return GetDefaultCompletions();
+
+    var items = new List<CompletionItem>();
+    var addedNames = new HashSet<string>();
+
+    // Add fields from the struct type
+    if (info.TypeDefs.TryGetValue(typeName, out var mlirType)
+        && mlirType is MaxonSharp.Compiler.Mlir.Core.MlirStructType structType) {
+      foreach (var field in structType.Fields) {
+        if (!field.IsExported) continue;
+        if (addedNames.Add(field.Name)) {
+          items.Add(new CompletionItem {
+            Label = field.Name,
+            Kind = CompletionItemKind.Field,
+            Detail = $"{typeName}.{field.Name}: {field.Type.Name}"
+          });
+        }
+      }
+    }
+
+    // Add methods: functions named "*.TypeName.methodName"
+    // e.g., "stdlib.String.slice" -> method "slice" on type "String"
+    var dotType = $".{typeName}.";
+    var prefixType = $"{typeName}.";
+    foreach (var func in info.Functions) {
+      var funcName = func.Name;
+
+      // Extract method name after "TypeName."
+      string? methodPart = null;
+      var idx = funcName.IndexOf(dotType);
+      if (idx >= 0) {
+        methodPart = funcName[(idx + dotType.Length)..];
+      } else if (funcName.StartsWith(prefixType)) {
+        methodPart = funcName[prefixType.Length..];
+      }
+      if (methodPart == null) continue;
+
+      // Strip overload mangling (e.g., "slice$endIndex" -> "slice")
+      var dollarIdx = methodPart.IndexOf('$');
+      if (dollarIdx >= 0) methodPart = methodPart[..dollarIdx];
+
+      // Skip nested names (e.g., "String.ByteView.next" when looking at String)
+      if (methodPart.Contains('.')) continue;
+
+      if (string.IsNullOrEmpty(methodPart) || !addedNames.Add(methodPart)) continue;
+
+      // Build parameter signature
+      var paramParts = new List<string>();
+      for (int i = 0; i < func.ParamNames.Count; i++) {
+        if (func.ParamNames[i] == "self") continue;
+        var paramType = i < func.ParamTypes.Count ? func.ParamTypes[i].Name : "?";
+        paramParts.Add($"{func.ParamNames[i]} {paramType}");
+      }
+      var paramsStr = string.Join(", ", paramParts);
+      var returnStr = func.ReturnType != null && func.ReturnType.Name != "void"
+        ? $" returns {func.ReturnType.Name}" : "";
+
+      items.Add(new CompletionItem {
+        Label = methodPart,
+        Kind = CompletionItemKind.Method,
+        Detail = $"{methodPart}({paramsStr}){returnStr}",
+        InsertText = methodPart
       });
     }
 
-    var diagnostics = errors.Select(error => new Diagnostic {
-      Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
-        new Position((error.Line ?? 1) - 1, (error.Column ?? 1) - 1),
-        new Position((error.Line ?? 1) - 1, (error.Column ?? 1))
-      ),
-      Severity = DiagnosticSeverity.Error,
-      Source = "maxon",
-      Message = error.Message,
-      Code = error.Code.Format()
-    }).ToList();
+    if (items.Count == 0) return GetDefaultCompletions();
 
-    return new Container<Diagnostic>(diagnostics);
+    return new CompletionList(items, isIncomplete: false);
   }
 
-  public static CompletionList GetCompletions(DocumentUri uri, Position position) {
+  private static CompletionList GetDefaultCompletions() {
     var items = new List<CompletionItem>();
 
     // Add keywords
@@ -212,3 +341,9 @@ public class LspServer {
     );
   }
 }
+
+public record CompletionInfo(
+  Dictionary<string, MlirType> TypeDefs,
+  List<MlirFunction<MaxonOp>> Functions,
+  Dictionary<string, string> VariableTypes
+);

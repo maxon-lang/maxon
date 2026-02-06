@@ -11,7 +11,7 @@ public class CompletionHandler(LspServer server) : CompletionHandlerBase {
   private readonly TextDocumentSelector _documentSelector = TextDocumentSelector.ForLanguage("maxon");
 
   public override Task<CompletionList> Handle(CompletionParams request, CancellationToken cancellationToken) {
-    var completions = LspServer.GetCompletions(request.TextDocument.Uri, request.Position);
+    var completions = _server.GetCompletions(request.TextDocument.Uri, request.Position);
     return Task.FromResult(completions);
   }
 
