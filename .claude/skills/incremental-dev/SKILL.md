@@ -19,6 +19,7 @@ Run the spec tests and fix any failures by modifying the compiler code.
 8. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be review to ensure they are ok.
 9. If any compiler code was changed then review any code changes to see if you can refactor to eliminate duplicated code.
 10. If any compiler code was changed then review any code changes to check that the code does not use default cases. When handling multiple cases if there is not a specific match it should throw an error. Check 'switch' and also the use of 'else'. 
+11. Write a git commit message for these changes.
 
 ## Guidelines
 

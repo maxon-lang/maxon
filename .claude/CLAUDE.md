@@ -51,11 +51,8 @@ See `docs/SPECS.md` for the complete spec file format and detailed workflow.
 
 ## Constraints
 
-### CRITICAL: No Git Commands
-**NEVER use git commands.** This includes git status, git diff, git add, git commit, git log, git checkout, or any other git command. This constraint applies at all times, regardless of context or how long the session has been running.
-
 ### CRITICAL: Finish the plan.
-If you are implementing a plan then you must finish the plan.
+If you are implementing a plan then you must finish the plan. Do not simplify.
 
 ### Other Constraints
 - **Clean up temp files** - Create test files in `/temp` and delete after

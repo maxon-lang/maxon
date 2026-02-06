@@ -15,6 +15,7 @@ Run the spec tests and fix any failures by modifying the compiler code.
 5. Repeat until all tests pass.
 6. If any compiler code was changed then review any code changes to see if you can refactor to eliminate duplicated code.
 7. If any compiler code was changed then review any code changes to check that the code does not use default cases. When handling multiple cases if there is not a specific match it should throw an error. Check 'switch' and also the use of 'else'. 
+8. Write a git commit message for these changes
 
 ## Guidelines
 
