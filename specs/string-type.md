@@ -1438,7 +1438,7 @@ HELLO
 hello
 ```
 
-<!-- disabled-test: cow-original-unchanged -->
+<!-- test: cow-original-unchanged -->
 ### COW Original Unchanged After Copy Mutation
 ```maxon
 function main() returns int
@@ -1461,7 +1461,7 @@ test string
 TEST STRING
 ```
 
-<!-- disabled-test: cow-slice-independent -->
+<!-- test: cow-slice-independent -->
 ### Slice Is Independent After Parent Goes Out of Scope
 Demonstrates that sliced strings work correctly.
 ```maxon
