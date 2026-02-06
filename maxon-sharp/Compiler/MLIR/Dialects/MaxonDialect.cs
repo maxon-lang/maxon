@@ -598,11 +598,14 @@ public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueK
 
 // Get element at index from managed buffer: __managed_memory_get_unchecked(managed, index)
 // Element size is read from the managed struct's element_size field at runtime.
+// When IsStructElement is true, the element data is stored inline in the buffer
+// and the result is a pointer to the element's location (not a loaded value).
 public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_get";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
   public MaxonValueKind ResultKind { get; } = resultKind;
+  public bool IsStructElement { get; init; }
   public MaxonValue Result { get; } = resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
@@ -610,12 +613,15 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, Ma
 
 // Set element at index in managed buffer: __managed_memory_set_at(managed, index, value)
 // Element size is read from the managed struct's element_size field at runtime.
+// When IsStructElement is true, the value is a pointer to struct data and the
+// full struct is copied inline into the buffer (not just the pointer).
 public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value, MaxonValueKind elementKind = MaxonValueKind.Integer) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_set";
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
   public MaxonValue Value { get; } = value;
   public MaxonValueKind ElementKind { get; } = elementKind;
+  public bool IsStructElement { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
 }
 
@@ -741,6 +747,16 @@ public class MaxonCStringWriteStdoutOp(MaxonValue cstrPtr) : MaxonOp {
   public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+/// Generic runtime function call op for intrinsics that delegate to a runtime function.
+public class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult) : MaxonOp {
+  public override string Mnemonic => $"maxon.call_runtime.{FunctionName}";
+  public string FunctionName { get; } = functionName;
+  public List<MaxonValue> Args { get; } = args;
+  public MaxonInteger? Result { get; } = hasResult ? new MaxonInteger(MlirContext.Current.NextId()) : null;
+  public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
+  public override IReadOnlyList<string> PrintableOperands => Args.Select(a => a.ToString()).ToList();
 }
 
 // Create a Character from bytes within a managed buffer

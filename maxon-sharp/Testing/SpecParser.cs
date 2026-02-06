@@ -80,6 +80,13 @@ public static partial class SpecParser {
       var endIndex = nextTestMatch.Success ? nextTestMatch.Index : content.Length;
       var testSection = content[startIndex..endIndex];
 
+      // Parse directives from HTML comments between the test marker and code block
+      string? testArgs = null;
+      var argsMatch = ArgsDirectiveRegex().Match(testSection);
+      if (argsMatch.Success) {
+        testArgs = argsMatch.Groups[1].Value.Trim();
+      }
+
       var source = ExtractCodeBlock(testSection, "maxon");
       if (source == null) continue;
 
@@ -107,7 +114,8 @@ public static partial class SpecParser {
       tests.Add(new TestCase {
         Name = testName,
         Source = source,
-        Expectation = expectation
+        Expectation = expectation,
+        Args = testArgs
       });
     }
 
@@ -195,4 +203,7 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"```maxoncstderr\r?\n(.*?)```", RegexOptions.Singleline)]
   private static partial Regex MaxoncStderrBlockRegex();
+
+  [GeneratedRegex(@"<!--\s*Args:\s*(.+?)\s*-->")]
+  private static partial Regex ArgsDirectiveRegex();
 }

@@ -18,6 +18,11 @@ public class TestCase {
   public required string Name { get; init; }
   public required string Source { get; init; }
   public required TestExpectation Expectation { get; init; }
+  /// <summary>
+  /// Command-line arguments to pass when running the test executable.
+  /// Parsed from `&lt;!-- Args: ... --&gt;` directives in the spec file.
+  /// </summary>
+  public string? Args { get; init; }
 }
 
 /// <summary>
@@ -62,6 +67,10 @@ public class Fragment {
   /// All pipeline stages IR concatenated with "--- stagename" markers (parsed from fragment file).
   /// </summary>
   public string? GeneratedMLIR { get; init; }
+  /// <summary>
+  /// Command-line arguments to pass when running the test executable.
+  /// </summary>
+  public string? Args { get; init; }
 }
 
 /// <summary>

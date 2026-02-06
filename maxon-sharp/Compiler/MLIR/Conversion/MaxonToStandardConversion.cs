@@ -96,6 +96,9 @@ public static class MaxonToStandardConversion {
       var varTypes = new Dictionary<string, string>();
       // Maps MaxonStruct value IDs to their variable name prefix (for field access)
       var structVarNames = new Dictionary<int, string>();
+      // Maps value IDs to their struct type name (for cases where the value is not a MaxonStruct
+      // but is semantically a struct, e.g. try_call results from monomorphized generic functions)
+      var structValueTypes = new Dictionary<int, string>();
       // Maps variable names to their resolved struct prefix (for cross-block references)
       var varNameToStructPrefix = new Dictionary<string, string>();
 
@@ -135,6 +138,7 @@ public static class MaxonToStandardConversion {
                 // Load each field from the self pointer into named variables
                 LoadStructFieldsFromPointer(newBlock, selfPtrVal, "self", selfStructType!, varTypes);
                 structVarNames[structParamOp.Result.Id] = "self";
+                structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
               } else {
                 // Non-self struct param: receive as pointer, load fields from it
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
@@ -145,6 +149,7 @@ public static class MaxonToStandardConversion {
                 EmitStore(newBlock, ptrVal, ptrVarName, varTypes);
                 LoadStructFieldsFromPointer(newBlock, ptrVal, structParamOp.Name, structType, varTypes);
                 structVarNames[structParamOp.Result.Id] = structParamOp.Name;
+                structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
               }
               break;
             }
@@ -278,6 +283,7 @@ public static class MaxonToStandardConversion {
               }
 
               structVarNames[structLitOp.Result.Id] = tempName;
+              structValueTypes[structLitOp.Result.Id] = structLitOp.TypeName;
               break;
             }
             case MaxonAssignOp assignOp: {
@@ -285,7 +291,12 @@ public static class MaxonToStandardConversion {
                 // Struct assignment: copy all fields from source to destination
                 var srcName = structVarNames[assignOp.Value.Id];
                 var dstName = assignOp.VarName;
-                var structTypeName = ((MaxonStruct)assignOp.Value).TypeName;
+                // Get struct type name: prefer the MaxonStruct's TypeName, fall back to
+                // structValueTypes for values that are semantically structs but typed as
+                // integers (e.g. try_call results from monomorphized generic functions)
+                var structTypeName = assignOp.Value is MaxonStruct ms
+                  ? ms.TypeName
+                  : structValueTypes[assignOp.Value.Id];
                 var structType = (MlirStructType)module.TypeDefs[structTypeName];
                 CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // In struct instance methods, assigning to a self field struct must also
@@ -297,9 +308,11 @@ public static class MaxonToStandardConversion {
                   CopyStructFields(newBlock, dstName, selfDstName, structType, varTypes);
                   EmitStructWriteThrough(newBlock, selfDstName, assignOp.VarName, structType, selfStructType!, varTypes);
                   structVarNames[assignOp.Value.Id] = selfDstName;
+                  structValueTypes[assignOp.Value.Id] = structTypeName;
                   varNameToStructPrefix[assignOp.VarName] = selfDstName;
                 } else {
                   structVarNames[assignOp.Value.Id] = dstName;
+                  structValueTypes[assignOp.Value.Id] = structTypeName;
                   varNameToStructPrefix[assignOp.VarName] = dstName;
                 }
               } else {
@@ -340,6 +353,7 @@ public static class MaxonToStandardConversion {
                 resolvedName = varNameToStructPrefix.GetValueOrDefault(structVarRef.VarName, structVarRef.VarName);
               }
               structVarNames[structVarRef.Result.Id] = resolvedName;
+              structValueTypes[structVarRef.Result.Id] = structVarRef.StructTypeName;
               break;
             }
             case MaxonFieldAccessOp fieldAccess: {
@@ -560,7 +574,7 @@ public static class MaxonToStandardConversion {
             }
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, module.TypeDefs);
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, module.TypeDefs);
               break;
             case MaxonFunctionRefOp fnRefOp:
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
@@ -581,7 +595,7 @@ public static class MaxonToStandardConversion {
               LowerThrow(throwOp, newBlock, valueMap);
               break;
             case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, module.TypeDefs);
+              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames);
@@ -603,6 +617,9 @@ public static class MaxonToStandardConversion {
               break;
             case MaxonManagedMemByteSetOp byteSetOp:
               LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
+              break;
+            case MaxonCStringToManagedOp fromCStringOp:
+              LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonManagedToCStringOp toCStringOp:
               LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes, structVarNames);
@@ -628,6 +645,17 @@ public static class MaxonToStandardConversion {
             case MaxonMakeCharFromBytesOp makeCharOp:
               LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames);
               break;
+            case MaxonCallRuntimeOp callRtOp: {
+              var stdArgs = callRtOp.Args.Select(a => (StdValue)(StdI64)valueMap[a]).ToList();
+              if (callRtOp.Result != null) {
+                var rtResult = new StdI64(MlirContext.Current.NextId());
+                newBlock.AddOp(new StdCallRuntimeOp(callRtOp.FunctionName, stdArgs, rtResult));
+                valueMap[callRtOp.Result] = rtResult;
+              } else {
+                newBlock.AddOp(new StdCallRuntimeOp(callRtOp.FunctionName, stdArgs, null));
+              }
+              break;
+            }
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }
@@ -678,6 +706,7 @@ public static class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs) {
@@ -710,6 +739,7 @@ public static class MaxonToStandardConversion {
       block.AddOp(funcCall);
       if (callOp.Result != null) {
         structVarNames[callOp.Result.Id] = sretVarName!;
+        structValueTypes[callOp.Result.Id] = calleeRetStructType.Name;
       }
     } else {
       var callResult = ResolveCallResultType(callOp.ResultKind, calleeFunc.ReturnType);
@@ -749,10 +779,22 @@ public static class MaxonToStandardConversion {
     }
 
     if (retStructType != null && retOp.Value != null) {
-      var srcName = structVarNames[retOp.Value.Id];
       var sretLoad = new StdLoadI64Op("__sret");
       block.AddOp(sretLoad);
-      WriteStructFieldsToPointer(block, srcName, sretLoad.Result, retStructType, varTypes);
+
+      if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
+        // Normal path: struct is flattened on the stack, copy fields to sret buffer
+        WriteStructFieldsToPointer(block, srcName, sretLoad.Result, retStructType, varTypes);
+      } else {
+        // Struct element returned from managed memory: the value is a pointer to
+        // the struct's raw bytes in the heap buffer. Load fields via that pointer
+        // and copy them into the sret buffer.
+        var elemPtr = (StdI64)valueMap[retOp.Value];
+        var tempName = $"__ret_elem_{retOp.Value.Id}";
+        LoadStructFieldsFromPointer(block, elemPtr, tempName, retStructType, varTypes);
+        WriteStructFieldsToPointer(block, tempName, sretLoad.Result, retStructType, varTypes);
+      }
+
       block.AddOp(new StdReturnOp());
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
@@ -780,6 +822,7 @@ public static class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs) {
@@ -806,6 +849,7 @@ public static class MaxonToStandardConversion {
       block.AddOp(stdTryCall);
       if (tryCallOp.Result != null) {
         structVarNames[tryCallOp.Result.Id] = sretVarName!;
+        structValueTypes[tryCallOp.Result.Id] = calleeRetStructType.Name;
       }
     } else {
       var stdResult = ResolveCallResultType(tryCallOp.ResultKind, calleeFunc.ReturnType);
@@ -1317,6 +1361,8 @@ public static class MaxonToStandardConversion {
   /// __managed_memory_get_unchecked(managed, index): load element from heap buffer.
   /// buffer[index] = *(buffer + index * elementSize)
   /// Element size is read from the managed struct's element_size field.
+  /// For struct elements, returns the address of the element in the buffer directly
+  /// (the struct data is stored inline, not as a pointer).
   /// </summary>
   private static void LowerManagedMemGet(
     MaxonManagedMemGetOp op,
@@ -1330,17 +1376,26 @@ public static class MaxonToStandardConversion {
     var index = (StdI64)valueMap[op.Index];
     var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
-    // Determine load type based on result kind
-    // For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen
-    var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemGet");
-    var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
-    block.AddOp(loadOp);
-    valueMap[op.Result] = loadOp.Result;
+    if (op.IsStructElement) {
+      // Struct elements are stored inline in the buffer. Return the computed
+      // address directly so downstream code (LoadStructFieldsFromPointer) can
+      // read the struct fields from the buffer without an extra indirection.
+      valueMap[op.Result] = addr;
+    } else {
+      // Determine load type based on result kind
+      // For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen
+      var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemGet");
+      var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
+      block.AddOp(loadOp);
+      valueMap[op.Result] = loadOp.Result;
+    }
   }
 
   /// <summary>
   /// __managed_memory_set_at(managed, index, value): store element into heap buffer.
   /// Element size is read from the managed struct's element_size field.
+  /// For struct elements, copies the full struct data inline into the buffer
+  /// (not just a pointer) so elements survive stack frame reuse in loops.
   /// </summary>
   private static void LowerManagedMemSet(
     MaxonManagedMemSetOp op,
@@ -1357,9 +1412,18 @@ public static class MaxonToStandardConversion {
     var index = (StdI64)valueMap[op.Index];
     var value = valueMap[op.Value];
     var addr = ComputeElementAddress(block, buffer, index, elemSize);
-    // Determine store type based on element kind
-    var elemType = GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
-    block.AddOp(new StdStoreIndirectOp(value, addr, 0, elemType));
+
+    if (op.IsStructElement) {
+      // Struct elements: copy the full struct data from the source pointer
+      // into the buffer using memcpy. This ensures the data is stored inline
+      // and doesn't become stale when the source stack frame is reused.
+      var copyResult = new StdI64(MlirContext.Current.NextId());
+      block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [addr, (StdI64)value, elemSize], copyResult));
+    } else {
+      // Scalar elements: store directly
+      var elemType = GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
+      block.AddOp(new StdStoreIndirectOp(value, addr, 0, elemType));
+    }
   }
 
   /// <summary>
@@ -1567,6 +1631,41 @@ public static class MaxonToStandardConversion {
     var addrOp = new StdAddI64Op(bufReload, index);
     block.AddOp(addrOp);
     block.AddOp(new StdStoreIndirectOp(value, addrOp.Result, 0, MlirType.I8));
+  }
+
+  /// <summary>
+  /// __cstring_to_managed(cstrPtr): convert a null-terminated C string to __ManagedMemory.
+  /// Computes strlen, allocates buffer, copies bytes, returns managed struct.
+  /// </summary>
+  private static void LowerCStringToManaged(
+    MaxonCStringToManagedOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+    var cstrPtr = (StdI64)valueMap[op.CstrPtr];
+
+    // Get string length
+    var lenResult = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_strlen", [cstrPtr], lenResult));
+
+    // Allocate buffer
+    var allocResult = EmitAlloc(block, lenResult);
+
+    // Copy bytes from cstring to new buffer
+    var copyResult = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [allocResult, cstrPtr, lenResult], copyResult));
+
+    // Set up __ManagedMemory struct fields
+    var tempName = $"__from_cstring_{op.Result.Id}";
+    var elemSizeOp = new StdConstI64Op(1);
+    block.AddOp(elemSizeOp);
+
+    EmitStore(block, allocResult, $"{tempName}.buffer", varTypes);
+    EmitStore(block, lenResult, $"{tempName}.length", varTypes);
+    EmitStore(block, lenResult, $"{tempName}.capacity", varTypes);
+    EmitStore(block, elemSizeOp.Result, $"{tempName}.element_size", varTypes);
+    structVarNames[op.Result.Id] = tempName;
   }
 
   /// <summary>

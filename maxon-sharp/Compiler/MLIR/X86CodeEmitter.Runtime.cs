@@ -17,6 +17,26 @@ public partial class X86CodeEmitter {
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
     EmitMaxonI64ToString();
+    EmitMaxonCommandLineCount();
+    EmitMaxonCommandLineArg();
+    EmitMaxonFileOpenRead();
+    EmitMaxonFileSize();
+    EmitMaxonFileRead();
+    EmitMaxonFileClose();
+    EmitMaxonFileDelete();
+    EmitMaxonWriteFile();
+    EmitMaxonWriteFileBinary();
+    EmitMaxonFindFirstFile();
+    EmitMaxonFindFilename();
+    EmitMaxonFindNextFile();
+    EmitMaxonFindClose();
+    EmitMaxonDirectoryExists();
+    EmitMaxonProcessCreate();
+    EmitMaxonProcessWait();
+    EmitMaxonProcessGetExitCode();
+    EmitMaxonProcessClose();
+    EmitMaxonStrlen();
+    EmitMaxonMemcpy();
   }
 
   /// <summary>maxon_alloc(size_in_rcx) -> ptr_in_rax</summary>
@@ -277,6 +297,290 @@ public partial class X86CodeEmitter {
     EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
     EmitPopReg(X86Register.Rbp);
     EmitByte(0xC3); // ret
+  }
+
+  // ==========================================================================
+  // Command line runtime functions
+  // ==========================================================================
+
+  /// <summary>
+  /// maxon_command_line_count() -> int: returns total argc (including argv[0]).
+  /// The stdlib skips index 0, so this returns the raw count from CommandLineToArgvW.
+  /// Stack: [rbp-0x08] = argc output (4-byte int from CommandLineToArgvW),
+  ///        [rbp-0x10] = argv pointer (for LocalFree),
+  ///        [rbp-0x18] = saved argc (widened to 64-bit)
+  /// </summary>
+  private void EmitMaxonCommandLineCount() {
+    EmitRuntimeFunctionStart("maxon_command_line_count", 0, 0x40);
+
+    // Zero the argc slot so the upper 4 bytes are clean when we read it as 4 bytes
+    EmitBytes(0x48, 0xC7, 0x45, 0xF8, 0x00, 0x00, 0x00, 0x00); // MOV qword [rbp-0x08], 0
+
+    // Step 1: Get the raw command line wide string
+    EmitCallImport("kernel32.dll", "GetCommandLineW");
+
+    // Step 2: Parse into argv array
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    // RDX = &argc (pointer to 4-byte int)
+    EmitLeaRegMem(X86Register.Rdx, -0x08);
+    EmitCallImport("shell32.dll", "CommandLineToArgvW");
+
+    // Step 3: Save argv pointer for LocalFree, and save argc before the call clobbers registers
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+    // argc is a 32-bit int at [rbp-0x08]; load as 4 bytes (zero-extends to 64-bit)
+    EmitMovRegMem(X86Register.Rax, -0x08, 4);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Step 4: Free the argv array
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCallImport("kernel32.dll", "LocalFree");
+
+    // Step 5: Return saved argc
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_command_line_arg(index) -> cstring_ptr: returns a heap-allocated UTF-8 string.
+  /// Calls GetCommandLineW + CommandLineToArgvW to get wide argv, indexes by the given
+  /// index, converts to UTF-8 via WideCharToMultiByte, allocates via maxon_alloc.
+  /// Stack: [rbp-0x08]=index, [rbp-0x10]=wargv, [rbp-0x18]=wstr, [rbp-0x20]=bufsize,
+  ///        [rbp-0x28]=buffer, [rbp-0x30]=argc (scratch for CommandLineToArgvW)
+  /// </summary>
+  private void EmitMaxonCommandLineArg() {
+    EmitRuntimeFunctionStart("maxon_command_line_arg", 1, 0x80);
+
+    // Step 1: Get the raw command line wide string
+    EmitCallImport("kernel32.dll", "GetCommandLineW");
+
+    // Step 2: Parse into argv array
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    // RDX = &argc -> LEA RDX, [rbp-0x30]
+    EmitLeaRegMem(X86Register.Rdx, -0x30);
+    EmitCallImport("shell32.dll", "CommandLineToArgvW");
+
+    // Step 3: Save wargv pointer
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+
+    // Step 4: Get wargv[index] — the wide string pointer
+    // Load index into RCX
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    // MOV RAX, [RAX + RCX*8]: REX.W 8B 04 C8
+    EmitBytes(0x48, 0x8B, 0x04, 0xC8);
+    // Save wide string pointer
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Step 5: Get required UTF-8 buffer size
+    // WideCharToMultiByte(CP_UTF8=65001, 0, wideStr, -1, NULL, 0, NULL, NULL)
+    // 8 args: RCX, RDX, R8, R9, [rsp+0x20], [rsp+0x28], [rsp+0x30], [rsp+0x38]
+    EmitMovRegImm(X86Register.Rcx, 65001);           // arg1: CP_UTF8
+    EmitMovRegImm(X86Register.Rdx, 0);               // arg2: flags = 0
+    EmitMovRegMem(X86Register.R8, -0x18, 8);          // arg3: wide string pointer
+    EmitMovRegImm(X86Register.R9, -1);                // arg4: -1 (null-terminated)
+    // arg5: NULL (output buffer) at [rsp+0x20]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
+    // arg6: 0 (output buffer size) at [rsp+0x28]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00);
+    // arg7: NULL at [rsp+0x30]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);
+    // arg8: NULL at [rsp+0x38]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "WideCharToMultiByte");
+
+    // Save required size
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+
+    // Step 6: Allocate buffer via maxon_alloc
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+
+    // Save buffer pointer
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    // Step 7: Convert wide string to UTF-8 into the allocated buffer
+    // WideCharToMultiByte(CP_UTF8, 0, wideStr, -1, buffer, size, NULL, NULL)
+    EmitMovRegImm(X86Register.Rcx, 65001);           // arg1: CP_UTF8
+    EmitMovRegImm(X86Register.Rdx, 0);               // arg2: flags = 0
+    EmitMovRegMem(X86Register.R8, -0x18, 8);          // arg3: wide string pointer
+    EmitMovRegImm(X86Register.R9, -1);                // arg4: -1 (null-terminated)
+    // arg5: buffer at [rsp+0x20]
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x20);         // MOV [rsp+0x20], RAX
+    // arg6: size at [rsp+0x28]
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x28);         // MOV [rsp+0x28], RAX
+    // arg7: NULL at [rsp+0x30]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00);
+    // arg8: NULL at [rsp+0x38]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x38, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "WideCharToMultiByte");
+
+    // Step 8: Free the argv array from CommandLineToArgvW
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCallImport("kernel32.dll", "LocalFree");
+
+    // Step 9: Return buffer pointer
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // File I/O runtime stubs
+  // ==========================================================================
+
+  /// <summary>maxon_file_open_read(cstring_path) -> handle: returns -1 (stub, indicates failure)</summary>
+  private void EmitMaxonFileOpenRead() {
+    EmitRuntimeFunctionStart("maxon_file_open_read", 1);
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_file_size(handle) -> int: returns 0 (stub)</summary>
+  private void EmitMaxonFileSize() {
+    EmitRuntimeFunctionStart("maxon_file_size", 1);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_file_read(handle, buffer_ptr, size) -> int: returns 0 (stub)</summary>
+  private void EmitMaxonFileRead() {
+    EmitRuntimeFunctionStart("maxon_file_read", 3);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_file_close(handle): void (stub)</summary>
+  private void EmitMaxonFileClose() {
+    EmitRuntimeFunctionStart("maxon_file_close", 1);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_file_delete(cstring_path) -> int: returns 0 (stub)</summary>
+  private void EmitMaxonFileDelete() {
+    EmitRuntimeFunctionStart("maxon_file_delete", 1);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_write_file(cstring_path, cstring_content) -> int: returns 0 (stub)</summary>
+  private void EmitMaxonWriteFile() {
+    EmitRuntimeFunctionStart("maxon_write_file", 2);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_write_file_binary(cstring_path, byte_array) -> int: returns 0 (stub)</summary>
+  private void EmitMaxonWriteFileBinary() {
+    EmitRuntimeFunctionStart("maxon_write_file_binary", 2);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Directory runtime stubs
+  // ==========================================================================
+
+  /// <summary>maxon_find_first_file(cstring_pattern) -> handle: returns 0 (stub)</summary>
+  private void EmitMaxonFindFirstFile() {
+    EmitRuntimeFunctionStart("maxon_find_first_file", 1);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_find_filename(handle) -> cstring: returns 0 (stub)</summary>
+  private void EmitMaxonFindFilename() {
+    EmitRuntimeFunctionStart("maxon_find_filename", 1);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_find_next_file(handle) -> int: returns 0 (stub)</summary>
+  private void EmitMaxonFindNextFile() {
+    EmitRuntimeFunctionStart("maxon_find_next_file", 1);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_find_close(handle): void (stub)</summary>
+  private void EmitMaxonFindClose() {
+    EmitRuntimeFunctionStart("maxon_find_close", 1);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_directory_exists(cstring_path) -> int: returns 0 (stub)</summary>
+  private void EmitMaxonDirectoryExists() {
+    EmitRuntimeFunctionStart("maxon_directory_exists", 1);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Process runtime stubs
+  // ==========================================================================
+
+  /// <summary>maxon_process_create(cstring_cmd, cstring_cwd) -> handle: returns 0 (stub)</summary>
+  private void EmitMaxonProcessCreate() {
+    EmitRuntimeFunctionStart("maxon_process_create", 2);
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_process_wait(handle, timeout_ms) -> int: returns -1 (stub, error)</summary>
+  private void EmitMaxonProcessWait() {
+    EmitRuntimeFunctionStart("maxon_process_wait", 2);
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_process_get_exit_code(handle) -> int: returns -1 (stub)</summary>
+  private void EmitMaxonProcessGetExitCode() {
+    EmitRuntimeFunctionStart("maxon_process_get_exit_code", 1);
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_process_close(handle): void (stub)</summary>
+  private void EmitMaxonProcessClose() {
+    EmitRuntimeFunctionStart("maxon_process_close", 1);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // String utility runtime functions
+  // ==========================================================================
+
+  /// <summary>maxon_strlen(cstr_ptr) -> length</summary>
+  private void EmitMaxonStrlen() {
+    EmitRuntimeFunctionStart("maxon_strlen", 1);
+    // RCX = pointer to null-terminated string
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx); // RDX = ptr
+    EmitMovRegImm(X86Register.Rax, 0); // RAX = 0 (counter)
+    DefineLabel("rt_strlen_loop");
+    // movzx ecx, byte ptr [rdx+rax]: 0F B6 0C 02
+    EmitBytes(0x0F, 0xB6, 0x0C, 0x02);
+    // TEST CL, CL
+    EmitBytes(0x84, 0xC9);
+    EmitJcc("z", "rt_strlen_done");
+    // INC RAX: 48 FF C0
+    EmitBytes(0x48, 0xFF, 0xC0);
+    EmitJmp("rt_strlen_loop");
+    DefineLabel("rt_strlen_done");
+    // RAX = length
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_memcpy(dst, src, count) -> dst</summary>
+  private void EmitMaxonMemcpy() {
+    EmitRuntimeFunctionStart("maxon_memcpy", 3);
+    // RCX = dst, RDX = src, R8 = count
+    // Set up for REP MOVSB: RDI=dst, RSI=src, RCX=count
+    EmitMovRegReg(X86Register.Rdi, X86Register.Rcx); // RDI = dst
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx); // RAX = dst (return value)
+    EmitMovRegReg(X86Register.Rsi, X86Register.Rdx); // RSI = src
+    EmitMovRegReg(X86Register.Rcx, X86Register.R8);  // RCX = count
+    EmitBytes(0xF3, 0xA4); // REP MOVSB
+    // RAX already has dst
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>

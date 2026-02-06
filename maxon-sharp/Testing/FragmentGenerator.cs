@@ -166,6 +166,10 @@ public static class FragmentGenerator {
     sb.AppendLine(test.Source);
     sb.AppendLine("---");
 
+    if (test.Args != null) {
+      sb.AppendLine($"Args: {test.Args}");
+    }
+
     if (test.Expectation is SuccessExpectation success) {
       if (success.ExitCode.HasValue) {
         sb.AppendLine($"ExitCode: {success.ExitCode.Value}");
@@ -251,7 +255,7 @@ public static class FragmentGenerator {
     }
 
     var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
-    var expectation = ParseExpectation(expectationSection);
+    var (expectation, fragmentArgs) = ParseExpectation(expectationSection);
 
     // Parse generated MLIR (between second --- and third ---)
     string? generatedMLIR = null;
@@ -269,7 +273,8 @@ public static class FragmentGenerator {
       TestName = testName,
       Source = source,
       Expectation = expectation,
-      GeneratedMLIR = generatedMLIR
+      GeneratedMLIR = generatedMLIR,
+      Args = fragmentArgs
     };
   }
 
@@ -283,13 +288,14 @@ public static class FragmentGenerator {
     return string.Join('\n', lines).TrimEnd();
   }
 
-  private static TestExpectation ParseExpectation(string section) {
+  private static (TestExpectation Expectation, string? Args) ParseExpectation(string section) {
     var lines = section.Split('\n');
     int? exitCode = null;
     string? stdout = null;
     string? requiredMLIR = null;
     string? requiredRdata = null;
     string? expectedError = null;
+    string? args = null;
 
     var i = 0;
     while (i < lines.Length) {
@@ -300,6 +306,8 @@ public static class FragmentGenerator {
         if (int.TryParse(value, out var code)) {
           exitCode = code;
         }
+      } else if (line.StartsWith("Args:")) {
+        args = line["Args:".Length..].Trim();
       } else if (line.StartsWith("MaxoncStderr: ```")) {
         expectedError = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("Stdout: ```")) {
@@ -314,17 +322,17 @@ public static class FragmentGenerator {
     }
 
     if (expectedError != null) {
-      return new CompilerErrorExpectation {
+      return (new CompilerErrorExpectation {
         ExpectedStderr = expectedError
-      };
+      }, args);
     }
 
-    return new SuccessExpectation {
+    return (new SuccessExpectation {
       ExitCode = exitCode,
       Stdout = stdout,
       RequiredMLIR = requiredMLIR,
       RequiredRdata = requiredRdata
-    };
+    }, args);
   }
 
   private static string ExtractMultilineValue(string[] lines, ref int i) {

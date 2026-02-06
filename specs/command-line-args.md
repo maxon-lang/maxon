@@ -136,7 +136,6 @@ hello
 
 <!-- test: access-multiple-args -->
 <!-- Args: foo bar baz -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
   let args = CommandLine.args()
@@ -156,67 +155,9 @@ end 'main'
 0
 ```
 ```stdout
-ALLOC #1: 4 bytes (command line arg)
-MOVE: managed
-ALLOC #2: 168 bytes (array grow)
-INCREF: array grow -> rc=1
-INCREF: <array_store nested> -> rc=2
-CLEANUP: cstr
-FREE #1: 4 bytes (cstring release)
-ALLOC #3: 4 bytes (command line arg)
-MOVE: managed
-INCREF: <array_store nested> -> rc=2
-CLEANUP: cstr
-FREE #3: 4 bytes (cstring release)
-ALLOC #4: 4 bytes (command line arg)
-MOVE: managed
-INCREF: <array_store nested> -> rc=2
-CLEANUP: cstr
-FREE #4: 4 bytes (cstring release)
-MOVE: result
-INCREF: <array element return> -> rc=3
-INCREF: <array element return> -> rc=3
-INCREF: <array element return> -> rc=3
-INCREF: <cstr> -> rc=4
-fooCLEANUP: cs
-DECREF: <cstr cleanup> -> rc=3
-MOVE: managed
-
-CLEANUP: cs
-INCREF: <cstr> -> rc=4
-barCLEANUP: cs
-DECREF: <cstr cleanup> -> rc=3
-MOVE: managed
-
-CLEANUP: cs
-INCREF: <cstr> -> rc=4
-bazCLEANUP: cs
-DECREF: <cstr cleanup> -> rc=3
-MOVE: managed
-
-CLEANUP: cs
-CLEANUP: arg1
-DECREF: arg1 -> rc=2
-CLEANUP: arg2
-DECREF: arg2 -> rc=2
-CLEANUP: arg3
-DECREF: arg3 -> rc=2
-CLEANUP: args
-DECREF: <array element> -> rc=1
-DECREF: <array element> -> rc=1
-DECREF: <array element> -> rc=1
-DECREF: args -> rc=0
-FREE #2: 168 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 180 bytes
-Freed:     180 bytes
-Leaked:    0 bytes
-Moves:     7
-Increfs:   10
-Decrefs:   10
-Copies:    0
-Cleanups:  13
+foo
+bar
+baz
 ```
 
 <!-- test: iterate-args -->

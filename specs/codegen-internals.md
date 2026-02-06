@@ -206,14 +206,14 @@ module {
     %4 = maxon.literal {value = 8 : i64}
     %5 = maxon.struct_literal @__ManagedMemory
     %6 = maxon.literal {value = 0 : i64}
-    %7 = maxon.struct_literal @Array
+    %7 = maxon.struct_literal @IntArray
     maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
     %8 = maxon.literal {value = 0 : i64}
     %9 = maxon.literal {value = 77 : i64}
-    maxon.call @stdlib.Array.set %7, %8, %9
+    maxon.call @IntArray.set %7, %8, %9
     %10 = maxon.struct_var_ref arr
     %11 = maxon.literal {value = 0 : i64}
-    %14, %13 = maxon.try_call @stdlib.Array.get %10, %11
+    %14, %13 = maxon.try_call @IntArray.get %10, %11
     %15 = maxon.literal {value = 0 : i64}
     maxon.assign %15 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %14 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -279,7 +279,7 @@ module {
     %24 = memref.load arr.iterIndex : i64
     memref.store %24, __selfbuf_19.iterIndex
     %25 = memref.lea __selfbuf_19
-    func.call @stdlib.Array.set %25, %17, %18
+    func.call @IntArray.set %25, %17, %18
     %26 = memref.load __selfbuf_19.iterIndex : i64
     memref.store %26, arr.iterIndex
     %27 = memref.load __selfbuf_19.managed.buffer : i64
@@ -302,7 +302,7 @@ module {
     %37 = memref.load arr.iterIndex : i64
     memref.store %37, __selfbuf_32.iterIndex
     %38 = memref.lea __selfbuf_32
-    %39, %40 = func.try_call @stdlib.Array.get %38, %31
+    %39, %40 = func.try_call @IntArray.get %38, %31
     memref.store %40, __error_flag
     %41 = memref.load __selfbuf_32.iterIndex : i64
     memref.store %41, arr.iterIndex
@@ -382,7 +382,7 @@ module {
     x86.mov r8, rcx
     x86.mov rcx, rdx
     x86.mov rdx, rax
-    x86.call stdlib.Array.set
+    x86.call IntArray.set
     x86.mov eax, [rbp-152]
     x86.mov [rbp-80], eax
     x86.mov eax, [rbp-144]
@@ -406,7 +406,7 @@ module {
     x86.mov [rbp-192], ecx
     x86.lea rcx, [rbp-192]
     x86.mov rdx, rax
-    x86.call stdlib.Array.get
+    x86.call IntArray.get
     x86.mov ecx, [rbp-192]
     x86.mov [rbp-80], ecx
     x86.mov ecx, [rbp-184]

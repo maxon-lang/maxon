@@ -123,6 +123,21 @@ public class Compiler {
     foreach (var source in sources)
       PreRegisterTypeNames(module, source);
 
+    // Pre-scan all sources to register function signatures, type details, etc.
+    // so that cross-file forward references resolve regardless of parse order
+    foreach (var source in sources) {
+      try {
+        var lexer = new Lexer(source.Content);
+        var tokens = lexer.Tokenize();
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path);
+        parser.PreScan(module);
+      } catch (CompileError ex) {
+        ex.FilePath ??= source.Path;
+        throw;
+      }
+    }
+
+    // Full parse with all signatures known
     foreach (var source in sources) {
       try {
         var lexer = new Lexer(source.Content);
@@ -142,38 +157,48 @@ public class Compiler {
     var tokens = lexer.Tokenize();
     for (int i = 0; i < tokens.Count - 1; i++) {
       var t = tokens[i];
-      if (t.Type == TokenType.Export && i + 2 < tokens.Count
-          && tokens[i + 1].Type == TokenType.Type
-          && tokens[i + 2].Type == TokenType.Identifier) {
-        module.TypeDefs.TryAdd(tokens[i + 2].Value, new MlirStructType(tokens[i + 2].Value, []));
-        i += 2;
-      } else if (t.Type == TokenType.Type && tokens[i + 1].Type == TokenType.Identifier) {
+      // Skip 'export' prefix
+      if (t.Type == TokenType.Export && i + 1 < tokens.Count) {
+        i++;
+        t = tokens[i];
+      }
+
+      if (t.Type == TokenType.Type && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
+        var name = tokens[i + 1].Value;
+        var assocNames = ParseUsesClauseTokens(tokens, i + 2);
+        module.TypeDefs.TryAdd(name, new MlirStructType(name, [], assocNames));
+        i += 1;
+      } else if (t.Type == TokenType.Enum && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
+        module.TypeDefs.TryAdd(tokens[i + 1].Value, new MlirEnumType(tokens[i + 1].Value, [], null, []));
+        i += 1;
+      } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         module.TypeDefs.TryAdd(tokens[i + 1].Value, new MlirStructType(tokens[i + 1].Value, []));
         i += 1;
       }
     }
   }
+
+  /// <summary>
+  /// Token-level extraction of `uses A, B, C` clause from a type declaration.
+  /// </summary>
+  private static List<string> ParseUsesClauseTokens(List<Token> tokens, int startPos) {
+    var names = new List<string>();
+    if (startPos >= tokens.Count || tokens[startPos].Type != TokenType.Uses)
+      return names;
+    int pos = startPos + 1; // skip 'uses'
+    while (pos < tokens.Count && tokens[pos].Type == TokenType.Identifier) {
+      names.Add(tokens[pos].Value);
+      pos++;
+      if (pos < tokens.Count && tokens[pos].Type == TokenType.Comma)
+        pos++;
+      else
+        break;
+    }
+    return names;
+  }
 }
 
 public static class StdlibLoader {
-  private static readonly string[] WhitelistedModules = [
-    "Interfaces.maxon",
-    "Array.maxon",
-    "Vector.maxon",
-    "Math.maxon",
-    "Pair.maxon",
-    "Set.maxon",
-    "helpers/string/_utf8.maxon",
-    "helpers/string/_hash.maxon",
-    "helpers/string/_grapheme.maxon",
-    "helpers/string/_search.maxon",
-    "helpers/string/_utf16.maxon",
-    "String.maxon",
-    "helpers/string/_views.maxon",
-    "Character.maxon",
-    "Print.maxon"
-  ];
-
   public static string? FindStdlibPath() {
     var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
     Logger.Debug(LogCategory.Compiler, $"StdlibLoader: exeDir={exeDir}");
@@ -201,12 +226,19 @@ public static class StdlibLoader {
     var stdlibPath = FindStdlibPath();
     if (stdlibPath == null) return [];
 
+    var files = Directory.GetFiles(stdlibPath, "*.maxon", SearchOption.AllDirectories);
+
+    // Sort: helper files (in subdirectories) before top-level files, then alphabetically
+    Array.Sort(files, (a, b) => {
+      var aIsHelper = Path.GetDirectoryName(a) != stdlibPath;
+      var bIsHelper = Path.GetDirectoryName(b) != stdlibPath;
+      if (aIsHelper != bIsHelper) return aIsHelper ? -1 : 1;
+      return string.Compare(a, b, StringComparison.Ordinal);
+    });
+
     var sources = new List<SourceFile>();
-    foreach (var module in WhitelistedModules) {
-      var filePath = Path.Combine(stdlibPath, module);
-      if (File.Exists(filePath))
-        sources.Add(new SourceFile(filePath, File.ReadAllText(filePath)));
-    }
+    foreach (var filePath in files)
+      sources.Add(new SourceFile(filePath, File.ReadAllText(filePath)));
     return [.. sources];
   }
 

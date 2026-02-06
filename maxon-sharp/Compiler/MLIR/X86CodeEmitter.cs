@@ -391,10 +391,30 @@ public partial class X86CodeEmitter {
   }
 
   public void ResolveImports(int rvaOffset) {
-    // IAT entries are 8 bytes each. Import index i is at IAT offset i*8.
+    // The PE writer groups imports by DLL (using GroupBy which preserves first-occurrence
+    // order of DLL names) and writes a null qword terminator after each DLL's entries in
+    // the IAT. We must replicate this grouping to compute the correct IAT byte offset
+    // for each import index.
+    var iatByteOffsets = new int[_imports.Count];
+    var dllGroups = _imports.Select((imp, idx) => (imp, idx))
+                            .GroupBy(x => x.imp.DllName)
+                            .ToList();
+    var currentOffset = 0;
+    foreach (var group in dllGroups) {
+      foreach (var (_, idx) in group) {
+        iatByteOffsets[idx] = currentOffset;
+        currentOffset += 8;
+      }
+      currentOffset += 8; // null terminator after each DLL group
+    }
+
+    for (int i = 0; i < _imports.Count; i++) {
+      Logger.Debug(LogCategory.Codegen, $"Import[{i}] = {_imports[i].DllName}::{_imports[i].FunctionName} -> IAT offset 0x{iatByteOffsets[i]:X}");
+    }
+
     var codeSize = _code.Count;
     foreach (var (offset, importIndex) in _importCallFixups) {
-      var iatEntryOffset = importIndex * 8;
+      var iatEntryOffset = iatByteOffsets[importIndex];
       var target = codeSize + rvaOffset + iatEntryOffset;
       var rel = target - (offset + 4);
       PatchDword(offset, rel);

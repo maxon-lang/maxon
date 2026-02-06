@@ -31,9 +31,6 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   public Dictionary<string, List<string>> InterfaceAssociatedTypes { get; } = [];
 
   public void AddFunction(MlirFunction<TOp> func) {
-    if (func.Name.Contains("ensureCapacity")) {
-      Logger.Debug(LogCategory.Parser, $"AddFunction: {func.Name}");
-    }
     Functions.Add(func);
   }
 
@@ -52,13 +49,19 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   }
 
   public void Merge(MlirModule<TOp> other) {
-    // Add functions, skipping any that were seeded (already exist with same name)
-    var existingNames = new HashSet<string>(Functions.Select(f => f.Name));
+    // Add or replace functions - replace stubs (no body) with full functions (with body)
+    var existingByName = Functions.ToDictionary(f => f.Name);
     foreach (var func in other.Functions) {
-      if (existingNames.Add(func.Name)) {
+      if (existingByName.TryGetValue(func.Name, out var existing)) {
+        if (func.Body.Blocks.Count > 0 && existing.Body.Blocks.Count == 0) {
+          Functions.Remove(existing);
+          Functions.Add(func);
+          existingByName[func.Name] = func;
+        }
+      } else {
         Functions.Add(func);
+        existingByName[func.Name] = func;
       }
-      // Note: duplicates are silently skipped (they were seeded from this module)
     }
     RdataEntries.AddRange(other.RdataEntries);
     Globals.AddRange(other.Globals);

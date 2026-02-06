@@ -310,7 +310,6 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
       var state = try oldStates.get(i) otherwise SlotState.Empty
 
       if state == SlotState.Occupied 'occupied'
-        // Re-insert into new arrays using insert logic
         var key = try oldKeys.get(i) otherwise 'skip_key'
         i = i + 1
         continue 'rehash'
@@ -319,23 +318,7 @@ export type Map uses Key, Value is BuiltinDictionaryLiteral, Sized, Dictionary w
         i = i + 1
         continue 'rehash'
         end 'skip_val'
-        var hash = key.hash()
-        var index = hash mod newCapacity
-        if index < 0 'fix_negative'
-          index = index + newCapacity
-        end 'fix_negative'
-
-        // Find empty slot (no deleted slots in fresh array)
-        var currentState = try states.get(index) otherwise SlotState.Empty
-        while currentState != SlotState.Empty 'find_slot'
-          index = (index + 1) mod newCapacity
-          currentState = try states.get(index) otherwise SlotState.Empty
-        end 'find_slot'
-
-        keys.set(index, value: key)
-        values.set(index, value: value)
-        states.set(index, value: SlotState.Occupied)
-        count = count + 1
+        insert(key: key, value: value)
       end 'occupied'
       i = i + 1
     end 'rehash'

@@ -4,49 +4,51 @@
 export type Ascii
   /// Returns true if character is an ASCII digit ('0'-'9')
   export static function isDigit(c Character) returns bool
-    return match c 'check'
-      '0'..='9' gives true
-      default gives false
-    end 'check'
+    if c.byteLength() != 1 'notAscii'
+      return false
+    end 'notAscii'
+    let code = try c.asciiValue() otherwise 0
+    return code >= 48 and code <= 57
   end 'isDigit'
 
   /// Returns true if character is an ASCII letter ('a'-'z' or 'A'-'Z')
   export static function isAlpha(c Character) returns bool
-    return match c 'check'
-      'a'..='z' or 'A'..='Z' gives true
-      default gives false
-    end 'check'
+    if c.byteLength() != 1 'notAscii'
+      return false
+    end 'notAscii'
+    let code = try c.asciiValue() otherwise 0
+    return (code >= 65 and code <= 90) or (code >= 97 and code <= 122)
   end 'isAlpha'
 
   /// Returns true if character is alphanumeric ('a'-'z', 'A'-'Z', or '0'-'9')
   export static function isAlphanumeric(c Character) returns bool
-    return match c 'check'
-      'a'..='z' or 'A'..='Z' or '0'..='9' gives true
-      default gives false
-    end 'check'
+    return Ascii.isAlpha(c) or Ascii.isDigit(c)
   end 'isAlphanumeric'
 
   /// Returns true if character is ASCII whitespace (space, tab, newline, carriage return)
   export static function isWhitespace(c Character) returns bool
-    return match c 'check'
-      ' ' or '\t' or '\n' or '\r' gives true
-      default gives false
-    end 'check'
+    if c.byteLength() != 1 'notAscii'
+      return false
+    end 'notAscii'
+    let code = try c.asciiValue() otherwise 0
+    return code == 32 or code == 9 or code == 10 or code == 13
   end 'isWhitespace'
 
   /// Returns true if character is an ASCII uppercase letter ('A'-'Z')
   export static function isUpper(c Character) returns bool
-    return match c 'check'
-      'A'..='Z' gives true
-      default gives false
-    end 'check'
+    if c.byteLength() != 1 'notAscii'
+      return false
+    end 'notAscii'
+    let code = try c.asciiValue() otherwise 0
+    return code >= 65 and code <= 90
   end 'isUpper'
 
   /// Returns true if character is an ASCII lowercase letter ('a'-'z')
   export static function isLower(c Character) returns bool
-    return match c 'check'
-      'a'..='z' gives true
-      default gives false
-    end 'check'
+    if c.byteLength() != 1 'notAscii'
+      return false
+    end 'notAscii'
+    let code = try c.asciiValue() otherwise 0
+    return code >= 97 and code <= 122
   end 'isLower'
 end 'Ascii'

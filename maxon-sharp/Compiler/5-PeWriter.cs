@@ -146,9 +146,10 @@ public class PeWriter {
     for (int i = 2; i < 12; i++) {
       writer.Write((uint)0); writer.Write((uint)0);
     }
-    // 12: IAT (Import Address Table)
+    // 12: IAT (Import Address Table) — size includes per-DLL null terminators
+    var numDllGroups = hasImports ? imports.GroupBy(i => i.DllName).Count() : 0;
     writer.Write(hasImports ? iatRva : 0u);
-    writer.Write(hasImports ? (uint)(imports.Count * 8 + 8) : 0u);
+    writer.Write(hasImports ? (uint)((imports.Count + numDllGroups) * 8) : 0u);
     // 13-15: Remaining directories (zeros)
     for (int i = 13; i < 16; i++) {
       writer.Write((uint)0); writer.Write((uint)0);

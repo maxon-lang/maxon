@@ -316,7 +316,7 @@ public static class MonomorphizationPass {
       if (elementType == MlirType.I8) return MaxonValueKind.Byte;
       if (elementType == MlirType.I1) return MaxonValueKind.Bool;
       // Struct type means the element is a user-defined type, keep as Integer
-      if (elementType is MlirStructType) return MaxonValueKind.Integer;
+      if (elementType is MlirStructType or MlirEnumType) return MaxonValueKind.Integer;
       throw new InvalidOperationException($"SubstituteValueKind: unsupported element type '{elementType.Name}'");
     }
     return kind;
@@ -625,7 +625,8 @@ public static class MonomorphizationPass {
       case MaxonManagedMemGetOp memGet: {
         // Substitute result kind if Element type was substituted
         var resultKind = SubstituteValueKind(memGet.ResultKind, typeSubstitution);
-        var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind);
+        var isStructElem = typeSubstitution.TryGetValue("Element", out var getElemType) && getElemType is MlirStructType;
+        var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind) { IsStructElement = isStructElem };
         RegisterResult(memGet.Result, cloned.Result);
         return cloned;
       }
@@ -633,8 +634,9 @@ public static class MonomorphizationPass {
       case MaxonManagedMemSetOp memSet: {
         // Substitute element kind if Element type was substituted
         var elementKind = SubstituteValueKind(memSet.ElementKind, typeSubstitution);
+        var isStructElem = typeSubstitution.TryGetValue("Element", out var setElemType) && setElemType is MlirStructType;
         var mappedValue = MapValue(memSet.Value);
-        return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, elementKind);
+        return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, elementKind) { IsStructElement = isStructElem };
       }
 
       case MaxonManagedMemCreateOp memCreate: {
@@ -658,6 +660,14 @@ public static class MonomorphizationPass {
       case MaxonManagedMemSliceOp memSlice: {
         var cloned = new MaxonManagedMemSliceOp(MapValue(memSlice.Managed), MapValue(memSlice.Start), MapValue(memSlice.End));
         RegisterResult(memSlice.Result, cloned.Result);
+        return cloned;
+      }
+
+      case MaxonCallRuntimeOp callRtOp: {
+        var newArgs = callRtOp.Args.Select(a => MapValue(a)).ToList();
+        var cloned = new MaxonCallRuntimeOp(callRtOp.FunctionName, newArgs, callRtOp.Result != null);
+        if (callRtOp.Result != null && cloned.Result != null)
+          RegisterResult(callRtOp.Result, cloned.Result);
         return cloned;
       }
 
