@@ -1,0 +1,85 @@
+// Test: docs-example-10
+function main() returns int
+  var temp = 25
+  let category = match temp 'weather'
+    min upto 0 gives 1      // freezing
+    0 upto 15 gives 2    // cold  
+    15 upto 25 gives 3   // mild
+    25 to max gives 4      // warm
+  end 'weather'
+  return category
+end 'main'
+
+---
+ExitCode: 4
+---
+module {
+  func @match-statements.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 25
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.jmp match-statements.main.weather_0.cmp0
+  weather_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jge match-statements.main.weather_0.cmp1
+  weather_0.case0:
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.weather_0.merge
+  weather_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setge edx
+    x86.movzx edx, edxb
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, 15
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.and edx, edi
+    x86.test edx, edx
+    x86.je match-statements.main.weather_0.cmp2
+  weather_0.case1:
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.weather_0.merge
+  weather_0.cmp2:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 15
+    x86.cmp eax, ecx
+    x86.setge edx
+    x86.movzx edx, edxb
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, 25
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.and edx, edi
+    x86.test edx, edx
+    x86.je match-statements.main.weather_0.cmp3
+  weather_0.case2:
+    x86.mov eax, 3
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.weather_0.merge
+  weather_0.cmp3:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 25
+    x86.cmp eax, ecx
+    x86.jl match-statements.main.weather_0.merge
+  weather_0.case3:
+    x86.mov eax, 4
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.weather_0.merge
+  weather_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

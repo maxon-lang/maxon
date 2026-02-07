@@ -5159,27 +5159,29 @@ module {
     %1 = maxon.var_ref {var = __match_check_0} {type = i64}
     %2 = maxon.literal {value = 1 : i64}
     %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
-    %4 = maxon.literal {value = 2 : i64}
-    %5 = maxon.binop %1, %4 {op = eq} {kind = i64}
-    %6 = maxon.binop %3, %5 {op = or} {kind = i1}
-    maxon.cond_br %6 [then: check_0.case0, else: check_0.cmp1]
+    %4 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %5 = maxon.literal {value = 2 : i64}
+    %6 = maxon.binop %4, %5 {op = eq} {kind = i64}
+    %7 = maxon.binop %3, %6 {op = or} {kind = i1}
+    maxon.cond_br %7 [then: check_0.case0, else: check_0.cmp1]
   check_0.case0:
-    %7 = maxon.literal {value = 10 : i64}
-    maxon.return %7
+    %8 = maxon.literal {value = 10 : i64}
+    maxon.return %8
   check_0.cmp1:
-    %8 = maxon.var_ref {var = __match_check_0} {type = i64}
-    %9 = maxon.literal {value = 3 : i64}
-    %10 = maxon.binop %8, %9 {op = eq} {kind = i64}
-    %11 = maxon.literal {value = 4 : i64}
-    %12 = maxon.binop %8, %11 {op = eq} {kind = i64}
-    %13 = maxon.binop %10, %12 {op = or} {kind = i1}
-    maxon.cond_br %13 [then: check_0.case1, else: check_0.case2]
+    %9 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %10 = maxon.literal {value = 3 : i64}
+    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
+    %12 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %13 = maxon.literal {value = 4 : i64}
+    %14 = maxon.binop %12, %13 {op = eq} {kind = i64}
+    %15 = maxon.binop %11, %14 {op = or} {kind = i1}
+    maxon.cond_br %15 [then: check_0.case1, else: check_0.case2]
   check_0.case1:
-    %14 = maxon.literal {value = 20 : i64}
-    maxon.return %14
+    %16 = maxon.literal {value = 20 : i64}
+    maxon.return %16
   check_0.case2:
-    %15 = maxon.literal {value = 0 : i64}
-    maxon.return %15
+    %17 = maxon.literal {value = 0 : i64}
+    maxon.return %17
   check_0.merge:
   }
 }
@@ -5195,27 +5197,29 @@ module {
     %1 = memref.load __match_check_0 : i64
     %2 = arith.constant {value = 1 : i64}
     %3 = arith.cmpi eq %1, %2
-    %4 = arith.constant {value = 2 : i64}
-    %5 = arith.cmpi eq %1, %4
-    %6 = arith.ori1 %3, %5
-    cf.cond_br %6 [then: check_0.case0, else: check_0.cmp1]
+    %4 = memref.load __match_check_0 : i64
+    %5 = arith.constant {value = 2 : i64}
+    %6 = arith.cmpi eq %4, %5
+    %7 = arith.ori1 %3, %6
+    cf.cond_br %7 [then: check_0.case0, else: check_0.cmp1]
   check_0.case0:
-    %7 = arith.constant {value = 10 : i64}
-    func.return %7
+    %8 = arith.constant {value = 10 : i64}
+    func.return %8
   check_0.cmp1:
-    %8 = memref.load __match_check_0 : i64
-    %9 = arith.constant {value = 3 : i64}
-    %10 = arith.cmpi eq %8, %9
-    %11 = arith.constant {value = 4 : i64}
-    %12 = arith.cmpi eq %8, %11
-    %13 = arith.ori1 %10, %12
-    cf.cond_br %13 [then: check_0.case1, else: check_0.case2]
+    %9 = memref.load __match_check_0 : i64
+    %10 = arith.constant {value = 3 : i64}
+    %11 = arith.cmpi eq %9, %10
+    %12 = memref.load __match_check_0 : i64
+    %13 = arith.constant {value = 4 : i64}
+    %14 = arith.cmpi eq %12, %13
+    %15 = arith.ori1 %11, %14
+    cf.cond_br %15 [then: check_0.case1, else: check_0.case2]
   check_0.case1:
-    %14 = arith.constant {value = 20 : i64}
-    func.return %14
+    %16 = arith.constant {value = 20 : i64}
+    func.return %16
   check_0.case2:
-    %15 = arith.constant {value = 0 : i64}
-    func.return %15
+    %17 = arith.constant {value = 0 : i64}
+    func.return %17
   check_0.merge:
   }
 }
@@ -5233,11 +5237,12 @@ module {
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, 2
-    x86.cmp eax, ebx
-    x86.sete esi
-    x86.movzx esi, esib
-    x86.or edx, esi
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 2
+    x86.cmp ebx, esi
+    x86.sete edi
+    x86.movzx edi, edib
+    x86.or edx, edi
     x86.test edx, edx
     x86.je register-allocator.main.check_0.cmp1
   check_0.case0:
@@ -5250,11 +5255,12 @@ module {
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, 4
-    x86.cmp eax, ebx
-    x86.sete esi
-    x86.movzx esi, esib
-    x86.or edx, esi
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 4
+    x86.cmp ebx, esi
+    x86.sete edi
+    x86.movzx edi, edib
+    x86.or edx, edi
     x86.test edx, edx
     x86.je register-allocator.main.check_0.case2
   check_0.case1:
@@ -5609,34 +5615,36 @@ module {
     %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %3 = maxon.literal {value = 1 : i64}
     %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
-    %5 = maxon.literal {value = 2 : i64}
-    %6 = maxon.binop %2, %5 {op = eq} {kind = i64}
-    %7 = maxon.binop %4, %6 {op = or} {kind = i1}
-    maxon.cond_br %7 [then: eval_0.case0, else: eval_0.cmp1]
+    %5 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %6 = maxon.literal {value = 2 : i64}
+    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
+    %8 = maxon.binop %4, %7 {op = or} {kind = i1}
+    maxon.cond_br %8 [then: eval_0.case0, else: eval_0.cmp1]
   eval_0.case0:
-    %8 = maxon.literal {value = 10 : i64}
-    maxon.assign %8 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    %9 = maxon.literal {value = 10 : i64}
+    maxon.assign %9 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
     maxon.br eval_0.merge
   eval_0.cmp1:
-    %9 = maxon.var_ref {var = __match_eval_0} {type = i64}
-    %10 = maxon.literal {value = 3 : i64}
-    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
-    %12 = maxon.literal {value = 4 : i64}
-    %13 = maxon.binop %9, %12 {op = eq} {kind = i64}
-    %14 = maxon.binop %11, %13 {op = or} {kind = i1}
-    maxon.cond_br %14 [then: eval_0.case1, else: eval_0.case2]
+    %10 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %11 = maxon.literal {value = 3 : i64}
+    %12 = maxon.binop %10, %11 {op = eq} {kind = i64}
+    %13 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %14 = maxon.literal {value = 4 : i64}
+    %15 = maxon.binop %13, %14 {op = eq} {kind = i64}
+    %16 = maxon.binop %12, %15 {op = or} {kind = i1}
+    maxon.cond_br %16 [then: eval_0.case1, else: eval_0.case2]
   eval_0.case1:
-    %15 = maxon.literal {value = 20 : i64}
-    maxon.assign %15 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    %17 = maxon.literal {value = 20 : i64}
+    maxon.assign %17 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
     maxon.br eval_0.merge
   eval_0.case2:
-    %16 = maxon.literal {value = 0 : i64}
-    maxon.assign %16 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    %18 = maxon.literal {value = 0 : i64}
+    maxon.assign %18 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
     maxon.br eval_0.merge
   eval_0.merge:
-    %17 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
-    maxon.assign %17 {var = result} {kind = i64} {decl = 1 : i1}
-    maxon.return %17
+    %19 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
+    maxon.assign %19 {var = result} {kind = i64} {decl = 1 : i1}
+    maxon.return %19
   }
 }
 === standard
@@ -5653,34 +5661,36 @@ module {
     %2 = memref.load __match_eval_0 : i64
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.cmpi eq %2, %3
-    %5 = arith.constant {value = 2 : i64}
-    %6 = arith.cmpi eq %2, %5
-    %7 = arith.ori1 %4, %6
-    cf.cond_br %7 [then: eval_0.case0, else: eval_0.cmp1]
+    %5 = memref.load __match_eval_0 : i64
+    %6 = arith.constant {value = 2 : i64}
+    %7 = arith.cmpi eq %5, %6
+    %8 = arith.ori1 %4, %7
+    cf.cond_br %8 [then: eval_0.case0, else: eval_0.cmp1]
   eval_0.case0:
-    %8 = arith.constant {value = 10 : i64}
-    memref.store %8, __matchexpr_eval_0
+    %9 = arith.constant {value = 10 : i64}
+    memref.store %9, __matchexpr_eval_0
     cf.br eval_0.merge
   eval_0.cmp1:
-    %9 = memref.load __match_eval_0 : i64
-    %10 = arith.constant {value = 3 : i64}
-    %11 = arith.cmpi eq %9, %10
-    %12 = arith.constant {value = 4 : i64}
-    %13 = arith.cmpi eq %9, %12
-    %14 = arith.ori1 %11, %13
-    cf.cond_br %14 [then: eval_0.case1, else: eval_0.case2]
+    %10 = memref.load __match_eval_0 : i64
+    %11 = arith.constant {value = 3 : i64}
+    %12 = arith.cmpi eq %10, %11
+    %13 = memref.load __match_eval_0 : i64
+    %14 = arith.constant {value = 4 : i64}
+    %15 = arith.cmpi eq %13, %14
+    %16 = arith.ori1 %12, %15
+    cf.cond_br %16 [then: eval_0.case1, else: eval_0.case2]
   eval_0.case1:
-    %15 = arith.constant {value = 20 : i64}
-    memref.store %15, __matchexpr_eval_0
+    %17 = arith.constant {value = 20 : i64}
+    memref.store %17, __matchexpr_eval_0
     cf.br eval_0.merge
   eval_0.case2:
-    %16 = arith.constant {value = 0 : i64}
-    memref.store %16, __matchexpr_eval_0
+    %18 = arith.constant {value = 0 : i64}
+    memref.store %18, __matchexpr_eval_0
     cf.br eval_0.merge
   eval_0.merge:
-    %17 = memref.load __matchexpr_eval_0 : i64
-    memref.store %17, result
-    func.return %17
+    %19 = memref.load __matchexpr_eval_0 : i64
+    memref.store %19, result
+    func.return %19
   }
 }
 === x86
@@ -5699,11 +5709,12 @@ module {
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, 2
-    x86.cmp eax, ebx
-    x86.sete esi
-    x86.movzx esi, esib
-    x86.or edx, esi
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, 2
+    x86.cmp ebx, esi
+    x86.sete edi
+    x86.movzx edi, edib
+    x86.or edx, edi
     x86.test edx, edx
     x86.je register-allocator.main.eval_0.cmp1
   eval_0.case0:
@@ -5716,11 +5727,12 @@ module {
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, 4
-    x86.cmp eax, ebx
-    x86.sete esi
-    x86.movzx esi, esib
-    x86.or edx, esi
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, 4
+    x86.cmp ebx, esi
+    x86.sete edi
+    x86.movzx edi, edib
+    x86.or edx, edi
     x86.test edx, edx
     x86.je register-allocator.main.eval_0.case2
   eval_0.case1:

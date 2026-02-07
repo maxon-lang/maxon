@@ -35,6 +35,7 @@ public enum ErrorCode {
   ParserMatchFallthroughWithReturn = 2025,
   ParserMatchNotExhaustive = 2026,
   ParserMatchDuplicatePattern = 2027,
+  ParserMatchTypeMismatch = 2028,
   ParserMatchDefaultNotLast = 2029,
   ParserMatchMissingBlockId = 2042,
   ParserMatchMismatchedBlockId = 2043,

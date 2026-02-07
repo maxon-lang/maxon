@@ -2,8 +2,6 @@
 You *Are* Going To Read It
 
 ## Priorities
-- range()
-- check for conflicting symbols (especially typealias), exported and non-exported
 - self hosting features
 - debugging (speed up the dev process)
 - memory safety (generational references)

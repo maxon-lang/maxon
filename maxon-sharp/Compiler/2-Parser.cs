@@ -3585,22 +3585,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Match statement / expression
   // ============================================================================
 
-  private record MatchPattern(long RawValue, string DisplayName, int Line, int Column);
+  private abstract record MatchPattern(string DisplayName, int Line, int Column);
+  private sealed record ExactIntPattern(long Value, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
+  private sealed record ExactFloatPattern(double Value, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
+  private sealed record ExactStringPattern(string Value, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
+  private sealed record ExactCharPattern(string Value, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
+  private sealed record RangePattern(RangeBound? Lower, RangeBound? Upper, bool UpperInclusive, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
+
+  private abstract record RangeBound;
+  private sealed record IntRangeBound(long Value) : RangeBound;
+  private sealed record FloatRangeBound(double Value) : RangeBound;
+  private sealed record CharRangeBound(string Value) : RangeBound;
 
   /// <summary>
-  /// Parses match case patterns (integer literals or enum member access like Color.red).
+  /// Parses match case patterns. Supports integer, float, string, character literals,
+  /// enum member access, and range patterns (to/upto/min/max).
   /// Multiple patterns can be separated by 'or'. Returns the list of parsed patterns.
   /// Also tracks seen patterns for duplicate detection and enum cases for exhaustiveness.
   /// </summary>
   private List<MatchPattern> ParseMatchPatterns(
       string? enumTypeName, MlirEnumType? enumType,
-      HashSet<long> seenPatterns, HashSet<string> seenEnumCases) {
+      HashSet<string> seenPatternKeys, HashSet<string> seenEnumCases,
+      MaxonValueKind compareKind, string? structTypeName) {
     var patterns = new List<MatchPattern>();
     while (true) {
       var patternLine = Current().Line;
       var patternCol = Current().Column;
 
       if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+        // Enum pattern: Type.case
         var enumTypeToken = Advance();
         Advance(); // consume '.'
         var caseNameToken = Expect(TokenType.Identifier);
@@ -3617,44 +3630,109 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             $"unknown enum case: '{caseNameToken.Value}'",
             caseNameToken.Line, caseNameToken.Column);
 
-        long rawValue;
-        if (enumType.BackingType == MlirType.F64) {
-          rawValue = BitConverter.DoubleToInt64Bits((double)enumCase.RawValue!);
-        } else if (enumType.BackingType == MlirType.I64) {
-          rawValue = (long)enumCase.RawValue!;
-        } else if (enumType.BackingType == null) {
-          rawValue = enumCase.Ordinal;
-        } else {
-          throw new InvalidOperationException($"Unsupported enum backing type in match pattern: {enumType.BackingType}");
-        }
-
         var displayName = $"{patternEnumName}.{caseNameToken.Value}";
-        if (!seenPatterns.Add(rawValue)) {
+        if (!seenPatternKeys.Add(displayName)) {
           throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
             $"duplicate pattern in match: '{displayName}'",
             patternLine, patternCol);
         }
         seenEnumCases.Add(caseNameToken.Value);
-        patterns.Add(new MatchPattern(rawValue, displayName, patternLine, patternCol));
-      } else if (Check(TokenType.IntegerLiteral)) {
-        var litToken = Advance();
-        var litValue = ParseIntegerLiteral(litToken);
-        if (!seenPatterns.Add(litValue)) {
-          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
-            $"duplicate pattern in match: '{litValue}'",
+
+        if (enumType.BackingType == MlirType.F64) {
+          var rawValue = (double)enumCase.RawValue!;
+          patterns.Add(new ExactFloatPattern(rawValue, displayName, patternLine, patternCol));
+        } else {
+          long rawValue;
+          if (enumType.BackingType == MlirType.I64) {
+            rawValue = (long)enumCase.RawValue!;
+          } else if (enumType.BackingType == null) {
+            rawValue = enumCase.Ordinal;
+          } else {
+            throw new InvalidOperationException($"Unsupported enum backing type in match pattern: {enumType.BackingType}");
+          }
+          patterns.Add(new ExactIntPattern(rawValue, displayName, patternLine, patternCol));
+        }
+      } else if (Check(TokenType.Identifier) && Current().Value == "min") {
+        // Open-ended lower bound: min to/upto <upper>
+        Advance(); // consume 'min'
+        if (compareKind == MaxonValueKind.Struct) {
+          throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+            $"'min' is only valid for numeric range patterns",
             patternLine, patternCol);
         }
-        patterns.Add(new MatchPattern(litValue, litValue.ToString(), patternLine, patternCol));
-      } else if (Check(TokenType.Minus) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.IntegerLiteral) {
-        Advance(); // consume '-'
-        var litToken = Advance();
-        var litValue = -ParseIntegerLiteral(litToken);
-        if (!seenPatterns.Add(litValue)) {
+        bool upperInclusive = true;
+        if (Check(TokenType.To)) {
+          Advance();
+        } else if (Check(TokenType.Upto)) {
+          Advance();
+          upperInclusive = false;
+        } else {
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            "'min' must be followed by 'to' or 'upto'",
+            Current().Line, Current().Column);
+        }
+        var upper = ParseRangeEndpoint(compareKind);
+        var displayName = $"min {(upperInclusive ? "to" : "upto")} {RangeBoundDisplay(upper)}";
+        if (!seenPatternKeys.Add(displayName)) {
           throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
-            $"duplicate pattern in match: '{litValue}'",
+            $"duplicate pattern in match: '{displayName}'",
             patternLine, patternCol);
         }
-        patterns.Add(new MatchPattern(litValue, litValue.ToString(), patternLine, patternCol));
+        patterns.Add(new RangePattern(null, upper, upperInclusive, displayName, patternLine, patternCol));
+      } else if (Check(TokenType.IntegerLiteral) || (Check(TokenType.Minus) && _pos + 1 < _tokens.Count
+          && (_tokens[_pos + 1].Type == TokenType.IntegerLiteral || _tokens[_pos + 1].Type == TokenType.FloatLiteral))) {
+        // Integer or negative integer/float, possibly followed by range
+        if (compareKind == MaxonValueKind.Struct) {
+          throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+            $"pattern type 'int' does not match scrutinee type '{structTypeName}'",
+            patternLine, patternCol);
+        }
+        bool negative = false;
+        if (Check(TokenType.Minus)) {
+          Advance(); // consume '-'
+          negative = true;
+        }
+        if (Check(TokenType.FloatLiteral)) {
+          // Negative float
+          var litToken = Advance();
+          var litValue = double.Parse(litToken.Value, System.Globalization.CultureInfo.InvariantCulture);
+          if (negative) litValue = -litValue;
+          patterns.Add(ParseFloatPatternOrRange(litValue, compareKind, seenPatternKeys, patternLine, patternCol));
+        } else {
+          var litToken = Advance();
+          var litValue = ParseIntegerLiteral(litToken);
+          if (negative) litValue = -litValue;
+          patterns.Add(ParseIntPatternOrRange(litValue, compareKind, seenPatternKeys, patternLine, patternCol));
+        }
+      } else if (Check(TokenType.FloatLiteral)) {
+        if (compareKind == MaxonValueKind.Struct) {
+          throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+            $"pattern type 'float' does not match scrutinee type '{structTypeName}'",
+            patternLine, patternCol);
+        }
+        var litToken = Advance();
+        var litValue = double.Parse(litToken.Value, System.Globalization.CultureInfo.InvariantCulture);
+        patterns.Add(ParseFloatPatternOrRange(litValue, compareKind, seenPatternKeys, patternLine, patternCol));
+      } else if (Check(TokenType.StringLiteral)) {
+        if (compareKind != MaxonValueKind.Struct || structTypeName == null ||
+            !(_typeRegistry[structTypeName] is MlirStructType st && st.ConformingInterfaces.Contains("BuiltinStringLiteral"))) {
+          var scrutineeTypeName = enumTypeName ?? structTypeName ?? KindToTypeName(compareKind);
+          throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+            $"pattern type 'String' does not match scrutinee type '{scrutineeTypeName}'",
+            Current().Line, Current().Column);
+        }
+        var strToken = Advance();
+        var displayName = $"\"{strToken.Value}\"";
+        if (!seenPatternKeys.Add(displayName)) {
+          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+            $"duplicate pattern in match: '{displayName}'",
+            patternLine, patternCol);
+        }
+        patterns.Add(new ExactStringPattern(strToken.Value, displayName, patternLine, patternCol));
+      } else if (Check(TokenType.CharacterLiteral) && structTypeName != null &&
+          _typeRegistry[structTypeName] is MlirStructType charSt && charSt.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
+        var charToken = Advance();
+        patterns.Add(ParseCharPatternOrRange(charToken.Value, seenPatternKeys, patternLine, patternCol));
       } else {
         throw new CompileError(ErrorCode.ParserExpectedExpression,
           $"Expected pattern value, got '{Current().Value}'",
@@ -3671,6 +3749,142 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return patterns;
   }
 
+  private MatchPattern ParseIntPatternOrRange(long value, MaxonValueKind compareKind,
+      HashSet<string> seenPatternKeys, int patternLine, int patternCol) {
+    if (Check(TokenType.To) || Check(TokenType.Upto)) {
+      bool upperInclusive = Check(TokenType.To);
+      Advance();
+      RangeBound? upper = null;
+      if (Check(TokenType.Identifier) && Current().Value == "max") {
+        Advance();
+      } else {
+        upper = ParseRangeEndpoint(compareKind);
+      }
+      var lower = compareKind == MaxonValueKind.Float
+        ? (RangeBound)new FloatRangeBound(value)
+        : new IntRangeBound(value);
+      var displayName = $"{value} {(upperInclusive ? "to" : "upto")} {(upper == null ? "max" : RangeBoundDisplay(upper))}";
+      if (!seenPatternKeys.Add(displayName)) {
+        throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+          $"duplicate pattern in match: '{displayName}'",
+          patternLine, patternCol);
+      }
+      return new RangePattern(lower, upper, upperInclusive, displayName, patternLine, patternCol);
+    }
+    var display = value.ToString();
+    if (!seenPatternKeys.Add(display)) {
+      throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+        $"duplicate pattern in match: '{display}'",
+        patternLine, patternCol);
+    }
+    if (compareKind == MaxonValueKind.Float) {
+      return new ExactFloatPattern(value, display, patternLine, patternCol);
+    }
+    return new ExactIntPattern(value, display, patternLine, patternCol);
+  }
+
+  private MatchPattern ParseFloatPatternOrRange(double value, MaxonValueKind compareKind,
+      HashSet<string> seenPatternKeys, int patternLine, int patternCol) {
+    if (Check(TokenType.To) || Check(TokenType.Upto)) {
+      bool upperInclusive = Check(TokenType.To);
+      Advance();
+      RangeBound? upper = null;
+      if (Check(TokenType.Identifier) && Current().Value == "max") {
+        Advance();
+      } else {
+        upper = ParseRangeEndpoint(compareKind);
+      }
+      var lower = new FloatRangeBound(value);
+      var displayName = $"{value} {(upperInclusive ? "to" : "upto")} {(upper == null ? "max" : RangeBoundDisplay(upper))}";
+      if (!seenPatternKeys.Add(displayName)) {
+        throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+          $"duplicate pattern in match: '{displayName}'",
+          patternLine, patternCol);
+      }
+      return new RangePattern(lower, upper, upperInclusive, displayName, patternLine, patternCol);
+    }
+    var display = value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    if (!seenPatternKeys.Add(display)) {
+      throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+        $"duplicate pattern in match: '{display}'",
+        patternLine, patternCol);
+    }
+    return new ExactFloatPattern(value, display, patternLine, patternCol);
+  }
+
+  private MatchPattern ParseCharPatternOrRange(string charValue, HashSet<string> seenPatternKeys,
+      int patternLine, int patternCol) {
+    if (Check(TokenType.To) || Check(TokenType.Upto)) {
+      bool upperInclusive = Check(TokenType.To);
+      Advance();
+      var upperToken = Expect(TokenType.CharacterLiteral);
+      var lower = new CharRangeBound(charValue);
+      var upper = new CharRangeBound(upperToken.Value);
+      var displayName = $"'{charValue}' {(upperInclusive ? "to" : "upto")} '{upperToken.Value}'";
+      if (!seenPatternKeys.Add(displayName)) {
+        throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+          $"duplicate pattern in match: '{displayName}'",
+          patternLine, patternCol);
+      }
+      return new RangePattern(lower, upper, upperInclusive, displayName, patternLine, patternCol);
+    }
+    var display = $"'{charValue}'";
+    if (!seenPatternKeys.Add(display)) {
+      throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+        $"duplicate pattern in match: '{display}'",
+        patternLine, patternCol);
+    }
+    return new ExactCharPattern(charValue, display, patternLine, patternCol);
+  }
+
+  private RangeBound ParseRangeEndpoint(MaxonValueKind compareKind) {
+    bool negative = false;
+    if (Check(TokenType.Minus)) {
+      Advance();
+      negative = true;
+    }
+    if (Check(TokenType.FloatLiteral)) {
+      var tok = Advance();
+      var val = double.Parse(tok.Value, System.Globalization.CultureInfo.InvariantCulture);
+      if (negative) val = -val;
+      return new FloatRangeBound(val);
+    }
+    if (Check(TokenType.IntegerLiteral)) {
+      var tok = Advance();
+      var val = ParseIntegerLiteral(tok);
+      if (negative) val = -val;
+      if (compareKind == MaxonValueKind.Float) {
+        return new FloatRangeBound(val);
+      }
+      return new IntRangeBound(val);
+    }
+    throw new CompileError(ErrorCode.ParserExpectedExpression,
+      $"Expected range endpoint, got '{Current().Value}'",
+      Current().Line, Current().Column);
+  }
+
+  private static string RangeBoundDisplay(RangeBound bound) {
+    return bound switch {
+      IntRangeBound i => i.Value.ToString(),
+      FloatRangeBound f => f.Value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+      CharRangeBound c => $"'{c.Value}'",
+      _ => throw new InvalidOperationException($"Unknown range bound type: {bound.GetType().Name}")
+    };
+  }
+
+  private static string KindToTypeName(MaxonValueKind kind) {
+    return kind switch {
+      MaxonValueKind.Integer => "int",
+      MaxonValueKind.Float => "float",
+      MaxonValueKind.Bool => "bool",
+      MaxonValueKind.Byte => "byte",
+      MaxonValueKind.Struct => "struct",
+      MaxonValueKind.Enum => "enum",
+      MaxonValueKind.Function => "function",
+      _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
+    };
+  }
+
   /// <summary>
   /// Emits comparison ops for a set of patterns against the scrutinee value.
   /// Multiple patterns are combined with logical OR.
@@ -3678,28 +3892,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private MaxonValue EmitPatternComparison(
       List<MatchPattern> patterns, string scrutTempName,
-      MaxonValueKind compareKind) {
-    var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
-    _currentBlock!.AddOp(refOp);
-    var localCompareVal = refOp.Result;
-
+      MaxonValueKind compareKind, string? structTypeName) {
     MaxonValue? combinedCmp = null;
     foreach (var pattern in patterns) {
-      MaxonLiteralOp patLit;
-      if (compareKind == MaxonValueKind.Float) {
-        patLit = new MaxonLiteralOp(BitConverter.Int64BitsToDouble(pattern.RawValue));
-      } else {
-        patLit = new MaxonLiteralOp(pattern.RawValue);
-      }
-      _currentBlock!.AddOp(patLit);
-
-      var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, localCompareVal, patLit.Result, compareKind);
-      _currentBlock!.AddOp(cmpOp);
-
+      var patternCmp = EmitSinglePatternComparison(pattern, scrutTempName, compareKind, structTypeName);
       if (combinedCmp == null) {
-        combinedCmp = cmpOp.Result;
+        combinedCmp = patternCmp;
       } else {
-        var orOp = new MaxonBinOp(MaxonBinOperator.Or, combinedCmp, cmpOp.Result, MaxonValueKind.Bool);
+        var orOp = new MaxonBinOp(MaxonBinOperator.Or, combinedCmp, patternCmp, MaxonValueKind.Bool);
         _currentBlock!.AddOp(orOp);
         combinedCmp = orOp.Result;
       }
@@ -3707,11 +3907,153 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return combinedCmp!;
   }
 
+  private MaxonValue EmitSinglePatternComparison(MatchPattern pattern, string scrutTempName,
+      MaxonValueKind compareKind, string? structTypeName) {
+    switch (pattern) {
+      case ExactIntPattern intPat: {
+        var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
+        _currentBlock!.AddOp(refOp);
+        var patLit = new MaxonLiteralOp(intPat.Value);
+        _currentBlock!.AddOp(patLit);
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, refOp.Result, patLit.Result, compareKind);
+        _currentBlock!.AddOp(cmpOp);
+        return cmpOp.Result;
+      }
+      case ExactFloatPattern floatPat: {
+        var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
+        _currentBlock!.AddOp(refOp);
+        var patLit = new MaxonLiteralOp(floatPat.Value);
+        _currentBlock!.AddOp(patLit);
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, refOp.Result, patLit.Result, compareKind);
+        _currentBlock!.AddOp(cmpOp);
+        return cmpOp.Result;
+      }
+      case ExactStringPattern stringPat: {
+        var refOp = new MaxonStructVarRefOp(scrutTempName, structTypeName!);
+        _currentBlock!.AddOp(refOp);
+        var strLit = new MaxonStringLiteralOp(stringPat.Value, structTypeName!);
+        _currentBlock!.AddOp(strLit);
+        var equalsMethodName = $"{structTypeName}.equals";
+        var equalsToken = new Token(TokenType.Identifier, equalsMethodName, pattern.Line, pattern.Column);
+        var callOp = CreateFunctionCall(equalsToken, [refOp.Result, strLit.Result]);
+        return callOp.Result!;
+      }
+      case ExactCharPattern charPat: {
+        var refOp = new MaxonStructVarRefOp(scrutTempName, structTypeName!);
+        _currentBlock!.AddOp(refOp);
+        var charLit = new MaxonCharLiteralOp(charPat.Value, structTypeName!);
+        _currentBlock!.AddOp(charLit);
+        var equalsMethodName = $"{structTypeName}.equals";
+        var equalsToken = new Token(TokenType.Identifier, equalsMethodName, pattern.Line, pattern.Column);
+        var callOp = CreateFunctionCall(equalsToken, [refOp.Result, charLit.Result]);
+        return callOp.Result!;
+      }
+      case RangePattern rangePat: {
+        return EmitRangeComparison(rangePat, scrutTempName, compareKind, structTypeName);
+      }
+      default:
+        throw new InvalidOperationException($"Unknown pattern type: {pattern.GetType().Name}");
+    }
+  }
+
+  private MaxonValue EmitRangeComparison(RangePattern rangePat, string scrutTempName,
+      MaxonValueKind compareKind, string? structTypeName) {
+    if (rangePat.Lower is CharRangeBound || rangePat.Upper is CharRangeBound) {
+      return EmitCharRangeComparison(rangePat, scrutTempName, structTypeName!);
+    }
+
+    MaxonValue? lowerCmp = null;
+    MaxonValue? upperCmp = null;
+
+    if (rangePat.Lower != null) {
+      var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
+      _currentBlock!.AddOp(refOp);
+      MaxonLiteralOp lowerLit;
+      if (rangePat.Lower is FloatRangeBound fb) {
+        lowerLit = new MaxonLiteralOp(fb.Value);
+      } else {
+        lowerLit = new MaxonLiteralOp(((IntRangeBound)rangePat.Lower).Value);
+      }
+      _currentBlock!.AddOp(lowerLit);
+      var geOp = new MaxonBinOp(MaxonBinOperator.Ge, refOp.Result, lowerLit.Result, compareKind);
+      _currentBlock!.AddOp(geOp);
+      lowerCmp = geOp.Result;
+    }
+
+    if (rangePat.Upper != null) {
+      var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
+      _currentBlock!.AddOp(refOp);
+      MaxonLiteralOp upperLit;
+      if (rangePat.Upper is FloatRangeBound fb) {
+        upperLit = new MaxonLiteralOp(fb.Value);
+      } else {
+        upperLit = new MaxonLiteralOp(((IntRangeBound)rangePat.Upper).Value);
+      }
+      _currentBlock!.AddOp(upperLit);
+      var upperOp = rangePat.UpperInclusive
+        ? new MaxonBinOp(MaxonBinOperator.Le, refOp.Result, upperLit.Result, compareKind)
+        : new MaxonBinOp(MaxonBinOperator.Lt, refOp.Result, upperLit.Result, compareKind);
+      _currentBlock!.AddOp(upperOp);
+      upperCmp = upperOp.Result;
+    }
+
+    if (lowerCmp != null && upperCmp != null) {
+      var andOp = new MaxonBinOp(MaxonBinOperator.And, lowerCmp, upperCmp, MaxonValueKind.Bool);
+      _currentBlock!.AddOp(andOp);
+      return andOp.Result;
+    }
+    return (lowerCmp ?? upperCmp)!;
+  }
+
+  private MaxonValue EmitCharRangeComparison(RangePattern rangePat, string scrutTempName, string structTypeName) {
+    MaxonValue? lowerCmp = null;
+    MaxonValue? upperCmp = null;
+
+    if (rangePat.Lower is CharRangeBound lowerBound) {
+      var refOp = new MaxonStructVarRefOp(scrutTempName, structTypeName);
+      _currentBlock!.AddOp(refOp);
+      var charLit = new MaxonCharLiteralOp(lowerBound.Value, structTypeName);
+      _currentBlock!.AddOp(charLit);
+      var compareMethodName = $"{structTypeName}.compare";
+      var compareToken = new Token(TokenType.Identifier, compareMethodName, rangePat.Line, rangePat.Column);
+      var callOp = CreateFunctionCall(compareToken, [refOp.Result, charLit.Result]);
+      var zeroLit = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(zeroLit);
+      var geOp = new MaxonBinOp(MaxonBinOperator.Ge, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(geOp);
+      lowerCmp = geOp.Result;
+    }
+
+    if (rangePat.Upper is CharRangeBound upperBound) {
+      var refOp = new MaxonStructVarRefOp(scrutTempName, structTypeName);
+      _currentBlock!.AddOp(refOp);
+      var charLit = new MaxonCharLiteralOp(upperBound.Value, structTypeName);
+      _currentBlock!.AddOp(charLit);
+      var compareMethodName = $"{structTypeName}.compare";
+      var compareToken = new Token(TokenType.Identifier, compareMethodName, rangePat.Line, rangePat.Column);
+      var callOp = CreateFunctionCall(compareToken, [refOp.Result, charLit.Result]);
+      var zeroLit = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(zeroLit);
+      var upperOp = rangePat.UpperInclusive
+        ? new MaxonBinOp(MaxonBinOperator.Le, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer)
+        : new MaxonBinOp(MaxonBinOperator.Lt, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(upperOp);
+      upperCmp = upperOp.Result;
+    }
+
+    if (lowerCmp != null && upperCmp != null) {
+      var andOp = new MaxonBinOp(MaxonBinOperator.And, lowerCmp, upperCmp, MaxonValueKind.Bool);
+      _currentBlock!.AddOp(andOp);
+      return andOp.Result;
+    }
+    return (lowerCmp ?? upperCmp)!;
+  }
+
   /// <summary>
   /// Resolves scrutinee to a comparable value. For enums, extracts the raw backing value.
   /// Returns the compare value, its kind, and enum metadata if applicable.
   /// </summary>
-  private (MaxonValue CompareVal, MaxonValueKind CompareKind, string? EnumTypeName, MlirEnumType? EnumType)
+  private (MaxonValue CompareVal, MaxonValueKind CompareKind, string? EnumTypeName, MlirEnumType? EnumType, string? StructTypeName)
       ResolveScrutinee(MaxonValue scrutineeVal) {
     if (scrutineeVal is MaxonEnum enumVal) {
       var enumTypeName = enumVal.TypeName;
@@ -3719,9 +4061,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var backingKind = GetEnumBackingKind(enumType);
       var rawOp = new MaxonEnumRawValueOp(scrutineeVal, enumTypeName, backingKind);
       _currentBlock!.AddOp(rawOp);
-      return (rawOp.Result, backingKind, enumTypeName, enumType);
+      return (rawOp.Result, backingKind, enumTypeName, enumType, null);
     }
-    return (scrutineeVal, DetermineValueKind(scrutineeVal), null, null);
+    if (scrutineeVal is MaxonStruct structVal) {
+      return (scrutineeVal, MaxonValueKind.Struct, null, null, structVal.TypeName);
+    }
+    return (scrutineeVal, DetermineValueKind(scrutineeVal), null, null, null);
   }
 
   /// <summary>
@@ -3821,14 +4166,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     SkipNewlines();
 
     var scrutineeVal = ResolveExprValue(scrutineeExpr);
-    var (compareVal, compareKind, enumTypeName, enumType) = ResolveScrutinee(scrutineeVal);
+    var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
 
     var entryBlock = _currentBlock!;
 
     // Store scrutinee in a temp var so comparison blocks can reference it across blocks
     var scrutTempName = $"__match_{matchLabel}";
     entryBlock.AddOp(new MaxonAssignOp(scrutTempName, compareVal, isDeclaration: true, isMutable: false, compareKind));
-    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock);
+    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock, StructTypeName: structTypeName);
 
     var mergeLabel = $"{matchLabel}.merge";
     var caseBlocks = new List<MlirBlock<MaxonOp>>();
@@ -3836,7 +4181,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var caseFallthrough = new List<bool>();
     // One entry per case: non-default cases have their comparison block, default has null
     var cmpBlocks = new List<MlirBlock<MaxonOp>?>();
-    var seenPatterns = new HashSet<long>();
+    var seenPatternKeys = new HashSet<string>();
     var seenEnumCases = new HashSet<string>();
     bool hasDefault = false;
     bool defaultSeen = false;
@@ -3862,7 +4207,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             "'default' case must be the last case in match",
             caseLine, caseCol);
         }
-        patterns = ParseMatchPatterns(enumTypeName, enumType, seenPatterns, seenEnumCases);
+        patterns = ParseMatchPatterns(enumTypeName, enumType, seenPatternKeys, seenEnumCases, compareKind, structTypeName);
       }
 
       Expect(TokenType.Then);
@@ -3877,7 +4222,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
         caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
         _currentBlock = cmpBlock;
-        var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind);
+        var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind, structTypeName);
         cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
         cmpBlocks.Add(cmpBlock);
       } else {
@@ -3951,7 +4296,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     SkipNewlines();
 
     var scrutineeVal = ResolveExprValue(scrutineeExpr);
-    var (compareVal, compareKind, enumTypeName, enumType) = ResolveScrutinee(scrutineeVal);
+    var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
 
     var entryBlock = _currentBlock!;
 
@@ -3967,13 +4312,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Store scrutinee for cross-block access
     var scrutTempName = $"__match_{matchLabel}";
     entryBlock.AddOp(new MaxonAssignOp(scrutTempName, compareVal, isDeclaration: true, isMutable: false, compareKind));
-    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock);
+    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock, StructTypeName: structTypeName);
 
     var mergeLabel = $"{matchLabel}.merge";
     var caseBlocks = new List<MlirBlock<MaxonOp>>();
     var caseIsDefault = new List<bool>();
     var cmpBlocks = new List<MlirBlock<MaxonOp>?>();
-    var seenPatterns = new HashSet<long>();
+    var seenPatternKeys = new HashSet<string>();
     var seenEnumCases = new HashSet<string>();
     bool hasDefault = false;
     bool defaultSeen = false;
@@ -3999,7 +4344,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             "'default' case must be the last case in match",
             caseLine, caseCol);
         }
-        patterns = ParseMatchPatterns(enumTypeName, enumType, seenPatterns, seenEnumCases);
+        patterns = ParseMatchPatterns(enumTypeName, enumType, seenPatternKeys, seenEnumCases, compareKind, structTypeName);
       }
 
       Expect(TokenType.Gives);
@@ -4013,7 +4358,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
         caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
         _currentBlock = cmpBlock;
-        var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind);
+        var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind, structTypeName);
         cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
         cmpBlocks.Add(cmpBlock);
       } else {

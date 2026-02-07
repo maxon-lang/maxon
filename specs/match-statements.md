@@ -121,6 +121,9 @@ function main() returns int
   end 'navigate'
 end 'main'
 ```
+```exitcode
+1
+```
 
 If any enum case is missing, the compiler will report an error listing the missing cases.
 
@@ -149,23 +152,24 @@ String matching uses the `equals` method from the `Equatable` interface, so any 
 Range patterns allow matching values within an interval. This is useful for numeric ranges, character classification, and grading systems.
 
 **Syntax:**
-- `1..=5` - inclusive range (matches 1, 2, 3, 4, 5)
-- `1..<5` - exclusive upper bound (matches 1, 2, 3, 4)
-- `1..` - from 1 to infinity (open-ended upper)
-- `..=5` - from negative infinity to 5 inclusive (open-ended lower)
-- `..<5` - from negative infinity to 5 exclusive (open-ended lower)
-- `..` - matches everything (wildcard)
+- `1 to 5` - inclusive range (matches 1, 2, 3, 4, 5)
+- `1 upto 5` - exclusive upper bound (matches 1, 2, 3, 4)
+- `1 to max` - from 1 to infinity (open-ended upper)
+- `min to 5` - from negative infinity to 5 inclusive (open-ended lower)
+- `min upto 5` - from negative infinity to 5 exclusive (open-ended lower)
+
+min/max are only valid for numeric ranges
 
 **Integer ranges:**
 
 ```maxon
 function grade(score int) returns int
   match score 'grade'
-    90..=100 then return 65  // 'A'
-    80..<90 then return 66   // 'B'
-    70..<80 then return 67   // 'C'
-    60..<70 then return 68   // 'D'
-    0..<60 then return 70    // 'F'
+    90 to 100 then return 65  // 'A'
+    80 upto 90 then return 66   // 'B'
+    70 upto 80 then return 67   // 'C'
+    60 upto 70 then return 68   // 'D'
+    0 upto 60 then return 70    // 'F'
     default then return 63   // '?'
   end 'grade'
 end 'grade'
@@ -186,9 +190,9 @@ The comparison is lexicographic (byte-by-byte).
 ```maxon
 function charType(c Character) returns int
   match c 'classify'
-    'a'..='z' then return 1  // lowercase
-    'A'..='Z' then return 2  // uppercase
-    '0'..='9' then return 3  // digit
+    'a' to 'z' then return 1  // lowercase
+    'A' to 'Z' then return 2  // uppercase
+    '0' to '9' then return 3  // digit
     default then return 0    // other
   end 'classify'
 end 'charType'
@@ -206,9 +210,9 @@ end 'main'
 ```maxon
 function classify(age int) returns int
   match age 'category'
-    ..<0 then return 0       // invalid (negative)
-    0..<18 then return 1     // minor
-    18.. then return 2       // adult
+    min upto 0 then return 0       // invalid (negative)
+    0 upto 18 then return 1     // minor
+    18 to max then return 2       // adult
   end 'category'
 end 'classify'
 
@@ -226,10 +230,10 @@ end 'main'
 function main() returns int
   var temp = 25
   let category = match temp 'weather'
-    ..<0 gives 1      // freezing
-    0..<15 gives 2    // cold  
-    15..<25 gives 3   // mild
-    25.. gives 4      // warm
+    min upto 0 gives 1      // freezing
+    0 upto 15 gives 2    // cold  
+    15 upto 25 gives 3   // mild
+    25 to max gives 4      // warm
   end 'weather'
   return category
 end 'main'
@@ -244,7 +248,7 @@ end 'main'
 function main() returns int
   var x = 50
   match x 'check'
-    1..=10 or 90..=100 then return 1   // extreme values
+    1 to 10 or 90 to 100 then return 1   // extreme values
     default then return 0
   end 'check'
 end 'main'
@@ -607,7 +611,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E002: specs/fragments/match-statements.error.match-expression-fallthrough.1.test:5:20: unexpected token: 'and'
+error E2001: specs/fragments/match-statements/error.match-expression-fallthrough.test:5:16: unexpected token: 'and'
 ```
 
 <!-- test: error.match-fallthrough-with-return -->
@@ -621,7 +625,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E025: specs/fragments/match-statements.error.match-fallthrough-with-return.1.test:5:16: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
+error E2025: specs/fragments/match-statements/error.match-fallthrough-with-return.test:5:22: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
 ```
 
 <!-- test: error.match-enum-not-exhaustive -->
@@ -641,7 +645,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E026: specs/fragments/match-statements.error.match-enum-not-exhaustive.1.test:10:5: match on enum 'Color' is not exhaustive, missing: blue
+error E2026: specs/fragments/match-statements/error.match-enum-not-exhaustive.test:13:3: match on enum 'Color' is not exhaustive, missing: blue
 ```
 
 <!-- test: error.match-duplicate-pattern -->
@@ -656,7 +660,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E027: specs/fragments/match-statements.error.match-duplicate-pattern.1.test:6:9: duplicate pattern in match: '1'
+error E2027: specs/fragments/match-statements/error.match-duplicate-pattern.test:6:5: duplicate pattern in match: '1'
 ```
 
 <!-- test: error.match-type-mismatch -->
@@ -670,7 +674,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E028: specs/fragments/match-statements.error.match-type-mismatch.1.test:5:20: pattern type 'String' does not match scrutinee type 'int'
+error E2028: specs/fragments/match-statements/error.match-type-mismatch.test:5:5: pattern type 'String' does not match scrutinee type 'int'
 ```
 
 <!-- test: error.match-missing-block-id -->
@@ -684,7 +688,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E042: specs/fragments/match-statements.error.match-missing-block-id.1.test:4:12: missing block identifier
+error E2042: specs/fragments/match-statements/error.match-missing-block-id.test:4:10: missing block identifier
 ```
 
 <!-- test: error.match-mismatched-block-id -->
@@ -698,7 +702,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E043: specs/fragments/match-statements.error.match-mismatched-block-id.1.test:7:16: block identifier mismatch: expected 'check', got 'wrong'
+error E2043: specs/fragments/match-statements/error.match-mismatched-block-id.test:7:3: block identifier mismatch: expected 'check', got 'wrong'
 ```
 
 <!-- test: error.match-default-not-last -->
@@ -713,7 +717,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E029: specs/fragments/match-statements.error.match-default-not-last.1.test:6:9: 'default' case must be the last case in match
+error E2029: specs/fragments/match-statements/error.match-default-not-last.test:6:5: 'default' case must be the last case in match
 ```
 
 <!-- test: match-string.simple -->
@@ -797,7 +801,7 @@ end 'main'
 function main() returns int
   var x = 5
   match x 'check'
-    1..=5 then return 1
+    1 to 5 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -811,7 +815,7 @@ end 'main'
 function main() returns int
   var x = 1
   match x 'check'
-    1..=5 then return 1
+    1 to 5 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -825,7 +829,7 @@ end 'main'
 function main() returns int
   var x = 4
   match x 'check'
-    1..<5 then return 1
+    1 upto 5 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -839,7 +843,7 @@ end 'main'
 function main() returns int
   var x = 5
   match x 'check'
-    1..<5 then return 1
+    1 upto 5 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -853,7 +857,7 @@ end 'main'
 function main() returns int
   var x = 100
   match x 'check'
-    10.. then return 1
+    10 to max then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -867,7 +871,7 @@ end 'main'
 function main() returns int
   var x = 5
   match x 'check'
-    ..=5 then return 1
+    min to 5 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -881,7 +885,7 @@ end 'main'
 function main() returns int
   var x = 5
   match x 'check'
-    ..<5 then return 1
+    min upto 5 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -890,27 +894,14 @@ end 'main'
 0
 ```
 
-<!-- test: match-range.wildcard -->
-```maxon
-function main() returns int
-  var x = 42
-  match x 'check'
-    .. then return 1
-  end 'check'
-end 'main'
-```
-```exitcode
-1
-```
-
 <!-- test: match-range.multiple-ranges -->
 ```maxon
 function main() returns int
   var score = 85
   match score 'grade'
-    90..=100 then return 65
-    80..<90 then return 66
-    70..<80 then return 67
+    90 to 100 then return 65
+    80 upto 90 then return 66
+    70 upto 80 then return 67
     default then return 70
   end 'grade'
 end 'main'
@@ -924,7 +915,7 @@ end 'main'
 function main() returns int
   var x = -5
   match x 'check'
-    -10..=-1 then return 1
+    -10 to -1 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -938,10 +929,10 @@ end 'main'
 function main() returns int
   var temp = 22
   let category = match temp 'weather'
-    ..<0 gives 1
-    0..<15 gives 2
-    15..<25 gives 3
-    25.. gives 4
+    min upto 0 gives 1
+    0 upto 15 gives 2
+    15 upto 25 gives 3
+    25 to max gives 4
   end 'weather'
   return category
 end 'main'
@@ -955,9 +946,9 @@ end 'main'
 function main() returns int
   var c = 'G'
   match c 'classify'
-    'a'..='z' then return 1
-    'A'..='Z' then return 2
-    '0'..='9' then return 3
+    'a' to 'z' then return 1
+    'A' to 'Z' then return 2
+    '0' to '9' then return 3
     default then return 0
   end 'classify'
 end 'main'
@@ -971,8 +962,8 @@ end 'main'
 function main() returns int
   var c = 'm'
   match c 'classify'
-    'a'..='z' then return 1
-    'A'..='Z' then return 2
+    'a' to 'z' then return 1
+    'A' to 'Z' then return 2
     default then return 0
   end 'classify'
 end 'main'
@@ -986,9 +977,9 @@ end 'main'
 function main() returns int
   var c = '7'
   match c 'classify'
-    'a'..='z' then return 1
-    'A'..='Z' then return 2
-    '0'..='9' then return 3
+    'a' to 'z' then return 1
+    'A' to 'Z' then return 2
+    '0' to '9' then return 3
     default then return 0
   end 'classify'
 end 'main'
@@ -1002,7 +993,7 @@ end 'main'
 function main() returns int
   var x = 95
   match x 'check'
-    1..=10 or 90..=100 then return 1
+    1 to 10 or 90 to 100 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -1016,7 +1007,7 @@ end 'main'
 function main() returns int
   var x = 5
   match x 'check'
-    1..=10 or 90..=100 then return 1
+    1 to 10 or 90 to 100 then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -1030,7 +1021,7 @@ end 'main'
 function main() returns int
   var x = 2.5
   match x 'check'
-    0.0..=5.0 then return 1
+    0.0 to 5.0 then return 1
     default then return 0
   end 'check'
 end 'main'

@@ -1,0 +1,82 @@
+// Test: match-range.multiple-ranges
+function main() returns int
+  var score = 85
+  match score 'grade'
+    90 to 100 then return 65
+    80 upto 90 then return 66
+    70 upto 80 then return 67
+    default then return 70
+  end 'grade'
+end 'main'
+---
+ExitCode: 66
+---
+module {
+  func @match-statements.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 85
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.grade_0.cmp0
+  grade_0.cmp0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 90
+    x86.cmp eax, ecx
+    x86.setge edx
+    x86.movzx edx, edxb
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 100
+    x86.cmp ebx, esi
+    x86.setle edi
+    x86.movzx edi, edib
+    x86.and edx, edi
+    x86.test edx, edx
+    x86.je match-statements.main.grade_0.cmp1
+  grade_0.case0:
+    x86.mov eax, 65
+    x86.epilogue
+    x86.ret
+  grade_0.cmp1:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 80
+    x86.cmp eax, ecx
+    x86.setge edx
+    x86.movzx edx, edxb
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 90
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.and edx, edi
+    x86.test edx, edx
+    x86.je match-statements.main.grade_0.cmp2
+  grade_0.case1:
+    x86.mov eax, 66
+    x86.epilogue
+    x86.ret
+  grade_0.cmp2:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 70
+    x86.cmp eax, ecx
+    x86.setge edx
+    x86.movzx edx, edxb
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 80
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.and edx, edi
+    x86.test edx, edx
+    x86.je match-statements.main.grade_0.case3
+  grade_0.case2:
+    x86.mov eax, 67
+    x86.epilogue
+    x86.ret
+  grade_0.case3:
+    x86.mov eax, 70
+    x86.epilogue
+    x86.ret
+  grade_0.merge:
+  }
+}
+---

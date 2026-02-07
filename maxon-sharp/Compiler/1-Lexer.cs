@@ -52,6 +52,7 @@ public enum TokenType {
   Then,
   Fallthrough,
   Default,
+  Upto,
 
   // Types
   Int,
@@ -213,6 +214,7 @@ public class Lexer(string source) {
     { "then", new(TokenType.Then, KeywordCategory.Control, "Used in match expressions to separate pattern from result.", true) },
     { "fallthrough", new(TokenType.Fallthrough, KeywordCategory.Control, "Falls through to the next case in a match statement.", false) },
     { "default", new(TokenType.Default, KeywordCategory.Control, "Default case in a match statement.", false) },
+    { "upto", new(TokenType.Upto, KeywordCategory.Control, "Exclusive upper bound in range patterns.", false) },
   };
 
   // Operator map: { operator_text, TokenType, OperatorCategory, help_text }

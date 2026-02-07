@@ -1,0 +1,68 @@
+// Test: docs-example-9
+function classify(age int) returns int
+  match age 'category'
+    min upto 0 then return 0       // invalid (negative)
+    0 upto 18 then return 1     // minor
+    18 to max then return 2       // adult
+  end 'category'
+end 'classify'
+
+function main() returns int
+  return classify(25)
+end 'main'
+
+---
+ExitCode: 2
+---
+module {
+  func @match-statements.classify(age: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.jmp match-statements.classify.category_0.cmp0
+  category_0.cmp0:
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jge match-statements.classify.category_0.cmp1
+  category_0.case0:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  category_0.cmp1:
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setge edx
+    x86.movzx edx, edxb
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 18
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.and edx, edi
+    x86.test edx, edx
+    x86.je match-statements.classify.category_0.cmp2
+  category_0.case1:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  category_0.cmp2:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 18
+    x86.cmp eax, ecx
+    x86.jl match-statements.classify.category_0.merge
+  category_0.case2:
+    x86.mov eax, 2
+    x86.epilogue
+    x86.ret
+  category_0.merge:
+  }
+  func @match-statements.main() -> i64 {
+  entry:
+    x86.mov eax, 25
+    x86.mov rcx, rax
+    x86.jmp match-statements.classify
+  }
+}
+---

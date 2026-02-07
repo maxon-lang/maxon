@@ -1,0 +1,66 @@
+// Test: match-statements.fallthrough-to-default
+function main() returns int
+  var x = 3
+  var result = 0
+  match x 'check'
+    1 then result = 10
+    2 then result = 20
+    3 then result = result + 30 and fallthrough
+    default then result = result + 100
+  end 'check'
+  return result
+end 'main'
+---
+ExitCode: 130
+---
+module {
+  func @match-statements.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 3
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.jmp match-statements.main.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne match-statements.main.check_0.cmp1
+  check_0.case0:
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.check_0.merge
+  check_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne match-statements.main.check_0.cmp2
+  check_0.case1:
+    x86.mov eax, 20
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.check_0.merge
+  check_0.cmp2:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.jne match-statements.main.check_0.case3
+  check_0.case2:
+    x86.mov eax, 30
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.jmp match-statements.main.check_0.case3
+  check_0.case3:
+    x86.mov eax, 100
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.jmp match-statements.main.check_0.merge
+  check_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---
