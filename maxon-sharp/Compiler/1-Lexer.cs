@@ -97,6 +97,7 @@ public enum TokenType {
   DotDot,
   DotDotEquals,
   DotDotLess,
+  Bang,
 
   // Formatting
   Newline,
@@ -358,9 +359,8 @@ public class Lexer(string source) {
         Advance(); Advance();
         return new Token(TokenType.NotEquals, "!=", startLine, startColumn);
       }
-      // Single ! not supported
       Advance();
-      return new Token(TokenType.Unknown, "!", startLine, startColumn);
+      return new Token(TokenType.Bang, "!", startLine, startColumn);
     }
 
     if (c == '<') {

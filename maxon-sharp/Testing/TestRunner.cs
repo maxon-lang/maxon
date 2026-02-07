@@ -345,7 +345,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     try {
       var result = new Compiler.Compiler().Compile(
         [new Compiler.SourceFile(fragment.FilePath, fragment.Source)],
-        outputPath);
+        outputPath, trackAllocs: fragment.TrackMemory);
       return (result.Success, result.Error);
     } catch (Exception ex) {
       return (false, ex.Message);

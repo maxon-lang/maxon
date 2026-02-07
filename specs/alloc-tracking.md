@@ -18,26 +18,6 @@ Compile with the `--track-allocs` flag:
 maxon compile --track-allocs myprogram.maxon
 ```
 
-## Output Format
-
-Each allocation prints:
-```text
-ALLOC #1: 80 bytes (array grow)
-```
-
-Each free prints:
-```text
-FREE #1: 80 bytes (array cleanup)
-```
-
-At exit, a summary is printed:
-```text
-=== MEMORY STATS ===
-Allocated: 80 bytes
-Freed:     80 bytes
-Leaked:    0 bytes
-```
-
 ## Tests
 
 <!-- test: dynamic-array-no-leak -->
@@ -57,15 +37,15 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 88 bytes (array grow)
+ALLOC #1: 80 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 88 bytes (array cleanup)
+FREE #1: 80 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 88 bytes
-Freed:     88 bytes
+Allocated: 80 bytes
+Freed:     80 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   1
@@ -120,20 +100,20 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #2: 88 bytes (array grow)
+ALLOC #2: 80 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr1
 DECREF: arr1 -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 CLEANUP: arr2
 DECREF: arr2 -> rc=0
-FREE #2: 88 bytes (array cleanup)
+FREE #2: 80 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 136 bytes
-Freed:     136 bytes
+Allocated: 120 bytes
+Freed:     120 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   2
@@ -162,15 +142,15 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   1
@@ -199,15 +179,15 @@ end 'main'
 42
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   1
@@ -237,15 +217,15 @@ end 'main'
 99
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   1
@@ -272,15 +252,15 @@ end 'main'
 77
 ```
 ```stdout
-ALLOC #1: 88 bytes (array grow)
+ALLOC #1: 80 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 88 bytes (array cleanup)
+FREE #1: 80 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 88 bytes
-Freed:     88 bytes
+Allocated: 80 bytes
+Freed:     80 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   1
@@ -312,15 +292,15 @@ end 'main'
 84
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   1
@@ -355,15 +335,15 @@ end 'main'
 60
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   1
@@ -396,25 +376,25 @@ end 'main'
 3
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
-ALLOC #2: 48 bytes (array grow)
+FREE #1: 40 bytes (array cleanup)
+ALLOC #2: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #2: 48 bytes (array cleanup)
-ALLOC #3: 48 bytes (array grow)
+FREE #2: 40 bytes (array cleanup)
+ALLOC #3: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #3: 48 bytes (array cleanup)
+FREE #3: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 144 bytes
-Freed:     144 bytes
+Allocated: 120 bytes
+Freed:     120 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   3
@@ -425,16 +405,17 @@ Cleanups:  3
 
 <!-- test: string-array-cleanup-void-main -->
 <!-- TrackMemory: true -->
-Array of strings should be properly cleaned up in a void main function.
+Array of strings should be properly cleaned up in a main function that doesn't use the return value.
 
 ```maxon
 typealias StringArray = Array with String
 
-function main()
+function main() returns int
   var arr = StringArray{}
   arr.push("hi")
   var s = try arr.get(0)! otherwise "oops"
   print(s)
+  return 0
 end 'main'
 ```
 ```exitcode
@@ -442,17 +423,17 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
-ALLOC #1: 168 bytes (array grow)
+ALLOC #1: 160 bytes (array grow)
 INCREF: array grow -> rc=1
 hiCLEANUP: cs
-CLEANUP: s
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 168 bytes (array cleanup)
+FREE #1: 160 bytes (array cleanup)
+CLEANUP: s
 
 === MEMORY STATS ===
-Allocated: 168 bytes
-Freed:     168 bytes
+Allocated: 160 bytes
+Freed:     160 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   1
@@ -481,16 +462,16 @@ end 'main'
 100
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: arr
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   1
@@ -528,17 +509,17 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: arr
 MOVE: arr
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 40 bytes
+Freed:     40 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   1
@@ -578,21 +559,21 @@ end 'main'
 109
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #2: 48 bytes (array grow)
+ALLOC #2: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: arr2
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #2: 48 bytes (array cleanup)
+FREE #2: 40 bytes (array cleanup)
 CLEANUP: arr1
 DECREF: arr1 -> rc=0
-FREE #1: 48 bytes (array cleanup)
+FREE #1: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 96 bytes
-Freed:     96 bytes
+Allocated: 80 bytes
+Freed:     80 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   2
@@ -657,20 +638,20 @@ end 'main'
 20
 ```
 ```stdout
-ALLOC #1: 48 bytes (array grow)
+ALLOC #1: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 48 bytes (array cleanup)
-ALLOC #2: 48 bytes (array grow)
+FREE #1: 40 bytes (array cleanup)
+ALLOC #2: 40 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #2: 48 bytes (array cleanup)
+FREE #2: 40 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 96 bytes
-Freed:     96 bytes
+Allocated: 80 bytes
+Freed:     80 bytes
 Leaked:    0 bytes
 Moves:     0
 Increfs:   2
@@ -699,17 +680,17 @@ end 'main'
 ```
 ```stdout
 MOVE: managed
-ALLOC #1: 168 bytes (array grow)
+ALLOC #1: 160 bytes (array grow)
 INCREF: array grow -> rc=1
 hiCLEANUP: cs
-CLEANUP: s
 CLEANUP: arr
 DECREF: arr -> rc=0
-FREE #1: 168 bytes (array cleanup)
+FREE #1: 160 bytes (array cleanup)
+CLEANUP: s
 
 === MEMORY STATS ===
-Allocated: 168 bytes
-Freed:     168 bytes
+Allocated: 160 bytes
+Freed:     160 bytes
 Leaked:    0 bytes
 Moves:     1
 Increfs:   1

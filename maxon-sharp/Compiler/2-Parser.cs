@@ -2423,6 +2423,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
     _currentBlock!.AddOp(tryCallOp);
 
+    // '!' is syntactic-only (clone marker for struct results from arrays).
+    // The actual struct copy is handled by get()'s return path.
+    if (Check(TokenType.Bang)) {
+      Advance();
+    }
+
     // Check for 'otherwise' clause
     if (!Check(TokenType.Otherwise)) {
       // Propagation form: try func() - propagates error to caller
@@ -6083,7 +6089,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Resolves the result kind and struct type name for a function call based on the callee's return type.
   /// For type parameter returns, resolves against the self arg's element type.
   /// </summary>
-  private (MaxonValueKind?, string?) ResolveCallResultType(MlirType? returnType, List<MaxonValue> args, string displayName, Token errorToken) {
+  private (MaxonValueKind?, string?) ResolveCallResultType(MlirType? returnType, List<MaxonValue> args) {
     if (returnType == null) return (null, null);
     if (returnType is MlirTypeParameterType)
       return OverrideResultKindForElementType(MaxonValueKind.TypeParameter, null, args);
@@ -6111,7 +6117,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         functionNameToken.Line, functionNameToken.Column);
     }
 
-    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, functionName, functionNameToken);
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
     return callOp;
@@ -6131,7 +6137,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         functionNameToken.Line, functionNameToken.Column);
     }
 
-    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, UnmangleName(functionName), functionNameToken);
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
     return callOp;

@@ -41,6 +41,7 @@ class Program {
     Console.WriteLine("Build options (compile, build, run):");
     Console.WriteLine("  --emit-ir                Write .mlir file");
     Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.mlir, etc.)");
+    Console.WriteLine("  --track-allocs           Track heap allocations and print memory stats");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
@@ -96,8 +97,11 @@ class Program {
   }
 
   static int RunCompile(string[] args) {
-    var (emitIr, dumpStages, valid) = ParseOptions(args);
+    var compileOptions = new HashSet<string> { "--track-allocs" };
+    var (emitIr, dumpStages, valid) = ParseOptions(args, compileOptions);
     if (!valid) return Fail();
+
+    var trackAllocs = args.Contains("--track-allocs");
 
     var sourceFile = GetNonOptionArg(args);
     if (sourceFile == null) return Fail();
@@ -113,7 +117,7 @@ class Program {
 
     var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(sourceFile, emitIr, dumpStages);
 
-    return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath);
+    return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, trackAllocs);
   }
 
   static int RunBuild(string[] args) {
@@ -249,8 +253,8 @@ class Program {
   /// <summary>
   /// Compiles source files and reports the result.
   /// </summary>
-  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath) {
-    var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
+  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath, bool trackAllocs = false) {
+    var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath, trackAllocs: trackAllocs);
     if (!result.Success && result.Error != null) {
       Logger.Error(LogCategory.Compiler, result.Error);
     }

@@ -4,14 +4,38 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 public static class MaxonToStandardConversion {
-  public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
+  [ThreadStatic] private static bool _trackAllocs;
+  [ThreadStatic] private static MlirModule<StandardOp>? _resultModule;
+  [ThreadStatic] private static Dictionary<string, string>? _rdataTagCache;
+
+  public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module, bool trackAllocs = false) {
+    _trackAllocs = trackAllocs;
+    _rdataTagCache = [];
     var result = new MlirModule<StandardOp>();
+    _resultModule = result;
     result.RdataEntries.AddRange(module.RdataEntries);
     result.Globals.AddRange(module.Globals);
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
     // Build a lookup of functions by name for struct-aware call lowering
     var funcLookup = module.Functions.ToDictionary(f => f.Name);
+
+    // Pre-analyze: which functions mutate managed struct parameters?
+    // Used to determine MOVE vs borrow semantics at call sites.
+    var mutatingFunctions = new HashSet<string>();
+    if (trackAllocs) {
+      foreach (var f in module.Functions) {
+        foreach (var b in f.Body.Blocks) {
+          foreach (var op in b.Operations) {
+            if (op is MaxonCallOp c && IsMutatingMethodCall(c.Callee)) {
+              mutatingFunctions.Add(f.Name);
+              goto nextFunc;
+            }
+          }
+        }
+      nextFunc:;
+      }
+    }
 
     bool hasResetAfterStdlib = false;
 
@@ -103,12 +127,27 @@ public static class MaxonToStandardConversion {
       var varNameToStructPrefix = new Dictionary<string, string>();
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
       var varNameToStructType = new Dictionary<string, string>();
+      // Tracks variable names that own managed memory (for cleanup before return)
+      // Key: user variable name (e.g. "arr"), Value: path to buffer field (e.g. "arr.managed.buffer")
+      var managedVarOwners = new Dictionary<string, string>();
 
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
 
+      // Track cstring result IDs from .cstr() calls and their variable names
+      var cstringResultIds = new HashSet<int>();
+      var cstringTrackVars = new HashSet<string>();
+
+      // Track processed blocks to detect loop back-edges
+      var processedBlocks = new HashSet<string>();
+      // Snapshot of managedVarOwners at each block's entry, keyed by block name
+      var managedStateAtBlockEntry = new Dictionary<string, Dictionary<string, string>>();
+
       bool sretParamEmitted = false;
       foreach (var block in func.Body.Blocks) {
+        processedBlocks.Add(block.Name);
+        if (_trackAllocs)
+          managedStateAtBlockEntry[block.Name] = new Dictionary<string, string>(managedVarOwners);
         var newBlock = newFunc.Body.AddBlock(block.Name);
 
         // In the entry block of sret functions, save the sret pointer (param 0)
@@ -152,6 +191,12 @@ public static class MaxonToStandardConversion {
                 LoadStructFieldsFromPointer(newBlock, ptrVal, structParamOp.Name, structType, varTypes);
                 structVarNames[structParamOp.Result.Id] = structParamOp.Name;
                 structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
+                // Mutating functions own their managed struct params (MOVE semantics)
+                if (mutatingFunctions.Contains(func.Name)) {
+                  var bufferPath = GetManagedBufferPath(structParamOp.Name, structParamOp.StructTypeName, module.TypeDefs);
+                  if (bufferPath != null)
+                    managedVarOwners[structParamOp.Name] = bufferPath;
+                }
               }
               break;
             }
@@ -303,6 +348,9 @@ public static class MaxonToStandardConversion {
                   ? ms.TypeName
                   : structValueTypes[assignOp.Value.Id];
                 var structType = (MlirStructType)module.TypeDefs[structTypeName];
+                // Cleanup old managed memory before reassignment
+                if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPath))
+                  EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes);
                 CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // In struct instance methods, assigning to a self field struct must also
                 // update the self.X variables, write through __self_ptr, and use
@@ -321,6 +369,12 @@ public static class MaxonToStandardConversion {
                   structValueTypes[assignOp.Value.Id] = structTypeName;
                   varNameToStructPrefix[assignOp.VarName] = dstName;
                 }
+                // Track managed memory ownership for cleanup
+                if (!isStructInstanceMethod && !assignOp.VarName.StartsWith("__")) {
+                  var bufferPath = GetManagedBufferPath(dstName, structTypeName, module.TypeDefs);
+                  if (bufferPath != null)
+                    managedVarOwners[assignOp.VarName] = bufferPath;
+                }
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 // In struct instance methods, self field assignments store to the self-prefixed
@@ -332,6 +386,8 @@ public static class MaxonToStandardConversion {
                 } else {
                   EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
                 }
+                if (_trackAllocs && cstringResultIds.Contains(assignOp.Value.Id))
+                  cstringTrackVars.Add(assignOp.VarName);
               }
               break;
             }
@@ -348,8 +404,7 @@ public static class MaxonToStandardConversion {
               // actually refer to a struct variable (e.g., for-in loop element from
               // Array<String>.next). If the variable is a struct prefix, handle it
               // as a struct reference.
-              if (!varTypes.ContainsKey(resolvedVarName) && varNameToStructPrefix.ContainsKey(resolvedVarName)) {
-                var structPrefix = varNameToStructPrefix[resolvedVarName];
+              if (!varTypes.ContainsKey(resolvedVarName) && varNameToStructPrefix.TryGetValue(resolvedVarName, out string? structPrefix)) {
                 structVarNames[varRef.Result.Id] = structPrefix;
                 if (varNameToStructType.TryGetValue(resolvedVarName, out var stType)) {
                   structValueTypes[varRef.Result.Id] = stType;
@@ -422,6 +477,26 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonBrOp br: {
+              // Loop back-edge: cleanup managed vars defined in this iteration
+              if (_trackAllocs && processedBlocks.Contains(br.Target)
+                  && managedStateAtBlockEntry.TryGetValue(br.Target, out var targetState)) {
+                var loopScopedVars = new List<string>();
+                foreach (var (varName, bufferPath) in managedVarOwners) {
+                  if (!targetState.ContainsKey(varName))
+                    loopScopedVars.Add(varName);
+                }
+                foreach (var varName in loopScopedVars) {
+                  EmitManagedCleanup(newBlock, varName, managedVarOwners[varName], varTypes);
+                  // Zero capacity to prevent use-after-free on reinitialization
+                  var capacityPath = managedVarOwners[varName];
+                  capacityPath = capacityPath[..capacityPath.LastIndexOf('.')] + ".capacity";
+                  var zero = new StdConstI64Op(0);
+                  newBlock.AddOp(zero);
+                  newBlock.AddOp(new StdStoreI64Op(zero.Result, capacityPath));
+                  // Remove from owner tracking — loop handles its own cleanup
+                  managedVarOwners.Remove(varName);
+                }
+              }
               newBlock.AddOp(new StdBrOp(br.Target));
               break;
             }
@@ -592,7 +667,9 @@ public static class MaxonToStandardConversion {
             }
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, module.TypeDefs);
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, module.TypeDefs, managedVarOwners, mutatingFunctions);
+              if (_trackAllocs && callOp.Callee.EndsWith(".cstr") && callOp.Result != null)
+                cstringResultIds.Add(callOp.Result.Id);
               break;
             case MaxonFunctionRefOp fnRefOp:
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
@@ -607,7 +684,7 @@ public static class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, managedVarOwners, cstringTrackVars);
               break;
             case MaxonThrowOp throwOp:
               LowerThrow(throwOp, newBlock, valueMap);
@@ -728,48 +805,111 @@ public static class MaxonToStandardConversion {
     Dictionary<int, string> structValueTypes,
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
-    Dictionary<string, MlirType> typeDefs) {
-    // Try exact match first, then suffix match (for namespace-qualified names)
-    if (funcLookup.TryGetValue(callOp.Callee, out MlirFunction<MaxonOp>? calleeFunc)) {
-      // Exact match found
-    } else {
-      // Try suffix match
-      var suffixPattern = $".{callOp.Callee}";
-      calleeFunc = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern)) ?? throw new InvalidOperationException($"Function '{callOp.Callee}' not found in module");
-    }
+    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, string> managedVarOwners,
+    HashSet<string> mutatingFunctions) {
+    LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
+      isTryCall: false, funcLookup, block, valueMap, varTypes, structVarNames,
+      structValueTypes, isStructInstanceMethod, selfStructType, typeDefs,
+      managedVarOwners, mutatingFunctions);
+  }
+
+  /// <summary>
+  /// Shared implementation for lowering both MaxonCallOp and MaxonTryCallOp.
+  /// For try calls, pass errorFlagValue to map the error flag into valueMap.
+  /// </summary>
+  private static void LowerCallCore(
+    string callee,
+    List<MaxonValue> args,
+    MaxonValue? result,
+    MaxonValueKind? resultKind,
+    bool isTryCall,
+    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
+    bool isStructInstanceMethod,
+    MlirStructType? selfStructType,
+    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, string>? managedVarOwners,
+    HashSet<string>? mutatingFunctions,
+    MaxonValue? errorFlagValue = null) {
+
+    var calleeFunc = ResolveCallee(callee, funcLookup);
     var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
+    bool calleeIsStructInstance = IsStructInstanceMethod(calleeFunc);
 
     var newArgs = new List<StdValue>();
+    var sretVarName = SetupSretArg(calleeRetStructType, result?.Id ?? 0, block, varTypes, newArgs);
 
-    // If callee returns struct, allocate local space and pass sret pointer.
-    string? sretVarName = null;
-    if (calleeRetStructType != null) {
-      sretVarName = $"__sret_{callOp.Result!.Id}";
-      AllocateStructOnStack(block, sretVarName, calleeRetStructType, varTypes);
-      var leaOp = new StdLeaOp(sretVarName);
-      block.AddOp(leaOp);
-      newArgs.Add(leaOp.Result);
+    // Emit MOVE tracking before flattening args (ownership transfer)
+    if (_trackAllocs && managedVarOwners != null && mutatingFunctions != null) {
+      bool calleeMutates = mutatingFunctions.Contains(callee) || IsMutatingMethodCall(callee);
+      if (calleeMutates) {
+        for (int i = 0; i < args.Count; i++) {
+          bool isSelfArg = calleeIsStructInstance && i == 0;
+          if (!isSelfArg && structVarNames.TryGetValue(args[i].Id, out var argVarName)
+              && managedVarOwners.ContainsKey(argVarName)) {
+            EmitTrackMove(block, argVarName);
+            managedVarOwners.Remove(argVarName);
+          }
+        }
+        // For struct instance method calls where non-self params are managed structs,
+        // emit MOVE for the self arg's managed field (the container accepting ownership)
+        bool hasManagedStructParam = false;
+        if (calleeIsStructInstance) {
+          for (int i = 1; i < calleeFunc.ParamTypes.Count; i++) {
+            if (calleeFunc.ParamTypes[i] is MlirStructType paramSt
+                && GetManagedFieldName(paramSt) != null) {
+              hasManagedStructParam = true;
+              break;
+            }
+          }
+        }
+        if (calleeIsStructInstance && hasManagedStructParam) {
+          var selfArg = args[0];
+          if (structVarNames.TryGetValue(selfArg.Id, out _)) {
+            var selfStructType2 = (MlirStructType)calleeFunc.ParamTypes[0];
+            var managedFieldName = GetManagedFieldName(selfStructType2);
+            if (managedFieldName != null) {
+              EmitTrackMove(block, managedFieldName);
+            }
+          }
+        }
+      }
     }
 
-    var selfBufName = FlattenCallArgs(callOp.Args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callOp.Callee);
+    var selfBufName = FlattenCallArgs(args, calleeFunc, calleeIsStructInstance, block, valueMap, varTypes, structVarNames, newArgs, callee);
 
-    if (calleeRetStructType != null) {
-      var funcCall = new StdCallOp(callOp.Callee, newArgs);
-      block.AddOp(funcCall);
-      if (callOp.Result != null) {
-        structVarNames[callOp.Result.Id] = sretVarName!;
-        structValueTypes[callOp.Result.Id] = calleeRetStructType.Name;
+    // Emit call or try_call
+    StdValue? callResult = calleeRetStructType != null
+      ? null
+      : ResolveCallResultType(resultKind, calleeFunc.ReturnType);
+    if (isTryCall) {
+      var tryCall = new StdTryCallOp(callee, newArgs, callResult);
+      block.AddOp(tryCall);
+      if (errorFlagValue != null) {
+        valueMap[errorFlagValue] = tryCall.ErrorFlag;
+        EmitStore(block, tryCall.ErrorFlag, "__error_flag", varTypes);
       }
     } else {
-      var callResult = ResolveCallResultType(callOp.ResultKind, calleeFunc.ReturnType);
-      var funcCall = new StdCallOp(callOp.Callee, newArgs, callResult);
-      block.AddOp(funcCall);
-      if (callOp.Result != null && funcCall.Result != null) {
-        valueMap[callOp.Result] = funcCall.Result;
+      block.AddOp(new StdCallOp(callee, newArgs, callResult));
+    }
+
+    // Map results
+    if (result != null) {
+      if (calleeRetStructType != null) {
+        structVarNames[result.Id] = sretVarName!;
+        structValueTypes[result.Id] = calleeRetStructType.Name;
+      } else if (callResult != null) {
+        valueMap[result] = callResult;
       }
     }
 
-    ReadBackSelfFields(callOp.Args, calleeFunc, selfBufName, block, varTypes,
+    var calleeSelfType = calleeIsStructInstance ? (MlirStructType)calleeFunc.ParamTypes[0] : null;
+    ReadBackSelfFields(args, selfBufName, calleeSelfType, block, varTypes,
       structVarNames, isStructInstanceMethod, selfStructType);
   }
 
@@ -781,7 +921,9 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     bool isStructInstanceMethod,
-    MlirStructType? selfStructType) {
+    MlirStructType? selfStructType,
+    Dictionary<string, string> managedVarOwners,
+    HashSet<string> cstringTrackVars) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -814,11 +956,36 @@ public static class MaxonToStandardConversion {
         WriteStructFieldsToPointer(block, tempName, sretLoad.Result, retStructType, varTypes);
       }
 
+      EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes);
       block.AddOp(new StdReturnOp());
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
-      block.AddOp(new StdReturnOp(newRetVal));
+      bool hasCleanup = _trackAllocs && (managedVarOwners.Count > 0 || cstringTrackVars.Count > 0);
+      if (newRetVal != null && hasCleanup) {
+        // Save return value to stack before cleanup (cleanup calls clobber registers)
+        var retVarName = $"__ret_save_{MlirContext.Current.NextId()}";
+        EmitStore(block, newRetVal, retVarName, varTypes);
+
+        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes);
+
+        var retReload = EmitLoad(block, retVarName, varTypes);
+        block.AddOp(new StdReturnOp(retReload));
+      } else {
+        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes);
+        block.AddOp(new StdReturnOp(newRetVal));
+      }
     }
+  }
+
+  private static void EmitReturnCleanup(
+    MlirBlock<StandardOp> block,
+    HashSet<string> cstringTrackVars,
+    Dictionary<string, string> managedVarOwners,
+    Dictionary<string, string> varTypes) {
+    foreach (var csVar in cstringTrackVars)
+      EmitTrackCleanup(block, csVar);
+    foreach (var (varName, bufferPath) in managedVarOwners)
+      EmitManagedCleanup(block, varName, bufferPath, varTypes);
   }
 
   private static void LowerThrow(
@@ -845,45 +1012,10 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs) {
-
-    var calleeFunc = funcLookup[tryCallOp.Callee];
-    var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
-    var newArgs = new List<StdValue>();
-
-    // If callee returns struct, allocate local space and pass sret pointer
-    string? sretVarName = null;
-    if (calleeRetStructType != null) {
-      sretVarName = $"__sret_{tryCallOp.Result!.Id}";
-      AllocateStructOnStack(block, sretVarName, calleeRetStructType, varTypes);
-      var leaOp = new StdLeaOp(sretVarName);
-      block.AddOp(leaOp);
-      newArgs.Add(leaOp.Result);
-    }
-
-    var selfBufName = FlattenCallArgs(tryCallOp.Args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, tryCallOp.Callee);
-
-    StdTryCallOp stdTryCall;
-    if (calleeRetStructType != null) {
-      stdTryCall = new StdTryCallOp(tryCallOp.Callee, newArgs);
-      block.AddOp(stdTryCall);
-      if (tryCallOp.Result != null) {
-        structVarNames[tryCallOp.Result.Id] = sretVarName!;
-        structValueTypes[tryCallOp.Result.Id] = calleeRetStructType.Name;
-      }
-    } else {
-      var stdResult = ResolveCallResultType(tryCallOp.ResultKind, calleeFunc.ReturnType);
-      stdTryCall = new StdTryCallOp(tryCallOp.Callee, newArgs, stdResult);
-      block.AddOp(stdTryCall);
-      if (tryCallOp.Result != null && stdResult != null) {
-        valueMap[tryCallOp.Result] = stdResult;
-      }
-    }
-
-    valueMap[tryCallOp.ErrorFlag] = stdTryCall.ErrorFlag;
-    EmitStore(block, stdTryCall.ErrorFlag, "__error_flag", varTypes);
-
-    ReadBackSelfFields(tryCallOp.Args, calleeFunc, selfBufName, block, varTypes,
-      structVarNames, isStructInstanceMethod, selfStructType);
+    LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
+      tryCallOp.ResultKind, isTryCall: true, funcLookup, block, valueMap, varTypes,
+      structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, typeDefs,
+      null, null, tryCallOp.ErrorFlag);
   }
 
   /// <summary>
@@ -894,13 +1026,13 @@ public static class MaxonToStandardConversion {
   private static string? FlattenCallArgs(
     List<MaxonValue> args,
     MlirFunction<MaxonOp> calleeFunc,
+    bool calleeIsStructInstance,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     List<StdValue> newArgs,
     string calleeName) {
-    bool calleeIsStructInstance = IsStructInstanceMethod(calleeFunc);
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
     string? selfBufName = null;
 
@@ -927,6 +1059,28 @@ public static class MaxonToStandardConversion {
       }
     }
     return selfBufName;
+  }
+
+  private static MlirFunction<MaxonOp> ResolveCallee(string calleeName, Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+    if (funcLookup.TryGetValue(calleeName, out var calleeFunc))
+      return calleeFunc;
+    var suffixPattern = $".{calleeName}";
+    return funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern))
+      ?? throw new InvalidOperationException($"Function '{calleeName}' not found in module");
+  }
+
+  private static string? SetupSretArg(MlirStructType? calleeRetStructType,
+                                      int resultId,
+                                      MlirBlock<StandardOp> block,
+                                      Dictionary<string, string> varTypes,
+                                      List<StdValue> newArgs) {
+    if (calleeRetStructType == null) return null;
+    var sretVarName = $"__sret_{resultId}";
+    AllocateStructOnStack(block, sretVarName, calleeRetStructType, varTypes);
+    var leaOp = new StdLeaOp(sretVarName);
+    block.AddOp(leaOp);
+    newArgs.Add(leaOp.Result);
+    return sretVarName;
   }
 
   /// <summary>
@@ -960,17 +1114,16 @@ public static class MaxonToStandardConversion {
   /// </summary>
   private static void ReadBackSelfFields(
     List<MaxonValue> args,
-    MlirFunction<MaxonOp> calleeFunc,
     string? selfBufName,
+    MlirStructType? calleeSelfStructType,
     MlirBlock<StandardOp> block,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     bool isStructInstanceMethod,
     MlirStructType? selfStructType) {
-    bool calleeIsStructInstance = IsStructInstanceMethod(calleeFunc);
-    if (calleeIsStructInstance && selfBufName != null && args.Count > 0
+    // selfBufName is only set by FlattenCallArgs for struct instance methods
+    if (selfBufName != null && calleeSelfStructType != null && args.Count > 0
         && structVarNames.TryGetValue(args[0].Id, out var callerSelfName)) {
-      var calleeSelfStructType = (MlirStructType)calleeFunc.ParamTypes[0];
       CopyStructFields(block, selfBufName, callerSelfName, calleeSelfStructType, varTypes);
 
       // If we're inside a struct instance method and the subcall was on self,
@@ -1500,13 +1653,32 @@ public static class MaxonToStandardConversion {
     var newBufferResult = new StdI64(MlirContext.Current.NextId());
     block.AddOp(new StdCallRuntimeOp("maxon_realloc", [oldBuffer, newByteSizeOp.Result], newBufferResult));
 
+    StdI64 newBufReload;
+    if (_trackAllocs) {
+      // Save byte size and buffer pointer before tracking calls (which clobber registers)
+      var byteSizeVar = $"__grow_bytesize_{MlirContext.Current.NextId()}";
+      EmitStore(block, newByteSizeOp.Result, byteSizeVar, varTypes);
+      var newBufVar = $"__grow_newbuf_{MlirContext.Current.NextId()}";
+      EmitStore(block, newBufferResult, newBufVar, varTypes);
+
+      var bufReload = (StdI64)EmitLoad(block, newBufVar, varTypes);
+      var sizeReload = (StdI64)EmitLoad(block, byteSizeVar, varTypes);
+      EmitTrackAlloc(block, bufReload, sizeReload, "array grow");
+      EmitTrackIncref(block, "array grow", 1);
+
+      // Reload new buffer from stack (tracking calls clobbered the register)
+      newBufReload = (StdI64)EmitLoad(block, newBufVar, varTypes);
+    } else {
+      newBufReload = newBufferResult;
+    }
+
     // Update managed struct fields
-    EmitStore(block, newBufferResult, $"{managedVarName}.buffer", varTypes);
+    EmitStore(block, newBufReload, $"{managedVarName}.buffer", varTypes);
     EmitStore(block, newCap, $"{managedVarName}.capacity", varTypes);
 
     // Write through to self pointer if in struct instance method
     if (isStructInstanceMethod && selfStructType != null && managedVarName.StartsWith("self.")) {
-      EmitNestedSelfFieldWriteThrough(block, newBufferResult, managedVarName, "buffer", selfStructType);
+      EmitNestedSelfFieldWriteThrough(block, newBufReload, managedVarName, "buffer", selfStructType);
       EmitNestedSelfFieldWriteThrough(block, newCap, managedVarName, "capacity", selfStructType);
     }
   }
@@ -1615,12 +1787,19 @@ public static class MaxonToStandardConversion {
     block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, length, elemSize], newBuffer));
 
     EmitStore(block, newBuffer, $"{managedVarName}.buffer", varTypes);
+    // If COW triggered (capacity was 0), new capacity = length; otherwise keep original
+    var zeroConst = new StdConstI64Op(0);
+    block.AddOp(zeroConst);
+    var cmpOp = new StdCmpI64Op("eq", capacity, zeroConst.Result);
+    block.AddOp(cmpOp);
     var lenReload = (StdI64)EmitLoad(block, cowLenVar, varTypes);
-    EmitStore(block, lenReload, $"{managedVarName}.capacity", varTypes);
+    var selectOp = new StdSelectI64Op(cmpOp.Result, lenReload, capacity);
+    block.AddOp(selectOp);
+    EmitStore(block, selectOp.Result, $"{managedVarName}.capacity", varTypes);
 
     if (isStructInstanceMethod && selfStructType != null && managedVarName.StartsWith("self.")) {
       EmitNestedSelfFieldWriteThrough(block, newBuffer, managedVarName, "buffer", selfStructType);
-      EmitNestedSelfFieldWriteThrough(block, lenReload, managedVarName, "capacity", selfStructType);
+      EmitNestedSelfFieldWriteThrough(block, selectOp.Result, managedVarName, "capacity", selfStructType);
     }
   }
 
@@ -2437,5 +2616,133 @@ public static class MaxonToStandardConversion {
       MaxonValueKind.TypeParameter => MlirType.I64, // unresolved type parameter, stored as i64
       _ => throw new InvalidOperationException($"{context}: unsupported element kind '{kind}'")
     };
+  }
+
+  // ============================================================================
+  // Allocation tracking helpers
+  // ============================================================================
+
+  /// <summary>
+  /// Get or create an rdata label for a tracking tag string.
+  /// </summary>
+  private static string GetOrCreateTrackingTag(string tag) {
+    if (_rdataTagCache!.TryGetValue(tag, out var label))
+      return label;
+    label = $"__track_tag_{_rdataTagCache.Count}";
+    var bytes = System.Text.Encoding.UTF8.GetBytes(tag);
+    _resultModule!.RdataEntries.Add((label, bytes, 1));
+    _rdataTagCache[tag] = label;
+    return label;
+  }
+
+  /// <summary>
+  /// Emit ops to load a tracking tag string pointer and length.
+  /// </summary>
+  private static (StdI64 tagPtr, StdI64 tagLen) EmitTrackingTagLoad(
+    MlirBlock<StandardOp> block, string tag) {
+    var rdataLabel = GetOrCreateTrackingTag(tag);
+    var leaOp = new StdLeaRdataOp(rdataLabel);
+    block.AddOp(leaOp);
+    var ptrOp = new StdPtrToI64Op(leaOp.Result);
+    block.AddOp(ptrOp);
+    var lenOp = new StdConstI64Op(System.Text.Encoding.UTF8.GetByteCount(tag));
+    block.AddOp(lenOp);
+    return (ptrOp.Result, lenOp.Result);
+  }
+
+  /// <summary>
+  /// Emit tracking call: ALLOC #N: X bytes (tag)
+  /// </summary>
+  private static void EmitTrackAlloc(
+    MlirBlock<StandardOp> block, StdI64 ptr, StdI64 size, string tag) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_alloc", [ptr, size, tagPtr, tagLen]));
+  }
+
+  /// <summary>
+  /// Emit tracking call: INCREF: tag -> rc=N
+  /// </summary>
+  private static void EmitTrackIncref(
+    MlirBlock<StandardOp> block, string tag, long refcount) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    var rcOp = new StdConstI64Op(refcount);
+    block.AddOp(rcOp);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_incref", [tagPtr, tagLen, rcOp.Result]));
+  }
+
+  /// <summary>
+  /// Emit tracking call: CLEANUP: tag
+  /// </summary>
+  private static void EmitTrackCleanup(
+    MlirBlock<StandardOp> block, string tag) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_cleanup", [tagPtr, tagLen]));
+  }
+
+  /// <summary>
+  /// Emit tracking call: MOVE: tag
+  /// </summary>
+  private static void EmitTrackMove(
+    MlirBlock<StandardOp> block, string tag) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_move", [tagPtr, tagLen]));
+  }
+
+  private static string? GetManagedFieldName(MlirStructType structType) {
+    var managedField = structType.GetField("managed");
+    if (managedField != null) return "managed";
+    foreach (var field in structType.Fields)
+      if (field.Type is MlirStructType nested && nested.Name == "__ManagedMemory")
+        return field.Name;
+    return null;
+  }
+
+  /// <summary>
+  /// Determines the buffer field path for a struct variable that owns managed memory.
+  /// Returns null if the struct type does not contain managed memory.
+  /// </summary>
+  private static string? GetManagedBufferPath(string varName, string structTypeName, Dictionary<string, MlirType> typeDefs) {
+    if (structTypeName == "__ManagedMemory")
+      return $"{varName}.buffer";
+    if (typeDefs.TryGetValue(structTypeName, out var typeDef) && typeDef is MlirStructType structType) {
+      var fieldName = GetManagedFieldName(structType);
+      if (fieldName != null)
+        return $"{varName}.{fieldName}.buffer";
+    }
+    return null;
+  }
+
+  /// <summary>
+  /// Emit the cleanup sequence for a managed variable before scope exit.
+  /// In tracking mode: calls maxon_cleanup_managed which prints CLEANUP/DECREF/FREE and frees.
+  /// In non-tracking mode: just calls maxon_free on the buffer.
+  /// </summary>
+  private static void EmitManagedCleanup(
+    MlirBlock<StandardOp> block,
+    string varName,
+    string bufferVarPath,
+    Dictionary<string, string> varTypes) {
+    if (!_trackAllocs) return; // TODO: enable non-tracking cleanup once validated
+    // Derive capacity path from buffer path (e.g. "arr.managed.buffer" -> "arr.managed.capacity")
+    var capacityPath = bufferVarPath[..bufferVarPath.LastIndexOf('.')] + ".capacity";
+    var capacity = (StdI64)EmitLoad(block, capacityPath, varTypes);
+    var buffer = (StdI64)EmitLoad(block, bufferVarPath, varTypes);
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, varName);
+    block.AddOp(new StdCallRuntimeOp("maxon_cleanup_managed", [capacity, buffer, tagPtr, tagLen]));
+  }
+
+  /// <summary>
+  /// Check if a method call name indicates mutation of the self struct.
+  /// </summary>
+  private static bool IsMutatingMethodCall(string callee) {
+    // Method calls are like "IntArray.set", "StringArray.push", etc.
+    var dot = callee.LastIndexOf('.');
+    if (dot < 0) return false;
+    var method = callee[(dot + 1)..];
+    return method is "set" or "resize" or "push" or "shift" or "remove" or "pop" or "insert" or "concat";
   }
 }

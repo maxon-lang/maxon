@@ -700,16 +700,6 @@ public static class MonomorphizationPass {
   }
 
   /// <summary>
-  /// Determines the concrete type name for a call site by checking the result struct type
-  /// or the self argument (first arg) struct type.
-  /// </summary>
-  private static string? GetConcreteTypeForCall(string? resultStructTypeName, List<MaxonValue> args) {
-    if (resultStructTypeName != null) return resultStructTypeName;
-    if (args.Count > 0 && args[0] is MaxonStruct selfStruct) return selfStruct.TypeName;
-    return null;
-  }
-
-  /// <summary>
   /// Resolve a callee rewrite by trying the result struct type first, then the self arg type.
   /// For instance methods like Array.get that return an element type (e.g., Pair), the result
   /// type won't match the container type alias (__Array_Pair), so we fall back to the self arg.

@@ -32,7 +32,7 @@ public record CompileResult(
 public class Compiler {
   private readonly MlirContext _context = new();
 
-  public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
+  public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null, bool trackAllocs = false) {
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
     using var _ = _context.PushScope();
@@ -60,7 +60,7 @@ public class Compiler {
 
       // Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
       var pipeline = new MlirPipeline();
-      var mlirResult = MlirPipeline.Run(module, returnIr, dumpStagesBasePath);
+      var mlirResult = MlirPipeline.Run(module, returnIr, dumpStagesBasePath, trackAllocs);
 
       // Write MLIR if requested
       if (mlirOutputPath != null) {
@@ -68,7 +68,7 @@ public class Compiler {
       }
 
       // Stage 5: Code emission (X86 dialect -> machine code)
-      var codeResult = CodeEmitter.Emit(mlirResult.Module);
+      var codeResult = CodeEmitter.Emit(mlirResult.Module, trackAllocs);
 
       // Stage 6: Write PE executable
       PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Imports);

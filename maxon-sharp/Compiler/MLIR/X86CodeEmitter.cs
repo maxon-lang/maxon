@@ -4,7 +4,7 @@ namespace MaxonSharp.Compiler.Mlir;
 
 public record ImportEntry(string DllName, string FunctionName);
 
-public partial class X86CodeEmitter {
+public partial class X86CodeEmitter(bool trackAllocs = false) {
   private readonly List<byte> _code = [];
   private readonly List<byte> _rdata = [];
   private readonly List<byte> _data = [];
@@ -41,6 +41,9 @@ public partial class X86CodeEmitter {
   private readonly List<int> _chkstkCallSites = [];
 
   private string _currentFunction = "";
+
+  // Whether allocation tracking is enabled (--track-allocs)
+  public bool TrackAllocs { get; } = trackAllocs;
 
   public IReadOnlyList<ImportEntry> Imports => _imports;
   public bool HasRdata => _rdata.Count > 0;
@@ -302,8 +305,22 @@ public partial class X86CodeEmitter {
     _relCallFixups.Add((_code.Count, mainFunctionName));
     EmitDword(0); // placeholder
 
-    // mov ecx, eax (move return value to first arg for ExitProcess)
-    EmitBytes(0x89, 0xC1);
+    if (TrackAllocs) {
+      // Save return value on stack (shadow space at [rsp+0x20])
+      EmitMovMemRspReg(0x20, X86Register.Rax);
+
+      // Call maxon_print_alloc_summary
+      EmitByte(0xE8);
+      _relCallFixups.Add((_code.Count, "maxon_print_alloc_summary"));
+      EmitDword(0); // placeholder
+
+      // Restore return value for ExitProcess
+      // MOV rcx, [rsp+0x20]
+      EmitBytes(0x48, 0x8B, 0x4C, 0x24, 0x20);
+    } else {
+      // mov ecx, eax (move return value to first arg for ExitProcess)
+      EmitBytes(0x89, 0xC1);
+    }
 
     // call [rip+disp32] ExitProcess (indirect through IAT)
     EmitBytes(0xFF, 0x15);
@@ -1248,6 +1265,16 @@ public partial class X86CodeEmitter {
     // MOV r64, [rip+disp32]: REX.W + 8B /r (mod=00, r/m=101 for RIP-relative)
     Rex.W().Reg(dest).Emit(this);
     EmitByte(0x8B);
+    EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
+    _globalFixups.Add((_code.Count, globalName));
+    EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  private void EmitGlobalLeaReg(X86Register dest, string globalName) {
+    RequireGpr(dest, nameof(EmitGlobalLeaReg));
+    // LEA r64, [rip+disp32]: REX.W + 8D /r (mod=00, r/m=101 for RIP-relative)
+    Rex.W().Reg(dest).Emit(this);
+    EmitByte(0x8D);
     EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
     _globalFixups.Add((_code.Count, globalName));
     EmitDword(0); // placeholder for RIP-relative displacement

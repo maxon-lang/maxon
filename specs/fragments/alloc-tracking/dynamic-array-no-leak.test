@@ -1,0 +1,166 @@
+// Test: dynamic-array-no-leak
+typealias IntArray = Array with int
+
+function main() returns int
+  let size = 10
+  var arr = IntArray{}
+  arr.resize(size)
+  arr.set(0, value: 42)
+  return try arr.get(0) otherwise 0
+end 'main'
+---
+TrackMemory: true
+ExitCode: 42
+Stdout: ```
+ALLOC #1: 80 bytes (array grow)
+INCREF: array grow -> rc=1
+CLEANUP: arr
+DECREF: arr -> rc=0
+FREE #1: 80 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 80 bytes
+Freed:     80 bytes
+Leaked:    0 bytes
+Moves:     0
+Increfs:   1
+Decrefs:   1
+Copies:    0
+Cleanups:  1
+```
+---
+module {
+  func @alloc-tracking.main() -> i64 {
+  entry:
+    x86.prologue stack_size=256
+    x86.mov eax, 10
+    x86.xor ecx, ecx
+    x86.xor edx, edx
+    x86.xor ebx, ebx
+    x86.xor esi, esi
+    x86.mov edi, 8
+    x86.mov [rbp-8], edx
+    x86.mov [rbp-16], ebx
+    x86.mov [rbp-24], esi
+    x86.mov [rbp-32], edi
+    x86.mov [rbp-40], ecx
+    x86.mov r8, [rbp-8]
+    x86.mov [rbp-48], r8
+    x86.mov r9, [rbp-16]
+    x86.mov [rbp-56], r9
+    x86.mov ecx, [rbp-24]
+    x86.mov [rbp-64], ecx
+    x86.mov ecx, [rbp-32]
+    x86.mov [rbp-72], ecx
+    x86.mov ecx, [rbp-40]
+    x86.mov [rbp-80], ecx
+    x86.mov ecx, [rbp-48]
+    x86.mov [rbp-88], ecx
+    x86.mov ecx, [rbp-56]
+    x86.mov [rbp-96], ecx
+    x86.mov ecx, [rbp-64]
+    x86.mov [rbp-104], ecx
+    x86.mov ecx, [rbp-72]
+    x86.mov [rbp-112], ecx
+    x86.mov ecx, [rbp-112]
+    x86.mov [rbp-120], ecx
+    x86.mov ecx, [rbp-104]
+    x86.mov [rbp-128], ecx
+    x86.mov ecx, [rbp-96]
+    x86.mov [rbp-136], ecx
+    x86.mov ecx, [rbp-88]
+    x86.mov [rbp-144], ecx
+    x86.mov ecx, [rbp-80]
+    x86.mov [rbp-152], ecx
+    x86.lea rcx, [rbp-152]
+    x86.mov rdx, rax
+    x86.call IntArray.resize
+    x86.mov eax, [rbp-152]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-144]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-136]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-128]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-120]
+    x86.mov [rbp-112], eax
+    x86.xor eax, eax
+    x86.mov ecx, 42
+    x86.mov edx, [rbp-112]
+    x86.mov [rbp-160], edx
+    x86.mov edx, [rbp-104]
+    x86.mov [rbp-168], edx
+    x86.mov edx, [rbp-96]
+    x86.mov [rbp-176], edx
+    x86.mov edx, [rbp-88]
+    x86.mov [rbp-184], edx
+    x86.mov edx, [rbp-80]
+    x86.mov [rbp-192], edx
+    x86.lea rdx, [rbp-192]
+    x86.mov r8, rcx
+    x86.mov rcx, rdx
+    x86.mov rdx, rax
+    x86.call IntArray.set
+    x86.mov eax, [rbp-192]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-184]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-176]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-168]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-160]
+    x86.mov [rbp-112], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-112]
+    x86.mov [rbp-200], ecx
+    x86.mov ecx, [rbp-104]
+    x86.mov [rbp-208], ecx
+    x86.mov ecx, [rbp-96]
+    x86.mov [rbp-216], ecx
+    x86.mov ecx, [rbp-88]
+    x86.mov [rbp-224], ecx
+    x86.mov ecx, [rbp-80]
+    x86.mov [rbp-232], ecx
+    x86.lea rcx, [rbp-232]
+    x86.mov rdx, rax
+    x86.call IntArray.get
+    x86.mov ecx, [rbp-232]
+    x86.mov [rbp-80], ecx
+    x86.mov ecx, [rbp-224]
+    x86.mov [rbp-88], ecx
+    x86.mov ecx, [rbp-216]
+    x86.mov [rbp-96], ecx
+    x86.mov ecx, [rbp-208]
+    x86.mov [rbp-104], ecx
+    x86.mov ecx, [rbp-200]
+    x86.mov [rbp-112], ecx
+    x86.xor ecx, ecx
+    x86.mov [rbp-240], ecx
+    x86.mov [rbp-248], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je alloc-tracking.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-240]
+    x86.mov [rbp-248], eax
+    x86.jmp alloc-tracking.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-248]
+    x86.mov [rbp-256], eax
+    x86.mov ecx, [rbp-104]
+    x86.mov edx, [rbp-88]
+    x86.lea_rdata rbx, [__track_tag_0]
+    x86.mov rsi, rbx
+    x86.mov edi, 3
+    x86.mov r8, rsi
+    x86.mov r9, rdi
+    x86.call maxon_cleanup_managed
+    x86.mov r8, [rbp-256]
+    x86.mov eax, r8
+    x86.epilogue
+    x86.ret
+  }
+}
+---

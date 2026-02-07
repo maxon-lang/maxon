@@ -87,6 +87,12 @@ public static partial class SpecParser {
         testArgs = argsMatch.Groups[1].Value.Trim();
       }
 
+      bool trackMemory = false;
+      var trackMemMatch = TrackMemoryDirectiveRegex().Match(testSection);
+      if (trackMemMatch.Success) {
+        trackMemory = trackMemMatch.Groups[1].Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
+      }
+
       var source = ExtractCodeBlock(testSection, "maxon");
       if (source == null) continue;
 
@@ -107,7 +113,8 @@ public static partial class SpecParser {
           ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
           Stdout = stdout,
           RequiredMLIR = requiredMLIR,
-          RequiredRdata = requiredRdata
+          RequiredRdata = requiredRdata,
+          TrackMemory = trackMemory
         };
       }
 
@@ -115,7 +122,8 @@ public static partial class SpecParser {
         Name = testName,
         Source = source,
         Expectation = expectation,
-        Args = testArgs
+        Args = testArgs,
+        TrackMemory = trackMemory
       });
     }
 
@@ -206,4 +214,7 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*Args:\s*(.+?)\s*-->")]
   private static partial Regex ArgsDirectiveRegex();
+
+  [GeneratedRegex(@"<!--\s*TrackMemory:\s*(.+?)\s*-->")]
+  private static partial Regex TrackMemoryDirectiveRegex();
 }

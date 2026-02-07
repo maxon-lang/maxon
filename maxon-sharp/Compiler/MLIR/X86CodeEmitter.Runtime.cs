@@ -39,6 +39,11 @@ public partial class X86CodeEmitter {
     EmitMaxonProcessClose();
     EmitMaxonStrlen();
     EmitMaxonMemcpy();
+    EmitMaxonCleanupUntracked();
+
+    if (TrackAllocs) {
+      EmitTrackingRuntimeFunctions();
+    }
   }
 
   /// <summary>maxon_alloc(size_in_rcx) -> ptr_in_rax</summary>
@@ -818,5 +823,687 @@ public partial class X86CodeEmitter {
     if (rbpSlotR9 != 0)
       EmitMovRegMem(X86Register.R9, rbpSlotR9, 8);
     EmitCallImport("kernel32.dll", heapFunction);
+  }
+
+  /// <summary>
+  /// maxon_cleanup_untracked(capacity_in_rcx, buffer_in_rdx)
+  /// Frees heap-allocated buffer if capacity > 0 (skips rdata/constant buffers).
+  /// Stack: [rbp-8]=capacity, [rbp-16]=buffer
+  /// </summary>
+  private void EmitMaxonCleanupUntracked() {
+    EmitRuntimeFunctionStart("maxon_cleanup_untracked", 2);
+    // Only free if capacity > 0 (heap-allocated)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // capacity
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_cleanup_untracked_done");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buffer
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_cleanup_untracked_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Allocation tracking runtime functions
+  // ==========================================================================
+
+  /// <summary>
+  /// Emit all allocation tracking runtime functions. Called when TrackAllocs is enabled.
+  /// </summary>
+  private void EmitTrackingRuntimeFunctions() {
+    // Define rdata string constants used by tracking functions
+    DefineRdata("rdata_track_alloc", System.Text.Encoding.UTF8.GetBytes("ALLOC #"));
+    DefineRdata("rdata_track_free", System.Text.Encoding.UTF8.GetBytes("FREE #"));
+    DefineRdata("rdata_track_incref", System.Text.Encoding.UTF8.GetBytes("INCREF: "));
+    DefineRdata("rdata_track_decref", System.Text.Encoding.UTF8.GetBytes("DECREF: "));
+    DefineRdata("rdata_track_move", System.Text.Encoding.UTF8.GetBytes("MOVE: "));
+    DefineRdata("rdata_track_copy", System.Text.Encoding.UTF8.GetBytes("COPY: "));
+    DefineRdata("rdata_track_cleanup", System.Text.Encoding.UTF8.GetBytes("CLEANUP: "));
+    DefineRdata("rdata_track_colon", System.Text.Encoding.UTF8.GetBytes(": "));
+    DefineRdata("rdata_track_bytes", System.Text.Encoding.UTF8.GetBytes(" bytes ("));
+    DefineRdata("rdata_track_rparen", System.Text.Encoding.UTF8.GetBytes(")\n"));
+    DefineRdata("rdata_track_arrow_rc", System.Text.Encoding.UTF8.GetBytes(" -> rc="));
+    DefineRdata("rdata_track_newline", System.Text.Encoding.UTF8.GetBytes("\n"));
+    DefineRdata("rdata_track_summary_header", System.Text.Encoding.UTF8.GetBytes("\n=== MEMORY STATS ===\n"));
+    DefineRdata("rdata_track_summary_allocated", System.Text.Encoding.UTF8.GetBytes("Allocated: "));
+    DefineRdata("rdata_track_summary_freed", System.Text.Encoding.UTF8.GetBytes("Freed:     "));
+    DefineRdata("rdata_track_summary_leaked", System.Text.Encoding.UTF8.GetBytes("Leaked:    "));
+    DefineRdata("rdata_track_summary_moves", System.Text.Encoding.UTF8.GetBytes("Moves:     "));
+    DefineRdata("rdata_track_summary_increfs", System.Text.Encoding.UTF8.GetBytes("Increfs:   "));
+    DefineRdata("rdata_track_summary_decrefs", System.Text.Encoding.UTF8.GetBytes("Decrefs:   "));
+    DefineRdata("rdata_track_summary_copies", System.Text.Encoding.UTF8.GetBytes("Copies:    "));
+    DefineRdata("rdata_track_summary_cleanups", System.Text.Encoding.UTF8.GetBytes("Cleanups:  "));
+    DefineRdata("rdata_track_array_cleanup", System.Text.Encoding.UTF8.GetBytes("array cleanup"));
+
+    // Emit all tracking functions
+    EmitMaxonTrackPrintStr();
+    EmitMaxonTrackAlloc();
+    EmitMaxonTrackFree();
+    EmitMaxonTrackIncref();
+    EmitMaxonTrackDecref();
+    EmitMaxonTrackMove();
+    EmitMaxonTrackCopy();
+    EmitMaxonTrackCleanup();
+    EmitMaxonCleanupManaged();
+    EmitMaxonPrintAllocSummary();
+  }
+
+  /// <summary>
+  /// maxon_track_print_str(ptr_in_rcx, len_in_rdx)
+  /// Writes a non-null-terminated string to stdout using WriteFile.
+  /// Stack: [rbp-8]=ptr, [rbp-16]=len, [rbp-24]=handle, [rbp-32]=bytesWritten
+  /// </summary>
+  private void EmitMaxonTrackPrintStr() {
+    EmitRuntimeFunctionStart("maxon_track_print_str", 2, 0x40);
+
+    // GetStdHandle(STD_OUTPUT_HANDLE = -11)
+    EmitMovRegImm(X86Register.Rcx, -11);
+    EmitCallImport("kernel32.dll", "GetStdHandle");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = handle
+
+    // WriteFile(handle, buffer, nNumberOfBytesToWrite, &lpNumberOfBytesWritten, lpOverlapped)
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);  // arg1: handle
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);  // arg2: buffer (ptr)
+    EmitMovRegMem(X86Register.R8, -0x10, 8);   // arg3: length
+    // arg4: LEA R9, [rbp-0x20] (&bytesWritten)
+    EmitBytes(0x4C, 0x8D, 0x4D, 0xE0);
+    // arg5: lpOverlapped = NULL at [rsp+0x20]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "WriteFile");
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_alloc(ptr_in_rcx, size_in_rdx, tag_ptr_in_r8, tag_len_in_r9)
+  /// Tracks an allocation by incrementing next_id, updating alloc_bytes, storing in table,
+  /// and printing: ALLOC #id: size bytes (tag)
+  /// Stack: [rbp-8]=ptr, [rbp-16]=size, [rbp-24]=tag_ptr, [rbp-32]=tag_len,
+  ///        [rbp-40]=id, [rbp-48]=loop counter, [rbp-64]=number buffer (24 bytes)
+  /// </summary>
+  private void EmitMaxonTrackAlloc() {
+    EmitRuntimeFunctionStart("maxon_track_alloc", 4, 0xC0);
+
+    // Increment __track_next_id: load, add 1, store, use new value
+    EmitGlobalLoadReg(X86Register.Rax, "__track_next_id");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__track_next_id");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = id
+
+    // Add size to __track_alloc_bytes
+    EmitGlobalLoadReg(X86Register.Rax, "__track_alloc_bytes");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = size
+    EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx
+    EmitGlobalStoreReg(X86Register.Rax, "__track_alloc_bytes");
+
+    // Find empty slot in __track_table and store {ptr, size, id}
+    // Load table base address into R10
+    EmitGlobalLeaReg(X86Register.R10, "__track_table");
+    // R11 = loop counter (0 to 255)
+    EmitBytes(0x4D, 0x31, 0xDB); // XOR r11, r11
+
+    DefineLabel("rt_track_alloc_find_slot");
+    // Check if R11 >= 256
+    EmitBytes(0x49, 0x81, 0xFB, 0x00, 0x01, 0x00, 0x00); // CMP r11, 256
+    EmitJcc("ge", "rt_track_alloc_slot_done"); // No slot found, skip
+
+    // Calculate entry address: R10 + R11*24
+    // RAX = R11 * 24
+    EmitBytes(0x4C, 0x89, 0xD8); // MOV rax, r11
+    EmitMovRegImm(X86Register.Rcx, 24);
+    EmitBytes(0x48, 0x0F, 0xAF, 0xC1); // IMUL rax, rcx
+    EmitBytes(0x4C, 0x01, 0xD0); // ADD rax, r10 => RAX = entry address
+
+    // Check if ptr (first 8 bytes) == 0
+    EmitBytes(0x48, 0x83, 0x38, 0x00); // CMP qword [rax], 0
+    EmitJcc("nz", "rt_track_alloc_next_slot"); // Slot occupied, try next
+
+    // Found empty slot: store {ptr, size, id}
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = ptr
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx (ptr at offset 0)
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = size
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx (size at offset 8)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = id
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx (id at offset 16)
+    EmitJmp("rt_track_alloc_slot_done");
+
+    DefineLabel("rt_track_alloc_next_slot");
+    EmitBytes(0x49, 0xFF, 0xC3); // INC r11
+    EmitJmp("rt_track_alloc_find_slot");
+
+    DefineLabel("rt_track_alloc_slot_done");
+
+    // Print: "ALLOC #"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_alloc");
+    EmitMovRegImm(X86Register.Rdx, 7); // length of "ALLOC #"
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print id
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = id
+    EmitLeaRegMem(X86Register.Rdx, -0x40); // RDX = buffer address
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    // RAX = length, print it
+    EmitLeaRegMem(X86Register.Rcx, -0x40); // RCX = buffer
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax); // RDX = length
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print ": "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_colon");
+    EmitMovRegImm(X86Register.Rdx, 2);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print size
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = size
+    EmitLeaRegMem(X86Register.Rdx, -0x40); // RDX = buffer address
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x40);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print " bytes ("
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_bytes");
+    EmitMovRegImm(X86Register.Rdx, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print tag
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // tag_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // tag_len
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print ")\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_rparen");
+    EmitMovRegImm(X86Register.Rdx, 2);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_free(ptr_in_rcx, tag_ptr_in_rdx, tag_len_in_r8)
+  /// Looks up ptr in table, updates freed_bytes, clears entry, prints: FREE #id: size bytes (tag)
+  /// Stack: [rbp-8]=ptr, [rbp-16]=tag_ptr, [rbp-24]=tag_len,
+  ///        [rbp-32]=id, [rbp-40]=size, [rbp-64]=number buffer (24 bytes)
+  /// </summary>
+  private void EmitMaxonTrackFree() {
+    EmitRuntimeFunctionStart("maxon_track_free", 3, 0xC0);
+
+    // Look up ptr in __track_table
+    EmitGlobalLeaReg(X86Register.R10, "__track_table");
+    EmitBytes(0x4D, 0x31, 0xDB); // XOR r11, r11 (loop counter)
+
+    DefineLabel("rt_track_free_find_slot");
+    // Check if R11 >= 256
+    EmitBytes(0x49, 0x81, 0xFB, 0x00, 0x01, 0x00, 0x00); // CMP r11, 256
+    EmitJcc("ge", "rt_track_free_not_found");
+
+    // Calculate entry address: R10 + R11*24
+    EmitBytes(0x4C, 0x89, 0xD8); // MOV rax, r11
+    EmitMovRegImm(X86Register.Rcx, 24);
+    EmitBytes(0x48, 0x0F, 0xAF, 0xC1); // IMUL rax, rcx
+    EmitBytes(0x4C, 0x01, 0xD0); // ADD rax, r10
+
+    // Check if ptr at [rax] matches our ptr
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = ptr to find
+    EmitBytes(0x48, 0x39, 0x08); // CMP [rax], rcx
+    EmitJcc("nz", "rt_track_free_next_slot");
+
+    // Found: load size and id
+    EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] (size)
+    EmitMovMemReg(-0x28, X86Register.Rcx, 8); // [rbp-40] = size
+    EmitBytes(0x48, 0x8B, 0x48, 0x10); // MOV rcx, [rax+16] (id)
+    EmitMovMemReg(-0x20, X86Register.Rcx, 8); // [rbp-32] = id
+
+    // Add size to __track_freed_bytes
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_freed_bytes");
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8); // RDX = size
+    EmitBytes(0x48, 0x01, 0xD1); // ADD rcx, rdx
+    EmitGlobalStoreReg(X86Register.Rcx, "__track_freed_bytes");
+
+    // Clear the entry: set ptr to 0
+    EmitBytes(0x48, 0xC7, 0x00, 0x00, 0x00, 0x00, 0x00); // MOV qword [rax], 0
+
+    EmitJmp("rt_track_free_found");
+
+    DefineLabel("rt_track_free_next_slot");
+    EmitBytes(0x49, 0xFF, 0xC3); // INC r11
+    EmitJmp("rt_track_free_find_slot");
+
+    DefineLabel("rt_track_free_not_found");
+    // Not found: set id and size to 0 for printing
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // id = 0
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // size = 0
+
+    DefineLabel("rt_track_free_found");
+
+    // Print: "FREE #"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_free");
+    EmitMovRegImm(X86Register.Rdx, 6);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print id
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitLeaRegMem(X86Register.Rdx, -0x40);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x40);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print ": "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_colon");
+    EmitMovRegImm(X86Register.Rdx, 2);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print size
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitLeaRegMem(X86Register.Rdx, -0x40);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x40);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print " bytes ("
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_bytes");
+    EmitMovRegImm(X86Register.Rdx, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print tag
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // tag_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // tag_len
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print ")\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_rparen");
+    EmitMovRegImm(X86Register.Rdx, 2);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_incref(tag_ptr_in_rcx, tag_len_in_rdx, new_rc_in_r8)
+  /// Increments incref counter and prints: INCREF: tag -> rc=new_rc
+  /// Stack: [rbp-8]=tag_ptr, [rbp-16]=tag_len, [rbp-24]=new_rc, [rbp-48]=number buffer
+  /// </summary>
+  private void EmitMaxonTrackIncref() {
+    EmitRuntimeFunctionStart("maxon_track_incref", 3, 0x80);
+
+    // Increment __track_incref_count
+    EmitGlobalLoadReg(X86Register.Rax, "__track_incref_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__track_incref_count");
+
+    // Print "INCREF: "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_incref");
+    EmitMovRegImm(X86Register.Rdx, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print tag
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print " -> rc="
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_arrow_rc");
+    EmitMovRegImm(X86Register.Rdx, 7);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print new_rc
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // new_rc
+    EmitLeaRegMem(X86Register.Rdx, -0x30);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x30);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_decref(tag_ptr_in_rcx, tag_len_in_rdx, new_rc_in_r8)
+  /// Increments decref counter and prints: DECREF: tag -> rc=new_rc
+  /// Stack: [rbp-8]=tag_ptr, [rbp-16]=tag_len, [rbp-24]=new_rc, [rbp-48]=number buffer
+  /// </summary>
+  private void EmitMaxonTrackDecref() {
+    EmitRuntimeFunctionStart("maxon_track_decref", 3, 0x80);
+
+    // Increment __track_decref_count
+    EmitGlobalLoadReg(X86Register.Rax, "__track_decref_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__track_decref_count");
+
+    // Print "DECREF: "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_decref");
+    EmitMovRegImm(X86Register.Rdx, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print tag
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print " -> rc="
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_arrow_rc");
+    EmitMovRegImm(X86Register.Rdx, 7);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print new_rc
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // new_rc
+    EmitLeaRegMem(X86Register.Rdx, -0x30);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x30);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_move(tag_ptr_in_rcx, tag_len_in_rdx)
+  /// Increments move counter and prints: MOVE: tag
+  /// Stack: [rbp-8]=tag_ptr, [rbp-16]=tag_len
+  /// </summary>
+  private void EmitMaxonTrackMove() {
+    EmitRuntimeFunctionStart("maxon_track_move", 2, 0x80);
+
+    // Increment __track_move_count
+    EmitGlobalLoadReg(X86Register.Rax, "__track_move_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__track_move_count");
+
+    // Print "MOVE: "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_move");
+    EmitMovRegImm(X86Register.Rdx, 6);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print tag
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_copy(tag_ptr_in_rcx, tag_len_in_rdx)
+  /// Increments copy counter and prints: COPY: tag
+  /// Stack: [rbp-8]=tag_ptr, [rbp-16]=tag_len
+  /// </summary>
+  private void EmitMaxonTrackCopy() {
+    EmitRuntimeFunctionStart("maxon_track_copy", 2, 0x80);
+
+    // Increment __track_copy_count
+    EmitGlobalLoadReg(X86Register.Rax, "__track_copy_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__track_copy_count");
+
+    // Print "COPY: "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_copy");
+    EmitMovRegImm(X86Register.Rdx, 6);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print tag
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_cleanup(tag_ptr_in_rcx, tag_len_in_rdx)
+  /// Increments cleanup counter and prints: CLEANUP: tag
+  /// Stack: [rbp-8]=tag_ptr, [rbp-16]=tag_len
+  /// </summary>
+  private void EmitMaxonTrackCleanup() {
+    EmitRuntimeFunctionStart("maxon_track_cleanup", 2, 0x80);
+
+    // Increment __track_cleanup_count
+    EmitGlobalLoadReg(X86Register.Rax, "__track_cleanup_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__track_cleanup_count");
+
+    // Print "CLEANUP: "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_cleanup");
+    EmitMovRegImm(X86Register.Rdx, 9);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print tag
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_cleanup_managed(buffer_in_rcx, var_tag_ptr_in_rdx, var_tag_len_in_r8)
+  /// Combined cleanup function: prints CLEANUP, then if buffer != 0, prints DECREF + FREE and frees.
+  /// Stack: [rbp-8]=capacity, [rbp-16]=buffer, [rbp-24]=tag_ptr, [rbp-32]=tag_len
+  /// </summary>
+  private void EmitMaxonCleanupManaged() {
+    EmitRuntimeFunctionStart("maxon_cleanup_managed", 4, 0x60);
+
+    // Call maxon_track_cleanup(tag_ptr, tag_len)
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // tag_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // tag_len
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_cleanup")); EmitDword(0);
+
+    // Only free heap-allocated buffers (capacity > 0); rdata/constant buffers have capacity=0
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // capacity
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_cleanup_managed_done");
+
+    // Buffer is heap-allocated: DECREF with rc=0
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // tag_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // tag_len
+    EmitBytes(0x4D, 0x31, 0xC0); // XOR r8, r8 (rc=0)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_decref")); EmitDword(0);
+
+    // FREE: call maxon_track_free(buffer, "array cleanup" ptr, len)
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buffer
+    EmitLeaRegRipRel(X86Register.Rdx, "rdata_track_array_cleanup");
+    EmitMovRegImm(X86Register.R8, 13); // len("array cleanup")
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_free")); EmitDword(0);
+
+    // Actually free the memory
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buffer
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+
+    DefineLabel("rt_cleanup_managed_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_print_alloc_summary()
+  /// Prints a summary of all memory tracking stats:
+  /// === MEMORY STATS ===
+  /// Allocated: X bytes
+  /// Freed:     X bytes
+  /// Leaked:    X bytes
+  /// Moves:     X
+  /// Increfs:   X
+  /// Decrefs:   X
+  /// Copies:    X
+  /// Cleanups:  X
+  /// Stack: [rbp-8]=leaked_bytes (computed), [rbp-32]=number buffer
+  /// </summary>
+  private void EmitMaxonPrintAllocSummary() {
+    EmitRuntimeFunctionStart("maxon_print_alloc_summary", 0, 0x80);
+
+    // Print header: "\n=== MEMORY STATS ===\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_header");
+    EmitMovRegImm(X86Register.Rdx, 22); // length
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "Allocated: "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_allocated");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print allocated bytes
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_alloc_bytes");
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print " bytes\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_bytes");
+    EmitMovRegImm(X86Register.Rdx, 7); // " bytes\n" (skip the '(' from " bytes (")
+    // Actually we need a proper " bytes\n" string
+    // Let's print " bytes" part then newline
+    EmitMovRegImm(X86Register.Rdx, 6); // " bytes"
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "Freed:     "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_freed");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print freed bytes
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_freed_bytes");
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print " bytes\n"
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_bytes");
+    EmitMovRegImm(X86Register.Rdx, 6);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Compute and print leaked bytes (alloc - freed)
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_leaked");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitGlobalLoadReg(X86Register.Rax, "__track_alloc_bytes");
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_freed_bytes");
+    EmitBytes(0x48, 0x29, 0xC8); // SUB rax, rcx => leaked = alloc - freed
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save for reference
+
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_bytes");
+    EmitMovRegImm(X86Register.Rdx, 6);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "Moves:     "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_moves");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_move_count");
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "Increfs:   "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_increfs");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_incref_count");
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "Decrefs:   "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_decrefs");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_decref_count");
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "Copies:    "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_copies");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_copy_count");
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    // Print "Cleanups:  "
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_summary_cleanups");
+    EmitMovRegImm(X86Register.Rdx, 11);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitGlobalLoadReg(X86Register.Rcx, "__track_cleanup_count");
+    EmitLeaRegMem(X86Register.Rdx, -0x20);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitLeaRegMem(X86Register.Rcx, -0x20);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_newline");
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
   }
 }

@@ -170,6 +170,10 @@ public static class FragmentGenerator {
       sb.AppendLine($"Args: {test.Args}");
     }
 
+    if (test.TrackMemory) {
+      sb.AppendLine("TrackMemory: true");
+    }
+
     if (test.Expectation is SuccessExpectation success) {
       if (success.ExitCode.HasValue) {
         sb.AppendLine($"ExitCode: {success.ExitCode.Value}");
@@ -203,7 +207,7 @@ public static class FragmentGenerator {
     // Compile to executable and capture IR (for success expectations only)
     if (test.Expectation is SuccessExpectation) {
       var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
-      var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
+      var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, trackAllocs: test.TrackMemory);
       if (result.Success) {
         if (result.X86Ir != null) {
           sb.Append(result.X86Ir.Trim());
@@ -255,7 +259,7 @@ public static class FragmentGenerator {
     }
 
     var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
-    var (expectation, fragmentArgs) = ParseExpectation(expectationSection);
+    var (expectation, fragmentArgs, fragmentTrackMemory) = ParseExpectation(expectationSection);
 
     // Parse generated MLIR (between second --- and third ---)
     string? generatedMLIR = null;
@@ -274,7 +278,8 @@ public static class FragmentGenerator {
       Source = source,
       Expectation = expectation,
       GeneratedMLIR = generatedMLIR,
-      Args = fragmentArgs
+      Args = fragmentArgs,
+      TrackMemory = fragmentTrackMemory
     };
   }
 
@@ -288,7 +293,7 @@ public static class FragmentGenerator {
     return string.Join('\n', lines).TrimEnd();
   }
 
-  private static (TestExpectation Expectation, string? Args) ParseExpectation(string section) {
+  private static (TestExpectation Expectation, string? Args, bool TrackMemory) ParseExpectation(string section) {
     var lines = section.Split('\n');
     int? exitCode = null;
     string? stdout = null;
@@ -296,6 +301,7 @@ public static class FragmentGenerator {
     string? requiredRdata = null;
     string? expectedError = null;
     string? args = null;
+    bool trackMemory = false;
 
     var i = 0;
     while (i < lines.Length) {
@@ -308,6 +314,8 @@ public static class FragmentGenerator {
         }
       } else if (line.StartsWith("Args:")) {
         args = line["Args:".Length..].Trim();
+      } else if (line.StartsWith("TrackMemory:")) {
+        trackMemory = line["TrackMemory:".Length..].Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
       } else if (line.StartsWith("MaxoncStderr: ```")) {
         expectedError = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("Stdout: ```")) {
@@ -324,15 +332,16 @@ public static class FragmentGenerator {
     if (expectedError != null) {
       return (new CompilerErrorExpectation {
         ExpectedStderr = expectedError
-      }, args);
+      }, args, trackMemory);
     }
 
     return (new SuccessExpectation {
       ExitCode = exitCode,
       Stdout = stdout,
       RequiredMLIR = requiredMLIR,
-      RequiredRdata = requiredRdata
-    }, args);
+      RequiredRdata = requiredRdata,
+      TrackMemory = trackMemory
+    }, args, trackMemory);
   }
 
   private static string ExtractMultilineValue(string[] lines, ref int i) {
