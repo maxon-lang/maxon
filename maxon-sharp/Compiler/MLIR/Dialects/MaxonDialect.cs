@@ -704,9 +704,9 @@ public class MaxonManagedMemConcatOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
 }
 
 // String interpolation: concatenates literal parts and expression values into a new String
-public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue)> parts, string stringTypeName) : MaxonOp {
+public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec)> parts, string stringTypeName) : MaxonOp {
   public override string Mnemonic => "maxon.string_interp";
-  public List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue)> Parts { get; } = parts;
+  public List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec)> Parts { get; } = parts;
   public string StringTypeName { get; } = stringTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), stringTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];

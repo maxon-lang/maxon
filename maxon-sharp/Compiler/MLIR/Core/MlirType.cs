@@ -104,6 +104,10 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }
 
+/// Marker type for string-backed enum backing types. At runtime, string-backed enums
+/// are stored as ordinals (i64), but their display value is the associated string.
+public class MlirStringBackingType() : MlirType("string_enum", 8);
+
 public class MlirTypeParameterType(string parameterName) : MlirType(parameterName) {
   public string ParameterName { get; } = parameterName;
   public override int SizeInBytes => throw new InvalidOperationException($"Type parameter '{ParameterName}' has no size");

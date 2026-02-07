@@ -269,6 +269,14 @@ public class X86MovzxRegOp(X86Register dest) : X86Op {
   public override string Mnemonic => $"x86.movzx {Dest.ToString().ToLower()}, {Dest.ToString().ToLower()}b";
 }
 
+/// Conditional move: moves src to dest if the zero flag is not set (condition != 0).
+/// Must be preceded by a TEST instruction on the condition register.
+public class X86CmovneRegRegOp(X86Register dest, X86Register src) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.cmovne {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
 public class X86JccOp(string condition, string target) : X86Op {
   public string Condition { get; } = condition;
   public string Target { get; } = target;

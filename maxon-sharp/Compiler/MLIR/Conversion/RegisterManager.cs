@@ -347,6 +347,24 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit a conditional select: result = condition ? trueValue : falseValue.
+  /// Uses TEST + CMOVNE to select between two i64 values.
+  /// </summary>
+  public void EmitSelectI64(StdValue condition, StdValue trueValue, StdValue falseValue, StdValue result, MlirBlock<X86Op> block) {
+    var trueReg = EnsureInRegister(trueValue, block);
+    var falseReg = EnsureInRegister(falseValue, block, protect1: trueReg);
+    var condReg = EnsureInRegister(condition, block, protect1: trueReg, protect2: falseReg);
+
+    // TEST condition, condition (sets ZF=1 if condition is 0/false)
+    block.AddOp(new X86TestRegRegOp(condReg, condReg));
+
+    // Start with falseValue in result, then CMOVNE to trueValue if condition != 0
+    var resultReg = AllocateRegister(result, block, protect1: To64Bit(trueReg), protect2: To64Bit(condReg));
+    block.AddOp(new X86MovRegRegOp(resultReg, falseReg));
+    block.AddOp(new X86CmovneRegRegOp(resultReg, trueReg));
+  }
+
+  /// <summary>
   /// Materialize a comparison result (from CPU flags) into a GPR via setcc + movzx.
   /// </summary>
   public void EmitSetcc(StdValue result, string condition, MlirBlock<X86Op> block) {

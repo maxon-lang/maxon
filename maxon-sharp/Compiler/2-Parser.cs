@@ -1022,6 +1022,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           }
 
           cases.Add(new MlirEnumCase(caseName, ordinal, rawVal));
+        } else if (Check(TokenType.StringLiteral)) {
+          if (isNegative) {
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+              "cannot negate a string raw value", caseToken.Line, caseToken.Column);
+          }
+
+          var rawVal = Advance().Value;
+
+          if (backingType == null) {
+            backingType = new MlirStringBackingType();
+          } else if (backingType is not MlirStringBackingType) {
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+              $"raw value type mismatch: expected string, got {(backingType == MlirType.I64 ? "int" : "float")}",
+              caseToken.Line, caseToken.Column);
+          }
+
+          // Check for duplicate raw values
+          foreach (var existing in cases) {
+            if (existing.RawValue is string existingVal && existingVal == rawVal) {
+              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
+                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
+            }
+          }
+
+          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal));
+        } else {
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"expected integer, float, or string literal for enum raw value",
+            caseToken.Line, caseToken.Column);
         }
       } else {
         cases.Add(new MlirEnumCase(caseName, ordinal));
@@ -1729,6 +1758,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private static MaxonValueKind GetEnumBackingKind(MlirEnumType enumType) {
     if (enumType.BackingType == MlirType.F64) return MaxonValueKind.Float;
+    if (enumType.BackingType is MlirStringBackingType) return MaxonValueKind.Integer;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MaxonValueKind.Integer;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
@@ -4642,6 +4672,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (double)enumCase.RawValue!);
             } else if (enumType.BackingType == MlirType.I64) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.RawValue!);
+            } else if (enumType.BackingType is MlirStringBackingType) {
+              // String-backed enums are stored as ordinals at runtime
+              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
             } else if (enumType.BackingType == null) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
             } else {
@@ -4956,7 +4989,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         "No type implements BuiltinStringLiteral (String type not found in stdlib)",
         token.Line, token.Column);
 
-    var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue)>();
+    var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec)>();
     var text = token.Value;
     var pos = 0;
     var literalBuf = new System.Text.StringBuilder();
@@ -5001,7 +5034,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
       } else if (text[pos] == '{') {
         if (literalBuf.Length > 0) {
-          parts.Add((true, literalBuf.ToString(), null));
+          parts.Add((true, literalBuf.ToString(), null, null));
           literalBuf.Clear();
         }
         pos++; // skip '{'
@@ -5015,8 +5048,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var exprText = text[exprStart..pos];
         if (pos < text.Length) pos++; // skip closing '}'
 
+        // Split on ':' for format specifier (e.g., {value:verbose})
+        string? formatSpec = null;
+        var colonIdx = exprText.IndexOf(':');
+        if (colonIdx >= 0) {
+          formatSpec = exprText[(colonIdx + 1)..];
+          exprText = exprText[..colonIdx];
+        }
+
         var exprValue = ParseInterpolationExpression(exprText);
-        parts.Add((false, null, exprValue));
+        parts.Add((false, null, exprValue, formatSpec));
       } else {
         literalBuf.Append(text[pos]);
         pos++;
@@ -5024,7 +5065,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     if (literalBuf.Length > 0) {
-      parts.Add((true, literalBuf.ToString(), null));
+      parts.Add((true, literalBuf.ToString(), null, null));
     }
 
     // If no expression parts, emit a regular string literal with escaped content

@@ -18,6 +18,7 @@ public partial class X86CodeEmitter {
     EmitMaxonWriteStdout();
     EmitMaxonI64ToString();
     EmitMaxonF64ToString();
+    EmitMaxonBoolToString();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
     EmitMaxonFileOpenRead();
@@ -462,6 +463,42 @@ public partial class X86CodeEmitter {
     EmitMovRegReg(X86Register.Rax, X86Register.Rcx); // RAX = length
 
     DefineLabel("rt_f64str_epilogue");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_bool_to_string(value_in_rcx, buffer_ptr_in_rdx) -> length_in_rax
+  /// Writes "true" (4 bytes) or "false" (5 bytes) into the caller-provided buffer.
+  /// Buffer must be >= 6 bytes. Returns byte count (excluding null terminator).
+  /// Stack: [rbp-8]=value, [rbp-16]=buffer
+  /// </summary>
+  private void EmitMaxonBoolToString() {
+    EmitRuntimeFunctionStart("maxon_bool_to_string", 2);
+
+    // TEST rcx, rcx — check if value is 0 (false)
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("z", "rt_boolstr_false");
+
+    // True path: write "true\0"
+    EmitBytes(0xC6, 0x02, 0x74);       // MOV byte [rdx], 't'
+    EmitBytes(0xC6, 0x42, 0x01, 0x72); // MOV byte [rdx+1], 'r'
+    EmitBytes(0xC6, 0x42, 0x02, 0x75); // MOV byte [rdx+2], 'u'
+    EmitBytes(0xC6, 0x42, 0x03, 0x65); // MOV byte [rdx+3], 'e'
+    EmitBytes(0xC6, 0x42, 0x04, 0x00); // MOV byte [rdx+4], 0
+    EmitMovRegImm(X86Register.Rax, 4);
+    EmitJmp("rt_boolstr_epilogue");
+
+    // False path: write "false\0"
+    DefineLabel("rt_boolstr_false");
+    EmitBytes(0xC6, 0x02, 0x66);       // MOV byte [rdx], 'f'
+    EmitBytes(0xC6, 0x42, 0x01, 0x61); // MOV byte [rdx+1], 'a'
+    EmitBytes(0xC6, 0x42, 0x02, 0x6C); // MOV byte [rdx+2], 'l'
+    EmitBytes(0xC6, 0x42, 0x03, 0x73); // MOV byte [rdx+3], 's'
+    EmitBytes(0xC6, 0x42, 0x04, 0x65); // MOV byte [rdx+4], 'e'
+    EmitBytes(0xC6, 0x42, 0x05, 0x00); // MOV byte [rdx+5], 0
+    EmitMovRegImm(X86Register.Rax, 5);
+
+    DefineLabel("rt_boolstr_epilogue");
     EmitRuntimeFunctionEnd();
   }
 

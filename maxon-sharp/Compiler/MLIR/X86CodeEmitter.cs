@@ -281,6 +281,9 @@ public partial class X86CodeEmitter {
       case X86CallImportOp callImport:
         EmitCallImport(callImport.DllName, callImport.FunctionName);
         break;
+      case X86CmovneRegRegOp cmovne:
+        EmitCmovneRegReg(cmovne.Dest, cmovne.Src);
+        break;
       default:
         throw new InvalidOperationException($"No X86 emission for: {op.GetType().Name} ({op.Mnemonic})");
     }
@@ -755,6 +758,16 @@ public partial class X86CodeEmitter {
     Rex.W().Reg(rhs).Rm(lhs).Emit(this);
     EmitByte(0x85);
     EmitByte((byte)(0xC0 | (RegCode(rhs) << 3) | RegCode(lhs)));
+  }
+
+  private void EmitCmovneRegReg(X86Register dest, X86Register src) {
+    RequireGpr(dest, nameof(EmitCmovneRegReg));
+    RequireGpr(src, nameof(EmitCmovneRegReg));
+    // CMOVNE r64, r/m64: REX.W + 0F 45 /r
+    Rex.W().Reg(dest).Rm(src).Emit(this);
+    EmitByte(0x0F);
+    EmitByte(0x45);
+    EmitByte((byte)(0xC0 | (RegCode(dest) << 3) | RegCode(src)));
   }
 
   private void EmitSetcc(string condition, X86Register dest) {

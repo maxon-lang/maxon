@@ -384,6 +384,10 @@ public static class StandardToX86Conversion {
             regManager.EmitLoadFromStack(loadPtrOp.Result, varOffsets[loadPtrOp.VarName], 8, x86Block);
             break;
 
+          case StdSelectI64Op selectOp:
+            regManager.EmitSelectI64(selectOp.Condition, selectOp.TrueValue, selectOp.FalseValue, selectOp.Result, x86Block);
+            break;
+
           case StdCmpI64Op cmpI64Op:
             regManager.EmitIntegerCompare(cmpI64Op.Lhs, cmpI64Op.Rhs, x86Block);
             lastCmpResult = cmpI64Op.Result;

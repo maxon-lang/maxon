@@ -271,6 +271,21 @@ public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp 
   public override List<StdValue> ReadValues => [Lhs, Rhs];
 }
 
+// === Conditional Select ===
+
+/// Selects between two i64 values based on a boolean condition.
+/// If condition is true, result = trueValue; otherwise result = falseValue.
+public class StdSelectI64Op(StdBool condition, StdI64 trueValue, StdI64 falseValue) : StandardOp {
+  public override string Mnemonic => "arith.select";
+  public StdBool Condition { get; } = condition;
+  public StdI64 TrueValue { get; } = trueValue;
+  public StdI64 FalseValue { get; } = falseValue;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Condition.ToString(), TrueValue.ToString(), FalseValue.ToString()];
+  public override List<StdValue> ReadValues => [Condition, TrueValue, FalseValue];
+}
+
 // === Bool Logical Operations ===
 
 public class StdAndI1Op(StdBool lhs, StdBool rhs) : StandardOp {

@@ -634,7 +634,7 @@ public static class MaxonToStandardConversion {
               LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result);
               break;
             case MaxonStringInterpOp interpOp:
-              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result);
+              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, funcLookup, result);
               break;
             case MaxonManagedMemConcatOp concatOp:
               LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames);
@@ -668,6 +668,7 @@ public static class MaxonToStandardConversion {
 
   private static MlirType ResolveEnumBackingMlirType(MlirEnumType enumType) {
     if (enumType.BackingType == MlirType.F64) return MlirType.F64;
+    if (enumType.BackingType is MlirStringBackingType) return MlirType.I64;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MlirType.I64;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
@@ -1794,11 +1795,13 @@ public static class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
+    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
     MlirModule<StandardOp> result) {
 
     var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
 
-    foreach (var (IsLiteral, LiteralValue, ExprValue) in op.Parts) {
+    foreach (var (IsLiteral, LiteralValue, ExprValue, FormatSpec) in op.Parts) {
       if (IsLiteral) {
         if (string.IsNullOrEmpty(LiteralValue)) continue;
 
@@ -1809,26 +1812,16 @@ public static class MaxonToStandardConversion {
         var exprValue = ExprValue!;
 
         if (structVarNames.TryGetValue(exprValue.Id, out var managedVarName)) {
-          // String/struct expression: read buffer and length from managed memory fields
-          string bufferVar, lengthVar;
-          if (varTypes.ContainsKey($"{managedVarName}._managed.buffer")) {
-            bufferVar = $"{managedVarName}._managed.buffer";
-            lengthVar = $"{managedVarName}._managed.length";
-          } else {
-            bufferVar = $"{managedVarName}.buffer";
-            lengthVar = $"{managedVarName}.length";
-          }
-
-          var bufLoad = (StdI64)EmitLoad(block, bufferVar, varTypes);
-          var lenLoad = (StdI64)EmitLoad(block, lengthVar, varTypes);
-
-          partInfos.Add((bufLoad, lenLoad));
+          partInfos.Add(EmitStructInterpolation(exprValue, managedVarName, FormatSpec, block, varTypes,
+            structVarNames, structValueTypes, funcLookup, result));
         } else if (exprValue is MaxonInteger or MaxonByte) {
-          // Integer/byte expression: convert to string via runtime function
           partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
         } else if (exprValue is MaxonFloat) {
-          // Float expression: convert to string via runtime function
           partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
+        } else if (exprValue is MaxonBool) {
+          partInfos.Add(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
+        } else if (exprValue is MaxonEnum enumValue) {
+          partInfos.Add(EmitEnumToString(enumValue, valueMap, block, varTypes, result));
         } else {
           throw new InvalidOperationException(
             $"String interpolation: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
@@ -1931,45 +1924,228 @@ public static class MaxonToStandardConversion {
   /// Allocates a 21-byte buffer and calls maxon_i64_to_string runtime to convert
   /// an integer value to its decimal string representation. Returns (buffer, length).
   /// </summary>
-  private static (StdI64 Buffer, StdI64 Length) EmitI64ToString(
-    StdI64 intValue,
+  /// <summary>
+  /// Allocates a buffer, calls a runtime conversion function, and returns (buffer, length).
+  /// Used by EmitI64ToString, EmitF64ToString, and EmitBoolToString.
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitRuntimeToString(
+    StdValue value,
+    string runtimeFuncName,
+    int bufferSize,
     MlirBlock<StandardOp> block,
     Dictionary<string, string> varTypes) {
 
-    var bufResult = EmitAlloc(block, 21);
+    var bufResult = EmitAlloc(block, bufferSize);
 
-    // Store buffer pointer so it survives the i64_to_string call
-    var bufVarName = $"__i64tostr_buf_{bufResult.Id}";
+    // Store buffer pointer so it survives the runtime call
+    var bufVarName = $"__tostr_buf_{bufResult.Id}";
     EmitStore(block, bufResult, bufVarName, varTypes);
 
     var lenResult = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("maxon_i64_to_string", [intValue, bufResult], lenResult));
+    block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult], lenResult));
 
     var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
     return (finalBuf, lenResult);
+  }
+
+  private static (StdI64 Buffer, StdI64 Length) EmitI64ToString(
+    StdI64 intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+    EmitRuntimeToString(intValue, "maxon_i64_to_string", 21, block, varTypes);
+
+  private static (StdI64 Buffer, StdI64 Length) EmitF64ToString(
+    StdF64 floatValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+    EmitRuntimeToString(floatValue, "maxon_f64_to_string", 32, block, varTypes);
+
+  /// <summary>
+  /// Handles interpolation of struct values. For String/Character types (which have buffer/length
+  /// fields), reads those directly. For Stringable types, calls the toString() method and uses
+  /// the returned String's buffer/length.
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitStructInterpolation(
+    MaxonValue exprValue,
+    string managedVarName,
+    string? formatSpec,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
+    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+    MlirModule<StandardOp> result) {
+
+    // Check if this struct has managed memory buffer/length fields (String/Character)
+    foreach (var prefix in new[] { $"{managedVarName}._managed", managedVarName }) {
+      if (varTypes.ContainsKey($"{prefix}.buffer")) {
+        var bufLoad = (StdI64)EmitLoad(block, $"{prefix}.buffer", varTypes);
+        var lenLoad = (StdI64)EmitLoad(block, $"{prefix}.length", varTypes);
+        return (bufLoad, lenLoad);
+      }
+    }
+
+    // Not a String/Character — must be a Stringable type. Call toString("") on it.
+    string? structTypeName = null;
+    if (exprValue is MaxonStruct ms) {
+      structTypeName = ms.TypeName;
+    } else if (structValueTypes.TryGetValue(exprValue.Id, out var svt)) {
+      structTypeName = svt;
+    }
+    if (structTypeName == null) {
+      throw new InvalidOperationException(
+        $"String interpolation: struct value %{exprValue.Id} has no type name for Stringable call");
+    }
+
+    return EmitStringableToStringCall(structTypeName, managedVarName, formatSpec, block,
+      varTypes, structVarNames, funcLookup, result);
   }
 
   /// <summary>
-  /// Allocates a 32-byte buffer and calls maxon_f64_to_string runtime to convert
-  /// a float value to its decimal string representation. Returns (buffer, length).
+  /// Calls toString(format) on a Stringable struct and returns the resulting String's buffer/length.
   /// </summary>
-  private static (StdI64 Buffer, StdI64 Length) EmitF64ToString(
-    StdF64 floatValue,
+  private static (StdI64 Buffer, StdI64 Length) EmitStringableToStringCall(
+    string structTypeName,
+    string selfVarName,
+    string? formatSpec,
     MlirBlock<StandardOp> block,
-    Dictionary<string, string> varTypes) {
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+    MlirModule<StandardOp> result) {
 
-    var bufResult = EmitAlloc(block, 32);
+    // Find the toString method for this type (try exact match, then suffix match)
+    var toStringName = $"{structTypeName}.toString";
+    if (!funcLookup.TryGetValue(toStringName, out var toStringFunc)) {
+      var suffixPattern = $".{toStringName}";
+      toStringFunc = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern));
+      if (toStringFunc != null) {
+        toStringName = toStringFunc.Name;
+      } else {
+        throw new InvalidOperationException(
+          $"String interpolation: type '{structTypeName}' does not have a toString method");
+      }
+    }
 
-    // Store buffer pointer so it survives the f64_to_string call
-    var bufVarName = $"__f64tostr_buf_{bufResult.Id}";
-    EmitStore(block, bufResult, bufVarName, varTypes);
+    var calleeRetStructType = ResolveStructReturnType(toStringFunc.ReturnType, result.TypeDefs);
 
-    var lenResult = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("maxon_f64_to_string", [floatValue, bufResult], lenResult));
+    var newArgs = new List<StdValue>();
 
-    var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
-    return (finalBuf, lenResult);
+    // Allocate sret for the returned String
+    var sretVarName = $"__interp_tostr_sret_{MlirContext.Current.NextId()}";
+    AllocateStructOnStack(block, sretVarName, calleeRetStructType!, varTypes);
+    var sretLea = new StdLeaOp(sretVarName);
+    block.AddOp(sretLea);
+    newArgs.Add(sretLea.Result);
+
+    // Pass self pointer: allocate a copy of the struct on stack
+    var selfStructType = (MlirStructType)result.TypeDefs[structTypeName];
+    var selfBufName = $"__interp_selfbuf_{MlirContext.Current.NextId()}";
+    var selfPtr = AllocateAndCopyStructToStack(block, selfVarName, selfBufName, selfStructType, varTypes);
+    newArgs.Add(selfPtr);
+
+    // Pass format string argument (empty string for default, or format spec)
+    var formatValue = formatSpec ?? "";
+    var formatLitName = $"__interp_fmt_{MlirContext.Current.NextId()}";
+    var formatTempName = EmitManagedMemoryLiteral(formatValue, MlirContext.Current.NextId(),
+      "fmt", formatLitName, block, varTypes, structVarNames, result);
+
+    // String type has _iterPos field beyond __ManagedMemory fields
+    var iterConst = new StdConstI64Op(0);
+    block.AddOp(iterConst);
+    EmitStore(block, iterConst.Result, $"{formatTempName}._iterPos", varTypes);
+
+    // The format arg is a String struct passed by pointer
+    var formatStructType = calleeRetStructType!; // String type
+    var formatBufName = $"__interp_fmtbuf_{MlirContext.Current.NextId()}";
+    var formatPtr = AllocateAndCopyStructToStack(block, formatTempName, formatBufName, formatStructType, varTypes);
+    newArgs.Add(formatPtr);
+
+    // Call toString
+    block.AddOp(new StdCallOp(toStringName, newArgs));
+
+    // Read buffer/length from the sret result
+    var retBufLoad = (StdI64)EmitLoad(block, $"{sretVarName}._managed.buffer", varTypes);
+    var retLenLoad = (StdI64)EmitLoad(block, $"{sretVarName}._managed.length", varTypes);
+    return (retBufLoad, retLenLoad);
   }
+
+  /// <summary>
+  /// Converts an enum value to its string representation for interpolation.
+  /// For int-backed and simple (ordinal) enums, converts the backing integer to a string.
+  /// For float-backed enums, converts the backing float to a string.
+  /// For string-backed enums, emits the string value from rdata.
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitEnumToString(
+    MaxonEnum enumValue,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    MlirModule<StandardOp> result) {
+
+    if (!result.TypeDefs.TryGetValue(enumValue.TypeName, out var typeDef) || typeDef is not MlirEnumType enumType) {
+      throw new InvalidOperationException(
+        $"String interpolation: enum type '{enumValue.TypeName}' not found in type definitions");
+    }
+
+    var backingMlirType = ResolveEnumBackingMlirType(enumType);
+    var stdValue = valueMap[enumValue];
+
+    if (enumType.BackingType is MlirStringBackingType) {
+      // String-backed enum: the runtime value is the ordinal (i64).
+      // We need to emit a lookup that maps ordinal → string rdata label.
+      return EmitStringEnumToString(enumType, (StdI64)stdValue, block, result);
+    }
+
+    if (backingMlirType == MlirType.F64) {
+      return EmitF64ToString((StdF64)stdValue, block, varTypes);
+    }
+    return EmitI64ToString((StdI64)stdValue, block, varTypes);
+  }
+
+  /// <summary>
+  /// Emits code to convert a string-backed enum ordinal to its string representation.
+  /// Generates a chain of select operations: for each case, compares ordinal and selects
+  /// the matching string. Falls back to "?" for unknown ordinals.
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitStringEnumToString(
+    MlirEnumType enumType,
+    StdI64 ordinalValue,
+    MlirBlock<StandardOp> block,
+    MlirModule<StandardOp> result) {
+
+    // Initialize with a fallback "?" value
+    var fallbackLabel = $"__strenum_fallback_{MlirContext.Current.NextId()}";
+    var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
+
+    // For each case, compare ordinal and conditionally select the case's string
+    foreach (var enumCase in enumType.Cases) {
+      if (enumCase.RawValue is not string strValue) continue;
+
+      var caseLabel = $"__strenum_case_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var (caseBuf, caseLen) = EmitRdataLiteral(strValue, caseLabel, block, result);
+
+      var ordConst = new StdConstI64Op(enumCase.Ordinal);
+      block.AddOp(ordConst);
+      var cmpOp = new StdCmpI64Op("eq", ordinalValue, ordConst.Result);
+      block.AddOp(cmpOp);
+
+      // Select: if ordinal matches this case, use caseBuf/caseLen; otherwise keep current
+      var selectBuf = new StdSelectI64Op(cmpOp.Result, caseBuf, currentBuf);
+      block.AddOp(selectBuf);
+      var selectLen = new StdSelectI64Op(cmpOp.Result, caseLen, currentLen);
+      block.AddOp(selectLen);
+
+      currentBuf = selectBuf.Result;
+      currentLen = selectLen.Result;
+    }
+
+    return (currentBuf, currentLen);
+  }
+
+  /// <summary>
+  /// Allocates a 6-byte buffer and calls maxon_bool_to_string runtime to convert
+  /// a boolean value to "true" or "false". Returns (buffer, length).
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitBoolToString(
+    StdBool boolValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+    EmitRuntimeToString(boolValue, "maxon_bool_to_string", 6, block, varTypes);
 
   private static void LowerManagedMemConcat(
     MaxonManagedMemConcatOp op,

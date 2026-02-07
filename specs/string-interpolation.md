@@ -239,7 +239,7 @@ end 'main'
 0
 ```
 ```stdout
-Pi: 3.141589
+Pi: 3.14159
 ```
 
 ### Float Literal Interpolation
@@ -593,7 +593,7 @@ end 'main'
 0
 ```
 ```stdout
-Area: 12.566359
+Area: 12.56636
 ```
 
 ### Mixed Types
@@ -683,7 +683,7 @@ end 'main'
 0
 ```
 ```stdout
-1 2
+1	2
 ```
 
 ### Custom Type with Stringable
