@@ -307,18 +307,22 @@ public static class MonomorphizationPass {
   /// If Element is substituted to i8, Integer becomes Byte.
   /// If Element is substituted to i1, Integer becomes Bool.
   /// </summary>
+  /// <summary>
+  /// Resolves TypeParameter kinds to concrete kinds based on the Element type substitution.
+  /// Struct and Enum element types resolve to Integer because they are stored as i64 pointers
+  /// in managed memory and passed as scalars through generic function bodies.
+  /// </summary>
   private static MaxonValueKind SubstituteValueKind(MaxonValueKind kind, Dictionary<string, MlirType> substitution) {
-    // Substitute Integer kind if Element is mapped to a different type
-    if (kind == MaxonValueKind.Integer && substitution.TryGetValue("Element", out var elementType)) {
-      if (elementType == MlirType.I64) return MaxonValueKind.Integer;
-      if (elementType == MlirType.F64) return MaxonValueKind.Float;
-      if (elementType == MlirType.I8) return MaxonValueKind.Byte;
-      if (elementType == MlirType.I1) return MaxonValueKind.Bool;
-      // Struct type means the element is a user-defined type, keep as Integer
-      if (elementType is MlirStructType or MlirEnumType) return MaxonValueKind.Integer;
-      // Type parameter means the element hasn't been resolved to a concrete type yet
-      if (elementType is MlirTypeParameterType) return MaxonValueKind.Integer;
-      throw new InvalidOperationException($"SubstituteValueKind: unsupported element type '{elementType.Name}'");
+    if (kind == MaxonValueKind.TypeParameter && substitution.TryGetValue("Element", out var elementType)) {
+      return elementType switch {
+        { } t when t == MlirType.I64 => MaxonValueKind.Integer,
+        { } t when t == MlirType.F64 => MaxonValueKind.Float,
+        { } t when t == MlirType.I1 => MaxonValueKind.Bool,
+        { } t when t == MlirType.I8 => MaxonValueKind.Byte,
+        MlirStructType or MlirEnumType => MaxonValueKind.Integer,
+        MlirTypeParameterType => MaxonValueKind.TypeParameter,
+        _ => throw new InvalidOperationException($"SubstituteValueKind: unsupported element type '{elementType}'")
+      };
     }
     return kind;
   }
@@ -380,16 +384,13 @@ public static class MonomorphizationPass {
       }
 
       case MaxonAssignOp assign: {
-        // If this assignment is for an Element-polymorphic value, substitute the kind
         var valueKind = assign.ValueKind;
         var mappedValue = MapValue(assign.Value);
-        if (substituteToFloat && valueKind == MaxonValueKind.Integer) {
-          // Check if the source value is Element-polymorphic (mapped from a param that was)
-          if (mappedValue is MaxonFloat) {
-            valueKind = MaxonValueKind.Float;
-          }
+        if (valueKind == MaxonValueKind.TypeParameter) {
+          valueKind = substituteToFloat && mappedValue is MaxonFloat
+            ? MaxonValueKind.Float
+            : SubstituteValueKind(valueKind, typeSubstitution);
         }
-        // Track this variable as holding a float value
         if (valueKind == MaxonValueKind.Float) {
           floatVars.Add(assign.VarName);
         }
@@ -397,12 +398,10 @@ public static class MonomorphizationPass {
       }
 
       case MaxonParamOp param: {
-        // Substitute ValueKind if this parameter is Element-polymorphic
-        var valueKind = param.ValueKind;
+        var valueKind = SubstituteValueKind(param.ValueKind, typeSubstitution);
         if (substituteToFloat && IsElementPolymorphic(param.Index)) {
           valueKind = MaxonValueKind.Float;
         }
-        // Track float params so VarRefOps for this param name get correct kind
         if (valueKind == MaxonValueKind.Float) {
           floatVars.Add(param.Name);
         }
@@ -418,8 +417,7 @@ public static class MonomorphizationPass {
       }
 
       case MaxonVarRefOp varRef: {
-        // Substitute ValueKind if this variable was assigned a float value
-        var valueKind = varRef.ValueKind;
+        var valueKind = SubstituteValueKind(varRef.ValueKind, typeSubstitution);
         if (substituteToFloat && floatVars.Contains(varRef.VarName)) {
           valueKind = MaxonValueKind.Float;
         }
@@ -437,12 +435,9 @@ public static class MonomorphizationPass {
       case MaxonBinOp binOp: {
         var mappedLhs = MapValue(binOp.Lhs);
         var mappedRhs = MapValue(binOp.Rhs);
-        // Substitute OperandKind if operands are floats
-        var operandKind = binOp.OperandKind;
-        if (substituteToFloat && operandKind == MaxonValueKind.Integer) {
-          if (mappedLhs is MaxonFloat || mappedRhs is MaxonFloat) {
-            operandKind = MaxonValueKind.Float;
-          }
+        var operandKind = SubstituteValueKind(binOp.OperandKind, typeSubstitution);
+        if (substituteToFloat && (mappedLhs is MaxonFloat || mappedRhs is MaxonFloat)) {
+          operandKind = MaxonValueKind.Float;
         }
         var cloned = new MaxonBinOp(binOp.Operator, mappedLhs, mappedRhs, operandKind);
         RegisterResult(binOp.Result, cloned.Result);
@@ -453,7 +448,12 @@ public static class MonomorphizationPass {
         var newCallee = SubstituteCallee(call.Callee, typeSubstitution);
         var newArgs = call.Args.Select(MapValue).ToList();
         var newResultStructTypeName = call.ResultStructTypeName != null ? SubName(call.ResultStructTypeName) : null;
-        var cloned = new MaxonCallOp(newCallee, newArgs, call.ResultKind, newResultStructTypeName);
+        var resultKind = call.ResultKind.HasValue ? SubstituteValueKind(call.ResultKind.Value, typeSubstitution) : call.ResultKind;
+        if (resultKind == MaxonValueKind.Struct && newResultStructTypeName == null && concreteElementType is MlirStructType callStructType)
+          newResultStructTypeName = callStructType.Name;
+        if (resultKind == MaxonValueKind.Enum && newResultStructTypeName == null && concreteElementType is MlirEnumType callEnumType)
+          newResultStructTypeName = callEnumType.Name;
+        var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, newResultStructTypeName);
         if (call.Result != null && cloned.Result != null) {
           RegisterResult(call.Result, cloned.Result);
         }
@@ -464,7 +464,12 @@ public static class MonomorphizationPass {
         var newCallee = SubstituteCallee(tryCall.Callee, typeSubstitution);
         var newArgs = tryCall.Args.Select(MapValue).ToList();
         var newResultStructTypeName = tryCall.ResultStructTypeName != null ? SubName(tryCall.ResultStructTypeName) : null;
-        var cloned = new MaxonTryCallOp(newCallee, newArgs, tryCall.ResultKind, newResultStructTypeName);
+        var resultKind = tryCall.ResultKind.HasValue ? SubstituteValueKind(tryCall.ResultKind.Value, typeSubstitution) : tryCall.ResultKind;
+        if (resultKind == MaxonValueKind.Struct && newResultStructTypeName == null && concreteElementType is MlirStructType tryStructType)
+          newResultStructTypeName = tryStructType.Name;
+        if (resultKind == MaxonValueKind.Enum && newResultStructTypeName == null && concreteElementType is MlirEnumType tryEnumType)
+          newResultStructTypeName = tryEnumType.Name;
+        var cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, newResultStructTypeName);
         if (tryCall.Result != null && cloned.Result != null) {
           RegisterResult(tryCall.Result, cloned.Result);
         }
@@ -700,8 +705,26 @@ public static class MonomorphizationPass {
   /// </summary>
   private static string? GetConcreteTypeForCall(string? resultStructTypeName, List<MaxonValue> args) {
     if (resultStructTypeName != null) return resultStructTypeName;
-    // For void methods (e.g., set), use the self argument's struct type
     if (args.Count > 0 && args[0] is MaxonStruct selfStruct) return selfStruct.TypeName;
+    return null;
+  }
+
+  /// <summary>
+  /// Resolve a callee rewrite by trying the result struct type first, then the self arg type.
+  /// For instance methods like Array.get that return an element type (e.g., Pair), the result
+  /// type won't match the container type alias (__Array_Pair), so we fall back to the self arg.
+  /// </summary>
+  private static string? ResolveCalleeRewrite(string callee, string? resultStructTypeName, List<MaxonValue> args, Dictionary<(string, string), string> calleeMap) {
+    // Try result struct type first (works for most cases)
+    if (resultStructTypeName != null) {
+      var key = (callee, resultStructTypeName);
+      if (calleeMap.TryGetValue(key, out var newCallee)) return newCallee;
+    }
+    // Fall back to self arg type (for methods that return element type, not container type)
+    if (args.Count > 0 && args[0] is MaxonStruct selfStruct) {
+      var key = (callee, selfStruct.TypeName);
+      if (calleeMap.TryGetValue(key, out var newCallee)) return newCallee;
+    }
     return null;
   }
 
@@ -728,31 +751,25 @@ public static class MonomorphizationPass {
           var op = block.Operations[i];
 
           if (op is MaxonCallOp call) {
-            var concreteType = GetConcreteTypeForCall(call.ResultStructTypeName, call.Args);
-            if (concreteType != null) {
-              var key = (call.Callee, concreteType);
-              if (calleeMap.TryGetValue(key, out var newCallee)) {
-                Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
-                var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
-                  call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
-                block.Operations[i] = new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
-                if (newResultKind != call.ResultKind && call.Result != null) {
-                  UpdateSubsequentAssignOps(block, i + 1, call.Result, newResultKind);
-                }
+            var newCallee = ResolveCalleeRewrite(call.Callee, call.ResultStructTypeName, call.Args, calleeMap);
+            if (newCallee != null) {
+              Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
+              var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
+                call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+              block.Operations[i] = new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
+              if (newResultKind != call.ResultKind && call.Result != null) {
+                UpdateSubsequentAssignOps(block, i + 1, call.Result, newResultKind);
               }
             }
           } else if (op is MaxonTryCallOp tryCall) {
-            var concreteType = GetConcreteTypeForCall(tryCall.ResultStructTypeName, tryCall.Args);
-            if (concreteType != null) {
-              var key = (tryCall.Callee, concreteType);
-              if (calleeMap.TryGetValue(key, out var newCallee)) {
-                Logger.Debug(LogCategory.Mlir, $"  Rewrote try_call {tryCall.Callee} -> {newCallee} in {func.Name}");
-                var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
-                  tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
-                block.Operations[i] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName);
-                if (newResultKind != tryCall.ResultKind && tryCall.Result != null) {
-                  UpdateSubsequentAssignOps(block, i + 1, tryCall.Result, newResultKind);
-                }
+            var newCallee = ResolveCalleeRewrite(tryCall.Callee, tryCall.ResultStructTypeName, tryCall.Args, calleeMap);
+            if (newCallee != null) {
+              Logger.Debug(LogCategory.Mlir, $"  Rewrote try_call {tryCall.Callee} -> {newCallee} in {func.Name}");
+              var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
+                tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
+              block.Operations[i] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName);
+              if (newResultKind != tryCall.ResultKind && tryCall.Result != null) {
+                UpdateSubsequentAssignOps(block, i + 1, tryCall.Result, newResultKind);
               }
             }
           }
@@ -772,28 +789,19 @@ public static class MonomorphizationPass {
     if (!funcLookup.TryGetValue(newCallee, out var newFunc) || newFunc.ReturnType == null)
       return (originalKind, originalStructTypeName);
 
-    if (newFunc.ReturnType is MlirStructType retStruct)
-      return (MaxonValueKind.Struct, retStruct.Name);
-    if (newFunc.ReturnType is MlirEnumType retEnum)
-      return (MaxonValueKind.Enum, retEnum.Name);
-    if (newFunc.ReturnType == MlirType.I64)
-      return (MaxonValueKind.Integer, null);
-    if (newFunc.ReturnType == MlirType.F64)
-      return (MaxonValueKind.Float, null);
-    if (newFunc.ReturnType == MlirType.I8)
-      return (MaxonValueKind.Byte, null);
-    if (newFunc.ReturnType == MlirType.I1)
-      return (MaxonValueKind.Bool, null);
-    if (newFunc.ReturnType is MlirTypeParameterType)
-      return (originalKind, originalStructTypeName);
-
-    throw new InvalidOperationException($"ResolveMonomorphizedResultType: unsupported return type '{newFunc.ReturnType.Name}' for {newCallee}");
+    var kind = newFunc.ReturnType.ToValueKind();
+    var typeName = newFunc.ReturnType switch {
+      MlirStructType s => s.Name,
+      MlirEnumType e => e.Name,
+      _ => (string?)null
+    };
+    return (kind, typeName);
   }
 
   /// <summary>
   /// Update MaxonAssignOps that reference the given result value to use the new value kind.
   /// This is needed when monomorphization changes a function's return type (e.g. from
-  /// type parameter Integer to concrete Struct).
+  /// TypeParameter to concrete Struct).
   /// </summary>
   private static void UpdateSubsequentAssignOps(
       MlirBlock<MaxonOp> block, int startIndex, MaxonValue result, MaxonValueKind? newKind) {

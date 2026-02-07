@@ -2,7 +2,7 @@ using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
 
-public enum MaxonValueKind { Integer, Float, Bool, Byte, Struct, Enum, Function }
+public enum MaxonValueKind { Integer, Float, Bool, Byte, Struct, Enum, Function, TypeParameter }
 
 public static class MaxonValueKindExtensions {
   public static MlirType ToMlirType(this MaxonValueKind kind) => kind switch {
@@ -13,6 +13,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require lookup via type registry, not ToMlirType()"),
     MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require lookup via type registry, not ToMlirType()"),
     MaxonValueKind.Function => throw new InvalidOperationException("Function kinds require lookup via function type, not ToMlirType()"),
+    MaxonValueKind.TypeParameter => MlirType.I64, // unresolved type parameter stored as i64
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -28,6 +29,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Struct => 8, // Struct references are pointers (8 bytes)
     MaxonValueKind.Enum => 8,   // Enums stored as i64
     MaxonValueKind.Function => 8, // Function pointers are 8 bytes
+    MaxonValueKind.TypeParameter => 8, // Placeholder size before monomorphization
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -37,8 +39,9 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
     MaxonValueKind.Byte => new MaxonByte(MlirContext.Current.NextId()),
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require a type name, use CreateStructValue() instead"),
-    MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require a type name, use MaxonEnumLiteralOp instead"),
+    MaxonValueKind.Enum => new MaxonInteger(MlirContext.Current.NextId()),
     MaxonValueKind.Function => new MaxonFunctionPtr(MlirContext.Current.NextId()),
+    MaxonValueKind.TypeParameter => new MaxonInteger(MlirContext.Current.NextId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 
@@ -48,7 +51,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.I1) return MaxonValueKind.Bool;
     if (type == MlirType.I8) return MaxonValueKind.Byte;
     if (type is MlirEnumType) return MaxonValueKind.Enum;
-    if (type is MlirTypeParameterType) return MaxonValueKind.Integer;
+    if (type is MlirTypeParameterType) return MaxonValueKind.TypeParameter;
     if (type is MlirStructType) return MaxonValueKind.Struct;
     if (type is MlirFunctionType) return MaxonValueKind.Function;
     throw new ArgumentOutOfRangeException(nameof(type), $"No MaxonValueKind for MlirType: {type}");
@@ -62,6 +65,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Struct => new StdPtr(MlirContext.Current.NextId()),
     MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
     MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
+    MaxonValueKind.TypeParameter => new StdI64(MlirContext.Current.NextId()),
     _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
   };
 }
@@ -131,7 +135,7 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
       var attrs = new Dictionary<string, MlirAttribute> {
         ["var"] = new StringAttr(VarName),
       };
-      if (ValueKind != MaxonValueKind.Struct && ValueKind != MaxonValueKind.Enum && ValueKind != MaxonValueKind.Function) {
+      if (ValueKind is not (MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.Function or MaxonValueKind.TypeParameter)) {
         attrs["kind"] = new TypeAttr(ValueKind.ToMlirType());
       }
       if (IsDeclaration) attrs["decl"] = new IntegerAttr(1, MlirType.I1);
@@ -148,12 +152,17 @@ public class MaxonParamOp(int index, string name, MaxonValueKind kind) : MaxonOp
   public MaxonValueKind ValueKind { get; } = kind;
   public MaxonValue Result { get; } = kind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
-    new Dictionary<string, MlirAttribute> {
-      ["index"] = new IntegerAttr(Index, MlirType.I32),
-      ["name"] = new StringAttr(Name),
-      ["type"] = new TypeAttr(ValueKind.ToMlirType())
-    };
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes {
+    get {
+      var attrs = new Dictionary<string, MlirAttribute> {
+        ["index"] = new IntegerAttr(Index, MlirType.I32),
+        ["name"] = new StringAttr(Name),
+      };
+      if (ValueKind is not MaxonValueKind.TypeParameter)
+        attrs["type"] = new TypeAttr(ValueKind.ToMlirType());
+      return attrs;
+    }
+  }
 }
 
 // Struct parameter op: represents a struct being received as a function parameter.
@@ -484,9 +493,11 @@ public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string 
   public string FieldName { get; } = fieldName;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public string? ResultStructTypeName { get; } = resultStructTypeName;
-  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
-      ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!)
-      : resultKind.CreateValue();
+  public MaxonValue Result { get; } = resultKind switch {
+      MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!),
+      MaxonValueKind.Enum => new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!),
+      _ => resultKind.CreateValue()
+  };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString()];
 }
@@ -607,7 +618,9 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, Ma
   public MaxonValue Index { get; } = index;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public bool IsStructElement { get; init; }
-  public MaxonValue Result { get; } = resultKind.CreateValue();
+  // Result is always a scalar or pointer — struct/enum elements produce a pointer to inline data
+  public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
+    ? new MaxonInteger(MlirContext.Current.NextId()) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
 }

@@ -1969,9 +1969,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(fnParamOp);
         _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, false, fnParamOp.Result, _currentBlock!, FnTypeName: fnType);
       } else if (paramType is MlirTypeParameterType tp) {
-        var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.Integer);
+        var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Integer, false, paramOp.Result, _currentBlock!, tp.ParameterName);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.TypeParameter, false, paramOp.Result, _currentBlock!, tp.ParameterName);
       } else {
         var kind = paramType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
@@ -2880,7 +2880,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p.Expect(TokenType.Comma);
         var value = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
-        var elementKind = p.DetermineValueKind(value);
+        var elementKind = p.GetElementKind();
         var op = new MaxonManagedMemSetOp(managed, index, value, elementKind);
         p._currentBlock!.AddOp(op);
         return null;
@@ -3122,15 +3122,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
         && typeInfo is MlirStructType structType
         && structType.TypeParams.TryGetValue("Element", out var elementType)) {
-      if (elementType == MlirType.I64) return MaxonValueKind.Integer;
-      if (elementType == MlirType.F64) return MaxonValueKind.Float;
-      if (elementType == MlirType.I8) return MaxonValueKind.Byte;
-      if (elementType == MlirType.I1) return MaxonValueKind.Bool;
-      // Unresolved type parameter (e.g., "Element") - default to Integer, monomorphization will specialize
-      if (elementType.Name == "Element") return MaxonValueKind.Integer;
-      // Struct/enum types are stored as i64 pointers in managed memory
-      if (elementType is MlirStructType or MlirEnumType) return MaxonValueKind.Integer;
-      throw new InvalidOperationException($"GetElementKind: unsupported element type '{elementType}'");
+      return elementType.ToValueKind();
     }
     // No Element type parameter - default to Integer for non-generic types
     return MaxonValueKind.Integer;
@@ -3509,17 +3501,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
       ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
     var elementMlirType = nextFunc.ReturnType;
+    // Resolve type parameter to concrete type using the iterable's type params
+    if (elementMlirType is MlirTypeParameterType tp
+        && iterableType?.TypeParams.TryGetValue(tp.ParameterName, out var concreteElemType) == true) {
+      elementMlirType = concreteElemType;
+    }
     // Resolve to canonical type (pre-scanned stubs may have 0 fields)
     if (elementMlirType is MlirStructType retStruct
         && _typeRegistry.TryGetValue(retStruct.Name, out var canonical)
         && canonical is MlirStructType canonicalStruct) {
       elementMlirType = canonicalStruct;
     }
-    var elementIsStruct = elementMlirType is MlirStructType resolvedStruct && resolvedStruct.Fields.Count > 0;
-    var elementKind = elementIsStruct ? MaxonValueKind.Struct
-      : elementMlirType == MlirType.F64 ? MaxonValueKind.Float
-      : MaxonValueKind.Integer;
-    var elementStructTypeName = elementIsStruct ? elementMlirType!.Name : null;
+    var elementKind = elementMlirType!.ToValueKind();
+    var elementStructTypeName = elementMlirType switch {
+      MlirStructType s => s.Name,
+      MlirEnumType e => e.Name,
+      _ => (string?)null
+    };
 
     var loopLabel = UniqueLabel(loopSourceLabel);
     var headerLabel = $"{loopLabel}.header";
@@ -4946,8 +4944,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               "bool" => MaxonValueKind.Bool,
               "byte" => MaxonValueKind.Byte,
               null => (MaxonValueKind?)null,
-              // Type parameter return types (e.g. Element) are treated as Integer pre-monomorphization
-              { } name when IsAssociatedTypeName(name) => MaxonValueKind.Integer,
+              { } name when IsAssociatedTypeName(name) => MaxonValueKind.TypeParameter,
               { } name => throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Unsupported return type '{name}' in interface method '{fieldName}'", fieldToken.Line, fieldToken.Column)
             };
             var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, null);
@@ -4987,7 +4984,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       var fieldKind = field.Type.ToValueKind();
-      var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
+      var fieldStructName = field.Type is MlirStructType fst ? fst.Name
+        : field.Type is MlirEnumType fet ? fet.Name
+        : null;
       var structVal2 = ResolveExprValue(result);
       var accessOp = new MaxonFieldAccessOp(structVal2, userTypeName, fieldName, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);
@@ -5153,11 +5152,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Creates a stack-allocated __ManagedMemory struct and wraps it in an Array struct.
   /// </summary>
   private ExprResult.Direct ParseArrayLiteral() {
-    var (managedStruct, arrayTag, elementCount, elementKind) = EmitArrayLiteralElements();
+    var (managedStruct, arrayTag, elementCount, elementKind, elementStructTypeName) = EmitArrayLiteralElements();
 
     // Find the appropriate typealias for this element type
-    // e.g., byte -> ByteArray, int -> IntArray (or just "Array" if no alias exists)
-    var arrayTypeName = FindArrayTypeAliasForElement(elementKind);
+    // e.g., byte -> ByteArray, int -> IntArray, Pair -> __Array_Pair
+    var arrayTypeName = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
 
     // Create Array struct: {iterIndex: 0, managed: <managed>}
     var iterIndexLit = new MaxonLiteralOp(0L);
@@ -5180,15 +5179,44 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// <summary>
   /// Finds the typealias name for Array with the given element type.
   /// Returns the concrete alias (e.g., "ByteArray") if one exists, otherwise "Array".
+  /// For struct element types, auto-creates a type alias if none exists.
   /// </summary>
-  private string FindArrayTypeAliasForElement(MaxonValueKind elementKind) {
+  private string FindArrayTypeAliasForElement(MaxonValueKind elementKind, string? elementStructTypeName = null) {
+    // For struct elements, search for existing alias or auto-create one
+    if (elementKind == MaxonValueKind.Struct && elementStructTypeName != null) {
+      // Search for an existing typealias of Array with this struct Element type
+      foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
+        if (sourceTypeName != "Array") continue;
+        if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
+            && aliasType is MlirStructType st
+            && st.TypeParams.TryGetValue("Element", out var elemType)
+            && elemType.Name == elementStructTypeName) {
+          return aliasName;
+        }
+      }
+
+      // No existing alias - auto-create one (e.g., __Array_Pair)
+      var autoAliasName = $"__Array_{elementStructTypeName}";
+      if (!_typeRegistry.ContainsKey(autoAliasName)
+          && _typeRegistry.TryGetValue("Array", out var arrayType)
+          && arrayType is MlirStructType arrayStruct
+          && _typeRegistry.TryGetValue(elementStructTypeName, out var elemStructType)) {
+        var substitution = new Dictionary<string, MlirType> { ["Element"] = elemStructType };
+        RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
+      }
+      return autoAliasName;
+    }
+
     // Map element kind to the expected Element type name
     var elementTypeName = elementKind switch {
       MaxonValueKind.Integer => "i64",
       MaxonValueKind.Float => "f64",
       MaxonValueKind.Byte => "i8",
       MaxonValueKind.Bool => "i1",
-      _ => null
+      MaxonValueKind.Enum => null,
+      MaxonValueKind.Function => null,
+      MaxonValueKind.Struct => throw new InvalidOperationException("Struct element kind should have been handled above"),
+      _ => throw new InvalidOperationException($"Unhandled element kind: {elementKind}")
     };
 
     if (elementTypeName == null) return "Array";
@@ -5212,7 +5240,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Parses [expr, expr, ...] and emits element assigns + __ManagedMemory struct.
   /// Returns the managed memory struct op, the element count, and the element kind.
   /// </summary>
-  private (MaxonStructLiteralOp ManagedStruct, string ArrayTag, int ElementCount, MaxonValueKind ElementKind) EmitArrayLiteralElements() {
+  private (MaxonStructLiteralOp ManagedStruct, string ArrayTag, int ElementCount, MaxonValueKind ElementKind, string? ElementStructTypeName) EmitArrayLiteralElements() {
     Advance(); // consume '['
 
     // Parse element expressions
@@ -5240,7 +5268,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Determine element size - for structs, look up the actual type size
     int elementSize;
+    string? elementStructTypeName = null;
     if (elements[0] is MaxonStruct structElem) {
+      elementStructTypeName = structElem.TypeName;
       if (_typeRegistry.TryGetValue(structElem.TypeName, out var structType)) {
         elementSize = structType.ElementSize;
       } else {
@@ -5282,7 +5312,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields);
     _currentBlock!.AddOp(managedStruct);
 
-    return (managedStruct, arrayTag, count, elementKind);
+    return (managedStruct, arrayTag, count, elementKind, elementStructTypeName);
   }
 
   private ExprResult.Direct ParseStructLiteral(string typeName) {
@@ -5458,7 +5488,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         typeToken.Line, typeToken.Column);
 
     // Parse elements — both paths start the same way
-    var (managedStruct, arrayTag, elementCount, _) = EmitArrayLiteralElements();
+    var (managedStruct, arrayTag, elementCount, _, _) = EmitArrayLiteralElements();
 
     // The init argument differs: BuiltinArrayLiteral gets __ManagedMemory, InitableFromArrayLiteral gets Array
     MaxonValue initArg;
@@ -5945,7 +5975,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // Skip type conversion for type-parameter params
       if (paramType is MlirTypeParameterType) continue;
 
-      var paramKind = MlirTypeToValueKind(paramType);
+      var paramKind = paramType.ToValueKind();
       if (argKind == paramKind) continue;
 
       args[i] = ConvertArgToParamType(args[i]!, argKind, paramKind, callee.ParamNames[i], functionNameToken);
@@ -5954,15 +5984,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return args.ToList()!;
   }
 
-  private static MaxonValueKind MlirTypeToValueKind(MlirType type) {
-    if (type == MlirType.I64) return MaxonValueKind.Integer;
-    if (type == MlirType.F64) return MaxonValueKind.Float;
-    if (type == MlirType.I1) return MaxonValueKind.Bool;
-    if (type == MlirType.I8) return MaxonValueKind.Byte;
-    if (type is MlirEnumType) return MaxonValueKind.Enum;
-    if (type is MlirFunctionType) return MaxonValueKind.Function;
-    throw new InvalidOperationException($"Cannot map MlirType '{type}' to MaxonValueKind");
-  }
 
   private MaxonValue ConvertArgToParamType(MaxonValue arg, MaxonValueKind argKind, MaxonValueKind paramKind,
       string paramName, Token callToken) {
@@ -5988,8 +6009,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Parse a single call argument value. If the argument starts with '{' and the expected
   /// parameter type is a struct, parse it as an anonymous struct literal.
   /// </summary>
-  private MaxonValue ParseCallArgValue(MlirType expectedType) {
-    if (Check(TokenType.LeftBrace) && expectedType is MlirStructType structType) {
+  private MaxonValue ParseCallArgValue(MlirType expectedType, Dictionary<string, MlirType>? typeParams = null) {
+    var resolvedType = expectedType;
+    if (resolvedType is MlirTypeParameterType tp && typeParams != null && typeParams.TryGetValue(tp.ParameterName, out var concrete)) {
+      resolvedType = concrete;
+    }
+    if (Check(TokenType.LeftBrace) && resolvedType is MlirStructType structType) {
       var structLiteral = ParseStructLiteral(structType.Name);
       return ResolveExprValue(structLiteral);
     }
@@ -6002,16 +6027,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// slot used when the first argument is positional (0 for normal calls, 1 for
   /// instance methods where slot 0 is self).
   /// </summary>
-  private void ParseArgList(Token callToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex) {
+  private void ParseArgList(Token callToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, MlirType>? typeParams = null) {
     if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
-      ParseNamedArg(callee, args);
+      ParseNamedArg(callee, args, typeParams);
     } else {
-      args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex]);
+      args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex], typeParams);
     }
 
     while (Check(TokenType.Comma) && Advance() != null) {
       if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
-        ParseNamedArg(callee, args);
+        ParseNamedArg(callee, args, typeParams);
       } else {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Second and subsequent arguments must be named. Use 'name: value' syntax",
@@ -6020,13 +6045,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
-  private void ParseNamedArg(MlirFunction<MaxonOp> callee, MaxonValue?[] args) {
+  private void ParseNamedArg(MlirFunction<MaxonOp> callee, MaxonValue?[] args, Dictionary<string, MlirType>? typeParams = null) {
     var nameToken = Advance();
     Advance(); // consume ':'
     var idx = callee.ParamNames.IndexOf(nameToken.Value);
     if (idx < 0)
       throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
-    args[idx] = ParseCallArgValue(callee.ParamTypes[idx]);
+    args[idx] = ParseCallArgValue(callee.ParamTypes[idx], typeParams);
   }
 
   /// <summary>
@@ -6040,12 +6065,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var args = new MaxonValue?[callee.ParamTypes.Count];
     args[0] = selfValue;
 
+    // Resolve type parameters from the self value's concrete struct type
+    Dictionary<string, MlirType>? typeParams = null;
+    if (selfValue is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var selfType) && selfType is MlirStructType selfStructType && selfStructType.TypeParams.Count > 0) {
+      typeParams = selfStructType.TypeParams;
+    }
+
     if (!Check(TokenType.RightParen)) {
-      ParseArgList(methodNameToken, callee, args, firstPositionalIndex: 1);
+      ParseArgList(methodNameToken, callee, args, firstPositionalIndex: 1, typeParams);
     }
 
     Expect(TokenType.RightParen);
     return (FillDefaultArgs(methodNameToken, callee, args), callee);
+  }
+
+  /// <summary>
+  /// Resolves the result kind and struct type name for a function call based on the callee's return type.
+  /// For type parameter returns, resolves against the self arg's element type.
+  /// </summary>
+  private (MaxonValueKind?, string?) ResolveCallResultType(MlirType? returnType, List<MaxonValue> args, string displayName, Token errorToken) {
+    if (returnType == null) return (null, null);
+    if (returnType is MlirTypeParameterType)
+      return OverrideResultKindForElementType(MaxonValueKind.TypeParameter, null, args);
+    var kind = returnType.ToValueKind();
+    var typeName = returnType switch {
+      MlirStructType s => s.Name,
+      MlirEnumType e => e.Name,
+      _ => (string?)null
+    };
+    return (kind, typeName);
   }
 
   /// <summary>
@@ -6063,31 +6111,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         functionNameToken.Line, functionNameToken.Column);
     }
 
-    MaxonValueKind? resultKind = null;
-    string? resultStructTypeName = null;
-
-    if (callee.ReturnType is MlirStructType retStructType) {
-      resultKind = MaxonValueKind.Struct;
-      resultStructTypeName = retStructType.Name;
-    } else if (callee.ReturnType is MlirEnumType retEnumType) {
-      resultKind = MaxonValueKind.Enum;
-      resultStructTypeName = retEnumType.Name;
-    } else if (callee.ReturnType is MlirTypeParameterType) {
-      resultKind = MaxonValueKind.Integer;
-      resultKind = OverrideResultKindForElementType(resultKind.Value, args);
-    } else if (callee.ReturnType != null) {
-      resultKind = callee.ReturnType switch {
-        { } t when t == MlirType.I64 => MaxonValueKind.Integer,
-        { } t when t == MlirType.F64 => MaxonValueKind.Float,
-        { } t when t == MlirType.I1 => MaxonValueKind.Bool,
-        { } t when t == MlirType.I8 => MaxonValueKind.Byte,
-        _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{functionName}'", functionNameToken.Line, functionNameToken.Column)
-      };
-
-      resultKind = OverrideResultKindForElementType(resultKind.Value, args);
-    }
-
-    // Use the resolved function's qualified name for the call op
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, functionName, functionNameToken);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
     return callOp;
@@ -6107,30 +6131,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         functionNameToken.Line, functionNameToken.Column);
     }
 
-    MaxonValueKind? resultKind = null;
-    string? resultStructTypeName = null;
-
-    if (callee.ReturnType is MlirStructType retStructType) {
-      resultKind = MaxonValueKind.Struct;
-      resultStructTypeName = retStructType.Name;
-    } else if (callee.ReturnType is MlirEnumType retEnumType) {
-      resultKind = MaxonValueKind.Enum;
-      resultStructTypeName = retEnumType.Name;
-    } else if (callee.ReturnType is MlirTypeParameterType) {
-      resultKind = MaxonValueKind.Integer;
-      resultKind = OverrideResultKindForElementType(resultKind.Value, args);
-    } else if (callee.ReturnType != null) {
-      resultKind = callee.ReturnType switch {
-        { } t when t == MlirType.I64 => MaxonValueKind.Integer,
-        { } t when t == MlirType.F64 => MaxonValueKind.Float,
-        { } t when t == MlirType.I1 => MaxonValueKind.Bool,
-        { } t when t == MlirType.I8 => MaxonValueKind.Byte,
-        _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{UnmangleName(functionName)}'", functionNameToken.Line, functionNameToken.Column)
-      };
-
-      resultKind = OverrideResultKindForElementType(resultKind.Value, args);
-    }
-
+    var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args, UnmangleName(functionName), functionNameToken);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
     return callOp;
@@ -6141,20 +6142,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // ============================================================================
 
   /// <summary>
-  /// For generic methods returning I64 as an Element placeholder, checks if the caller's
-  /// struct type has a concrete Element type (e.g. F64) that should override the result kind.
+  /// For generic methods returning a TypeParameter placeholder, checks if the caller's
+  /// struct type has a concrete Element type that should override the result kind.
   /// </summary>
-  private MaxonValueKind OverrideResultKindForElementType(MaxonValueKind resultKind, List<MaxonValue> args) {
-    if (resultKind == MaxonValueKind.Integer && args.Count > 0 && args[0] is MaxonStruct selfStruct) {
+  private (MaxonValueKind Kind, string? StructTypeName) OverrideResultKindForElementType(MaxonValueKind resultKind, string? resultStructTypeName, List<MaxonValue> args) {
+    if (resultKind == MaxonValueKind.TypeParameter && args.Count > 0 && args[0] is MaxonStruct selfStruct) {
       if (_typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
           && selfType is MlirStructType selfStructType
           && selfStructType.TypeParams.TryGetValue("Element", out var elementType)) {
-        if (elementType == MlirType.F64) {
-          return MaxonValueKind.Float;
-        }
+        if (elementType is MlirTypeParameterType) return (resultKind, resultStructTypeName);
+        var kind = elementType.ToValueKind();
+        var typeName = elementType switch {
+          MlirStructType s => s.Name,
+          MlirEnumType e => e.Name,
+          _ => (string?)null
+        };
+        return (kind, typeName);
       }
     }
-    return resultKind;
+    return (resultKind, resultStructTypeName);
   }
 
   private string UniqueLabel(string label) => $"{label}_{_blockCounter++}";

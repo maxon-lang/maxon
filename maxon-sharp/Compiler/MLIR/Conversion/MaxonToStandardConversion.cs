@@ -289,8 +289,8 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonAssignOp assignOp: {
-              // After monomorphization, a type parameter (Integer) may resolve to Struct.
-              // Check structVarNames to detect the actual type.
+              // Check structVarNames as fallback to detect struct values that flow
+              // through ops not yet updated to track struct kinds.
               if (assignOp.ValueKind == MaxonValueKind.Struct
                   || structVarNames.ContainsKey(assignOp.Value.Id)) {
                 // Struct assignment: copy all fields from source to destination
@@ -1093,24 +1093,21 @@ public static class MaxonToStandardConversion {
       var zeroOp = new StdConstI1Op(false);
       block.AddOp(zeroOp);
       EmitStore(block, zeroOp.Result, varName, varTypes);
-    } else if (fieldType == MlirType.I64 || fieldType == MlirType.I8) {
-      // I64 and I8 (byte) both use I64 constants
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.I8 || fieldType is MlirEnumType) {
       var zeroOp = new StdConstI64Op(0);
       block.AddOp(zeroOp);
       EmitStore(block, zeroOp.Result, varName, varTypes);
-    } else if (fieldType == MlirType.I32) {
-      throw new InvalidOperationException("I32 zero-store not yet implemented (StdConstI32Op needed)");
     } else if (fieldType == MlirType.Fn) {
-      // Function pointer uses null pointer (reinterpret zero I64 as StdPtr)
       var zeroOp = new StdConstI64Op(0);
       block.AddOp(zeroOp);
-      // Reinterpret the zero I64 as a StdPtr (null pointer)
       var nullPtr = new StdPtr(zeroOp.Result.Id);
       EmitStore(block, nullPtr, varName, varTypes);
+    } else if (fieldType == MlirType.I32) {
+      throw new InvalidOperationException($"EmitZeroStore: I32 zero-store not yet implemented for '{varName}'");
     } else if (fieldType is MlirStructType) {
-      throw new InvalidOperationException("Struct zero-store not yet implemented (need recursive field initialization)");
+      throw new InvalidOperationException($"EmitZeroStore: struct zero-store not yet implemented for '{varName}' of type '{fieldType}'");
     } else {
-      throw new InvalidOperationException($"Unsupported field type for zero-store: {fieldType}");
+      throw new InvalidOperationException($"EmitZeroStore: unsupported field type '{fieldType}' for '{varName}'");
     }
   }
 
@@ -2437,6 +2434,7 @@ public static class MaxonToStandardConversion {
       MaxonValueKind.Enum => MlirType.I64,
       MaxonValueKind.Struct => MlirType.I64, // struct references are pointers
       MaxonValueKind.Function => MlirType.I64, // function pointers
+      MaxonValueKind.TypeParameter => MlirType.I64, // unresolved type parameter, stored as i64
       _ => throw new InvalidOperationException($"{context}: unsupported element kind '{kind}'")
     };
   }
