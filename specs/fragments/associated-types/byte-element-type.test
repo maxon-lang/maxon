@@ -1,0 +1,57 @@
+// Test: byte-element-type
+interface ByteSource uses Element
+  function getByte() returns Element
+end 'ByteSource'
+
+type SingleByte is ByteSource with byte
+  var b byte
+
+  function getByte() returns byte
+    return b
+  end 'getByte'
+end 'SingleByte'
+
+function main() returns int
+  var s = SingleByte{b: 42 as byte}
+  var b = s.getByte()
+  return b as int
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @SingleByte.getByte(__self_ptr: i64) -> i8 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.movzx eax, byte ptr [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov byte ptr [edx+0], ebxb
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @associated-types.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 42
+    x86.mov ecx, 255
+    x86.and eax, ecx
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-16], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-24], ebx
+    x86.lea rsi, [rbp-24]
+    x86.mov rcx, rsi
+    x86.call SingleByte.getByte
+    x86.mov edi, [rbp-24]
+    x86.mov [rbp-16], edi
+    x86.epilogue
+    x86.ret
+  }
+}
+---

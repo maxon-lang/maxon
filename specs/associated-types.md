@@ -175,7 +175,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/associated-types.doc-example-3.1.test:1:1: Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
+error E3016: specs/fragments/associated-types/docs-example-3.test:6:6: Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
 ```
 
 ### Error: Partial Implementation
@@ -201,7 +201,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/associated-types.doc-example-4.1.test:1:1: Partial interface implementation: type 'Partial' is missing 1 method(s):
+error E3016: specs/fragments/associated-types/docs-example-4.test:7:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
 ```
 
@@ -227,7 +227,8 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/associated-types.doc-example-5.1.test:1:1: Method 'WrongReturn.produce' has return type 'int' but interface 'Producer' requires 'float'
+error E3016: specs/fragments/associated-types/docs-example-5.test:6:6: Partial interface implementation: type 'WrongReturn' has 1 method(s) with wrong signature:
+  - produce() returns int (expected produce() returns float)
 ```
 
 
@@ -393,7 +394,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/associated-types.missing-type-binding-error.1.test:1:1: Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
+error E3016: specs/fragments/associated-types/missing-type-binding-error.test:6:6: Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
 ```
 
 
@@ -417,7 +418,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/associated-types.partial-implementation-error.1.test:1:1: Partial interface implementation: type 'Partial' is missing 1 method(s):
+error E3016: specs/fragments/associated-types/partial-implementation-error.test:7:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns int
 ```
 
@@ -441,7 +442,8 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/associated-types.wrong-return-type-error.1.test:1:1: Method 'WrongType.make' has return type 'int' but interface 'Typed' requires 'float'
+error E3016: specs/fragments/associated-types/wrong-return-type-error.test:6:6: Partial interface implementation: type 'WrongType' has 1 method(s) with wrong signature:
+  - make() returns int (expected make() returns float)
 ```
 
 
@@ -464,7 +466,8 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/associated-types.wrong-param-type-error.1.test:1:1: Method 'WrongParam.accept' parameter 1 has type 'int' but interface 'Acceptor' requires 'float'
+error E3016: specs/fragments/associated-types/wrong-param-type-error.test:6:6: Partial interface implementation: type 'WrongParam' has 1 method(s) with wrong signature:
+  - accept(val int) returns int (expected accept(val float) returns int)
 ```
 
 

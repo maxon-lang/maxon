@@ -570,7 +570,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     names.Add(ifaceName);
     if (Check(TokenType.With)) {
       Advance();
-      var withTypes = ParseWithTypeArgs();
+      int expectedCount = GetAssociatedTypeCount(ifaceName);
+      var withTypes = ParseWithTypeArgs(expectedCount);
       ResolveWithTypeParams(ifaceName, withTypes, typeParams);
     }
     while (Check(TokenType.Comma)) {
@@ -579,7 +580,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       names.Add(ifaceName);
       if (Check(TokenType.With)) {
         Advance();
-        var withTypes = ParseWithTypeArgs();
+        int expectedCount = GetAssociatedTypeCount(ifaceName);
+        var withTypes = ParseWithTypeArgs(expectedCount);
         ResolveWithTypeParams(ifaceName, withTypes, typeParams);
       }
     }
@@ -588,8 +590,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// <summary>
   /// Parse type arguments after 'with': either a single type or (Type1, Type2, ...).
+  /// When expectedCount > 1 and no parentheses, consumes comma-separated types.
   /// </summary>
-  private List<MlirType> ParseWithTypeArgs() {
+  private List<MlirType> ParseWithTypeArgs(int expectedCount) {
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
       var types = new List<MlirType> { ParseTypeRef() };
@@ -600,7 +603,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       Expect(TokenType.RightParen);
       return types;
     }
-    return [ParseTypeRef()];
+    var result = new List<MlirType> { ParseTypeRef() };
+    while (result.Count < expectedCount && Check(TokenType.Comma)) {
+      Advance();
+      result.Add(ParseTypeRef());
+    }
+    return result;
+  }
+
+  private int GetAssociatedTypeCount(string ifaceName) {
+    if (_interfaceAssociatedTypes.TryGetValue(ifaceName, out var assocNames))
+      return assocNames.Count;
+    return 1;
   }
 
   /// <summary>
@@ -784,6 +798,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceType) || ifaceType is not MlirInterfaceType iface)
         continue;
 
+      // Check for missing type binding: interface has associated types but type doesn't provide 'with'
+      if (_interfaceAssociatedTypes.TryGetValue(ifaceName, out var assocTypeNames) && assocTypeNames.Count > 0) {
+        var missingBindings = assocTypeNames.Where(n => !structTypeParams.ContainsKey(n)).ToList();
+        if (missingBindings.Count > 0) {
+          throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
+            $"Type '{typeName}' does not define required associated type '{missingBindings[0]}' from interface '{ifaceName}'",
+            typeNameToken.Line, typeNameToken.Column);
+        }
+      }
+
       var missingMethods = new List<string>();
       var wrongSignatureMethods = new List<string>();
       foreach (var method in iface.Methods) {
@@ -799,10 +823,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
 
         if (func == null) {
-          missingMethods.Add(method.Format());
+          missingMethods.Add(method.FormatResolved(structTypeParams));
         } else if (!SignatureMatches(method, func, ifaceName, typeName, structTypeParams)) {
           var actualSig = FormatFunctionSignature(method.Name, func);
-          wrongSignatureMethods.Add($"{actualSig} (expected {method.Format()})");
+          wrongSignatureMethods.Add($"{actualSig} (expected {method.FormatResolved(structTypeParams)})");
         } else if (method.ThrowsTypeName != null) {
           ValidateThrowsConformance(func, typeName, method.Name, ifaceName, method.ThrowsTypeName, typeNameToken);
         }
@@ -904,7 +928,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (name == ifaceName) return typeName;
     // Resolve associated types (e.g., Element -> byte when struct declares 'with byte')
     if (typeParams.TryGetValue(name, out var resolvedType)) {
-      return FormatTypeName(resolvedType);
+      return MlirType.FormatAsSourceName(resolvedType);
     }
     return name;
   }
@@ -917,22 +941,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Skip 'self' parameter
     var paramNames = func.ParamNames.Skip(1).ToList();
     var paramTypes = func.ParamTypes.Skip(1).ToList();
-    var paramsStr = string.Join(", ", paramNames.Zip(paramTypes, (n, t) => $"{n} {FormatTypeName(t)}"));
-    var returnStr = func.ReturnType != null ? $" returns {FormatTypeName(func.ReturnType)}" : " returns void";
+    var paramsStr = string.Join(", ", paramNames.Zip(paramTypes, (n, t) => $"{n} {MlirType.FormatAsSourceName(t)}"));
+    var returnStr = func.ReturnType != null ? $" returns {MlirType.FormatAsSourceName(func.ReturnType)}" : " returns void";
     return $"{methodName}({paramsStr}){returnStr}";
   }
 
-  /// <summary>
-  /// Maps an MlirType back to its source-level name for error messages.
-  /// </summary>
-  private static string FormatTypeName(MlirType type) {
-    if (type == MlirType.I64) return "int";
-    if (type == MlirType.F64) return "float";
-    if (type == MlirType.I1) return "bool";
-    if (type == MlirType.I8) return "byte";
-    if (type == MlirType.Void) return "void";
-    return type.Name;
-  }
 
   private void PreScanEnum(MlirModule<MaxonOp> module) {
     Advance(); // consume 'enum'
@@ -6067,6 +6080,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         { } t when t == MlirType.I64 => MaxonValueKind.Integer,
         { } t when t == MlirType.F64 => MaxonValueKind.Float,
         { } t when t == MlirType.I1 => MaxonValueKind.Bool,
+        { } t when t == MlirType.I8 => MaxonValueKind.Byte,
         _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{functionName}'", functionNameToken.Line, functionNameToken.Column)
       };
 
@@ -6110,6 +6124,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         { } t when t == MlirType.I64 => MaxonValueKind.Integer,
         { } t when t == MlirType.F64 => MaxonValueKind.Float,
         { } t when t == MlirType.I1 => MaxonValueKind.Bool,
+        { } t when t == MlirType.I8 => MaxonValueKind.Byte,
         _ => throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unsupported return type '{callee.ReturnType}' for function '{UnmangleName(functionName)}'", functionNameToken.Line, functionNameToken.Column)
       };
 

@@ -28,6 +28,18 @@ public class MlirType {
   public virtual int ElementSize => SizeInBytes;
 
   public override string ToString() => Name;
+
+  /// <summary>
+  /// Maps an MlirType back to its source-level name for error messages.
+  /// </summary>
+  public static string FormatAsSourceName(MlirType type) {
+    if (type == I64) return "int";
+    if (type == F64) return "float";
+    if (type == I1) return "bool";
+    if (type == I8) return "byte";
+    if (type == Void) return "void";
+    return type.Name;
+  }
 }
 
 public class MlirStructField(string name, MlirType type, bool isExported, bool isMutable, MlirAttribute? defaultValue = null) {
@@ -81,6 +93,19 @@ public class MlirInterfaceMethodSignature(string name, List<string> paramTypeNam
   public string Format() {
     var paramsStr = string.Join(", ", ParamNames.Zip(ParamTypeNames, (n, t) => $"{n} {t}"));
     var returnStr = ReturnTypeName != null ? $" returns {ReturnTypeName}" : " returns void";
+    var throwsStr = ThrowsTypeName != null ? $" throws {ThrowsTypeName}" : "";
+    return $"{(IsStatic ? "static " : "")}{Name}({paramsStr}){returnStr}{throwsStr}";
+  }
+
+  /// <summary>
+  /// Formats the method signature with type parameters resolved to concrete types.
+  /// </summary>
+  public string FormatResolved(Dictionary<string, MlirType> typeParams) {
+    string Resolve(string typeName) =>
+      typeParams.TryGetValue(typeName, out var resolved) ? MlirType.FormatAsSourceName(resolved) : typeName;
+
+    var paramsStr = string.Join(", ", ParamNames.Zip(ParamTypeNames, (n, t) => $"{n} {Resolve(t)}"));
+    var returnStr = ReturnTypeName != null ? $" returns {Resolve(ReturnTypeName)}" : " returns void";
     var throwsStr = ThrowsTypeName != null ? $" throws {ThrowsTypeName}" : "";
     return $"{(IsStatic ? "static " : "")}{Name}({paramsStr}){returnStr}{throwsStr}";
   }
