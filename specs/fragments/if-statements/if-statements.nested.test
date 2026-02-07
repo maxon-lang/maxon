@@ -1,0 +1,45 @@
+// Test: if-statements.nested
+function main() returns int
+  var x = 3
+  if x == 1 'outer'
+    return 1
+  end 'outer' else 'else_outer'
+    if x == 2 'inner'
+      return 2
+    end 'inner' else 'else_inner'
+      return 3
+    end 'else_inner'
+  end 'else_outer'
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @if-statements.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 3
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne if-statements.main.else_outer_1
+  outer_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  else_outer_1:
+    x86.mov eax, 2
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jne if-statements.main.else_inner_3
+  inner_2:
+    x86.mov eax, 2
+    x86.epilogue
+    x86.ret
+  else_inner_3:
+    x86.mov eax, 3
+    x86.epilogue
+    x86.ret
+  }
+}
+---

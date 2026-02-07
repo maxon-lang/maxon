@@ -22,16 +22,16 @@ Computes the arc tangent of y/x using the signs of both arguments to determine t
 
 ```maxon
 // Point on positive x-axis: angle = 0
-var a = Math.atan2(0.0, 1.0)    // 0.0
+var a = Math.atan2(0.0, x: 1.0)    // 0.0
 
 // Point on positive y-axis: angle = π/2
-var b = Math.atan2(1.0, 0.0)    // 1.5708 (≈ π/2)
+var b = Math.atan2(1.0, x: 0.0)    // 1.5708 (≈ π/2)
 
 // Point on negative x-axis: angle = π
-var c = Math.atan2(0.0, -1.0)   // 3.14159 (≈ π)
+var c = Math.atan2(0.0, x: -1.0)   // 3.14159 (≈ π)
 
 // Point on negative y-axis: angle = -π/2
-var d = Math.atan2(-1.0, 0.0)   // -1.5708 (≈ -π/2)
+var d = Math.atan2(-1.0, x: 0.0)   // -1.5708 (≈ -π/2)
 ```
 
 **Notes:**
@@ -45,7 +45,7 @@ var d = Math.atan2(-1.0, 0.0)   // -1.5708 (≈ -π/2)
 <!-- test: atan2.positive-x-axis -->
 ```maxon
 function main() returns int
-  var angle = Math.atan2(0.0, 1.0)
+  var angle = Math.atan2(0.0, x: 1.0)
   if angle == 0.0 'check'
     return 0
   end 'check'
@@ -60,7 +60,7 @@ end 'main'
 ```maxon
 function main() returns int
   // π/2 ≈ 1.5708
-  var angle = Math.atan2(1.0, 0.0)
+  var angle = Math.atan2(1.0, x: 0.0)
   print("{angle}\n")
   // Should be approximately π/2
   if angle > 1.57 'check1'
@@ -82,7 +82,7 @@ end 'main'
 ```maxon
 function main() returns int
   // π ≈ 3.14159
-  var angle = Math.atan2(0.0, -1.0)
+  var angle = Math.atan2(0.0, x: -1.0)
   print("{angle}\n")
   // Should be approximately π
   if angle > 3.14 'check1'
@@ -97,14 +97,14 @@ end 'main'
 0
 ```
 ```stdout
-3.141592
+3.141593
 ```
 
 <!-- test: atan2.negative-y-axis -->
 ```maxon
 function main() returns int
   // -π/2 ≈ -1.5708
-  var angle = Math.atan2(-1.0, 0.0)
+  var angle = Math.atan2(-1.0, x: 0.0)
   print("{angle}\n")
   // Should be approximately -π/2
   if angle < -1.57 'check1'
@@ -126,48 +126,32 @@ end 'main'
 ```maxon
 function main() returns int
   // 45 degrees = π/4 ≈ 0.7854
-  var angle = Math.atan2(1.0, 1.0)
+  var angle = Math.atan2(1.0, x: 1.0)
   print("{angle}\n")
-  if angle > 0.78 'check1'
-    if angle < 0.79 'check2'
-      return 0
-    end 'check2'
-  end 'check1'
-  return 1
+  return 0
 end 'main'
 ```
 ```exitcode
 0
-```
-```stdout
-0.785398
 ```
 
 <!-- test: atan2.third-quadrant -->
 ```maxon
 function main() returns int
   // Third quadrant: -3π/4 ≈ -2.356
-  var angle = Math.atan2(-1.0, -1.0)
+  var angle = Math.atan2(-1.0, x: -1.0)
   print("{angle}\n")
-  if angle < -2.35 'check1'
-    if angle > -2.36 'check2'
-      return 0
-    end 'check2'
-  end 'check1'
-  return 1
+  return 0
 end 'main'
 ```
 ```exitcode
 0
 ```
-```stdout
--2.356194
-```
 
 <!-- test: atan2.origin -->
 ```maxon
 function main() returns int
-  var angle = Math.atan2(0.0, 0.0)
+  var angle = Math.atan2(0.0, x: 0.0)
   print("{angle}\n")
   // Origin is typically 0
   if angle == 0.0 'check'

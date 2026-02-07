@@ -1,0 +1,19 @@
+// Test: zero-exponent
+function main() returns int
+  var result = Math.pow(123.0, exponent: 0.0)
+  return trunc(result)
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @pow.main() -> i64 {
+  entry:
+    x86.movsd xmm0, [rip+__float_123]
+    x86.movsd xmm1, [rip+__float_0]
+    x86.call stdlib.Math.pow
+    x86.cvttsd2si eax, xmm0
+    x86.ret
+  }
+}
+---

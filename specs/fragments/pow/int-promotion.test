@@ -1,0 +1,22 @@
+// Test: int-promotion
+function main() returns int
+  var result = Math.pow(3, exponent: 2)  // Ints promoted to float
+  return trunc(result)
+end 'main'
+---
+ExitCode: 9
+---
+module {
+  func @pow.main() -> i64 {
+  entry:
+    x86.mov eax, 3
+    x86.mov ecx, 2
+    x86.cvtsi2sd xmm0, eax
+    x86.cvtsi2sd xmm1, ecx
+    x86.call stdlib.Math.pow
+    x86.cvttsd2si edx, xmm0
+    x86.mov eax, edx
+    x86.ret
+  }
+}
+---

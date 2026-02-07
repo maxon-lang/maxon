@@ -1,0 +1,24 @@
+// Test: variable-division-optimizes
+function main() returns int
+  var a = 7
+  var b = 2
+  return trunc(a / b)      // Should optimize to sdiv after Mem2Reg
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @arithmetic-operators.main() -> i64 {
+  entry:
+    x86.mov eax, 7
+    x86.mov ecx, 2
+    x86.cvtsi2sd xmm0, eax
+    x86.cvtsi2sd xmm1, ecx
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.cvttsd2si edx, xmm2
+    x86.mov eax, edx
+    x86.ret
+  }
+}
+---

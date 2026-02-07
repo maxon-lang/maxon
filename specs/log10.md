@@ -109,7 +109,7 @@ end 'main'
 0
 ```
 ```stdout
-0.301029
+0.30103
 ```
 
 <!-- test: log10.with-int-promotion -->

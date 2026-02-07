@@ -17,6 +17,7 @@ public partial class X86CodeEmitter {
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
     EmitMaxonI64ToString();
+    EmitMaxonF64ToString();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
     EmitMaxonFileOpenRead();
@@ -276,6 +277,191 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
 
     DefineLabel("rt_i64str_epilogue");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_f64_to_string(value_in_xmm0, buffer_ptr_in_rdx) -> length_in_rax
+  /// Converts a float64 to its decimal string representation with up to 6 fractional digits.
+  /// Trailing fractional zeros are stripped (except one digit after the decimal point).
+  /// Buffer must be >= 32 bytes. Returns byte count (excluding null terminator).
+  /// Stack layout:
+  ///   [rbp-0x08] = float value (overwritten from XMM0 since prologue saves RCX here)
+  ///   [rbp-0x10] = buffer pointer (saved by prologue from RDX)
+  ///   [rbp-0x18] = is_negative flag
+  ///   [rbp-0x20] = integer part length (after i64_to_string call)
+  ///   [rbp-0x28] = write position / scratch
+  ///   [rbp-0x30] = integer part (i64)
+  /// </summary>
+  private void EmitMaxonF64ToString() {
+    EmitRuntimeFunctionStart("maxon_f64_to_string", 2, 0xA0);
+
+    // Prologue saved RCX to [rbp-8] and RDX to [rbp-16], but the float is in XMM0.
+    // Overwrite [rbp-8] with the actual float value.
+    EmitMovSdMemXmm(-0x08, X86XmmRegister.Xmm0);
+
+    // ---- Special case: value == 0.0 ----
+    // XORPD xmm1, xmm1 to get 0.0
+    EmitBytes(0x66, 0x0F, 0x57, 0xC9); // XORPD xmm1, xmm1
+    EmitUcomisd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1);
+    EmitJcc("nz", "rt_f64str_not_zero");
+    // Also jump if parity is set (NaN)
+    EmitJcc("p", "rt_f64str_not_zero");
+    // Write "0.0\0" to buffer
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitBytes(0xC6, 0x00, 0x30);             // MOV byte [rax], '0'
+    EmitBytes(0xC6, 0x40, 0x01, 0x2E);       // MOV byte [rax+1], '.'
+    EmitBytes(0xC6, 0x40, 0x02, 0x30);       // MOV byte [rax+2], '0'
+    EmitBytes(0xC6, 0x40, 0x03, 0x00);       // MOV byte [rax+3], 0
+    EmitMovRegImm(X86Register.Rax, 3);
+    EmitJmp("rt_f64str_epilogue");
+
+    // ---- Handle sign ----
+    DefineLabel("rt_f64str_not_zero");
+    // is_negative = 0
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Reload value into XMM0 and compare with zero
+    EmitMovSdXmmMem(X86XmmRegister.Xmm0, -0x08);
+    // XORPD xmm1, xmm1 for zero
+    EmitBytes(0x66, 0x0F, 0x57, 0xC9); // XORPD xmm1, xmm1
+    EmitUcomisd(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0);
+    // If 0.0 > value (i.e., value is negative), UCOMISD sets CF
+    EmitJcc("be", "rt_f64str_positive");
+
+    // Negative: negate by subtracting from zero (0.0 - value)
+    // XMM1 is already 0.0
+    EmitSubSd(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0); // XMM1 = 0.0 - value = |value|
+    // Store |value| back
+    EmitMovSdMemXmm(-0x08, X86XmmRegister.Xmm1);
+    // is_negative = 1
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // ---- Extract integer part ----
+    DefineLabel("rt_f64str_positive");
+    EmitMovSdXmmMem(X86XmmRegister.Xmm0, -0x08); // XMM0 = |value|
+    EmitCvttSd2Si(X86Register.Rax, X86XmmRegister.Xmm0); // RAX = truncate(|value|)
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-0x30] = integer part
+
+    // Set up args for maxon_i64_to_string: RCX = integer part, RDX = buffer (possibly offset by 1 for '-')
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = buffer
+    // If negative, advance buffer by 1 to leave room for '-'
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = is_negative
+    EmitBytes(0x48, 0x01, 0xCA);              // ADD RDX, RCX (add 0 or 1)
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = integer part value
+    // Call maxon_i64_to_string(integer_value, buffer+offset)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    // RAX = length of integer part string
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // [rbp-0x20] = int_part_length
+
+    // If negative, write '-' at buffer[0] and adjust length
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = is_negative
+    EmitBytes(0x48, 0x85, 0xC9);              // TEST RCX, RCX
+    EmitJcc("z", "rt_f64str_no_sign");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitBytes(0xC6, 0x00, 0x2D);              // MOV byte [rax], '-'
+    // Increase length by 1 for the sign
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+
+    DefineLabel("rt_f64str_no_sign");
+    // ---- Append decimal point ----
+    // write_pos = buffer + int_part_length (including sign)
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // RCX = current length
+    EmitBytes(0x48, 0x01, 0xC8);              // ADD RAX, RCX
+    EmitBytes(0xC6, 0x00, 0x2E);              // MOV byte [rax], '.'
+
+    // ---- Extract fractional part ----
+    // Reload |value| and integer part
+    EmitMovSdXmmMem(X86XmmRegister.Xmm0, -0x08); // XMM0 = |value|
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);     // RAX = integer part
+    EmitCvtSi2Sd(X86XmmRegister.Xmm1, X86Register.Rax); // XMM1 = (double)integer_part
+    EmitSubSd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1); // XMM0 = fractional part
+
+    // Multiply by 1000000 for 6 decimal places
+    // Load 1000000.0 into XMM1 via GPR to avoid rdata dependency
+    EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(1000000.0));
+    EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8); // MOVQ XMM1, RAX
+    EmitMulSd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1); // XMM0 = frac * 1000000
+
+    // Add 0.5 for rounding
+    // Load 0.5 into XMM1 via GPR to avoid rdata dependency
+    EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(0.5));
+    EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8); // MOVQ XMM1, RAX
+    EmitAddSd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1); // XMM0 = frac * 1000000 + 0.5
+
+    EmitCvttSd2Si(X86Register.Rax, X86XmmRegister.Xmm0); // RAX = rounded 6-digit fractional integer
+
+    // Clamp to 999999 if rounding pushed it to 1000000 (avoids carry into integer part)
+    EmitBytes(0x48, 0x3D, 0x40, 0x42, 0x0F, 0x00); // CMP RAX, 1000000
+    EmitJcc("l", "rt_f64str_frac_ok");
+    EmitMovRegImm(X86Register.Rax, 999999);
+    DefineLabel("rt_f64str_frac_ok");
+
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-0x28] = frac_digits
+
+    // ---- Write 6 fractional digits backwards then reverse into place ----
+    // Write position = buffer + int_part_length + 1 (past the '.')
+    EmitMovRegMem(X86Register.Rdi, -0x10, 8); // RDI = buffer
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // RCX = int_part_length (includes sign)
+    EmitBytes(0x48, 0x01, 0xCF);              // ADD RDI, RCX
+    EmitAddRegImm(X86Register.Rdi, 1);         // past the '.'
+
+    // Write 6 digits from the fractional integer (least-significant first into positions 5,4,3,2,1,0)
+    // We write them forward at [rdi+0..5] by dividing from the end
+    // R8 = loop counter (6 iterations), working from position 5 down to 0
+    EmitMovRegImm(X86Register.R8, 6);
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = frac_digits
+
+    DefineLabel("rt_f64str_frac_loop");
+    EmitBytes(0x48, 0x31, 0xD2);              // XOR RDX, RDX
+    EmitMovRegImm(X86Register.Rcx, 10);
+    EmitBytes(0x48, 0xF7, 0xF1);              // DIV RCX => RAX = quotient, RDX = remainder
+    // Write digit at [rdi + r8 - 1]
+    EmitAddRegImm(X86Register.Rdx, 0x30);      // RDX += '0'
+    // LEA RSI, [RDI + R8 - 1]
+    EmitBytes(0x4A, 0x8D, 0x74, 0x07, 0xFF);  // LEA RSI, [RDI + R8*1 - 1]
+    // MOV byte [RSI], DL
+    EmitBytes(0x88, 0x16);
+    // DEC R8
+    EmitBytes(0x49, 0xFF, 0xC8);
+    EmitBytes(0x4D, 0x85, 0xC0);              // TEST R8, R8
+    EmitJcc("nz", "rt_f64str_frac_loop");
+
+    // ---- Strip trailing zeros (keep at least 1 fractional digit) ----
+    // RSI = pointer to last fractional digit = RDI + 5
+    EmitMovRegReg(X86Register.Rsi, X86Register.Rdi);
+    EmitAddRegImm(X86Register.Rsi, 5); // RSI points at 6th digit (index 5)
+
+    DefineLabel("rt_f64str_strip_loop");
+    // Compare RSI with RDI (must keep at least rdi+0, so strip while RSI > RDI)
+    EmitBytes(0x48, 0x39, 0xFE);              // CMP RSI, RDI
+    EmitJcc("be", "rt_f64str_strip_done");     // if RSI <= RDI, stop (keep at least 1 digit)
+    // Check if byte at [RSI] == '0'
+    EmitBytes(0x80, 0x3E, 0x30);              // CMP byte [RSI], '0'
+    EmitJcc("nz", "rt_f64str_strip_done");
+    // DEC RSI
+    EmitBytes(0x48, 0xFF, 0xCE);              // DEC RSI
+    EmitJmp("rt_f64str_strip_loop");
+
+    DefineLabel("rt_f64str_strip_done");
+    // Null-terminate after the last non-zero fractional digit
+    // RSI points to last kept digit, null-terminate at RSI+1
+    EmitBytes(0xC6, 0x46, 0x01, 0x00);        // MOV byte [RSI+1], 0
+
+    // ---- Compute total length ----
+    // length = (RSI + 1) - buffer
+    EmitBytes(0x48, 0xFF, 0xC6);              // INC RSI (RSI now points past last digit)
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rsi);
+    EmitBytes(0x48, 0x29, 0xC1);              // SUB RCX, RAX => RCX = length
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx); // RAX = length
+
+    DefineLabel("rt_f64str_epilogue");
     EmitRuntimeFunctionEnd();
   }
 

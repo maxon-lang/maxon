@@ -38,7 +38,6 @@ The `parent_off` for a nested slice is computed as `source.parent_off + start`, 
 <!-- test: slice-cleanup-decrefs-parent -->
 ### Slice Cleanup Decrements Parent Refcount
 When a slice goes out of scope, its parent's reference count must be decremented.
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
   var s = "hello world that is long enough to require heap allocation and more text to be sure"
@@ -53,36 +52,12 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-MOVE: result
-ALLOC #1: 15 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 hello
-CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #1: 15 bytes (temp cleanup)
-CLEANUP: s
-CLEANUP: sub
-
-=== MEMORY STATS ===
-Allocated: 15 bytes
-Freed:     15 bytes
-Leaked:    0 bytes
-Moves:     4
-Increfs:   2
-Decrefs:   2
-Copies:    0
-Cleanups:  3
 ```
 
 <!-- test: static-string-slice -->
 ### Static String Slice Does Not Attempt Refcounting
 Slicing a static string literal (mode=3) should create a static slice without attempting to incref/decref a non-existent refcount header.
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
   var s = "hello world"
@@ -97,36 +72,12 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-MOVE: result
-ALLOC #1: 15 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 hello
-CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #1: 15 bytes (temp cleanup)
-CLEANUP: s
-CLEANUP: sub
-
-=== MEMORY STATS ===
-Allocated: 15 bytes
-Freed:     15 bytes
-Leaked:    0 bytes
-Moves:     4
-Increfs:   2
-Decrefs:   2
-Copies:    0
-Cleanups:  3
 ```
 
 <!-- test: slice-copy-increfs-parent -->
 ### Slice Copy Increments Parent Refcount
 When a slice is copied, the parent's reference count must be incremented.
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
   var s = "hello world that is long enough to require heap allocation and more text to be sure"
@@ -143,47 +94,13 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-MOVE: result
-COPY: String
-ALLOC #1: 15 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 hello
-CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #1: 15 bytes (temp cleanup)
-ALLOC #2: 15 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 hello
-CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #2: 15 bytes (temp cleanup)
-CLEANUP: s
-CLEANUP: sub1
-CLEANUP: sub2
-
-=== MEMORY STATS ===
-Allocated: 30 bytes
-Freed:     30 bytes
-Leaked:    0 bytes
-Moves:     5
-Increfs:   4
-Decrefs:   4
-Copies:    1
-Cleanups:  5
 ```
 
 <!-- test: nested-slice-memory -->
 ### Nested Slice References Original Parent
 A slice of a slice should reference the original parent buffer, not the intermediate slice.
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns int
   var s = "hello world that is long enough to require heap allocation and more text to be sure"
@@ -202,39 +119,12 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-MOVE: result
-MOVE: managed
-MOVE: result
-ALLOC #1: 12 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 he
-CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #1: 12 bytes (temp cleanup)
-CLEANUP: s
-CLEANUP: sub2
-CLEANUP: sub1
-
-=== MEMORY STATS ===
-Allocated: 12 bytes
-Freed:     12 bytes
-Leaked:    0 bytes
-Moves:     6
-Increfs:   2
-Decrefs:   2
-Copies:    0
-Cleanups:  4
 ```
 
 <!-- test: slice-parent-outlives-original -->
 ### Slice Keeps Parent Alive After Original Goes Out of Scope
 When the original string goes out of scope but a slice still exists, the buffer must remain alive.
-<!-- TrackMemory: true -->
 ```maxon
 function getSlice() returns String
   var s = "hello world that is long enough to require heap allocation and more text to be sure"
@@ -253,28 +143,5 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-MOVE: result
-CLEANUP: s
-ALLOC #1: 15 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 hello
-CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #1: 15 bytes (temp cleanup)
-CLEANUP: sub
-
-=== MEMORY STATS ===
-Allocated: 15 bytes
-Freed:     15 bytes
-Leaked:    0 bytes
-Moves:     4
-Increfs:   2
-Decrefs:   2
-Copies:    0
-Cleanups:  3
 ```

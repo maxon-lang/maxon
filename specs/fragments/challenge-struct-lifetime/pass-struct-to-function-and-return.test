@@ -1,0 +1,59 @@
+// Test: pass-struct-to-function-and-return
+type Counter
+  export var value int
+end 'Counter'
+
+function increment(c Counter) returns Counter
+  return {value: c.value + 1}
+end 'increment'
+
+function main() returns int
+  var c1 = Counter{value: 10}
+  var c2 = increment(c1)
+  return c2.value
+end 'main'
+---
+ExitCode: 11
+---
+module {
+  func @challenge-struct-lifetime.increment(__sret: i64, c: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [edx+0]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov edx, 1
+    x86.add eax, edx
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [rbp-24]
+    x86.mov [eax+0], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @challenge-struct-lifetime.main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-16], ecx
+    x86.xor edx, edx
+    x86.mov [rbp-24], edx
+    x86.lea rbx, [rbp-24]
+    x86.mov esi, [rbp-16]
+    x86.mov [rbp-32], esi
+    x86.lea rdi, [rbp-32]
+    x86.mov rcx, rbx
+    x86.mov rdx, rdi
+    x86.call challenge-struct-lifetime.increment
+    x86.mov r8, [rbp-24]
+    x86.mov [rbp-40], r8
+    x86.mov r9, [rbp-40]
+    x86.mov eax, r9
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -1,0 +1,29 @@
+// Test: sin.zero
+function main() returns int
+  var result = Math.sin(0.0)
+  if result == 0.0 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @sin.main() -> i64 {
+  entry:
+    x86.movsd xmm0, [rip+__float_0]
+    x86.call stdlib.Math.sin
+    x86.movsd xmm1, [rip+__float_0]
+    x86.ucomisd xmm0, xmm1
+    x86.jne sin.main.check_0.after
+    x86.jp sin.main.check_0.after
+  check_0:
+    x86.xor eax, eax
+    x86.ret
+  check_0.after:
+    x86.mov eax, 1
+    x86.ret
+  }
+}
+---

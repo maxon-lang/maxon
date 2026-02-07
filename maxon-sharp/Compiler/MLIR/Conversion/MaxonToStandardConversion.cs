@@ -1826,6 +1826,9 @@ public static class MaxonToStandardConversion {
         } else if (exprValue is MaxonInteger or MaxonByte) {
           // Integer/byte expression: convert to string via runtime function
           partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
+        } else if (exprValue is MaxonFloat) {
+          // Float expression: convert to string via runtime function
+          partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
         } else {
           throw new InvalidOperationException(
             $"String interpolation: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
@@ -1941,6 +1944,28 @@ public static class MaxonToStandardConversion {
 
     var lenResult = new StdI64(MlirContext.Current.NextId());
     block.AddOp(new StdCallRuntimeOp("maxon_i64_to_string", [intValue, bufResult], lenResult));
+
+    var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
+    return (finalBuf, lenResult);
+  }
+
+  /// <summary>
+  /// Allocates a 32-byte buffer and calls maxon_f64_to_string runtime to convert
+  /// a float value to its decimal string representation. Returns (buffer, length).
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitF64ToString(
+    StdF64 floatValue,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes) {
+
+    var bufResult = EmitAlloc(block, 32);
+
+    // Store buffer pointer so it survives the f64_to_string call
+    var bufVarName = $"__f64tostr_buf_{bufResult.Id}";
+    EmitStore(block, bufResult, bufVarName, varTypes);
+
+    var lenResult = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_f64_to_string", [floatValue, bufResult], lenResult));
 
     var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
     return (finalBuf, lenResult);

@@ -1,0 +1,108 @@
+// Test: multiple-struct-returns
+type Value
+  export var n int
+end 'Value'
+
+function step1() returns Value
+  return {n: 1}
+end 'step1'
+
+function step2(v Value) returns Value
+  return {n: v.n + 10}
+end 'step2'
+
+function step3(v Value) returns Value
+  return {n: v.n + 100}
+end 'step3'
+
+function main() returns int
+  var v1 = step1()
+  var v2 = step2(v1)
+  var v3 = step3(v2)
+  return v3.n
+end 'main'
+---
+ExitCode: 111
+---
+module {
+  func @challenge-struct-lifetime.step1(__sret: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 1
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [eax+0], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @challenge-struct-lifetime.step2(__sret: i64, v: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [edx+0]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov edx, 10
+    x86.add eax, edx
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [rbp-24]
+    x86.mov [eax+0], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @challenge-struct-lifetime.step3(__sret: i64, v: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [edx+0]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov edx, 100
+    x86.add eax, edx
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [rbp-24]
+    x86.mov [eax+0], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @challenge-struct-lifetime.main() -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.lea rcx, [rbp-8]
+    x86.call challenge-struct-lifetime.step1
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-16], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-24], ebx
+    x86.lea rsi, [rbp-24]
+    x86.mov edi, [rbp-16]
+    x86.mov [rbp-32], edi
+    x86.lea r8, [rbp-32]
+    x86.mov rcx, rsi
+    x86.mov rdx, r8
+    x86.call challenge-struct-lifetime.step2
+    x86.mov r9, [rbp-24]
+    x86.mov [rbp-40], r9
+    x86.xor eax, eax
+    x86.mov [rbp-48], eax
+    x86.lea rax, [rbp-48]
+    x86.mov ecx, [rbp-40]
+    x86.mov [rbp-56], ecx
+    x86.lea rcx, [rbp-56]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call challenge-struct-lifetime.step3
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-64]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

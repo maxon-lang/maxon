@@ -1,0 +1,56 @@
+// Test: nested-struct-returned
+type Inner
+  export var value int
+end 'Inner'
+
+type Outer
+  export var inner Inner
+end 'Outer'
+
+function makeOuter() returns Outer
+  var i = Inner{value: 42}
+  return {inner: i}
+end 'makeOuter'
+
+function main() returns int
+  var o = makeOuter()
+  return o.inner.value
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @challenge-nested-structs.makeOuter(__sret: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 42
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-8]
+    x86.xor edx, edx
+    x86.add eax, edx
+    x86.mov edx, [rbp-32]
+    x86.mov [eax+0], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @challenge-nested-structs.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.lea rcx, [rbp-8]
+    x86.call challenge-nested-structs.makeOuter
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-16], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov eax, ebx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

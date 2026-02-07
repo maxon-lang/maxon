@@ -1,0 +1,28 @@
+// Test: if-statements.else
+function main() returns int
+  var x = 5
+  if x == 5 'is5'
+    return 1
+  end 'is5' else 'not5'
+    return 0
+  end 'not5'
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @if-statements.main() -> i64 {
+  entry:
+    x86.mov eax, 5
+    x86.mov ecx, 5
+    x86.cmp eax, ecx
+    x86.jne if-statements.main.not5_1
+  is5_0:
+    x86.mov eax, 1
+    x86.ret
+  not5_1:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

@@ -1,0 +1,60 @@
+// Test: return-struct-with-computed-fields
+type Result
+  export var sum int
+  export var product int
+end 'Result'
+
+function compute(a int, b int) returns Result
+  return {sum: a + b, product: a * b}
+end 'compute'
+
+function main() returns int
+  var r = compute(3, b: 4)
+  return r.sum + r.product
+end 'main'
+---
+ExitCode: 19
+---
+module {
+  func @challenge-struct-lifetime.compute(__sret: i64, a: i64, b: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.lea eax, [edx + r8]
+    x86.imul edx, r8
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [eax+0], edx
+    x86.mov edx, [rbp-24]
+    x86.mov [eax+8], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @challenge-struct-lifetime.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 3
+    x86.mov ecx, 4
+    x86.xor edx, edx
+    x86.mov [rbp-8], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-16], ebx
+    x86.lea rsi, [rbp-16]
+    x86.mov rdx, rax
+    x86.mov r8, rcx
+    x86.mov rcx, rsi
+    x86.call challenge-struct-lifetime.compute
+    x86.mov edi, [rbp-16]
+    x86.mov [rbp-24], edi
+    x86.mov r8, [rbp-8]
+    x86.mov [rbp-32], r8
+    x86.mov r9, [rbp-24]
+    x86.mov eax, [rbp-32]
+    x86.lea eax, [r9 + eax]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

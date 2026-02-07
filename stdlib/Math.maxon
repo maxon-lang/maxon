@@ -322,4 +322,66 @@ export type Math
     var exp_times_log = exponent * log_base
     return Math.exp(exp_times_log)
   end 'pow'
+
+  /// Calculate the arc tangent of z
+  /// Uses Taylor series for |z| <= 1, identity for |z| > 1
+  export static function atan(z float) returns float
+    if z == 0.0 'zero'
+      return 0.0
+    end 'zero'
+
+    var pi_half = 1.5707963267948966
+
+    // For |z| > 1, use atan(z) = sign(z) * π/2 - atan(1/z)
+    if z > 1.0 'large_pos'
+      return pi_half - Math.atan(1.0 / z)
+    end 'large_pos'
+    if z < -1.0 'large_neg'
+      return -pi_half - Math.atan(1.0 / z)
+    end 'large_neg'
+
+    // Taylor series for |z| <= 1: atan(z) = z - z^3/3 + z^5/5 - z^7/7 + ...
+    var z_squared = z * z
+    var term = z
+    var sum = z
+    var k = 1.0
+
+    while k < 25.0 'series'
+      term = term * (-z_squared)
+      var divisor = 2.0 * k + 1.0
+      sum = sum + term / divisor
+      k = k + 1.0
+    end 'series'
+
+    return sum
+  end 'atan'
+
+  /// Calculate the two-argument arc tangent
+  /// Returns the angle in radians between [-π, π]
+  export static function atan2(y float, x float) returns float
+    var pi = 3.14159265358979323846
+    var pi_half = 1.5707963267948966
+
+    if x > 0.0 'x_pos'
+      return Math.atan(y / x)
+    end 'x_pos'
+
+    if x < 0.0 'x_neg'
+      if y >= 0.0 'y_nonneg'
+        return Math.atan(y / x) + pi
+      end 'y_nonneg'
+      return Math.atan(y / x) - pi
+    end 'x_neg'
+
+    // x == 0
+    if y > 0.0 'y_pos'
+      return pi_half
+    end 'y_pos'
+    if y < 0.0 'y_neg'
+      return -pi_half
+    end 'y_neg'
+
+    // x == 0 and y == 0
+    return 0.0
+  end 'atan2'
 end 'Math'
