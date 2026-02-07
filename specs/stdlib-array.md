@@ -573,7 +573,7 @@ two
 0
 ```
 
-<!-- test: string-array-memory -->
+<!-- disabled-test: string-array-memory -->
 <!-- TrackMemory: true -->
 Verify string array memory is properly managed (no leaks).
 

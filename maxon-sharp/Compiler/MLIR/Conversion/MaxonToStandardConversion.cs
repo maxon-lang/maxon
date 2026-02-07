@@ -101,6 +101,8 @@ public static class MaxonToStandardConversion {
       var structValueTypes = new Dictionary<int, string>();
       // Maps variable names to their resolved struct prefix (for cross-block references)
       var varNameToStructPrefix = new Dictionary<string, string>();
+      // Maps variable names to their struct type name (for monomorphized type parameter vars)
+      var varNameToStructType = new Dictionary<string, string>();
 
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
@@ -287,7 +289,10 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonAssignOp assignOp: {
-              if (assignOp.ValueKind == MaxonValueKind.Struct) {
+              // After monomorphization, a type parameter (Integer) may resolve to Struct.
+              // Check structVarNames to detect the actual type.
+              if (assignOp.ValueKind == MaxonValueKind.Struct
+                  || structVarNames.ContainsKey(assignOp.Value.Id)) {
                 // Struct assignment: copy all fields from source to destination
                 var srcName = structVarNames[assignOp.Value.Id];
                 var dstName = assignOp.VarName;
@@ -303,6 +308,7 @@ public static class MaxonToStandardConversion {
                 // update the self.X variables, write through __self_ptr, and use
                 // "self.X" as the canonical name so later method calls read from
                 // the self-prefixed variables (which always exist).
+                varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
                   var selfDstName = $"self.{assignOp.VarName}";
                   CopyStructFields(newBlock, dstName, selfDstName, structType, varTypes);
@@ -337,6 +343,18 @@ public static class MaxonToStandardConversion {
                 var selfPrefixed = $"self.{resolvedVarName}";
                 if (varTypes.ContainsKey(selfPrefixed))
                   resolvedVarName = selfPrefixed;
+              }
+              // After monomorphization, a VarRefOp originally typed as Integer may
+              // actually refer to a struct variable (e.g., for-in loop element from
+              // Array<String>.next). If the variable is a struct prefix, handle it
+              // as a struct reference.
+              if (!varTypes.ContainsKey(resolvedVarName) && varNameToStructPrefix.ContainsKey(resolvedVarName)) {
+                var structPrefix = varNameToStructPrefix[resolvedVarName];
+                structVarNames[varRef.Result.Id] = structPrefix;
+                if (varNameToStructType.TryGetValue(resolvedVarName, out var stType)) {
+                  structValueTypes[varRef.Result.Id] = stType;
+                }
+                break;
               }
               var loaded = EmitLoad(newBlock, resolvedVarName, varTypes);
               valueMap[varRef.Result] = loaded;
@@ -2334,6 +2352,8 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.And, MaxonValueKind.Bool), (l, r) => { var op = new StdAndI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
     { (MaxonBinOperator.Or, MaxonValueKind.Bool), (l, r) => { var op = new StdOrI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
     { (MaxonBinOperator.BitXor, MaxonValueKind.Bool), (l, r) => { var op = new StdXorI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Eq, MaxonValueKind.Bool), (l, r) => { var op = new StdCmpI1Op("eq", (StdBool)l, (StdBool)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Ne, MaxonValueKind.Bool), (l, r) => { var op = new StdCmpI1Op("ne", (StdBool)l, (StdBool)r); return (op, op.Result); } },
   };
 
   // ============================================================================

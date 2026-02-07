@@ -271,6 +271,17 @@ public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp 
   public override List<StdValue> ReadValues => [Lhs, Rhs];
 }
 
+public class StdCmpI1Op(string predicate, StdBool lhs, StdBool rhs) : StandardOp {
+  public override string Mnemonic => $"arith.cmpi1 {Predicate}";
+  public string Predicate { get; } = predicate;
+  public StdBool Lhs { get; } = lhs;
+  public StdBool Rhs { get; } = rhs;
+  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override List<StdValue> ReadValues => [Lhs, Rhs];
+}
+
 // === Conditional Select ===
 
 /// Selects between two i64 values based on a boolean condition.

@@ -395,6 +395,13 @@ public static class StandardToX86Conversion {
             lastCmpPredicate = cmpI64Op.Predicate;
             break;
 
+          case StdCmpI1Op cmpI1Op:
+            regManager.EmitIntegerCompare(cmpI1Op.Lhs, cmpI1Op.Rhs, x86Block);
+            lastCmpResult = cmpI1Op.Result;
+            lastCmpKind = ComparisonKind.Integer;
+            lastCmpPredicate = cmpI1Op.Predicate;
+            break;
+
           case StdCmpF64Op cmpF64Op:
             regManager.EmitXmmCompare(cmpF64Op.Lhs, cmpF64Op.Rhs, x86Block);
             lastCmpResult = cmpF64Op.Result;

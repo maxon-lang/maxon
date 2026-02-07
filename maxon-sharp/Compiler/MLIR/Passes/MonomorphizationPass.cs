@@ -715,6 +715,12 @@ public static class MonomorphizationPass {
       calleeMap[(spec.SourceFunc.Name, spec.ConcreteTypeName)] = newCallee;
     }
 
+    // Build function lookup for resolving monomorphized return types
+    var funcLookup = new Dictionary<string, MlirFunction<MaxonOp>>();
+    foreach (var f in module.Functions) {
+      funcLookup[f.Name] = f;
+    }
+
     // For each function, scan call sites and rewrite if needed
     foreach (var func in module.Functions) {
       foreach (var block in func.Body.Blocks) {
@@ -727,7 +733,12 @@ public static class MonomorphizationPass {
               var key = (call.Callee, concreteType);
               if (calleeMap.TryGetValue(key, out var newCallee)) {
                 Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
-                block.Operations[i] = new MaxonCallOp(newCallee, call.Args, call.Result, call.ResultKind, call.ResultStructTypeName);
+                var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
+                  call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+                block.Operations[i] = new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
+                if (newResultKind != call.ResultKind && call.Result != null) {
+                  UpdateSubsequentAssignOps(block, i + 1, call.Result, newResultKind);
+                }
               }
             }
           } else if (op is MaxonTryCallOp tryCall) {
@@ -736,11 +747,60 @@ public static class MonomorphizationPass {
               var key = (tryCall.Callee, concreteType);
               if (calleeMap.TryGetValue(key, out var newCallee)) {
                 Logger.Debug(LogCategory.Mlir, $"  Rewrote try_call {tryCall.Callee} -> {newCallee} in {func.Name}");
-                block.Operations[i] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, tryCall.ResultKind, tryCall.ResultStructTypeName);
+                var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
+                  tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
+                block.Operations[i] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName);
+                if (newResultKind != tryCall.ResultKind && tryCall.Result != null) {
+                  UpdateSubsequentAssignOps(block, i + 1, tryCall.Result, newResultKind);
+                }
               }
             }
           }
         }
+      }
+    }
+  }
+
+  /// <summary>
+  /// Resolve the actual result type for a rewritten call by looking up the monomorphized function.
+  /// When a generic function (e.g. Array.next) returns a type parameter (Element),
+  /// the monomorphized version (e.g. StringArray.next) returns the concrete type (String).
+  /// </summary>
+  private static (MaxonValueKind?, string?) ResolveMonomorphizedResultType(
+      MaxonValueKind? originalKind, string? originalStructTypeName,
+      string newCallee, Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+    if (!funcLookup.TryGetValue(newCallee, out var newFunc) || newFunc.ReturnType == null)
+      return (originalKind, originalStructTypeName);
+
+    if (newFunc.ReturnType is MlirStructType retStruct)
+      return (MaxonValueKind.Struct, retStruct.Name);
+    if (newFunc.ReturnType is MlirEnumType retEnum)
+      return (MaxonValueKind.Enum, retEnum.Name);
+    if (newFunc.ReturnType == MlirType.I64)
+      return (MaxonValueKind.Integer, null);
+    if (newFunc.ReturnType == MlirType.F64)
+      return (MaxonValueKind.Float, null);
+    if (newFunc.ReturnType == MlirType.I8)
+      return (MaxonValueKind.Byte, null);
+    if (newFunc.ReturnType == MlirType.I1)
+      return (MaxonValueKind.Bool, null);
+    if (newFunc.ReturnType is MlirTypeParameterType)
+      return (originalKind, originalStructTypeName);
+
+    throw new InvalidOperationException($"ResolveMonomorphizedResultType: unsupported return type '{newFunc.ReturnType.Name}' for {newCallee}");
+  }
+
+  /// <summary>
+  /// Update MaxonAssignOps that reference the given result value to use the new value kind.
+  /// This is needed when monomorphization changes a function's return type (e.g. from
+  /// type parameter Integer to concrete Struct).
+  /// </summary>
+  private static void UpdateSubsequentAssignOps(
+      MlirBlock<MaxonOp> block, int startIndex, MaxonValue result, MaxonValueKind? newKind) {
+    if (newKind == null) return;
+    for (int j = startIndex; j < block.Operations.Count; j++) {
+      if (block.Operations[j] is MaxonAssignOp assign && assign.Value == result) {
+        block.Operations[j] = new MaxonAssignOp(assign.VarName, assign.Value, assign.IsDeclaration, assign.IsMutable, newKind.Value);
       }
     }
   }
