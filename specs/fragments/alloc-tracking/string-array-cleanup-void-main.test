@@ -17,6 +17,7 @@ ALLOC #1: 160 bytes (array grow)
 INCREF: array grow -> rc=1
 hiCLEANUP: cs
 CLEANUP: arr
+CLEANUP: <array element>
 DECREF: arr -> rc=0
 FREE #1: 160 bytes (array cleanup)
 CLEANUP: s
@@ -29,13 +30,13 @@ Moves:     1
 Increfs:   1
 Decrefs:   1
 Copies:    0
-Cleanups:  3
+Cleanups:  4
 ```
 ---
 module {
   func @alloc-tracking.main() -> i64 {
   entry:
-    x86.prologue stack_size=528
+    x86.prologue stack_size=560
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -227,10 +228,36 @@ module {
     x86.lea_rdata rbx, [__track_tag_2]
     x86.mov rsi, rbx
     x86.mov ebx, 3
-    x86.mov [rbp-528], eax
-    x86.mov r8, rsi
+    x86.mov [rbp-544], eax
+    x86.mov [rbp-552], ecx
+    x86.mov [rbp-560], edx
+    x86.mov rcx, rsi
+    x86.mov rdx, rbx
+    x86.call maxon_track_cleanup
+    x86.mov eax, [rbp-96]
+    x86.mov ecx, [rbp-112]
+    x86.lea_rdata rdx, [__managed_offsets_107]
+    x86.mov rbx, rdx
+    x86.mov edx, 1
+    x86.mov esi, [rbp-560]
+    x86.mov [rbp-528], esi
+    x86.mov edi, [rbp-552]
+    x86.mov [rbp-536], edi
+    x86.mov r8, rcx
     x86.mov r9, rbx
-    x86.call maxon_cleanup_managed
+    x86.mov rcx, rsi
+    x86.mov rsi, rdx
+    x86.mov rdx, rax
+    x86.call maxon_cleanup_array_elements
+    x86.mov eax, [rbp-528]
+    x86.mov ecx, [rbp-536]
+    x86.lea_rdata rdx, [__track_tag_2]
+    x86.mov rbx, rdx
+    x86.mov edx, 3
+    x86.mov r8, rbx
+    x86.mov r9, rdx
+    x86.mov rdx, rax
+    x86.call maxon_cleanup_managed_free
     x86.mov eax, [rbp-456]
     x86.mov ecx, [rbp-440]
     x86.lea_rdata rdx, [__track_tag_3]

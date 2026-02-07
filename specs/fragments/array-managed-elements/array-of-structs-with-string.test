@@ -1,0 +1,447 @@
+// Test: array-of-structs-with-string
+type Item
+  export var name String
+  export var value int
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns int
+  var items = ItemArray{}
+  items.push({name: "hello world that needs heap allocation", value: 1})
+  items.push({name: "another long string for heap allocation", value: 2})
+  let first = try items.get(0) otherwise Item{name: "", value: 0}
+  print("{first.name}\n")
+  return first.value
+end 'main'
+---
+TrackMemory: true
+ExitCode: 1
+Stdout: ```
+MOVE: managed
+COPY: String
+ALLOC #1: 192 bytes (array grow)
+INCREF: array grow -> rc=1
+MOVE: managed
+COPY: String
+hello world that needs heap allocation
+CLEANUP: cs
+CLEANUP: items
+CLEANUP: <array element>
+CLEANUP: <array element>
+DECREF: items -> rc=0
+FREE #1: 192 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 192 bytes
+Freed:     192 bytes
+Leaked:    0 bytes
+Moves:     2
+Increfs:   1
+Decrefs:   1
+Copies:    2
+Cleanups:  4
+```
+---
+module {
+  func @array-managed-elements.main() -> i64 {
+  entry:
+    x86.prologue stack_size=992
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.xor edx, edx
+    x86.xor ebx, ebx
+    x86.mov esi, 48
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], ebx
+    x86.mov [rbp-32], esi
+    x86.mov [rbp-40], eax
+    x86.mov edi, [rbp-8]
+    x86.mov [rbp-48], edi
+    x86.mov r8, [rbp-16]
+    x86.mov [rbp-56], r8
+    x86.mov r9, [rbp-24]
+    x86.mov [rbp-64], r9
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-64]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-72]
+    x86.mov [rbp-112], eax
+    x86.lea_rdata rax, [__str_7]
+    x86.mov rcx, rax
+    x86.mov eax, 38
+    x86.mov [rbp-120], ecx
+    x86.mov [rbp-128], eax
+    x86.xor eax, eax
+    x86.mov [rbp-136], eax
+    x86.mov eax, 1
+    x86.mov [rbp-144], eax
+    x86.xor eax, eax
+    x86.mov [rbp-152], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-120]
+    x86.mov [rbp-160], ecx
+    x86.mov ecx, [rbp-128]
+    x86.mov [rbp-168], ecx
+    x86.mov ecx, [rbp-136]
+    x86.mov [rbp-176], ecx
+    x86.mov ecx, [rbp-144]
+    x86.mov [rbp-184], ecx
+    x86.mov ecx, [rbp-152]
+    x86.mov [rbp-192], ecx
+    x86.mov [rbp-200], eax
+    x86.lea_rdata rax, [__track_tag_1]
+    x86.mov rcx, rax
+    x86.mov eax, 7
+    x86.mov rdx, rax
+    x86.call maxon_track_move
+    x86.lea_rdata rax, [__track_tag_2]
+    x86.mov rcx, rax
+    x86.mov eax, 6
+    x86.mov rdx, rax
+    x86.call maxon_track_copy
+    x86.mov eax, [rbp-112]
+    x86.mov [rbp-208], eax
+    x86.mov eax, [rbp-104]
+    x86.mov [rbp-216], eax
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-224], eax
+    x86.mov eax, [rbp-88]
+    x86.mov [rbp-232], eax
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-240], eax
+    x86.lea rax, [rbp-240]
+    x86.mov ecx, [rbp-200]
+    x86.mov [rbp-248], ecx
+    x86.mov ecx, [rbp-192]
+    x86.mov [rbp-256], ecx
+    x86.mov ecx, [rbp-184]
+    x86.mov [rbp-264], ecx
+    x86.mov ecx, [rbp-176]
+    x86.mov [rbp-272], ecx
+    x86.mov ecx, [rbp-168]
+    x86.mov [rbp-280], ecx
+    x86.mov ecx, [rbp-160]
+    x86.mov [rbp-288], ecx
+    x86.lea rcx, [rbp-288]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call ItemArray.push
+    x86.mov eax, [rbp-240]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-232]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-224]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-216]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-208]
+    x86.mov [rbp-112], eax
+    x86.lea_rdata rax, [__str_10]
+    x86.mov rcx, rax
+    x86.mov eax, 39
+    x86.mov [rbp-296], ecx
+    x86.mov [rbp-304], eax
+    x86.xor eax, eax
+    x86.mov [rbp-312], eax
+    x86.mov eax, 1
+    x86.mov [rbp-320], eax
+    x86.xor eax, eax
+    x86.mov [rbp-328], eax
+    x86.mov eax, 2
+    x86.mov ecx, [rbp-296]
+    x86.mov [rbp-336], ecx
+    x86.mov ecx, [rbp-304]
+    x86.mov [rbp-344], ecx
+    x86.mov ecx, [rbp-312]
+    x86.mov [rbp-352], ecx
+    x86.mov ecx, [rbp-320]
+    x86.mov [rbp-360], ecx
+    x86.mov ecx, [rbp-328]
+    x86.mov [rbp-368], ecx
+    x86.mov [rbp-376], eax
+    x86.lea_rdata rax, [__track_tag_1]
+    x86.mov rcx, rax
+    x86.mov eax, 7
+    x86.mov rdx, rax
+    x86.call maxon_track_move
+    x86.lea_rdata rax, [__track_tag_2]
+    x86.mov rcx, rax
+    x86.mov eax, 6
+    x86.mov rdx, rax
+    x86.call maxon_track_copy
+    x86.mov eax, [rbp-112]
+    x86.mov [rbp-384], eax
+    x86.mov eax, [rbp-104]
+    x86.mov [rbp-392], eax
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-400], eax
+    x86.mov eax, [rbp-88]
+    x86.mov [rbp-408], eax
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-416], eax
+    x86.lea rax, [rbp-416]
+    x86.mov ecx, [rbp-376]
+    x86.mov [rbp-424], ecx
+    x86.mov ecx, [rbp-368]
+    x86.mov [rbp-432], ecx
+    x86.mov ecx, [rbp-360]
+    x86.mov [rbp-440], ecx
+    x86.mov ecx, [rbp-352]
+    x86.mov [rbp-448], ecx
+    x86.mov ecx, [rbp-344]
+    x86.mov [rbp-456], ecx
+    x86.mov ecx, [rbp-336]
+    x86.mov [rbp-464], ecx
+    x86.lea rcx, [rbp-464]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call ItemArray.push
+    x86.mov eax, [rbp-416]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-408]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-400]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-392]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-384]
+    x86.mov [rbp-112], eax
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-472], ecx
+    x86.xor ecx, ecx
+    x86.mov [rbp-480], ecx
+    x86.xor ecx, ecx
+    x86.mov [rbp-488], ecx
+    x86.xor ecx, ecx
+    x86.mov [rbp-496], ecx
+    x86.xor ecx, ecx
+    x86.mov [rbp-504], ecx
+    x86.xor ecx, ecx
+    x86.mov [rbp-512], ecx
+    x86.lea rcx, [rbp-512]
+    x86.mov edx, [rbp-112]
+    x86.mov [rbp-520], edx
+    x86.mov edx, [rbp-104]
+    x86.mov [rbp-528], edx
+    x86.mov edx, [rbp-96]
+    x86.mov [rbp-536], edx
+    x86.mov edx, [rbp-88]
+    x86.mov [rbp-544], edx
+    x86.mov edx, [rbp-80]
+    x86.mov [rbp-552], edx
+    x86.lea rdx, [rbp-552]
+    x86.mov r8, rax
+    x86.call ItemArray.get
+    x86.mov eax, [rbp-552]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-544]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-536]
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-528]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-520]
+    x86.mov [rbp-112], eax
+    x86.lea_rdata rax, [__str_18]
+    x86.mov rcx, rax
+    x86.xor eax, eax
+    x86.mov [rbp-560], ecx
+    x86.mov [rbp-568], eax
+    x86.xor eax, eax
+    x86.mov [rbp-576], eax
+    x86.mov eax, 1
+    x86.mov [rbp-584], eax
+    x86.xor eax, eax
+    x86.mov [rbp-592], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-560]
+    x86.mov [rbp-600], ecx
+    x86.mov ecx, [rbp-568]
+    x86.mov [rbp-608], ecx
+    x86.mov ecx, [rbp-576]
+    x86.mov [rbp-616], ecx
+    x86.mov ecx, [rbp-584]
+    x86.mov [rbp-624], ecx
+    x86.mov ecx, [rbp-592]
+    x86.mov [rbp-632], ecx
+    x86.mov [rbp-640], eax
+    x86.mov eax, [rbp-600]
+    x86.mov [rbp-648], eax
+    x86.mov eax, [rbp-608]
+    x86.mov [rbp-656], eax
+    x86.mov eax, [rbp-616]
+    x86.mov [rbp-664], eax
+    x86.mov eax, [rbp-624]
+    x86.mov [rbp-672], eax
+    x86.mov eax, [rbp-632]
+    x86.mov [rbp-680], eax
+    x86.mov eax, [rbp-640]
+    x86.mov [rbp-688], eax
+    x86.mov eax, [rbp-512]
+    x86.mov [rbp-696], eax
+    x86.mov eax, [rbp-504]
+    x86.mov [rbp-704], eax
+    x86.mov eax, [rbp-496]
+    x86.mov [rbp-712], eax
+    x86.mov eax, [rbp-488]
+    x86.mov [rbp-720], eax
+    x86.mov eax, [rbp-480]
+    x86.mov [rbp-728], eax
+    x86.mov eax, [rbp-472]
+    x86.mov [rbp-736], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je array-managed-elements.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-648]
+    x86.mov [rbp-696], eax
+    x86.mov ecx, [rbp-656]
+    x86.mov [rbp-704], ecx
+    x86.mov edx, [rbp-664]
+    x86.mov [rbp-712], edx
+    x86.mov ebx, [rbp-672]
+    x86.mov [rbp-720], ebx
+    x86.mov esi, [rbp-680]
+    x86.mov [rbp-728], esi
+    x86.mov edi, [rbp-688]
+    x86.mov [rbp-736], edi
+    x86.jmp array-managed-elements.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-696]
+    x86.mov [rbp-744], eax
+    x86.mov ecx, [rbp-704]
+    x86.mov [rbp-752], ecx
+    x86.mov edx, [rbp-712]
+    x86.mov ebx, [rbp-720]
+    x86.mov esi, [rbp-728]
+    x86.mov edi, [rbp-736]
+    x86.mov [rbp-760], edi
+    x86.mov r8, [rbp-744]
+    x86.mov r9, [rbp-752]
+    x86.lea_rdata rax, [__interp_lit_151]
+    x86.mov rcx, rax
+    x86.mov eax, 1
+    x86.lea edx, [r9 + eax]
+    x86.mov ebx, 1
+    x86.lea esi, [edx + ebx]
+    x86.mov [rbp-928], eax
+    x86.mov [rbp-936], ecx
+    x86.mov [rbp-944], edx
+    x86.mov [rbp-952], r8
+    x86.mov [rbp-960], r9
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.xor ecx, ecx
+    x86.mov [rbp-768], ecx
+    x86.mov [rbp-776], eax
+    x86.mov eax, [rbp-944]
+    x86.mov [rbp-784], eax
+    x86.mov eax, [rbp-952]
+    x86.mov [rbp-792], eax
+    x86.mov eax, [rbp-960]
+    x86.mov [rbp-800], eax
+    x86.mov eax, [rbp-936]
+    x86.mov [rbp-808], eax
+    x86.mov eax, [rbp-928]
+    x86.mov [rbp-816], eax
+    x86.mov eax, [rbp-776]
+    x86.mov ecx, [rbp-768]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-792]
+    x86.mov edx, [rbp-800]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, [rbp-768]
+    x86.mov ecx, [rbp-800]
+    x86.add eax, ecx
+    x86.mov [rbp-768], eax
+    x86.mov eax, [rbp-776]
+    x86.mov ecx, [rbp-768]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-808]
+    x86.mov edx, [rbp-816]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, [rbp-768]
+    x86.mov ecx, [rbp-816]
+    x86.add eax, ecx
+    x86.mov [rbp-768], eax
+    x86.mov eax, [rbp-776]
+    x86.mov [rbp-824], eax
+    x86.mov eax, [rbp-784]
+    x86.mov [rbp-832], eax
+    x86.mov [rbp-840], eax
+    x86.mov eax, 1
+    x86.mov [rbp-848], eax
+    x86.xor eax, eax
+    x86.mov [rbp-856], eax
+    x86.mov eax, [rbp-856]
+    x86.mov [rbp-864], eax
+    x86.mov eax, [rbp-848]
+    x86.mov [rbp-872], eax
+    x86.mov eax, [rbp-840]
+    x86.mov [rbp-880], eax
+    x86.mov eax, [rbp-832]
+    x86.mov [rbp-888], eax
+    x86.mov eax, [rbp-824]
+    x86.mov [rbp-896], eax
+    x86.lea rax, [rbp-896]
+    x86.mov rcx, rax
+    x86.call stdlib.Print.print
+    x86.mov ecx, [rbp-760]
+    x86.mov [rbp-904], ecx
+    x86.mov ecx, [rbp-104]
+    x86.mov edx, [rbp-88]
+    x86.lea_rdata rbx, [__track_tag_3]
+    x86.mov rsi, rbx
+    x86.mov ebx, 5
+    x86.mov [rbp-968], eax
+    x86.mov [rbp-976], ecx
+    x86.mov [rbp-984], edx
+    x86.mov rcx, rsi
+    x86.mov rdx, rbx
+    x86.call maxon_track_cleanup
+    x86.mov eax, [rbp-96]
+    x86.mov ecx, [rbp-112]
+    x86.lea_rdata rdx, [__managed_offsets_197]
+    x86.mov rbx, rdx
+    x86.mov edx, 1
+    x86.mov esi, [rbp-984]
+    x86.mov [rbp-912], esi
+    x86.mov edi, [rbp-976]
+    x86.mov [rbp-920], edi
+    x86.mov r8, rcx
+    x86.mov r9, rbx
+    x86.mov rcx, rsi
+    x86.mov rsi, rdx
+    x86.mov rdx, rax
+    x86.call maxon_cleanup_array_elements
+    x86.mov eax, [rbp-912]
+    x86.mov ecx, [rbp-920]
+    x86.lea_rdata rdx, [__track_tag_3]
+    x86.mov rbx, rdx
+    x86.mov edx, 5
+    x86.mov r8, rbx
+    x86.mov r9, rdx
+    x86.mov rdx, rax
+    x86.call maxon_cleanup_managed_free
+    x86.mov eax, [rbp-904]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

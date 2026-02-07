@@ -130,6 +130,9 @@ public static class MaxonToStandardConversion {
       // Tracks variable names that own managed memory (for cleanup before return)
       // Key: user variable name (e.g. "arr"), Value: path to buffer field (e.g. "arr.managed.buffer")
       var managedVarOwners = new Dictionary<string, string>();
+      // Tracks which managed vars hold arrays of structs with managed fields (for per-element cleanup)
+      // Key: user variable name, Value: list of (offset, typeName) for managed fields within elements
+      var managedVarElementInfo = new Dictionary<string, List<(int offset, string typeName)>>();
 
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
@@ -349,8 +352,10 @@ public static class MaxonToStandardConversion {
                   : structValueTypes[assignOp.Value.Id];
                 var structType = (MlirStructType)module.TypeDefs[structTypeName];
                 // Cleanup old managed memory before reassignment
-                if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPath))
-                  EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes);
+                if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPath)) {
+                  var oldElementInfo = managedVarElementInfo.TryGetValue(assignOp.VarName, out var oldInfo) ? oldInfo : null;
+                  EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes, oldElementInfo);
+                }
                 CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // In struct instance methods, assigning to a self field struct must also
                 // update the self.X variables, write through __self_ptr, and use
@@ -372,8 +377,16 @@ public static class MaxonToStandardConversion {
                 // Track managed memory ownership for cleanup
                 if (!isStructInstanceMethod && !assignOp.VarName.StartsWith("__")) {
                   var bufferPath = GetManagedBufferPath(dstName, structTypeName, module.TypeDefs);
-                  if (bufferPath != null)
+                  if (bufferPath != null) {
                     managedVarOwners[assignOp.VarName] = bufferPath;
+                    // Check if this array's element type has managed fields
+                    var elementStructType = GetArrayElementStructType(structTypeName, module.TypeDefs);
+                    if (elementStructType != null) {
+                      var elemFieldInfo = GetManagedElementFieldInfo(elementStructType);
+                      if (elemFieldInfo.Count > 0)
+                        managedVarElementInfo[assignOp.VarName] = elemFieldInfo;
+                    }
+                  }
                 }
               } else {
                 var mappedValue = valueMap[assignOp.Value];
@@ -486,7 +499,8 @@ public static class MaxonToStandardConversion {
                     loopScopedVars.Add(varName);
                 }
                 foreach (var varName in loopScopedVars) {
-                  EmitManagedCleanup(newBlock, varName, managedVarOwners[varName], varTypes);
+                  var elementInfo = managedVarElementInfo.TryGetValue(varName, out var info) ? info : null;
+                  EmitManagedCleanup(newBlock, varName, managedVarOwners[varName], varTypes, elementInfo);
                   // Zero capacity to prevent use-after-free on reinitialization
                   var capacityPath = managedVarOwners[varName];
                   capacityPath = capacityPath[..capacityPath.LastIndexOf('.')] + ".capacity";
@@ -684,7 +698,7 @@ public static class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, managedVarOwners, cstringTrackVars);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, managedVarOwners, cstringTrackVars, managedVarElementInfo);
               break;
             case MaxonThrowOp throwOp:
               LowerThrow(throwOp, newBlock, valueMap);
@@ -859,22 +873,38 @@ public static class MaxonToStandardConversion {
         // For struct instance method calls where non-self params are managed structs,
         // emit MOVE for the self arg's managed field (the container accepting ownership)
         bool hasManagedStructParam = false;
+        bool hasNestedManagedStructParam = false;
         if (calleeIsStructInstance) {
           for (int i = 1; i < calleeFunc.ParamTypes.Count; i++) {
-            if (calleeFunc.ParamTypes[i] is MlirStructType paramSt
-                && GetManagedFieldName(paramSt) != null) {
-              hasManagedStructParam = true;
-              break;
+            if (calleeFunc.ParamTypes[i] is MlirStructType paramSt) {
+              if (GetManagedFieldName(paramSt) != null) {
+                hasManagedStructParam = true;
+              } else if (GetManagedElementFieldInfo(paramSt).Count > 0) {
+                hasNestedManagedStructParam = true;
+              }
             }
           }
         }
-        if (calleeIsStructInstance && hasManagedStructParam) {
+        if (calleeIsStructInstance && hasManagedStructParam && !hasNestedManagedStructParam) {
           var selfArg = args[0];
           if (structVarNames.TryGetValue(selfArg.Id, out _)) {
             var selfStructType2 = (MlirStructType)calleeFunc.ParamTypes[0];
             var managedFieldName = GetManagedFieldName(selfStructType2);
             if (managedFieldName != null) {
               EmitTrackMove(block, managedFieldName);
+            }
+          }
+        }
+        // For struct params with nested managed fields (e.g. Item with String field),
+        // emit MOVE/COPY for each managed field within the struct
+        if (calleeIsStructInstance && hasNestedManagedStructParam) {
+          for (int i = 1; i < calleeFunc.ParamTypes.Count; i++) {
+            if (calleeFunc.ParamTypes[i] is MlirStructType paramSt) {
+              var managedFields = GetManagedElementFieldInfo(paramSt);
+              foreach (var (_, typeName) in managedFields) {
+                EmitTrackMove(block, "managed");
+                EmitTrackCopy(block, typeName);
+              }
             }
           }
         }
@@ -923,7 +953,8 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, string> managedVarOwners,
-    HashSet<string> cstringTrackVars) {
+    HashSet<string> cstringTrackVars,
+    Dictionary<string, List<(int offset, string typeName)>> managedVarElementInfo) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -956,7 +987,7 @@ public static class MaxonToStandardConversion {
         WriteStructFieldsToPointer(block, tempName, sretLoad.Result, retStructType, varTypes);
       }
 
-      EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes);
+      EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedVarElementInfo);
       block.AddOp(new StdReturnOp());
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
@@ -966,12 +997,12 @@ public static class MaxonToStandardConversion {
         var retVarName = $"__ret_save_{MlirContext.Current.NextId()}";
         EmitStore(block, newRetVal, retVarName, varTypes);
 
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes);
+        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedVarElementInfo);
 
         var retReload = EmitLoad(block, retVarName, varTypes);
         block.AddOp(new StdReturnOp(retReload));
       } else {
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes);
+        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedVarElementInfo);
         block.AddOp(new StdReturnOp(newRetVal));
       }
     }
@@ -981,11 +1012,14 @@ public static class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     HashSet<string> cstringTrackVars,
     Dictionary<string, string> managedVarOwners,
-    Dictionary<string, string> varTypes) {
+    Dictionary<string, string> varTypes,
+    Dictionary<string, List<(int offset, string typeName)>>? managedVarElementInfo = null) {
     foreach (var csVar in cstringTrackVars)
       EmitTrackCleanup(block, csVar);
-    foreach (var (varName, bufferPath) in managedVarOwners)
-      EmitManagedCleanup(block, varName, bufferPath, varTypes);
+    foreach (var (varName, bufferPath) in managedVarOwners) {
+      var elementInfo = managedVarElementInfo != null && managedVarElementInfo.TryGetValue(varName, out var info) ? info : null;
+      EmitManagedCleanup(block, varName, bufferPath, varTypes, elementInfo);
+    }
   }
 
   private static void LowerThrow(
@@ -2692,6 +2726,60 @@ public static class MaxonToStandardConversion {
     block.AddOp(new StdCallRuntimeOp("maxon_track_move", [tagPtr, tagLen]));
   }
 
+  /// <summary>
+  /// Emit tracking call: COPY: tag
+  /// </summary>
+  private static void EmitTrackCopy(
+    MlirBlock<StandardOp> block, string tag) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_copy", [tagPtr, tagLen]));
+  }
+
+  /// <summary>
+  /// Returns the offsets of managed fields (__ManagedMemory-containing fields) within a struct type.
+  /// Each entry is (byteOffset, fieldTypeName) where byteOffset is the offset of the __ManagedMemory
+  /// within the struct element, and fieldTypeName is the name of the field's type (e.g. "String").
+  /// Returns empty list if the struct has no managed fields.
+  /// </summary>
+  private static List<(int offset, string typeName)> GetManagedElementFieldInfo(
+    MlirStructType elementType) {
+    var result = new List<(int, string)>();
+    foreach (var field in elementType.Fields) {
+      if (field.Type is MlirStructType fieldStruct) {
+        if (fieldStruct.Name == "__ManagedMemory") {
+          result.Add((field.Offset, elementType.Name));
+        } else {
+          // Check nested struct for __ManagedMemory fields
+          foreach (var nestedField in fieldStruct.Fields) {
+            if (nestedField.Type is MlirStructType nestedType && nestedType.Name == "__ManagedMemory") {
+              result.Add((field.Offset + nestedField.Offset, fieldStruct.Name));
+              break;
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  /// <summary>
+  /// Gets the element type for an array/collection struct type by looking up the "Element" type parameter.
+  /// Only matches types with a field named "managed" (Array convention), not "_managed" (String/Character).
+  /// Returns null if the struct is not an array-like collection or the element type is not a struct.
+  /// </summary>
+  private static MlirStructType? GetArrayElementStructType(
+    string structTypeName, Dictionary<string, MlirType> typeDefs) {
+    if (!typeDefs.TryGetValue(structTypeName, out var typeDef) || typeDef is not MlirStructType structType)
+      return null;
+    // Only apply to types with a field named "managed" (Array convention for storing elements)
+    if (structType.GetField("managed") is not { Type: MlirStructType { Name: "__ManagedMemory" } })
+      return null;
+    if (!structType.TypeParams.TryGetValue("Element", out var elementType))
+      return null;
+    return elementType as MlirStructType;
+  }
+
   private static string? GetManagedFieldName(MlirStructType structType) {
     var managedField = structType.GetField("managed");
     if (managedField != null) return "managed";
@@ -2720,19 +2808,66 @@ public static class MaxonToStandardConversion {
   /// Emit the cleanup sequence for a managed variable before scope exit.
   /// In tracking mode: calls maxon_cleanup_managed which prints CLEANUP/DECREF/FREE and frees.
   /// In non-tracking mode: just calls maxon_free on the buffer.
+  /// If elementFieldInfo is provided, iterates all elements and cleans up their managed fields
+  /// between the CLEANUP tag and the DECREF/FREE.
   /// </summary>
   private static void EmitManagedCleanup(
     MlirBlock<StandardOp> block,
     string varName,
     string bufferVarPath,
-    Dictionary<string, string> varTypes) {
+    Dictionary<string, string> varTypes,
+    List<(int offset, string typeName)>? elementFieldInfo = null) {
     if (!_trackAllocs) return; // TODO: enable non-tracking cleanup once validated
-    // Derive capacity path from buffer path (e.g. "arr.managed.buffer" -> "arr.managed.capacity")
-    var capacityPath = bufferVarPath[..bufferVarPath.LastIndexOf('.')] + ".capacity";
+
+    var managedBasePath = bufferVarPath[..bufferVarPath.LastIndexOf('.')];
+    var capacityPath = managedBasePath + ".capacity";
     var capacity = (StdI64)EmitLoad(block, capacityPath, varTypes);
     var buffer = (StdI64)EmitLoad(block, bufferVarPath, varTypes);
-    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, varName);
-    block.AddOp(new StdCallRuntimeOp("maxon_cleanup_managed", [capacity, buffer, tagPtr, tagLen]));
+
+    if (elementFieldInfo != null && elementFieldInfo.Count > 0) {
+      // Print CLEANUP: varName first, then do per-element cleanup, then DECREF/FREE
+      EmitTrackCleanup(block, varName);
+
+      var lengthPath = managedBasePath + ".length";
+      var elemSizePath = managedBasePath + ".element_size";
+      var length = (StdI64)EmitLoad(block, lengthPath, varTypes);
+      var elemSize = (StdI64)EmitLoad(block, elemSizePath, varTypes);
+
+      // Build the managed field offsets array in rdata
+      var offsetsLabel = $"__managed_offsets_{MlirContext.Current.NextId()}";
+      var offsetBytes = new byte[elementFieldInfo.Count * 8];
+      for (int i = 0; i < elementFieldInfo.Count; i++) {
+        BitConverter.TryWriteBytes(offsetBytes.AsSpan(i * 8), (long)elementFieldInfo[i].offset);
+      }
+      _resultModule!.RdataEntries.Add((offsetsLabel, offsetBytes, 8));
+
+      var offsetsLea = new StdLeaRdataOp(offsetsLabel);
+      block.AddOp(offsetsLea);
+      var offsetsPtr = new StdPtrToI64Op(offsetsLea.Result);
+      block.AddOp(offsetsPtr);
+      var numFields = new StdConstI64Op(elementFieldInfo.Count);
+      block.AddOp(numFields);
+
+      // Save values to stack before the call (runtime calls clobber registers)
+      var bufSave = $"__cleanup_buf_{MlirContext.Current.NextId()}";
+      EmitStore(block, buffer, bufSave, varTypes);
+      var capSave = $"__cleanup_cap_{MlirContext.Current.NextId()}";
+      EmitStore(block, capacity, capSave, varTypes);
+
+      block.AddOp(new StdCallRuntimeOp("maxon_cleanup_array_elements",
+        [buffer, length, elemSize, offsetsPtr.Result, numFields.Result]));
+
+      // Reload buffer and capacity after the call, then just do the DECREF/FREE part
+      buffer = (StdI64)EmitLoad(block, bufSave, varTypes);
+      capacity = (StdI64)EmitLoad(block, capSave, varTypes);
+
+      // Call maxon_cleanup_managed_nocleanup to do DECREF/FREE without the CLEANUP tag
+      var (tagPtr, tagLen) = EmitTrackingTagLoad(block, varName);
+      block.AddOp(new StdCallRuntimeOp("maxon_cleanup_managed_free", [capacity, buffer, tagPtr, tagLen]));
+    } else {
+      var (tagPtr, tagLen) = EmitTrackingTagLoad(block, varName);
+      block.AddOp(new StdCallRuntimeOp("maxon_cleanup_managed", [capacity, buffer, tagPtr, tagLen]));
+    }
   }
 
   /// <summary>

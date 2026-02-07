@@ -874,6 +874,8 @@ public partial class X86CodeEmitter {
     DefineRdata("rdata_track_summary_cleanups", System.Text.Encoding.UTF8.GetBytes("Cleanups:  "));
     DefineRdata("rdata_track_array_cleanup", System.Text.Encoding.UTF8.GetBytes("array cleanup"));
 
+    DefineRdata("rdata_track_array_element", System.Text.Encoding.UTF8.GetBytes("<array element>"));
+
     // Emit all tracking functions
     EmitMaxonTrackPrintStr();
     EmitMaxonTrackAlloc();
@@ -884,6 +886,8 @@ public partial class X86CodeEmitter {
     EmitMaxonTrackCopy();
     EmitMaxonTrackCleanup();
     EmitMaxonCleanupManaged();
+    EmitMaxonCleanupManagedFree();
+    EmitMaxonCleanupArrayElements();
     EmitMaxonPrintAllocSummary();
   }
 
@@ -1335,6 +1339,117 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
 
     DefineLabel("rt_cleanup_managed_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_cleanup_managed_free(capacity_rcx, buffer_rdx, tag_ptr_r8, tag_len_r9)
+  /// Does the DECREF/FREE part of managed cleanup without printing the CLEANUP tag.
+  /// Used when the CLEANUP tag has already been printed (e.g. for arrays with managed elements).
+  /// Stack: [rbp-8]=capacity, [rbp-16]=buffer, [rbp-24]=tag_ptr, [rbp-32]=tag_len
+  /// </summary>
+  private void EmitMaxonCleanupManagedFree() {
+    EmitRuntimeFunctionStart("maxon_cleanup_managed_free", 4, 0x60);
+
+    // Only free heap-allocated buffers (capacity > 0); rdata/constant buffers have capacity=0
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // capacity
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_cleanup_managed_free_done");
+
+    // Buffer is heap-allocated: DECREF with rc=0
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // tag_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // tag_len
+    EmitBytes(0x4D, 0x31, 0xC0); // XOR r8, r8 (rc=0)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_decref")); EmitDword(0);
+
+    // FREE: call maxon_track_free(buffer, "array cleanup" ptr, len)
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buffer
+    EmitLeaRegRipRel(X86Register.Rdx, "rdata_track_array_cleanup");
+    EmitMovRegImm(X86Register.R8, 13); // len("array cleanup")
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_free")); EmitDword(0);
+
+    // Actually free the memory
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buffer
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+
+    DefineLabel("rt_cleanup_managed_free_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_cleanup_array_elements(buffer_rcx, length_rdx, elem_size_r8, offsets_ptr_r9, num_offsets_rsi)
+  /// Iterates over array elements and cleans up managed fields within each element.
+  /// For each managed field offset in each element,
+  /// prints CLEANUP: &lt;array element&gt; and frees the buffer if capacity > 0.
+  /// Stack: [rbp-8]=buffer, [rbp-16]=length, [rbp-24]=elem_size, [rbp-32]=offsets_ptr,
+  ///        [rbp-40]=num_offsets, [rbp-48]=loop_i, [rbp-56]=loop_j, [rbp-64]=elem_base
+  /// </summary>
+  private void EmitMaxonCleanupArrayElements() {
+    EmitRuntimeFunctionStart("maxon_cleanup_array_elements", 5, 0x80);
+
+    // Initialize outer loop counter i = 0
+    EmitBytes(0x48, 0xC7, 0x45, 0xD0, 0x00, 0x00, 0x00, 0x00); // MOV qword [rbp-48], 0
+
+    DefineLabel("rt_cleanup_elems_outer_loop");
+    // Check if i >= length
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = i
+    EmitBytes(0x48, 0x3B, 0x45, 0xF0);       // CMP RAX, [rbp-16] (length)
+    EmitJcc("ge", "rt_cleanup_elems_done");
+
+    // Compute elem_base = buffer + i * elem_size
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = i
+    EmitBytes(0x48, 0x0F, 0xAF, 0x45, 0xE8); // IMUL RAX, [rbp-24] (elem_size)
+    EmitBytes(0x48, 0x03, 0x45, 0xF8);        // ADD RAX, [rbp-8] (buffer)
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = elem_base
+
+    // Initialize inner loop counter j = 0
+    EmitBytes(0x48, 0xC7, 0x45, 0xC8, 0x00, 0x00, 0x00, 0x00); // MOV qword [rbp-56], 0
+
+    DefineLabel("rt_cleanup_elems_inner_loop");
+    // Check if j >= num_offsets
+    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = j
+    EmitBytes(0x48, 0x3B, 0x45, 0xD8);       // CMP RAX, [rbp-40] (num_offsets)
+    EmitJcc("ge", "rt_cleanup_elems_inner_done");
+
+    // CLEANUP: <array element> for the managed field
+    EmitLeaRegRipRel(X86Register.Rcx, "rdata_track_array_element");
+    EmitMovRegImm(X86Register.Rdx, 15); // len("<array element>")
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_cleanup")); EmitDword(0);
+
+    // Load managed field offset: offset = offsets_ptr[j]
+    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = j
+    EmitBytes(0x48, 0xC1, 0xE0, 0x03);        // SHL RAX, 3 (j * 8)
+    EmitBytes(0x48, 0x03, 0x45, 0xE0);        // ADD RAX, [rbp-32] (offsets_ptr)
+    EmitBytes(0x48, 0x8B, 0x00);               // MOV RAX, [RAX] (offset value)
+
+    // Compute mm_base = elem_base + offset
+    EmitBytes(0x48, 0x03, 0x45, 0xC0);        // ADD RAX, [rbp-64] (elem_base)
+    // RAX now points to the __ManagedMemory within the managed field
+
+    // Check capacity: [mm_base + 16] (__ManagedMemory.capacity is at offset 16)
+    EmitBytes(0x48, 0x8B, 0x48, 0x10);        // MOV RCX, [RAX+16] (capacity)
+    EmitBytes(0x48, 0x85, 0xC9);               // TEST RCX, RCX
+    EmitJcc("z", "rt_cleanup_elems_field_skip");
+
+    // Capacity > 0: free the buffer at [mm_base + 0]
+    EmitBytes(0x48, 0x8B, 0x08);               // MOV RCX, [RAX] (buffer pointer)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+
+    DefineLabel("rt_cleanup_elems_field_skip");
+    // j++
+    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = j
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = j + 1
+    EmitJmp("rt_cleanup_elems_inner_loop");
+
+    DefineLabel("rt_cleanup_elems_inner_done");
+    // i++
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = i
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = i + 1
+    EmitJmp("rt_cleanup_elems_outer_loop");
+
+    DefineLabel("rt_cleanup_elems_done");
     EmitRuntimeFunctionEnd();
   }
 

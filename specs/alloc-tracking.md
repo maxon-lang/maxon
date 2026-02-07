@@ -427,6 +427,7 @@ ALLOC #1: 160 bytes (array grow)
 INCREF: array grow -> rc=1
 hiCLEANUP: cs
 CLEANUP: arr
+CLEANUP: <array element>
 DECREF: arr -> rc=0
 FREE #1: 160 bytes (array cleanup)
 CLEANUP: s
@@ -439,8 +440,10 @@ Moves:     1
 Increfs:   1
 Decrefs:   1
 Copies:    0
-Cleanups:  3
-```<!-- test: array-move-no-leak -->
+Cleanups:  4
+```
+
+<!-- test: array-move-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
 typealias IntArray = Array with int
@@ -684,6 +687,7 @@ ALLOC #1: 160 bytes (array grow)
 INCREF: array grow -> rc=1
 hiCLEANUP: cs
 CLEANUP: arr
+CLEANUP: <array element>
 DECREF: arr -> rc=0
 FREE #1: 160 bytes (array cleanup)
 CLEANUP: s
@@ -696,5 +700,5 @@ Moves:     1
 Increfs:   1
 Decrefs:   1
 Copies:    0
-Cleanups:  3
+Cleanups:  4
 ```
