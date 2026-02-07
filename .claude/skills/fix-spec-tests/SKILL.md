@@ -1,7 +1,6 @@
 ---
 name: fix-spec-tests
 description: Run spec tests and fix any failures in the compiler
-disable-model-invocation: true
 ---
 
 Run the spec tests and fix any failures by modifying the compiler code.

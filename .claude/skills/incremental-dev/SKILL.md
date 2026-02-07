@@ -1,7 +1,6 @@
 ---
 name: incremental-dev
 description: Implement spec tests one at a time
-disable-model-invocation: true
 ---
 
 We are implementing new features by enabling tests one by one until they pass.

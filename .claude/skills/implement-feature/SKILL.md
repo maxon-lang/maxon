@@ -1,7 +1,6 @@
 ---
 name: implement-feature
 description: Implement a new language feature in the Maxon compiler using spec-driven development
-disable-model-invocation: true
 ---
 
 Implement a new language feature in the Maxon compiler following spec-driven development.

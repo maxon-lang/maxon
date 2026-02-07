@@ -1,7 +1,6 @@
 ---
 name: code-review
 description: Implement a new language feature in the Maxon compiler using spec-driven development
-disable-model-invocation: true
 ---
 
 Review the changes that have been made in the project.
