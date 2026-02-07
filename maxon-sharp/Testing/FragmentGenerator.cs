@@ -130,12 +130,12 @@ public static class FragmentGenerator {
           var absolutePath = Path.GetFullPath(fragmentPath);
           var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
           if (error != null) {
-            errors.Add($"Error compiling '{specName}/{test.Name}.test':\n{error}");
+            errors.Add($"Error compiling 'specs/fragments/{specName}/{test.Name}.test':\n{error}");
           }
           File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
           Interlocked.Increment(ref generated);
         } catch (Exception ex) {
-          errors.Add($"Exception generating {specName}/{test.Name}: {ex.Message}\n{ex.StackTrace}");
+          errors.Add($"Exception generating specs/fragments/{specName}/{test.Name}: {ex.Message}\n{ex.StackTrace}");
         }
       }
     });

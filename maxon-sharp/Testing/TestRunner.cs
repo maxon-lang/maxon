@@ -515,8 +515,12 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         }
         case "utf8": {
           if (value.Length < 2 || value[0] != '"' || value[^1] != '"') return null;
-          var str = ProcessEscapes(value[1..^1]);
-          result.AddRange(Encoding.UTF8.GetBytes(str));
+          try {
+            var str = StringUtils.ResolveEscapes(value[1..^1]);
+            result.AddRange(Encoding.UTF8.GetBytes(str));
+          } catch (InvalidEscapeException) {
+            return null;
+          }
           break;
         }
         default:
@@ -527,24 +531,6 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     return [.. result];
   }
 
-  private static string ProcessEscapes(string input) {
-    var sb = new StringBuilder(input.Length);
-    for (int i = 0; i < input.Length; i++) {
-      if (input[i] == '\\' && i + 1 < input.Length) {
-        switch (input[i + 1]) {
-          case '0': sb.Append('\0'); i++; break;
-          case 'n': sb.Append('\n'); i++; break;
-          case 't': sb.Append('\t'); i++; break;
-          case '\\': sb.Append('\\'); i++; break;
-          case '"': sb.Append('"'); i++; break;
-          default: sb.Append(input[i]); break;
-        }
-      } else {
-        sb.Append(input[i]);
-      }
-    }
-    return sb.ToString();
-  }
 
   // ============================================================================
   // PE parsing helpers

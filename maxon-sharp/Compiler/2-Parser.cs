@@ -4499,6 +4499,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
       }
 
+      // Struct ordering via Comparable interface
+      if (entry.Op is MaxonBinOperator.Lt or MaxonBinOperator.Gt or MaxonBinOperator.Le or MaxonBinOperator.Ge
+          && lhsVal is MaxonStruct lhsCmpStruct && rhsVal is MaxonStruct rhsCmpStruct
+          && lhsCmpStruct.TypeName == rhsCmpStruct.TypeName) {
+        if (_typeRegistry[lhsCmpStruct.TypeName] is MlirStructType cmpStructType && cmpStructType.ConformingInterfaces.Contains("Comparable")) {
+          var compareMethodName = $"{lhsCmpStruct.TypeName}.compare";
+          var compareToken = new Token(TokenType.Identifier, compareMethodName, opToken.Line, opToken.Column);
+          var callOp = CreateFunctionCall(compareToken, [lhsVal, rhsVal]);
+          var zeroLit = new MaxonLiteralOp(0L);
+          _currentBlock!.AddOp(zeroLit);
+          var cmpOp = new MaxonBinOp(entry.Op, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
+          _currentBlock!.AddOp(cmpOp);
+          lhs = new ExprResult.Direct(cmpOp.Result);
+          continue;
+        }
+      }
+
       MaxonValueKind kind;
       MaxonValue promotedLhs, promotedRhs;
 
@@ -5015,40 +5032,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     while (pos < text.Length) {
       if (text[pos] == '\\' && pos + 1 < text.Length) {
         var nextChar = text[pos + 1];
-        switch (nextChar) {
-          case '{':
-          case '}':
-            literalBuf.Append(nextChar);
-            pos += 2;
-            break;
-          case 'n':
-            literalBuf.Append('\n');
-            pos += 2;
-            break;
-          case 't':
-            literalBuf.Append('\t');
-            pos += 2;
-            break;
-          case '\\':
-            literalBuf.Append('\\');
-            pos += 2;
-            break;
-          case '0':
-            literalBuf.Append('\0');
-            pos += 2;
-            break;
-          case 'r':
-            literalBuf.Append('\r');
-            pos += 2;
-            break;
-          case '"':
-            literalBuf.Append('"');
-            pos += 2;
-            break;
-          default:
+        if (nextChar is '{' or '}') {
+          literalBuf.Append(nextChar);
+          pos += 2;
+        } else {
+          try { literalBuf.Append(StringUtils.ResolveEscapes($"\\{nextChar}")); }
+          catch (InvalidEscapeException ex) {
             throw new CompileError(ErrorCode.LexerInvalidEscape,
-                $"Invalid escape sequence '\\{nextChar}' in string interpolation",
-                token.Line, token.Column + pos);
+                $"{ex.Message} in string interpolation", token.Line, token.Column + pos);
+          }
+          pos += 2;
         }
       } else if (text[pos] == '{') {
         if (literalBuf.Length > 0) {
@@ -5125,10 +5118,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var charTypeName = FindTypeImplementingInterface("BuiltinCharLiteral") ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
         "No type implements BuiltinCharLiteral (Character type not found in stdlib)",
         token.Line, token.Column);
-    var op = new MaxonCharLiteralOp(token.Value, charTypeName);
+    string value;
+    try { value = StringUtils.ResolveEscapes(token.Value); }
+    catch (InvalidEscapeException ex) {
+      throw new CompileError(ErrorCode.LexerInvalidEscape,
+          $"{ex.Message} in character literal", token.Line, token.Column);
+    }
+    var op = new MaxonCharLiteralOp(value, charTypeName);
     _currentBlock!.AddOp(op);
     return op.Result;
   }
+
 
   private string? FindTypeImplementingInterface(string interfaceName) {
     foreach (var (name, type) in _typeRegistry) {
