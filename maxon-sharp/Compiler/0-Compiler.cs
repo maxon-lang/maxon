@@ -55,9 +55,6 @@ public class Compiler {
 
       CompileSources(module, sources, false);
 
-      // Remove unreachable functions (e.g. unused stdlib functions)
-      DeadFunctionElimination.Run(module);
-
       // Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
       var pipeline = new MlirPipeline();
       var mlirResult = MlirPipeline.Run(module, returnIr, dumpStagesBasePath, trackAllocs);

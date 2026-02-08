@@ -512,9 +512,15 @@ public static class MaxonToStandardConversion {
                 // Get struct type name: prefer the MaxonStruct's TypeName, fall back to
                 // structValueTypes for values that are semantically structs but typed as
                 // integers (e.g. try_call results from monomorphized generic functions)
-                var structTypeName = assignOp.Value is MaxonStruct ms
-                  ? ms.TypeName
-                  : structValueTypes[assignOp.Value.Id];
+                // Prefer structValueTypes (set by LowerCallCore with the canonical
+                // resolved type) over MaxonStruct.TypeName which may retain a stale
+                // inner alias name (e.g. "Entry" instead of "StringIntPair") from
+                // the parser when the call-site rewrite preserved the old Result.
+                var structTypeName = structValueTypes.TryGetValue(assignOp.Value.Id, out var svt)
+                  ? svt
+                  : assignOp.Value is MaxonStruct ms
+                    ? ms.TypeName
+                    : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'");
                 var structType = (MlirStructType)module.TypeDefs[structTypeName];
                 // Cleanup old managed memory before reassignment
                 if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPaths)) {
@@ -605,7 +611,14 @@ public static class MaxonToStandardConversion {
                 resolvedName = varNameToStructPrefix.GetValueOrDefault(structVarRef.VarName, structVarRef.VarName);
               }
               structVarNames[structVarRef.Result.Id] = resolvedName;
-              structValueTypes[structVarRef.Result.Id] = structVarRef.StructTypeName;
+              // Prefer the canonical type from varNameToStructType (set during struct
+              // assignment with resolved types) over the StructTypeName from the parser
+              // which may contain stale inner alias names (e.g. "Entry" instead of
+              // "StringIntPair") when the call-site rewrite preserved the old Result type.
+              var resolvedTypeName = varNameToStructType.TryGetValue(structVarRef.VarName, out var vt)
+                ? vt
+                : structVarRef.StructTypeName;
+              structValueTypes[structVarRef.Result.Id] = resolvedTypeName;
               break;
             }
             case MaxonFieldAccessOp fieldAccess: {
@@ -643,8 +656,10 @@ public static class MaxonToStandardConversion {
               if (!BinOpFactories.TryGetValue(key, out var factory))
                 throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind}");
 
-              var lhs = valueMap[binOp.Lhs];
-              var rhs = valueMap[binOp.Rhs];
+              if (!valueMap.TryGetValue(binOp.Lhs, out StdValue? lhs))
+                throw new InvalidOperationException($"BinOp LHS %{binOp.Lhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
+              if (!valueMap.TryGetValue(binOp.Rhs, out StdValue? rhs))
+                throw new InvalidOperationException($"BinOp RHS %{binOp.Rhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
               var (newOp, factoryResult) = factory(lhs, rhs);
               newBlock.AddOp(newOp);
               valueMap[binOp.Result] = factoryResult;
@@ -862,7 +877,7 @@ public static class MaxonToStandardConversion {
               LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap);
               break;
             case MaxonIndirectCallOp indirectCallOp:
-              LowerIndirectCall(indirectCallOp, newBlock, valueMap);
+              LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
               break;
             case MaxonReturnOp retOp:
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, managedVarOwners, cstringTrackVars, managedVarElementInfo);
@@ -1031,6 +1046,8 @@ public static class MaxonToStandardConversion {
     MaxonValue? errorFlagValue = null) {
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
+    // Use the resolved fully-qualified name for call emission (e.g., "String.hash" → "stdlib.String.hash")
+    var resolvedCallee = calleeFunc.Name;
     var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
     bool calleeIsStructInstance = IsStructInstanceMethod(calleeFunc);
 
@@ -1097,14 +1114,14 @@ public static class MaxonToStandardConversion {
       ? null
       : ResolveCallResultType(resultKind, calleeFunc.ReturnType);
     if (isTryCall) {
-      var tryCall = new StdTryCallOp(callee, newArgs, callResult);
+      var tryCall = new StdTryCallOp(resolvedCallee, newArgs, callResult);
       block.AddOp(tryCall);
       if (errorFlagValue != null) {
         valueMap[errorFlagValue] = tryCall.ErrorFlag;
         EmitStore(block, tryCall.ErrorFlag, "__error_flag", varTypes);
       }
     } else {
-      block.AddOp(new StdCallOp(callee, newArgs, callResult));
+      block.AddOp(new StdCallOp(resolvedCallee, newArgs, callResult));
     }
 
     // Map results
@@ -1589,6 +1606,10 @@ public static class MaxonToStandardConversion {
         var bufName = $"__argbuf_{MlirContext.Current.NextId()}";
         var argPtr = AllocateAndCopyStructToStack(block, argStructName, bufName, argStructType, varTypes);
         newArgs.Add(argPtr);
+      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
+        // Struct arg from managed memory get (inline struct data) — the value is already
+        // a pointer to the struct data, pass it directly
+        newArgs.Add(rawPtrValue);
       } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
         newArgs.Add(valueMap[arg]);
       } else {
@@ -1602,8 +1623,9 @@ public static class MaxonToStandardConversion {
     if (funcLookup.TryGetValue(calleeName, out var calleeFunc))
       return calleeFunc;
     var suffixPattern = $".{calleeName}";
-    return funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern))
-      ?? throw new InvalidOperationException($"Function '{calleeName}' not found in module");
+    var found = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern));
+    if (found != null) return found;
+    throw new InvalidOperationException($"Function '{calleeName}' not found in module");
   }
 
   private static string? SetupSretArg(MlirStructType? calleeRetStructType,
@@ -1822,11 +1844,20 @@ public static class MaxonToStandardConversion {
     string srcName, string dstName,
     MlirStructType structType,
     Dictionary<string, string> varTypes) {
-    foreach (var field in structType.Fields) {
+    // Store in reverse field order so the first field ends up at the lowest
+    // stack address, matching AllocateStructOnStack and FindFirstFieldOffset/LEA.
+    for (int fi = structType.Fields.Count - 1; fi >= 0; fi--) {
+      var field = structType.Fields[fi];
       var srcFieldVar = $"{srcName}.{field.Name}";
       var dstFieldVar = $"{dstName}.{field.Name}";
       if (field.Type is MlirStructType nestedStructType) {
         CopyStructFields(block, srcFieldVar, dstFieldVar, nestedStructType, varTypes);
+      } else if (!varTypes.ContainsKey(srcFieldVar)) {
+        throw new InvalidOperationException(
+          $"CopyStructFields: source field '{srcFieldVar}' not found in varTypes. " +
+          $"Struct type: {structType.Name}, field '{field.Name}' type: {field.Type.GetType().Name}({field.Type.Name}). " +
+          $"Expected MlirStructType for nested struct fields. " +
+          $"All fields: [{string.Join(", ", structType.Fields.Select(f => $"{f.Name}:{f.Type.GetType().Name}({f.Type.Name})"))}]");
       } else {
         var loaded = EmitLoad(block, srcFieldVar, varTypes);
         EmitStore(block, loaded, dstFieldVar, varTypes);
@@ -1864,7 +1895,13 @@ public static class MaxonToStandardConversion {
     string varName,
     MlirStructType structType,
     Dictionary<string, string> varTypes) {
-    foreach (var field in structType.Fields) {
+    // Iterate in reverse declaration order so the last field gets allocated
+    // first (lowest stack address) and the first field gets the highest
+    // address. This matches AllocateStructOnStack's layout, ensuring that
+    // FindFirstFieldOffset/LEA produces a base address where field offsets
+    // from the struct type definition correctly index each field's stack slot.
+    for (int fi = structType.Fields.Count - 1; fi >= 0; fi--) {
+      var field = structType.Fields[fi];
       var fieldVarName = $"{varName}.{field.Name}";
       if (field.Type is MlirStructType nestedStructType) {
         // Compute pointer to nested struct: base + field offset
@@ -2116,17 +2153,21 @@ public static class MaxonToStandardConversion {
     EmitCowCheck(block, managedVarName, varTypes, isStructInstanceMethod, selfStructType, elemSize);
     var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
     var index = (StdI64)valueMap[op.Index];
-    var value = valueMap[op.Value];
     var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
     if (op.IsStructElement) {
-      // Struct elements: copy the full struct data from the source pointer
-      // into the buffer using memcpy. This ensures the data is stored inline
-      // and doesn't become stale when the source stack frame is reused.
+      // Struct elements: get the source pointer from structVarNames (struct values
+      // are flattened to stack variables, we need to write them into the buffer)
+      var srcName = structVarNames[op.Value.Id];
+      var leaOp = new StdLeaOp(srcName);
+      block.AddOp(leaOp);
+      var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
+      block.AddOp(ptrToI64);
       var copyResult = new StdI64(MlirContext.Current.NextId());
-      block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [addr, (StdI64)value, elemSize], copyResult));
+      block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [addr, ptrToI64.Result, elemSize], copyResult));
     } else {
       // Scalar elements: store directly
+      var value = valueMap[op.Value];
       var elemType = GetManagedMemElementType(op.ElementKind, "LowerManagedMemSet");
       block.AddOp(new StdStoreIndirectOp(value, addr, 0, elemType));
     }
@@ -3223,22 +3264,52 @@ public static class MaxonToStandardConversion {
   private static void LowerIndirectCall(
       MaxonIndirectCallOp indirectCallOp,
       MlirBlock<StandardOp> block,
-      Dictionary<MaxonValue, StdValue> valueMap) {
+      Dictionary<MaxonValue, StdValue> valueMap,
+      Dictionary<string, string> varTypes,
+      Dictionary<int, string> structVarNames,
+      Dictionary<string, MlirType> typeDefs) {
     var calleeValue = valueMap[indirectCallOp.Callee];
     var newArgs = new List<StdValue>();
 
-    foreach (var arg in indirectCallOp.Args) {
-      newArgs.Add(valueMap[arg]);
+    for (int i = 0; i < indirectCallOp.Args.Count; i++) {
+      var arg = indirectCallOp.Args[i];
+      if (structVarNames.TryGetValue(arg.Id, out var structName)) {
+        // Struct args must be copied to a contiguous buffer in the correct field
+        // order, because the original named variables may have been stored in
+        // declaration order (e.g. from LoadStructFieldsFromPointer) which doesn't
+        // match the reverse-allocation layout that FindFirstFieldOffset/LEA expects.
+        var paramType = indirectCallOp.CalleeType.ParameterTypes[i];
+        if (paramType is MlirStructType paramStructType) {
+          var resolvedType = typeDefs.TryGetValue(paramStructType.Name, out var td) && td is MlirStructType tds ? tds : paramStructType;
+          var bufName = $"__icall_argbuf_{MlirContext.Current.NextId()}";
+          var argPtr = AllocateAndCopyStructToStack(block, structName, bufName, resolvedType, varTypes);
+          newArgs.Add(argPtr);
+        } else {
+          var leaOp = new StdLeaOp(structName);
+          block.AddOp(leaOp);
+          newArgs.Add(leaOp.Result);
+        }
+      } else {
+        newArgs.Add(valueMap[arg]);
+      }
     }
 
     StdValue? resultValue = null;
-    if (indirectCallOp.ResultKind != null) {
+    string? sretVarName = null;
+    if (indirectCallOp.ResultKind == MaxonValueKind.Struct && indirectCallOp.ResultStructTypeName != null
+        && typeDefs.TryGetValue(indirectCallOp.ResultStructTypeName, out var retTypeDef) && retTypeDef is MlirStructType retStructType) {
+      // Struct return via sret: allocate stack space with field slots and pass as first arg
+      sretVarName = $"__sret_{MlirContext.Current.NextId()}";
+      AllocateStructOnStack(block, sretVarName, retStructType, varTypes);
+      var leaOp = new StdLeaOp(sretVarName);
+      block.AddOp(leaOp);
+      newArgs.Insert(0, leaOp.Result);
+    } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
         MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
         MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
         MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
         MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
-        MaxonValueKind.Struct => throw new NotImplementedException("Struct return from indirect call not yet implemented"),
         MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
         MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
         MaxonValueKind.TypeParameter => new StdI64(MlirContext.Current.NextId()),
@@ -3249,7 +3320,9 @@ public static class MaxonToStandardConversion {
     var callOp = new StdIndirectCallOp(calleeValue, newArgs, resultValue);
     block.AddOp(callOp);
 
-    if (indirectCallOp.Result != null && callOp.Result != null) {
+    if (sretVarName != null && indirectCallOp.Result != null) {
+      structVarNames[indirectCallOp.Result.Id] = sretVarName;
+    } else if (indirectCallOp.Result != null && callOp.Result != null) {
       valueMap[indirectCallOp.Result] = callOp.Result;
     }
   }

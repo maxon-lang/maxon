@@ -118,60 +118,93 @@ public static class MonomorphizationPass {
       ["Self"] = concreteAliasType
     };
 
-    // Look for typealias definitions in the source struct (e.g., ElementArray -> Array)
-    // These are defined as fields with AssociatedType in the source struct
+    // Map associated type names (from uses clause) to concrete types
     foreach (var assocTypeName in sourceStruct.AssociatedTypeNames) {
-      // The associated type name (e.g., "Element") maps to a concrete type
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
         substitution[assocTypeName] = concreteType;
       }
     }
 
-    // Look for type aliases defined in source type (e.g., "ElementArray is Array with Element")
-    // These are tracked in TypeAliasSources where source is the generic type's typealias
-    foreach (var (_, candidateInfo) in module.TypeAliasSources) {
-      // Skip if not a typealias of a generic struct with our source as the origin
-      if (candidateInfo.SourceTypeName != sourceStruct.Name) continue;
-
-      // Check if this typealias uses our type params
-      if (candidateInfo.TypeParams != null) {
-        // This is a user-defined alias with concrete params - not what we want
-        continue;
-      }
-    }
-
-    // Handle associated type aliases like "ElementArray is Array with Element"
-    // These appear as MlirStructTypes with the associated type name and map to "Array"
-    // when Element is substituted
-    if (module.TypeDefs.TryGetValue(sourceStruct.Name, out var fullSourceDef) &&
-      fullSourceDef is MlirStructType fullSourceStruct) {
-      // Look for fields that reference associated types
-      foreach (var field in fullSourceStruct.Fields) {
-        if (field.Type is MlirStructType fieldStruct) {
-          // If the field's type name is an associated type name
-          if (sourceStruct.AssociatedTypeNames.Contains(fieldStruct.Name)) {
-            // This field references an associated type
+    // Resolve conformance-bound type params (e.g., Element = Entry for Map : Iterable with Entry).
+    // These are in the source struct's TypeParams but not in the concrete alias's typeParams.
+    // Resolve them through inner alias chain (Entry -> Pair with (Key, Value) -> StringIntPair).
+    foreach (var (paramName, paramValue) in sourceStruct.TypeParams) {
+      if (substitution.ContainsKey(paramName)) continue;
+      if (paramValue is MlirStructType innerAlias && module.TypeAliasSources.TryGetValue(innerAlias.Name, out TypeAliasInfo? innerInfo)) {
+        if (innerInfo.TypeParams != null) {
+          var resolvedInnerParams = new Dictionary<string, MlirType>();
+          bool allResolved = true;
+          foreach (var (ipn, ipt) in innerInfo.TypeParams) {
+            if (ipt is MlirTypeParameterType tp && substitution.TryGetValue(tp.ParameterName, out var resolved))
+              resolvedInnerParams[ipn] = resolved;
+            else if (ipt is not MlirTypeParameterType)
+              resolvedInnerParams[ipn] = ipt;
+            else { allResolved = false; break; }
+          }
+          if (allResolved) {
+            var concreteType = FindConcreteAlias(module, innerInfo.SourceTypeName, resolvedInnerParams);
+            if (concreteType != null) {
+              substitution[paramName] = concreteType;
+              substitution[innerAlias.Name] = concreteType;
+            }
           }
         }
       }
     }
 
-    // For "ElementArray" (which is "Array with Element"), substitute to "Array"
-    // This requires knowing the typealias definitions from parsing
-    // The struct type "ElementArray" should map to base struct "Array"
-    foreach (var assocTypeName in sourceStruct.AssociatedTypeNames) {
-      var aliasedTypeName = $"{assocTypeName}Array"; // Convention: ElementArray, ElementSet, etc.
-      if (module.TypeDefs.TryGetValue(aliasedTypeName, out _)) {
-        // Check if this is an alias of a generic struct instantiated with the associated type
-        // e.g., ElementArray is Array with Element
-        // Substitute ElementArray -> Array
-        if (module.TypeDefs.TryGetValue("Array", out var arrayType)) {
-          substitution[aliasedTypeName] = arrayType;
+    // Resolve inner type aliases to their concrete aliases.
+    // For Map<Key=String, Value=i64>, "KeyArray = Array with Key" resolves to StringArray,
+    // "ValueArray = Array with Value" resolves to IntArray, etc.
+    // Uses the full substitution map (includes conformance params like Element -> StringIntPair).
+    foreach (var (innerAliasName, aliasInfo) in module.TypeAliasSources) {
+      if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
+      bool hasOurTypeParams = aliasInfo.TypeParams.Values.Any(t =>
+        t is MlirTypeParameterType tp && substitution.ContainsKey(tp.ParameterName));
+      if (!hasOurTypeParams) continue;
+
+      // Resolve the inner alias's type params through the substitution map
+      var resolvedParams = new Dictionary<string, MlirType>();
+      foreach (var (paramName, paramType) in aliasInfo.TypeParams) {
+        if (paramType is MlirTypeParameterType tp && substitution.TryGetValue(tp.ParameterName, out var resolved)) {
+          // Resolved type may itself be a type alias — use the concrete type from the registry
+          if (resolved is MlirStructType resolvedSt && substitution.TryGetValue(resolvedSt.Name, out var deepResolved)) {
+            resolvedParams[paramName] = deepResolved;
+          } else {
+            resolvedParams[paramName] = resolved;
+          }
+        } else {
+          resolvedParams[paramName] = paramType;
         }
+      }
+
+      var concreteInnerType = FindConcreteAlias(module, aliasInfo.SourceTypeName, resolvedParams);
+      if (concreteInnerType != null) {
+        substitution[innerAliasName] = concreteInnerType;
       }
     }
 
     return substitution;
+  }
+
+  /// Searches TypeAliasSources for a concrete alias whose source type matches and whose
+  /// type params match the resolved params exactly. Returns the type definition or null.
+  private static MlirType? FindConcreteAlias(
+      MlirModule<MaxonOp> module,
+      string sourceTypeName,
+      Dictionary<string, MlirType> resolvedParams) {
+    foreach (var (candidateName, candidateInfo) in module.TypeAliasSources) {
+      if (candidateInfo.SourceTypeName != sourceTypeName) continue;
+      if (candidateInfo.TypeParams == null) continue;
+      if (candidateInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      if (candidateInfo.TypeParams.Count != resolvedParams.Count) continue;
+      bool match = true;
+      foreach (var (pn, pt) in resolvedParams) {
+        if (!candidateInfo.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
+      }
+      if (match && module.TypeDefs.TryGetValue(candidateName, out var candidateType))
+        return candidateType;
+    }
+    return null;
   }
 
   private static bool NeedsSpecialization(MlirFunction<MaxonOp> func, MlirStructType sourceStruct) {
@@ -255,7 +288,6 @@ public static class MonomorphizationPass {
         ? SubstituteType(sourceFunc.ReturnType, typeSubstitution)
         : null;
     }
-
     var newFunc = new MlirFunction<MaxonOp>(
       newFuncName,
       [.. sourceFunc.ParamNames],
@@ -275,6 +307,37 @@ public static class MonomorphizationPass {
     // Track variable names that hold float values (Element-polymorphic substituted)
     var floatVars = new HashSet<string>();
 
+    // For multi-parameter generics (Map<Key, Value>), track which type parameter
+    // each variable corresponds to, so we can resolve TypeParameter kinds correctly.
+    // e.g., param "key" has type Key, so varTypeParams["key"] = "Key"
+    var varTypeParams = new Dictionary<string, string>();
+    for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
+      if (sourceFunc.ParamTypes[i] is MlirTypeParameterType tp
+          && i < sourceFunc.ParamNames.Count) {
+        varTypeParams[sourceFunc.ParamNames[i]] = tp.ParameterName;
+      }
+    }
+
+    // Track which type param names resolve to struct types
+    var structTypeParams = new HashSet<string>();
+    foreach (var (paramName, concreteType) in typeSubstitution) {
+      if (concreteType is MlirStructType && paramName != "Self"
+          && !paramName.EndsWith("Array") && paramName != "Entry") {
+        structTypeParams.Add(paramName);
+      }
+    }
+
+    // Track variables that hold struct values (populated during cloning)
+    // Maps var name → struct type name (e.g., "__try_result_13" → "String")
+    var structVars = new Dictionary<string, string>();
+    // Seed from params that resolve to struct types
+    foreach (var (varName, typeParamName) in varTypeParams) {
+      if (structTypeParams.Contains(typeParamName)
+          && typeSubstitution.TryGetValue(typeParamName, out var ct) && ct is MlirStructType st) {
+        structVars[varName] = st.Name;
+      }
+    }
+
     // Clone all blocks and operations
     var extraOps = new List<MaxonOp>();
     foreach (var block in sourceFunc.Body.Blocks) {
@@ -282,12 +345,21 @@ public static class MonomorphizationPass {
 
       foreach (var op in block.Operations) {
         extraOps.Clear();
-        var clonedOp = CloneOp(op, typeSubstitution, valueMap, floatVars, elementPolymorphicIndices, concreteElementType, extraOps);
+        var clonedOp = CloneOp(op, typeSubstitution, valueMap, floatVars, elementPolymorphicIndices, concreteElementType, extraOps, varTypeParams, structTypeParams, structVars);
         foreach (var extra in extraOps) {
           newBlock.AddOp(extra);
         }
         newBlock.AddOp(clonedOp);
       }
+    }
+
+    // Post-processing: fix __ManagedMemory element_size for multi-parameter generic types.
+    // For types like Map<Key, Value>, the inner arrays (KeyArray, ValueArray) each need
+    // different element sizes. The monomorphized struct literals reference __ManagedMemory
+    // with element_size=0 (unresolved at parse time). Fix them by finding the wrapper struct
+    // that consumes each __ManagedMemory and determining element size from its resolved type.
+    if (concreteElementType == null && typeSubstitution.Count > 2) {
+      PatchManagedMemoryElementSizes(newFunc, typeSubstitution);
     }
 
     return newFunc;
@@ -300,6 +372,13 @@ public static class MonomorphizationPass {
     if (type is MlirStructType st) {
       if (substitution.TryGetValue(st.Name, out var newType)) {
         return newType;
+      }
+    }
+    if (type is MlirFunctionType ft) {
+      var newParams = ft.ParameterTypes.Select(p => SubstituteType(p, substitution)).ToList();
+      var newReturn = ft.ReturnType != null ? SubstituteType(ft.ReturnType, substitution) : null;
+      if (!newParams.SequenceEqual(ft.ParameterTypes) || newReturn != ft.ReturnType) {
+        return new MlirFunctionType(newParams, newReturn);
       }
     }
     return type;
@@ -316,19 +395,22 @@ public static class MonomorphizationPass {
   /// Struct and Enum element types resolve to Integer because they are stored as i64 pointers
   /// in managed memory and passed as scalars through generic function bodies.
   /// </summary>
-  private static MaxonValueKind SubstituteValueKind(MaxonValueKind kind, Dictionary<string, MlirType> substitution) {
-    if (kind == MaxonValueKind.TypeParameter && substitution.TryGetValue("Element", out var elementType)) {
-      return elementType switch {
-        { } t when t == MlirType.I64 => MaxonValueKind.Integer,
-        { } t when t == MlirType.F64 => MaxonValueKind.Float,
-        { } t when t == MlirType.I1 => MaxonValueKind.Bool,
-        { } t when t == MlirType.I8 => MaxonValueKind.Byte,
-        MlirStructType or MlirEnumType => MaxonValueKind.Integer,
-        MlirTypeParameterType => MaxonValueKind.TypeParameter,
-        _ => throw new InvalidOperationException($"SubstituteValueKind: unsupported element type '{elementType}'")
-      };
-    }
-    return kind;
+  private static MaxonValueKind SubstituteValueKind(MaxonValueKind kind, Dictionary<string, MlirType> substitution, string? typeParamName = null) {
+    if (kind != MaxonValueKind.TypeParameter) return kind;
+
+    // Use the specific type param name if provided (e.g., "Key", "Value"), otherwise fall back to "Element"
+    var paramKey = typeParamName ?? "Element";
+    if (!substitution.TryGetValue(paramKey, out var concreteType)) return kind;
+
+    return concreteType switch {
+      { } t when t == MlirType.I64 => MaxonValueKind.Integer,
+      { } t when t == MlirType.F64 => MaxonValueKind.Float,
+      { } t when t == MlirType.I1 => MaxonValueKind.Bool,
+      { } t when t == MlirType.I8 => MaxonValueKind.Byte,
+      MlirStructType or MlirEnumType => MaxonValueKind.Integer,
+      MlirTypeParameterType => MaxonValueKind.TypeParameter,
+      _ => throw new InvalidOperationException($"SubstituteValueKind: unsupported type '{concreteType}' for param '{paramKey}'")
+    };
   }
 
   private static MaxonOp CloneOp(
@@ -338,10 +420,29 @@ public static class MonomorphizationPass {
     HashSet<string> floatVars,
     HashSet<int>? elementPolymorphicIndices,
     MlirType? concreteElementType,
-    List<MaxonOp> extraOps) {
+    List<MaxonOp> extraOps,
+    Dictionary<string, string>? varTypeParams = null,
+    HashSet<string>? structTypeParams = null,
+    Dictionary<string, string>? structVars = null) {
 
     // Determine if we're substituting Element to a float type
     bool substituteToFloat = concreteElementType == MlirType.F64;
+
+    // Helper: resolve a variable's type param name and check if it maps to a struct
+    bool IsStructTypeParam(string? typeParamName) {
+      if (typeParamName == null || structTypeParams == null) return false;
+      return structTypeParams.Contains(typeParamName);
+    }
+
+    string? GetVarTypeParam(string varName) {
+      return varTypeParams?.GetValueOrDefault(varName);
+    }
+
+    string? GetStructTypeName(string typeParamName) {
+      if (typeSubstitution.TryGetValue(typeParamName, out var t) && t is MlirStructType st)
+        return st.Name;
+      return null;
+    }
 
     // Helper to check if a param index is Element-polymorphic
     bool IsElementPolymorphic(int paramIndex) =>
@@ -392,6 +493,12 @@ public static class MonomorphizationPass {
         var valueKind = assign.ValueKind;
         var mappedValue = MapValue(assign.Value);
         if (valueKind == MaxonValueKind.TypeParameter) {
+          // Check if the mapped value is a struct (from a struct-resolving type param)
+          if (mappedValue is MaxonStruct ms) {
+            // Track this variable as holding a struct value
+            structVars?.TryAdd(assign.VarName, ms.TypeName);
+            return new MaxonAssignOp(assign.VarName, mappedValue, assign.IsDeclaration, assign.IsMutable, MaxonValueKind.Struct);
+          }
           valueKind = substituteToFloat && mappedValue is MaxonFloat
             ? MaxonValueKind.Float
             : SubstituteValueKind(valueKind, typeSubstitution);
@@ -403,16 +510,24 @@ public static class MonomorphizationPass {
       }
 
       case MaxonParamOp param: {
-        var valueKind = SubstituteValueKind(param.ValueKind, typeSubstitution);
+        // Check if this TypeParameter param resolves to a struct type
+        var paramTypeParam = GetVarTypeParam(param.Name);
+        if (param.ValueKind == MaxonValueKind.TypeParameter && IsStructTypeParam(paramTypeParam)) {
+          var structTypeName = GetStructTypeName(paramTypeParam!);
+          var cloned = new MaxonStructParamOp(param.Index, param.Name, structTypeName!);
+          RegisterResult(param.Result, cloned.Result);
+          return cloned;
+        }
+        var valueKind = SubstituteValueKind(param.ValueKind, typeSubstitution, paramTypeParam);
         if (substituteToFloat && IsElementPolymorphic(param.Index)) {
           valueKind = MaxonValueKind.Float;
         }
         if (valueKind == MaxonValueKind.Float) {
           floatVars.Add(param.Name);
         }
-        var cloned = new MaxonParamOp(param.Index, param.Name, valueKind);
-        RegisterResult(param.Result, cloned.Result);
-        return cloned;
+        var scalarParam = new MaxonParamOp(param.Index, param.Name, valueKind);
+        RegisterResult(param.Result, scalarParam.Result);
+        return scalarParam;
       }
 
       case MaxonStructParamOp structParam: {
@@ -422,13 +537,27 @@ public static class MonomorphizationPass {
       }
 
       case MaxonVarRefOp varRef: {
-        var valueKind = SubstituteValueKind(varRef.ValueKind, typeSubstitution);
+        // Check if this variable holds a struct value (from type param → struct resolution)
+        if (varRef.ValueKind == MaxonValueKind.TypeParameter
+            && structVars != null && structVars.TryGetValue(varRef.VarName, out var svTypeName)) {
+          var cloned = new MaxonStructVarRefOp(varRef.VarName, svTypeName);
+          RegisterResult(varRef.Result, cloned.Result);
+          return cloned;
+        }
+        var varTp = GetVarTypeParam(varRef.VarName);
+        if (varRef.ValueKind == MaxonValueKind.TypeParameter && IsStructTypeParam(varTp)) {
+          var structTypeName = GetStructTypeName(varTp!);
+          var cloned = new MaxonStructVarRefOp(varRef.VarName, structTypeName!);
+          RegisterResult(varRef.Result, cloned.Result);
+          return cloned;
+        }
+        var valueKind = SubstituteValueKind(varRef.ValueKind, typeSubstitution, varTp);
         if (substituteToFloat && floatVars.Contains(varRef.VarName)) {
           valueKind = MaxonValueKind.Float;
         }
-        var cloned = new MaxonVarRefOp(varRef.VarName, valueKind);
-        RegisterResult(varRef.Result, cloned.Result);
-        return cloned;
+        var scalarRef = new MaxonVarRefOp(varRef.VarName, valueKind);
+        RegisterResult(varRef.Result, scalarRef.Result);
+        return scalarRef;
       }
 
       case MaxonStructVarRefOp structVarRef: {
@@ -440,6 +569,24 @@ public static class MonomorphizationPass {
       case MaxonBinOp binOp: {
         var mappedLhs = MapValue(binOp.Lhs);
         var mappedRhs = MapValue(binOp.Rhs);
+        // For Eq/Ne where operands resolved to structs, convert to equals() method call.
+        // Check mappedLhs type rather than OperandKind because SubstituteValueKind maps
+        // struct types to Integer, so the original TypeParameter kind is lost by this point.
+        if (binOp.Operator is MaxonBinOperator.Eq or MaxonBinOperator.Ne
+            && mappedLhs is MaxonStruct lhsStruct) {
+          var equalsCallee = $"{lhsStruct.TypeName}.equals";
+          var callOp = new MaxonCallOp(equalsCallee, [mappedLhs, mappedRhs], MaxonValueKind.Bool, null);
+          if (binOp.Operator == MaxonBinOperator.Ne) {
+            extraOps.Add(callOp);
+            var trueOp = new MaxonLiteralOp(true);
+            extraOps.Add(trueOp);
+            var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, callOp.Result!, trueOp.Result, MaxonValueKind.Bool);
+            RegisterResult(binOp.Result, xorOp.Result);
+            return xorOp;
+          }
+          RegisterResult(binOp.Result, callOp.Result!);
+          return callOp;
+        }
         var operandKind = SubstituteValueKind(binOp.OperandKind, typeSubstitution);
         if (substituteToFloat && (mappedLhs is MaxonFloat || mappedRhs is MaxonFloat)) {
           operandKind = MaxonValueKind.Float;
@@ -458,6 +605,8 @@ public static class MonomorphizationPass {
           newResultStructTypeName = callStructType.Name;
         if (resultKind == MaxonValueKind.Enum && newResultStructTypeName == null && concreteElementType is MlirEnumType callEnumType)
           newResultStructTypeName = callEnumType.Name;
+        // For TypeParameter results, resolve via the self arg's concrete inner alias type
+        ResolveTypeParameterResult(call.ResultKind, newArgs, typeSubstitution, ref resultKind, ref newResultStructTypeName);
         var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, newResultStructTypeName);
         if (call.Result != null && cloned.Result != null) {
           RegisterResult(call.Result, cloned.Result);
@@ -474,6 +623,8 @@ public static class MonomorphizationPass {
           newResultStructTypeName = tryStructType.Name;
         if (resultKind == MaxonValueKind.Enum && newResultStructTypeName == null && concreteElementType is MlirEnumType tryEnumType)
           newResultStructTypeName = tryEnumType.Name;
+        // For TypeParameter results, resolve via the self arg's concrete inner alias type
+        ResolveTypeParameterResult(tryCall.ResultKind, newArgs, typeSubstitution, ref resultKind, ref newResultStructTypeName);
         var cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, newResultStructTypeName);
         if (tryCall.Result != null && cloned.Result != null) {
           RegisterResult(tryCall.Result, cloned.Result);
@@ -634,10 +785,14 @@ public static class MonomorphizationPass {
         return new MaxonGlobalStoreOp(globalStore.GlobalName, MapValue(globalStore.Value), globalStore.ValueKind);
 
       case MaxonManagedMemGetOp memGet: {
-        // Substitute result kind if Element type was substituted
-        var resultKind = SubstituteValueKind(memGet.ResultKind, typeSubstitution);
-        var isStructElem = typeSubstitution.TryGetValue("Element", out var getElemType) && getElemType is MlirStructType;
-        var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind) { IsStructElement = isStructElem };
+        // Substitute result kind using the specific type param name (Key, Value, or Element)
+        var resultKind = SubstituteValueKind(memGet.ResultKind, typeSubstitution, memGet.TypeParamName);
+        var paramKey = memGet.TypeParamName ?? "Element";
+        var isStructElem = typeSubstitution.TryGetValue(paramKey, out var getElemType) && getElemType is MlirStructType;
+        var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind) {
+          IsStructElement = isStructElem,
+          TypeParamName = memGet.TypeParamName
+        };
         RegisterResult(memGet.Result, cloned.Result);
         return cloned;
       }
@@ -695,7 +850,8 @@ public static class MonomorphizationPass {
       }
 
       case MaxonFunctionVarRefOp funcVarRef: {
-        var cloned = new MaxonFunctionVarRefOp(funcVarRef.VarName, funcVarRef.FunctionType);
+        var newFuncType = (MlirFunctionType)SubstituteType(funcVarRef.FunctionType, typeSubstitution);
+        var cloned = new MaxonFunctionVarRefOp(funcVarRef.VarName, newFuncType);
         RegisterResult(funcVarRef.Result, cloned.Result);
         return cloned;
       }
@@ -706,7 +862,9 @@ public static class MonomorphizationPass {
         var resultKind = indirectCall.ResultKind.HasValue
           ? SubstituteValueKind(indirectCall.ResultKind.Value, typeSubstitution)
           : (MaxonValueKind?)null;
-        var cloned = new MaxonIndirectCallOp(newCallee, indirectCall.CalleeType, newArgs, resultKind, indirectCall.ResultStructTypeName);
+        var newCalleeType = (MlirFunctionType)SubstituteType(indirectCall.CalleeType, typeSubstitution);
+        var newResultStructTypeName = indirectCall.ResultStructTypeName != null ? SubName(indirectCall.ResultStructTypeName) : null;
+        var cloned = new MaxonIndirectCallOp(newCallee, newCalleeType, newArgs, resultKind, newResultStructTypeName);
         if (indirectCall.Result != null && cloned.Result != null)
           RegisterResult(indirectCall.Result, cloned.Result);
         return cloned;
@@ -719,6 +877,35 @@ public static class MonomorphizationPass {
 
   private static string SubstituteName(string name, Dictionary<string, MlirType> substitution) {
     return substitution.TryGetValue(name, out var newType) ? newType.Name : name;
+  }
+
+  /// When a call returns TypeParameter and the self arg is a concrete inner alias (e.g., StringArray),
+  /// resolve the Element type to determine if the result should be Struct.
+  /// For example: Array.get on StringArray returns String (a struct).
+  private static void ResolveTypeParameterResult(
+      MaxonValueKind? originalKind, List<MaxonValue> newArgs,
+      Dictionary<string, MlirType> typeSubstitution,
+      ref MaxonValueKind? resultKind, ref string? resultStructTypeName) {
+    if (originalKind != MaxonValueKind.TypeParameter) return;
+    if (newArgs.Count == 0) return;
+    if (newArgs[0] is not MaxonStruct selfStruct) return;
+
+    // Find the concrete alias in the substitution values
+    foreach (var (key, concreteType) in typeSubstitution) {
+      if (concreteType is MlirStructType st && st.Name == selfStruct.TypeName) {
+        // Check if this alias has an Element type param that resolves to a struct
+        if (st.TypeParams != null && st.TypeParams.TryGetValue("Element", out var elemType)) {
+          if (elemType is MlirStructType elemStruct) {
+            resultKind = MaxonValueKind.Struct;
+            resultStructTypeName = elemStruct.Name;
+          } else if (elemType is MlirEnumType elemEnum) {
+            resultKind = MaxonValueKind.Enum;
+            resultStructTypeName = elemEnum.Name;
+          }
+        }
+        break;
+      }
+    }
   }
 
   private static string SubstituteCallee(string callee, Dictionary<string, MlirType> substitution) {
@@ -836,5 +1023,73 @@ public static class MonomorphizationPass {
         block.Operations[j] = new MaxonAssignOp(assign.VarName, assign.Value, assign.IsDeclaration, assign.IsMutable, newKind.Value);
       }
     }
+  }
+
+  /// Fix __ManagedMemory element_size for multi-parameter generic types (e.g., Map<Key, Value>).
+  /// Finds each struct literal that wraps a __ManagedMemory, determines the correct element
+  /// size from the resolved type alias, and patches the element_size field.
+  private static void PatchManagedMemoryElementSizes(
+      MlirFunction<MaxonOp> func,
+      Dictionary<string, MlirType> typeSubstitution) {
+    foreach (var block in func.Body.Blocks) {
+      // Build a map of result IDs to their __ManagedMemory struct literal ops
+      var managedMemOps = new Dictionary<int, (MaxonStructLiteralOp Op, int BlockIndex)>();
+      for (int i = 0; i < block.Operations.Count; i++) {
+        if (block.Operations[i] is MaxonStructLiteralOp mmOp && mmOp.TypeName == "__ManagedMemory") {
+          managedMemOps[mmOp.Result.Id] = (mmOp, i);
+        }
+      }
+
+      if (managedMemOps.Count == 0) continue;
+
+      // Find struct literals that wrap these __ManagedMemory ops (via "managed" field)
+      for (int i = 0; i < block.Operations.Count; i++) {
+        if (block.Operations[i] is not MaxonStructLiteralOp wrapperOp) continue;
+        if (wrapperOp.TypeName == "__ManagedMemory") continue;
+
+        foreach (var (fieldName, fieldVal) in wrapperOp.FieldValues) {
+          if (fieldName != "managed") continue;
+          if (!managedMemOps.TryGetValue(fieldVal.Id, out var mmInfo)) continue;
+
+          // Determine element size from the wrapper's type alias type params
+          int? elemSize = GetElementSizeFromResolvedAlias(wrapperOp.TypeName, typeSubstitution);
+          if (elemSize == null || elemSize == 0) continue;
+
+          // Patch the element_size field in the __ManagedMemory struct literal
+          var mmOp = mmInfo.Op;
+          for (int fi = 0; fi < mmOp.FieldValues.Count; fi++) {
+            if (mmOp.FieldValues[fi].FieldName != "element_size") continue;
+            // Create new literal with correct element size and insert before the __ManagedMemory op
+            var newLit = new MaxonLiteralOp((long)elemSize.Value);
+            block.Operations.Insert(mmInfo.BlockIndex, newLit);
+            mmOp.FieldValues[fi] = ("element_size", newLit.Result);
+            // Adjust indices since we inserted an op
+            foreach (var key in managedMemOps.Keys.ToList()) {
+              var (Op, BlockIndex) = managedMemOps[key];
+              if (BlockIndex >= mmInfo.BlockIndex)
+                managedMemOps[key] = (Op, BlockIndex + 1);
+            }
+            i++;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  /// Get the element size for a resolved type alias by looking up its type definition.
+  /// The typeName should already be resolved via SubName (e.g., "StringArray" not "KeyArray").
+  private static int? GetElementSizeFromResolvedAlias(
+      string typeName, Dictionary<string, MlirType> typeSubstitution) {
+    // The typeName is the result of SubName — a concrete alias like "StringArray".
+    // Find it in the substitution values to get its type definition with Element type param.
+    foreach (var (_, concreteType) in typeSubstitution) {
+      if (concreteType is MlirStructType st && st.Name == typeName) {
+        if (st.TypeParams != null && st.TypeParams.TryGetValue("Element", out var elemType) && elemType is not MlirTypeParameterType) {
+          return elemType.SizeInBytes;
+        }
+      }
+    }
+    return null;
   }
 }

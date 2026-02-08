@@ -3543,7 +3543,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p.Expect(TokenType.Comma);
         var index = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGetOp(managed, index, p.GetElementKind());
+        var kind = p.GetTypeParamKind("Key");
+        var op = new MaxonManagedMemGetOp(managed, index, kind) {
+          TypeParamName = kind == MaxonValueKind.TypeParameter ? "Key" : null
+        };
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
@@ -3554,7 +3557,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p.Expect(TokenType.Comma);
         var index = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGetOp(managed, index, p.GetElementKind());
+        var kind = p.GetTypeParamKind("Value");
+        var op = new MaxonManagedMemGetOp(managed, index, kind) {
+          TypeParamName = kind == MaxonValueKind.TypeParameter ? "Value" : null
+        };
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
@@ -3564,13 +3570,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Get the element type from the current struct's type parameters (e.g., Element for Array/Vector)
   /// </summary>
   private MaxonValueKind GetElementKind() {
+    return GetTypeParamKind("Element");
+  }
+
+  /// <summary>
+  /// Get the kind for a named type parameter from the current struct (e.g., "Key", "Value", "Element").
+  /// Returns TypeParameter if the param exists but is unresolved; Integer if the param doesn't exist.
+  /// </summary>
+  private MaxonValueKind GetTypeParamKind(string paramName) {
     if (_currentTypeName != null
         && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
         && typeInfo is MlirStructType structType
-        && structType.TypeParams.TryGetValue("Element", out var elementType)) {
-      return elementType.ToValueKind();
+        && structType.TypeParams.TryGetValue(paramName, out var paramType)) {
+      return paramType.ToValueKind();
     }
-    // No Element type parameter - default to Integer for non-generic types
+    // No matching type parameter - default to Integer for non-generic types
     return MaxonValueKind.Integer;
   }
 
@@ -5163,13 +5177,32 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     if (Check(TokenType.LeftBracket)) {
-      var arrayResult = ParseArrayLiteral();
-      // Handle chained member access: [1,2,3].get(0)
-      if (Check(TokenType.Dot)) {
-        var bracketToken = new Token(TokenType.LeftBracket, "[", Current().Line, Current().Column);
-        return ParseFieldAccessChain(arrayResult, bracketToken);
+      var bracketToken = Current();
+      Advance(); // consume '['
+
+      if (Check(TokenType.RightBracket)) {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          "Empty array literals are not supported; use a typed empty array like 'IntArray{}' instead",
+          Current().Line, Current().Column);
       }
-      return arrayResult;
+
+      // Parse first element to determine if this is a map or array literal
+      var firstExpr = ResolveExprValue(ParseExpression());
+
+      ExprResult.Direct result;
+      if (Check(TokenType.Colon)) {
+        // Map literal: [key: value, ...]
+        result = ParseMapLiteral(firstExpr, bracketToken);
+      } else {
+        // Array literal: [expr, expr, ...]
+        result = ParseArrayLiteralWithFirstElement(firstExpr);
+      }
+
+      // Handle chained member access: [1,2,3].get(0) or ["a": 1].get("a")
+      if (Check(TokenType.Dot)) {
+        return ParseFieldAccessChain(result, bracketToken);
+      }
+      return result;
     }
 
     if (Check(TokenType.LeftParen)) {
@@ -5870,6 +5903,167 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Continues parsing an array literal when '[' has already been consumed and the first element
+  /// has already been parsed. Used when detecting map vs array literal syntax.
+  /// </summary>
+  private ExprResult.Direct ParseArrayLiteralWithFirstElement(MaxonValue firstElement) {
+    var elements = new List<MaxonValue> { firstElement };
+    while (Check(TokenType.Comma)) {
+      Advance();
+      if (Check(TokenType.RightBracket)) break; // trailing comma
+      elements.Add(ResolveExprValue(ParseExpression()));
+    }
+    Expect(TokenType.RightBracket);
+
+    var (managedStruct, arrayTag, elementCount, elementKind, elementStructTypeName) =
+      EmitManagedMemoryFromElements(elements);
+
+    var arrayTypeName = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
+
+    var iterIndexLit = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(iterIndexLit);
+
+    var arrayFields = new List<(string Name, MaxonValue Value)> {
+      ("iterIndex", iterIndexLit.Result),
+      ("managed", managedStruct.Result)
+    };
+    var arrayStruct = new MaxonStructLiteralOp(arrayTypeName, arrayFields);
+    _currentBlock!.AddOp(arrayStruct);
+
+    arrayStruct.ArrayLiteralTag = arrayTag;
+    arrayStruct.ArrayLiteralCount = elementCount;
+
+    return new ExprResult.Direct(arrayStruct.Result);
+  }
+
+  /// <summary>
+  /// Parses a map literal: [key: value, key: value, ...].
+  /// Called after '[' consumed and first key expression already parsed. Colon detected but not consumed.
+  /// Creates two __ManagedMemory structs (keys, values) and calls Map.init(keys, values).
+  /// </summary>
+  private ExprResult.Direct ParseMapLiteral(MaxonValue firstKey, Token bracketToken) {
+    Advance(); // consume ':'
+    var firstValue = ResolveExprValue(ParseExpression());
+
+    var keys = new List<MaxonValue> { firstKey };
+    var values = new List<MaxonValue> { firstValue };
+
+    while (Check(TokenType.Comma)) {
+      Advance(); // consume ','
+      if (Check(TokenType.RightBracket)) break; // trailing comma
+      var key = ResolveExprValue(ParseExpression());
+      Expect(TokenType.Colon);
+      var value = ResolveExprValue(ParseExpression());
+      keys.Add(key);
+      values.Add(value);
+    }
+    Expect(TokenType.RightBracket);
+
+    // Create __ManagedMemory for keys
+    var (keysManagedStruct, keysTag, keyCount, keyKind, keyStructTypeName) =
+      EmitManagedMemoryFromElements(keys);
+    keysManagedStruct.ArrayLiteralTag = keysTag;
+    keysManagedStruct.ArrayLiteralCount = keyCount;
+
+    // Create __ManagedMemory for values
+    var (valuesManagedStruct, valuesTag, _, valueKind, valueStructTypeName) =
+      EmitManagedMemoryFromElements(values);
+    valuesManagedStruct.ArrayLiteralTag = valuesTag;
+    valuesManagedStruct.ArrayLiteralCount = keyCount;
+
+    // Find the type implementing BuiltinDictionaryLiteral (Map)
+    var mapSourceTypeName = FindTypeImplementingInterface("BuiltinDictionaryLiteral")
+      ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+          "No type implements BuiltinDictionaryLiteral (Map type not found in stdlib)",
+          bracketToken.Line, bracketToken.Column);
+
+    // Determine concrete Key and Value types
+    var keyType = InferMlirTypeFromElements(keyKind, keyStructTypeName, bracketToken);
+    var valueType = InferMlirTypeFromElements(valueKind, valueStructTypeName, bracketToken);
+
+    // Create or find concrete Map type alias
+    var concreteMapTypeName = FindOrCreateMapTypeAlias(mapSourceTypeName, keyType, valueType);
+
+    // Resolve Map.init method
+    var sourceTypeName = _typeAliasSources.TryGetValue(concreteMapTypeName, out var src) ? src : concreteMapTypeName;
+    var initMethodName = $"{sourceTypeName}.init";
+    var resolvedInitName = ResolveMethodName(initMethodName);
+    var initFunc = resolvedInitName != null
+      ? _currentModule!.Functions.FirstOrDefault(f => f.Name == resolvedInitName)
+          ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == resolvedInitName)
+          ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+              $"Map type '{mapSourceTypeName}' does not have a valid init method (no '{initMethodName}' found)",
+              bracketToken.Line, bracketToken.Column)
+      : throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+            $"Map type '{mapSourceTypeName}' does not have a valid init method (no '{initMethodName}' found)",
+            bracketToken.Line, bracketToken.Column);
+
+    // Call Map.init(keys, values)
+    var callOp = new MaxonCallOp(initFunc.Name,
+      [keysManagedStruct.Result, valuesManagedStruct.Result],
+      MaxonValueKind.Struct, concreteMapTypeName);
+    _currentBlock!.AddOp(callOp);
+
+    return new ExprResult.Direct(callOp.Result!);
+  }
+
+  /// <summary>
+  /// Converts a MaxonValueKind + optional struct type name into an MlirType.
+  /// Used to determine concrete Key/Value types for map literal type alias creation.
+  /// </summary>
+  private MlirType InferMlirTypeFromElements(MaxonValueKind kind, string? structTypeName, Token errorToken) {
+    if (kind == MaxonValueKind.Struct && structTypeName != null) {
+      if (_typeRegistry.TryGetValue(structTypeName, out var type))
+        return type;
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Unknown struct type '{structTypeName}' in map literal",
+        errorToken.Line, errorToken.Column);
+    }
+    return kind switch {
+      MaxonValueKind.Integer => MlirType.I64,
+      MaxonValueKind.Float => MlirType.F64,
+      MaxonValueKind.Bool => MlirType.I1,
+      MaxonValueKind.Byte => MlirType.I8,
+      MaxonValueKind.Enum => throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        "Enum types in map literals are not yet supported", errorToken.Line, errorToken.Column),
+      MaxonValueKind.Function => throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        "Function types in map literals are not supported", errorToken.Line, errorToken.Column),
+      _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Unsupported value kind '{kind}' in map literal", errorToken.Line, errorToken.Column)
+    };
+  }
+
+  /// <summary>
+  /// Finds an existing Map type alias with matching Key/Value types, or creates one.
+  /// Pattern follows FindArrayTypeAliasForElement.
+  /// </summary>
+  private string FindOrCreateMapTypeAlias(string mapSourceTypeName, MlirType keyType, MlirType valueType) {
+    // Search for existing Map alias with matching Key and Value types
+    foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
+      if (sourceTypeName != mapSourceTypeName) continue;
+      if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
+          && aliasType is MlirStructType st
+          && st.TypeParams.TryGetValue("Key", out var kType) && kType.Name == keyType.Name
+          && st.TypeParams.TryGetValue("Value", out var vType) && vType.Name == valueType.Name) {
+        return aliasName;
+      }
+    }
+
+    // No existing alias — auto-create one
+    var autoAliasName = $"__Map_{keyType.Name}_{valueType.Name}";
+    if (!_typeRegistry.ContainsKey(autoAliasName)
+        && _typeRegistry.TryGetValue(mapSourceTypeName, out var mapType)
+        && mapType is MlirStructType mapStruct) {
+      var substitution = new Dictionary<string, MlirType> {
+        ["Key"] = keyType,
+        ["Value"] = valueType
+      };
+      RegisterConcreteTypeAlias(autoAliasName, mapSourceTypeName, mapStruct, substitution);
+    }
+    return autoAliasName;
+  }
+
+  /// <summary>
   /// Finds the typealias name for Array with the given element type.
   /// Returns the concrete alias (e.g., "ByteArray") if one exists, otherwise "Array".
   /// For struct element types, auto-creates a type alias if none exists.
@@ -5948,6 +6142,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     Expect(TokenType.RightBracket);
 
+    return EmitManagedMemoryFromElements(elements);
+  }
+
+  /// <summary>
+  /// Takes a list of parsed element values and emits stack variable assignments + __ManagedMemory struct.
+  /// Shared by array literals, map literal keys, and map literal values.
+  /// </summary>
+  private (MaxonStructLiteralOp ManagedStruct, string ArrayTag, int ElementCount, MaxonValueKind ElementKind, string? ElementStructTypeName) EmitManagedMemoryFromElements(List<MaxonValue> elements) {
     int count = elements.Count;
 
     if (count == 0) {
@@ -6779,9 +6981,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (resolvedType is MlirTypeParameterType tp && typeParams != null && typeParams.TryGetValue(tp.ParameterName, out var concrete)) {
       resolvedType = concrete;
     }
+    // Resolve function type parameters for closure type inference
+    if (resolvedType is MlirFunctionType ft && typeParams != null) {
+      resolvedType = ResolveFunctionType(ft, typeParams);
+    }
     if (Check(TokenType.LeftBrace) && resolvedType is MlirStructType structType) {
       var structLiteral = ParseStructLiteral(structType.Name);
       return ResolveExprValue(structLiteral);
+    }
+    // Untyped closure: when expecting a function type and tokens look like a closure
+    if (resolvedType is MlirFunctionType expectedFnType && IsClosure()) {
+      return ResolveExprValue(ParseClosure(expectedFnType));
     }
     return ResolveExprValue(ParseExpression());
   }
@@ -6833,7 +7043,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Resolve type parameters from the self value's concrete struct type
     Dictionary<string, MlirType>? typeParams = null;
     if (selfValue is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var selfType) && selfType is MlirStructType selfStructType && selfStructType.TypeParams.Count > 0) {
-      typeParams = selfStructType.TypeParams;
+      typeParams = BuildFullTypeParams(ms.TypeName, selfStructType);
     }
 
     if (!Check(TokenType.RightParen)) {
@@ -6852,6 +7062,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (returnType == null) return (null, null);
     if (returnType is MlirTypeParameterType)
       return OverrideResultKindForElementType(MaxonValueKind.TypeParameter, null, args);
+
+    // When return type is a struct with unresolved type params (e.g., ElementArray from
+    // Iterable extension with Element still abstract), resolve through the self arg's
+    // concrete element type to find/create the right concrete alias.
+    if (returnType is MlirStructType returnStruct
+        && args.Count > 0 && args[0] is MaxonStruct selfStruct) {
+      // Check if any type param is unresolved: either a direct type parameter, or
+      // a struct type that is itself an inner type alias with unresolved params
+      // Check for unresolved type params. Use the registry to get current type info
+      // since conformance clause references may be stale (pointing to pre-registered placeholders).
+      bool hasUnresolved = returnStruct.TypeParams.Values.Any(t => {
+        if (t is MlirTypeParameterType) return true;
+        if (t is MlirStructType st && _typeAliasSources.ContainsKey(st.Name)) {
+          var current = _typeRegistry.TryGetValue(st.Name, out var reg) && reg is MlirStructType regSt ? regSt : st;
+          return current.TypeParams.Values.Any(inner => inner is MlirTypeParameterType);
+        }
+        return false;
+      });
+      if (hasUnresolved) {
+        var resolved = ResolveStructReturnTypeThroughSelf(returnStruct, selfStruct.TypeName);
+        if (resolved != null) return (MaxonValueKind.Struct, resolved);
+      }
+    }
+
     var kind = returnType.ToValueKind();
     var typeName = returnType switch {
       MlirStructType s => s.Name,
@@ -6859,6 +7093,174 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _ => (string?)null
     };
     return (kind, typeName);
+  }
+
+  /// <summary>
+  /// Resolves a struct return type with unresolved type params by tracing through the self
+  /// type's type param chain. For example, when Iterable.map() returns ElementArray (Array
+  /// with unresolved Element), and self is __Map_String_i64, resolves Element through the
+  /// Map source type's bindings to find the concrete array alias.
+  /// </summary>
+  private string? ResolveStructReturnTypeThroughSelf(MlirStructType returnStruct, string selfTypeName) {
+    // Get the source type for the self (e.g., __Map_String_i64 -> Map)
+    if (!_typeAliasSources.TryGetValue(selfTypeName, out var sourceTypeName)) return null;
+    if (!_typeRegistry.TryGetValue(sourceTypeName, out var sourceRegType)) return null;
+    if (sourceRegType is not MlirStructType sourceStruct) return null;
+    if (!_typeRegistry.TryGetValue(selfTypeName, out var selfRegType)) return null;
+    if (selfRegType is not MlirStructType selfStruct) return null;
+
+    // Build the resolution map from return type's unresolved params to concrete types.
+    var resolvedReturnParams = new Dictionary<string, MlirType>();
+    foreach (var (paramName, paramType) in returnStruct.TypeParams) {
+      if (paramType is MlirTypeParameterType tp) {
+        // Direct type parameter (e.g., Element -> Element(tp)): look up in source type
+        if (sourceStruct.TypeParams.TryGetValue(tp.ParameterName, out var sourceBinding)) {
+          if (sourceBinding is MlirStructType innerAlias) {
+            var resolved = ResolveInnerAliasToConcreteType(innerAlias.Name, selfStruct.TypeParams);
+            if (resolved != null) { resolvedReturnParams[paramName] = resolved; continue; }
+          }
+          resolvedReturnParams[paramName] = sourceBinding;
+        }
+      } else if (paramType is MlirStructType innerStruct
+                 && _typeAliasSources.ContainsKey(innerStruct.Name)) {
+        // Look up current type info from registry (conformance refs may be stale placeholders)
+        var currentInner = _typeRegistry.TryGetValue(innerStruct.Name, out var innerReg) && innerReg is MlirStructType regInner ? regInner : innerStruct;
+        if (currentInner.TypeParams.Values.Any(inner => inner is MlirTypeParameterType)) {
+          // Struct is an inner alias with unresolved type params (e.g., Element -> Entry
+          // where Entry = Pair with (Key, Value)). Resolve through self's substitutions.
+          var resolved = ResolveInnerAliasToConcreteType(innerStruct.Name, selfStruct.TypeParams);
+          if (resolved != null) { resolvedReturnParams[paramName] = resolved; continue; }
+        }
+        resolvedReturnParams[paramName] = paramType;
+      } else {
+        resolvedReturnParams[paramName] = paramType;
+      }
+    }
+
+    // All params resolved? Find or create concrete alias.
+    if (resolvedReturnParams.Values.Any(t => t is MlirTypeParameterType)) return null;
+
+    // Find source for return type (e.g., ElementArray -> Array)
+    if (!_typeAliasSources.TryGetValue(returnStruct.Name, out var returnSourceName)) return null;
+
+    // Search for existing alias matching the resolved params
+    foreach (var (aliasName, aliasSource) in _typeAliasSources) {
+      if (aliasSource != returnSourceName) continue;
+      if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
+      if (aliasRegType is not MlirStructType aliasSt) continue;
+      if (aliasSt.TypeParams.Count != resolvedReturnParams.Count) continue;
+      if (aliasSt.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      bool match = true;
+      foreach (var (pn, pt) in resolvedReturnParams) {
+        if (!aliasSt.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
+      }
+      if (match) return aliasName;
+    }
+
+    // No existing alias — auto-create one
+    if (resolvedReturnParams.Count == 1 && resolvedReturnParams.TryGetValue("Element", out var elemType)) {
+      if (elemType is MlirStructType elemStruct) {
+        return FindArrayTypeAliasForElement(MaxonValueKind.Struct, elemStruct.Name);
+      }
+      var elemKind = elemType.ToValueKind();
+      return FindArrayTypeAliasForElement(elemKind);
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// Resolves an inner type alias (e.g., Entry = Pair with (Key, Value)) to a concrete type
+  /// using the outer type's resolved type params (e.g., Key=String, Value=i64).
+  /// </summary>
+  private MlirStructType? ResolveInnerAliasToConcreteType(string innerAliasName, Dictionary<string, MlirType> outerTypeParams) {
+    if (!_typeRegistry.TryGetValue(innerAliasName, out var innerRegType)) return null;
+    if (innerRegType is not MlirStructType innerStruct) return null;
+    if (!_typeAliasSources.TryGetValue(innerAliasName, out var innerSourceName)) return null;
+
+    // Resolve inner alias's type params through outer substitution
+    var resolvedInnerParams = new Dictionary<string, MlirType>();
+    foreach (var (pn, pt) in innerStruct.TypeParams) {
+      if (pt is MlirTypeParameterType tp && outerTypeParams.TryGetValue(tp.ParameterName, out var resolved))
+        resolvedInnerParams[pn] = resolved;
+      else
+        resolvedInnerParams[pn] = pt;
+    }
+
+    // If still unresolved, give up
+    if (resolvedInnerParams.Values.Any(t => t is MlirTypeParameterType)) return null;
+
+    // Find concrete alias matching these resolved params
+    foreach (var (aliasName, aliasSource) in _typeAliasSources) {
+      if (aliasSource != innerSourceName) continue;
+      if (!_typeRegistry.TryGetValue(aliasName, out var aliasRegType)) continue;
+      if (aliasRegType is not MlirStructType aliasSt) continue;
+      if (aliasSt.TypeParams.Count != resolvedInnerParams.Count) continue;
+      if (aliasSt.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      bool match = true;
+      foreach (var (pn, pt) in resolvedInnerParams) {
+        if (!aliasSt.TypeParams.TryGetValue(pn, out var ct) || ct.Name != pt.Name) { match = false; break; }
+      }
+      if (match) return aliasSt;
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// Builds a full type param map for a concrete alias, including conformance-derived params.
+  /// For __Map_String_i64, the direct TypeParams are {Key: String, Value: i64}.
+  /// The source type Map has conformance 'Iterable with Entry', binding Element → Entry.
+  /// This method resolves Entry → StringIntPair and adds Element → StringIntPair to the map.
+  /// </summary>
+  private Dictionary<string, MlirType> BuildFullTypeParams(string aliasName, MlirStructType aliasStruct) {
+    var result = new Dictionary<string, MlirType>(aliasStruct.TypeParams);
+
+    // Look up source type to get conformance-bound type params
+    if (!_typeAliasSources.TryGetValue(aliasName, out var sourceName)) return result;
+    if (!_typeRegistry.TryGetValue(sourceName, out var sourceTypeReg)) return result;
+    if (sourceTypeReg is not MlirStructType sourceStruct) return result;
+
+    foreach (var (paramName, paramValue) in sourceStruct.TypeParams) {
+      if (result.ContainsKey(paramName)) continue;
+      // paramValue is a conformance-bound type like Entry (an inner alias)
+      if (paramValue is MlirStructType innerStruct && _typeAliasSources.ContainsKey(innerStruct.Name)) {
+        var resolved = ResolveInnerAliasToConcreteType(innerStruct.Name, result);
+        if (resolved != null) {
+          result[paramName] = resolved;
+          // Also map the inner alias name itself (e.g., Entry → StringIntPair)
+          // so function types using the inner alias name can be resolved
+          if (!result.ContainsKey(innerStruct.Name))
+            result[innerStruct.Name] = resolved;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /// <summary>
+  /// Resolves type parameter types within a function type using the given type params map.
+  /// For example, fn(Element) returns Element with {Element: StringIntPair} becomes
+  /// fn(StringIntPair) returns StringIntPair.
+  /// </summary>
+  private static MlirFunctionType ResolveFunctionType(MlirFunctionType ft, Dictionary<string, MlirType> typeParams) {
+    var newParams = ft.ParameterTypes.Select(p => ResolveTypeParam(p, typeParams)).ToList();
+    var newReturn = ft.ReturnType != null ? ResolveTypeParam(ft.ReturnType, typeParams) : null;
+    if (!newParams.SequenceEqual(ft.ParameterTypes) || newReturn != ft.ReturnType)
+      return new MlirFunctionType(newParams, newReturn);
+    return ft;
+  }
+
+  /// <summary>
+  /// Resolves a single type through the type params map, including inner alias resolution.
+  /// </summary>
+  private static MlirType ResolveTypeParam(MlirType type, Dictionary<string, MlirType> typeParams) {
+    if (type is MlirTypeParameterType tp && typeParams.TryGetValue(tp.ParameterName, out var resolved))
+      return resolved;
+    if (type is MlirStructType st && typeParams.TryGetValue(st.Name, out var resolvedStruct))
+      return resolvedStruct;
+    return type;
   }
 
   /// <summary>
@@ -7020,19 +7422,41 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return false;
     lookahead++;
 
-    // After param name, must see a type token
+    // After param name, must see a type token (typed closure)
     if (_pos + lookahead >= _tokens.Count)
       return false;
     var afterName = _tokens[_pos + lookahead].Type;
-    return afterName == TokenType.Identifier || afterName == TokenType.Int || afterName == TokenType.Float ||
-           afterName == TokenType.Bool || afterName == TokenType.Byte || afterName == TokenType.LeftParen;
+    if (afterName == TokenType.Identifier || afterName == TokenType.Int || afterName == TokenType.Float ||
+           afterName == TokenType.Bool || afterName == TokenType.Byte || afterName == TokenType.LeftParen)
+      return true;
+
+    // Untyped closure: (name) gives or (name, name, ...) gives
+    // Skip comma-separated names until we hit ')'
+    while (_pos + lookahead < _tokens.Count) {
+      if (_tokens[_pos + lookahead].Type == TokenType.RightParen) {
+        lookahead++;
+        return _pos + lookahead < _tokens.Count && _tokens[_pos + lookahead].Type == TokenType.Gives;
+      }
+      if (_tokens[_pos + lookahead].Type == TokenType.Comma) {
+        lookahead++;
+        if (_pos + lookahead >= _tokens.Count || _tokens[_pos + lookahead].Type != TokenType.Identifier)
+          return false;
+        lookahead++;
+      } else {
+        return false;
+      }
+    }
+    return false;
   }
 
   /// <summary>
   /// Parses a closure expression: (param type, ...) gives expr
   /// Creates an anonymous function and returns a reference to it.
+  /// When inferredFnType is provided, parameters without type annotations
+  /// use the inferred types from the calling context, and the return type
+  /// is set to enable struct literal parsing in the body.
   /// </summary>
-  private ExprResult.Direct ParseClosure() {
+  private ExprResult.Direct ParseClosure(MlirFunctionType? inferredFnType = null) {
     Expect(TokenType.LeftParen);
 
     // Parse closure parameters
@@ -7040,11 +7464,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var paramTypes = new List<MlirType>();
 
     if (!Check(TokenType.RightParen)) {
+      int paramIdx = 0;
       do {
         var paramName = Expect(TokenType.Identifier).Value;
-        var paramType = ParseTypeRef();
         paramNames.Add(paramName);
-        paramTypes.Add(paramType);
+        // Check if next token is ')' or ',' — untyped parameter, use inferred type
+        if (Check(TokenType.RightParen) || Check(TokenType.Comma)) {
+          if (inferredFnType != null && paramIdx < inferredFnType.ParameterTypes.Count) {
+            paramTypes.Add(inferredFnType.ParameterTypes[paramIdx]);
+          } else {
+            throw new CompileError(ErrorCode.ParserExpectedType,
+              $"Cannot infer type for closure parameter '{paramName}'. Add an explicit type annotation.",
+              Current().Line, Current().Column);
+          }
+        } else {
+          var paramType = ParseTypeRef();
+          paramTypes.Add(paramType);
+        }
+        paramIdx++;
       } while (Check(TokenType.Comma) && Advance() != null);
     }
     Expect(TokenType.RightParen);
@@ -7060,8 +7497,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var savedFunction = _currentFunction;
     var savedReferencedVars = new HashSet<string>(_referencedVars);
 
-    // We'll determine the return type after parsing, use a placeholder for now
-    var closureFunc = new MlirFunction<MaxonOp>(closureName, paramNames, paramTypes, null, null) {
+    // Use inferred return type if available, so struct literal syntax works in body
+    MlirType? inferredReturnType = inferredFnType?.ReturnType;
+    var closureFunc = new MlirFunction<MaxonOp>(closureName, paramNames, paramTypes, inferredReturnType, null) {
       IsStdlib = false,
     };
 
@@ -7072,23 +7510,44 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Add closure parameters to scope
     for (int i = 0; i < paramNames.Count; i++) {
-      var pKind = paramTypes[i].ToValueKind();
-      var paramOp = new MaxonParamOp(i, paramNames[i], pKind);
-      _currentBlock.AddOp(paramOp);
-      _variables[paramNames[i]] = new VarInfo(pKind, false, paramOp.Result, _currentBlock);
+      if (paramTypes[i] is MlirStructType structType) {
+        var structParamOp = new MaxonStructParamOp(i, paramNames[i], structType.Name);
+        _currentBlock.AddOp(structParamOp);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock, structType.Name);
+      } else if (paramTypes[i] is MlirEnumType enumType) {
+        var backingKind = GetEnumBackingKind(enumType);
+        var paramOp = new MaxonParamOp(i, paramNames[i], backingKind);
+        _currentBlock.AddOp(paramOp);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, false, paramOp.Result, _currentBlock, enumType.Name);
+      } else {
+        var pKind = paramTypes[i].ToValueKind();
+        var paramOp = new MaxonParamOp(i, paramNames[i], pKind);
+        _currentBlock.AddOp(paramOp);
+        _variables[paramNames[i]] = new VarInfo(pKind, false, paramOp.Result, _currentBlock);
+      }
     }
 
     // Parse the closure body expression
-    var bodyExpr = ParseExpression();
+    ExprResult bodyExpr;
+    if (Check(TokenType.LeftBrace) && inferredReturnType is MlirStructType bodyStructType) {
+      bodyExpr = ParseStructLiteral(bodyStructType.Name);
+    } else {
+      bodyExpr = ParseExpression();
+    }
     var bodyValue = ResolveExprValue(bodyExpr);
 
     // Emit return
     var returnOp = new MaxonReturnOp(bodyValue);
     _currentBlock.AddOp(returnOp);
 
-    // Determine return type from the body value
-    var returnKind = DetermineValueKind(bodyValue);
-    var returnType = returnKind.ToMlirType();
+    // Determine return type: use inferred type if available, otherwise derive from body
+    MlirType returnType;
+    if (inferredReturnType != null) {
+      returnType = inferredReturnType;
+    } else {
+      var returnKind = DetermineValueKind(bodyValue);
+      returnType = returnKind.ToMlirType();
+    }
 
     // Create the final function with proper return type
     var finalClosureFunc = new MlirFunction<MaxonOp>(closureName, paramNames, paramTypes, returnType, null) {

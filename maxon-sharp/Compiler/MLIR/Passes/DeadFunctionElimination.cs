@@ -18,18 +18,32 @@ public static class DeadFunctionElimination {
       reachable.Add(mainFunc.Name);
     }
 
+    // Resolve a callee name to its actual function name (handles namespace-qualified names)
+    void EnqueueCallee(string callee) {
+      if (!reachable.Add(callee)) return;
+      queue.Enqueue(callee);
+      // Also resolve suffix-matched names so the actual function is marked reachable
+      if (!funcByName.ContainsKey(callee)) {
+        var suffix = $".{callee}";
+        foreach (var candidate in funcByName.Keys) {
+          if (candidate.EndsWith(suffix) && reachable.Add(candidate))
+            queue.Enqueue(candidate);
+        }
+      }
+    }
+
     while (queue.Count > 0) {
       var name = queue.Dequeue();
       if (!funcByName.TryGetValue(name, out var func)) continue;
 
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
-          if (op is MaxonCallOp call && reachable.Add(call.Callee))
-            queue.Enqueue(call.Callee);
-          if (op is MaxonTryCallOp tryCall && reachable.Add(tryCall.Callee))
-            queue.Enqueue(tryCall.Callee);
-          if (op is MaxonFunctionRefOp fnRef && reachable.Add(fnRef.FunctionName))
-            queue.Enqueue(fnRef.FunctionName);
+          if (op is MaxonCallOp call)
+            EnqueueCallee(call.Callee);
+          if (op is MaxonTryCallOp tryCall)
+            EnqueueCallee(tryCall.Callee);
+          if (op is MaxonFunctionRefOp fnRef)
+            EnqueueCallee(fnRef.FunctionName);
           // String interpolation with struct values may call toString dynamically
           if (op is MaxonStringInterpOp interp) {
             foreach (var (isLiteral, _, exprValue, _) in interp.Parts) {

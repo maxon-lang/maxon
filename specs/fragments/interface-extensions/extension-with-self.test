@@ -1,0 +1,86 @@
+// Test: extension-with-self
+interface Summable
+  function value() returns int
+end 'Summable'
+
+extension Summable
+  function doubled() returns int
+    return self.value() * 2
+  end 'doubled'
+end 'Summable'
+
+type Number is Summable
+  var n int
+
+  function value() returns int
+    return n
+  end 'value'
+end 'Number'
+
+function main() returns int
+  var num = Number{n: 21}
+  return num.doubled()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @Number.doubled(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.lea rbx, [rbp-24]
+    x86.mov [rbp-32], ecx
+    x86.mov rcx, rbx
+    x86.call Number.value
+    x86.mov esi, [rbp-24]
+    x86.mov [rbp-16], esi
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [rbp-16]
+    x86.mov [edi+0], r8
+    x86.mov r9, 2
+    x86.imul eax, r9
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [ecx+0], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @Number.value(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov [edx+0], ebx
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @interface-extensions.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 21
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.lea rbx, [rbp-24]
+    x86.mov rcx, rbx
+    x86.call Number.doubled
+    x86.mov esi, [rbp-24]
+    x86.mov [rbp-16], esi
+    x86.epilogue
+    x86.ret
+  }
+}
+---
