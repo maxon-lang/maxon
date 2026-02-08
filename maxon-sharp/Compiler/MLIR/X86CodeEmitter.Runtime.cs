@@ -706,40 +706,119 @@ public partial class X86CodeEmitter {
   }
 
   // ==========================================================================
-  // Directory runtime stubs
+  // Directory runtime functions
   // ==========================================================================
 
-  /// <summary>maxon_find_first_file(cstring_pattern) -> handle: returns 0 (stub)</summary>
+  // Layout of the find-file block allocated on the heap:
+  //   [0..7]   = Win32 HANDLE from FindFirstFileA
+  //   [8..327] = WIN32_FIND_DATAA (320 bytes)
+  //              +0  (offset 8):  dwFileAttributes (DWORD)
+  //              +44 (offset 52): cFileName (char[260])
+  // Total block size: 328 bytes
+  private const int FindBlockSize = 328;
+  private const int FindBlockHandleOffset = 0;
+  private const int FindBlockFindDataOffset = 8;
+  private const int FindDataFileNameOffset = 44;
+
+  /// <summary>
+  /// maxon_find_first_file(cstring_pattern) -> block_ptr or 0
+  /// Allocates a block [handle(8) + WIN32_FIND_DATAA(320)], calls FindFirstFileA.
+  /// Returns block pointer on success, 0 if not found.
+  /// Stack: [rbp-8]=pattern, [rbp-16]=block_ptr
+  /// </summary>
   private void EmitMaxonFindFirstFile() {
-    EmitRuntimeFunctionStart("maxon_find_first_file", 1);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_find_first_file", 1, 0x40);
+    // Allocate block
+    EmitMovRegImm(X86Register.Rcx, FindBlockSize);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = block_ptr
+    // FindFirstFileA(pattern, &block[8])
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: pattern
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // block_ptr
+    EmitAddRegImm(X86Register.Rdx, FindBlockFindDataOffset); // arg2: &findData
+    EmitCallImport("kernel32.dll", "FindFirstFileA");
+    // Check for INVALID_HANDLE_VALUE (-1)
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ne", "rt_fff_found");
+    // Not found: free block, return 0
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("rt_fff_done");
+    // Found: store handle in block[0], return block_ptr
+    DefineLabel("rt_fff_found");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // block_ptr
+    EmitMovIndirectMemReg(X86Register.Rcx, FindBlockHandleOffset, X86Register.Rax); // block[0] = handle
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx); // return block_ptr
+    DefineLabel("rt_fff_done");
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_find_filename(handle) -> cstring: returns 0 (stub)</summary>
+  /// <summary>
+  /// maxon_find_filename(block_ptr) -> cstring pointer to cFileName in the block
+  /// Returns block_ptr + 8 + 44 = block_ptr + 52
+  /// </summary>
   private void EmitMaxonFindFilename() {
     EmitRuntimeFunctionStart("maxon_find_filename", 1);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
+    EmitAddRegImm(X86Register.Rax, FindBlockFindDataOffset + FindDataFileNameOffset);
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_find_next_file(handle) -> int: returns 0 (stub)</summary>
+  /// <summary>
+  /// maxon_find_next_file(block_ptr) -> non-zero if found, 0 if done
+  /// Calls FindNextFileA(handle, &findData).
+  /// Stack: [rbp-8]=block_ptr
+  /// </summary>
   private void EmitMaxonFindNextFile() {
-    EmitRuntimeFunctionStart("maxon_find_next_file", 1);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_find_next_file", 1, 0x40);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // block_ptr
+    EmitAddRegImm(X86Register.Rdx, FindBlockFindDataOffset); // arg2: &findData
+    EmitCallImport("kernel32.dll", "FindNextFileA");
+    // RAX = non-zero if found, 0 if no more files
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_find_close(handle): void (stub)</summary>
+  /// <summary>
+  /// maxon_find_close(block_ptr) -> void
+  /// Calls FindClose(handle), then frees the block.
+  /// Stack: [rbp-8]=block_ptr
+  /// </summary>
   private void EmitMaxonFindClose() {
-    EmitRuntimeFunctionStart("maxon_find_close", 1);
+    EmitRuntimeFunctionStart("maxon_find_close", 1, 0x40);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
+    EmitCallImport("kernel32.dll", "FindClose");
+    // Free block
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_directory_exists(cstring_path) -> int: returns 0 (stub)</summary>
+  /// <summary>
+  /// maxon_directory_exists(cstring_path) -> 1 if directory, 0 otherwise
+  /// Calls GetFileAttributesA, checks FILE_ATTRIBUTE_DIRECTORY (0x10).
+  /// Stack: [rbp-8]=path
+  /// </summary>
   private void EmitMaxonDirectoryExists() {
-    EmitRuntimeFunctionStart("maxon_directory_exists", 1);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_directory_exists", 1, 0x40);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: path
+    EmitCallImport("kernel32.dll", "GetFileAttributesA");
+    // Check for INVALID_FILE_ATTRIBUTES (0xFFFFFFFF / -1 as DWORD)
+    EmitBytes(0x83, 0xF8, 0xFF); // CMP EAX, -1 (sign-extended imm8)
+    EmitJcc("ne", "rt_direx_check_attr");
+    // INVALID_FILE_ATTRIBUTES: return 0
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("rt_direx_done");
+    // Check FILE_ATTRIBUTE_DIRECTORY bit (0x10)
+    DefineLabel("rt_direx_check_attr");
+    EmitBytes(0xA8, 0x10); // TEST AL, 0x10
+    EmitSetcc("nz", X86Register.Rax);
+    EmitMovzxReg8To64(X86Register.Rax);
+    DefineLabel("rt_direx_done");
     EmitRuntimeFunctionEnd();
   }
 

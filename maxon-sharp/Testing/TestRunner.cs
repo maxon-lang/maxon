@@ -365,6 +365,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     var psi = new ProcessStartInfo {
       FileName = exePath,
       Arguments = args ?? "",
+      WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(exePath)),
       RedirectStandardOutput = true,
       RedirectStandardError = true,
       UseShellExecute = false,

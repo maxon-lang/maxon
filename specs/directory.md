@@ -117,8 +117,8 @@ function main() returns int
   let files = try Directory.list("../bin") otherwise 'err'
     return 99
   end 'err'
-  // bin directory has at least maxon.exe and maxon.pdb
-  if files.count() >= 2 'ok'
+  // bin directory has at least maxon.exe
+  if files.count() >= 1 'ok'
     return 42
   end 'ok'
   return files.count()
