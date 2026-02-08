@@ -58,8 +58,6 @@ module {
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, result
     %4, %5 = func.try_call @register-allocator.mayFail
-    memref.store %5, __error_flag
-    memref.store %5, __try_error_2
     memref.store %4, __try_result_3
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi ne %5, %6
@@ -69,7 +67,6 @@ module {
     memref.store %8, result
     cf.br otherwise_continue_1
   otherwise_continue_1:
-    %9 = memref.load __try_result_3 : i64
     %10 = memref.load result : i64
     func.return %10
   }
@@ -91,7 +88,6 @@ module {
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call register-allocator.mayFail
-    x86.mov [rbp-16], eax
     x86.xor ecx, ecx
     x86.cmp edx, ecx
     x86.je register-allocator.main.otherwise_continue_1
@@ -100,9 +96,7 @@ module {
     x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.otherwise_continue_1
   otherwise_continue_1:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov eax, ecx
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -125,7 +119,6 @@ module {
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call register-allocator.mayFail
-    x86.mov [rbp-16], eax
     x86.xor ecx, ecx
     x86.cmp edx, ecx
     x86.je register-allocator.main.otherwise_continue_1
@@ -134,9 +127,7 @@ module {
     x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.otherwise_continue_1
   otherwise_continue_1:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov eax, ecx
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

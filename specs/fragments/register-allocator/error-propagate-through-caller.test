@@ -73,7 +73,6 @@ module {
   func @register-allocator.middle() -> i64 {
   entry:
     %3, %4 = func.try_call @register-allocator.inner
-    memref.store %4, __error_flag
     memref.store %4, __try_error_2
     memref.store %3, __try_result_3
     %5 = arith.constant {value = 0 : i64}
@@ -84,13 +83,11 @@ module {
     func.error_return %7
   try_continue_1:
     %8 = memref.load __try_result_3 : i64
-    memref.store %8, x
     func.return %8
   }
   func @register-allocator.main() -> i64 {
   entry:
     %9, %10 = func.try_call @register-allocator.middle
-    memref.store %10, __error_flag
     %11 = arith.constant {value = 99 : i64}
     memref.store %11, __try_default_1
     memref.store %9, __try_result_0
@@ -103,7 +100,6 @@ module {
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
     %15 = memref.load __try_result_0 : i64
-    memref.store %15, x
     func.return %15
   }
 }

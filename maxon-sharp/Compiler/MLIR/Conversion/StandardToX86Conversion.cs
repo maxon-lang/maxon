@@ -155,21 +155,23 @@ public static class StandardToX86Conversion {
           preHandledOps.Add(paramOp);
         }
         foreach (var paramOp in registerParams) {
+          // Only match the param's own initial store (VarName == param name),
+          // not arbitrary later stores that happen to use the param's SSA value.
           var storeOp = srcBlock.Operations.OfType<StdStoreI64Op>()
-            .FirstOrDefault(s => s.Value.Equals(paramOp.Result));
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result) && s.VarName == paramOp.Name);
           if (storeOp != null && varOffsets.TryGetValue(storeOp.VarName, out int value)) {
             regManager.EmitStoreToStack(paramOp.Result, value, 8, x86Block);
             preHandledOps.Add(storeOp);
           }
           var storeF64 = srcBlock.Operations.OfType<StdStoreF64Op>()
-            .FirstOrDefault(s => s.Value.Equals(paramOp.Result));
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result) && s.VarName == paramOp.Name);
           if (storeF64 != null && varOffsets.TryGetValue(storeF64.VarName, out int value2)) {
             regManager.EmitXmmStoreToStack(paramOp.Result, value2, x86Block);
             preHandledOps.Add(storeF64);
           }
           // Handle bool (i1) parameters - must also be stored immediately
           var storeI1 = srcBlock.Operations.OfType<StdStoreI1Op>()
-            .FirstOrDefault(s => s.Value.Equals(paramOp.Result));
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result) && s.VarName == paramOp.Name);
           if (storeI1 != null && varOffsets.TryGetValue(storeI1.VarName, out int value3)) {
             regManager.EmitStoreToStack(paramOp.Result, value3, 1, x86Block);
             preHandledOps.Add(storeI1);

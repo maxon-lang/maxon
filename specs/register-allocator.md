@@ -81,7 +81,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 99 : i64}
-    memref.store %0, x
     func.return %0
   }
 }
@@ -168,9 +167,7 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 30 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 12 : i64}
-    memref.store %1, b
     %2 = arith.addi %0, %1
     func.return %2
   }
@@ -213,7 +210,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 21 : i64}
-    memref.store %0, x
     %1 = arith.addi %0, %0
     func.return %1
   }
@@ -266,16 +262,12 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 5 : i64}
     %2 = arith.addi %0, %1
-    memref.store %2, b
     %3 = arith.constant {value = 7 : i64}
     %4 = arith.addi %2, %3
-    memref.store %4, c
     %5 = arith.constant {value = 20 : i64}
     %6 = arith.addi %4, %5
-    memref.store %6, d
     func.return %6
   }
 }
@@ -328,12 +320,9 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
-    memref.store %0, x
     %1 = arith.constant {value = 80 : i64}
     %2 = arith.subi %0, %1
-    memref.store %2, y
     %3 = arith.constant {value = 22 : i64}
-    memref.store %3, x
     %4 = arith.addi %3, %2
     func.return %4
   }
@@ -399,17 +388,11 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 1 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 2 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 3 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 4 : i64}
-    memref.store %3, d
     %4 = arith.constant {value = 5 : i64}
-    memref.store %4, e
     %5 = arith.constant {value = 6 : i64}
-    memref.store %5, f
     %6 = arith.addi %0, %1
     %7 = arith.addi %6, %2
     %8 = arith.addi %7, %3
@@ -499,25 +482,15 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 1 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 2 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 3 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 4 : i64}
-    memref.store %3, d
     %4 = arith.constant {value = 5 : i64}
-    memref.store %4, e
     %5 = arith.constant {value = 6 : i64}
-    memref.store %5, f
     %6 = arith.constant {value = 7 : i64}
-    memref.store %6, g
     %7 = arith.constant {value = 8 : i64}
-    memref.store %7, h
     %8 = arith.constant {value = 9 : i64}
-    memref.store %8, i
     %9 = arith.constant {value = 10 : i64}
-    memref.store %9, j
     %10 = arith.addi %0, %1
     %11 = arith.addi %10, %2
     %12 = arith.addi %11, %3
@@ -655,37 +628,21 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 1 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 2 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 3 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 4 : i64}
-    memref.store %3, d
     %4 = arith.constant {value = 5 : i64}
-    memref.store %4, e
     %5 = arith.constant {value = 6 : i64}
-    memref.store %5, f
     %6 = arith.constant {value = 7 : i64}
-    memref.store %6, g
     %7 = arith.constant {value = 8 : i64}
-    memref.store %7, h
     %8 = arith.constant {value = 9 : i64}
-    memref.store %8, i
     %9 = arith.constant {value = 10 : i64}
-    memref.store %9, j
     %10 = arith.constant {value = 11 : i64}
-    memref.store %10, k
     %11 = arith.constant {value = 12 : i64}
-    memref.store %11, l
     %12 = arith.constant {value = 13 : i64}
-    memref.store %12, m
     %13 = arith.constant {value = 14 : i64}
-    memref.store %13, n
     %14 = arith.constant {value = 15 : i64}
-    memref.store %14, o
     %15 = arith.constant {value = 16 : i64}
-    memref.store %15, p
     %16 = arith.addi %0, %1
     %17 = arith.addi %16, %2
     %18 = arith.addi %17, %3
@@ -878,45 +835,25 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 1 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 2 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 3 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 4 : i64}
-    memref.store %3, d
     %4 = arith.constant {value = 5 : i64}
-    memref.store %4, e
     %5 = arith.constant {value = 6 : i64}
-    memref.store %5, f
     %6 = arith.constant {value = 7 : i64}
-    memref.store %6, g
     %7 = arith.constant {value = 8 : i64}
-    memref.store %7, h
     %8 = arith.constant {value = 9 : i64}
-    memref.store %8, i
     %9 = arith.constant {value = 10 : i64}
-    memref.store %9, j
     %10 = arith.constant {value = 11 : i64}
-    memref.store %10, k
     %11 = arith.constant {value = 12 : i64}
-    memref.store %11, l
     %12 = arith.constant {value = 13 : i64}
-    memref.store %12, m
     %13 = arith.constant {value = 14 : i64}
-    memref.store %13, n
     %14 = arith.constant {value = 15 : i64}
-    memref.store %14, o
     %15 = arith.constant {value = 16 : i64}
-    memref.store %15, p
     %16 = arith.constant {value = 17 : i64}
-    memref.store %16, q
     %17 = arith.constant {value = 18 : i64}
-    memref.store %17, r
     %18 = arith.constant {value = 19 : i64}
-    memref.store %18, s
     %19 = arith.constant {value = 20 : i64}
-    memref.store %19, t
     %20 = arith.addi %0, %1
     %21 = arith.addi %20, %2
     %22 = arith.addi %21, %3
@@ -1081,26 +1018,16 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 20 : i64}
-    memref.store %1, b
     %2 = arith.addi %0, %1
-    memref.store %2, ab
     %3 = arith.constant {value = 30 : i64}
-    memref.store %3, c
     %4 = arith.constant {value = 40 : i64}
-    memref.store %4, d
     %5 = arith.addi %3, %4
-    memref.store %5, cd
     %6 = arith.constant {value = 50 : i64}
-    memref.store %6, e
     %7 = arith.constant {value = 60 : i64}
-    memref.store %7, f
     %8 = arith.addi %6, %7
-    memref.store %8, ef
     %9 = arith.addi %2, %5
     %10 = arith.addi %9, %8
-    memref.store %10, result
     %11 = arith.constant {value = 256 : i64}
     %12 = arith.remsi %10, %11
     func.return %12
@@ -1189,54 +1116,33 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, sum1
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, sum2
-    %2 = arith.constant {value = 0 : i64}
-    memref.store %2, sum3
     %3 = arith.constant {value = 10 : i64}
-    %4 = arith.addi %0, %3
-    memref.store %4, sum1
-    %5 = arith.constant {value = 20 : i64}
-    %6 = arith.addi %1, %5
-    memref.store %6, sum2
-    %7 = arith.constant {value = 30 : i64}
-    %8 = arith.addi %2, %7
-    memref.store %8, sum3
-    %9 = arith.constant {value = 5 : i64}
-    %10 = arith.addi %4, %9
-    memref.store %10, sum1
-    %11 = arith.constant {value = 10 : i64}
-    %12 = arith.addi %6, %11
-    memref.store %12, sum2
-    %13 = arith.constant {value = 15 : i64}
-    %14 = arith.addi %8, %13
-    memref.store %14, sum3
-    %15 = arith.addi %10, %12
-    %16 = arith.addi %15, %14
-    func.return %16
+    %4 = arith.constant {value = 20 : i64}
+    %5 = arith.constant {value = 30 : i64}
+    %6 = arith.constant {value = 5 : i64}
+    %7 = arith.addi %3, %6
+    %8 = arith.constant {value = 10 : i64}
+    %9 = arith.addi %4, %8
+    %10 = arith.constant {value = 15 : i64}
+    %11 = arith.addi %5, %10
+    %12 = arith.addi %7, %9
+    %13 = arith.addi %12, %11
+    func.return %13
   }
 }
 === x86
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.xor eax, eax
-    x86.xor ecx, ecx
-    x86.xor edx, edx
-    x86.mov ebx, 10
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.mov edx, 30
+    x86.mov ebx, 5
     x86.add eax, ebx
-    x86.mov esi, 20
+    x86.mov esi, 10
     x86.add ecx, esi
-    x86.mov edi, 30
+    x86.mov edi, 15
     x86.add edx, edi
-    x86.mov r8, 5
-    x86.add eax, r8
-    x86.mov r9, 10
-    x86.add ecx, r9
-    x86.mov ebx, 15
-    x86.add edx, ebx
     x86.add eax, ecx
     x86.add eax, edx
     x86.ret
@@ -1289,9 +1195,7 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %1 = arith.constant {value = 2 : i64}
-    memref.store %1, x
     %2 = func.call @register-allocator.getForty
-    memref.store %2, y
     %3 = arith.addi %1, %2
     func.return %3
   }
@@ -1382,13 +1286,9 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %2 = arith.constant {value = 5 : i64}
-    memref.store %2, a
     %3 = func.call @register-allocator.getTen
-    memref.store %3, b
     %4 = arith.constant {value = 7 : i64}
-    memref.store %4, c
     %5 = func.call @register-allocator.getTwo
-    memref.store %5, d
     %6 = arith.addi %2, %3
     %7 = arith.addi %6, %4
     %8 = arith.addi %7, %5
@@ -1474,9 +1374,7 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %1 = func.call @register-allocator.compute
-    memref.store %1, a
     %2 = func.call @register-allocator.compute
-    memref.store %2, b
     %3 = arith.addi %1, %2
     %4 = arith.constant {value = 256 : i64}
     %5 = arith.remsi %3, %4
@@ -1543,9 +1441,7 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 126 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 3 : i64}
-    memref.store %1, b
     %2 = arith.sitofp %0
     %3 = arith.sitofp %1
     %4 = arith.divf %2, %3
@@ -1609,15 +1505,11 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
-    memref.store %0, x
     %1 = arith.constant {value = 84 : i64}
-    memref.store %1, a
     %2 = arith.constant {value = 2 : i64}
-    memref.store %2, b
     %3 = arith.sitofp %1
     %4 = arith.sitofp %2
     %5 = arith.divf %3, %4
-    memref.store %5, quotient
     %6 = arith.sitofp %0
     %7 = arith.subf %5, %6
     %8 = arith.fptosi %7
@@ -1681,9 +1573,7 @@ module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
-    memref.store %0, a
     %1 = func.param b : StdI64
-    memref.store %1, b
     %2 = arith.addi %0, %1
     func.return %2
   }
@@ -1753,18 +1643,14 @@ module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
-    memref.store %0, a
     %1 = func.param b : StdI64
-    memref.store %1, b
     %2 = arith.addi %0, %1
     func.return %2
   }
   func @register-allocator.main() -> i64 {
   entry:
     %3 = arith.constant {value = 20 : i64}
-    memref.store %3, x
     %4 = arith.constant {value = 22 : i64}
-    memref.store %4, y
     %5 = func.call @register-allocator.add %4, %3
     func.return %5
   }
@@ -1825,7 +1711,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
-    memref.store %0, x
     %1 = arith.constant {value = 10 : i64}
     %2 = arith.cmpi eq %0, %1
     cf.cond_br %2 [then: check_0, else: other_1]
@@ -1908,9 +1793,6 @@ module {
     %0 = arith.constant {value = 40 : i64}
     memref.store %0, base
     %1 = arith.constant {value = 1 : i64}
-    memref.store %1, cond
-    %2 = arith.constant {value = 0 : i64}
-    memref.store %2, extra
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.cmpi eq %1, %3
     cf.cond_br %4 [then: check_0, else: other_1]
@@ -1937,10 +1819,8 @@ module {
     x86.mov eax, 40
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
-    x86.xor edx, edx
-    x86.mov [rbp-16], edx
-    x86.mov ebx, 1
-    x86.cmp ecx, ebx
+    x86.mov edx, 1
+    x86.cmp ecx, edx
     x86.jne register-allocator.main.other_1
   check_0:
     x86.mov eax, 2
@@ -2914,7 +2794,6 @@ module {
   func @register-allocator.double(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
-    memref.store %0, x
     %1 = arith.constant {value = 2 : i64}
     %2 = arith.muli %0, %1
     func.return %2
@@ -3094,13 +2973,9 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 3 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 5 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 7 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 2 : i64}
-    memref.store %3, d
     %4 = arith.addi %0, %1
     %5 = arith.subi %2, %3
     %6 = arith.muli %4, %5
@@ -3168,15 +3043,10 @@ module {
   func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
-    memref.store %0, a
     %1 = func.param b : StdI64
-    memref.store %1, b
     %2 = func.param c : StdI64
-    memref.store %2, c
     %3 = func.param d : StdI64
-    memref.store %3, d
     %4 = func.param e : StdI64
-    memref.store %4, e
     %5 = arith.addi %0, %1
     %6 = arith.addi %5, %2
     %7 = arith.addi %6, %3
@@ -3277,23 +3147,14 @@ module {
   func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
-    memref.store %0, a
     %1 = func.param b : StdI64
-    memref.store %1, b
     %2 = func.param c : StdI64
-    memref.store %2, c
     %3 = func.param d : StdI64
-    memref.store %3, d
     %4 = func.param e : StdI64
-    memref.store %4, e
     %5 = func.param f : StdI64
-    memref.store %5, f
     %6 = func.param g : StdI64
-    memref.store %6, g
     %7 = func.param h : StdI64
-    memref.store %7, h
     %8 = func.param i : StdI64
-    memref.store %8, i
     %9 = arith.addi %0, %1
     %10 = arith.addi %9, %2
     %11 = arith.addi %10, %3
@@ -3326,17 +3187,17 @@ module {
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
     x86.mov ecx, [rbp+16]
-    x86.mov [rbp-16], r8
-    x86.mov r8, [rbp-8]
-    x86.add r8, edx
-    x86.mov edx, [rbp-16]
-    x86.add r8, edx
-    x86.add r8, r9
-    x86.add r8, esi
-    x86.add r8, edi
-    x86.add r8, eax
-    x86.add r8, ebx
-    x86.lea eax, [r8 + ecx]
+    x86.mov [rbp-16], ecx
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, edx
+    x86.add ecx, r8
+    x86.add ecx, r9
+    x86.add ecx, esi
+    x86.add ecx, edi
+    x86.add ecx, eax
+    x86.add ecx, ebx
+    x86.mov eax, [rbp-16]
+    x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret
   }
@@ -3582,7 +3443,6 @@ module {
   func @register-allocator.identity(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
-    memref.store %0, x
     func.return %0
   }
   func @register-allocator.main() -> i64 {
@@ -3760,17 +3620,11 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.float_constant {value = 3.14 : f64}
-    memref.store %0, x
     %1 = arith.float_constant {value = 2.86 : f64}
-    memref.store %1, y
     %2 = arith.addf %0, %1
-    memref.store %2, sum_f
     %3 = arith.constant {value = 10 : i64}
-    memref.store %3, a
     %4 = arith.constant {value = 20 : i64}
-    memref.store %4, b
     %5 = arith.addi %3, %4
-    memref.store %5, sum_i
     %6 = arith.fptosi %2
     %7 = arith.addi %6, %5
     func.return %7
@@ -4059,7 +3913,6 @@ module {
     %6 = memref.load a : i64
     %7 = memref.load b : i64
     %8 = arith.addi %6, %7
-    memref.store %8, temp
     %9 = memref.load b : i64
     memref.store %9, a
     memref.store %8, b
@@ -4166,21 +4019,13 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 10 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 20 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 30 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 40 : i64}
-    memref.store %3, d
     %4 = arith.constant {value = 50 : i64}
-    memref.store %4, e
     %5 = arith.constant {value = 60 : i64}
-    memref.store %5, f
     %6 = arith.constant {value = 70 : i64}
-    memref.store %6, g
     %7 = arith.constant {value = 2 : i64}
-    memref.store %7, h
     %8 = arith.addi %0, %1
     %9 = arith.addi %8, %2
     %10 = arith.addi %9, %3
@@ -4276,31 +4121,22 @@ module {
   func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
-    memref.store %0, a
     %1 = func.param b : StdI64
-    memref.store %1, b
     %2 = func.param c : StdI64
-    memref.store %2, c
     %3 = func.param d : StdI64
-    memref.store %3, d
     %4 = arith.addi %0, %1
-    memref.store %4, x
     %5 = arith.addi %2, %3
-    memref.store %5, y
     %6 = arith.addi %4, %5
-    memref.store %6, z
     func.return %6
   }
   func @register-allocator.main() -> i64 {
   entry:
     %7 = arith.constant {value = 42 : i64}
-    memref.store %7, sentinel
     %8 = arith.constant {value = 1 : i64}
     %9 = arith.constant {value = 2 : i64}
     %10 = arith.constant {value = 3 : i64}
     %11 = arith.constant {value = 4 : i64}
     %12 = func.call @register-allocator.useRegs %8, %9, %10, %11
-    memref.store %12, result
     %13 = arith.addi %7, %12
     func.return %13
   }
@@ -4378,9 +4214,7 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %1 = arith.float_constant {value = 3.14 : f64}
-    memref.store %1, f
     %2 = func.call @register-allocator.getInt
-    memref.store %2, x
     %3 = arith.fptosi %1
     %4 = arith.addi %3, %2
     func.return %4
@@ -4450,13 +4284,9 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 5 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 84 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 4 : i64}
-    memref.store %3, d
     %4 = arith.sitofp %0
     %5 = arith.sitofp %1
     %6 = arith.divf %4, %5
@@ -4528,13 +4358,9 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 7 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 10 : i64}
-    memref.store %2, c
     %3 = arith.remsi %0, %1
-    memref.store %3, rem
     %4 = arith.muli %3, %2
     func.return %4
   }
@@ -4604,20 +4430,15 @@ module {
   func @register-allocator.sub(a: i64, b: i64) -> i64 {
   entry:
     %0 = func.param a : StdI64
-    memref.store %0, a
     %1 = func.param b : StdI64
-    memref.store %1, b
     %2 = arith.subi %0, %1
     func.return %2
   }
   func @register-allocator.main() -> i64 {
   entry:
     %3 = arith.constant {value = 10 : i64}
-    memref.store %3, x
     %4 = arith.constant {value = 3 : i64}
-    memref.store %4, y
     %5 = func.call @register-allocator.sub %4, %3
-    memref.store %5, result
     %6 = arith.constant {value = 45 : i64}
     %7 = arith.addi %5, %6
     func.return %7
@@ -4697,21 +4518,13 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
-    memref.store %0, a
     %1 = arith.constant {value = 1 : i64}
-    memref.store %1, b
     %2 = arith.constant {value = 2 : i64}
-    memref.store %2, c
     %3 = arith.constant {value = 3 : i64}
-    memref.store %3, d
     %4 = arith.constant {value = 4 : i64}
-    memref.store %4, e
     %5 = arith.constant {value = 5 : i64}
-    memref.store %5, f
     %6 = arith.constant {value = 6 : i64}
-    memref.store %6, g
     %7 = arith.constant {value = 7 : i64}
-    memref.store %7, h
     %8 = arith.subi %0, %1
     %9 = arith.subi %8, %2
     %10 = arith.subi %9, %3
@@ -4811,12 +4624,6 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, x
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, y
-    %2 = arith.constant {value = 0 : i64}
-    memref.store %2, z
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.constant {value = 2 : i64}
     %5 = arith.cmpi lt %3, %4
@@ -4851,15 +4658,9 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.xor edx, edx
-    x86.mov [rbp-24], edx
-    x86.mov ebx, 1
-    x86.mov esi, 2
-    x86.cmp ebx, esi
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
     x86.jge register-allocator.main.other_1
   branch_0:
     x86.mov eax, 10
@@ -4941,7 +4742,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 2 : i64}
-    memref.store %0, x
     memref.store %0, __match_check_0
     cf.br check_0.cmp0
   check_0.cmp0:
@@ -5060,9 +4860,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 2 : i64}
-    memref.store %0, x
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, result
     memref.store %0, __match_process_0
     cf.br process_0.cmp0
   process_0.cmp0:
@@ -5098,34 +4895,32 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.xor ecx, ecx
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.process_0.cmp0
   process_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne register-allocator.main.process_0.cmp1
   process_0.case0:
     x86.mov eax, 100
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
   process_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne register-allocator.main.process_0.case2
   process_0.case1:
     x86.mov eax, 200
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
   process_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
   process_0.merge:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -5190,7 +4985,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 3 : i64}
-    memref.store %0, x
     memref.store %0, __match_check_0
     cf.br check_0.cmp0
   check_0.cmp0:
@@ -5351,7 +5145,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 1 : i64}
-    memref.store %0, x
     %1 = arith.constant {value = 0 : i64}
     memref.store %1, result
     memref.store %0, __match_cascade_0
@@ -5512,9 +5305,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 2 : i64}
-    memref.store %0, x
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, __matchexpr_eval_0
     memref.store %0, __match_eval_0
     cf.br eval_0.cmp0
   eval_0.cmp0:
@@ -5541,7 +5331,6 @@ module {
     cf.br eval_0.merge
   eval_0.merge:
     %11 = memref.load __matchexpr_eval_0 : i64
-    memref.store %11, result
     func.return %11
   }
 }
@@ -5551,34 +5340,32 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.xor ecx, ecx
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -5652,9 +5439,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 4 : i64}
-    memref.store %0, x
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, __matchexpr_eval_0
     memref.store %0, __match_eval_0
     cf.br eval_0.cmp0
   eval_0.cmp0:
@@ -5689,7 +5473,6 @@ module {
     cf.br eval_0.merge
   eval_0.merge:
     %19 = memref.load __matchexpr_eval_0 : i64
-    memref.store %19, result
     func.return %19
   }
 }
@@ -5699,17 +5482,15 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 4
-    x86.xor ecx, ecx
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, [rbp-16]
+    x86.mov ebx, [rbp-8]
     x86.mov esi, 2
     x86.cmp ebx, esi
     x86.sete edi
@@ -5719,15 +5500,15 @@ module {
     x86.je register-allocator.main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 3
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, [rbp-16]
+    x86.mov ebx, [rbp-8]
     x86.mov esi, 4
     x86.cmp ebx, esi
     x86.sete edi
@@ -5737,14 +5518,14 @@ module {
     x86.je register-allocator.main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -5812,9 +5593,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 2 : i64}
-    memref.store %0, x
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, __matchexpr_eval_0
     memref.store %0, __match_eval_0
     cf.br eval_0.cmp0
   eval_0.cmp0:
@@ -5843,7 +5621,6 @@ module {
     %11 = memref.load __matchexpr_eval_0 : i64
     %12 = arith.constant {value = 2 : i64}
     %13 = arith.muli %11, %12
-    memref.store %13, doubled
     func.return %13
   }
 }
@@ -5853,34 +5630,32 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.xor ecx, ecx
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.imul eax, ecx
     x86.epilogue
@@ -5961,7 +5736,6 @@ module {
   func @register-allocator.double(n: i64) -> i64 {
   entry:
     %0 = func.param n : StdI64
-    memref.store %0, n
     %1 = arith.constant {value = 2 : i64}
     %2 = arith.muli %0, %1
     func.return %2
@@ -5969,9 +5743,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %3 = arith.constant {value = 2 : i64}
-    memref.store %3, x
-    %4 = arith.constant {value = 0 : i64}
-    memref.store %4, result
     memref.store %3, __match_process_0
     cf.br process_0.cmp0
   process_0.cmp0:
@@ -6016,12 +5787,10 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.xor ecx, ecx
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.process_0.cmp0
   process_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne register-allocator.main.process_0.cmp1
@@ -6029,10 +5798,10 @@ module {
     x86.mov eax, 10
     x86.mov rcx, rax
     x86.call register-allocator.double
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
   process_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne register-allocator.main.process_0.case2
@@ -6040,14 +5809,14 @@ module {
     x86.mov eax, 20
     x86.mov rcx, rax
     x86.call register-allocator.double
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
   process_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
   process_0.merge:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -6101,7 +5870,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %3, %4 = func.try_call @register-allocator.mayFail
-    memref.store %4, __error_flag
     %5 = arith.constant {value = 42 : i64}
     func.return %5
   }
@@ -6190,8 +5958,6 @@ module {
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, result
     %4, %5 = func.try_call @register-allocator.mayFail
-    memref.store %5, __error_flag
-    memref.store %5, __try_error_2
     memref.store %4, __try_result_3
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi ne %5, %6
@@ -6201,7 +5967,6 @@ module {
     memref.store %8, result
     cf.br otherwise_continue_1
   otherwise_continue_1:
-    %9 = memref.load __try_result_3 : i64
     %10 = memref.load result : i64
     func.return %10
   }
@@ -6223,7 +5988,6 @@ module {
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call register-allocator.mayFail
-    x86.mov [rbp-16], eax
     x86.xor ecx, ecx
     x86.cmp edx, ecx
     x86.je register-allocator.main.otherwise_continue_1
@@ -6232,9 +5996,7 @@ module {
     x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.otherwise_continue_1
   otherwise_continue_1:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov eax, ecx
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -6319,7 +6081,6 @@ module {
   func @register-allocator.middle() -> i64 {
   entry:
     %3, %4 = func.try_call @register-allocator.inner
-    memref.store %4, __error_flag
     memref.store %4, __try_error_2
     memref.store %3, __try_result_3
     %5 = arith.constant {value = 0 : i64}
@@ -6330,13 +6091,11 @@ module {
     func.error_return %7
   try_continue_1:
     %8 = memref.load __try_result_3 : i64
-    memref.store %8, x
     func.return %8
   }
   func @register-allocator.main() -> i64 {
   entry:
     %9, %10 = func.try_call @register-allocator.middle
-    memref.store %10, __error_flag
     %11 = arith.constant {value = 99 : i64}
     memref.store %11, __try_default_1
     memref.store %9, __try_result_0
@@ -6349,7 +6108,6 @@ module {
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
     %15 = memref.load __try_result_0 : i64
-    memref.store %15, x
     func.return %15
   }
 }
@@ -6526,7 +6284,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %5, %6 = func.try_call @register-allocator.getA
-    memref.store %6, __error_flag
     %7 = arith.constant {value = 0 : i64}
     memref.store %7, __try_default_1
     memref.store %5, __try_result_0
@@ -6541,7 +6298,6 @@ module {
     %11 = memref.load __try_result_0 : i64
     memref.store %11, a
     %12, %13 = func.try_call @register-allocator.getB
-    memref.store %13, __error_flag
     %14 = arith.constant {value = 0 : i64}
     memref.store %14, __try_default_5
     memref.store %12, __try_result_4
@@ -6556,7 +6312,6 @@ module {
     %18 = memref.load __try_result_4 : i64
     memref.store %18, b
     %19, %20 = func.try_call @register-allocator.getC
-    memref.store %20, __error_flag
     %21 = arith.constant {value = 12 : i64}
     memref.store %21, __try_default_9
     memref.store %19, __try_result_8
@@ -6569,7 +6324,6 @@ module {
     cf.br otherwise_default_continue_11
   otherwise_default_continue_11:
     %25 = memref.load __try_result_8 : i64
-    memref.store %25, c
     %26 = memref.load a : i64
     %27 = memref.load b : i64
     %28 = arith.addi %26, %27
@@ -6751,7 +6505,6 @@ module {
   func @register-allocator.lookup(key: i64) -> i64 {
   entry:
     %0 = func.param key : StdI64
-    memref.store %0, key
     memref.store %0, __match_dispatch_0
     cf.br dispatch_0.cmp0
   dispatch_0.cmp0:
@@ -6781,7 +6534,6 @@ module {
   entry:
     %12 = arith.constant {value = 2 : i64}
     %13, %14 = func.try_call @register-allocator.lookup %12
-    memref.store %14, __error_flag
     %15 = arith.constant {value = 0 : i64}
     memref.store %15, __try_default_1
     memref.store %13, __try_result_0
@@ -6797,7 +6549,6 @@ module {
     memref.store %19, a
     %20 = arith.constant {value = 99 : i64}
     %21, %22 = func.try_call @register-allocator.lookup %20
-    memref.store %22, __error_flag
     %23 = arith.constant {value = 42 : i64}
     memref.store %23, __try_default_5
     memref.store %21, __try_result_4
@@ -6810,7 +6561,6 @@ module {
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
     %27 = memref.load __try_result_4 : i64
-    memref.store %27, b
     %28 = arith.constant {value = 256 : i64}
     %29 = arith.remsi %27, %28
     %30 = memref.load a : i64

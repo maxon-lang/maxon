@@ -37,52 +37,36 @@ module {
   }
   func @Adder.delegateAdd(__self_ptr: i64, other: i64, n: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
     x86.mov eax, [ecx+0]
     x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov eax, [edx+0]
-    x86.mov [rbp-24], eax
-    x86.mov edx, [rbp-24]
-    x86.mov [rbp-32], edx
-    x86.lea rbx, [rbp-32]
-    x86.mov [rbp-40], ecx
-    x86.mov rcx, rbx
+    x86.mov ecx, [edx+0]
+    x86.mov [rbp-24], ecx
+    x86.lea rdx, [rbp-24]
+    x86.mov rcx, rdx
     x86.mov rdx, r8
     x86.call Adder.addTo
-    x86.mov esi, [rbp-32]
-    x86.mov [rbp-24], esi
-    x86.mov edi, [rbp-8]
-    x86.mov r8, [rbp-16]
-    x86.mov [edi+0], r8
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-16]
+    x86.mov [ebx+0], esi
     x86.epilogue
     x86.ret
   }
   func @method-call-on-parameter.main() -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=16
     x86.mov eax, 100
+    x86.mov ecx, 50
+    x86.mov edx, 7
     x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
+    x86.lea rbx, [rbp-8]
     x86.mov [rbp-16], ecx
-    x86.mov edx, 50
-    x86.mov [rbp-24], edx
-    x86.mov ebx, [rbp-24]
-    x86.mov [rbp-32], ebx
-    x86.mov esi, 7
-    x86.mov edi, [rbp-16]
-    x86.mov [rbp-40], edi
-    x86.lea r8, [rbp-40]
-    x86.mov r9, [rbp-32]
-    x86.mov [rbp-48], r9
-    x86.lea rax, [rbp-48]
-    x86.mov rcx, r8
-    x86.mov rdx, rax
-    x86.mov r8, rsi
+    x86.lea rsi, [rbp-16]
+    x86.mov rcx, rbx
+    x86.mov r8, rdx
+    x86.mov rdx, rsi
     x86.call Adder.delegateAdd
-    x86.mov ecx, [rbp-40]
-    x86.mov [rbp-16], ecx
     x86.epilogue
     x86.ret
   }

@@ -56,9 +56,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 2 : i64}
-    memref.store %0, x
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, __matchexpr_eval_0
     memref.store %0, __match_eval_0
     cf.br eval_0.cmp0
   eval_0.cmp0:
@@ -87,7 +84,6 @@ module {
     %11 = memref.load __matchexpr_eval_0 : i64
     %12 = arith.constant {value = 2 : i64}
     %13 = arith.muli %11, %12
-    memref.store %13, doubled
     func.return %13
   }
 }
@@ -97,34 +93,32 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.xor ecx, ecx
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.imul eax, ecx
     x86.epilogue
@@ -138,34 +132,32 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.xor ecx, ecx
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.cmp1
   eval_0.case0:
     x86.mov eax, 10
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.cmp1:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, 2
     x86.cmp eax, ecx
     x86.jne register-allocator.main.eval_0.case2
   eval_0.case1:
     x86.mov eax, 20
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.case2:
     x86.xor eax, eax
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.merge:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.imul eax, ecx
     x86.epilogue

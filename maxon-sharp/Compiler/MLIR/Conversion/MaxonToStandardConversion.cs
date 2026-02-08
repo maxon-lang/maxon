@@ -117,6 +117,7 @@ public static class MaxonToStandardConversion {
       }
       var newFunc = new MlirFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType) { IsStdlib = func.IsStdlib };
       var valueMap = new Dictionary<MaxonValue, StdValue>();
+      var literalMap = new Dictionary<MaxonValue, MaxonLiteralOp>();
       var varTypes = new Dictionary<string, string>();
       // Maps MaxonStruct value IDs to their variable name prefix (for field access)
       var structVarNames = new Dictionary<int, string>();
@@ -162,6 +163,20 @@ public static class MaxonToStandardConversion {
           newBlock.AddOp(new StdParamOp(0, "__sret", sretParam));
           EmitStore(newBlock, sretParam, "__sret", varTypes);
           sretParamEmitted = true;
+        }
+
+        // Pre-scan: find struct literals immediately consumed by declaration assigns
+        // so we can store fields directly to the target variable.
+        // Only for declarations — reassignments need managed cleanup of the old value
+        // before the new fields are stored, so they must use an intermediate.
+        var structLiteralTargets = new Dictionary<int, string>();
+        for (int oi = 0; oi < block.Operations.Count - 1; oi++) {
+          if (block.Operations[oi] is MaxonStructLiteralOp lit
+            && block.Operations[oi + 1] is MaxonAssignOp assign
+            && assign.Value.Id == lit.Result.Id
+            && assign.IsDeclaration) {
+            structLiteralTargets[lit.Result.Id] = assign.VarName;
+          }
         }
 
         foreach (var op in block.Operations) {
@@ -333,6 +348,7 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonLiteralOp litOp: {
+              literalMap[litOp.Result] = litOp;
               switch (litOp.ValueKind) {
                 case MaxonValueKind.Integer: {
                   var newOp = new StdConstI64Op(litOp.IntValue);
@@ -365,7 +381,10 @@ public static class MaxonToStandardConversion {
             }
             case MaxonStructLiteralOp structLitOp: {
               // Store each field value to named slots.
-              var tempName = $"__struct_{structLitOp.Result.Id}";
+              // If this literal is immediately assigned, store directly to the target variable.
+              var tempName = structLiteralTargets.TryGetValue(structLitOp.Result.Id, out var inlineTarget)
+                ? inlineTarget
+                : $"__struct_{structLitOp.Result.Id}";
               var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                 var fieldVarName = $"{tempName}.{fieldName}";
@@ -528,7 +547,8 @@ public static class MaxonToStandardConversion {
                   foreach (var oldBufPath in oldBufPaths)
                     EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes, oldElementInfo);
                 }
-                CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
+                if (srcName != dstName)
+                  CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // In struct instance methods, assigning to a self field struct must also
                 // update the self.X variables, write through __self_ptr, and use
                 // "self.X" as the canonical name so later method calls read from
@@ -652,6 +672,12 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonBinOp binOp: {
+              if (TryAlgebraicIdentity(binOp, literalMap, valueMap, newBlock, out var identityResult)) {
+                Logger.Debug(LogCategory.Mlir, $"Algebraic identity: {binOp.Operator} on {binOp.OperandKind} → eliminated");
+                valueMap[binOp.Result] = identityResult;
+                break;
+              }
+
               var key = (binOp.Operator, binOp.OperandKind);
               if (!BinOpFactories.TryGetValue(key, out var factory))
                 throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind}");
@@ -3221,6 +3247,131 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.Eq, MaxonValueKind.Bool), (l, r) => { var op = new StdCmpI1Op("eq", (StdBool)l, (StdBool)r); return (op, op.Result); } },
     { (MaxonBinOperator.Ne, MaxonValueKind.Bool), (l, r) => { var op = new StdCmpI1Op("ne", (StdBool)l, (StdBool)r); return (op, op.Result); } },
   };
+
+  // ============================================================================
+  // Algebraic identity optimization
+  // ============================================================================
+
+  /// <summary>
+  /// Attempts to simplify a binary operation when one or both operands are known constants.
+  /// Returns true if the identity was applied, with the result value set accordingly.
+  /// When a new constant must be emitted (e.g. x*0=0), it is added to the block.
+  /// </summary>
+  private static bool TryAlgebraicIdentity(
+      MaxonBinOp binOp,
+      Dictionary<MaxonValue, MaxonLiteralOp> literalMap,
+      Dictionary<MaxonValue, StdValue> valueMap,
+      MlirBlock<StandardOp> block,
+      out StdValue result) {
+
+    literalMap.TryGetValue(binOp.Lhs, out var lhsLit);
+    literalMap.TryGetValue(binOp.Rhs, out var rhsLit);
+
+    // No constants — nothing to optimize
+    if (lhsLit == null && rhsLit == null) {
+      result = null!;
+      return false;
+    }
+
+    var lhsStd = valueMap[binOp.Lhs];
+    var rhsStd = valueMap[binOp.Rhs];
+
+    // Integer / Byte identities
+    if (binOp.OperandKind is MaxonValueKind.Integer or MaxonValueKind.Byte) {
+      long? lVal = lhsLit?.IntValue;
+      long? rVal = rhsLit?.IntValue;
+
+      switch (binOp.Operator) {
+        case MaxonBinOperator.Add:
+          if (rVal == 0) { result = lhsStd; return true; }
+          if (lVal == 0) { result = rhsStd; return true; }
+          break;
+        case MaxonBinOperator.Sub:
+          if (rVal == 0) { result = lhsStd; return true; }
+          break;
+        case MaxonBinOperator.Mul:
+          if (rVal == 1) { result = lhsStd; return true; }
+          if (lVal == 1) { result = rhsStd; return true; }
+          if (rVal == 0) { result = EmitConstI64(0, block); return true; }
+          if (lVal == 0) { result = EmitConstI64(0, block); return true; }
+          break;
+        case MaxonBinOperator.Div:
+          if (rVal == 1) { result = lhsStd; return true; }
+          break;
+        case MaxonBinOperator.Mod:
+          if (rVal == 1) { result = EmitConstI64(0, block); return true; }
+          break;
+        case MaxonBinOperator.BitAnd:
+          if (rVal == 0) { result = EmitConstI64(0, block); return true; }
+          if (lVal == 0) { result = EmitConstI64(0, block); return true; }
+          break;
+        case MaxonBinOperator.BitOr:
+          if (rVal == 0) { result = lhsStd; return true; }
+          if (lVal == 0) { result = rhsStd; return true; }
+          break;
+        case MaxonBinOperator.BitXor:
+          if (rVal == 0) { result = lhsStd; return true; }
+          if (lVal == 0) { result = rhsStd; return true; }
+          break;
+        case MaxonBinOperator.Shl:
+        case MaxonBinOperator.Shr:
+          if (rVal == 0) { result = lhsStd; return true; }
+          break;
+      }
+    }
+
+    // Float identities (safe subset — avoids signed-zero and NaN edge cases)
+    if (binOp.OperandKind == MaxonValueKind.Float) {
+      double? lVal = lhsLit?.FloatValue;
+      double? rVal = rhsLit?.FloatValue;
+
+      switch (binOp.Operator) {
+        case MaxonBinOperator.Mul:
+          if (rVal == 1.0) { result = lhsStd; return true; }
+          if (lVal == 1.0) { result = rhsStd; return true; }
+          break;
+        case MaxonBinOperator.Div:
+          if (rVal == 1.0) { result = lhsStd; return true; }
+          break;
+      }
+    }
+
+    // Bool identities
+    if (binOp.OperandKind == MaxonValueKind.Bool) {
+      bool? lVal = lhsLit?.BoolValue;
+      bool? rVal = rhsLit?.BoolValue;
+
+      switch (binOp.Operator) {
+        case MaxonBinOperator.And:
+          if (rVal == true) { result = lhsStd; return true; }
+          if (lVal == true) { result = rhsStd; return true; }
+          if (rVal == false) { result = EmitConstI1(false, block); return true; }
+          if (lVal == false) { result = EmitConstI1(false, block); return true; }
+          break;
+        case MaxonBinOperator.Or:
+          if (rVal == false) { result = lhsStd; return true; }
+          if (lVal == false) { result = rhsStd; return true; }
+          if (rVal == true) { result = EmitConstI1(true, block); return true; }
+          if (lVal == true) { result = EmitConstI1(true, block); return true; }
+          break;
+      }
+    }
+
+    result = null!;
+    return false;
+  }
+
+  private static StdI64 EmitConstI64(long value, MlirBlock<StandardOp> block) {
+    var op = new StdConstI64Op(value);
+    block.AddOp(op);
+    return op.Result;
+  }
+
+  private static StdBool EmitConstI1(bool value, MlirBlock<StandardOp> block) {
+    var op = new StdConstI1Op(value);
+    block.AddOp(op);
+    return op.Result;
+  }
 
   // ============================================================================
   // Function pointer operations

@@ -151,7 +151,6 @@ module {
   func @basics.main() -> i64 {
   entry:
     %0 = arith.float_constant {value = 3.14 : f64}
-    memref.store %0, x
     %1 = arith.float_constant {value = 3.14 : f64}
     %2 = arith.cmpf eq %0, %1
     cf.cond_br %2 [then: check_0, else: other_1]
