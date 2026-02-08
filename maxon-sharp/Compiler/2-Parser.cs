@@ -441,8 +441,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       } else if (Check(TokenType.Interface)) {
         PreScanInterface();
       } else if (Check(TokenType.Extension)) {
-        Advance();
-        SkipToMatchingEnd();
+        PreScanExtensionBlock(module);
       } else {
         // Unknown top-level token, skip to next line
         SkipToEndOfLine();
@@ -1189,6 +1188,115 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Pre-scan an extension block: register method signatures for each concrete type conforming to the interface.
+  /// </summary>
+  private void PreScanExtensionBlock(MlirModule<MaxonOp> module) {
+    ProcessExtensionBlock(module, (m, positions, typeName) => {
+      foreach (var pos in positions) {
+        _pos = pos;
+        PreScanInstanceMethod(m, typeName);
+      }
+    });
+  }
+
+  /// <summary>
+  /// Parse an extension block: parse method bodies for each concrete type conforming to the interface.
+  /// </summary>
+  private void ParseExtensionBlock(MlirModule<MaxonOp> module) {
+    ProcessExtensionBlock(module, (m, positions, typeName) => {
+      foreach (var pos in positions) {
+        _pos = pos;
+        ParseInstanceMethod(m, typeName);
+      }
+    });
+  }
+
+  /// <summary>
+  /// Shared logic for processing extension blocks. Scans the block structure,
+  /// finds conforming types, sets up type parameters, and delegates method
+  /// processing to the provided callback (pre-scan vs full parse).
+  /// </summary>
+  private void ProcessExtensionBlock(
+      MlirModule<MaxonOp> module,
+      Action<MlirModule<MaxonOp>, List<int>, string> processFunction) {
+    Advance(); // consume 'extension'
+    var interfaceNameToken = Expect(TokenType.Identifier);
+    var interfaceName = interfaceNameToken.Value;
+
+    SkipNewlines();
+    var typealiasPositions = new List<int>();
+    var functionPositions = new List<int>();
+
+    // Scan to find top-level typealias and function positions within the block
+    int scanPos = _pos;
+    int depth = 1;
+    while (scanPos < _tokens.Count && depth > 0) {
+      var tokenType = _tokens[scanPos].Type;
+      if (depth == 1) {
+        if (tokenType == TokenType.TypeAlias) {
+          typealiasPositions.Add(scanPos);
+        } else if (tokenType == TokenType.Function) {
+          functionPositions.Add(scanPos);
+        }
+      }
+      if (tokenType == TokenType.Function || tokenType == TokenType.If
+          || tokenType == TokenType.While || tokenType == TokenType.For
+          || tokenType == TokenType.Match) {
+        depth++;
+      } else if (tokenType == TokenType.Else) {
+        depth++;
+      } else if (tokenType == TokenType.Otherwise && scanPos + 1 < _tokens.Count
+                 && _tokens[scanPos + 1].Type == TokenType.CharacterLiteral) {
+        depth++;
+      } else if (tokenType == TokenType.End) {
+        depth--;
+      }
+      scanPos++;
+    }
+    int endPos = scanPos;
+    if (endPos < _tokens.Count && _tokens[endPos].Type == TokenType.CharacterLiteral) endPos++;
+
+    _interfaceAssociatedTypes.TryGetValue(interfaceName, out var assocTypeNames);
+
+    // Snapshot before iterating — PreScanTypeAlias modifies _typeRegistry
+    var conformingTypes = new List<(string Name, MlirStructType Type)>();
+    foreach (var (typeName, type) in _typeRegistry) {
+      if (type is not MlirStructType structType) continue;
+      if (!structType.ConformingInterfaces.Contains(interfaceName)) continue;
+      if (_typeAliasSources.ContainsKey(typeName)) continue;
+      conformingTypes.Add((typeName, structType));
+    }
+
+    foreach (var (typeName, structType) in conformingTypes) {
+      _currentTypeName = typeName;
+
+      var registeredParams = new List<string>();
+      if (assocTypeNames != null) {
+        foreach (var assocName in assocTypeNames) {
+          if (structType.TypeParams.TryGetValue(assocName, out var concreteType)) {
+            _typeRegistry[assocName] = concreteType;
+          } else {
+            _typeRegistry[assocName] = new MlirTypeParameterType(assocName);
+          }
+          registeredParams.Add(assocName);
+        }
+      }
+
+      foreach (var pos in typealiasPositions) {
+        _pos = pos;
+        PreScanTypeAlias();
+      }
+
+      processFunction(module, functionPositions, typeName);
+
+      RemoveAssociatedTypePlaceholders(registeredParams);
+    }
+
+    _currentTypeName = null;
+    _pos = endPos;
+  }
+
+  /// <summary>
   /// Pre-scan a typealias declaration: typealias Name = SourceType with (Type1, Type2, ...)
   /// Creates a concrete struct type by substituting associated type parameters.
   /// Also supports "with N Type" form where N is an integer capacity hint (e.g., Vector with 3 int).
@@ -1295,12 +1403,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     allParamNames.AddRange(paramNames);
     var allParamTypes = new List<MlirType> { (MlirType)structType };
     allParamTypes.AddRange(paramTypes);
-
-    // Skip methods with function-typed parameters (higher-order functions not yet supported)
-    if (paramTypes.Any(t => t == MlirType.Fn)) {
-      SkipToMatchingEnd();
-      return;
-    }
 
     var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames);
 
@@ -1556,8 +1658,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     } else if (Check(TokenType.Interface)) {
       SkipInterfaceDecl();
     } else if (Check(TokenType.Extension)) {
-      Advance();
-      SkipToMatchingEnd();
+      ParseExtensionBlock(module);
     } else {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected function declaration, got '{Current().Value}'", Current().Line, Current().Column);
     }
@@ -1861,12 +1962,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var throwsType = ParseThrowsClause();
 
     SkipNewlines();
-
-    // Skip methods with function-typed parameters (higher-order functions not yet supported)
-    if (paramTypes.Any(t => t == MlirType.Fn)) {
-      SkipToMatchingEnd();
-      return;
-    }
 
     // Instance method gets 'self' as first parameter (the struct type)
     var structType = (MlirStructType)_typeRegistry[typeName];

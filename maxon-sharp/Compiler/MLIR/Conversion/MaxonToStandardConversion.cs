@@ -689,7 +689,7 @@ public static class MaxonToStandardConversion {
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
               break;
             case MaxonFunctionParamOp fnParamOp:
-              LowerFunctionParam(fnParamOp, newBlock, valueMap, retStructType != null);
+              LowerFunctionParam(fnParamOp, newBlock, valueMap, varTypes, retStructType != null);
               break;
             case MaxonFunctionVarRefOp fnVarRefOp:
               LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap);
@@ -2583,11 +2583,15 @@ public static class MaxonToStandardConversion {
       MaxonFunctionParamOp fnParamOp,
       MlirBlock<StandardOp> block,
       Dictionary<MaxonValue, StdValue> valueMap,
+      Dictionary<string, string> varTypes,
       bool hasSret) {
     int flatIdx = fnParamOp.Index + (hasSret ? 1 : 0);
     var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(MlirContext.Current.NextId()));
     block.AddOp(paramOp);
     valueMap[fnParamOp.Result] = paramOp.Result;
+    // Store function pointer to variable so it can be loaded later via StdLoadI64Op
+    block.AddOp(new StdStorePtrOp((StdPtr)paramOp.Result, fnParamOp.Name));
+    varTypes[fnParamOp.Name] = "ptr";
   }
 
   private static void LowerFunctionVarRef(
@@ -2622,6 +2626,7 @@ public static class MaxonToStandardConversion {
         MaxonValueKind.Struct => throw new NotImplementedException("Struct return from indirect call not yet implemented"),
         MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
         MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
+        MaxonValueKind.TypeParameter => new StdI64(MlirContext.Current.NextId()),
         _ => throw new InvalidOperationException($"Unsupported result kind for indirect call: {indirectCallOp.ResultKind}")
       };
     }

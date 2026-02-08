@@ -53,6 +53,10 @@ public static class MonomorphizationPass {
       // Skip if no type params (not a generic instantiation)
       if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
 
+      // Extension typealiases like "ElementArray = Array with Element" have unresolved
+      // type params — they aren't concrete instantiations and can't be specialized
+      if (aliasInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+
       var sourceTypeName = aliasInfo.SourceTypeName;
 
       // Find the source struct type to get associated type names
@@ -358,6 +362,7 @@ public static class MonomorphizationPass {
         MaxonByte => new MaxonByte(newId),
         MaxonStruct s => new MaxonStruct(newId, SubstituteName(s.TypeName, typeSubstitution)),
         MaxonEnum e => new MaxonEnum(newId, e.TypeName),
+        MaxonFunctionPtr => new MaxonFunctionPtr(newId),
         _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
       };
       valueMap[old.Id] = newVal;
@@ -674,6 +679,36 @@ public static class MonomorphizationPass {
         var cloned = new MaxonCallRuntimeOp(callRtOp.FunctionName, newArgs, callRtOp.Result != null);
         if (callRtOp.Result != null && cloned.Result != null)
           RegisterResult(callRtOp.Result, cloned.Result);
+        return cloned;
+      }
+
+      case MaxonFunctionParamOp funcParam: {
+        var cloned = new MaxonFunctionParamOp(funcParam.Index, funcParam.Name, funcParam.FunctionType);
+        RegisterResult(funcParam.Result, cloned.Result);
+        return cloned;
+      }
+
+      case MaxonFunctionRefOp funcRef: {
+        var cloned = new MaxonFunctionRefOp(funcRef.FunctionName, funcRef.FunctionType);
+        RegisterResult(funcRef.Result, cloned.Result);
+        return cloned;
+      }
+
+      case MaxonFunctionVarRefOp funcVarRef: {
+        var cloned = new MaxonFunctionVarRefOp(funcVarRef.VarName, funcVarRef.FunctionType);
+        RegisterResult(funcVarRef.Result, cloned.Result);
+        return cloned;
+      }
+
+      case MaxonIndirectCallOp indirectCall: {
+        var newCallee = MapValue(indirectCall.Callee);
+        var newArgs = indirectCall.Args.Select(a => MapValue(a)).ToList();
+        var resultKind = indirectCall.ResultKind.HasValue
+          ? SubstituteValueKind(indirectCall.ResultKind.Value, typeSubstitution)
+          : (MaxonValueKind?)null;
+        var cloned = new MaxonIndirectCallOp(newCallee, indirectCall.CalleeType, newArgs, resultKind, indirectCall.ResultStructTypeName);
+        if (indirectCall.Result != null && cloned.Result != null)
+          RegisterResult(indirectCall.Result, cloned.Result);
         return cloned;
       }
 
