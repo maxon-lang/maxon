@@ -58,6 +58,21 @@ public static class FragmentGenerator {
   }
 
   /// <summary>
+  /// Write a file with retry logic for transient Windows file locking errors
+  /// (e.g., antivirus or search indexer briefly memory-mapping the file).
+  /// </summary>
+  private static void WriteFileWithRetry(string path, string content, int maxRetries = 3) {
+    for (int attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        File.WriteAllText(path, content);
+        return;
+      } catch (IOException) when (attempt < maxRetries) {
+        Thread.Sleep(50 * (attempt + 1));
+      }
+    }
+  }
+
+  /// <summary>
   /// Delete the .spec_count flag file (on generation failure).
   /// </summary>
   private static void DeleteSpecCountFlag(string fragmentDir) {
@@ -140,7 +155,7 @@ public static class FragmentGenerator {
           if (error != null) {
             errors.Add($"Error compiling 'specs/fragments/{specName}/{test.Name}.test':\n{error}");
           }
-          File.WriteAllText(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
+          WriteFileWithRetry(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
           Interlocked.Increment(ref generated);
         } catch (Exception ex) {
           errors.Add($"Exception generating specs/fragments/{specName}/{test.Name}: {ex.Message}\n{ex.StackTrace}");
