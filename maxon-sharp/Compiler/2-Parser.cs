@@ -3426,9 +3426,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["__write_file"] = RuntimeCallIntrinsic(
       "Writes text content to a file. Returns 0 on success.\n\n`__write_file(cstring_path, cstring_content) returns int`",
       "maxon_write_file", 2, true),
-    ["__write_file_binary"] = RuntimeCallIntrinsic(
-      "Writes binary content to a file. Returns 0 on success.\n\n`__write_file_binary(cstring_path, byte_array) returns int`",
-      "maxon_write_file_binary", 2, true),
+    ["__write_file_binary"] = new(
+      "Writes binary content to a file. Returns 0 on success.\n\n`__write_file_binary(cstring_path, array) returns int`",
+      p => {
+        var path = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var arrayVal = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        // Extract managed.buffer and managed.length from the Array struct
+        var managedRef = new MaxonFieldAccessOp(arrayVal, "Array", "managed", MaxonValueKind.Struct, "__ManagedMemory");
+        p._currentBlock!.AddOp(managedRef);
+        var bufferRef = new MaxonFieldAccessOp(managedRef.Result, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(bufferRef);
+        var lengthRef = new MaxonFieldAccessOp(managedRef.Result, "__ManagedMemory", "length", MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(lengthRef);
+        var op = new MaxonCallRuntimeOp("maxon_write_file_binary", [path, bufferRef.Result, lengthRef.Result], true);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
     // === Directory intrinsics ===
     ["__find_first_file"] = RuntimeCallIntrinsic(
       "Opens a file search. Returns handle or 0.\n\n`__find_first_file(cstring_pattern) returns int`",
@@ -5319,6 +5334,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var callOp = CreateFunctionCall(qualifiedFuncToken, args, callee);
             if (callOp.Result != null)
               return new ExprResult.Direct(callOp.Result);
+            if (_inTryContext)
+              return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
             throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{qualifiedName}' does not return a value", methodToken.Line, methodToken.Column);
           }
         }
@@ -5350,6 +5367,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var builtinResult = TryEmitManagedMemoryBuiltin(token);
           if (builtinResult != null)
             return new ExprResult.Direct(builtinResult);
+          if (_inTryContext)
+            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Builtin '{token.Value}' does not return a value", token.Line, token.Column);
         }
         // Check for sibling method call: bare methodName() inside an instance method resolves to self.methodName()
@@ -5357,6 +5376,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (siblingCallOp != null) {
           if (siblingCallOp.Result != null)
             return new ExprResult.Direct(siblingCallOp.Result);
+          if (_inTryContext)
+            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Method '{token.Value}' does not return a value", token.Line, token.Column);
         }
 
@@ -5397,6 +5418,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           _currentBlock!.AddOp(indirectCallOp);
           if (indirectCallOp.Result != null)
             return new ExprResult.Direct(indirectCallOp.Result);
+          if (_inTryContext)
+            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function variable '{token.Value}' does not return a value", token.Line, token.Column);
         }
 
@@ -5405,6 +5428,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var callOp = CreateFunctionCall(token, args, callee);
         if (callOp.Result != null)
           return new ExprResult.Direct(callOp.Result);
+        if (_inTryContext)
+          return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
         throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{token.Value}' does not return a value", token.Line, token.Column);
       }
 

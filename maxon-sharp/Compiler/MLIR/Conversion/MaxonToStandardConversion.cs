@@ -860,7 +860,19 @@ public static class MaxonToStandardConversion {
               LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonCallRuntimeOp callRtOp: {
-              var stdArgs = callRtOp.Args.Select(a => (StdValue)(StdI64)valueMap[a]).ToList();
+              var stdArgs = callRtOp.Args.Select(a => {
+                if (valueMap.TryGetValue(a, out var mapped))
+                  return (StdValue)(StdI64)mapped;
+                if (structVarNames.TryGetValue(a.Id, out var structName)) {
+                  if (!structValueTypes.TryGetValue(a.Id, out var typeName))
+                    throw new InvalidOperationException($"MaxonCallRuntimeOp struct arg {a} has no type in structValueTypes");
+                  var bufferPath = typeName == "__ManagedMemory"
+                    ? $"{structName}.buffer"
+                    : $"{structName}.managed.buffer";
+                  return (StdValue)(StdI64)EmitLoad(newBlock, bufferPath, varTypes);
+                }
+                throw new InvalidOperationException($"MaxonCallRuntimeOp arg {a} not found in valueMap or structVarNames");
+              }).ToList();
               if (callRtOp.Result != null) {
                 var rtResult = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdCallRuntimeOp(callRtOp.FunctionName, stdArgs, rtResult));

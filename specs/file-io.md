@@ -162,6 +162,12 @@ function main() returns int
   return 0
 end 'main'
 ```
+```exitcode
+1
+```
+```stdout
+Could not delete file
+```
 
 ## Tests
 
@@ -246,7 +252,7 @@ function main() returns int
   data.push(67 as byte)
 
   // Write binary file
-  try File.writeBinary("test_binary.bin", data) otherwise 'write_err'
+  try File.writeBinary("test_binary.bin", content: data) otherwise 'write_err'
     print("Write failed")
     return 1
   end 'write_err'

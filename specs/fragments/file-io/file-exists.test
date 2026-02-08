@@ -1,0 +1,52 @@
+// Test: file-exists
+function main() returns int
+  // Test File.exists on a nonexistent file (returns false)
+  if File.exists("nonexistent_xyz_12345.txt") 'check'
+    return 1
+  end 'check'
+  return 42
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @file-io.main() -> i64 {
+  entry:
+    x86.prologue stack_size=80
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.mov edx, 25
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-24], ebx
+    x86.mov esi, 1
+    x86.mov [rbp-32], esi
+    x86.xor edi, edi
+    x86.mov [rbp-40], edi
+    x86.mov r8, [rbp-40]
+    x86.mov [rbp-48], r8
+    x86.mov r9, [rbp-32]
+    x86.mov [rbp-56], r9
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-80], eax
+    x86.lea rax, [rbp-80]
+    x86.mov rcx, rax
+    x86.call stdlib.File.exists
+    x86.test eax, eax
+    x86.je file-io.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, 42
+    x86.epilogue
+    x86.ret
+  }
+}
+---

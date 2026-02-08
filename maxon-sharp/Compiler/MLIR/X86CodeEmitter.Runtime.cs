@@ -657,51 +657,177 @@ public partial class X86CodeEmitter {
   // File I/O runtime stubs
   // ==========================================================================
 
-  /// <summary>maxon_file_open_read(cstring_path) -> handle: returns -1 (stub, indicates failure)</summary>
+  /// <summary>
+  /// maxon_file_open_read(cstring_path) -> handle or -1
+  /// CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
+  /// Stack: [rbp-8]=path
+  /// </summary>
   private void EmitMaxonFileOpenRead() {
-    EmitRuntimeFunctionStart("maxon_file_open_read", 1);
-    EmitMovRegImm(X86Register.Rax, -1);
+    EmitRuntimeFunctionStart("maxon_file_open_read", 1, 0x50);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);        // arg1: lpFileName
+    EmitMovRegImm(X86Register.Rdx, 0x80000000);       // arg2: GENERIC_READ
+    EmitMovRegImm(X86Register.R8, 1);                  // arg3: FILE_SHARE_READ
+    EmitXorRegReg(X86Register.R9, X86Register.R9);     // arg4: lpSecurityAttributes = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00); // [rsp+0x20] = OPEN_EXISTING (3)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = 0
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    // CreateFileA returns INVALID_HANDLE_VALUE (-1) on failure, which is what we want
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_file_size(handle) -> int: returns 0 (stub)</summary>
+  /// <summary>
+  /// maxon_file_size(handle) -> file size in bytes
+  /// GetFileSizeEx(handle, &size) - size is a 64-bit value
+  /// Stack: [rbp-8]=handle, [rbp-16]=size (8 bytes for LARGE_INTEGER)
+  /// </summary>
   private void EmitMaxonFileSize() {
-    EmitRuntimeFunctionStart("maxon_file_size", 1);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_file_size", 1, 0x40);
+    // Zero the size slot
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: hFile
+    // LEA RDX, [rbp-0x10] (arg2: &size)
+    EmitBytes(0x48, 0x8D, 0x55, 0xF0);
+    EmitCallImport("kernel32.dll", "GetFileSizeEx");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);         // return size
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_file_read(handle, buffer_ptr, size) -> int: returns 0 (stub)</summary>
+  /// <summary>
+  /// maxon_file_read(handle, buffer_ptr, size) -> bytes read
+  /// ReadFile(handle, buffer, size, &bytesRead, NULL)
+  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=size, [rbp-32]=bytesRead
+  /// </summary>
   private void EmitMaxonFileRead() {
-    EmitRuntimeFunctionStart("maxon_file_read", 3);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_file_read", 3, 0x40);
+    // Zero the bytesRead slot
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: hFile
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // arg2: lpBuffer
+    EmitMovRegMem(X86Register.R8, -0x18, 8);           // arg3: nNumberOfBytesToRead
+    // LEA R9, [rbp-0x20] (arg4: &bytesRead)
+    EmitBytes(0x4C, 0x8D, 0x4D, 0xE0);
+    // [rsp+0x20] = NULL (lpOverlapped)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "ReadFile");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);         // return bytesRead
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_file_close(handle): void (stub)</summary>
+  /// <summary>
+  /// maxon_file_close(handle) -> void
+  /// CloseHandle(handle)
+  /// Stack: [rbp-8]=handle
+  /// </summary>
   private void EmitMaxonFileClose() {
     EmitRuntimeFunctionStart("maxon_file_close", 1);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: hObject
+    EmitCallImport("kernel32.dll", "CloseHandle");
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_file_delete(cstring_path) -> int: returns 0 (stub)</summary>
+  /// <summary>
+  /// maxon_file_delete(cstring_path) -> 0 on success, non-zero on failure
+  /// DeleteFileA returns non-zero on success (inverted from our convention)
+  /// Stack: [rbp-8]=path
+  /// </summary>
   private void EmitMaxonFileDelete() {
-    EmitRuntimeFunctionStart("maxon_file_delete", 1);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_file_delete", 1, 0x30);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: lpFileName
+    EmitCallImport("kernel32.dll", "DeleteFileA");
+    // DeleteFileA: non-zero = success, zero = failure
+    // We need: 0 = success, non-zero = failure (inverted)
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitSetcc("z", X86Register.Rax);                   // AL = 1 if failed (ZF set = RAX was 0)
+    EmitMovzxReg8To64(X86Register.Rax);
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_write_file(cstring_path, cstring_content) -> int: returns 0 (stub)</summary>
+  /// <summary>
+  /// Emits CreateFileA call for writing: CreateFileA(pathSlot, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL)
+  /// Result handle is in RAX. Branches to failLabel on INVALID_HANDLE_VALUE.
+  /// </summary>
+  private void EmitCreateFileForWrite(int pathSlot, string failLabel) {
+    EmitMovRegMem(X86Register.Rcx, pathSlot, 8);       // arg1: lpFileName
+    EmitMovRegImm(X86Register.Rdx, 0x40000000);        // arg2: GENERIC_WRITE
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // arg3: dwShareMode = 0
+    EmitXorRegReg(X86Register.R9, X86Register.R9);      // arg4: lpSecurityAttributes = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x02, 0x00, 0x00, 0x00); // [rsp+0x20] = CREATE_ALWAYS (2)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = 0
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", failLabel);
+  }
+
+  /// <summary>
+  /// Emits WriteFile + CloseHandle. Jumps to writeFailLabel if WriteFile fails (handle still needs closing).
+  /// </summary>
+  private void EmitWriteFileAndClose(int handleSlot, int bufferSlot, int lengthSlot, int bytesWrittenSlot, string writeFailLabel) {
+    EmitMovRegMem(X86Register.Rcx, handleSlot, 8);     // arg1: handle
+    EmitMovRegMem(X86Register.Rdx, bufferSlot, 8);     // arg2: buffer
+    EmitMovRegMem(X86Register.R8, lengthSlot, 8);       // arg3: length
+    // LEA R9, [rbp+bytesWrittenSlot] (&bytesWritten)
+    EmitBytes(0x4C, 0x8D, 0x4D, (byte)(bytesWrittenSlot & 0xFF));
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00); // [rsp+0x20] = NULL
+    EmitCallImport("kernel32.dll", "WriteFile");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", writeFailLabel);
+    EmitMovRegMem(X86Register.Rcx, handleSlot, 8);
+    EmitCallImport("kernel32.dll", "CloseHandle");
+  }
+
+  /// <summary>
+  /// maxon_write_file(cstring_path, cstring_content) -> 0 on success, non-zero on failure
+  /// Stack: [rbp-8]=path, [rbp-16]=content, [rbp-24]=handle, [rbp-32]=length/bytesWritten
+  /// </summary>
   private void EmitMaxonWriteFile() {
-    EmitRuntimeFunctionStart("maxon_write_file", 2);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_write_file", 2, 0x50);
+    EmitCreateFileForWrite(-0x08, "rt_wf_fail");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);         // [rbp-24] = handle
+    // strlen on content to get length
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // RDX = content ptr
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);    // RAX = 0 (counter)
+    DefineLabel("rt_wf_strlen_loop");
+    EmitBytes(0x0F, 0xB6, 0x0C, 0x02);                // MOVZX ECX, byte [RDX+RAX]
+    EmitBytes(0x84, 0xC9);                              // TEST CL, CL
+    EmitJcc("z", "rt_wf_strlen_done");
+    EmitBytes(0x48, 0xFF, 0xC0);                        // INC RAX
+    EmitJmp("rt_wf_strlen_loop");
+    DefineLabel("rt_wf_strlen_done");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);         // [rbp-32] = length
+    EmitWriteFileAndClose(-0x18, -0x10, -0x20, -0x20, "rt_wf_write_fail");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);    // return 0 (success)
+    EmitJmp("rt_wf_done");
+    DefineLabel("rt_wf_write_fail");
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    DefineLabel("rt_wf_fail");
+    EmitMovRegImm(X86Register.Rax, 1);
+    DefineLabel("rt_wf_done");
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_write_file_binary(cstring_path, byte_array) -> int: returns 0 (stub)</summary>
+  /// <summary>
+  /// maxon_write_file_binary(cstring_path, buffer_ptr, length) -> 0 on success, non-zero on failure
+  /// Stack: [rbp-8]=path, [rbp-16]=buffer_ptr, [rbp-24]=length, [rbp-32]=handle, [rbp-40]=bytesWritten
+  /// </summary>
   private void EmitMaxonWriteFileBinary() {
-    EmitRuntimeFunctionStart("maxon_write_file_binary", 2);
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitRuntimeFunctionStart("maxon_write_file_binary", 3, 0x50);
+    EmitCreateFileForWrite(-0x08, "rt_wfb_fail");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);         // [rbp-32] = handle
+    EmitWriteFileAndClose(-0x20, -0x10, -0x18, -0x28, "rt_wfb_write_fail");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);    // return 0 (success)
+    EmitJmp("rt_wfb_done");
+    DefineLabel("rt_wfb_write_fail");
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    DefineLabel("rt_wfb_fail");
+    EmitMovRegImm(X86Register.Rax, 1);
+    DefineLabel("rt_wfb_done");
     EmitRuntimeFunctionEnd();
   }
 
