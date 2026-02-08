@@ -85,9 +85,7 @@ module {
   func @advent.add(x: i64, y: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
-    memref.store %0, x
     %1 = func.param y : StdI64
-    memref.store %1, y
     %2 = arith.addi %0, %1
     func.return %2
   }
@@ -186,7 +184,6 @@ module {
   func @advent.multiply(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
-    memref.store %0, x
     func.return %0
   }
   func @advent.main() -> i64 {
@@ -204,15 +201,10 @@ module {
     %7 = memref.lea __sret_3
     func.call @stdlib.CommandLine.args %7
     %8 = memref.load __sret_3.iterIndex : i64
-    memref.store %8, args.iterIndex
     %9 = memref.load __sret_3.managed.buffer : i64
-    memref.store %9, args.managed.buffer
     %10 = memref.load __sret_3.managed.length : i64
-    memref.store %10, args.managed.length
     %11 = memref.load __sret_3.managed.capacity : i64
-    memref.store %11, args.managed.capacity
     %12 = memref.load __sret_3.managed.element_size : i64
-    memref.store %12, args.managed.element_size
     %13 = arith.constant {value = 0 : i64}
     %14 = arith.constant {value = 0 : i64}
     memref.store %14, __sret_8._iterPos
@@ -225,50 +217,24 @@ module {
     %18 = arith.constant {value = 0 : i64}
     memref.store %18, __sret_8._managed.buffer
     %19 = memref.lea __sret_8
-    %21 = memref.load args.managed.element_size : i64
-    memref.store %21, __selfbuf_20.managed.element_size
-    %22 = memref.load args.managed.capacity : i64
-    memref.store %22, __selfbuf_20.managed.capacity
-    %23 = memref.load args.managed.length : i64
-    memref.store %23, __selfbuf_20.managed.length
-    %24 = memref.load args.managed.buffer : i64
-    memref.store %24, __selfbuf_20.managed.buffer
-    %25 = memref.load args.iterIndex : i64
-    memref.store %25, __selfbuf_20.iterIndex
+    memref.store %12, __selfbuf_20.managed.element_size
+    memref.store %11, __selfbuf_20.managed.capacity
+    memref.store %10, __selfbuf_20.managed.length
+    memref.store %9, __selfbuf_20.managed.buffer
+    memref.store %8, __selfbuf_20.iterIndex
     %26 = memref.lea __selfbuf_20
     %27 = func.try_call @StringArray.get %19, %26, %13
-    memref.store %27, __error_flag
-    %28 = memref.load __selfbuf_20.iterIndex : i64
-    memref.store %28, args.iterIndex
-    %29 = memref.load __selfbuf_20.managed.buffer : i64
-    memref.store %29, args.managed.buffer
-    %30 = memref.load __selfbuf_20.managed.length : i64
-    memref.store %30, args.managed.length
-    %31 = memref.load __selfbuf_20.managed.capacity : i64
-    memref.store %31, args.managed.capacity
-    %32 = memref.load __selfbuf_20.managed.element_size : i64
-    memref.store %32, args.managed.element_size
     %33 = memref.lea_rdata __str_9
     %34 = std.ptr_to_i64 %33
     %35 = arith.constant {value = 0 : i64}
-    memref.store %34, __strtmp_9._managed.buffer
-    memref.store %35, __strtmp_9._managed.length
     %36 = arith.constant {value = 0 : i64}
-    memref.store %36, __strtmp_9._managed.capacity
     %37 = arith.constant {value = 1 : i64}
-    memref.store %37, __strtmp_9._managed.element_size
     %38 = arith.constant {value = 0 : i64}
-    memref.store %38, __strtmp_9._iterPos
-    %39 = memref.load __strtmp_9._managed.buffer : i64
-    memref.store %39, __try_default_1._managed.buffer
-    %40 = memref.load __strtmp_9._managed.length : i64
-    memref.store %40, __try_default_1._managed.length
-    %41 = memref.load __strtmp_9._managed.capacity : i64
-    memref.store %41, __try_default_1._managed.capacity
-    %42 = memref.load __strtmp_9._managed.element_size : i64
-    memref.store %42, __try_default_1._managed.element_size
-    %43 = memref.load __strtmp_9._iterPos : i64
-    memref.store %43, __try_default_1._iterPos
+    memref.store %34, __try_default_1._managed.buffer
+    memref.store %35, __try_default_1._managed.length
+    memref.store %36, __try_default_1._managed.capacity
+    memref.store %37, __try_default_1._managed.element_size
+    memref.store %38, __try_default_1._iterPos
     %44 = memref.load __sret_8._managed.buffer : i64
     memref.store %44, __try_result_0._managed.buffer
     %45 = memref.load __sret_8._managed.length : i64
@@ -307,7 +273,6 @@ module {
     memref.store %61, __argbuf_56._managed.buffer
     %62 = memref.lea __argbuf_56
     %63, %64 = func.try_call @stdlib.Parsing.__int_fromString %62
-    memref.store %64, __error_flag
     %65 = arith.constant {value = 0 : i64}
     memref.store %65, __try_default_5
     memref.store %63, __try_result_4
@@ -319,8 +284,6 @@ module {
     memref.store %68, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %69 = memref.load __try_result_4 : i64
-    memref.store %69, a
     %70 = arith.constant {value = 3 : i64}
     %71 = func.call @advent.multiply %70
     func.return %71
@@ -335,7 +298,7 @@ module {
   }
   func @advent.main() -> i64 {
   entry:
-    x86.prologue stack_size=336
+    x86.prologue stack_size=256
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
@@ -350,123 +313,93 @@ module {
     x86.mov rcx, rdi
     x86.call stdlib.CommandLine.args
     x86.mov r8, [rbp-40]
-    x86.mov [rbp-48], r8
     x86.mov r9, [rbp-32]
-    x86.mov [rbp-56], r9
     x86.mov eax, [rbp-24]
-    x86.mov [rbp-64], eax
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-80], eax
-    x86.xor eax, eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-88], ecx
-    x86.xor ecx, ecx
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-8]
+    x86.xor ebx, ebx
+    x86.xor esi, esi
+    x86.mov [rbp-48], esi
+    x86.xor esi, esi
+    x86.mov [rbp-56], esi
+    x86.xor esi, esi
+    x86.mov [rbp-64], esi
+    x86.xor esi, esi
+    x86.mov [rbp-72], esi
+    x86.xor esi, esi
+    x86.mov [rbp-80], esi
+    x86.lea rsi, [rbp-80]
+    x86.mov [rbp-88], edx
     x86.mov [rbp-96], ecx
-    x86.xor ecx, ecx
-    x86.mov [rbp-104], ecx
-    x86.xor ecx, ecx
-    x86.mov [rbp-112], ecx
-    x86.xor ecx, ecx
-    x86.mov [rbp-120], ecx
-    x86.lea rcx, [rbp-120]
-    x86.mov edx, [rbp-80]
-    x86.mov [rbp-128], edx
-    x86.mov edx, [rbp-72]
-    x86.mov [rbp-136], edx
-    x86.mov edx, [rbp-64]
-    x86.mov [rbp-144], edx
-    x86.mov edx, [rbp-56]
-    x86.mov [rbp-152], edx
-    x86.mov edx, [rbp-48]
-    x86.mov [rbp-160], edx
-    x86.lea rdx, [rbp-160]
-    x86.mov r8, rax
+    x86.mov [rbp-104], eax
+    x86.mov [rbp-112], r9
+    x86.mov [rbp-120], r8
+    x86.lea rax, [rbp-120]
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.mov r8, rbx
     x86.call StringArray.get
-    x86.mov eax, [rbp-160]
-    x86.mov [rbp-48], eax
-    x86.mov eax, [rbp-152]
-    x86.mov [rbp-56], eax
-    x86.mov eax, [rbp-144]
-    x86.mov [rbp-64], eax
-    x86.mov eax, [rbp-136]
-    x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-128]
-    x86.mov [rbp-80], eax
     x86.lea_rdata rax, [__str_9]
     x86.mov rcx, rax
     x86.xor eax, eax
-    x86.mov [rbp-168], ecx
+    x86.xor ebx, ebx
+    x86.mov esi, 1
+    x86.xor edi, edi
+    x86.mov [rbp-128], ecx
+    x86.mov [rbp-136], eax
+    x86.mov [rbp-144], ebx
+    x86.mov [rbp-152], esi
+    x86.mov [rbp-160], edi
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-168], eax
+    x86.mov eax, [rbp-72]
     x86.mov [rbp-176], eax
-    x86.xor eax, eax
+    x86.mov eax, [rbp-64]
     x86.mov [rbp-184], eax
-    x86.mov eax, 1
+    x86.mov eax, [rbp-56]
     x86.mov [rbp-192], eax
-    x86.xor eax, eax
+    x86.mov eax, [rbp-48]
     x86.mov [rbp-200], eax
-    x86.mov eax, [rbp-168]
-    x86.mov [rbp-208], eax
-    x86.mov eax, [rbp-176]
-    x86.mov [rbp-216], eax
-    x86.mov eax, [rbp-184]
-    x86.mov [rbp-224], eax
-    x86.mov eax, [rbp-192]
-    x86.mov [rbp-232], eax
-    x86.mov eax, [rbp-200]
-    x86.mov [rbp-240], eax
-    x86.mov eax, [rbp-120]
-    x86.mov [rbp-248], eax
-    x86.mov eax, [rbp-112]
-    x86.mov [rbp-256], eax
-    x86.mov eax, [rbp-104]
-    x86.mov [rbp-264], eax
-    x86.mov eax, [rbp-96]
-    x86.mov [rbp-272], eax
-    x86.mov eax, [rbp-88]
-    x86.mov [rbp-280], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je advent.main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-208]
-    x86.mov [rbp-248], eax
-    x86.mov ecx, [rbp-216]
-    x86.mov [rbp-256], ecx
-    x86.mov edx, [rbp-224]
-    x86.mov [rbp-264], edx
-    x86.mov ebx, [rbp-232]
-    x86.mov [rbp-272], ebx
-    x86.mov esi, [rbp-240]
-    x86.mov [rbp-280], esi
+    x86.mov eax, [rbp-128]
+    x86.mov [rbp-168], eax
+    x86.mov ecx, [rbp-136]
+    x86.mov [rbp-176], ecx
+    x86.mov edx, [rbp-144]
+    x86.mov [rbp-184], edx
+    x86.mov ebx, [rbp-152]
+    x86.mov [rbp-192], ebx
+    x86.mov esi, [rbp-160]
+    x86.mov [rbp-200], esi
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-280]
-    x86.mov [rbp-288], eax
-    x86.mov ecx, [rbp-272]
-    x86.mov [rbp-296], ecx
-    x86.mov edx, [rbp-264]
-    x86.mov [rbp-304], edx
-    x86.mov ebx, [rbp-256]
-    x86.mov [rbp-312], ebx
-    x86.mov esi, [rbp-248]
-    x86.mov [rbp-320], esi
-    x86.lea rdi, [rbp-320]
+    x86.mov eax, [rbp-200]
+    x86.mov [rbp-208], eax
+    x86.mov ecx, [rbp-192]
+    x86.mov [rbp-216], ecx
+    x86.mov edx, [rbp-184]
+    x86.mov [rbp-224], edx
+    x86.mov ebx, [rbp-176]
+    x86.mov [rbp-232], ebx
+    x86.mov esi, [rbp-168]
+    x86.mov [rbp-240], esi
+    x86.lea rdi, [rbp-240]
     x86.mov rcx, rdi
     x86.call stdlib.Parsing.__int_fromString
     x86.xor r8, r8
-    x86.mov [rbp-328], r8
-    x86.mov [rbp-336], eax
+    x86.mov [rbp-248], r8
     x86.xor r9, r9
     x86.cmp edx, r9
     x86.je advent.main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov eax, [rbp-328]
-    x86.mov [rbp-336], eax
+    x86.mov eax, [rbp-248]
     x86.jmp advent.main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov eax, [rbp-336]
-    x86.mov ecx, 3
+    x86.mov eax, 3
+    x86.mov rcx, rax
     x86.call advent.multiply
     x86.epilogue
     x86.ret
@@ -543,7 +476,6 @@ module {
   func @advent.multiply(x: i64) -> i64 {
   entry:
     %0 = func.param x : StdI64
-    memref.store %0, x
     %1 = arith.constant {value = 2 : i64}
     %2 = arith.muli %0, %1
     func.return %2
@@ -563,15 +495,10 @@ module {
     %8 = memref.lea __sret_3
     func.call @stdlib.CommandLine.args %8
     %9 = memref.load __sret_3.iterIndex : i64
-    memref.store %9, args.iterIndex
     %10 = memref.load __sret_3.managed.buffer : i64
-    memref.store %10, args.managed.buffer
     %11 = memref.load __sret_3.managed.length : i64
-    memref.store %11, args.managed.length
     %12 = memref.load __sret_3.managed.capacity : i64
-    memref.store %12, args.managed.capacity
     %13 = memref.load __sret_3.managed.element_size : i64
-    memref.store %13, args.managed.element_size
     %14 = arith.constant {value = 0 : i64}
     %15 = arith.constant {value = 0 : i64}
     memref.store %15, __sret_8._iterPos
@@ -584,50 +511,24 @@ module {
     %19 = arith.constant {value = 0 : i64}
     memref.store %19, __sret_8._managed.buffer
     %20 = memref.lea __sret_8
-    %22 = memref.load args.managed.element_size : i64
-    memref.store %22, __selfbuf_21.managed.element_size
-    %23 = memref.load args.managed.capacity : i64
-    memref.store %23, __selfbuf_21.managed.capacity
-    %24 = memref.load args.managed.length : i64
-    memref.store %24, __selfbuf_21.managed.length
-    %25 = memref.load args.managed.buffer : i64
-    memref.store %25, __selfbuf_21.managed.buffer
-    %26 = memref.load args.iterIndex : i64
-    memref.store %26, __selfbuf_21.iterIndex
+    memref.store %13, __selfbuf_21.managed.element_size
+    memref.store %12, __selfbuf_21.managed.capacity
+    memref.store %11, __selfbuf_21.managed.length
+    memref.store %10, __selfbuf_21.managed.buffer
+    memref.store %9, __selfbuf_21.iterIndex
     %27 = memref.lea __selfbuf_21
     %28 = func.try_call @StringArray.get %20, %27, %14
-    memref.store %28, __error_flag
-    %29 = memref.load __selfbuf_21.iterIndex : i64
-    memref.store %29, args.iterIndex
-    %30 = memref.load __selfbuf_21.managed.buffer : i64
-    memref.store %30, args.managed.buffer
-    %31 = memref.load __selfbuf_21.managed.length : i64
-    memref.store %31, args.managed.length
-    %32 = memref.load __selfbuf_21.managed.capacity : i64
-    memref.store %32, args.managed.capacity
-    %33 = memref.load __selfbuf_21.managed.element_size : i64
-    memref.store %33, args.managed.element_size
     %34 = memref.lea_rdata __str_9
     %35 = std.ptr_to_i64 %34
     %36 = arith.constant {value = 0 : i64}
-    memref.store %35, __strtmp_9._managed.buffer
-    memref.store %36, __strtmp_9._managed.length
     %37 = arith.constant {value = 0 : i64}
-    memref.store %37, __strtmp_9._managed.capacity
     %38 = arith.constant {value = 1 : i64}
-    memref.store %38, __strtmp_9._managed.element_size
     %39 = arith.constant {value = 0 : i64}
-    memref.store %39, __strtmp_9._iterPos
-    %40 = memref.load __strtmp_9._managed.buffer : i64
-    memref.store %40, __try_default_1._managed.buffer
-    %41 = memref.load __strtmp_9._managed.length : i64
-    memref.store %41, __try_default_1._managed.length
-    %42 = memref.load __strtmp_9._managed.capacity : i64
-    memref.store %42, __try_default_1._managed.capacity
-    %43 = memref.load __strtmp_9._managed.element_size : i64
-    memref.store %43, __try_default_1._managed.element_size
-    %44 = memref.load __strtmp_9._iterPos : i64
-    memref.store %44, __try_default_1._iterPos
+    memref.store %35, __try_default_1._managed.buffer
+    memref.store %36, __try_default_1._managed.length
+    memref.store %37, __try_default_1._managed.capacity
+    memref.store %38, __try_default_1._managed.element_size
+    memref.store %39, __try_default_1._iterPos
     %45 = memref.load __sret_8._managed.buffer : i64
     memref.store %45, __try_result_0._managed.buffer
     %46 = memref.load __sret_8._managed.length : i64
@@ -666,7 +567,6 @@ module {
     memref.store %62, __argbuf_57._managed.buffer
     %63 = memref.lea __argbuf_57
     %64, %65 = func.try_call @stdlib.Parsing.__int_fromString %63
-    memref.store %65, __error_flag
     %66 = arith.constant {value = 0 : i64}
     memref.store %66, __try_default_5
     memref.store %64, __try_result_4
@@ -678,8 +578,6 @@ module {
     memref.store %69, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %70 = memref.load __try_result_4 : i64
-    memref.store %70, a
     %71 = arith.constant {value = 3 : i64}
     %72 = func.call @advent.multiply %71
     func.return %72
@@ -696,7 +594,7 @@ module {
   }
   func @advent.main() -> i64 {
   entry:
-    x86.prologue stack_size=336
+    x86.prologue stack_size=256
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
@@ -711,123 +609,93 @@ module {
     x86.mov rcx, rdi
     x86.call stdlib.CommandLine.args
     x86.mov r8, [rbp-40]
-    x86.mov [rbp-48], r8
     x86.mov r9, [rbp-32]
-    x86.mov [rbp-56], r9
     x86.mov eax, [rbp-24]
-    x86.mov [rbp-64], eax
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-80], eax
-    x86.xor eax, eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-88], ecx
-    x86.xor ecx, ecx
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-8]
+    x86.xor ebx, ebx
+    x86.xor esi, esi
+    x86.mov [rbp-48], esi
+    x86.xor esi, esi
+    x86.mov [rbp-56], esi
+    x86.xor esi, esi
+    x86.mov [rbp-64], esi
+    x86.xor esi, esi
+    x86.mov [rbp-72], esi
+    x86.xor esi, esi
+    x86.mov [rbp-80], esi
+    x86.lea rsi, [rbp-80]
+    x86.mov [rbp-88], edx
     x86.mov [rbp-96], ecx
-    x86.xor ecx, ecx
-    x86.mov [rbp-104], ecx
-    x86.xor ecx, ecx
-    x86.mov [rbp-112], ecx
-    x86.xor ecx, ecx
-    x86.mov [rbp-120], ecx
-    x86.lea rcx, [rbp-120]
-    x86.mov edx, [rbp-80]
-    x86.mov [rbp-128], edx
-    x86.mov edx, [rbp-72]
-    x86.mov [rbp-136], edx
-    x86.mov edx, [rbp-64]
-    x86.mov [rbp-144], edx
-    x86.mov edx, [rbp-56]
-    x86.mov [rbp-152], edx
-    x86.mov edx, [rbp-48]
-    x86.mov [rbp-160], edx
-    x86.lea rdx, [rbp-160]
-    x86.mov r8, rax
+    x86.mov [rbp-104], eax
+    x86.mov [rbp-112], r9
+    x86.mov [rbp-120], r8
+    x86.lea rax, [rbp-120]
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.mov r8, rbx
     x86.call StringArray.get
-    x86.mov eax, [rbp-160]
-    x86.mov [rbp-48], eax
-    x86.mov eax, [rbp-152]
-    x86.mov [rbp-56], eax
-    x86.mov eax, [rbp-144]
-    x86.mov [rbp-64], eax
-    x86.mov eax, [rbp-136]
-    x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-128]
-    x86.mov [rbp-80], eax
     x86.lea_rdata rax, [__str_9]
     x86.mov rcx, rax
     x86.xor eax, eax
-    x86.mov [rbp-168], ecx
+    x86.xor ebx, ebx
+    x86.mov esi, 1
+    x86.xor edi, edi
+    x86.mov [rbp-128], ecx
+    x86.mov [rbp-136], eax
+    x86.mov [rbp-144], ebx
+    x86.mov [rbp-152], esi
+    x86.mov [rbp-160], edi
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-168], eax
+    x86.mov eax, [rbp-72]
     x86.mov [rbp-176], eax
-    x86.xor eax, eax
+    x86.mov eax, [rbp-64]
     x86.mov [rbp-184], eax
-    x86.mov eax, 1
+    x86.mov eax, [rbp-56]
     x86.mov [rbp-192], eax
-    x86.xor eax, eax
+    x86.mov eax, [rbp-48]
     x86.mov [rbp-200], eax
-    x86.mov eax, [rbp-168]
-    x86.mov [rbp-208], eax
-    x86.mov eax, [rbp-176]
-    x86.mov [rbp-216], eax
-    x86.mov eax, [rbp-184]
-    x86.mov [rbp-224], eax
-    x86.mov eax, [rbp-192]
-    x86.mov [rbp-232], eax
-    x86.mov eax, [rbp-200]
-    x86.mov [rbp-240], eax
-    x86.mov eax, [rbp-120]
-    x86.mov [rbp-248], eax
-    x86.mov eax, [rbp-112]
-    x86.mov [rbp-256], eax
-    x86.mov eax, [rbp-104]
-    x86.mov [rbp-264], eax
-    x86.mov eax, [rbp-96]
-    x86.mov [rbp-272], eax
-    x86.mov eax, [rbp-88]
-    x86.mov [rbp-280], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je advent.main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-208]
-    x86.mov [rbp-248], eax
-    x86.mov ecx, [rbp-216]
-    x86.mov [rbp-256], ecx
-    x86.mov edx, [rbp-224]
-    x86.mov [rbp-264], edx
-    x86.mov ebx, [rbp-232]
-    x86.mov [rbp-272], ebx
-    x86.mov esi, [rbp-240]
-    x86.mov [rbp-280], esi
+    x86.mov eax, [rbp-128]
+    x86.mov [rbp-168], eax
+    x86.mov ecx, [rbp-136]
+    x86.mov [rbp-176], ecx
+    x86.mov edx, [rbp-144]
+    x86.mov [rbp-184], edx
+    x86.mov ebx, [rbp-152]
+    x86.mov [rbp-192], ebx
+    x86.mov esi, [rbp-160]
+    x86.mov [rbp-200], esi
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-280]
-    x86.mov [rbp-288], eax
-    x86.mov ecx, [rbp-272]
-    x86.mov [rbp-296], ecx
-    x86.mov edx, [rbp-264]
-    x86.mov [rbp-304], edx
-    x86.mov ebx, [rbp-256]
-    x86.mov [rbp-312], ebx
-    x86.mov esi, [rbp-248]
-    x86.mov [rbp-320], esi
-    x86.lea rdi, [rbp-320]
+    x86.mov eax, [rbp-200]
+    x86.mov [rbp-208], eax
+    x86.mov ecx, [rbp-192]
+    x86.mov [rbp-216], ecx
+    x86.mov edx, [rbp-184]
+    x86.mov [rbp-224], edx
+    x86.mov ebx, [rbp-176]
+    x86.mov [rbp-232], ebx
+    x86.mov esi, [rbp-168]
+    x86.mov [rbp-240], esi
+    x86.lea rdi, [rbp-240]
     x86.mov rcx, rdi
     x86.call stdlib.Parsing.__int_fromString
     x86.xor r8, r8
-    x86.mov [rbp-328], r8
-    x86.mov [rbp-336], eax
+    x86.mov [rbp-248], r8
     x86.xor r9, r9
     x86.cmp edx, r9
     x86.je advent.main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov eax, [rbp-328]
-    x86.mov [rbp-336], eax
+    x86.mov eax, [rbp-248]
     x86.jmp advent.main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov eax, [rbp-336]
-    x86.mov ecx, 3
+    x86.mov eax, 3
+    x86.mov rcx, rax
     x86.call advent.multiply
     x86.epilogue
     x86.ret

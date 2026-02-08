@@ -8,6 +8,10 @@ public abstract class StandardOp : IPrintableOp {
   public virtual IReadOnlyList<string> PrintableOperands => [];
   public virtual IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes => new Dictionary<string, MlirAttribute>();
   public abstract List<StdValue> ReadValues { get; }
+
+  /// Returns the result ID if this op is pure (side-effect-free and safe to remove
+  /// when its result is unused), or -1 if it has side effects.
+  public abstract int PureResultId { get; }
 }
 
 public abstract class StdUnaryF64Op(StdF64 input) : StandardOp {
@@ -16,6 +20,7 @@ public abstract class StdUnaryF64Op(StdF64 input) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
 }
 
 public abstract class StdBinaryF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
@@ -25,6 +30,7 @@ public abstract class StdBinaryF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public interface IStoreOp {
@@ -42,6 +48,7 @@ public class StdConstI64Op(long value) : StandardOp {
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(Value, MlirType.I64) };
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdConstI32Op(long value) : StandardOp {
@@ -52,6 +59,7 @@ public class StdConstI32Op(long value) : StandardOp {
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(Value, MlirType.I32) };
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 // === Float Constants ===
@@ -64,6 +72,7 @@ public class StdConstF64Op(double value) : StandardOp {
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> { ["value"] = new FloatAttr(Value, MlirType.F64) };
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 // === Bool Constants ===
@@ -76,6 +85,7 @@ public class StdConstI1Op(bool value) : StandardOp {
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(Value ? 1 : 0, MlirType.I1) };
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 // === Integer Arithmetic ===
@@ -87,6 +97,7 @@ public abstract class StdBinaryI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdAddI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
@@ -101,6 +112,7 @@ public class StdAddI32Op(StdI32 lhs, StdI32 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdSubI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
@@ -115,6 +127,7 @@ public class StdSubI32Op(StdI32 lhs, StdI32 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdRemI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
@@ -161,6 +174,7 @@ public class StdAddF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdSubF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
@@ -171,6 +185,7 @@ public class StdSubF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdMulF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
@@ -181,6 +196,7 @@ public class StdMulF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdDivF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
@@ -191,6 +207,7 @@ public class StdDivF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 // === Float Absolute Value ===
@@ -234,6 +251,7 @@ public class StdFpToSiOp(StdF64 input) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
 }
 
 // === Int-to-Float Conversion ===
@@ -245,6 +263,7 @@ public class StdSiToFpOp(StdI64 input) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
 }
 
 // === Comparison ===
@@ -258,6 +277,7 @@ public class StdCmpI64Op(string predicate, StdI64 lhs, StdI64 rhs) : StandardOp 
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp {
@@ -269,6 +289,7 @@ public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp 
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdCmpI1Op(string predicate, StdBool lhs, StdBool rhs) : StandardOp {
@@ -280,6 +301,7 @@ public class StdCmpI1Op(string predicate, StdBool lhs, StdBool rhs) : StandardOp
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 // === Conditional Select ===
@@ -295,6 +317,7 @@ public class StdSelectI64Op(StdBool condition, StdI64 trueValue, StdI64 falseVal
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Condition.ToString(), TrueValue.ToString(), FalseValue.ToString()];
   public override List<StdValue> ReadValues => [Condition, TrueValue, FalseValue];
+  public override int PureResultId => Result.Id;
 }
 
 // === Bool Logical Operations ===
@@ -307,6 +330,7 @@ public class StdAndI1Op(StdBool lhs, StdBool rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdOrI1Op(StdBool lhs, StdBool rhs) : StandardOp {
@@ -317,6 +341,7 @@ public class StdOrI1Op(StdBool lhs, StdBool rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdXorI1Op(StdBool lhs, StdBool rhs) : StandardOp {
@@ -327,6 +352,7 @@ public class StdXorI1Op(StdBool lhs, StdBool rhs) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
 }
 
 // === Memory Operations ===
@@ -337,6 +363,7 @@ public class StdStoreI64Op(StdI64 value, string varName) : StandardOp, IStoreOp 
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.I64;
   public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
 }
 
 public class StdStoreF64Op(StdF64 value, string varName) : StandardOp, IStoreOp {
@@ -345,6 +372,7 @@ public class StdStoreF64Op(StdF64 value, string varName) : StandardOp, IStoreOp 
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.F64;
   public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
 }
 
 public class StdLoadI64Op(string varName) : StandardOp {
@@ -353,6 +381,7 @@ public class StdLoadI64Op(string varName) : StandardOp {
   public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdStoreI1Op(StdBool value, string varName) : StandardOp, IStoreOp {
@@ -361,6 +390,7 @@ public class StdStoreI1Op(StdBool value, string varName) : StandardOp, IStoreOp 
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.I1;
   public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
 }
 
 public class StdLoadI1Op(string varName) : StandardOp {
@@ -369,6 +399,7 @@ public class StdLoadI1Op(string varName) : StandardOp {
   public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdLoadF64Op(string varName) : StandardOp {
@@ -377,6 +408,7 @@ public class StdLoadF64Op(string varName) : StandardOp {
   public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdStorePtrOp(StdPtr value, string varName) : StandardOp, IStoreOp {
@@ -385,6 +417,7 @@ public class StdStorePtrOp(StdPtr value, string varName) : StandardOp, IStoreOp 
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.I64; // Function pointers are 64-bit
   public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
 }
 
 public class StdLoadPtrOp(string varName) : StandardOp {
@@ -393,6 +426,7 @@ public class StdLoadPtrOp(string varName) : StandardOp {
   public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 // === Control Flow ===
@@ -403,12 +437,14 @@ public class StdCondBrOp(StdBool condition, string thenBlock, string elseBlock) 
   public string ThenBlock { get; } = thenBlock;
   public string ElseBlock { get; } = elseBlock;
   public override List<StdValue> ReadValues => [Condition];
+  public override int PureResultId => -1;
 }
 
 public class StdBrOp(string target) : StandardOp {
   public override string Mnemonic => $"cf.br {Target}";
   public string Target { get; } = target;
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1;
 }
 
 // === Function Operations ===
@@ -420,6 +456,7 @@ public class StdParamOp(int index, string name, StdValue result) : StandardOp {
   public StdValue Result { get; } = result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1;
 }
 
 public class StdCallOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
@@ -432,6 +469,7 @@ public class StdCallOp(string callee, List<StdValue> args, StdValue? result = nu
   public override IReadOnlyList<string> PrintableOperands =>
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
+  public override int PureResultId => -1;
 }
 
 // Gets the address of a function (function reference/pointer)
@@ -441,6 +479,7 @@ public class StdFuncRefOp(string functionName) : StandardOp {
   public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 // Calls a function indirectly through a function pointer
@@ -454,6 +493,7 @@ public class StdIndirectCallOp(StdValue callee, List<StdValue> args, StdValue? r
   public override IReadOnlyList<string> PrintableOperands =>
     [Callee.ToString(), .. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => [Callee, .. Args];
+  public override int PureResultId => -1;
 }
 
 public class StdReturnOp(StdValue? value = null) : StandardOp {
@@ -462,6 +502,7 @@ public class StdReturnOp(StdValue? value = null) : StandardOp {
   public override IReadOnlyList<string> PrintableOperands =>
     ReturnValue != null ? [ReturnValue.ToString()] : [];
   public override List<StdValue> ReadValues => ReturnValue != null ? [ReturnValue] : [];
+  public override int PureResultId => -1;
 }
 
 // === Error handling operations ===
@@ -472,6 +513,7 @@ public class StdErrorReturnOp(StdValue errorFlag) : StandardOp {
   public StdValue ErrorFlag { get; } = errorFlag;
   public override IReadOnlyList<string> PrintableOperands => [ErrorFlag.ToString()];
   public override List<StdValue> ReadValues => [ErrorFlag];
+  public override int PureResultId => -1;
 }
 
 // Calls a throwing function and captures both the result (RAX) and error flag (RDX)
@@ -486,6 +528,7 @@ public class StdTryCallOp(string callee, List<StdValue> args, StdValue? result =
   public override IReadOnlyList<string> PrintableOperands =>
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
+  public override int PureResultId => -1;
 }
 
 // === Struct pointer operations (for sret convention) ===
@@ -497,6 +540,7 @@ public class StdLeaOp(string varName) : StandardOp {
   public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1; // Address escape — removing would change semantics
 }
 
 // Gets the address of an rdata label via RIP-relative addressing (for constant data in .rdata)
@@ -506,6 +550,7 @@ public class StdLeaRdataOp(string rdataLabel) : StandardOp {
   public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
 }
 
 // Store a value through a pointer at a given offset (for sret writes)
@@ -516,6 +561,7 @@ public class StdStoreIndirectOp(StdValue value, StdValue basePtr, int fieldOffse
   public int FieldOffset { get; } = fieldOffset;
   public MlirType FieldType { get; } = fieldType;
   public override List<StdValue> ReadValues => [Value, BasePtr];
+  public override int PureResultId => -1;
 }
 
 // Load a value through a pointer at a given offset (for reading sret results)
@@ -528,6 +574,7 @@ public class StdLoadIndirectOp(StdValue basePtr, int fieldOffset, MlirType field
 
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [BasePtr];
+  public override int PureResultId => Result.Id;
 }
 
 public static class StdValueFactory {
@@ -552,6 +599,7 @@ public class StdGlobalLoadI64Op(string globalName) : StandardOp {
   public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1; // Reads mutable global state
 }
 
 public class StdGlobalLoadF64Op(string globalName) : StandardOp {
@@ -560,6 +608,7 @@ public class StdGlobalLoadF64Op(string globalName) : StandardOp {
   public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1; // Reads mutable global state
 }
 
 public class StdGlobalLoadI1Op(string globalName) : StandardOp {
@@ -568,6 +617,7 @@ public class StdGlobalLoadI1Op(string globalName) : StandardOp {
   public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1; // Reads mutable global state
 }
 
 public class StdGlobalStoreI64Op(StdI64 value, string globalName) : StandardOp {
@@ -576,6 +626,7 @@ public class StdGlobalStoreI64Op(StdI64 value, string globalName) : StandardOp {
   public string GlobalName { get; } = globalName;
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
 }
 
 public class StdGlobalStoreF64Op(StdF64 value, string globalName) : StandardOp {
@@ -584,6 +635,7 @@ public class StdGlobalStoreF64Op(StdF64 value, string globalName) : StandardOp {
   public string GlobalName { get; } = globalName;
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
 }
 
 public class StdGlobalStoreI1Op(StdBool value, string globalName) : StandardOp {
@@ -592,6 +644,7 @@ public class StdGlobalStoreI1Op(StdBool value, string globalName) : StandardOp {
   public string GlobalName { get; } = globalName;
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
 }
 
 // ============================================================================
@@ -608,6 +661,7 @@ public class StdCallRuntimeOp(string callee, List<StdValue> args, StdValue? resu
   public override IReadOnlyList<string> PrintableOperands =>
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
+  public override int PureResultId => -1;
 }
 
 // ============================================================================
@@ -622,6 +676,7 @@ public class StdPtrToI64Op(StdPtr input) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
 }
 
 public class StdMemCopyOp(StdValue srcPtr, StdValue dstPtr, StdValue byteCount) : StandardOp {
@@ -631,4 +686,5 @@ public class StdMemCopyOp(StdValue srcPtr, StdValue dstPtr, StdValue byteCount) 
   public StdValue ByteCount { get; } = byteCount;
   public override IReadOnlyList<string> PrintableOperands => [SrcPtr.ToString(), DstPtr.ToString(), ByteCount.ToString()];
   public override List<StdValue> ReadValues => [SrcPtr, DstPtr, ByteCount];
+  public override int PureResultId => -1;
 }

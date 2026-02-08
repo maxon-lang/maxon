@@ -165,6 +165,20 @@ public static class MaxonToStandardConversion {
           sretParamEmitted = true;
         }
 
+        // Pre-scan: find struct literals immediately consumed by declaration assigns
+        // so we can store fields directly to the target variable.
+        // Only for declarations — reassignments need managed cleanup of the old value
+        // before the new fields are stored, so they must use an intermediate.
+        var structLiteralTargets = new Dictionary<int, string>();
+        for (int oi = 0; oi < block.Operations.Count - 1; oi++) {
+          if (block.Operations[oi] is MaxonStructLiteralOp lit
+            && block.Operations[oi + 1] is MaxonAssignOp assign
+            && assign.Value.Id == lit.Result.Id
+            && assign.IsDeclaration) {
+            structLiteralTargets[lit.Result.Id] = assign.VarName;
+          }
+        }
+
         foreach (var op in block.Operations) {
           switch (op) {
             case MaxonParamOp paramOp: {
@@ -367,7 +381,10 @@ public static class MaxonToStandardConversion {
             }
             case MaxonStructLiteralOp structLitOp: {
               // Store each field value to named slots.
-              var tempName = $"__struct_{structLitOp.Result.Id}";
+              // If this literal is immediately assigned, store directly to the target variable.
+              var tempName = structLiteralTargets.TryGetValue(structLitOp.Result.Id, out var inlineTarget)
+                ? inlineTarget
+                : $"__struct_{structLitOp.Result.Id}";
               var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                 var fieldVarName = $"{tempName}.{fieldName}";
@@ -524,7 +541,8 @@ public static class MaxonToStandardConversion {
                   foreach (var oldBufPath in oldBufPaths)
                     EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes, oldElementInfo);
                 }
-                CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
+                if (srcName != dstName)
+                  CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // In struct instance methods, assigning to a self field struct must also
                 // update the self.X variables, write through __self_ptr, and use
                 // "self.X" as the canonical name so later method calls read from
