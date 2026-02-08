@@ -6149,20 +6149,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Parse "TypeName from [...]" syntax.
-  /// Checks BuiltinArrayLiteral first (passes __ManagedMemory directly, stdlib types).
-  /// Falls back to InitableFromArrayLiteral (passes Array wrapper, user types).
+  /// Parse "TypeName from literal" syntax.
+  /// Supports array literals ([...]), string literals ("..."), and char literals ('...').
+  /// For arrays: checks BuiltinArrayLiteral first, falls back to InitableFromArrayLiteral.
+  /// For strings: checks InitableFromStringLiteral, creates String and passes to init().
+  /// For chars: checks InitableFromCharLiteral, creates Character and passes to init().
   /// For types with associated types and __capacity, auto-creates a concrete alias type.
   /// </summary>
   private ExprResult.Direct ParseFromExpression(Token typeToken) {
     Advance(); // consume 'from'
     var typeName = typeToken.Value;
-
-    // Expect array literal
-    if (!Check(TokenType.LeftBracket)) {
-      throw new CompileError(ErrorCode.ParserExpectedExpression,
-        "Expected array literal after 'from'", Current().Line, Current().Column);
-    }
 
     // Look up the type
     if (!_typeRegistry.TryGetValue(typeName, out var registeredType))
@@ -6171,6 +6167,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (registeredType is not MlirStructType sourceStruct)
       throw new CompileError(ErrorCode.ParserExpectedType,
         $"Type '{typeName}' is not a struct type", typeToken.Line, typeToken.Column);
+
+    // Handle string literal: TypeName from "..."
+    if (Check(TokenType.StringLiteral)) {
+      return ParseFromStringLiteral(typeToken, typeName, sourceStruct);
+    }
+
+    // Handle char literal: TypeName from '...'
+    if (Check(TokenType.CharacterLiteral)) {
+      return ParseFromCharLiteral(typeToken, typeName, sourceStruct);
+    }
+
+    // Handle array literal: TypeName from [...]
+    if (!Check(TokenType.LeftBracket)) {
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "Expected literal after 'from' (string, character, or array)", Current().Line, Current().Column);
+    }
 
     bool isBuiltinArrayLiteral = sourceStruct.ConformingInterfaces.Contains("BuiltinArrayLiteral");
     bool isInitableFromArrayLiteral = sourceStruct.ConformingInterfaces.Contains("InitableFromArrayLiteral");
@@ -6244,6 +6256,66 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Create the call to init using the resolved function name (may be mangled)
     var callOp = new MaxonCallOp(initFunc.Name, [initArg], resultKind, resultStructTypeName);
+    _currentBlock!.AddOp(callOp);
+
+    if (callOp.Result == null) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"'{initMethodName}' must return a value", typeToken.Line, typeToken.Column);
+    }
+
+    return new ExprResult.Direct(callOp.Result);
+  }
+
+  /// <summary>
+  /// Parse "TypeName from "..."" for types conforming to InitableFromStringLiteral.
+  /// Creates a String from the literal and passes it to TypeName.init(value String).
+  /// </summary>
+  private ExprResult.Direct ParseFromStringLiteral(Token typeToken, string typeName, MlirStructType sourceStruct) {
+    if (!sourceStruct.ConformingInterfaces.Contains("InitableFromStringLiteral"))
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Type '{typeName}' does not conform to InitableFromStringLiteral",
+        typeToken.Line, typeToken.Column);
+
+    var stringToken = Advance(); // consume the string literal
+    var stringStruct = EmitStringLiteralWithInterpolation(stringToken);
+
+    return EmitFromLiteralInitCall(typeToken, typeName, sourceStruct, stringStruct);
+  }
+
+  /// <summary>
+  /// Parse "TypeName from '...'" for types conforming to InitableFromCharLiteral.
+  /// Creates a Character from the literal and passes it to TypeName.init(value Character).
+  /// </summary>
+  private ExprResult.Direct ParseFromCharLiteral(Token typeToken, string typeName, MlirStructType sourceStruct) {
+    if (!sourceStruct.ConformingInterfaces.Contains("InitableFromCharLiteral"))
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Type '{typeName}' does not conform to InitableFromCharLiteral",
+        typeToken.Line, typeToken.Column);
+
+    var charToken = Advance(); // consume the char literal
+    var charStruct = EmitCharLiteral(charToken);
+
+    return EmitFromLiteralInitCall(typeToken, typeName, sourceStruct, charStruct);
+  }
+
+  /// <summary>
+  /// Emit the init() call for "TypeName from literal" expressions.
+  /// Looks up TypeName.init and calls it with the provided literal value.
+  /// </summary>
+  private ExprResult.Direct EmitFromLiteralInitCall(Token typeToken, string typeName, MlirStructType sourceStruct, MaxonStruct literalValue) {
+    var initMethodName = $"{typeName}.init";
+    var resolvedInitName = ResolveMethodName(initMethodName);
+    var initFunc = resolvedInitName != null
+      ? _currentModule!.Functions.FirstOrDefault(f => f.Name == resolvedInitName)
+        ?? _currentModule!.Functions.FirstOrDefault(f => UnmangleName(f.Name) == resolvedInitName)
+        ?? throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+            $"Type '{typeName}' does not have a valid init method",
+            typeToken.Line, typeToken.Column)
+      : throw new CompileError(ErrorCode.SemanticUndefinedFunction,
+          $"Type '{typeName}' does not have a valid init method",
+          typeToken.Line, typeToken.Column);
+
+    var callOp = new MaxonCallOp(initFunc.Name, [literalValue], MaxonValueKind.Struct, typeName);
     _currentBlock!.AddOp(callOp);
 
     if (callOp.Result == null) {
