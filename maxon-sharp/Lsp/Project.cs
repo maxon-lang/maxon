@@ -25,6 +25,7 @@ public class Project(
 
   private readonly StdlibCache _stdlibCache = stdlibCache;
   private readonly Action<DocumentUri, Container<Diagnostic>> _publishDiagnostics = publishDiagnostics;
+  private readonly bool _isStdlibProject = IsUnderStdlib(rootPath);
 
   public void NotifyFileChanged(string filePath, string content) {
     _fileContents[NormalizePath(filePath)] = content;
@@ -114,28 +115,33 @@ public class Project(
     foreach (var source in sources)
       newDiagnostics[source.Path] = [];
 
-    try {
-      var module = _stdlibCache.CreateModuleWithStdlib();
-      context.ResetIds();
-      Compiler.Compiler.CompileSources(module, sources, false);
+    // Stdlib files are already compiled in the cached stdlib — skip recompilation
+    if (_isStdlibProject) {
+      // just fall through to publish empty diagnostics
+    } else {
+      try {
+        var module = _stdlibCache.CreateModuleWithStdlib();
+        context.ResetIds();
+        Compiler.Compiler.CompileSources(module, sources, false);
 
-      // Success: update cached completion info
-      _lastSuccessfulCompletionInfo = new CompletionInfo(
-        module.TypeDefs,
-        module.Functions,
-        []
-      );
-    } catch (CompileError ex) {
-      // Record error for the appropriate file
-      var errorFile = ex.FilePath != null ? NormalizePath(ex.FilePath) : sources[0].Path;
-      if (newDiagnostics.TryGetValue(errorFile, out List<CompileError>? value))
-        value.Add(ex);
-      else
-        newDiagnostics[errorFile] = [ex];
-    } catch (Exception ex) {
-      // Unexpected error — publish a synthetic diagnostic on the first file
-      PublishSyntheticError(sources[0].Path, ex.Message);
-      return;
+        // Success: update cached completion info
+        _lastSuccessfulCompletionInfo = new CompletionInfo(
+          module.TypeDefs,
+          module.Functions,
+          []
+        );
+      } catch (CompileError ex) {
+        // Record error for the appropriate file
+        var errorFile = ex.FilePath != null ? NormalizePath(ex.FilePath) : sources[0].Path;
+        if (newDiagnostics.TryGetValue(errorFile, out List<CompileError>? value))
+          value.Add(ex);
+        else
+          newDiagnostics[errorFile] = [ex];
+      } catch (Exception ex) {
+        // Unexpected error — publish a synthetic diagnostic on the first file
+        PublishSyntheticError(sources[0].Path, ex.Message);
+        return;
+      }
     }
 
     // Update stored diagnostics and publish
@@ -175,6 +181,12 @@ public class Project(
     } catch {
       // URI conversion may fail
     }
+  }
+
+  private static bool IsUnderStdlib(string path) {
+    var stdlibPath = StdlibLoader.FindStdlibPath();
+    if (stdlibPath == null) return false;
+    return NormalizePath(path).StartsWith(NormalizePath(stdlibPath), StringComparison.OrdinalIgnoreCase);
   }
 
   internal static string NormalizePath(string path) =>
