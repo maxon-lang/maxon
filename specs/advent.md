@@ -187,7 +187,6 @@ module {
   entry:
     %0 = func.param x : StdI64
     memref.store %0, x
-    %1 = arith.constant {value = 1 : i64}
     func.return %0
   }
   func @advent.main() -> i64 {
@@ -331,7 +330,6 @@ module {
 module {
   func @advent.multiply(x: i64) -> i64 {
   entry:
-    x86.mov eax, 1
     x86.mov eax, ecx
     x86.ret
   }

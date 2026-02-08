@@ -43,6 +43,8 @@ public class MlirPipeline {
     var stdModule = MaxonToStandardConversion.Run(module, trackAllocs);
     Logger.Debug(LogCategory.Mlir, "Lowered Maxon to Standard");
 
+    DeadStoreEliminationPass.Run(stdModule);
+
     // Capture standard stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {

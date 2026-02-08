@@ -328,7 +328,6 @@ module {
   func @register-allocator.main() -> i64 {
   entry:
     %0 = arith.constant {value = 100 : i64}
-    memref.store %0, x
     %1 = arith.constant {value = 80 : i64}
     %2 = arith.subi %0, %1
     memref.store %2, y
@@ -1189,18 +1188,9 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, sum1
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, sum2
-    %2 = arith.constant {value = 0 : i64}
-    memref.store %2, sum3
     %3 = arith.constant {value = 10 : i64}
-    memref.store %3, sum1
     %4 = arith.constant {value = 20 : i64}
-    memref.store %4, sum2
     %5 = arith.constant {value = 30 : i64}
-    memref.store %5, sum3
     %6 = arith.constant {value = 5 : i64}
     %7 = arith.addi %3, %6
     memref.store %7, sum1
@@ -1219,20 +1209,17 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.xor eax, eax
-    x86.xor ecx, ecx
-    x86.xor edx, edx
-    x86.mov ebx, 10
-    x86.mov esi, 20
-    x86.mov edi, 30
-    x86.mov r8, 5
-    x86.add ebx, r8
-    x86.mov r9, 10
-    x86.add esi, r9
-    x86.mov eax, 15
-    x86.add edi, eax
-    x86.add ebx, esi
-    x86.lea eax, [ebx + edi]
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.mov edx, 30
+    x86.mov ebx, 5
+    x86.add eax, ebx
+    x86.mov esi, 10
+    x86.add ecx, esi
+    x86.mov edi, 15
+    x86.add edx, edi
+    x86.add eax, ecx
+    x86.add eax, edx
     x86.ret
   }
 }
