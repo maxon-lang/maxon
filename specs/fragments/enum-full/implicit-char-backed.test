@@ -1,0 +1,38 @@
+// Test: implicit-char-backed
+enum CharBacked
+  'N'
+  'S'
+  'E'
+end 'CharBacked'
+
+function main() returns int
+  var dir = CharBacked.N
+  if dir == CharBacked.S 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @enum-full.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov edx, [rbp-8]
+    x86.cmp edx, ecx
+    x86.jne enum-full.main.check_0.after
+  check_0:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  }
+}
+---

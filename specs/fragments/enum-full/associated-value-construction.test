@@ -1,0 +1,51 @@
+// Test: associated-value-construction
+enum Container
+  empty
+  value(n int)
+end 'Container'
+
+function main() returns int
+  var c = Container.value(42)
+  var e = Container.empty
+  // Construction works - verify by checking tags are different
+  if c != e 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @enum-full.main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 42
+    x86.mov ecx, 1
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-16]
+    x86.xor esi, esi
+    x86.mov [rbp-32], esi
+    x86.xor edi, edi
+    x86.mov [rbp-40], edi
+    x86.mov r8, [rbp-32]
+    x86.mov [rbp-48], r8
+    x86.mov r9, [rbp-40]
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-48]
+    x86.cmp eax, ecx
+    x86.je enum-full.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

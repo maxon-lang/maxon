@@ -568,7 +568,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E030: specs/fragments/enums.error.duplicate-case.1.test:4:5: duplicate enum case: 'red'
+error E3030: specs/fragments/enum-full/error.duplicate-case.test:4:3: duplicate enum case: 'red'
 ```
 
 <!-- test: error.unknown-enum-case -->
@@ -584,7 +584,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E034: specs/fragments/enums.error.unknown-enum-case.1.test:8:5: unknown enum case: 'green'
+error E3034: specs/fragments/enum-full/error.unknown-enum-case.test:8:12: unknown enum case: 'green'
 ```
 
 <!-- test: error.duplicate-raw-value -->
@@ -599,7 +599,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E031: specs/fragments/enums.error.duplicate-raw-value.1.test:4:5: duplicate raw value: '200'
+error E3031: specs/fragments/enum-full/error.duplicate-raw-value.test:4:3: duplicate raw value: '200'
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
@@ -614,7 +614,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E032: specs/fragments/enums.error.raw-value-type-mismatch.1.test:4:5: raw value type mismatch: 'expected int, got String'
+error E3032: specs/fragments/enum-full/error.raw-value-type-mismatch.test:4:3: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: error.associated-value-wrong-count -->
@@ -630,7 +630,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E011: specs/fragments/enums.error.associated-value-wrong-count.1.test:8:21: wrong argument count: 'expected 1, got 2'
+error E3036: specs/fragments/enum-full/error.associated-value-wrong-count.test:8:12: wrong argument count: 'expected 1, got 2'
 ```
 
 <!-- test: error.associated-value-type-mismatch -->
@@ -645,7 +645,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/enums.error.associated-value-type-mismatch.1.test:7:24: type mismatch: 'expected int, got String'
+error E3005: specs/fragments/enum-full/error.associated-value-type-mismatch.test:7:35: type mismatch: 'expected int, got String'
 ```
 
 <!-- test: match-enum-binding-simple -->
@@ -739,7 +739,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E035: specs/fragments/enums.error.match-enum-wrong-binding-count.1.test:8:5: wrong binding count: 'value'
+error E3035: specs/fragments/enum-full/error.match-enum-wrong-binding-count.test:9:5: wrong binding count: 'value'
 ```
 
 <!-- test: error.match-enum-unknown-case -->
@@ -757,7 +757,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E034: specs/fragments/enums.error.match-enum-unknown-case.1.test:9:5: unknown enum case: 'unknown'
+error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:10:5: unknown enum case: 'unknown'
 ```
 
 <!-- test: simple-enum-rawvalue -->
@@ -1139,7 +1139,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E032: specs/fragments/enums.error.mixed-backing-types.1.test:4:5: raw value type mismatch: 'expected int, got String'
+error E3032: specs/fragments/enum-full/error.mixed-backing-types.test:4:3: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: name-simple -->
@@ -1428,8 +1428,8 @@ function main() returns int
   return 0
 end 'main'
 ```
-```stderr
-E034
+```maxoncstderr
+error E3034: specs/fragments/enum-full/error.fromName-invalid-case.test:8:26: no enum case named 'invalid_case_name_that_does_not_exist': 'Direction'
 ```
 
 <!-- test: error.fromName-wrong-arg-count -->
@@ -1443,8 +1443,8 @@ function main() returns int
   return 0
 end 'main'
 ```
-```stderr
-E011
+```maxoncstderr
+error E3036: specs/fragments/enum-full/error.fromName-wrong-arg-count.test:7:26: wrong argument count: 'case 'value' requires 1 associated value(s)'
 ```
 
 <!-- test: fromName-associated-runtime-empty -->
@@ -1630,8 +1630,8 @@ function main() returns int
   return 0
 end 'main'
 ```
-```stderr
-E034
+```maxoncstderr
+error E3034: specs/fragments/enum-full/error.fromRawValue-invalid-literal.test:8:27: no enum case with raw value '999': 'HttpStatus'
 ```
 
 <!-- test: error.fromRawValue-type-mismatch -->
@@ -1646,8 +1646,8 @@ function main() returns int
   return 0
 end 'main'
 ```
-```stderr
-E022
+```maxoncstderr
+error E3005: specs/fragments/enum-full/error.fromRawValue-type-mismatch.test:8:27: type mismatch: 'expected int, got String'
 ```
 
 <!-- test: error.fromRawValue-associated-values -->
@@ -1662,8 +1662,8 @@ function main() returns int
   return 0
 end 'main'
 ```
-```stderr
-E003
+```maxoncstderr
+error E3003: specs/fragments/enum-full/error.fromRawValue-associated-values.test:8:26: fromRawValue is not available for enums with associated values: 'Container'
 ```
 
 <!-- test: enum-member-constant -->

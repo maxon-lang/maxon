@@ -39,6 +39,7 @@ public partial class X86CodeEmitter {
     EmitMaxonProcessClose();
     EmitMaxonStrlen();
     EmitMaxonMemcpy();
+    EmitMaxonMemcmp();
     EmitMaxonCleanupUntracked();
 
     if (TrackAllocs) {
@@ -808,6 +809,24 @@ public partial class X86CodeEmitter {
     EmitMovRegReg(X86Register.Rcx, X86Register.R8);  // RCX = count
     EmitBytes(0xF3, 0xA4); // REP MOVSB
     // RAX already has dst
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_memcmp(ptr1, ptr2, count) -> 1 if equal, 0 if not</summary>
+  private void EmitMaxonMemcmp() {
+    EmitRuntimeFunctionStart("maxon_memcmp", 3);
+    // RCX = ptr1, RDX = ptr2, R8 = count
+    // Use REPE CMPSB: RSI=ptr1, RDI=ptr2, RCX=count
+    EmitMovRegReg(X86Register.Rsi, X86Register.Rcx); // RSI = ptr1
+    EmitMovRegReg(X86Register.Rdi, X86Register.Rdx); // RDI = ptr2
+    EmitMovRegReg(X86Register.Rcx, X86Register.R8);  // RCX = count
+    // Handle zero-length case (REPE CMPSB with RCX=0 sets ZF=1, so equal)
+    EmitBytes(0xF3, 0xA6); // REPE CMPSB
+    // ZF=1 if equal, ZF=0 if not equal
+    // SETE AL: set AL=1 if equal
+    EmitBytes(0x0F, 0x94, 0xC0); // SETE AL
+    // MOVZX RAX, AL
+    EmitBytes(0x48, 0x0F, 0xB6, 0xC0); // MOVZX RAX, AL
     EmitRuntimeFunctionEnd();
   }
 

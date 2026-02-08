@@ -217,6 +217,51 @@ public static class MaxonToStandardConversion {
               }
               break;
             }
+            case MaxonEnumConstructOp enumConstructOp: {
+              // Store tag + payload as flat variables, similar to struct literals
+              var tempName = $"__enum_{enumConstructOp.Result.Id}";
+              var tagOp = new StdConstI64Op(enumConstructOp.Ordinal);
+              newBlock.AddOp(tagOp);
+              EmitStore(newBlock, tagOp.Result, $"{tempName}.__tag", varTypes);
+
+              var enumTypeDef = (MlirEnumType)module.TypeDefs[enumConstructOp.EnumTypeName];
+              var enumCase = enumTypeDef.GetCase(enumConstructOp.CaseName)!;
+
+              // Store associated values as payload slots
+              for (int ai = 0; ai < enumConstructOp.Args.Count; ai++) {
+                var argStdVal = valueMap[enumConstructOp.Args[ai]];
+                EmitStore(newBlock, argStdVal, $"{tempName}.__payload_{ai}", varTypes);
+              }
+              // Zero-fill any unused payload slots (max payload size - this case's values)
+              int maxPayload = enumTypeDef.Cases.Max(c => c.AssociatedValues?.Count ?? 0);
+              for (int ai = enumConstructOp.Args.Count; ai < maxPayload; ai++) {
+                var zeroOp = new StdConstI64Op(0);
+                newBlock.AddOp(zeroOp);
+                EmitStore(newBlock, zeroOp.Result, $"{tempName}.__payload_{ai}", varTypes);
+              }
+
+              structVarNames[enumConstructOp.Result.Id] = tempName;
+              structValueTypes[enumConstructOp.Result.Id] = enumConstructOp.EnumTypeName;
+              break;
+            }
+            case MaxonEnumTagOp enumTagOp: {
+              // Load the tag from a flattened associated-value enum
+              if (structVarNames.TryGetValue(enumTagOp.EnumValue.Id, out var enumPrefix)) {
+                var loaded = EmitLoad(newBlock, $"{enumPrefix}.__tag", varTypes);
+                valueMap[enumTagOp.Result] = loaded;
+              } else {
+                // Fallback: the enum value might be a simple scalar (shouldn't happen for associated-value enums)
+                valueMap[enumTagOp.Result] = valueMap[enumTagOp.EnumValue];
+              }
+              break;
+            }
+            case MaxonEnumPayloadOp enumPayloadOp: {
+              // Load a payload value from a flattened associated-value enum
+              var enumPrefix2 = structVarNames[enumPayloadOp.EnumValue.Id];
+              var loaded2 = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{enumPayloadOp.PayloadIndex}", varTypes);
+              valueMap[enumPayloadOp.Result] = loaded2;
+              break;
+            }
             case MaxonEnumParamOp enumParamOp: {
               int adjustedIndex = enumParamOp.Index + (retStructType != null ? 1 : 0);
               if (enumParamOp.BackingKind == MaxonValueKind.Float) {
@@ -235,14 +280,54 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumVarRefOp enumVarRef: {
-              var loaded = EmitLoad(newBlock, enumVarRef.VarName, varTypes);
-              valueMap[enumVarRef.Result] = loaded;
+              // Check if this is an associated-value enum (stored as flat vars)
+              if (module.TypeDefs.TryGetValue(enumVarRef.EnumTypeName, out var evType)
+                  && evType is MlirEnumType evEnumType && evEnumType.HasAssociatedValues) {
+                // Resolve the struct prefix: either from varNameToStructPrefix or direct varName
+                string resolvedPrefix;
+                if (varNameToStructPrefix.TryGetValue(enumVarRef.VarName, out var existingPrefix)) {
+                  resolvedPrefix = existingPrefix;
+                } else {
+                  resolvedPrefix = enumVarRef.VarName;
+                }
+                structVarNames[enumVarRef.Result.Id] = resolvedPrefix;
+                structValueTypes[enumVarRef.Result.Id] = enumVarRef.EnumTypeName;
+              } else {
+                var loaded = EmitLoad(newBlock, enumVarRef.VarName, varTypes);
+                valueMap[enumVarRef.Result] = loaded;
+              }
               break;
             }
             case MaxonEnumRawValueOp rawValueOp: {
               // The enum's backing value IS the raw value - just pass through
               var enumStdVal = valueMap[rawValueOp.EnumValue];
               valueMap[rawValueOp.Result] = enumStdVal;
+              break;
+            }
+            case MaxonEnumStringRawValueOp strRawOp: {
+              var enumType = (MlirEnumType)module.TypeDefs[strRawOp.EnumTypeName];
+              var ordinalValue = (StdI64)valueMap[strRawOp.EnumValue];
+              var (buf, len) = EmitStringEnumToString(enumType, ordinalValue, newBlock, result);
+              var tempName = $"__enum_rawval_{strRawOp.Result.Id}";
+              EmitManagedStructFromBufLen(tempName, buf, len,
+                !strRawOp.IsChar, newBlock, varTypes, structVarNames, strRawOp.Result.Id);
+              break;
+            }
+            case MaxonEnumNameOp enumNameOp: {
+              var enumType = (MlirEnumType)module.TypeDefs[enumNameOp.EnumTypeName];
+              var stdValue = valueMap[enumNameOp.EnumValue];
+              StdI64 ordinalValue;
+              if (enumType.BackingType == MlirType.I64) {
+                ordinalValue = EmitIntEnumToOrdinal(enumType, (StdI64)stdValue, newBlock);
+              } else if (enumType.BackingType == MlirType.F64) {
+                ordinalValue = EmitFloatEnumToOrdinal(enumType, (StdF64)stdValue, newBlock);
+              } else {
+                ordinalValue = (StdI64)stdValue;
+              }
+              var (nameBuf, nameLen) = EmitEnumNameLookup(enumType, ordinalValue, newBlock, result);
+              var tempName = $"__enum_name_{enumNameOp.Result.Id}";
+              EmitManagedStructFromBufLen(tempName, nameBuf, nameLen,
+                true, newBlock, varTypes, structVarNames, enumNameOp.Result.Id);
               break;
             }
             case MaxonLiteralOp litOp: {
@@ -337,6 +422,26 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonAssignOp assignOp: {
+              // Associated-value enum assignment: copy tag + payload flat vars
+              if (structVarNames.TryGetValue(assignOp.Value.Id, out var enumSrc)
+                  && structValueTypes.TryGetValue(assignOp.Value.Id, out var enumSrcType)
+                  && module.TypeDefs.TryGetValue(enumSrcType, out var enumTypeForAssign)
+                  && enumTypeForAssign is MlirEnumType assignEnumType && assignEnumType.HasAssociatedValues) {
+                var dstName = assignOp.VarName;
+                int maxPayload = assignEnumType.Cases.Max(c => c.AssociatedValues?.Count ?? 0);
+                // Copy tag
+                var tagLoaded = EmitLoad(newBlock, $"{enumSrc}.__tag", varTypes);
+                EmitStore(newBlock, tagLoaded, $"{dstName}.__tag", varTypes);
+                // Copy payload slots
+                for (int pi = 0; pi < maxPayload; pi++) {
+                  var payloadLoaded = EmitLoad(newBlock, $"{enumSrc}.__payload_{pi}", varTypes);
+                  EmitStore(newBlock, payloadLoaded, $"{dstName}.__payload_{pi}", varTypes);
+                }
+                structVarNames[assignOp.Value.Id] = dstName;
+                structValueTypes[assignOp.Value.Id] = enumSrcType;
+                varNameToStructPrefix[assignOp.VarName] = dstName;
+                break;
+              }
               // Check structVarNames as fallback to detect struct values that flow
               // through ops not yet updated to track struct kinds.
               if (assignOp.ValueKind == MaxonValueKind.Struct
@@ -777,7 +882,7 @@ public static class MaxonToStandardConversion {
 
   private static MlirType ResolveEnumBackingMlirType(MlirEnumType enumType) {
     if (enumType.BackingType == MlirType.F64) return MlirType.F64;
-    if (enumType.BackingType is MlirStringBackingType) return MlirType.I64;
+    if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) return MlirType.I64;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MlirType.I64;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
@@ -1046,10 +1151,331 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs) {
+    // Intercept synthetic enum static method calls
+    if (tryCallOp.Callee.StartsWith("__enum_fromRawValue:")) {
+      var enumTypeName = tryCallOp.Callee["__enum_fromRawValue:".Length..];
+      var enumType = (MlirEnumType)typeDefs[enumTypeName];
+      LowerEnumFromRawValue(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
+      return;
+    }
+    if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
+      var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
+      var enumType = (MlirEnumType)typeDefs[enumTypeName];
+      LowerEnumFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes);
+      return;
+    }
     LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
       tryCallOp.ResultKind, isTryCall: true, funcLookup, block, valueMap, varTypes,
       structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, typeDefs,
       null, null, tryCallOp.ErrorFlag);
+  }
+
+  /// <summary>
+  /// Lowers EnumType.fromRawValue(arg) inline as a comparison chain.
+  /// For simple/int-backed enums: compares arg against each case's ordinal/raw value.
+  /// For float-backed enums: compares arg against each case's float raw value.
+  /// For string/char-backed enums: compares arg string against each case's string via memcmp.
+  /// Sets error flag to 0 on match, 1 on no match. Result is the matched ordinal.
+  /// </summary>
+  private static void LowerEnumFromRawValue(
+    MaxonTryCallOp tryCallOp,
+    MlirEnumType enumType,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+
+    var inputArg = tryCallOp.Args[0];
+
+    if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      // String/char-backed: input is a managed struct, compare against each case's string
+      LowerEnumFromRawValueString(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
+    } else if (enumType.BackingType == MlirType.F64) {
+      // Float-backed: compare float values, result is the input value itself
+      var inputVal = (StdF64)valueMap[inputArg];
+
+      var noMatchFlag = new StdConstI64Op(1);
+      block.AddOp(noMatchFlag);
+      StdI64 currentErrorFlag = noMatchFlag.Result;
+
+      foreach (var enumCase in enumType.Cases) {
+        var caseRawConst = new StdConstF64Op((double)enumCase.RawValue!);
+        block.AddOp(caseRawConst);
+        var cmpOp = new StdCmpF64Op("eq", inputVal, caseRawConst.Result);
+        block.AddOp(cmpOp);
+
+        var zeroFlag = new StdConstI64Op(0);
+        block.AddOp(zeroFlag);
+        var selectFlag = new StdSelectI64Op(cmpOp.Result, zeroFlag.Result, currentErrorFlag);
+        block.AddOp(selectFlag);
+        currentErrorFlag = selectFlag.Result;
+      }
+
+      valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
+      // The result is the input float value (which IS the enum's runtime representation)
+      valueMap[tryCallOp.Result!] = inputVal;
+    } else if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) {
+      // Simple (null backing) or int-backed: compare integer values
+      var inputVal = (StdI64)valueMap[inputArg];
+
+      var noMatchFlag = new StdConstI64Op(1);
+      block.AddOp(noMatchFlag);
+      var defaultOrd = new StdConstI64Op(0);
+      block.AddOp(defaultOrd);
+      StdI64 currentErrorFlag = noMatchFlag.Result;
+      StdI64 currentResult = defaultOrd.Result;
+
+      foreach (var enumCase in enumType.Cases) {
+        long rawValue = enumType.BackingType == MlirType.I64
+          ? (long)enumCase.RawValue!
+          : enumCase.Ordinal;
+
+        var caseRawConst = new StdConstI64Op(rawValue);
+        block.AddOp(caseRawConst);
+        var cmpOp = new StdCmpI64Op("eq", inputVal, caseRawConst.Result);
+        block.AddOp(cmpOp);
+
+        // On match: error flag = 0, result = ordinal (or raw value for int-backed)
+        var zeroFlag = new StdConstI64Op(0);
+        block.AddOp(zeroFlag);
+        var selectFlag = new StdSelectI64Op(cmpOp.Result, zeroFlag.Result, currentErrorFlag);
+        block.AddOp(selectFlag);
+        currentErrorFlag = selectFlag.Result;
+
+        // Result is the runtime value of the enum (ordinal for simple, raw value for int-backed)
+        var resultConst = new StdConstI64Op(enumType.BackingType == MlirType.I64 ? rawValue : enumCase.Ordinal);
+        block.AddOp(resultConst);
+        var selectResult = new StdSelectI64Op(cmpOp.Result, resultConst.Result, currentResult);
+        block.AddOp(selectResult);
+        currentResult = selectResult.Result;
+      }
+
+      valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
+      valueMap[tryCallOp.Result!] = currentResult;
+    } else {
+      throw new InvalidOperationException($"Unsupported enum backing type for fromRawValue: {enumType.BackingType}");
+    }
+  }
+
+  /// <summary>
+  /// Handles fromRawValue for string/char-backed enums.
+  /// Compares input string against each case's string value using length check + memcmp.
+  /// </summary>
+  private static void LowerEnumFromRawValueString(
+    MaxonTryCallOp tryCallOp,
+    MlirEnumType enumType,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+
+    var inputArg = tryCallOp.Args[0];
+    // Input is a String or Character managed struct - load its buffer and length
+    var inputStructName = structVarNames[inputArg.Id];
+    var inputBuf = (StdI64)EmitLoad(block, $"{inputStructName}._managed.buffer", varTypes);
+    var inputLen = (StdI64)EmitLoad(block, $"{inputStructName}._managed.length", varTypes);
+
+    var noMatchFlag = new StdConstI64Op(1);
+    block.AddOp(noMatchFlag);
+    var defaultOrd = new StdConstI64Op(0);
+    block.AddOp(defaultOrd);
+    StdI64 currentErrorFlag = noMatchFlag.Result;
+    StdI64 currentResult = defaultOrd.Result;
+
+    foreach (var enumCase in enumType.Cases) {
+      var caseString = (string)enumCase.RawValue!;
+      var rdataLabel = $"__enum_frv_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var (caseBuf, caseLen) = EmitRdataLiteral(caseString, rdataLabel, block, _resultModule!);
+      var bothMatch = EmitStringEquals(inputBuf, inputLen, caseBuf, caseLen, block);
+
+      var zeroFlag = new StdConstI64Op(0);
+      block.AddOp(zeroFlag);
+      var selectFlag = new StdSelectI64Op(bothMatch, zeroFlag.Result, currentErrorFlag);
+      block.AddOp(selectFlag);
+      currentErrorFlag = selectFlag.Result;
+
+      var ordConst = new StdConstI64Op(enumCase.Ordinal);
+      block.AddOp(ordConst);
+      var selectResult = new StdSelectI64Op(bothMatch, ordConst.Result, currentResult);
+      block.AddOp(selectResult);
+      currentResult = selectResult.Result;
+    }
+
+    valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
+    // String/char-backed enums store ordinals at runtime
+    valueMap[tryCallOp.Result!] = currentResult;
+  }
+
+  /// <summary>
+  /// Lowers EnumType.fromName(nameArg, ...associatedArgs) inline as a comparison chain.
+  /// Compares input string against each case name using length check + memcmp.
+  /// For associated-value enums with compile-time literal name: constructs the full enum.
+  /// For associated-value enums with dynamic name: only matches cases without associated values.
+  /// </summary>
+  private static void LowerEnumFromName(
+    MaxonTryCallOp tryCallOp,
+    MlirEnumType enumType,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes) {
+
+    var nameArg = tryCallOp.Args[0];
+    // Name is always a String managed struct
+    var nameStructName = structVarNames[nameArg.Id];
+    var nameBuf = (StdI64)EmitLoad(block, $"{nameStructName}._managed.buffer", varTypes);
+    var nameLen = (StdI64)EmitLoad(block, $"{nameStructName}._managed.length", varTypes);
+
+    bool hasAssociatedValues = enumType.HasAssociatedValues;
+    bool hasExtraArgs = tryCallOp.Args.Count > 1;
+
+    if (hasAssociatedValues) {
+      // For associated-value enums, construct as flat struct (tag + payload)
+      LowerEnumFromNameAssociated(tryCallOp, enumType, block, valueMap, varTypes,
+        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs);
+    } else {
+      // Simple/raw-value enum: result is an ordinal/raw value
+      LowerEnumFromNameSimple(tryCallOp, enumType, block, valueMap, varTypes, nameBuf, nameLen);
+    }
+  }
+
+  private static void LowerEnumFromNameSimple(
+    MaxonTryCallOp tryCallOp,
+    MlirEnumType enumType,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    StdI64 nameBuf, StdI64 nameLen) {
+
+    var noMatchFlag = new StdConstI64Op(1);
+    block.AddOp(noMatchFlag);
+    var defaultResult = new StdConstI64Op(0);
+    block.AddOp(defaultResult);
+    StdI64 currentErrorFlag = noMatchFlag.Result;
+    StdI64 currentResult = defaultResult.Result;
+
+    foreach (var enumCase in enumType.Cases) {
+      var rdataLabel = $"__enum_fn_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, rdataLabel, block, _resultModule!);
+      var isMatch = EmitStringEquals(nameBuf, nameLen, caseBuf, caseLen, block);
+
+      var zeroFlag = new StdConstI64Op(0);
+      block.AddOp(zeroFlag);
+      var selectFlag = new StdSelectI64Op(isMatch, zeroFlag.Result, currentErrorFlag);
+      block.AddOp(selectFlag);
+      currentErrorFlag = selectFlag.Result;
+
+      long runtimeValue = enumType.BackingType == MlirType.I64
+        ? (long)enumCase.RawValue!
+        : enumCase.Ordinal;
+      var resultConst = new StdConstI64Op(runtimeValue);
+      block.AddOp(resultConst);
+      var selectResult = new StdSelectI64Op(isMatch, resultConst.Result, currentResult);
+      block.AddOp(selectResult);
+      currentResult = selectResult.Result;
+    }
+
+    valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
+
+    if (enumType.BackingType == MlirType.F64) {
+      // Float-backed fromName: convert ordinal to float via i64 bit pattern select chain,
+      // then reinterpret the bits as f64 through a stack variable
+      var bitsVarName = $"__enum_fn_bits_{MlirContext.Current.NextId()}";
+      var defaultBits = new StdConstI64Op(0);
+      block.AddOp(defaultBits);
+      StdI64 currentBits = defaultBits.Result;
+      foreach (var enumCase in enumType.Cases) {
+        long floatBits = BitConverter.DoubleToInt64Bits((double)enumCase.RawValue!);
+        var caseBitsConst = new StdConstI64Op(floatBits);
+        block.AddOp(caseBitsConst);
+        var ordCheckConst = new StdConstI64Op(enumCase.Ordinal);
+        block.AddOp(ordCheckConst);
+        var cmpOrdConst = new StdCmpI64Op("eq", currentResult, ordCheckConst.Result);
+        block.AddOp(cmpOrdConst);
+        var selectBits = new StdSelectI64Op(cmpOrdConst.Result, caseBitsConst.Result, currentBits);
+        block.AddOp(selectBits);
+        currentBits = selectBits.Result;
+      }
+      // Store as i64, then load as f64 (reinterpret via same stack slot)
+      EmitStore(block, currentBits, bitsVarName, varTypes);
+      varTypes[bitsVarName] = "f64";
+      var floatResult = (StdF64)EmitLoad(block, bitsVarName, varTypes);
+      valueMap[tryCallOp.Result!] = floatResult;
+    } else {
+      valueMap[tryCallOp.Result!] = currentResult;
+    }
+  }
+
+  private static void LowerEnumFromNameAssociated(
+    MaxonTryCallOp tryCallOp,
+    MlirEnumType enumType,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
+    StdI64 nameBuf, StdI64 nameLen,
+    bool hasExtraArgs) {
+
+    // For associated-value enums, store as flat struct (tag + payload)
+    var tempName = $"__enum_{tryCallOp.Result!.Id}";
+    int maxPayload = enumType.Cases.Max(c => c.AssociatedValues?.Count ?? 0);
+
+    // Initialize with default tag=0 and zero payload
+    var defaultTag = new StdConstI64Op(0);
+    block.AddOp(defaultTag);
+    var tagVarName = $"{tempName}.__tag";
+    EmitStore(block, defaultTag.Result, tagVarName, varTypes);
+    for (int i = 0; i < maxPayload; i++) {
+      var zeroPayload = new StdConstI64Op(0);
+      block.AddOp(zeroPayload);
+      EmitStore(block, zeroPayload.Result, $"{tempName}.__payload_{i}", varTypes);
+    }
+
+    var noMatchFlag = new StdConstI64Op(1);
+    block.AddOp(noMatchFlag);
+    StdI64 currentErrorFlag = noMatchFlag.Result;
+
+    foreach (var enumCase in enumType.Cases) {
+      bool caseHasAssocValues = enumCase.AssociatedValues is { Count: > 0 };
+
+      // For dynamic name (no extra args), skip cases that need associated values
+      if (!hasExtraArgs && caseHasAssocValues) continue;
+
+      var rdataLabel = $"__enum_fna_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, rdataLabel, block, _resultModule!);
+      var isMatch = EmitStringEquals(nameBuf, nameLen, caseBuf, caseLen, block);
+
+      var zeroFlag = new StdConstI64Op(0);
+      block.AddOp(zeroFlag);
+      var selectFlag = new StdSelectI64Op(isMatch, zeroFlag.Result, currentErrorFlag);
+      block.AddOp(selectFlag);
+      currentErrorFlag = selectFlag.Result;
+
+      // On match, set the tag
+      var tagConst = new StdConstI64Op(enumCase.Ordinal);
+      block.AddOp(tagConst);
+      var currentTag = (StdI64)EmitLoad(block, tagVarName, varTypes);
+      var selectTag = new StdSelectI64Op(isMatch, tagConst.Result, currentTag);
+      block.AddOp(selectTag);
+      EmitStore(block, selectTag.Result, tagVarName, varTypes);
+
+      if (hasExtraArgs && caseHasAssocValues) {
+        for (int ai = 0; ai < enumCase.AssociatedValues!.Count; ai++) {
+          var avArg = tryCallOp.Args[1 + ai];
+          var avStdVal = valueMap[avArg];
+          var currentPayload = (StdI64)EmitLoad(block, $"{tempName}.__payload_{ai}", varTypes);
+          var selectPayload = new StdSelectI64Op(isMatch, (StdI64)avStdVal, currentPayload);
+          block.AddOp(selectPayload);
+          EmitStore(block, selectPayload.Result, $"{tempName}.__payload_{ai}", varTypes);
+        }
+      }
+    }
+
+    valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
+    structVarNames[tryCallOp.Result!.Id] = tempName;
+    structValueTypes[tryCallOp.Result!.Id] = enumType.Name;
   }
 
   /// <summary>
@@ -2315,8 +2741,8 @@ public static class MaxonToStandardConversion {
     var backingMlirType = ResolveEnumBackingMlirType(enumType);
     var stdValue = valueMap[enumValue];
 
-    if (enumType.BackingType is MlirStringBackingType) {
-      // String-backed enum: the runtime value is the ordinal (i64).
+    if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      // String/char-backed enum: the runtime value is the ordinal (i64).
       // We need to emit a lookup that maps ordinal → string rdata label.
       return EmitStringEnumToString(enumType, (StdI64)stdValue, block, result);
     }
@@ -2364,6 +2790,118 @@ public static class MaxonToStandardConversion {
       currentLen = selectLen.Result;
     }
 
+    return (currentBuf, currentLen);
+  }
+
+  /// Compares two strings (inputBuf/inputLen vs caseBuf/caseLen) using length check + memcmp.
+  /// Returns a boolean StdBool that is true if the strings are equal.
+  private static StdBool EmitStringEquals(
+    StdI64 inputBuf, StdI64 inputLen, StdI64 caseBuf, StdI64 caseLen,
+    MlirBlock<StandardOp> block) {
+    var lenCmp = new StdCmpI64Op("eq", inputLen, caseLen);
+    block.AddOp(lenCmp);
+    var memcmpResult = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_memcmp", [inputBuf, caseBuf, caseLen], memcmpResult));
+    var oneConst = new StdConstI64Op(1);
+    block.AddOp(oneConst);
+    var memEq = new StdCmpI64Op("eq", memcmpResult, oneConst.Result);
+    block.AddOp(memEq);
+    var bothMatch = new StdAndI1Op((StdBool)lenCmp.Result, (StdBool)memEq.Result);
+    block.AddOp(bothMatch);
+    return bothMatch.Result;
+  }
+
+  /// Builds a managed String or Character struct from a (buffer, length) pair.
+  private static void EmitManagedStructFromBufLen(
+    string tempName, StdI64 bufferPtr, StdI64 lengthVal,
+    bool hasIterPos, MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes, Dictionary<int, string> structVarNames, int resultId) {
+    EmitStore(block, bufferPtr, $"{tempName}._managed.buffer", varTypes);
+    EmitStore(block, lengthVal, $"{tempName}._managed.length", varTypes);
+
+    var capConst = new StdConstI64Op(0);
+    block.AddOp(capConst);
+    EmitStore(block, capConst.Result, $"{tempName}._managed.capacity", varTypes);
+
+    var elemSizeConst = new StdConstI64Op(1);
+    block.AddOp(elemSizeConst);
+    EmitStore(block, elemSizeConst.Result, $"{tempName}._managed.element_size", varTypes);
+
+    if (hasIterPos) {
+      var iterConst = new StdConstI64Op(0);
+      block.AddOp(iterConst);
+      EmitStore(block, iterConst.Result, $"{tempName}._iterPos", varTypes);
+    }
+
+    structVarNames[resultId] = tempName;
+  }
+
+  /// Converts an int-backed enum raw value to its ordinal via a select chain.
+  private static StdI64 EmitIntEnumToOrdinal(
+    MlirEnumType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
+    var fallbackOrd = new StdConstI64Op(0);
+    block.AddOp(fallbackOrd);
+    StdI64 currentOrd = fallbackOrd.Result;
+
+    foreach (var enumCase in enumType.Cases) {
+      var caseRawConst = new StdConstI64Op((long)enumCase.RawValue!);
+      block.AddOp(caseRawConst);
+      var cmpOp = new StdCmpI64Op("eq", rawValue, caseRawConst.Result);
+      block.AddOp(cmpOp);
+      var ordConst = new StdConstI64Op(enumCase.Ordinal);
+      block.AddOp(ordConst);
+      var selectOp = new StdSelectI64Op(cmpOp.Result, ordConst.Result, currentOrd);
+      block.AddOp(selectOp);
+      currentOrd = selectOp.Result;
+    }
+    return currentOrd;
+  }
+
+  /// Converts a float-backed enum raw value to its ordinal via a select chain.
+  private static StdI64 EmitFloatEnumToOrdinal(
+    MlirEnumType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
+    var fallbackOrd = new StdConstI64Op(0);
+    block.AddOp(fallbackOrd);
+    StdI64 currentOrd = fallbackOrd.Result;
+
+    foreach (var enumCase in enumType.Cases) {
+      var caseRawConst = new StdConstF64Op((double)enumCase.RawValue!);
+      block.AddOp(caseRawConst);
+      var cmpOp = new StdCmpF64Op("eq", rawValue, caseRawConst.Result);
+      block.AddOp(cmpOp);
+      var ordConst = new StdConstI64Op(enumCase.Ordinal);
+      block.AddOp(ordConst);
+      var selectOp = new StdSelectI64Op(cmpOp.Result, ordConst.Result, currentOrd);
+      block.AddOp(selectOp);
+      currentOrd = selectOp.Result;
+    }
+    return currentOrd;
+  }
+
+  /// Looks up an enum case name by ordinal via a select chain. Returns (buffer, length).
+  private static (StdI64 Buffer, StdI64 Length) EmitEnumNameLookup(
+    MlirEnumType enumType, StdI64 ordinalValue,
+    MlirBlock<StandardOp> block, MlirModule<StandardOp> result) {
+    var fallbackLabel = $"__enumname_fallback_{MlirContext.Current.NextId()}";
+    var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
+
+    foreach (var enumCase in enumType.Cases) {
+      var caseLabel = $"__enumname_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, caseLabel, block, result);
+
+      var ordConst = new StdConstI64Op(enumCase.Ordinal);
+      block.AddOp(ordConst);
+      var cmpOp = new StdCmpI64Op("eq", ordinalValue, ordConst.Result);
+      block.AddOp(cmpOp);
+
+      var selectBuf = new StdSelectI64Op(cmpOp.Result, caseBuf, currentBuf);
+      block.AddOp(selectBuf);
+      var selectLen = new StdSelectI64Op(cmpOp.Result, caseLen, currentLen);
+      block.AddOp(selectLen);
+
+      currentBuf = selectBuf.Result;
+      currentLen = selectLen.Result;
+    }
     return (currentBuf, currentLen);
   }
 

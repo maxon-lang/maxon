@@ -27,6 +27,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private Dictionary<string, object> _topLevelConstants = [];
 
   // Top-level array let declarations deferred to main function body
+  private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
   private record DeferredArrayLet(string Name, int TokenStart, int TokenEnd, int Line, int Column);
   private readonly List<DeferredArrayLet> _deferredArrayLets = [];
 
@@ -456,7 +457,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var evaluating = new HashSet<string>();
 
     foreach (var decl in constDecls) {
-      EvaluateConstant(decl.Name, constDecls, evaluated, evaluating);
+      EvaluateConstant(decl.Name, constDecls, evaluated, evaluating, decl.Line, decl.Column);
     }
 
     _topLevelConstants = evaluated;
@@ -975,12 +976,62 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SkipNewlines();
       if (Check(TokenType.End) || Check(TokenType.Function)) break;
 
+      // Implicit string-backed ("North") or char-backed ('N'): literal as case name
+      if (Check(TokenType.StringLiteral) || Check(TokenType.CharacterLiteral)) {
+        bool isString = Check(TokenType.StringLiteral);
+        var litToken = Advance();
+        var litName = litToken.Value;
+
+        if (!caseNames.Add(litName)) {
+          throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
+            $"duplicate enum case: '{litName}'", litToken.Line, litToken.Column);
+        }
+
+        MlirType expectedBacking = isString ? new MlirStringBackingType() : new MlirCharBackingType();
+        if (backingType == null) {
+          backingType = expectedBacking;
+        } else if (backingType.GetType() != expectedBacking.GetType()) {
+          throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+            $"raw value type mismatch: expected {(isString ? "string" : "char")}",
+            litToken.Line, litToken.Column);
+        }
+
+        foreach (var existing in cases) {
+          if (existing.RawValue is string existingVal && existingVal == litName) {
+            throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
+              $"duplicate raw value: '{litName}'", litToken.Line, litToken.Column);
+          }
+        }
+
+        cases.Add(new MlirEnumCase(litName, ordinal, litName));
+        ordinal++;
+        SkipNewlines();
+        continue;
+      }
+
       var caseToken = Expect(TokenType.Identifier);
       var caseName = caseToken.Value;
 
       if (!caseNames.Add(caseName)) {
         throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
           $"duplicate enum case: '{caseName}'", caseToken.Line, caseToken.Column);
+      }
+
+      // Associated value syntax: caseName(paramName type, ...)
+      if (Check(TokenType.LeftParen)) {
+        Advance(); // consume '('
+        var assocValues = new List<(string Name, MlirType Type)>();
+        while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+          var paramName = Expect(TokenType.Identifier).Value;
+          var paramType = ParseTypeRef();
+          assocValues.Add((paramName, paramType));
+          if (Check(TokenType.Comma)) Advance();
+        }
+        Expect(TokenType.RightParen);
+        cases.Add(new MlirEnumCase(caseName, ordinal, associatedValues: assocValues));
+        ordinal++;
+        SkipNewlines();
+        continue;
       }
 
       if (Check(TokenType.Equals)) {
@@ -1004,7 +1055,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               caseToken.Line, caseToken.Column);
           }
 
-          // Check for duplicate raw values
           foreach (var existing in cases) {
             if (existing.RawValue is long existingVal && existingVal == rawVal) {
               throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
@@ -1025,7 +1075,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               caseToken.Line, caseToken.Column);
           }
 
-          // Check for duplicate raw values
           foreach (var existing in cases) {
             if (existing.RawValue is double existingVal && existingVal == rawVal) {
               throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
@@ -1046,11 +1095,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             backingType = new MlirStringBackingType();
           } else if (backingType is not MlirStringBackingType) {
             throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              $"raw value type mismatch: expected string, got {(backingType == MlirType.I64 ? "int" : "float")}",
+              $"raw value type mismatch: 'expected {(backingType == MlirType.I64 ? "int" : backingType == MlirType.F64 ? "float" : "String")}, got String'",
               caseToken.Line, caseToken.Column);
           }
 
-          // Check for duplicate raw values
+          foreach (var existing in cases) {
+            if (existing.RawValue is string existingVal && existingVal == rawVal) {
+              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
+                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
+            }
+          }
+
+          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal));
+        } else if (Check(TokenType.CharacterLiteral)) {
+          if (isNegative) {
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+              "cannot negate a character raw value", caseToken.Line, caseToken.Column);
+          }
+
+          var rawVal = Advance().Value;
+
+          if (backingType == null) {
+            backingType = new MlirCharBackingType();
+          } else if (backingType is not MlirCharBackingType) {
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+              $"raw value type mismatch: 'expected {(backingType == MlirType.I64 ? "int" : backingType == MlirType.F64 ? "float" : "char")}, got char'",
+              caseToken.Line, caseToken.Column);
+          }
+
           foreach (var existing in cases) {
             if (existing.RawValue is string existingVal && existingVal == rawVal) {
               throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
@@ -1061,7 +1133,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           cases.Add(new MlirEnumCase(caseName, ordinal, rawVal));
         } else {
           throw new CompileError(ErrorCode.ParserExpectedExpression,
-            $"expected integer, float, or string literal for enum raw value",
+            $"expected integer, float, string, or character literal for enum raw value",
             caseToken.Line, caseToken.Column);
         }
       } else {
@@ -1454,10 +1526,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
-  private object EvaluateConstant(string name, List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvaluateConstant(string name, List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating, int refLine = 0, int refCol = 0) {
     if (evaluated.TryGetValue(name, out var val)) return val;
 
-    var decl = decls.FirstOrDefault(d => d.Name == name) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined constant '{name}'", 0, 0);
+    var decl = decls.FirstOrDefault(d => d.Name == name) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined constant '{name}'", refLine, refCol);
     if (!evaluating.Add(name)) {
       // Circular dependency: collect all names in the cycle
       var cycleNames = string.Join(", ", evaluating);
@@ -1624,7 +1696,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     if (Check(TokenType.Identifier)) {
       var token = Advance();
-      return EvaluateConstant(token.Value, decls, evaluated, evaluating);
+      // Handle enum constant: EnumType.caseName
+      if (Check(TokenType.Dot) && _typeRegistry.TryGetValue(token.Value, out var constType) && constType is MlirEnumType constEnumType) {
+        Advance(); // consume '.'
+        var caseToken = Expect(TokenType.Identifier);
+        var enumCase = constEnumType.GetCase(caseToken.Value)
+          ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+            $"unknown enum case: '{caseToken.Value}'", caseToken.Line, caseToken.Column);
+        return new EnumConstantValue(token.Value, caseToken.Value, enumCase.Ordinal);
+      }
+      return EvaluateConstant(token.Value, decls, evaluated, evaluating, token.Line, token.Column);
     }
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected constant expression, got '{Current().Value}'", Current().Line, Current().Column);
   }
@@ -1873,8 +1954,193 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private static MaxonValueKind GetEnumBackingKind(MlirEnumType enumType) {
     if (enumType.BackingType == MlirType.F64) return MaxonValueKind.Float;
     if (enumType.BackingType is MlirStringBackingType) return MaxonValueKind.Integer;
+    if (enumType.BackingType is MlirCharBackingType) return MaxonValueKind.Integer;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MaxonValueKind.Integer;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
+  }
+
+  /// <summary>
+  /// Parse EnumType.fromRawValue(arg) or EnumType.fromName(nameArg, ...associatedArgs).
+  /// Emits a MaxonCallOp with a synthetic callee name for lowering.
+  /// </summary>
+  private ExprResult.Direct ParseEnumStaticMethod(MlirEnumType enumType, string methodName) {
+    Advance(); // consume '.'
+    var methodToken = Advance(); // consume method name
+    Expect(TokenType.LeftParen);
+
+    if (methodName == "fromRawValue") {
+      return ParseEnumFromRawValue(enumType, methodToken);
+    } else if (methodName == "fromName") {
+      return ParseEnumFromName(enumType, methodToken);
+    }
+    throw new InvalidOperationException($"Unknown enum static method: '{methodName}'");
+  }
+
+  private ExprResult.Direct ParseEnumFromRawValue(MlirEnumType enumType, Token methodToken) {
+    // fromRawValue is not available for enums with associated values
+    if (enumType.HasAssociatedValues) {
+      throw new CompileError(ErrorCode.SemanticUndefinedVariable,
+        $"fromRawValue is not available for enums with associated values: '{enumType.Name}'",
+        methodToken.Line, methodToken.Column);
+    }
+
+    var argExpr = ParseExpression();
+    var argVal = ResolveExprValue(argExpr);
+    Expect(TokenType.RightParen);
+
+    // Determine expected argument type based on enum backing type
+    var argKind = DetermineValueKind(argVal);
+    MaxonValueKind expectedKind;
+    if (enumType.BackingType == MlirType.F64) {
+      expectedKind = MaxonValueKind.Float;
+    } else if (enumType.BackingType is MlirStringBackingType) {
+      expectedKind = MaxonValueKind.Struct; // String is a struct
+    } else if (enumType.BackingType is MlirCharBackingType) {
+      expectedKind = MaxonValueKind.Struct; // Character is a struct
+    } else {
+      expectedKind = MaxonValueKind.Integer; // simple or int-backed
+    }
+
+    // Type check
+    if (argKind != expectedKind) {
+      var actualTypeName = argVal is MaxonStruct ms
+        ? ms.TypeName
+        : MlirType.FormatAsSourceName(argKind.ToMlirType());
+      string expectedTypeName;
+      if (enumType.BackingType == MlirType.F64) expectedTypeName = "float";
+      else if (enumType.BackingType is MlirStringBackingType) expectedTypeName = "String";
+      else if (enumType.BackingType is MlirCharBackingType) expectedTypeName = "Character";
+      else expectedTypeName = "int";
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"type mismatch: 'expected {expectedTypeName}, got {actualTypeName}'",
+        methodToken.Line, methodToken.Column);
+    }
+
+    // Compile-time validation for literal values
+    ValidateFromRawValueLiteral(enumType, methodToken);
+
+    // Emit a MaxonCallOp with synthetic callee for lowering
+    var callOp = new MaxonCallOp(
+      $"__enum_fromRawValue:{enumType.Name}",
+      [argVal],
+      MaxonValueKind.Enum,
+      enumType.Name);
+    _currentBlock!.AddOp(callOp);
+    return new ExprResult.Direct(callOp.Result!);
+  }
+
+  private void ValidateFromRawValueLiteral(MlirEnumType enumType, Token methodToken) {
+    // Check if the argument is a compile-time literal
+    var lastOps = _currentBlock!.Operations;
+    if (lastOps.Count < 1) return;
+
+    // The call op hasn't been emitted yet, so the literal is the last op
+    var prevOp = lastOps[^1];
+    if (prevOp is not MaxonLiteralOp litOp) return;
+
+    // For simple/int-backed enums, check if literal matches any case's raw value
+    if (enumType.BackingType == null) {
+      // Simple enum: raw value is ordinal
+      var ordinal = litOp.IntValue;
+      if (ordinal < 0 || ordinal >= enumType.Cases.Count) {
+        throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+          $"no enum case with raw value '{ordinal}': '{enumType.Name}'",
+          methodToken.Line, methodToken.Column);
+      }
+    } else if (enumType.BackingType == MlirType.I64) {
+      var intVal = litOp.IntValue;
+      if (!enumType.Cases.Any(c => c.RawValue is long rv && rv == intVal)) {
+        throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+          $"no enum case with raw value '{intVal}': '{enumType.Name}'",
+          methodToken.Line, methodToken.Column);
+      }
+    } else if (enumType.BackingType == MlirType.F64) {
+      var floatVal = litOp.FloatValue;
+      if (!enumType.Cases.Any(c => c.RawValue is double rv && rv == floatVal)) {
+        throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+          $"no enum case with raw value '{floatVal}': '{enumType.Name}'",
+          methodToken.Line, methodToken.Column);
+      }
+    }
+    // String/char-backed enums: literal arg would be a string/char literal, not MaxonLiteralOp
+    // Those are handled by MaxonStringLiteralOp/MaxonCharLiteralOp
+  }
+
+  private ExprResult.Direct ParseEnumFromName(MlirEnumType enumType, Token methodToken) {
+    var nameExpr = ParseExpression();
+    var nameVal = ResolveExprValue(nameExpr);
+
+    // First arg must be a String
+    var nameKind = DetermineValueKind(nameVal);
+    if (nameKind != MaxonValueKind.Struct || nameVal is not MaxonStruct nameStruct || nameStruct.TypeName != "String") {
+      var actualTypeName = nameVal is MaxonStruct ms
+        ? ms.TypeName
+        : MlirType.FormatAsSourceName(nameKind.ToMlirType());
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"type mismatch: 'expected String, got {actualTypeName}'",
+        methodToken.Line, methodToken.Column);
+    }
+
+    // Check if name is a compile-time string literal
+    bool isLiteral = false;
+    string? literalName = null;
+    var lastOps = _currentBlock!.Operations;
+    // Walk backwards to find the string literal that produced this value
+    for (int i = lastOps.Count - 1; i >= 0; i--) {
+      if (lastOps[i] is MaxonStringLiteralOp strLitOp && strLitOp.Result.Id == nameVal.Id) {
+        isLiteral = true;
+        literalName = strLitOp.Value;
+        break;
+      }
+    }
+
+    var args = new List<MaxonValue> { nameVal };
+
+    if (isLiteral && literalName != null) {
+      // Validate the literal name against known cases
+      var matchedCase = enumType.GetCase(literalName) ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+          $"no enum case named '{literalName}': '{enumType.Name}'",
+          methodToken.Line, methodToken.Column);
+
+      // For associated-value enums with a literal name, parse associated value args
+      if (enumType.HasAssociatedValues && matchedCase.AssociatedValues is { Count: > 0 }) {
+        // Expect additional args after the name
+        if (!Check(TokenType.Comma)) {
+          throw new CompileError(ErrorCode.SemanticWrongArgCount,
+            $"wrong argument count: 'case '{literalName}' requires {matchedCase.AssociatedValues.Count} associated value(s)'",
+            methodToken.Line, methodToken.Column);
+        }
+        for (int ai = 0; ai < matchedCase.AssociatedValues.Count; ai++) {
+          Expect(TokenType.Comma);
+          var avExpr = ParseExpression();
+          var avVal = ResolveExprValue(avExpr);
+          // Type-check
+          var expectedType = matchedCase.AssociatedValues[ai].Type;
+          var actualKind = DetermineValueKind(avVal);
+          var expectedAVKind = expectedType.ToValueKind();
+          if (actualKind != expectedAVKind) {
+            var actualTypeName = avVal is MaxonStruct ms2
+              ? ms2.TypeName
+              : MlirType.FormatAsSourceName(actualKind.ToMlirType());
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
+              methodToken.Line, methodToken.Column);
+          }
+          args.Add(avVal);
+        }
+      }
+    }
+
+    Expect(TokenType.RightParen);
+
+    // Emit a MaxonCallOp with synthetic callee for lowering
+    var callOp = new MaxonCallOp(
+      $"__enum_fromName:{enumType.Name}",
+      args,
+      MaxonValueKind.Enum,
+      enumType.Name);
+    _currentBlock!.AddOp(callOp);
+    return new ExprResult.Direct(callOp.Result!);
   }
 
   private void ParseStaticField(MlirModule<MaxonOp> module, string typeName) {
@@ -2259,11 +2525,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // ============================================================================
 
   private void ParseBodyUntilEnd() {
+    bool wasDeadCode = false;
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
       if (Check(TokenType.End)) break;
+      // After exhaustive match/if-else where all branches terminate, _currentBlock
+      // becomes null. Create a dead block so subsequent unreachable code can still
+      // be parsed for syntax validation without crashing.
+      if (_currentBlock == null) {
+        wasDeadCode = true;
+        var deadLabel = $"__dead_{_blockCounter++}";
+        _currentBlock = _currentFunction!.Body.AddBlock(deadLabel);
+      }
       ParseStatement();
       SkipNewlines();
+    }
+    if (wasDeadCode) {
+      _currentBlock = null;
     }
   }
 
@@ -3733,6 +4011,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private sealed record ExactStringPattern(string Value, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
   private sealed record ExactCharPattern(string Value, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
   private sealed record RangePattern(RangeBound? Lower, RangeBound? Upper, bool UpperInclusive, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
+  // Pattern for associated-value enum case: matches tag and optionally binds payload values
+  private sealed record EnumCasePattern(int Ordinal, string CaseName, List<string>? Bindings,
+      List<(string Name, MlirType Type)>? AssociatedValues, string DisplayName, int Line, int Column)
+      : MatchPattern(DisplayName, Line, Column);
 
   private abstract record RangeBound;
   private sealed record IntRangeBound(long Value) : RangeBound;
@@ -3754,7 +4036,52 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var patternLine = Current().Line;
       var patternCol = Current().Column;
 
-      if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+      if (Check(TokenType.Identifier) && enumType is { HasAssociatedValues: true }
+          && PeekNext().Type != TokenType.Dot
+          && enumType.GetCase(Current().Value) != null) {
+        // Bare case name pattern for associated-value enums: empty, value(n), etc.
+        var caseNameToken = Advance();
+        var enumCase = enumType.GetCase(caseNameToken.Value)!;
+
+        var displayName = caseNameToken.Value;
+        if (!seenPatternKeys.Add(displayName)) {
+          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+            $"duplicate pattern in match: '{displayName}'",
+            patternLine, patternCol);
+        }
+        seenEnumCases.Add(caseNameToken.Value);
+
+        List<string>? bindings = null;
+        if (Check(TokenType.LeftParen)) {
+          Advance(); // consume '('
+          bindings = [];
+          while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+            var bindingName = Expect(TokenType.Identifier).Value;
+            bindings.Add(bindingName);
+            if (Check(TokenType.Comma)) Advance();
+          }
+          Expect(TokenType.RightParen);
+
+          // Validate binding count matches associated value count
+          var expectedCount = enumCase.AssociatedValues?.Count ?? 0;
+          if (bindings.Count != expectedCount) {
+            throw new CompileError(ErrorCode.SemanticEnumWrongBindingCount,
+              $"wrong binding count: '{caseNameToken.Value}'",
+              caseNameToken.Line, caseNameToken.Column);
+          }
+        }
+
+        patterns.Add(new EnumCasePattern(enumCase.Ordinal, caseNameToken.Value, bindings,
+          enumCase.AssociatedValues, displayName, patternLine, patternCol));
+      } else if (Check(TokenType.Identifier) && enumType is { HasAssociatedValues: true }
+          && PeekNext().Type != TokenType.Dot
+          && enumType.GetCase(Current().Value) == null
+          && (PeekNext().Type == TokenType.LeftParen || PeekNext().Type == TokenType.Then || PeekNext().Type == TokenType.Gives)) {
+        // Bare identifier in associated-value match that is NOT a valid case name
+        throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+          $"unknown enum case: '{Current().Value}'",
+          patternLine, patternCol);
+      } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
         // Enum pattern: Type.case
         var enumTypeToken = Advance();
         Advance(); // consume '.'
@@ -3787,7 +4114,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           long rawValue;
           if (enumType.BackingType == MlirType.I64) {
             rawValue = (long)enumCase.RawValue!;
-          } else if (enumType.BackingType == null) {
+          } else if (enumType.BackingType == null || enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
             rawValue = enumCase.Ordinal;
           } else {
             throw new InvalidOperationException($"Unsupported enum backing type in match pattern: {enumType.BackingType}");
@@ -4032,6 +4359,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Multiple patterns are combined with logical OR.
   /// Returns the combined boolean comparison result.
   /// </summary>
+  /// <summary>
+  /// Emits payload binding variables for associated-value enum match patterns.
+  /// For each EnumCasePattern with bindings, extracts payload values from the
+  /// original enum scrutinee and declares them as local variables.
+  /// </summary>
+  private void EmitEnumCaseBindings(List<MatchPattern> patterns, string origEnumTempName, string enumTypeName) {
+    foreach (var pattern in patterns) {
+      if (pattern is not EnumCasePattern { Bindings: { } bindings, AssociatedValues: { } assocValues }) continue;
+
+      // Load the original enum value from the cross-block temp variable
+      var enumVarRef = new MaxonEnumVarRefOp(origEnumTempName, enumTypeName, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(enumVarRef);
+
+      for (int i = 0; i < bindings.Count; i++) {
+        var bindingName = bindings[i];
+        var assocType = assocValues[i].Type;
+        var bindingKind = assocType.ToValueKind();
+
+        var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind);
+        _currentBlock!.AddOp(payloadOp);
+
+        _currentBlock!.AddOp(new MaxonAssignOp(bindingName, payloadOp.Result,
+          isDeclaration: true, isMutable: false, bindingKind));
+        _variables[bindingName] = new VarInfo(bindingKind, false, payloadOp.Result, _currentBlock!);
+      }
+    }
+  }
+
   private MaxonValue EmitPatternComparison(
       List<MatchPattern> patterns, string scrutTempName,
       MaxonValueKind compareKind, string? structTypeName) {
@@ -4089,6 +4444,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var equalsToken = new Token(TokenType.Identifier, equalsMethodName, pattern.Line, pattern.Column);
         var callOp = CreateFunctionCall(equalsToken, [refOp.Result, charLit.Result]);
         return callOp.Result!;
+      }
+      case EnumCasePattern enumCasePat: {
+        // Compare tag (ordinal) against the case's ordinal
+        var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
+        _currentBlock!.AddOp(refOp);
+        var patLit = new MaxonLiteralOp((long)enumCasePat.Ordinal);
+        _currentBlock!.AddOp(patLit);
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, refOp.Result, patLit.Result, compareKind);
+        _currentBlock!.AddOp(cmpOp);
+        return cmpOp.Result;
       }
       case RangePattern rangePat: {
         return EmitRangeComparison(rangePat, scrutTempName, compareKind, structTypeName);
@@ -4200,6 +4565,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (scrutineeVal is MaxonEnum enumVal) {
       var enumTypeName = enumVal.TypeName;
       var enumType = (MlirEnumType)_typeRegistry[enumTypeName];
+      if (enumType.HasAssociatedValues) {
+        // For associated-value enums, extract the tag for comparison
+        var tagOp = new MaxonEnumTagOp(scrutineeVal, enumTypeName);
+        _currentBlock!.AddOp(tagOp);
+        return (tagOp.Result, MaxonValueKind.Integer, enumTypeName, enumType, null);
+      }
       var backingKind = GetEnumBackingKind(enumType);
       var rawOp = new MaxonEnumRawValueOp(scrutineeVal, enumTypeName, backingKind);
       _currentBlock!.AddOp(rawOp);
@@ -4209,6 +4580,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return (scrutineeVal, MaxonValueKind.Struct, null, null, structVal.TypeName);
     }
     return (scrutineeVal, DetermineValueKind(scrutineeVal), null, null, null);
+  }
+
+  /// Resolves the scrutinee and, for associated-value enums, stores the original
+  /// enum value in a temp variable so payload can be extracted in case bodies.
+  private (string? origEnumTempName, MaxonValue compareVal, MaxonValueKind compareKind,
+      string? enumTypeName, MlirEnumType? enumType, string? structTypeName)
+      SetupMatchScrutinee(MaxonValue scrutineeVal, string matchLabel) {
+    string? origEnumTempName = null;
+    if (scrutineeVal is MaxonEnum origEnum) {
+      var origEnumType = (MlirEnumType)_typeRegistry[origEnum.TypeName];
+      if (origEnumType.HasAssociatedValues) {
+        origEnumTempName = $"__match_enum_{matchLabel}";
+      }
+    }
+    var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
+    if (origEnumTempName != null) {
+      _currentBlock!.AddOp(new MaxonAssignOp(origEnumTempName, scrutineeVal, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
+      _variables[origEnumTempName] = new VarInfo(MaxonValueKind.Enum, false, scrutineeVal, _currentBlock!);
+    }
+    return (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName);
   }
 
   /// <summary>
@@ -4308,7 +4699,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     SkipNewlines();
 
     var scrutineeVal = ResolveExprValue(scrutineeExpr);
-    var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
+    var (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName) =
+      SetupMatchScrutinee(scrutineeVal, matchLabel);
 
     var entryBlock = _currentBlock!;
 
@@ -4373,6 +4765,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       _currentBlock = caseBodyBlock;
+
+      // Emit payload bindings for associated-value enum patterns
+      if (origEnumTempName != null) {
+        EmitEnumCaseBindings(patterns, origEnumTempName, enumTypeName!);
+      }
+
       bool caseHasReturn = Check(TokenType.Return);
       ParseStatement();
 
@@ -4419,6 +4817,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     _variables.Remove(scrutTempName);
+    if (origEnumTempName != null) _variables.Remove(origEnumTempName);
 
     // If all cases terminate, there's no reachable code after the match
     _currentBlock = allTerminate ? null : mergeBlock;
@@ -4438,7 +4837,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     SkipNewlines();
 
     var scrutineeVal = ResolveExprValue(scrutineeExpr);
-    var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
+    var (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName) =
+      SetupMatchScrutinee(scrutineeVal, matchLabel);
 
     var entryBlock = _currentBlock!;
 
@@ -4509,6 +4909,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       _currentBlock = caseBodyBlock;
+
+      // Emit payload bindings for associated-value enum patterns
+      if (origEnumTempName != null) {
+        EmitEnumCaseBindings(patterns, origEnumTempName, enumTypeName!);
+      }
+
       var caseValue = ResolveExprValue(ParseExpression());
       resultKind = DetermineValueKind(caseValue);
 
@@ -4536,6 +4942,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     _variables.Remove(scrutTempName);
     _variables.Remove(resultVarName);
+    if (origEnumTempName != null) _variables.Remove(origEnumTempName);
 
     _currentBlock = mergeBlock;
     var resultRef = new MaxonVarRefOp(resultVarName, resultKind);
@@ -4623,9 +5030,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         // Enum comparisons use the backing kind (Integer or Float)
         if (kind == MaxonValueKind.Enum) {
-          var enumTypeName = lhsVal is MaxonEnum le ? le.TypeName : ((MaxonEnum)rhsVal).TypeName;
-          var enumType = (MlirEnumType)_typeRegistry[enumTypeName];
-          kind = GetEnumBackingKind(enumType);
+          var cmpEnumTypeName = lhsVal is MaxonEnum le ? le.TypeName : ((MaxonEnum)rhsVal).TypeName;
+          var cmpEnumType = (MlirEnumType)_typeRegistry[cmpEnumTypeName];
+          if (cmpEnumType.HasAssociatedValues) {
+            // For associated-value enums, compare tags only
+            kind = MaxonValueKind.Integer;
+            if (promotedLhs is MaxonEnum) {
+              var lhsTag = new MaxonEnumTagOp(promotedLhs, cmpEnumTypeName);
+              _currentBlock!.AddOp(lhsTag);
+              promotedLhs = lhsTag.Result;
+            }
+            if (promotedRhs is MaxonEnum) {
+              var rhsTag = new MaxonEnumTagOp(promotedRhs, cmpEnumTypeName);
+              _currentBlock!.AddOp(rhsTag);
+              promotedRhs = rhsTag.Result;
+            }
+          } else {
+            kind = GetEnumBackingKind(cmpEnumType);
+          }
         }
 
         // Division always produces a float result
@@ -4796,13 +5218,66 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           if (enumCase != null) {
             Advance(); // consume '.'
             Advance(); // consume case name
+
+            // Associated value enum: use MaxonEnumConstructOp
+            if (enumType.HasAssociatedValues) {
+              var args = new List<MaxonValue>();
+              if (enumCase.AssociatedValues is { Count: > 0 }) {
+                // Case with associated values: parse arguments
+                Expect(TokenType.LeftParen);
+                for (int ai = 0; ai < enumCase.AssociatedValues.Count; ai++) {
+                  if (ai > 0) Expect(TokenType.Comma);
+                  var argExpr = ParseExpression();
+                  var argVal = ResolveExprValue(argExpr);
+                  // Type-check the argument
+                  var expectedType = enumCase.AssociatedValues[ai].Type;
+                  var actualKind = DetermineValueKind(argVal);
+                  var expectedKind = expectedType.ToValueKind();
+                  if (actualKind != expectedKind) {
+                    // Determine source-level name for the actual type
+                    var actualTypeName = argVal is MaxonStruct ms
+                      ? ms.TypeName
+                      : MlirType.FormatAsSourceName(actualKind.ToMlirType());
+                    throw new CompileError(ErrorCode.SemanticTypeMismatch,
+                      $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
+                      Current().Line, Current().Column);
+                  }
+                  args.Add(argVal);
+                }
+                // Check for too many arguments
+                if (Check(TokenType.Comma)) {
+                  Advance();
+                  // Count remaining extra args after the comma
+                  int extraArgs = 0;
+                  while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+                    ParseExpression();
+                    extraArgs++;
+                    if (Check(TokenType.Comma)) Advance();
+                  }
+                  throw new CompileError(ErrorCode.SemanticWrongArgCount,
+                    $"wrong argument count: 'expected {enumCase.AssociatedValues.Count}, got {enumCase.AssociatedValues.Count + extraArgs}'",
+                    token.Line, token.Column);
+                }
+                Expect(TokenType.RightParen);
+              } else if (Check(TokenType.LeftParen)) {
+                // Case without associated values but caller used parens - error
+                throw new CompileError(ErrorCode.SemanticWrongArgCount,
+                  $"wrong argument count: 'expected 0, got ...'",
+                  token.Line, token.Column);
+              }
+              // Cases with no associated values and no parens: just tag, no payload
+              var constructOp = new MaxonEnumConstructOp(token.Value, memberName, enumCase.Ordinal, args);
+              _currentBlock!.AddOp(constructOp);
+              return ParseFieldAccessChain(new ExprResult.Direct(constructOp.Result), token);
+            }
+
+            // Simple/raw-value enum: use MaxonEnumLiteralOp
             MaxonEnumLiteralOp enumLitOp;
             if (enumType.BackingType == MlirType.F64) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (double)enumCase.RawValue!);
             } else if (enumType.BackingType == MlirType.I64) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.RawValue!);
-            } else if (enumType.BackingType is MlirStringBackingType) {
-              // String-backed enums are stored as ordinals at runtime
+            } else if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
             } else if (enumType.BackingType == null) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
@@ -4819,6 +5294,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             Advance(); // consume member name
             throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
               $"unknown enum case: '{memberName}'", token.Line, token.Column);
+          }
+
+          // Check for fromRawValue / fromName static methods on enum types
+          if (memberName is "fromRawValue" or "fromName") {
+            return ParseEnumStaticMethod(enumType, memberName);
           }
         }
 
@@ -5007,9 +5487,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Handle enum-specific access
       if (registeredType is MlirEnumType enumType) {
+        // .name access - returns case name as String
+        if (fieldName == "name") {
+          var enumVal = ResolveExprValue(result);
+          var nameOp = new MaxonEnumNameOp(enumVal, userTypeName);
+          _currentBlock!.AddOp(nameOp);
+          result = new ExprResult.Direct(nameOp.Result);
+          continue;
+        }
+
         // .rawValue access
         if (fieldName == "rawValue") {
           var enumVal = ResolveExprValue(result);
+          if (enumType.BackingType is MlirStringBackingType) {
+            var stringRawOp = new MaxonEnumStringRawValueOp(enumVal, userTypeName, isChar: false);
+            _currentBlock!.AddOp(stringRawOp);
+            result = new ExprResult.Direct(stringRawOp.Result);
+            continue;
+          }
+          if (enumType.BackingType is MlirCharBackingType) {
+            var charRawOp = new MaxonEnumStringRawValueOp(enumVal, userTypeName, isChar: true);
+            _currentBlock!.AddOp(charRawOp);
+            result = new ExprResult.Direct(charRawOp.Result);
+            continue;
+          }
           var resultKind = GetEnumBackingKind(enumType);
           var rawValueOp = new MaxonEnumRawValueOp(enumVal, userTypeName, resultKind);
           _currentBlock!.AddOp(rawValueOp);
@@ -5131,8 +5632,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           literalBuf.Append(nextChar);
           pos += 2;
         } else {
-          try { literalBuf.Append(StringUtils.ResolveEscapes($"\\{nextChar}")); }
-          catch (InvalidEscapeException ex) {
+          try { literalBuf.Append(StringUtils.ResolveEscapes($"\\{nextChar}")); } catch (InvalidEscapeException ex) {
             throw new CompileError(ErrorCode.LexerInvalidEscape,
                 $"{ex.Message} in string interpolation", token.Line, token.Column + pos);
           }
@@ -5214,8 +5714,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         "No type implements BuiltinCharLiteral (Character type not found in stdlib)",
         token.Line, token.Column);
     string value;
-    try { value = StringUtils.ResolveEscapes(token.Value); }
-    catch (InvalidEscapeException ex) {
+    try { value = StringUtils.ResolveEscapes(token.Value); } catch (InvalidEscapeException ex) {
       throw new CompileError(ErrorCode.LexerInvalidEscape,
           $"{ex.Message} in character literal", token.Line, token.Column);
     }
@@ -5234,6 +5733,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private ExprResult.Direct EmitConstantLiteral(object constValue) {
+    if (constValue is EnumConstantValue ec) {
+      var enumType = (MlirEnumType)_typeRegistry[ec.EnumTypeName];
+      var enumCase = enumType.GetCase(ec.CaseName)!;
+      MaxonEnumLiteralOp enumLitOp;
+      if (enumType.BackingType == MlirType.F64) {
+        enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (double)enumCase.RawValue!);
+      } else if (enumType.BackingType == MlirType.I64) {
+        enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.RawValue!);
+      } else if (enumType.BackingType == null || enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+        enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.Ordinal);
+      } else {
+        throw new InvalidOperationException($"Unsupported enum backing type for constant: {enumType.BackingType}");
+      }
+      _currentBlock!.AddOp(enumLitOp);
+      return new ExprResult.Direct(enumLitOp.Result);
+    }
     var op = constValue switch {
       long v => new MaxonLiteralOp(v),
       double v => new MaxonLiteralOp(v),

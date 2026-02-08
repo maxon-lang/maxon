@@ -1,0 +1,65 @@
+// Test: enum-method-returns-enum
+enum Toggle
+  on
+  off
+
+  function flip() returns Toggle
+    if self == Toggle.on 'check'
+      return Toggle.off
+    end 'check'
+    return Toggle.on
+  end 'flip'
+end 'Toggle'
+
+function main() returns int
+  let t = Toggle.on
+  let flipped = t.flip()
+  if flipped == Toggle.off 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Toggle.flip(self: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.mov edx, [rbp-8]
+    x86.cmp edx, eax
+    x86.jne Toggle.flip.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @enum-full.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.call Toggle.flip
+    x86.mov [rbp-16], eax
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-16]
+    x86.cmp ebx, edx
+    x86.jne enum-full.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

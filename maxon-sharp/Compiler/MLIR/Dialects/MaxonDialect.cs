@@ -557,6 +557,41 @@ public class MaxonEnumLiteralOp : MaxonOp {
   }
 }
 
+// Constructs an associated-value enum case: Container.value(42)
+// For cases without associated values (e.g. Container.empty), Args is empty.
+public class MaxonEnumConstructOp(string enumTypeName, string caseName, int ordinal, List<MaxonValue> args) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_construct @{EnumTypeName}.{CaseName}";
+  public string EnumTypeName { get; } = enumTypeName;
+  public string CaseName { get; } = caseName;
+  public int Ordinal { get; } = ordinal;
+  public List<MaxonValue> Args { get; } = args;
+  public MaxonEnum Result { get; } = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+}
+
+// Extracts the tag (ordinal) from an associated-value enum
+public class MaxonEnumTagOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_tag @{EnumTypeName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
+// Extracts a payload value at a given index from an associated-value enum
+public class MaxonEnumPayloadOp(MaxonValue enumValue, string enumTypeName, int payloadIndex, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_payload @{EnumTypeName}[{PayloadIndex}]";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public int PayloadIndex { get; } = payloadIndex;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public MaxonValue Result { get; } = resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
 // Enum parameter op: represents an enum being received as a function parameter
 public class MaxonEnumParamOp(int index, string name, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
   public override string Mnemonic => $"maxon.enum_param @{EnumTypeName}";
@@ -587,6 +622,27 @@ public class MaxonEnumRawValueOp(MaxonValue enumValue, string enumTypeName, Maxo
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Float
     ? new MaxonFloat(MlirContext.Current.NextId())
     : new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
+// Accesses .rawValue on a string or char-backed enum, returning String or Character
+public class MaxonEnumStringRawValueOp(MaxonValue enumValue, string enumTypeName, bool isChar) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_string_rawvalue @{EnumTypeName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public bool IsChar { get; } = isChar;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), isChar ? "Character" : "String");
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
+// Accesses .name on an enum value, returning the case name as a String
+public class MaxonEnumNameOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_name @{EnumTypeName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "String");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }

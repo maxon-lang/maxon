@@ -115,16 +115,27 @@ public class MlirInterfaceType(string name, List<MlirInterfaceMethodSignature> m
   public List<MlirInterfaceMethodSignature> Methods { get; } = methods;
 }
 
-public class MlirEnumCase(string name, int ordinal, object? rawValue = null) {
+public class MlirEnumCase(string name, int ordinal, object? rawValue = null,
+    List<(string Name, MlirType Type)>? associatedValues = null) {
   public string Name { get; } = name;
   public int Ordinal { get; } = ordinal;
   public object? RawValue { get; } = rawValue;
+  public List<(string Name, MlirType Type)>? AssociatedValues { get; } = associatedValues;
 }
 
-public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null) : MlirType(name, 8) {
+public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null) : MlirType(name) {
   public List<MlirEnumCase> Cases { get; } = cases;
   public MlirType? BackingType { get; } = backingType;
   public List<string> ConformingInterfaces { get; } = conformingInterfaces ?? [];
+
+  public bool HasAssociatedValues => Cases.Any(c => c.AssociatedValues is { Count: > 0 });
+
+  /// For associated value enums: 8 (tag) + max payload size across all cases.
+  /// Each payload field occupies 8 bytes (64-bit slots).
+  /// For simple enums: 8 bytes (single i64).
+  public override int SizeInBytes => HasAssociatedValues
+    ? 8 + Cases.Max(c => c.AssociatedValues?.Count ?? 0) * 8
+    : 8;
 
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }
@@ -132,6 +143,10 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
 /// Marker type for string-backed enum backing types. At runtime, string-backed enums
 /// are stored as ordinals (i64), but their display value is the associated string.
 public class MlirStringBackingType() : MlirType("string_enum", 8);
+
+/// Marker type for character-backed enum backing types. At runtime, char-backed enums
+/// are stored as ordinals (i64), but their display value is the associated character.
+public class MlirCharBackingType() : MlirType("char_enum", 8);
 
 public class MlirTypeParameterType(string parameterName) : MlirType(parameterName) {
   public string ParameterName { get; } = parameterName;

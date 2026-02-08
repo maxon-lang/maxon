@@ -16,5 +16,4 @@ Review the changes that have been made in the project.
 
 ## Guidelines
 
-- Any old 3-digit error codes (e.g., E022) in spec files need to be updated to the new 4-digit error codes.
 - Keep the x86 code generation correct — watch for short jump overflow (max +/-127 bytes) and 32-bit register truncation (image base is above 4GB).

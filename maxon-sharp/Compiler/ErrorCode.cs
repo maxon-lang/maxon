@@ -61,6 +61,8 @@ public enum ErrorCode {
   SemanticEnumDuplicateRawValue = 3031,
   SemanticEnumRawValueTypeMismatch = 3032,
   SemanticEnumUnknownCase = 3034,
+  SemanticEnumWrongBindingCount = 3035,
+  SemanticWrongArgCount = 3036,
   SemanticMainCannotThrow = 3054,
   SemanticTryRequiresThrowingFunction = 3055,
   SemanticThrowingFunctionRequiresTry = 3057,
