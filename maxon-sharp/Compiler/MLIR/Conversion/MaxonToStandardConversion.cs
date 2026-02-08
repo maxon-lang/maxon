@@ -128,8 +128,9 @@ public static class MaxonToStandardConversion {
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
       var varNameToStructType = new Dictionary<string, string>();
       // Tracks variable names that own managed memory (for cleanup before return)
-      // Key: user variable name (e.g. "arr"), Value: path to buffer field (e.g. "arr.managed.buffer")
-      var managedVarOwners = new Dictionary<string, string>();
+      // Key: user variable name (e.g. "arr"), Value: list of paths to buffer fields
+      // Single-managed: ["arr.managed.buffer"], Multi-managed: ["item.numbers.managed.buffer", "item.text._managed.buffer", ...]
+      var managedVarOwners = new Dictionary<string, List<string>>();
       // Tracks which managed vars hold arrays of structs with managed fields (for per-element cleanup)
       // Key: user variable name, Value: list of (offset, typeName) for managed fields within elements
       var managedVarElementInfo = new Dictionary<string, List<(int offset, string typeName)>>();
@@ -144,13 +145,14 @@ public static class MaxonToStandardConversion {
       // Track processed blocks to detect loop back-edges
       var processedBlocks = new HashSet<string>();
       // Snapshot of managedVarOwners at each block's entry, keyed by block name
-      var managedStateAtBlockEntry = new Dictionary<string, Dictionary<string, string>>();
+      var managedStateAtBlockEntry = new Dictionary<string, Dictionary<string, List<string>>>();
 
       bool sretParamEmitted = false;
       foreach (var block in func.Body.Blocks) {
         processedBlocks.Add(block.Name);
         if (_trackAllocs)
-          managedStateAtBlockEntry[block.Name] = new Dictionary<string, string>(managedVarOwners);
+          managedStateAtBlockEntry[block.Name] = managedVarOwners.ToDictionary(
+            kvp => kvp.Key, kvp => new List<string>(kvp.Value));
         var newBlock = newFunc.Body.AddBlock(block.Name);
 
         // In the entry block of sret functions, save the sret pointer (param 0)
@@ -196,9 +198,9 @@ public static class MaxonToStandardConversion {
                 structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
                 // Mutating functions own their managed struct params (MOVE semantics)
                 if (mutatingFunctions.Contains(func.Name)) {
-                  var bufferPath = GetManagedBufferPath(structParamOp.Name, structParamOp.StructTypeName, module.TypeDefs);
-                  if (bufferPath != null)
-                    managedVarOwners[structParamOp.Name] = bufferPath;
+                  var bufferPaths = GetAllManagedBufferPaths(structParamOp.Name, structParamOp.StructTypeName, module.TypeDefs);
+                  if (bufferPaths.Count > 0)
+                    managedVarOwners[structParamOp.Name] = bufferPaths;
                 }
               }
               break;
@@ -419,6 +421,64 @@ public static class MaxonToStandardConversion {
 
               structVarNames[structLitOp.Result.Id] = tempName;
               structValueTypes[structLitOp.Result.Id] = structLitOp.TypeName;
+
+              // Transfer ownership: managed vars used as field values in the struct literal
+              // are now owned by the struct literal, not the original variable.
+              // For non-variable managed fields (e.g. String literals), emit MOVE+COPY tracking.
+              // Skip tracking for internal/builtin struct types (initializers, not transfers).
+              if (_trackAllocs && !structLitOp.TypeName.StartsWith("__")
+                  && GetManagedFieldName(structType) == null) {
+                // Check if this struct literal is consumed as a non-self arg to a mutating call.
+                // If so, the call handler emits MOVE/COPY tracking — skip Phase 1 here to avoid doubling.
+                bool consumedByMutatingCall = false;
+                var resultId = structLitOp.Result.Id;
+                foreach (var laterOp in block.Operations) {
+                  if (laterOp is MaxonCallOp callOp) {
+                    for (int ai = 1; ai < callOp.Args.Count; ai++) {
+                      if (callOp.Args[ai].Id == resultId) {
+                        var calleeName = callOp.Callee;
+                        if (mutatingFunctions.Contains(calleeName) || IsMutatingMethodCall(calleeName)) {
+                          consumedByMutatingCall = true;
+                        }
+                        break;
+                      }
+                    }
+                  }
+                  if (consumedByMutatingCall) break;
+                }
+
+                if (!consumedByMutatingCall) {
+                  // Phase 1: MOVE+COPY for non-variable managed fields (String literals, etc.)
+                  foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
+                    // Skip fields backed by tracked managed variables (handled in Phase 2)
+                    if (structVarNames.TryGetValue(fieldVal.Id, out var srcName)
+                        && managedVarOwners.ContainsKey(srcName))
+                      continue;
+                    var field = structType.GetField(fieldName)!;
+                    if (field.Type is MlirStructType fieldStruct) {
+                      var fieldPaths = GetAllManagedBufferPaths("", fieldStruct.Name, module.TypeDefs);
+                      if (fieldPaths.Count > 0) {
+                        EmitTrackMove(newBlock, "managed");
+                        EmitTrackCopy(newBlock, fieldStruct.Name);
+                      }
+                    }
+                  }
+                }
+                // Phase 2: MOVE for variable-backed managed fields (ownership transfer)
+                foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
+                  if (structVarNames.TryGetValue(fieldVal.Id, out var srcVarName)
+                      && managedVarOwners.ContainsKey(srcVarName)) {
+                    var field = structType.GetField(fieldName)!;
+                    if (field.Type is MlirStructType fieldStruct) {
+                      var fieldPaths = GetAllManagedBufferPaths("", fieldStruct.Name, module.TypeDefs);
+                      if (fieldPaths.Count > 0) {
+                        EmitTrackMove(newBlock, srcVarName);
+                        managedVarOwners.Remove(srcVarName);
+                      }
+                    }
+                  }
+                }
+              }
               break;
             }
             case MaxonAssignOp assignOp: {
@@ -457,9 +517,10 @@ public static class MaxonToStandardConversion {
                   : structValueTypes[assignOp.Value.Id];
                 var structType = (MlirStructType)module.TypeDefs[structTypeName];
                 // Cleanup old managed memory before reassignment
-                if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPath)) {
+                if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPaths)) {
                   var oldElementInfo = managedVarElementInfo.TryGetValue(assignOp.VarName, out var oldInfo) ? oldInfo : null;
-                  EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes, oldElementInfo);
+                  foreach (var oldBufPath in oldBufPaths)
+                    EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes, oldElementInfo);
                 }
                 CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
                 // In struct instance methods, assigning to a self field struct must also
@@ -481,9 +542,9 @@ public static class MaxonToStandardConversion {
                 }
                 // Track managed memory ownership for cleanup
                 if (!isStructInstanceMethod && !assignOp.VarName.StartsWith("__")) {
-                  var bufferPath = GetManagedBufferPath(dstName, structTypeName, module.TypeDefs);
-                  if (bufferPath != null) {
-                    managedVarOwners[assignOp.VarName] = bufferPath;
+                  var bufferPaths = GetAllManagedBufferPaths(dstName, structTypeName, module.TypeDefs);
+                  if (bufferPaths.Count > 0) {
+                    managedVarOwners[assignOp.VarName] = bufferPaths;
                     // Check if this array's element type has managed fields
                     var elementStructType = GetArrayElementStructType(structTypeName, module.TypeDefs);
                     if (elementStructType != null) {
@@ -599,19 +660,20 @@ public static class MaxonToStandardConversion {
               if (_trackAllocs && processedBlocks.Contains(br.Target)
                   && managedStateAtBlockEntry.TryGetValue(br.Target, out var targetState)) {
                 var loopScopedVars = new List<string>();
-                foreach (var (varName, bufferPath) in managedVarOwners) {
+                foreach (var (varName, _) in managedVarOwners) {
                   if (!targetState.ContainsKey(varName))
                     loopScopedVars.Add(varName);
                 }
                 foreach (var varName in loopScopedVars) {
                   var elementInfo = managedVarElementInfo.TryGetValue(varName, out var info) ? info : null;
-                  EmitManagedCleanup(newBlock, varName, managedVarOwners[varName], varTypes, elementInfo);
-                  // Zero capacity to prevent use-after-free on reinitialization
-                  var capacityPath = managedVarOwners[varName];
-                  capacityPath = capacityPath[..capacityPath.LastIndexOf('.')] + ".capacity";
-                  var zero = new StdConstI64Op(0);
-                  newBlock.AddOp(zero);
-                  newBlock.AddOp(new StdStoreI64Op(zero.Result, capacityPath));
+                  foreach (var bufferPath in managedVarOwners[varName]) {
+                    EmitManagedCleanup(newBlock, varName, bufferPath, varTypes, elementInfo);
+                    // Zero capacity to prevent use-after-free on reinitialization
+                    var capacityPath = bufferPath[..bufferPath.LastIndexOf('.')] + ".capacity";
+                    var zero = new StdConstI64Op(0);
+                    newBlock.AddOp(zero);
+                    newBlock.AddOp(new StdStoreI64Op(zero.Result, capacityPath));
+                  }
                   // Remove from owner tracking — loop handles its own cleanup
                   managedVarOwners.Remove(varName);
                 }
@@ -937,7 +999,7 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs,
-    Dictionary<string, string> managedVarOwners,
+    Dictionary<string, List<string>> managedVarOwners,
     HashSet<string> mutatingFunctions) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
       isTryCall: false, funcLookup, block, valueMap, varTypes, structVarNames,
@@ -964,7 +1026,7 @@ public static class MaxonToStandardConversion {
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
     Dictionary<string, MlirType> typeDefs,
-    Dictionary<string, string>? managedVarOwners,
+    Dictionary<string, List<string>>? managedVarOwners,
     HashSet<string>? mutatingFunctions,
     MaxonValue? errorFlagValue = null) {
 
@@ -1069,7 +1131,7 @@ public static class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     bool isStructInstanceMethod,
     MlirStructType? selfStructType,
-    Dictionary<string, string> managedVarOwners,
+    Dictionary<string, List<string>> managedVarOwners,
     HashSet<string> cstringTrackVars,
     Dictionary<string, List<(int offset, string typeName)>> managedVarElementInfo) {
 
@@ -1094,6 +1156,8 @@ public static class MaxonToStandardConversion {
       if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
         // Normal path: struct is flattened on the stack, copy fields to sret buffer
         WriteStructFieldsToPointer(block, srcName, sretLoad.Result, retStructType, varTypes);
+        // Transfer ownership of the returned struct's managed fields to the caller
+        managedVarOwners.Remove(srcName);
       } else {
         // Struct element returned from managed memory: the value is a pointer to
         // the struct's raw bytes in the heap buffer. Load fields via that pointer
@@ -1128,14 +1192,15 @@ public static class MaxonToStandardConversion {
   private static void EmitReturnCleanup(
     MlirBlock<StandardOp> block,
     HashSet<string> cstringTrackVars,
-    Dictionary<string, string> managedVarOwners,
+    Dictionary<string, List<string>> managedVarOwners,
     Dictionary<string, string> varTypes,
     Dictionary<string, List<(int offset, string typeName)>>? managedVarElementInfo = null) {
     foreach (var csVar in cstringTrackVars)
       EmitTrackCleanup(block, csVar);
-    foreach (var (varName, bufferPath) in managedVarOwners) {
+    foreach (var (varName, bufferPaths) in managedVarOwners) {
       var elementInfo = managedVarElementInfo != null && managedVarElementInfo.TryGetValue(varName, out var info) ? info : null;
-      EmitManagedCleanup(block, varName, bufferPath, varTypes, elementInfo);
+      foreach (var bufferPath in bufferPaths)
+        EmitManagedCleanup(block, varName, bufferPath, varTypes, elementInfo);
     }
   }
 
@@ -3344,19 +3409,28 @@ public static class MaxonToStandardConversion {
     return null;
   }
 
+
   /// <summary>
-  /// Determines the buffer field path for a struct variable that owns managed memory.
-  /// Returns null if the struct type does not contain managed memory.
+  /// Finds ALL managed buffer paths within a struct type, recursing into nested structs.
+  /// For MultiManaged with fields {numbers: IntArray, text: String, tag: String}, returns
+  /// ["varName.numbers.managed.buffer", "varName.text._managed.buffer", "varName.tag._managed.buffer"].
+  /// For single-managed structs like IntArray, returns ["varName.managed.buffer"].
   /// </summary>
-  private static string? GetManagedBufferPath(string varName, string structTypeName, Dictionary<string, MlirType> typeDefs) {
-    if (structTypeName == "__ManagedMemory")
-      return $"{varName}.buffer";
-    if (typeDefs.TryGetValue(structTypeName, out var typeDef) && typeDef is MlirStructType structType) {
-      var fieldName = GetManagedFieldName(structType);
-      if (fieldName != null)
-        return $"{varName}.{fieldName}.buffer";
+  private static List<string> GetAllManagedBufferPaths(string varName, string structTypeName, Dictionary<string, MlirType> typeDefs) {
+    var result = new List<string>();
+    if (structTypeName == "__ManagedMemory") {
+      result.Add($"{varName}.buffer");
+      return result;
     }
-    return null;
+    if (!typeDefs.TryGetValue(structTypeName, out var typeDef) || typeDef is not MlirStructType structType)
+      return result;
+    foreach (var field in structType.Fields) {
+      if (field.Type is MlirStructType fieldStruct) {
+        var nestedPaths = GetAllManagedBufferPaths($"{varName}.{field.Name}", fieldStruct.Name, typeDefs);
+        result.AddRange(nestedPaths);
+      }
+    }
+    return result;
   }
 
   /// <summary>

@@ -53,6 +53,8 @@ ALLOC #1: 192 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 COPY: String
+MOVE: managed
+COPY: String
 hello world that needs heap allocation
 CLEANUP: cs
 CLEANUP: items
@@ -60,16 +62,17 @@ CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: items -> rc=0
 FREE #1: 192 bytes (array cleanup)
+CLEANUP: first
 
 === MEMORY STATS ===
 Allocated: 192 bytes
 Freed:     192 bytes
 Leaked:    0 bytes
-Moves:     2
+Moves:     3
 Increfs:   1
 Decrefs:   1
-Copies:    2
-Cleanups:  4
+Copies:    3
+Cleanups:  5
 ```
 
 <!-- test: array-of-structs-cleanup-order -->

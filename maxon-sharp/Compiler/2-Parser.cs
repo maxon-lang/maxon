@@ -2611,8 +2611,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (afterIdent.Type == TokenType.Dot) {
         // Nested field access chain: o.inner.x = ... or o.inner.method(...)
         // Scan ahead to find what terminates the chain
-        if (IsNestedFieldAssignment()) {
+        if (IsNestedFieldChainEndingWith(TokenType.Equals)) {
           ParseFieldAssignment();
+          return;
+        }
+        if (IsNestedFieldChainEndingWith(TokenType.LeftParen)) {
+          ParseNestedFieldMethodCall();
           return;
         }
       }
@@ -2644,19 +2648,87 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ParseFieldAssignment();
   }
 
-  private bool IsNestedFieldAssignment() {
+  /// Validates field exists and is accessible, emits MaxonFieldAccessOp, returns updated current value and struct type name.
+  private (MaxonValue value, string structTypeName) EmitIntermediateFieldAccess(
+      MaxonValue currentValue, string currentStructTypeName, Token fieldToken) {
+    var structType = (MlirStructType)_typeRegistry[currentStructTypeName];
+    var field = structType.GetField(fieldToken.Value)
+      ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+        $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
+        fieldToken.Line, fieldToken.Column);
+
+    if (!field.IsExported && _currentTypeName != structType.Name) {
+      throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess,
+        $"cannot access unexported field: '{fieldToken.Value}' outside of type '{structType.Name}'",
+        fieldToken.Line, fieldToken.Column);
+    }
+
+    var fieldKind = field.Type.ToValueKind();
+    var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
+    var accessOp = new MaxonFieldAccessOp(currentValue, currentStructTypeName, fieldToken.Value, fieldKind, fieldStructName);
+    _currentBlock!.AddOp(accessOp);
+    var newStructTypeName = fieldStructName
+      ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+        $"Cannot access nested field on non-struct field '{fieldToken.Value}'",
+        fieldToken.Line, fieldToken.Column);
+    return (accessOp.Result, newStructTypeName);
+  }
+
+  private bool IsNestedFieldChainEndingWith(TokenType terminator) {
     // Scan from _pos forward through identifier.identifier.identifier... pattern
-    // Returns true if the chain ends with '='
+    // Returns true if the chain ends with the specified terminator token
     var i = _pos;
     while (i < _tokens.Count) {
       if (_tokens[i].Type != TokenType.Identifier) return false;
       i++;
       if (i >= _tokens.Count) return false;
-      if (_tokens[i].Type == TokenType.Equals) return true;
+      if (_tokens[i].Type == terminator) return true;
       if (_tokens[i].Type != TokenType.Dot) return false;
       i++;
     }
     return false;
+  }
+
+  private void ParseNestedFieldMethodCall() {
+    // Handles: o.inner.field.method(args)
+    // Walk the chain of field accesses until we reach the final identifier followed by '('
+    var nameToken = Advance(); // consume root variable name
+    if (!_variables.TryGetValue(nameToken.Value, out var varInfo) || varInfo.StructTypeName == null) {
+      throw new CompileError(ErrorCode.SemanticUndefinedVariable,
+        $"Undefined variable '{nameToken.Value}'",
+        nameToken.Line, nameToken.Column);
+    }
+
+    var currentStructTypeName = varInfo.StructTypeName;
+    var currentValue = ResolveExprValue(new ExprResult.VarRef(nameToken.Value, varInfo));
+
+    // Walk intermediate field accesses: consume '.fieldName' pairs
+    // Stop when the next segment is followed by '(' (method call)
+    while (Check(TokenType.Dot)) {
+      Advance(); // consume '.'
+      var fieldToken = Expect(TokenType.Identifier);
+
+      if (Check(TokenType.LeftParen)) {
+        // This is the method call at the end of the chain
+        var methodName = $"{currentStructTypeName}.{fieldToken.Value}";
+        var resolvedName = ResolveMethodName(methodName)
+          ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Undefined method '{fieldToken.Value}' on type '{currentStructTypeName}'",
+            fieldToken.Line, fieldToken.Column);
+        Advance(); // consume '('
+        var qualifiedToken = new Token(TokenType.Identifier, resolvedName, fieldToken.Line, fieldToken.Column);
+        var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, currentValue);
+        CreateFunctionCall(qualifiedToken, args, callee);
+        return;
+      }
+
+      // Intermediate field access
+      (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(currentValue, currentStructTypeName, fieldToken);
+    }
+
+    throw new CompileError(ErrorCode.ParserExpectedExpression,
+      "Expected method call at end of field access chain",
+      Current().Line, Current().Column);
   }
 
   private void ParseSelfDotStatement() {
@@ -3120,27 +3192,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     while (Check(TokenType.Dot)) {
       // This is an intermediate field - it must be struct-typed so we can continue the chain
-      var structType = (MlirStructType)_typeRegistry[currentStructTypeName];
-      var field = structType.GetField(fieldToken.Value)
-        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-          $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
-          fieldToken.Line, fieldToken.Column);
-
-      if (!field.IsExported && _currentTypeName != structType.Name) {
-        throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess,
-          $"cannot access unexported field: '{fieldToken.Value}' outside of type '{structType.Name}'",
-          fieldToken.Line, fieldToken.Column);
-      }
-
-      var fieldKind = field.Type.ToValueKind();
-      var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
-      var accessOp = new MaxonFieldAccessOp(currentValue, currentStructTypeName, fieldToken.Value, fieldKind, fieldStructName);
-      _currentBlock!.AddOp(accessOp);
-      currentValue = accessOp.Result;
-      currentStructTypeName = fieldStructName
-        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-          $"Cannot access nested field on non-struct field '{fieldToken.Value}'",
-          fieldToken.Line, fieldToken.Column);
+      (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(currentValue, currentStructTypeName, fieldToken);
 
       Advance(); // consume '.'
       fieldToken = Expect(TokenType.Identifier);

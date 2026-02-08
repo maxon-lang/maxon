@@ -1,0 +1,90 @@
+// Test: if-try-else-with-error-binding
+enum MyError is Error
+  first
+  second
+end 'MyError'
+
+function mayFail(which int) returns int throws MyError
+  if which == 1 'check1'
+    throw MyError.first
+  end 'check1'
+  if which == 2 'check2'
+    throw MyError.second
+  end 'check2'
+  return 42
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  if try mayFail(1) 'check'
+    result = 100
+  end 'check' else (e) 'err'
+    result = 50
+  end 'err'
+  return result
+end 'main'
+---
+ExitCode: 50
+---
+module {
+  func @if-try.mayFail(which: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 1
+    x86.cmp ecx, eax
+    x86.jne if-try.mayFail.check1_0.after
+  check1_0:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check1_0.after:
+    x86.mov eax, 2
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jne if-try.mayFail.check2_1.after
+  check2_1:
+    x86.mov eax, 1
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check2_1.after:
+    x86.mov eax, 42
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @if-try.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.call if-try.mayFail
+    x86.mov [rbp-16], edx
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.jne if-try.main.err_3
+  check_2:
+    x86.mov eax, 100
+    x86.mov [rbp-8], eax
+    x86.jmp if-try.main.check_2.merge
+  err_3:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 50
+    x86.mov [rbp-8], ecx
+    x86.jmp if-try.main.check_2.merge
+  check_2.merge:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

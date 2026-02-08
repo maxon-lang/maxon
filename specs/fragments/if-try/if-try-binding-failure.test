@@ -1,0 +1,61 @@
+// Test: if-try-binding-failure
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail(succeed bool) returns int throws MyError
+  if not succeed 'check'
+    throw MyError.failed
+  end 'check'
+  return 42
+end 'mayFail'
+
+function main() returns int
+  if let value = try mayFail(false) 'check'
+    return value
+  end 'check'
+  return 99
+end 'main'
+---
+ExitCode: 99
+---
+module {
+  func @if-try.mayFail(succeed: i1) -> i64 {
+  entry:
+    x86.mov eax, 1
+    x86.xor ecx, eax
+    x86.test ecx, ecx
+    x86.je if-try.mayFail.check_0.after
+  check_0:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.ret
+  check_0.after:
+    x86.mov eax, 42
+    x86.xor edx, edx
+    x86.ret
+  }
+  func @if-try.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call if-try.mayFail
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.jne if-try.main.check_2.after
+  check_2:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  check_2.after:
+    x86.mov eax, 99
+    x86.epilogue
+    x86.ret
+  }
+}
+---

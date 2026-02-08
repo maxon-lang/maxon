@@ -372,7 +372,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E055: specs/fragments/if-try.error.if-try-non-throwing.1.test:7:5: try requires a throwing function: ''noThrow' does not throw'
+error E3055: specs/fragments/if-try/error.if-try-non-throwing.test:7:6: try requires a throwing function: ''if-try.noThrow' does not throw'
 ```
 
 <!-- test: if-try-binding-struct-multiple-managed-fields -->
@@ -419,7 +419,7 @@ end 'main'
 30
 ```
 ```stdout
-ALLOC #1: 40 bytes (array grow)
+ALLOC #1: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 COPY: String
@@ -427,12 +427,11 @@ MOVE: managed
 COPY: String
 MOVE: nums
 CLEANUP: item
-CLEANUP: item
 DECREF: item -> rc=0
-FREE #1: 40 bytes (array cleanup)
+FREE #1: 32 bytes (array cleanup)
 CLEANUP: item
 CLEANUP: item
-ALLOC #2: 40 bytes (array grow)
+ALLOC #2: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 COPY: String
@@ -440,12 +439,11 @@ MOVE: managed
 COPY: String
 MOVE: nums
 CLEANUP: item
-CLEANUP: item
 DECREF: item -> rc=0
-FREE #2: 40 bytes (array cleanup)
+FREE #2: 32 bytes (array cleanup)
 CLEANUP: item
 CLEANUP: item
-ALLOC #3: 40 bytes (array grow)
+ALLOC #3: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 COPY: String
@@ -453,21 +451,20 @@ MOVE: managed
 COPY: String
 MOVE: nums
 CLEANUP: item
-CLEANUP: item
 DECREF: item -> rc=0
-FREE #3: 40 bytes (array cleanup)
+FREE #3: 32 bytes (array cleanup)
 CLEANUP: item
 CLEANUP: item
 
 === MEMORY STATS ===
-Allocated: 120 bytes
-Freed:     120 bytes
+Allocated: 96 bytes
+Freed:     96 bytes
 Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
 Copies:    6
-Cleanups:  12
+Cleanups:  9
 ```
 
 <!-- test: complex-nested-struct-cleanup -->
@@ -514,36 +511,35 @@ end 'main'
 ```stdout
 MOVE: managed
 COPY: String
-COPY: Array$int
-ALLOC #1: 40 bytes (array grow)
+MOVE: managed
+COPY: IntArray
+ALLOC #1: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 COPY: String
-COPY: Array$String
+MOVE: managed
+COPY: StringArray
 MOVE: inner
 MOVE: managed
-ALLOC #2: 168 bytes (array grow)
+ALLOC #2: 160 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
-MOVE: outer
-CLEANUP: outer
-CLEANUP: outer
 CLEANUP: outer
 CLEANUP: outer
 CLEANUP: outer
 DECREF: outer -> rc=0
-FREE #1: 40 bytes (array cleanup)
+FREE #1: 32 bytes (array cleanup)
 CLEANUP: outer
 DECREF: outer -> rc=0
-FREE #2: 168 bytes (array cleanup)
+FREE #2: 160 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 208 bytes
-Freed:     208 bytes
+Allocated: 192 bytes
+Freed:     192 bytes
 Leaked:    0 bytes
-Moves:     6
+Moves:     7
 Increfs:   2
 Decrefs:   2
 Copies:    4
-Cleanups:  6
+Cleanups:  4
 ```
