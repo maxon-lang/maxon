@@ -218,21 +218,56 @@ export type Math
   end 'log10'
 
   /// Calculate base-2 logarithm of x
-  /// Uses the identity: log2(x) = log(x) / log(2)
+  /// Normalizes x to [1.0, 2.0) then uses series for the fractional part
   export static function log2(x float) returns float
     // Handle special cases
     if x <= 0.0 'invalid'
-      return 0.0  // undefined for non-positive values
+      return 0.0
     end 'invalid'
 
     if x == 1.0 'one'
       return 0.0
     end 'one'
 
-    // log2(x) = log(x) / log(2)
-    var ln_x = Math.log(x)
+    // Decompose: log2(x) = n + log2(y) where y in [1.0, 2.0)
+    // Powers of 2 normalize to y=1.0 exactly, giving exact integer results
+    var n = 0
+    var y = x
+
+    while y >= 2.0 'normalize_down'
+      y = y / 2.0
+      n = n + 1
+    end 'normalize_down'
+
+    while y < 1.0 'normalize_up'
+      y = y * 2.0
+      n = n - 1
+    end 'normalize_up'
+
+    // Now y is in [1.0, 2.0), compute log2(y) = ln(y) / ln(2)
+    // For y=1.0 (powers of 2), z=0 and the series gives exactly 0.0
+    // ln(y) via series: ln(y) = 2 * sum(z^(2k+1)/(2k+1)) where z = (y-1)/(y+1)
+    var num = y - 1.0
+    var den = y + 1.0
+    var z = num / den
+    var z_squared = z * z
+    var term = z
+    var sum = term
+    var k = 1
+
+    while k < 30 'series'
+      term = term * z_squared
+      var divisor = 2.0 * k + 1.0
+      sum = sum + term / divisor
+      k = k + 1
+    end 'series'
+
+    var ln_y = 2.0 * sum
+    // log2(y) = ln(y) / ln(2)
     var ln_2 = 0.693147180559945309417232121458
-    var result = ln_x / ln_2
+    var frac = ln_y / ln_2
+    // n is exact integer, frac is the small fractional correction
+    var result = n + frac
     return result
   end 'log2'
 

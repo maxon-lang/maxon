@@ -6279,7 +6279,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var stringToken = Advance(); // consume the string literal
     var stringStruct = EmitStringLiteralWithInterpolation(stringToken);
 
-    return EmitFromLiteralInitCall(typeToken, typeName, sourceStruct, stringStruct);
+    return EmitFromLiteralInitCall(typeToken, typeName, stringStruct);
   }
 
   /// <summary>
@@ -6295,14 +6295,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var charToken = Advance(); // consume the char literal
     var charStruct = EmitCharLiteral(charToken);
 
-    return EmitFromLiteralInitCall(typeToken, typeName, sourceStruct, charStruct);
+    return EmitFromLiteralInitCall(typeToken, typeName, charStruct);
   }
 
   /// <summary>
   /// Emit the init() call for "TypeName from literal" expressions.
   /// Looks up TypeName.init and calls it with the provided literal value.
   /// </summary>
-  private ExprResult.Direct EmitFromLiteralInitCall(Token typeToken, string typeName, MlirStructType sourceStruct, MaxonStruct literalValue) {
+  private ExprResult.Direct EmitFromLiteralInitCall(Token typeToken, string typeName, MaxonStruct literalValue) {
     var initMethodName = $"{typeName}.init";
     var resolvedInitName = ResolveMethodName(initMethodName);
     var initFunc = resolvedInitName != null

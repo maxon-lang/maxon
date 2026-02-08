@@ -73,13 +73,13 @@ end 'main'
 ```
 ```stdout
 0.0
-0.999999
-1.999999
-2.999999
-3.999999
-9.999999
--0.999999
--1.999999
+1.0
+2.0
+3.0
+4.0
+10.0
+-1.0
+-2.0
 ```
 
 <!-- test: log2.non-powers-and-precision -->
@@ -103,10 +103,10 @@ end 'main'
 0
 ```
 ```stdout
-1.584962
+1.584963
 2.321928
-2.584962
-19.931568
+2.584963
+19.931569
 ```
 
 
@@ -139,7 +139,7 @@ function main() returns int
   
   // Test relationship: log2(2^x) = x
   var exponent = 7.0
-  var power_val = Math.pow(2.0, exponent)
+  var power_val = Math.pow(2.0, exponent: exponent)
   var r_pow = Math.log2(power_val)
   print("{r_pow}\n")
   
@@ -150,10 +150,10 @@ end 'main'
 0
 ```
 ```stdout
-4.999999
-5.999999
-4.999999
-6.999999
+5.0
+6.0
+5.0
+7.0
 ```
 
 <!-- test: log2.special-values -->
@@ -182,5 +182,5 @@ end 'main'
 ```stdout
 1.442695
 3.321928
-3.584962
+3.584963
 ```

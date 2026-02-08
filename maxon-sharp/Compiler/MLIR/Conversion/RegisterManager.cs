@@ -485,19 +485,23 @@ public class RegisterManager {
       block.AddOp(new X86MovMemRspRegOp(offset, argReg));
     }
 
-    // Place float args directly into their target XMM registers.
-    // Float args don't compete with GPR args for register slots.
+    // Place float args into their target XMM registers using multi-pass
+    // placement to avoid overwriting an arg that hasn't been placed yet.
     var gprArgs = new List<int>();
+    var xmmArgs = new List<int>();
     for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64) {
-        var srcXmm = EnsureInXmmRegister(args[i], block);
-        if (srcXmm != CallConvXmmRegs[i]) {
-          block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], srcXmm));
-        }
-      } else {
+      if (args[i] is StdF64)
+        xmmArgs.Add(i);
+      else
         gprArgs.Add(i);
-      }
     }
+
+    // Snapshot where each XMM arg currently lives
+    var xmmSources = new X86XmmRegister?[regArgCount];
+    foreach (int i in xmmArgs)
+      xmmSources[i] = EnsureInXmmRegister(args[i], block);
+
+    PlaceXmmArgs(xmmArgs, xmmSources, regArgCount, block);
 
     // Snapshot where each GPR register arg currently lives (register or stack).
     // This avoids calling EnsureInRegister in a loop where each call
@@ -637,23 +641,27 @@ public class RegisterManager {
 
     // Snapshot where each GPR arg currently lives
     var gprArgs = new List<int>();
+    var xmmArgs = new List<int>();
     var argSources = new X86Register?[regArgCount];
     for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64) continue;
-      gprArgs.Add(i);
-      argSources[i] = To64Bit(_valueToRegister[args[i]]);
-    }
-
-    // Place float args into their target XMM registers
-    var placed = new bool[regArgCount];
-    for (int i = 0; i < regArgCount; i++) {
       if (args[i] is StdF64) {
-        var srcXmm = EnsureInXmmRegister(args[i], block);
-        if (srcXmm != CallConvXmmRegs[i])
-          block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], srcXmm));
-        placed[i] = true;
+        xmmArgs.Add(i);
+      } else {
+        gprArgs.Add(i);
+        argSources[i] = To64Bit(_valueToRegister[args[i]]);
       }
     }
+
+    // Place float args into their target XMM registers using multi-pass
+    var xmmSources = new X86XmmRegister?[regArgCount];
+    foreach (int i in xmmArgs)
+      xmmSources[i] = _valueToXmm[args[i]];
+
+    PlaceXmmArgs(xmmArgs, xmmSources, regArgCount, block);
+
+    var placed = new bool[regArgCount];
+    foreach (int i in xmmArgs)
+      placed[i] = true;
 
     var targetRegs = new X86Register[regArgCount];
     for (int i = 0; i < regArgCount; i++)
@@ -1147,6 +1155,66 @@ public class RegisterManager {
     _registerContents[reg] = value;
     _valueToRegister[value] = reg;
     _lastUsed[reg] = _currentOpIndex;
+  }
+
+  /// <summary>
+  /// Place XMM args into their calling convention target registers using a
+  /// multi-pass algorithm that avoids overwriting args not yet placed.
+  /// </summary>
+  private static void PlaceXmmArgs(List<int> xmmArgs, X86XmmRegister?[] xmmSources, int regArgCount, MlirBlock<X86Op> block) {
+    if (xmmArgs.Count == 0) return;
+
+    var placed = new bool[regArgCount];
+
+    // Pass 1: mark args already in their target register
+    foreach (int i in xmmArgs) {
+      if (xmmSources[i] == CallConvXmmRegs[i])
+        placed[i] = true;
+    }
+
+    // Pass 2: place args whose target is not occupied by another unplaced arg
+    bool progress = true;
+    while (progress) {
+      progress = false;
+      foreach (int i in xmmArgs) {
+        if (placed[i]) continue;
+        bool targetBlocked = false;
+        foreach (int j in xmmArgs) {
+          if (j != i && !placed[j] && xmmSources[j] == CallConvXmmRegs[i]) {
+            targetBlocked = true;
+            break;
+          }
+        }
+        if (!targetBlocked) {
+          block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], xmmSources[i]!.Value));
+          placed[i] = true;
+          progress = true;
+        }
+      }
+    }
+
+    // Pass 3: resolve remaining cycles using a temp XMM register.
+    // Analogous to the GPR xchg pass but using a scratch register since
+    // XMM registers don't have an xchg instruction.
+    foreach (int i in xmmArgs) {
+      if (placed[i]) continue;
+      if (xmmSources[i] == CallConvXmmRegs[i]) {
+        placed[i] = true;
+        continue;
+      }
+      var temp = X86XmmRegister.Xmm15;
+      block.AddOp(new X86MovSdXmmXmmOp(temp, xmmSources[i]!.Value));
+      block.AddOp(new X86MovSdXmmXmmOp(xmmSources[i]!.Value, CallConvXmmRegs[i]));
+      block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], temp));
+      // Update the other arg's source to reflect the swap
+      foreach (int j in xmmArgs) {
+        if (j != i && !placed[j] && xmmSources[j] == CallConvXmmRegs[i]) {
+          xmmSources[j] = xmmSources[i]!.Value;
+          break;
+        }
+      }
+      placed[i] = true;
+    }
   }
 
   private static bool SamePhysicalRegister(X86Register? a, X86Register? b) {
