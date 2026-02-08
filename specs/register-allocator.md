@@ -1196,26 +1196,23 @@ module {
     %2 = arith.constant {value = 0 : i64}
     memref.store %2, sum3
     %3 = arith.constant {value = 10 : i64}
-    %4 = arith.addi %0, %3
-    memref.store %4, sum1
-    %5 = arith.constant {value = 20 : i64}
-    %6 = arith.addi %1, %5
-    memref.store %6, sum2
-    %7 = arith.constant {value = 30 : i64}
-    %8 = arith.addi %2, %7
-    memref.store %8, sum3
-    %9 = arith.constant {value = 5 : i64}
-    %10 = arith.addi %4, %9
-    memref.store %10, sum1
-    %11 = arith.constant {value = 10 : i64}
-    %12 = arith.addi %6, %11
-    memref.store %12, sum2
-    %13 = arith.constant {value = 15 : i64}
-    %14 = arith.addi %8, %13
-    memref.store %14, sum3
-    %15 = arith.addi %10, %12
-    %16 = arith.addi %15, %14
-    func.return %16
+    memref.store %3, sum1
+    %4 = arith.constant {value = 20 : i64}
+    memref.store %4, sum2
+    %5 = arith.constant {value = 30 : i64}
+    memref.store %5, sum3
+    %6 = arith.constant {value = 5 : i64}
+    %7 = arith.addi %3, %6
+    memref.store %7, sum1
+    %8 = arith.constant {value = 10 : i64}
+    %9 = arith.addi %4, %8
+    memref.store %9, sum2
+    %10 = arith.constant {value = 15 : i64}
+    %11 = arith.addi %5, %10
+    memref.store %11, sum3
+    %12 = arith.addi %7, %9
+    %13 = arith.addi %12, %11
+    func.return %13
   }
 }
 === x86
@@ -1226,19 +1223,16 @@ module {
     x86.xor ecx, ecx
     x86.xor edx, edx
     x86.mov ebx, 10
-    x86.add eax, ebx
     x86.mov esi, 20
-    x86.add ecx, esi
     x86.mov edi, 30
-    x86.add edx, edi
     x86.mov r8, 5
-    x86.add eax, r8
+    x86.add ebx, r8
     x86.mov r9, 10
-    x86.add ecx, r9
-    x86.mov ebx, 15
-    x86.add edx, ebx
-    x86.add eax, ecx
-    x86.add eax, edx
+    x86.add esi, r9
+    x86.mov eax, 15
+    x86.add edi, eax
+    x86.add ebx, esi
+    x86.lea eax, [ebx + edi]
     x86.ret
   }
 }
