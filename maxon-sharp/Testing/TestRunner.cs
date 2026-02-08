@@ -298,7 +298,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
         // Run the executable if we have runtime expectations
         if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null) {
-          var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, fragment.Args);
+          var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
 
           if (successExpectation.ExitCode.HasValue && ExitCode != successExpectation.ExitCode.Value) {
             return new TestResult {
@@ -361,11 +361,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
   private const int TestTimeoutMs = 1000;
 
-  private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string? args = null) {
+  private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string workingDirectory, string? args = null) {
     var psi = new ProcessStartInfo {
       FileName = exePath,
       Arguments = args ?? "",
-      WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(exePath)),
+      WorkingDirectory = workingDirectory,
       RedirectStandardOutput = true,
       RedirectStandardError = true,
       UseShellExecute = false,
