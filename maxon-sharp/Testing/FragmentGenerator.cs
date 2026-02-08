@@ -84,7 +84,7 @@ public static class FragmentGenerator {
   /// <param name="fragmentDir">Directory to output fragment files</param>
   /// <param name="force">Force regeneration even if up to date</param>
   /// <returns>Result with number of fragments generated and error count</returns>
-  public static FragmentGenerationResult GenerateFragments(string specDir, string fragmentDir, bool force = false) {
+  public static FragmentGenerationResult GenerateFragments(string specDir, string fragmentDir, bool force = false, string? filter = null) {
     if (!Directory.Exists(specDir)) {
       Logger.Error(LogCategory.Testing, $"Spec directory not found: {specDir}");
       return new FragmentGenerationResult(0, 1);
@@ -95,9 +95,11 @@ public static class FragmentGenerator {
     var specs = SpecParser.ParseDirectory(specDir);
     var totalTests = specs.Sum(s => s.Tests.Count);
 
-    // Check if we need to regenerate based on spec/test count changes
-    if (NeedsRegeneration(fragmentDir, specs.Count, totalTests)) {
-      // Clean the fragments directory to remove stale fragments
+    // Check before deleting, then delete so interrupted runs force full regeneration next time
+    var needsRegen = filter == null && NeedsRegeneration(fragmentDir, specs.Count, totalTests);
+    DeleteSpecCountFlag(fragmentDir);
+
+    if (needsRegen) {
       CleanFragmentsDirectory(fragmentDir);
       force = true;
     }
@@ -114,6 +116,12 @@ public static class FragmentGenerator {
       Directory.CreateDirectory(specFragmentDir);
 
       foreach (var test in spec.Tests) {
+        // Skip tests that don't match the filter (matched against specName/testName)
+        var testPath = $"{specName}/{test.Name}";
+        if (filter != null && !testPath.Contains(filter, StringComparison.OrdinalIgnoreCase)) {
+          continue;
+        }
+
         var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
         var exePath = Path.Combine(specFragmentDir, $"{test.Name}.exe");
         var fragmentFile = new FileInfo(fragmentPath);
@@ -145,11 +153,9 @@ public static class FragmentGenerator {
       Logger.Error(LogCategory.Testing, error);
     }
 
-    // Update or delete the flag file based on success/failure
-    if (errors.IsEmpty) {
+    // Only restore the flag on a successful unfiltered run
+    if (filter == null && errors.IsEmpty) {
       WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
-    } else {
-      DeleteSpecCountFlag(fragmentDir);
     }
 
     return new FragmentGenerationResult(generated, errors.Count);

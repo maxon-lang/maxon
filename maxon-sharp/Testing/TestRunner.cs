@@ -29,7 +29,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
 
     // Regenerate fragments if specs changed
-    var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir, _updateRequiredMLIR);
+    var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir, _updateRequiredMLIR, _filter);
     if (genResult.Generated > 0) {
       Logger.Info(LogCategory.Testing, $"Generated {genResult.Generated} fragment(s)");
     }
@@ -51,8 +51,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     // Load all fragments
     var fragments = LoadAllFragments();
     if (_filter != null) {
-      var filterRegex = new Regex(_filter, RegexOptions.IgnoreCase);
-      fragments = [.. fragments.Where(f => filterRegex.IsMatch(f.TestName))];
+      fragments = [.. fragments.Where(f => GetTestPath(f).Contains(_filter, StringComparison.OrdinalIgnoreCase))];
     }
 
     if (fragments.Count == 0) {
@@ -134,6 +133,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     } catch {
       // Ignore directory access errors
     }
+  }
+
+  /// <summary>
+  /// Get the spec/test path for filtering (e.g. "arithmetic/addition").
+  /// </summary>
+  private static string GetTestPath(Fragment f) {
+    var dir = Path.GetFileName(Path.GetDirectoryName(f.FilePath));
+    return $"{dir}/{f.TestName}";
   }
 
   private List<Fragment> LoadAllFragments() {
