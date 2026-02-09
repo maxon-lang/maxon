@@ -808,9 +808,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
       }
 
+      // Collect all methods: direct methods plus inherited from extended interfaces
+      var allMethods = new List<(MlirInterfaceMethodSignature Method, string SourceInterface)>();
+      CollectInterfaceMethods(iface, ifaceName, allMethods, new HashSet<string>());
+
       var missingMethods = new List<string>();
       var wrongSignatureMethods = new List<string>();
-      foreach (var method in iface.Methods) {
+      foreach (var (method, sourceIfaceName) in allMethods) {
         var qualifiedName = $"{qualifiedTypeName}.{method.Name}";
         var func = module.Functions.FirstOrDefault(f => f.Name == qualifiedName);
 
@@ -818,17 +822,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // only validate throws conformance
         if (method.IsStatic) {
           if (func != null && method.ThrowsTypeName != null)
-            ValidateThrowsConformance(func, typeName, method.Name, ifaceName, method.ThrowsTypeName, typeNameToken);
+            ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, typeNameToken);
           continue;
         }
 
         if (func == null) {
-          missingMethods.Add(method.FormatResolved(structTypeParams));
-        } else if (!SignatureMatches(method, func, ifaceName, typeName, structTypeParams)) {
+          var sig = method.FormatResolved(structTypeParams);
+          if (sourceIfaceName != ifaceName) sig += $" (from {sourceIfaceName})";
+          missingMethods.Add(sig);
+        } else if (!SignatureMatches(method, func, sourceIfaceName, typeName, structTypeParams)) {
           var actualSig = FormatFunctionSignature(method.Name, func);
           wrongSignatureMethods.Add($"{actualSig} (expected {method.FormatResolved(structTypeParams)})");
         } else if (method.ThrowsTypeName != null) {
-          ValidateThrowsConformance(func, typeName, method.Name, ifaceName, method.ThrowsTypeName, typeNameToken);
+          ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, typeNameToken);
         }
       }
 
@@ -851,6 +857,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.End)) Advance();
     // Skip end label
     if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  /// <summary>
+  /// Recursively collects all method signatures from an interface and its extended (parent) interfaces.
+  /// </summary>
+  private void CollectInterfaceMethods(MlirInterfaceType iface, string ifaceName,
+      List<(MlirInterfaceMethodSignature Method, string SourceInterface)> result, HashSet<string> visited) {
+    if (!visited.Add(ifaceName)) return;
+
+    foreach (var method in iface.Methods) {
+      result.Add((method, ifaceName));
+    }
+
+    foreach (var parentName in iface.ExtendedInterfaces) {
+      if (_typeRegistry.TryGetValue(parentName, out var parentType) && parentType is MlirInterfaceType parentIface) {
+        CollectInterfaceMethods(parentIface, parentName, result, visited);
+      }
+    }
   }
 
   /// <summary>
@@ -1172,9 +1196,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Allow Self to resolve inside interface method signatures
     _currentTypeName = interfaceName;
 
+    // Parse 'extends' clause for interface inheritance (e.g., interface Derived extends Base)
+    var extendedInterfaces = new List<string>();
+    if (Check(TokenType.Extends)) {
+      Advance();
+      do {
+        extendedInterfaces.Add(Expect(TokenType.Identifier).Value);
+      } while (Check(TokenType.Comma) && Advance() != null);
+    }
+
     // Temporary entry so ParseTypeRef can resolve Self references
     if (!_typeRegistry.ContainsKey(interfaceName)) {
-      _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, []);
+      _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, [], extendedInterfaces);
     }
 
     // Handle 'uses' clause for associated types (e.g., interface Iterable uses Element)
@@ -1253,7 +1286,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
-    _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, methods);
+    _typeRegistry[interfaceName] = new MlirInterfaceType(interfaceName, methods, extendedInterfaces);
     if (associatedTypeNames.Count > 0) {
       _interfaceAssociatedTypes[interfaceName] = associatedTypeNames;
     }

@@ -291,13 +291,16 @@ end 'Point'
 function main() returns int
   var p1 = Point{x: 3, y: 4}
   var p2 = Point{x: 3, y: 4}
-  return p1.hash() + p1.equals(p2)
+  print("{p1.hash()} {p1.equals(p2)}\n")
+  return 0
 end 'main'
 ```
 ```exitcode
-8
+0
 ```
-
+```stdout
+7 true
+```
 
 <!-- test: self-return-type -->
 ```maxon
@@ -316,7 +319,7 @@ end 'Point'
 
 function main() returns int
   var p = Point{x: 10, y: 20}
-  var p2 = p.move(5, 10)
+  var p2 = p.move(5, dy: 10)
   return p2.x + p2.y
 end 'main'
 ```
@@ -370,7 +373,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/interfaces.partial-implementation-error.1.test:1:1: Partial interface implementation: type 'Incomplete' is missing 2 method(s):
+error E3016: specs/fragments/interfaces/partial-implementation-error.test:8:6: Partial interface implementation: type 'Incomplete' is missing 2 method(s):
   - two() returns int
   - three() returns int
 ```
@@ -424,7 +427,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E015: specs/fragments/interfaces.transitive-interface-validation.1.test:1:1: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
+error E3016: specs/fragments/interfaces/transitive-interface-validation.test:11:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
   - baseMethod() returns int (from BaseInterface)
 ```
 

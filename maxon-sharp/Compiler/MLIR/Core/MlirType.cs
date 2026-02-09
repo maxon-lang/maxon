@@ -111,8 +111,9 @@ public class MlirInterfaceMethodSignature(string name, List<string> paramTypeNam
   }
 }
 
-public class MlirInterfaceType(string name, List<MlirInterfaceMethodSignature> methods) : MlirType(name, 0) {
+public class MlirInterfaceType(string name, List<MlirInterfaceMethodSignature> methods, List<string>? extendedInterfaces = null) : MlirType(name, 0) {
   public List<MlirInterfaceMethodSignature> Methods { get; } = methods;
+  public List<string> ExtendedInterfaces { get; } = extendedInterfaces ?? [];
 }
 
 public class MlirEnumCase(string name, int ordinal, object? rawValue = null,

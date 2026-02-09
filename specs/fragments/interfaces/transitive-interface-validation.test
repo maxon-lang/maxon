@@ -1,0 +1,28 @@
+// Test: transitive-interface-validation
+interface BaseInterface
+  function baseMethod() returns int
+end 'BaseInterface'
+
+interface DerivedInterface extends BaseInterface
+  function derivedMethod() returns int
+end 'DerivedInterface'
+
+// IncompleteType is missing baseMethod from BaseInterface
+type IncompleteType is DerivedInterface
+  var value int
+
+  function derivedMethod() returns int
+    return value
+  end 'derivedMethod'
+end 'IncompleteType'
+
+function main() returns int
+  return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/interfaces/transitive-interface-validation.test:11:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
+  - baseMethod() returns int (from BaseInterface)
+```
+---
+---

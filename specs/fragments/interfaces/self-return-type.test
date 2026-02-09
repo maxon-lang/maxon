@@ -1,0 +1,83 @@
+// Test: self-return-type
+interface Movable
+  function move(dx int, dy int) returns Self
+end 'Movable'
+
+type Point is Movable
+  export var x int
+  export var y int
+
+  function move(dx int, dy int) returns Point
+    return {x: x + dx, y: y + dy}
+  end 'move'
+end 'Point'
+
+function main() returns int
+  var p = Point{x: 10, y: 20}
+  var p2 = p.move(5, dy: 10)
+  return p2.x + p2.y
+end 'main'
+---
+ExitCode: 45
+---
+module {
+  func @Point.move(__sret: i64, __self_ptr: i64, dx: i64, dy: i64) {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [edx+8]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [edx+0]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov edx, [rbp-24]
+    x86.add eax, r8
+    x86.add edx, r9
+    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], edx
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [rbp-32]
+    x86.mov [eax+0], edx
+    x86.mov edx, [rbp-24]
+    x86.mov [eax+8], edx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [rbp-40]
+    x86.mov [eax+0], edx
+    x86.mov edx, [rbp-48]
+    x86.mov [eax+8], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @interfaces.main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.mov edx, 5
+    x86.mov ebx, 10
+    x86.xor esi, esi
+    x86.mov [rbp-8], esi
+    x86.xor edi, edi
+    x86.mov [rbp-16], edi
+    x86.lea r8, [rbp-16]
+    x86.mov [rbp-24], ecx
+    x86.mov [rbp-32], eax
+    x86.lea r9, [rbp-32]
+    x86.mov rcx, r8
+    x86.mov r8, rdx
+    x86.mov rdx, r9
+    x86.mov r9, rbx
+    x86.call Point.move
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-40]
+    x86.add eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+}
+---
