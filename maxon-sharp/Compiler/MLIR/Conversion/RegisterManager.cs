@@ -397,6 +397,15 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit movq: reinterpret XMM float bits as GPR integer (bitcast).
+  /// </summary>
+  public void EmitMovqXmmToGpr(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcXmm = EnsureInXmmRegister(input, block);
+    var destGpr = AllocateRegister(result, block);
+    block.AddOp(new X86MovqXmmToGprOp(destGpr, srcXmm));
+  }
+
+  /// <summary>
   /// Emit cvtsi2sd: convert GPR integer to XMM float.
   /// </summary>
   public void EmitCvtSi2Sd(StdValue input, StdValue result, MlirBlock<X86Op> block) {

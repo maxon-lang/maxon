@@ -194,6 +194,9 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86CvttSd2SiOp cvttsd2si:
         EmitCvttSd2Si(cvttsd2si.Dest, cvttsd2si.Src);
         break;
+      case X86MovqXmmToGprOp movq:
+        EmitMovqXmmToGpr(movq.Dest, movq.Src);
+        break;
       case X86CvtSi2SdOp cvtsi2sd:
         EmitCvtSi2Sd(cvtsi2sd.Dest, cvtsi2sd.Src);
         break;
@@ -1019,6 +1022,17 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     Rex.W().Reg(dest).Rm(s).Emit(this);
     EmitBytes(0x0F, 0x2C);
     EmitByte((byte)(0xC0 | (d << 3) | (s & 7)));
+  }
+
+  private void EmitMovqXmmToGpr(X86Register dest, X86XmmRegister src) {
+    RequireGpr(dest, nameof(EmitMovqXmmToGpr));
+    // MOVQ r64, xmm: 66 REX.W 0F 7E /r
+    var d = RegCode(dest);
+    var s = XmmRegCode(src);
+    EmitByte(0x66);
+    Rex.W().Reg(s).Rm(dest).Emit(this);
+    EmitBytes(0x0F, 0x7E);
+    EmitByte((byte)(0xC0 | ((s & 7) << 3) | (d & 7)));
   }
 
   private void EmitCvtSi2Sd(X86XmmRegister dest, X86Register src) {

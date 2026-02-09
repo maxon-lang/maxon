@@ -304,6 +304,10 @@ public static class StandardToX86Conversion {
             regManager.EmitCvttSd2Si(fpToSiOp.Input, fpToSiOp.Result, x86Block);
             break;
 
+          case StdBitcastF64ToI64Op bitcastOp:
+            regManager.EmitMovqXmmToGpr(bitcastOp.Input, bitcastOp.Result, x86Block);
+            break;
+
           case StdSiToFpOp siToFpOp:
             regManager.EmitCvtSi2Sd(siToFpOp.Input, siToFpOp.Result, x86Block);
             break;

@@ -203,6 +203,12 @@ public class X86CvttSd2SiOp(X86Register dest, X86XmmRegister src) : X86Op {
   public override string Mnemonic => $"x86.cvttsd2si {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
+public class X86MovqXmmToGprOp(X86Register dest, X86XmmRegister src) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86XmmRegister Src { get; } = src;
+  public override string Mnemonic => $"x86.movq {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
 public class X86CvtSi2SdOp(X86XmmRegister dest, X86Register src) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86Register Src { get; } = src;

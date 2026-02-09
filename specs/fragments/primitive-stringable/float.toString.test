@@ -1,0 +1,62 @@
+// Test: float.toString
+function main() returns int
+  var x = 3.14
+  var s = x.toString()
+  if s == "3.14" 'ok'
+    return 1
+  end 'ok'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @primitive-stringable.main() -> i64 {
+  entry:
+    x86.prologue stack_size=96
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.mov eax, 32
+    x86.movsd [rbp-88], xmm0
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-96], eax
+    x86.movsd xmm0, [rbp-88]
+    x86.mov rdx, rax
+    x86.call maxon_f64_to_string
+    x86.mov ecx, 1
+    x86.xor edx, edx
+    x86.lea_rdata rbx, [__str_2]
+    x86.mov rsi, rbx
+    x86.mov edi, 4
+    x86.xor r8, r8
+    x86.mov r9, 1
+    x86.xor ebx, ebx
+    x86.mov [rbp-8], edx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-40], eax
+    x86.lea rax, [rbp-40]
+    x86.mov [rbp-48], ebx
+    x86.mov [rbp-56], r9
+    x86.mov [rbp-64], r8
+    x86.mov [rbp-72], edi
+    x86.mov [rbp-80], esi
+    x86.lea rcx, [rbp-80]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call stdlib.String.equals
+    x86.test eax, eax
+    x86.je primitive-stringable.main.ok_0.after
+  ok_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  ok_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

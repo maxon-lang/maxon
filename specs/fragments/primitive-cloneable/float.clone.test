@@ -1,0 +1,29 @@
+// Test: float.clone
+function main() returns int
+  var x = 3.14
+  var y = x.clone()
+  if y == 3.14 'ok'
+    return 1
+  end 'ok'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @primitive-cloneable.main() -> i64 {
+  entry:
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.movsd xmm1, [rip+__float_3.14]
+    x86.ucomisd xmm0, xmm1
+    x86.jne primitive-cloneable.main.ok_0.after
+    x86.jp primitive-cloneable.main.ok_0.after
+  ok_0:
+    x86.mov eax, 1
+    x86.ret
+  ok_0.after:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

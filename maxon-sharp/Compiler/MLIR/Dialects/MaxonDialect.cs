@@ -378,6 +378,23 @@ public class MaxonRoundOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
+public class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
+  public override string Mnemonic => "maxon.bitcast_f64_to_i64";
+  public MaxonValue Input { get; } = input;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
+public class MaxonPrimitiveToStringOp(MaxonValue input, MaxonValueKind inputKind) : MaxonOp {
+  public override string Mnemonic => $"maxon.primitive_to_string ({InputKind})";
+  public MaxonValue Input { get; } = input;
+  public MaxonValueKind InputKind { get; } = inputKind;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "String");
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+}
+
 public class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public override string Mnemonic => "maxon.min";
   public MaxonValue Lhs { get; } = lhs;

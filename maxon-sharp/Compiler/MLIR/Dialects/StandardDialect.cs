@@ -254,6 +254,18 @@ public class StdFpToSiOp(StdF64 input) : StandardOp {
   public override int PureResultId => Result.Id;
 }
 
+// === Float Bitcast (reinterpret bits) ===
+
+public class StdBitcastF64ToI64Op(StdF64 input) : StandardOp {
+  public override string Mnemonic => "arith.bitcast_f64_to_i64";
+  public StdF64 Input { get; } = input;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
 // === Int-to-Float Conversion ===
 
 public class StdSiToFpOp(StdI64 input) : StandardOp {

@@ -729,6 +729,36 @@ public static class MaxonToStandardConversion {
               valueMap[truncOp.Result] = stdOp.Result;
               break;
             }
+            case MaxonBitcastF64ToI64Op bitcastOp: {
+              var input = (StdF64)valueMap[bitcastOp.Input];
+              var stdOp = new StdBitcastF64ToI64Op(input);
+              newBlock.AddOp(stdOp);
+              valueMap[bitcastOp.Result] = stdOp.Result;
+              break;
+            }
+            case MaxonPrimitiveToStringOp toStrOp: {
+              var input = valueMap[toStrOp.Input];
+              (StdI64 buf, StdI64 len) = toStrOp.InputKind switch {
+                MaxonValueKind.Integer => EmitI64ToString((StdI64)input, newBlock, varTypes),
+                MaxonValueKind.Byte => EmitI64ToString((StdI64)input, newBlock, varTypes),
+                MaxonValueKind.Float => EmitF64ToString((StdF64)input, newBlock, varTypes),
+                MaxonValueKind.Bool => EmitBoolToString((StdBool)input, newBlock, varTypes),
+                _ => throw new InvalidOperationException($"Unsupported primitive toString kind: {toStrOp.InputKind}")
+              };
+              // Construct String struct: _managed.buffer, _managed.length, _managed.capacity, _managed.element_size, _iterPos
+              var tempName = $"__primstr_{toStrOp.Result.Id}";
+              EmitStore(newBlock, buf, $"{tempName}._managed.buffer", varTypes);
+              EmitStore(newBlock, len, $"{tempName}._managed.length", varTypes);
+              EmitStore(newBlock, len, $"{tempName}._managed.capacity", varTypes);
+              var elemSize = new StdConstI64Op(1);
+              newBlock.AddOp(elemSize);
+              EmitStore(newBlock, elemSize.Result, $"{tempName}._managed.element_size", varTypes);
+              var iterPos = new StdConstI64Op(0);
+              newBlock.AddOp(iterPos);
+              EmitStore(newBlock, iterPos.Result, $"{tempName}._iterPos", varTypes);
+              structVarNames[toStrOp.Result.Id] = tempName;
+              break;
+            }
             case MaxonIntToFloatOp intToFloatOp: {
               var input = (StdI64)valueMap[intToFloatOp.Input];
               var stdOp = new StdSiToFpOp(input);

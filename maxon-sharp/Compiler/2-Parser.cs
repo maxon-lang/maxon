@@ -5616,6 +5616,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var fieldToken = Expect(TokenType.Identifier);
       var fieldName = fieldToken.Value;
 
+      // Handle method calls on primitive types (int, float, bool, byte)
+      if (result is ExprResult.VarRef pvr && pvr.Info.StructTypeName == null
+          && pvr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Bool or MaxonValueKind.Byte
+          && Check(TokenType.LeftParen)) {
+        var primitiveResult = TryEmitPrimitiveMethod(result, pvr.Info.Kind, fieldName, fieldToken);
+        if (primitiveResult != null) {
+          result = primitiveResult;
+          continue;
+        }
+      }
+
       string userTypeName;
       if (result is ExprResult.VarRef vr) {
         userTypeName = vr.Info.StructTypeName
@@ -7030,6 +7041,100 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var castOp = new MaxonCastOp(value, targetKind);
     _currentBlock!.AddOp(castOp);
     return castOp.Result;
+  }
+
+  /// <summary>
+  /// Emit inline code for .hash() or .equals() on primitive types (int, float, bool, byte).
+  /// Returns null if the method name is not recognized.
+  /// </summary>
+  private ExprResult.Direct? TryEmitPrimitiveMethod(ExprResult result, MaxonValueKind kind, string methodName, Token methodToken) {
+    switch (methodName) {
+      case "hash": {
+        Advance(); // consume '('
+        Expect(TokenType.RightParen);
+        var selfVal = ResolveExprValue(result);
+        switch (kind) {
+          case MaxonValueKind.Integer:
+            return new ExprResult.Direct(selfVal);
+          case MaxonValueKind.Bool:
+          case MaxonValueKind.Byte:
+            return new ExprResult.Direct(EmitCast(selfVal, MaxonValueKind.Integer));
+          case MaxonValueKind.Float: {
+            // Bitcast float bits to int, normalizing -0.0 to 0
+            var bitcastOp = new MaxonBitcastF64ToI64Op(selfVal);
+            _currentBlock!.AddOp(bitcastOp);
+            // Branchless normalization: isNegZero = (bits == 0x8000000000000000)
+            // result = bits * (1 - isNegZeroAsInt)
+            var negZeroBits = new MaxonLiteralOp(unchecked((long)0x8000000000000000));
+            _currentBlock!.AddOp(negZeroBits);
+            var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, bitcastOp.Result, negZeroBits.Result, MaxonValueKind.Integer);
+            _currentBlock!.AddOp(cmpOp);
+            var isNegZeroInt = new MaxonCastOp(cmpOp.Result, MaxonValueKind.Integer);
+            _currentBlock!.AddOp(isNegZeroInt);
+            var oneLit = new MaxonLiteralOp(1L);
+            _currentBlock!.AddOp(oneLit);
+            var notFlag = new MaxonBinOp(MaxonBinOperator.Sub, oneLit.Result, isNegZeroInt.Result, MaxonValueKind.Integer);
+            _currentBlock!.AddOp(notFlag);
+            var mulOp = new MaxonBinOp(MaxonBinOperator.Mul, bitcastOp.Result, notFlag.Result, MaxonValueKind.Integer);
+            _currentBlock!.AddOp(mulOp);
+            return new ExprResult.Direct(mulOp.Result);
+          }
+          default:
+            throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{kind}' does not support .hash()", methodToken.Line, methodToken.Column);
+        }
+      }
+      case "equals": {
+        Advance(); // consume '('
+        var otherVal = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var selfVal = ResolveExprValue(result);
+        var eqOp = new MaxonBinOp(MaxonBinOperator.Eq, selfVal, otherVal, kind);
+        _currentBlock!.AddOp(eqOp);
+        return new ExprResult.Direct(eqOp.Result);
+      }
+      case "compare": {
+        Advance(); // consume '('
+        var otherVal = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var selfVal = ResolveExprValue(result);
+        // For bool/byte, cast to int first (Lt/Gt not supported on bool/byte)
+        var cmpKind = kind;
+        var cmpSelf = selfVal;
+        var cmpOther = otherVal;
+        if (kind is MaxonValueKind.Bool or MaxonValueKind.Byte) {
+          cmpSelf = EmitCast(selfVal, MaxonValueKind.Integer);
+          cmpOther = EmitCast(otherVal, MaxonValueKind.Integer);
+          cmpKind = MaxonValueKind.Integer;
+        }
+        // Branchless: (self > other) as int - (self < other) as int → -1/0/1
+        var ltOp = new MaxonBinOp(MaxonBinOperator.Lt, cmpSelf, cmpOther, cmpKind);
+        _currentBlock!.AddOp(ltOp);
+        var ltInt = new MaxonCastOp(ltOp.Result, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(ltInt);
+        var gtOp = new MaxonBinOp(MaxonBinOperator.Gt, cmpSelf, cmpOther, cmpKind);
+        _currentBlock!.AddOp(gtOp);
+        var gtInt = new MaxonCastOp(gtOp.Result, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(gtInt);
+        var subOp = new MaxonBinOp(MaxonBinOperator.Sub, gtInt.Result, ltInt.Result, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(subOp);
+        return new ExprResult.Direct(subOp.Result);
+      }
+      case "toString": {
+        Advance(); // consume '('
+        Expect(TokenType.RightParen);
+        var selfVal = ResolveExprValue(result);
+        var toStrOp = new MaxonPrimitiveToStringOp(selfVal, kind);
+        _currentBlock!.AddOp(toStrOp);
+        return new ExprResult.Direct(toStrOp.Result);
+      }
+      case "clone": {
+        Advance(); // consume '('
+        Expect(TokenType.RightParen);
+        return new ExprResult.Direct(ResolveExprValue(result));
+      }
+      default:
+        return null;
+    }
   }
 
   /// <summary>
