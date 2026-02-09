@@ -736,29 +736,6 @@ public static class MaxonToStandardConversion {
               valueMap[bitcastOp.Result] = stdOp.Result;
               break;
             }
-            case MaxonPrimitiveToStringOp toStrOp: {
-              var input = valueMap[toStrOp.Input];
-              (StdI64 buf, StdI64 len) = toStrOp.InputKind switch {
-                MaxonValueKind.Integer => EmitI64ToString((StdI64)input, newBlock, varTypes),
-                MaxonValueKind.Byte => EmitI64ToString((StdI64)input, newBlock, varTypes),
-                MaxonValueKind.Float => EmitF64ToString((StdF64)input, newBlock, varTypes),
-                MaxonValueKind.Bool => EmitBoolToString((StdBool)input, newBlock, varTypes),
-                _ => throw new InvalidOperationException($"Unsupported primitive toString kind: {toStrOp.InputKind}")
-              };
-              // Construct String struct: _managed.buffer, _managed.length, _managed.capacity, _managed.element_size, _iterPos
-              var tempName = $"__primstr_{toStrOp.Result.Id}";
-              EmitStore(newBlock, buf, $"{tempName}._managed.buffer", varTypes);
-              EmitStore(newBlock, len, $"{tempName}._managed.length", varTypes);
-              EmitStore(newBlock, len, $"{tempName}._managed.capacity", varTypes);
-              var elemSize = new StdConstI64Op(1);
-              newBlock.AddOp(elemSize);
-              EmitStore(newBlock, elemSize.Result, $"{tempName}._managed.element_size", varTypes);
-              var iterPos = new StdConstI64Op(0);
-              newBlock.AddOp(iterPos);
-              EmitStore(newBlock, iterPos.Result, $"{tempName}._iterPos", varTypes);
-              structVarNames[toStrOp.Result.Id] = tempName;
-              break;
-            }
             case MaxonIntToFloatOp intToFloatOp: {
               var input = (StdI64)valueMap[intToFloatOp.Input];
               var stdOp = new StdSiToFpOp(input);
@@ -981,7 +958,7 @@ public static class MaxonToStandardConversion {
               LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result);
               break;
             case MaxonStringInterpOp interpOp:
-              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, funcLookup, result);
+              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result);
               break;
             case MaxonManagedMemConcatOp concatOp:
               LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames);
@@ -2624,8 +2601,6 @@ public static class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
     MlirModule<StandardOp> result) {
 
     var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
@@ -2641,8 +2616,7 @@ public static class MaxonToStandardConversion {
         var exprValue = ExprValue!;
 
         if (structVarNames.TryGetValue(exprValue.Id, out var managedVarName)) {
-          partInfos.Add(EmitStructInterpolation(exprValue, managedVarName, FormatSpec, block, varTypes,
-            structVarNames, structValueTypes, funcLookup, result));
+          partInfos.Add(EmitStructInterpolation(managedVarName, block, varTypes));
         } else if (exprValue is MaxonInteger or MaxonByte) {
           partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
         } else if (exprValue is MaxonFloat) {
@@ -2791,17 +2765,11 @@ public static class MaxonToStandardConversion {
   /// the returned String's buffer/length.
   /// </summary>
   private static (StdI64 Buffer, StdI64 Length) EmitStructInterpolation(
-    MaxonValue exprValue,
     string managedVarName,
-    string? formatSpec,
     MlirBlock<StandardOp> block,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-    MlirModule<StandardOp> result) {
+    Dictionary<string, string> varTypes) {
 
-    // Check if this struct has managed memory buffer/length fields (String/Character)
+    // toString calls are emitted at parse time, so all struct parts here are String-like
     foreach (var prefix in new[] { $"{managedVarName}._managed", managedVarName }) {
       if (varTypes.ContainsKey($"{prefix}.buffer")) {
         var bufLoad = (StdI64)EmitLoad(block, $"{prefix}.buffer", varTypes);
@@ -2810,89 +2778,8 @@ public static class MaxonToStandardConversion {
       }
     }
 
-    // Not a String/Character — must be a Stringable type. Call toString("") on it.
-    string? structTypeName = null;
-    if (exprValue is MaxonStruct ms) {
-      structTypeName = ms.TypeName;
-    } else if (structValueTypes.TryGetValue(exprValue.Id, out var svt)) {
-      structTypeName = svt;
-    }
-    if (structTypeName == null) {
-      throw new InvalidOperationException(
-        $"String interpolation: struct value %{exprValue.Id} has no type name for Stringable call");
-    }
-
-    return EmitStringableToStringCall(structTypeName, managedVarName, formatSpec, block,
-      varTypes, structVarNames, funcLookup, result);
-  }
-
-  /// <summary>
-  /// Calls toString(format) on a Stringable struct and returns the resulting String's buffer/length.
-  /// </summary>
-  private static (StdI64 Buffer, StdI64 Length) EmitStringableToStringCall(
-    string structTypeName,
-    string selfVarName,
-    string? formatSpec,
-    MlirBlock<StandardOp> block,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-    MlirModule<StandardOp> result) {
-
-    // Find the toString method for this type (try exact match, then suffix match)
-    var toStringName = $"{structTypeName}.toString";
-    if (!funcLookup.TryGetValue(toStringName, out var toStringFunc)) {
-      var suffixPattern = $".{toStringName}";
-      toStringFunc = funcLookup.Values.FirstOrDefault(f => f.Name.EndsWith(suffixPattern));
-      if (toStringFunc != null) {
-        toStringName = toStringFunc.Name;
-      } else {
-        throw new InvalidOperationException(
-          $"String interpolation: type '{structTypeName}' does not have a toString method");
-      }
-    }
-
-    var calleeRetStructType = ResolveStructReturnType(toStringFunc.ReturnType, result.TypeDefs);
-
-    var newArgs = new List<StdValue>();
-
-    // Allocate sret for the returned String
-    var sretVarName = $"__interp_tostr_sret_{MlirContext.Current.NextId()}";
-    AllocateStructOnStack(block, sretVarName, calleeRetStructType!, varTypes);
-    var sretLea = new StdLeaOp(sretVarName);
-    block.AddOp(sretLea);
-    newArgs.Add(sretLea.Result);
-
-    // Pass self pointer: allocate a copy of the struct on stack
-    var selfStructType = (MlirStructType)result.TypeDefs[structTypeName];
-    var selfBufName = $"__interp_selfbuf_{MlirContext.Current.NextId()}";
-    var selfPtr = AllocateAndCopyStructToStack(block, selfVarName, selfBufName, selfStructType, varTypes);
-    newArgs.Add(selfPtr);
-
-    // Pass format string argument (empty string for default, or format spec)
-    var formatValue = formatSpec ?? "";
-    var formatLitName = $"__interp_fmt_{MlirContext.Current.NextId()}";
-    var formatTempName = EmitManagedMemoryLiteral(formatValue, MlirContext.Current.NextId(),
-      "fmt", formatLitName, block, varTypes, structVarNames, result);
-
-    // String type has _iterPos field beyond __ManagedMemory fields
-    var iterConst = new StdConstI64Op(0);
-    block.AddOp(iterConst);
-    EmitStore(block, iterConst.Result, $"{formatTempName}._iterPos", varTypes);
-
-    // The format arg is a String struct passed by pointer
-    var formatStructType = calleeRetStructType!; // String type
-    var formatBufName = $"__interp_fmtbuf_{MlirContext.Current.NextId()}";
-    var formatPtr = AllocateAndCopyStructToStack(block, formatTempName, formatBufName, formatStructType, varTypes);
-    newArgs.Add(formatPtr);
-
-    // Call toString
-    block.AddOp(new StdCallOp(toStringName, newArgs));
-
-    // Read buffer/length from the sret result
-    var retBufLoad = (StdI64)EmitLoad(block, $"{sretVarName}._managed.buffer", varTypes);
-    var retLenLoad = (StdI64)EmitLoad(block, $"{sretVarName}._managed.length", varTypes);
-    return (retBufLoad, retLenLoad);
+    throw new InvalidOperationException(
+      $"String interpolation: struct '{managedVarName}' has no buffer/length fields");
   }
 
   /// <summary>

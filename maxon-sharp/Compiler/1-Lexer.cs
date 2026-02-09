@@ -170,10 +170,8 @@ public class Lexer(string source) {
     { "end", new(TokenType.End, KeywordCategory.Control, "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", true) },
     { "let", new(TokenType.Let, KeywordCategory.Other, "Declares an immutable variable. The value cannot be changed after initialization.", false) },
     { "var", new(TokenType.Var, KeywordCategory.Other, "Declares a mutable variable. The value can be changed after initialization.", false) },
-    { "mod", new(TokenType.Mod, KeywordCategory.Logical, "Modulo operator. Returns the remainder of division.", false) },
     { "type", new(TokenType.Type, KeywordCategory.Other, "Declares a struct type with fields and methods.\n\nExample:\n```maxon\ntype Point\n    var x int\n    var y int\nend 'Point'\n```", false) },
     { "enum", new(TokenType.Enum, KeywordCategory.Other, "Declares an enumeration type with a fixed set of cases.\n\nExample:\n```maxon\nenum Color\n    red\n    green\n    blue\nend 'Color'\n```", false) },
-    { "array", new(TokenType.Array, KeywordCategory.TypeKeyword, "Array type declaration.", false) },
     { "of", new(TokenType.Of, KeywordCategory.TypeKeyword, "Used in array type declarations (array of int).", false) },
     { "if", new(TokenType.If, KeywordCategory.Control, "Conditional statement. Executes code if the condition is true.", true) },
     { "else", new(TokenType.Else, KeywordCategory.Control, "Alternative branch in an if statement. Executed when the condition is false.", true) },
@@ -236,6 +234,7 @@ public class Lexer(string source) {
     { "*", new(TokenType.Star, OperatorCategory.Arithmetic, "Multiplication operator. Multiplies two numbers.") },
     { "/", new(TokenType.Slash, OperatorCategory.Arithmetic, "Division operator. Divides left operand by right operand.") },
     { "=", new(TokenType.Equals, OperatorCategory.Assignment, "Assignment operator. Assigns the value on the right to the variable on the left.") },
+    { "mod", new(TokenType.Mod, OperatorCategory.Arithmetic, "Modulo operator. Returns the remainder of division.") },
   };
 
   public List<Token> Tokenize() {
@@ -500,7 +499,9 @@ public class Lexer(string source) {
     }
     var value = _source[start.._pos];
 
-    var type = KeywordMap.TryGetValue(value, out var keywordInfo) ? keywordInfo.Type : TokenType.Identifier;
+    var type = KeywordMap.TryGetValue(value, out var keywordInfo) ? keywordInfo.Type
+      : OperatorMap.TryGetValue(value, out var opInfo) ? opInfo.Type
+      : TokenType.Identifier;
     if (type != TokenType.Identifier) {
       Logger.Debug(LogCategory.Lexer, $"Recognized keyword: {value}");
     }

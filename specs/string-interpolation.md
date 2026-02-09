@@ -101,7 +101,7 @@ type Point is Stringable
   var x int
   var y int
 
-  function toString(format String) returns String
+  function toString() returns String
     return {self.y})"
   end 'toString'
 end 'Point'
@@ -694,7 +694,7 @@ type Pair is Stringable
   var first int
   var second int
 
-  function toString(_ String) returns String
+  function toString() returns String
     return "[{first}, {second}]"
   end 'toString'
 end 'Pair'
@@ -716,8 +716,12 @@ end 'main'
 
 <!-- test: stringable-format-spec -->
 ```maxon
-type Counter is Stringable
+type Counter is Stringable, FormattedStringable
   var value int
+
+  function toString() returns String
+    return "{value}"
+  end 'toString'
 
   function toString(format String) returns String
     if format == "verbose" 'verbose'
@@ -750,7 +754,7 @@ type Name is Stringable
   var first String
   var last String
 
-  function toString(_ String) returns String
+  function toString() returns String
     return "{first} {last}"
   end 'toString'
 end 'Name'
@@ -758,7 +762,7 @@ end 'Name'
 type Age is Stringable
   var years int
 
-  function toString(_ String) returns String
+  function toString() returns String
     return "{years} years old"
   end 'toString'
 end 'Age'

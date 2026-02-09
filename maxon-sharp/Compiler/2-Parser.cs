@@ -53,8 +53,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private static string MangleOverloadName(string baseName, List<string> paramNames) {
     var nonSelf = paramNames.Where(n => n != "self").ToList();
-    if (nonSelf.Count <= 1) return baseName; // 0 or 1 param, no disambiguation possible
-    var distinguishing = nonSelf.Skip(1); // skip first positional param
+    if (nonSelf.Count == 0) return baseName;
+    // For 1-param overloads, use param name directly; for 2+, skip the first positional
+    var distinguishing = nonSelf.Count == 1 ? nonSelf : nonSelf.Skip(1);
     return $"{baseName}${string.Join("_", distinguishing)}";
   }
 
@@ -787,10 +788,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
 
-    // Validate interface conformance: each required method must exist with matching signature
-    var structTypeParams = conformanceTypeParams;
+    ValidateInterfaceConformance(module, typeName, conformingInterfaces, conformanceTypeParams, typeNameToken);
 
-    // Construct namespace-qualified type name for method lookup
+    // consume 'end'
+    if (Check(TokenType.End)) Advance();
+    // Skip end label
+    if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  /// <summary>
+  /// Validates that a type implements all methods required by its declared conforming interfaces.
+  /// </summary>
+  private void ValidateInterfaceConformance(
+      MlirModule<MaxonOp> module, string typeName, List<string> conformingInterfaces,
+      Dictionary<string, MlirType> typeParams, Token nameToken) {
     var namespace_ = DeriveNamespace(includeFilename: false);
     var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
 
@@ -798,17 +809,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (!_typeRegistry.TryGetValue(ifaceName, out var ifaceType) || ifaceType is not MlirInterfaceType iface)
         continue;
 
-      // Check for missing type binding: interface has associated types but type doesn't provide 'with'
       if (_interfaceAssociatedTypes.TryGetValue(ifaceName, out var assocTypeNames) && assocTypeNames.Count > 0) {
-        var missingBindings = assocTypeNames.Where(n => !structTypeParams.ContainsKey(n)).ToList();
+        var missingBindings = assocTypeNames.Where(n => !typeParams.ContainsKey(n)).ToList();
         if (missingBindings.Count > 0) {
           throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
             $"Type '{typeName}' does not define required associated type '{missingBindings[0]}' from interface '{ifaceName}'",
-            typeNameToken.Line, typeNameToken.Column);
+            nameToken.Line, nameToken.Column);
         }
       }
 
-      // Collect all methods: direct methods plus inherited from extended interfaces
       var allMethods = new List<(MlirInterfaceMethodSignature Method, string SourceInterface)>();
       CollectInterfaceMethods(iface, ifaceName, allMethods, []);
 
@@ -818,23 +827,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var qualifiedName = $"{qualifiedTypeName}.{method.Name}";
         var func = module.Functions.FirstOrDefault(f => f.Name == qualifiedName);
 
-        // Static method signatures are handled by the compiler directly —
-        // only validate throws conformance
+        // Try mangled name for overloaded methods (e.g. toString$format)
+        if (method.ParamNames.Count > 0) {
+          var mangledName = MangleOverloadName($"{qualifiedTypeName}.{method.Name}", method.ParamNames);
+          if (mangledName != qualifiedName) {
+            var mangledFunc = module.Functions.FirstOrDefault(f => f.Name == mangledName);
+            if (mangledFunc != null) func = mangledFunc;
+          }
+        }
+
+        // Static method signatures are handled by the compiler directly
         if (method.IsStatic) {
           if (func != null && method.ThrowsTypeName != null)
-            ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, typeNameToken);
+            ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, nameToken);
           continue;
         }
 
         if (func == null) {
-          var sig = method.FormatResolved(structTypeParams);
+          var sig = method.FormatResolved(typeParams);
           if (sourceIfaceName != ifaceName) sig += $" (from {sourceIfaceName})";
           missingMethods.Add(sig);
-        } else if (!SignatureMatches(method, func, sourceIfaceName, typeName, structTypeParams)) {
+        } else if (!SignatureMatches(method, func, sourceIfaceName, typeName, typeParams)) {
           var actualSig = FormatFunctionSignature(method.Name, func);
-          wrongSignatureMethods.Add($"{actualSig} (expected {method.FormatResolved(structTypeParams)})");
+          wrongSignatureMethods.Add($"{actualSig} (expected {method.FormatResolved(typeParams)})");
         } else if (method.ThrowsTypeName != null) {
-          ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, typeNameToken);
+          ValidateThrowsConformance(func, typeName, method.Name, sourceIfaceName, method.ThrowsTypeName, nameToken);
         }
       }
 
@@ -842,21 +859,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var details = string.Join("\n", missingMethods.Select(m => $"  - {m}"));
         throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
           $"Partial interface implementation: type '{typeName}' is missing {missingMethods.Count} method(s):\n{details}",
-          typeNameToken.Line, typeNameToken.Column);
+          nameToken.Line, nameToken.Column);
       }
 
       if (wrongSignatureMethods.Count > 0) {
         var details = string.Join("\n", wrongSignatureMethods.Select(m => $"  - {m}"));
         throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
           $"Partial interface implementation: type '{typeName}' has {wrongSignatureMethods.Count} method(s) with wrong signature:\n{details}",
-          typeNameToken.Line, typeNameToken.Column);
+          nameToken.Line, nameToken.Column);
       }
     }
-
-    // consume 'end'
-    if (Check(TokenType.End)) Advance();
-    // Skip end label
-    if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
   /// <summary>
@@ -1301,6 +1313,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _pos = pos;
         PreScanInstanceMethod(m, typeName);
       }
+    }, (m, typeName, conformances, nameToken) => {
+      ValidateInterfaceConformance(m, typeName, conformances, [], nameToken);
     });
   }
 
@@ -1323,10 +1337,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private void ProcessExtensionBlock(
       MlirModule<MaxonOp> module,
-      Action<MlirModule<MaxonOp>, List<int>, string> processFunction) {
+      Action<MlirModule<MaxonOp>, List<int>, string> processFunction,
+      Action<MlirModule<MaxonOp>, string, List<string>, Token>? validateConformance = null) {
     Advance(); // consume 'extension'
-    var interfaceNameToken = Expect(TokenType.Identifier);
+    Token interfaceNameToken;
+    if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Bool) || Check(TokenType.Byte)) {
+      interfaceNameToken = Advance();
+    } else {
+      interfaceNameToken = Expect(TokenType.Identifier);
+    }
     var interfaceName = interfaceNameToken.Value;
+
+    // Parse optional conformance clause for primitive type extensions
+    List<string> primitiveConformances = [];
+    if (interfaceName is "int" or "float" or "bool" or "byte" && Check(TokenType.Is)) {
+      (primitiveConformances, _) = ParseConformanceClause();
+    }
 
     SkipNewlines();
     var typealiasPositions = new List<int>();
@@ -1360,6 +1386,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     int endPos = scanPos;
     if (endPos < _tokens.Count && _tokens[endPos].Type == TokenType.CharacterLiteral) endPos++;
+
+    // Primitive type extensions: process methods directly for the named type
+    if (interfaceName is "int" or "float" or "bool" or "byte") {
+      _currentTypeName = interfaceName;
+      processFunction(module, functionPositions, interfaceName);
+      _currentTypeName = null;
+      if (primitiveConformances.Count > 0)
+        validateConformance?.Invoke(module, interfaceName, primitiveConformances, interfaceNameToken);
+      _pos = endPos;
+      return;
+    }
 
     _interfaceAssociatedTypes.TryGetValue(interfaceName, out var assocTypeNames);
 
@@ -1502,11 +1539,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var throwsType = ParseThrowsClause();
 
     // Instance method gets 'self' as first parameter
-    var structType = _typeRegistry[typeName];
+    MlirType selfType = TryGetPrimitiveMlirType(typeName) ?? (MlirType)_typeRegistry[typeName];
 
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
-    var allParamTypes = new List<MlirType> { (MlirType)structType };
+    var allParamTypes = new List<MlirType> { selfType };
     allParamTypes.AddRange(paramTypes);
 
     var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames);
@@ -2262,12 +2299,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     SkipNewlines();
 
-    // Instance method gets 'self' as first parameter (the struct type)
-    var structType = (MlirStructType)_typeRegistry[typeName];
+    // Instance method gets 'self' as first parameter
+    MlirType selfType = TryGetPrimitiveMlirType(typeName) ?? (MlirType)_typeRegistry[typeName];
 
     var allParamNames = new List<string> { "self" };
     allParamNames.AddRange(paramNames);
-    var allParamTypes = new List<MlirType> { structType };
+    var allParamTypes = new List<MlirType> { selfType };
     allParamTypes.AddRange(paramTypes);
 
     // Store defaults (offset by 1 for 'self' parameter)
@@ -2278,18 +2315,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     SetupFunctionParsing(module, methodName, allParamNames, allParamTypes, offsetDefaults, returnType, throwsType);
 
-    // Emit self param (struct) and register fields as accessible variables
-    var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
-    _currentBlock!.AddOp(selfParamOp);
-    _variables["self"] = new VarInfo(MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, typeName);
+    if (PrimitiveTypes.TryGetValue(typeName, out var primInfo)) {
+      // Primitive type: emit simple param op for 'self'
+      var selfParamOp = new MaxonParamOp(0, "self", primInfo.Kind);
+      _currentBlock!.AddOp(selfParamOp);
+      _variables["self"] = new VarInfo(primInfo.Kind, false, selfParamOp.Result, _currentBlock!);
+    } else {
+      var structType = (MlirStructType)_typeRegistry[typeName];
 
-    // Register all fields of 'self' as directly accessible variables
-    foreach (var field in structType.Fields) {
-      var fieldKind = field.Type.ToValueKind();
-      var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
-      var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, fieldKind, fieldStructName);
-      _currentBlock!.AddOp(fieldAccessOp);
-      _variables[field.Name] = new VarInfo(fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, fieldStructName);
+      // Emit self param (struct) and register fields as accessible variables
+      var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
+      _currentBlock!.AddOp(selfParamOp);
+      _variables["self"] = new VarInfo(MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, typeName);
+
+      // Register all fields of 'self' as directly accessible variables
+      foreach (var field in structType.Fields) {
+        var fieldKind = field.Type.ToValueKind();
+        var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
+        var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, fieldKind, fieldStructName);
+        _currentBlock!.AddOp(fieldAccessOp);
+        _variables[field.Name] = new VarInfo(fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, fieldStructName);
+      }
     }
 
     // Emit remaining params (offset by 1 for 'self')
@@ -2847,7 +2893,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return;
 
     throw new CompileError(ErrorCode.SemanticTypeMismatch,
-      $"Cannot return '{KindDisplayName(valueKind)}' from function declared to return '{KindDisplayName(expectedKind)}'",
+      $"Cannot return '{KindToTypeName(valueKind)}' from function declared to return '{KindToTypeName(expectedKind)}'",
       returnToken.Line, returnToken.Column);
   }
 
@@ -3597,7 +3643,28 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
+    // === Primitive type intrinsics ===
+    ["__float_to_bits"] = new(
+      "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__float_to_bits(value) returns int`",
+      p => {
+        var value = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonBitcastF64ToI64Op(value);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
   };
+
+  private static readonly Dictionary<string, (MlirType Type, MaxonValueKind Kind)> PrimitiveTypes = new() {
+    ["int"] = (MlirType.I64, MaxonValueKind.Integer),
+    ["float"] = (MlirType.F64, MaxonValueKind.Float),
+    ["bool"] = (MlirType.I1, MaxonValueKind.Bool),
+    ["byte"] = (MlirType.I8, MaxonValueKind.Byte),
+  };
+
+  private static MlirType? TryGetPrimitiveMlirType(string typeName) =>
+    PrimitiveTypes.TryGetValue(typeName, out var info) ? info.Type : null;
+
 
   /// <summary>
   /// Get the element type from the current struct's type parameters (e.g., Element for Array/Vector)
@@ -5616,20 +5683,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var fieldToken = Expect(TokenType.Identifier);
       var fieldName = fieldToken.Value;
 
-      // Handle method calls on primitive types (int, float, bool, byte)
-      if (result is ExprResult.VarRef pvr && pvr.Info.StructTypeName == null
-          && pvr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Bool or MaxonValueKind.Byte
-          && Check(TokenType.LeftParen)) {
-        var primitiveResult = TryEmitPrimitiveMethod(result, pvr.Info.Kind, fieldName, fieldToken);
-        if (primitiveResult != null) {
-          result = primitiveResult;
-          continue;
-        }
-      }
-
       string userTypeName;
       if (result is ExprResult.VarRef vr) {
         userTypeName = vr.Info.StructTypeName
+          ?? (vr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Bool or MaxonValueKind.Byte ? KindToTypeName(vr.Info.Kind) : null)
           ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct or enum type", originToken.Line, originToken.Column);
       } else if (result is ExprResult.Direct d && d.Value is MaxonStruct ms) {
         userTypeName = ms.TypeName;
@@ -5637,6 +5694,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         userTypeName = me.TypeName;
       } else {
         throw new CompileError(ErrorCode.MlirInvalidFieldAccess, "Cannot access field on non-struct value", fieldToken.Line, fieldToken.Column);
+      }
+
+      // Primitive types: only method calls are allowed, no field access
+      if (PrimitiveTypes.ContainsKey(userTypeName)) {
+        if (Check(TokenType.LeftParen)) {
+          var qualifiedMethodName = $"{userTypeName}.{fieldName}";
+          var resolvedMethodName = ResolveMethodName(qualifiedMethodName);
+          if (resolvedMethodName != null) {
+            Advance(); // consume '('
+            var selfVal = ResolveExprValue(result);
+            var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedMethodName, fieldToken.Line, fieldToken.Column);
+            var (allArgs, callee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, selfVal);
+            var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, callee);
+            result = new ExprResult.Direct(callOp.Result ?? selfVal);
+            continue;
+          }
+        }
+        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Primitive type '{userTypeName}' has no method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
       var registeredType = _typeRegistry[userTypeName];
@@ -5819,6 +5894,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
 
         var exprValue = ParseInterpolationExpression(exprText);
+
+        // Non-String structs need a toString call — emit it here as a regular MaxonCallOp
+        // so DCE sees it naturally, just like any other function call
+        if (exprValue is MaxonStruct structVal && structVal.TypeName != stringTypeName) {
+          var overloads = ResolveFunctionOverloads($"{structVal.TypeName}.toString");
+          if (overloads.Count == 0)
+            throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
+              $"Type '{structVal.TypeName}' used in string interpolation must have a toString method",
+              token.Line, token.Column);
+
+          // With format spec: prefer overload with 2 params (self + format), fall back to 1 param
+          var toStringFunc = formatSpec != null
+            ? overloads.FirstOrDefault(f => f.ParamTypes.Count == 2) ?? overloads.First(f => f.ParamTypes.Count == 1)
+            : overloads.First(f => f.ParamTypes.Count == 1);
+
+          var callArgs = new List<MaxonValue> { structVal };
+          if (formatSpec != null && toStringFunc.ParamTypes.Count == 2) {
+            var fmtLiteral = new MaxonStringLiteralOp(formatSpec, stringTypeName);
+            _currentBlock!.AddOp(fmtLiteral);
+            callArgs.Add(fmtLiteral.Result);
+            formatSpec = null;
+          }
+
+          var (resultKind, resultStructTypeName) = ResolveCallResultType(toStringFunc.ReturnType, callArgs);
+          var callOp = new MaxonCallOp(toStringFunc.Name, callArgs, resultKind, resultStructTypeName);
+          _currentBlock!.AddOp(callOp);
+          exprValue = callOp.Result!;
+        }
+
         parts.Add((false, null, exprValue, formatSpec));
       } else {
         literalBuf.Append(text[pos]);
@@ -6706,20 +6810,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!IsWideningCast(sourceKind, targetKind)) {
       throw new CompileError(
         ErrorCode.SemanticUnsafeCast,
-        $"Cannot cast from {KindDisplayName(sourceKind)} to {KindDisplayName(targetKind)}",
+        $"Cannot cast from {KindToTypeName(sourceKind)} to {KindToTypeName(targetKind)}",
         asToken.Line, asToken.Column);
     }
   }
 
-  private static string KindDisplayName(MaxonValueKind kind) => kind switch {
-    MaxonValueKind.Integer => "int",
-    MaxonValueKind.Float => "float",
-    MaxonValueKind.Bool => "bool",
-    MaxonValueKind.Byte => "byte",
-    MaxonValueKind.Struct => "struct",
-    MaxonValueKind.Enum => "enum",
-    _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
-  };
 
   private static bool IsComparisonOp(MaxonBinOperator op) =>
     op is MaxonBinOperator.Eq or MaxonBinOperator.Ne or MaxonBinOperator.Lt
@@ -6745,7 +6840,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"type mismatch: 'cannot compare {KindDisplayName(lhsKind)} with {KindDisplayName(rhsKind)}'",
+        $"type mismatch: 'cannot compare {KindToTypeName(lhsKind)} with {KindToTypeName(rhsKind)}'",
         opToken.Line, opToken.Column);
     }
 
@@ -6753,7 +6848,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (IsWideningCast(rhsKind, lhsKind)) return (lhsKind, lhs, PromoteValue(rhs, lhsKind));
 
     throw new CompileError(ErrorCode.ParserExpectedExpression,
-      $"Cannot operate on {KindDisplayName(lhsKind)} and {KindDisplayName(rhsKind)}",
+      $"Cannot operate on {KindToTypeName(lhsKind)} and {KindToTypeName(rhsKind)}",
       opToken.Line, opToken.Column);
   }
 
@@ -7032,7 +7127,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       (MaxonValueKind.Float, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => arg, // byte is stored as i64 internally
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"argument type mismatch for '{paramName}': expected '{KindDisplayName(paramKind)}', got '{KindDisplayName(argKind)}'",
+        $"argument type mismatch for '{paramName}': expected '{KindToTypeName(paramKind)}', got '{KindToTypeName(argKind)}'",
         callToken.Line, callToken.Column)
     };
   }
@@ -7041,100 +7136,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var castOp = new MaxonCastOp(value, targetKind);
     _currentBlock!.AddOp(castOp);
     return castOp.Result;
-  }
-
-  /// <summary>
-  /// Emit inline code for .hash() or .equals() on primitive types (int, float, bool, byte).
-  /// Returns null if the method name is not recognized.
-  /// </summary>
-  private ExprResult.Direct? TryEmitPrimitiveMethod(ExprResult result, MaxonValueKind kind, string methodName, Token methodToken) {
-    switch (methodName) {
-      case "hash": {
-        Advance(); // consume '('
-        Expect(TokenType.RightParen);
-        var selfVal = ResolveExprValue(result);
-        switch (kind) {
-          case MaxonValueKind.Integer:
-            return new ExprResult.Direct(selfVal);
-          case MaxonValueKind.Bool:
-          case MaxonValueKind.Byte:
-            return new ExprResult.Direct(EmitCast(selfVal, MaxonValueKind.Integer));
-          case MaxonValueKind.Float: {
-            // Bitcast float bits to int, normalizing -0.0 to 0
-            var bitcastOp = new MaxonBitcastF64ToI64Op(selfVal);
-            _currentBlock!.AddOp(bitcastOp);
-            // Branchless normalization: isNegZero = (bits == 0x8000000000000000)
-            // result = bits * (1 - isNegZeroAsInt)
-            var negZeroBits = new MaxonLiteralOp(unchecked((long)0x8000000000000000));
-            _currentBlock!.AddOp(negZeroBits);
-            var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, bitcastOp.Result, negZeroBits.Result, MaxonValueKind.Integer);
-            _currentBlock!.AddOp(cmpOp);
-            var isNegZeroInt = new MaxonCastOp(cmpOp.Result, MaxonValueKind.Integer);
-            _currentBlock!.AddOp(isNegZeroInt);
-            var oneLit = new MaxonLiteralOp(1L);
-            _currentBlock!.AddOp(oneLit);
-            var notFlag = new MaxonBinOp(MaxonBinOperator.Sub, oneLit.Result, isNegZeroInt.Result, MaxonValueKind.Integer);
-            _currentBlock!.AddOp(notFlag);
-            var mulOp = new MaxonBinOp(MaxonBinOperator.Mul, bitcastOp.Result, notFlag.Result, MaxonValueKind.Integer);
-            _currentBlock!.AddOp(mulOp);
-            return new ExprResult.Direct(mulOp.Result);
-          }
-          default:
-            throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{kind}' does not support .hash()", methodToken.Line, methodToken.Column);
-        }
-      }
-      case "equals": {
-        Advance(); // consume '('
-        var otherVal = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var selfVal = ResolveExprValue(result);
-        var eqOp = new MaxonBinOp(MaxonBinOperator.Eq, selfVal, otherVal, kind);
-        _currentBlock!.AddOp(eqOp);
-        return new ExprResult.Direct(eqOp.Result);
-      }
-      case "compare": {
-        Advance(); // consume '('
-        var otherVal = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
-        var selfVal = ResolveExprValue(result);
-        // For bool/byte, cast to int first (Lt/Gt not supported on bool/byte)
-        var cmpKind = kind;
-        var cmpSelf = selfVal;
-        var cmpOther = otherVal;
-        if (kind is MaxonValueKind.Bool or MaxonValueKind.Byte) {
-          cmpSelf = EmitCast(selfVal, MaxonValueKind.Integer);
-          cmpOther = EmitCast(otherVal, MaxonValueKind.Integer);
-          cmpKind = MaxonValueKind.Integer;
-        }
-        // Branchless: (self > other) as int - (self < other) as int → -1/0/1
-        var ltOp = new MaxonBinOp(MaxonBinOperator.Lt, cmpSelf, cmpOther, cmpKind);
-        _currentBlock!.AddOp(ltOp);
-        var ltInt = new MaxonCastOp(ltOp.Result, MaxonValueKind.Integer);
-        _currentBlock!.AddOp(ltInt);
-        var gtOp = new MaxonBinOp(MaxonBinOperator.Gt, cmpSelf, cmpOther, cmpKind);
-        _currentBlock!.AddOp(gtOp);
-        var gtInt = new MaxonCastOp(gtOp.Result, MaxonValueKind.Integer);
-        _currentBlock!.AddOp(gtInt);
-        var subOp = new MaxonBinOp(MaxonBinOperator.Sub, gtInt.Result, ltInt.Result, MaxonValueKind.Integer);
-        _currentBlock!.AddOp(subOp);
-        return new ExprResult.Direct(subOp.Result);
-      }
-      case "toString": {
-        Advance(); // consume '('
-        Expect(TokenType.RightParen);
-        var selfVal = ResolveExprValue(result);
-        var toStrOp = new MaxonPrimitiveToStringOp(selfVal, kind);
-        _currentBlock!.AddOp(toStrOp);
-        return new ExprResult.Direct(toStrOp.Result);
-      }
-      case "clone": {
-        Advance(); // consume '('
-        Expect(TokenType.RightParen);
-        return new ExprResult.Direct(ResolveExprValue(result));
-      }
-      default:
-        return null;
-    }
   }
 
   /// <summary>

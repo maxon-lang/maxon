@@ -44,22 +44,6 @@ public static class DeadFunctionElimination {
             EnqueueCallee(tryCall.Callee);
           if (op is MaxonFunctionRefOp fnRef)
             EnqueueCallee(fnRef.FunctionName);
-          // String interpolation with struct values may call toString dynamically
-          if (op is MaxonStringInterpOp interp) {
-            foreach (var (isLiteral, _, exprValue, _) in interp.Parts) {
-              if (!isLiteral && exprValue is MaxonStruct structVal) {
-                // Try both exact and suffix match for toString method
-                var exactName = $"{structVal.TypeName}.toString";
-                if (funcByName.ContainsKey(exactName) && reachable.Add(exactName))
-                  queue.Enqueue(exactName);
-                var suffix = $".{structVal.TypeName}.toString";
-                foreach (var candidate in funcByName.Keys) {
-                  if (candidate.EndsWith(suffix) && reachable.Add(candidate))
-                    queue.Enqueue(candidate);
-                }
-              }
-            }
-          }
         }
       }
     }

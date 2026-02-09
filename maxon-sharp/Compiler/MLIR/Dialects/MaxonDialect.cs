@@ -311,6 +311,47 @@ public class MaxonCallOp : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
 
+// Calls a throwing function and captures both the result and error flag.
+// ErrorFlag is non-zero if the callee threw an error.
+public class MaxonTryCallOp : MaxonOp {
+  public override string Mnemonic => $"maxon.try_call @{Callee}";
+  public string Callee { get; }
+  public List<MaxonValue> Args { get; }
+  public MaxonValue? Result { get; }
+  public MaxonValueKind? ResultKind { get; }
+  public string? ResultStructTypeName { get; }
+  public MaxonInteger ErrorFlag { get; }
+
+  public MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
+    Callee = callee;
+    Args = args;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    ErrorFlag = new MaxonInteger(MlirContext.Current.NextId());
+    if (resultKind == MaxonValueKind.Struct) {
+      Result = new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!);
+    } else if (resultKind == MaxonValueKind.Enum) {
+      Result = new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!);
+    } else {
+      Result = resultKind?.CreateValue();
+    }
+  }
+
+  // Internal constructor preserving existing result/errorFlag for call site rewriting
+  internal MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValue? existingResult, MaxonInteger existingErrorFlag, MaxonValueKind? resultKind, string? resultStructTypeName) {
+    Callee = callee;
+    Args = args;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    Result = existingResult;
+    ErrorFlag = existingErrorFlag;
+  }
+
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+}
+
 public class MaxonTruncOp(MaxonValue input) : MaxonOp {
   public override string Mnemonic => "maxon.trunc";
   public MaxonValue Input { get; } = input;
@@ -386,15 +427,6 @@ public class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonPrimitiveToStringOp(MaxonValue input, MaxonValueKind inputKind) : MaxonOp {
-  public override string Mnemonic => $"maxon.primitive_to_string ({InputKind})";
-  public MaxonValue Input { get; } = input;
-  public MaxonValueKind InputKind { get; } = inputKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "String");
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
-}
-
 public class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public override string Mnemonic => "maxon.min";
   public MaxonValue Lhs { get; } = lhs;
@@ -445,47 +477,6 @@ public class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : MaxonOp
   public override IReadOnlyList<string> PrintableOperands => [ErrorValue.ToString()];
 }
 
-// Calls a throwing function and captures both the result and error flag.
-// ErrorFlag is non-zero if the callee threw an error.
-public class MaxonTryCallOp : MaxonOp {
-  public override string Mnemonic => $"maxon.try_call @{Callee}";
-  public string Callee { get; }
-  public List<MaxonValue> Args { get; }
-  public MaxonValue? Result { get; }
-  public MaxonValueKind? ResultKind { get; }
-  public string? ResultStructTypeName { get; }
-  public MaxonInteger ErrorFlag { get; }
-
-  public MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
-    Callee = callee;
-    Args = args;
-    ResultKind = resultKind;
-    ResultStructTypeName = resultStructTypeName;
-    ErrorFlag = new MaxonInteger(MlirContext.Current.NextId());
-    if (resultKind == MaxonValueKind.Struct) {
-      Result = new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!);
-    } else if (resultKind == MaxonValueKind.Enum) {
-      Result = new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!);
-    } else {
-      Result = resultKind?.CreateValue();
-    }
-  }
-
-  // Internal constructor preserving existing result/errorFlag for call site rewriting
-  internal MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValue? existingResult, MaxonInteger existingErrorFlag, MaxonValueKind? resultKind, string? resultStructTypeName) {
-    Callee = callee;
-    Args = args;
-    ResultKind = resultKind;
-    ResultStructTypeName = resultStructTypeName;
-    Result = existingResult;
-    ErrorFlag = existingErrorFlag;
-  }
-
-  public override IReadOnlyList<string> PrintableResults =>
-    Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
-}
-
 // ============================================================================
 // Struct operations
 // ============================================================================
@@ -511,9 +502,9 @@ public class MaxonFieldAccessOp(MaxonValue structValue, string typeName, string 
   public MaxonValueKind ResultKind { get; } = resultKind;
   public string? ResultStructTypeName { get; } = resultStructTypeName;
   public MaxonValue Result { get; } = resultKind switch {
-      MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!),
-      MaxonValueKind.Enum => new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!),
-      _ => resultKind.CreateValue()
+    MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!),
+    MaxonValueKind.Enum => new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!),
+    _ => resultKind.CreateValue()
   };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString()];
