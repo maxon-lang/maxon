@@ -145,20 +145,11 @@ public static class MonomorphizationPass {
               Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
               var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
                 call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
-              block.Operations[i] = new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
+              block.Operations[i] = call is MaxonTryCallOp tryCall
+                ? new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName)
+                : new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
               if (newResultKind != call.ResultKind && call.Result != null) {
                 UpdateSubsequentAssignOps(block, i + 1, call.Result, newResultKind);
-              }
-            }
-          } else if (op is MaxonTryCallOp tryCall) {
-            var newCallee = ResolveCalleeRewrite(tryCall.Callee, tryCall.ResultStructTypeName, tryCall.Args, calleeMap);
-            if (newCallee != null) {
-              Logger.Debug(LogCategory.Mlir, $"  Rewrote try_call {tryCall.Callee} -> {newCallee} in {func.Name}");
-              var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
-                tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
-              block.Operations[i] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName);
-              if (newResultKind != tryCall.ResultKind && tryCall.Result != null) {
-                UpdateSubsequentAssignOps(block, i + 1, tryCall.Result, newResultKind);
               }
             }
           }

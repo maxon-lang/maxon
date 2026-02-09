@@ -203,8 +203,8 @@ internal class FunctionCloner {
       case MaxonParamOp param: return CloneParamOp(param);
       case MaxonVarRefOp varRef: return CloneVarRefOp(varRef);
       case MaxonBinOp binOp: return CloneBinOp(binOp, extraOps);
-      case MaxonCallOp call: return CloneCallOp(call);
       case MaxonTryCallOp tryCall: return CloneTryCallOp(tryCall);
+      case MaxonCallOp call: return CloneCallOp(call);
       case MaxonIndirectCallOp indirect: return CloneIndirectCallOp(indirect);
       case MaxonStructLiteralOp structLit: return CloneStructLiteralOp(structLit, extraOps);
       case MaxonManagedMemGetOp memGet: return CloneManagedMemGetOp(memGet);
@@ -373,9 +373,8 @@ internal class FunctionCloner {
     var newArgs = call.Args.Select(MapValue).ToList();
     var (resultKind, resultStructTypeName) = ResolveCallResultType(call.ResultKind, call.ResultStructTypeName, newArgs);
     var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, resultStructTypeName);
-    if (call.Result != null && cloned.Result != null) {
+    if (call.Result != null && cloned.Result != null)
       RegisterResult(call.Result, cloned.Result);
-    }
     return cloned;
   }
 
@@ -384,9 +383,8 @@ internal class FunctionCloner {
     var newArgs = tryCall.Args.Select(MapValue).ToList();
     var (resultKind, resultStructTypeName) = ResolveCallResultType(tryCall.ResultKind, tryCall.ResultStructTypeName, newArgs);
     var cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, resultStructTypeName);
-    if (tryCall.Result != null && cloned.Result != null) {
+    if (tryCall.Result != null && cloned.Result != null)
       RegisterResult(tryCall.Result, cloned.Result);
-    }
     RegisterResult(tryCall.ErrorFlag, cloned.ErrorFlag);
     return cloned;
   }

@@ -279,7 +279,7 @@ public class MaxonCallOp : MaxonOp {
   public override string Mnemonic => $"maxon.call @{Callee}";
   public string Callee { get; }
   public List<MaxonValue> Args { get; }
-  public MaxonValue? Result { get; }
+  public MaxonValue? Result { get; protected set; }
   public MaxonValueKind? ResultKind { get; }
   // The struct type name for calls returning a struct
   public string? ResultStructTypeName { get; }
@@ -289,13 +289,7 @@ public class MaxonCallOp : MaxonOp {
     Args = args;
     ResultKind = resultKind;
     ResultStructTypeName = resultStructTypeName;
-    if (resultKind == MaxonValueKind.Struct) {
-      Result = new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!);
-    } else if (resultKind == MaxonValueKind.Enum) {
-      Result = new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!);
-    } else {
-      Result = resultKind?.CreateValue();
-    }
+    Result = CreateResult(resultKind, resultStructTypeName);
   }
 
   // Internal constructor preserving existing result for call site rewriting
@@ -307,49 +301,38 @@ public class MaxonCallOp : MaxonOp {
     Result = existingResult;
   }
 
+  protected static MaxonValue? CreateResult(MaxonValueKind? resultKind, string? resultStructTypeName) {
+    if (resultKind == MaxonValueKind.Struct)
+      return new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!);
+    if (resultKind == MaxonValueKind.Enum)
+      return new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!);
+    return resultKind?.CreateValue();
+  }
+
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
   public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
 
 // Calls a throwing function and captures both the result and error flag.
 // ErrorFlag is non-zero if the callee threw an error.
-public class MaxonTryCallOp : MaxonOp {
+public class MaxonTryCallOp : MaxonCallOp {
   public override string Mnemonic => $"maxon.try_call @{Callee}";
-  public string Callee { get; }
-  public List<MaxonValue> Args { get; }
-  public MaxonValue? Result { get; }
-  public MaxonValueKind? ResultKind { get; }
-  public string? ResultStructTypeName { get; }
   public MaxonInteger ErrorFlag { get; }
 
-  public MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
-    Callee = callee;
-    Args = args;
-    ResultKind = resultKind;
-    ResultStructTypeName = resultStructTypeName;
+  public MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null)
+    : base(callee, args, (MaxonValue?)null, resultKind, resultStructTypeName) {
     ErrorFlag = new MaxonInteger(MlirContext.Current.NextId());
-    if (resultKind == MaxonValueKind.Struct) {
-      Result = new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!);
-    } else if (resultKind == MaxonValueKind.Enum) {
-      Result = new MaxonEnum(MlirContext.Current.NextId(), resultStructTypeName!);
-    } else {
-      Result = resultKind?.CreateValue();
-    }
+    Result = CreateResult(resultKind, resultStructTypeName);
   }
 
   // Internal constructor preserving existing result/errorFlag for call site rewriting
-  internal MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValue? existingResult, MaxonInteger existingErrorFlag, MaxonValueKind? resultKind, string? resultStructTypeName) {
-    Callee = callee;
-    Args = args;
-    ResultKind = resultKind;
-    ResultStructTypeName = resultStructTypeName;
-    Result = existingResult;
+  internal MaxonTryCallOp(string callee, List<MaxonValue> args, MaxonValue? existingResult, MaxonInteger existingErrorFlag, MaxonValueKind? resultKind, string? resultStructTypeName)
+    : base(callee, args, existingResult, resultKind, resultStructTypeName) {
     ErrorFlag = existingErrorFlag;
   }
 
   public override IReadOnlyList<string> PrintableResults =>
     Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
 }
 
 public class MaxonTruncOp(MaxonValue input) : MaxonOp {

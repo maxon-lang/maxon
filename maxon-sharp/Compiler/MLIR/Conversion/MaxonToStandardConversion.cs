@@ -894,6 +894,9 @@ public static class MaxonToStandardConversion {
               }
               break;
             }
+            case MaxonTryCallOp tryCallOp:
+              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, module.TypeDefs);
+              break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
               LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, module.TypeDefs, managedVarOwners, mutatingFunctions);
@@ -917,9 +920,6 @@ public static class MaxonToStandardConversion {
               break;
             case MaxonThrowOp throwOp:
               LowerThrow(throwOp, newBlock, valueMap);
-              break;
-            case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, isStructInstanceMethod, selfStructType, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames);
