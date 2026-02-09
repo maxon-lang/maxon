@@ -2844,6 +2844,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Advance(); // consume 'return'
 
     if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
+      // Check for redundant type annotation: return TypeName{...} when return type is TypeName
+      if (Check(TokenType.Identifier) && _currentFunction?.ReturnType is MlirStructType retCheckType
+          && Current().Value == retCheckType.Name && PeekNext().Type == TokenType.LeftBrace) {
+        var typeToken = Current();
+        throw new CompileError(ErrorCode.SemanticRedundantTypeAnnotation,
+          $"redundant type annotation: '{retCheckType.Name}'",
+          typeToken.Line, typeToken.Column);
+      }
       // Check for anonymous struct literal: return { field: value, ... }
       if (Check(TokenType.LeftBrace) && _currentFunction?.ReturnType is MlirStructType retStructType) {
         var structLiteral = ParseStructLiteral(retStructType.Name);
@@ -7736,7 +7744,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               Current().Line, Current().Column);
           }
         } else {
+          var typeToken = Current();
           var paramType = ParseTypeRef();
+          // Check for redundant struct/enum type annotation when type can be inferred from context
+          if (inferredFnType != null && paramIdx < inferredFnType.ParameterTypes.Count
+              && (paramType is MlirStructType || paramType is MlirEnumType)) {
+            var inferredType = inferredFnType.ParameterTypes[paramIdx];
+            if ((paramType is MlirStructType st && inferredType is MlirStructType ist && st.Name == ist.Name)
+                || (paramType is MlirEnumType et && inferredType is MlirEnumType iet && et.Name == iet.Name)) {
+              throw new CompileError(ErrorCode.SemanticRedundantTypeAnnotation,
+                $"redundant type annotation: '{typeToken.Value}'",
+                typeToken.Line, typeToken.Column);
+            }
+          }
           paramTypes.Add(paramType);
         }
         paramIdx++;
@@ -7786,6 +7806,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     // Parse the closure body expression
+    // Check for redundant type annotation: gives TypeName{...} when return type is TypeName
+    if (Check(TokenType.Identifier) && inferredReturnType is MlirStructType bodyCheckType
+        && Current().Value == bodyCheckType.Name && PeekNext().Type == TokenType.LeftBrace) {
+      var typeToken = Current();
+      throw new CompileError(ErrorCode.SemanticRedundantTypeAnnotation,
+        $"redundant type annotation: '{bodyCheckType.Name}'",
+        typeToken.Line, typeToken.Column);
+    }
     ExprResult bodyExpr;
     if (Check(TokenType.LeftBrace) && inferredReturnType is MlirStructType bodyStructType) {
       bodyExpr = ParseStructLiteral(bodyStructType.Name);

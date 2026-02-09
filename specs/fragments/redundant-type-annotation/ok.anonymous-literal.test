@@ -1,0 +1,56 @@
+// Test: ok.anonymous-literal
+type Point
+  export var x int
+  export var y int
+end 'Point'
+
+function makePoint() returns Point
+  return {x: 1, y: 2}
+end 'makePoint'
+
+function main() returns int
+  var p = makePoint()
+  return p.x + p.y
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @redundant-type-annotation.makePoint(__sret: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 1
+    x86.mov edx, 2
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [eax+0], edx
+    x86.mov edx, [rbp-24]
+    x86.mov [eax+8], edx
+    x86.epilogue
+    x86.ret
+  }
+  func @redundant-type-annotation.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.lea rdx, [rbp-16]
+    x86.mov rcx, rdx
+    x86.call redundant-type-annotation.makePoint
+    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-24], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov [rbp-32], esi
+    x86.mov edi, [rbp-32]
+    x86.mov r8, [rbp-24]
+    x86.lea eax, [edi + r8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

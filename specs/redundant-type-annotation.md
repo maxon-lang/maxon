@@ -23,7 +23,7 @@ Type inference works in:
 
 ```text
 function makePoint() returns Point
-  return Point{x: 1, y: 2}  // Error E059: 'Point' can be inferred
+  return Point{x: 1, y: 2}  // Error E3015: 'Point' can be inferred
 end 'makePoint'
 ```
 
@@ -31,7 +31,7 @@ end 'makePoint'
 
 ```text
 m.map((p StringIntPair) gives {key: p.key, value: p.value * 10})
-      // Error E059: 'StringIntPair' can be inferred from m.map's signature
+      // Error E3015: 'StringIntPair' can be inferred from m.map's signature
 ```
 
 ### Solution
@@ -65,7 +65,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E059: specs/fragments/redundant-type-annotation.error.exact-match-return.1.test:8:5: redundant type annotation: 'Point'
+error E3015: specs/fragments/redundant-type-annotation/error.exact-match-return.test:8:10: redundant type annotation: 'Point'
 ```
 
 <!-- test: error.closure-return -->
@@ -85,7 +85,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E059: specs/fragments/redundant-type-annotation.error.closure-return.1.test:12:5: redundant type annotation: 'Point'
+error E3015: specs/fragments/redundant-type-annotation/error.closure-return.test:12:35: redundant type annotation: 'Point'
 ```
 
 <!-- test: ok.no-context -->
@@ -140,7 +140,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E059: specs/fragments/redundant-type-annotation.error.closure-param.1.test:12:25: redundant type annotation: 'Point'
+error E3015: specs/fragments/redundant-type-annotation/error.closure-param.test:12:23: redundant type annotation: 'Point'
 ```
 
 <!-- test: ok.closure-param-no-context -->
