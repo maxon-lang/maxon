@@ -8,7 +8,7 @@ status: implemented
 Type checking ensures argument types match parameter types at compile time.
 
 ## Docs
-The compiler validates that function and method arguments match the expected parameter types. Type mismatches are reported as compile-time errors (E022).
+The compiler validates that function and method arguments match the expected parameter types. Type mismatches are reported as compile-time errors (E3005).
 
 ## Tests
 
@@ -23,7 +23,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.method-call-wrong-self-type.1.test:6:6: argument type mismatch for 'other': expected 'Array$String', got 'String'
+error E3005: specs/fragments/type-checking/method-call-wrong-self-type.test:6:7: argument type mismatch for 'other': expected 'StringArray', got 'String'
 ```
 
 <!-- test: method-call-wrong-element-type -->
@@ -37,7 +37,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.method-call-wrong-element-type.1.test:6:6: argument type mismatch for 'value': expected 'int', got 'String'
+error E3005: specs/fragments/type-checking/method-call-wrong-element-type.test:6:7: argument type mismatch for 'value': expected 'int', got 'String'
 ```
 
 <!-- test: function-call-string-where-int-expected -->
@@ -52,7 +52,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.function-call-string-where-int-expected.1.test:7:2: argument type mismatch for 'n': expected 'int', got 'String'
+error E3005: specs/fragments/type-checking/function-call-string-where-int-expected.test:7:3: argument type mismatch for 'n': expected 'int', got 'String'
 ```
 
 <!-- test: function-call-primitive-where-struct-expected -->
@@ -69,7 +69,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.function-call-primitive-where-struct-expected.1.test:9:2: argument type mismatch for 'arr': expected 'Array$int', got 'int'
+error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-expected.test:9:3: argument type mismatch for 'arr': expected 'IntArray', got 'int'
 ```
 
 <!-- test: function-call-wrong-struct-type -->
@@ -95,7 +95,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.function-call-wrong-struct-type.1.test:18:2: argument type mismatch for 'p': expected 'Point', got 'Size'
+error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:18:3: argument type mismatch for 'p': expected 'Point', got 'Size'
 ```
 
 <!-- test: stdlib-function-call-wrong-type -->
@@ -106,7 +106,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.stdlib-function-call-wrong-type.1.test:3:2: argument type mismatch for 'value': expected 'String', got 'int'
+error E3005: specs/fragments/type-checking/stdlib-function-call-wrong-type.test:3:3: argument type mismatch for 'value': expected 'String', got 'int'
 ```
 
 <!-- test: implicit-method-call-wrong-type -->
@@ -126,7 +126,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.implicit-method-call-wrong-type.1.test:8:9: argument type mismatch for 'value': expected 'int', got 'String'
+error E3005: specs/fragments/type-checking/implicit-method-call-wrong-type.test:8:9: argument type mismatch for 'value': expected 'int', got 'String'
 ```
 
 <!-- test: array-of-different-element-types -->
@@ -142,7 +142,7 @@ function main() returns int
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/type-checking.array-of-different-element-types.1.test:8:7: argument type mismatch for 'other': expected 'Array$int', got 'Array$String'
+error E3005: specs/fragments/type-checking/array-of-different-element-types.test:8:8: argument type mismatch for 'other': expected 'IntArray', got 'StringArray'
 ```
 
 <!-- test: typealias-forward-reference -->

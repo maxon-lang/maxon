@@ -4535,6 +4535,44 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     };
   }
 
+  private static string ArgTypeName(MaxonValue value, MaxonValueKind kind) {
+    return value switch {
+      MaxonStruct ms => ms.TypeName,
+      MaxonEnum me => me.TypeName,
+      _ => KindToTypeName(kind)
+    };
+  }
+
+  /// <summary>
+  /// Checks if argTypeName is compatible with paramTypeName, considering typealiases.
+  /// A typealias like StringArray (source: Array) is compatible with Array.
+  /// </summary>
+  private bool IsStructTypeCompatible(string argTypeName, string paramTypeName) {
+    if (argTypeName == paramTypeName) return true;
+    _typeAliasSources.TryGetValue(argTypeName, out var argSource);
+    _typeAliasSources.TryGetValue(paramTypeName, out var paramSource);
+    // Check if arg type is a typealias whose source matches the param type
+    if (argSource == paramTypeName) return true;
+    // Check if param type is a typealias whose source matches the arg type
+    if (paramSource == argTypeName) return true;
+    // Both are aliases of the same source: compatible only if type params match
+    if (argSource != null && paramSource != null && argSource == paramSource) {
+      return HaveMatchingTypeParams(argTypeName, paramTypeName);
+    }
+    return false;
+  }
+
+  private bool HaveMatchingTypeParams(string typeA, string typeB) {
+    if (!_typeRegistry.TryGetValue(typeA, out var typeAEntry) || typeAEntry is not MlirStructType structA) return false;
+    if (!_typeRegistry.TryGetValue(typeB, out var typeBEntry) || typeBEntry is not MlirStructType structB) return false;
+    if (structA.TypeParams.Count != structB.TypeParams.Count) return false;
+    foreach (var (key, valueA) in structA.TypeParams) {
+      if (!structB.TypeParams.TryGetValue(key, out var valueB)) return false;
+      if (valueA.Name != valueB.Name) return false;
+    }
+    return true;
+  }
+
   /// <summary>
   /// Emits comparison ops for a set of patterns against the scrutinee value.
   /// Multiple patterns are combined with logical OR.
@@ -7090,23 +7128,74 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
+    // Resolve type parameters from the self arg's concrete struct type
+    Dictionary<string, MlirType>? selfTypeParams = null;
     if (args.Length > 0 && args[0] is MaxonStruct selfStruct
         && _typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
         && selfType is MlirStructType selfStructType
-        && selfStructType.TypeParams.TryGetValue("Element", out var elemType)) {
-      // Check if we're calling an Element-polymorphic method and get caller's Element type
-      Logger.Debug(LogCategory.Parser, $"FillDefaultArgs: {callee.Name} - callerElementType={elemType}");
+        && selfStructType.TypeParams.Count > 0) {
+      selfTypeParams = selfStructType.TypeParams;
     }
 
-    // Implicit type conversion for function arguments
+    // Implicit type conversion and type checking for function arguments
     for (int i = 0; i < args.Length; i++) {
       var argKind = DetermineValueKind(args[i]!);
       var paramType = callee.ParamTypes[i];
-      if (paramType is MlirStructType) continue;
-      if (paramType is MlirEnumType) continue;
 
-      // Skip type conversion for type-parameter params
-      if (paramType is MlirTypeParameterType) continue;
+      // Resolve type-parameter params against the self arg's concrete type params
+      if (paramType is MlirTypeParameterType tp) {
+        if (selfTypeParams != null && selfTypeParams.TryGetValue(tp.ParameterName, out var resolvedType)
+            && resolvedType is not MlirTypeParameterType) {
+          paramType = resolvedType;
+        } else {
+          continue;
+        }
+      }
+
+      if (paramType is MlirStructType paramStructType) {
+        // Struct parameter: arg must be a struct with matching type name
+        if (args[i] is not MaxonStruct argStruct) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': expected '{paramStructType.Name}', got '{KindToTypeName(argKind)}'",
+            functionNameToken.Line, functionNameToken.Column);
+        }
+        // For Self-typed params (param type matches self's base type), the arg must match
+        // the self's concrete type, not just the base type
+        var expectedTypeName = paramStructType.Name;
+        if (i > 0 && args[0] is MaxonStruct selfArg
+            && _typeAliasSources.TryGetValue(selfArg.TypeName, out var selfSource)
+            && selfSource == paramStructType.Name) {
+          expectedTypeName = selfArg.TypeName;
+        }
+        if (!IsStructTypeCompatible(argStruct.TypeName, expectedTypeName)) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': expected '{expectedTypeName}', got '{argStruct.TypeName}'",
+            functionNameToken.Line, functionNameToken.Column);
+        }
+        continue;
+      }
+
+      if (paramType is MlirEnumType paramEnumType) {
+        // Enum parameter: arg must be an enum with matching type name
+        if (args[i] is not MaxonEnum argEnum) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': expected '{paramEnumType.Name}', got '{ArgTypeName(args[i]!, argKind)}'",
+            functionNameToken.Line, functionNameToken.Column);
+        }
+        if (argEnum.TypeName != paramEnumType.Name) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"argument type mismatch for '{callee.ParamNames[i]}': expected '{paramEnumType.Name}', got '{argEnum.TypeName}'",
+            functionNameToken.Line, functionNameToken.Column);
+        }
+        continue;
+      }
+
+      // Primitive parameter: arg must not be a struct/enum
+      if (argKind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"argument type mismatch for '{callee.ParamNames[i]}': expected '{MlirType.FormatAsSourceName(paramType)}', got '{ArgTypeName(args[i]!, argKind)}'",
+          functionNameToken.Line, functionNameToken.Column);
+      }
 
       var paramKind = paramType.ToValueKind();
       if (argKind == paramKind) continue;

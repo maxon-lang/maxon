@@ -51,7 +51,7 @@ public static class MaxonToStandardConversion {
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
       bool isInstanceMethod = isStructInstanceMethod || isEnumInstanceMethod;
-      var selfStructType = isStructInstanceMethod ? (MlirStructType)func.ParamTypes[0] : null;
+      var selfStructType = isStructInstanceMethod ? ResolveStructType((MlirStructType)func.ParamTypes[0], module.TypeDefs) : null;
 
       // Build the new function signature:
       // - Struct instance method 'self' param is passed as a pointer (by reference)
@@ -203,7 +203,7 @@ public static class MaxonToStandardConversion {
               } else {
                 // Non-self struct param: receive as pointer, load fields from it
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
-                var structType = (MlirStructType)func.ParamTypes[structParamOp.Index];
+                var structType = ResolveStructType((MlirStructType)func.ParamTypes[structParamOp.Index], module.TypeDefs);
                 var ptrVarName = $"__{structParamOp.Name}_ptr";
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, ptrVarName, ptrVal));
@@ -1140,7 +1140,7 @@ public static class MaxonToStandardConversion {
       }
     }
 
-    var selfBufName = FlattenCallArgs(args, calleeFunc, calleeIsStructInstance, block, valueMap, varTypes, structVarNames, newArgs, callee);
+    var selfBufName = FlattenCallArgs(args, calleeFunc, calleeIsStructInstance, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs);
 
     // Emit call or try_call
     StdValue? callResult = calleeRetStructType != null
@@ -1620,7 +1620,8 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     List<StdValue> newArgs,
-    string calleeName) {
+    string calleeName,
+    Dictionary<string, MlirType> typeDefs) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
     string? selfBufName = null;
 
@@ -1629,7 +1630,7 @@ public static class MaxonToStandardConversion {
       if (calleeIsEnumInstance && i == 0) {
         newArgs.Add(valueMap[arg]);
       } else if (calleeIsStructInstance && i == 0 && structVarNames.TryGetValue(arg.Id, out var selfName)) {
-        var calleeSelfStructType = (MlirStructType)calleeFunc.ParamTypes[0];
+        var calleeSelfStructType = ResolveStructType((MlirStructType)calleeFunc.ParamTypes[0], typeDefs);
         selfBufName = $"__selfbuf_{MlirContext.Current.NextId()}";
         var selfPtr = AllocateAndCopyStructToStack(block, selfName, selfBufName, calleeSelfStructType, varTypes);
         newArgs.Add(selfPtr);
@@ -1637,8 +1638,9 @@ public static class MaxonToStandardConversion {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirStructType argStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
         // Allocate stack copy and pass pointer
+        var resolved = ResolveStructType(argStructType, typeDefs);
         var bufName = $"__argbuf_{MlirContext.Current.NextId()}";
-        var argPtr = AllocateAndCopyStructToStack(block, argStructName, bufName, argStructType, varTypes);
+        var argPtr = AllocateAndCopyStructToStack(block, argStructName, bufName, resolved, varTypes);
         newArgs.Add(argPtr);
       } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
         // Struct arg from managed memory get (inline struct data) — the value is already
@@ -1651,6 +1653,17 @@ public static class MaxonToStandardConversion {
       }
     }
     return selfBufName;
+  }
+
+  /// <summary>
+  /// Re-resolves a struct type from typeDefs if the captured instance has no fields
+  /// (forward-referenced types captured before their fields were parsed).
+  /// </summary>
+  private static MlirStructType ResolveStructType(MlirStructType structType, Dictionary<string, MlirType> typeDefs) {
+    if (structType.Fields.Count > 0) return structType;
+    if (typeDefs.TryGetValue(structType.Name, out var resolved) && resolved is MlirStructType resolvedStruct && resolvedStruct.Fields.Count > 0)
+      return resolvedStruct;
+    return structType;
   }
 
   private static MlirFunction<MaxonOp> ResolveCallee(string calleeName, Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
