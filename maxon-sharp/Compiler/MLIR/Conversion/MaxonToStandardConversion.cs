@@ -132,9 +132,9 @@ public static class MaxonToStandardConversion {
       // Key: user variable name (e.g. "arr"), Value: list of paths to buffer fields
       // Single-managed: ["arr.managed.buffer"], Multi-managed: ["item.numbers.managed.buffer", "item.text._managed.buffer", ...]
       var managedVarOwners = new Dictionary<string, List<string>>();
-      // Tracks which managed vars hold arrays of structs with managed fields (for per-element cleanup)
-      // Key: user variable name, Value: list of (offset, typeName) for managed fields within elements
-      var managedVarElementInfo = new Dictionary<string, List<(int offset, string typeName)>>();
+      // Tracks which buffer paths hold arrays of structs with managed fields (for per-element cleanup)
+      // Key: buffer path (e.g. "m.keys.managed.buffer"), Value: list of (offset, typeName) for managed fields within elements
+      var managedBufferElementInfo = new Dictionary<string, List<(int offset, string typeName)>>();
 
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
@@ -483,7 +483,11 @@ public static class MaxonToStandardConversion {
                     }
                   }
                 }
-                // Phase 2: MOVE for variable-backed managed fields (ownership transfer)
+              }
+              // Phase 2: MOVE for variable-backed managed fields (ownership transfer).
+              // Must run for ALL struct types (including auto-generated like __Map_String_i64)
+              // to prevent double-free when the parent struct and source variable share buffers.
+              if (_trackAllocs && GetManagedFieldName(structType) == null) {
                 foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                   if (structVarNames.TryGetValue(fieldVal.Id, out var srcVarName)
                       && managedVarOwners.ContainsKey(srcVarName)) {
@@ -543,9 +547,10 @@ public static class MaxonToStandardConversion {
                 var structType = (MlirStructType)module.TypeDefs[structTypeName];
                 // Cleanup old managed memory before reassignment
                 if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPaths)) {
-                  var oldElementInfo = managedVarElementInfo.TryGetValue(assignOp.VarName, out var oldInfo) ? oldInfo : null;
-                  foreach (var oldBufPath in oldBufPaths)
+                  foreach (var oldBufPath in oldBufPaths) {
+                    var oldElementInfo = managedBufferElementInfo.TryGetValue(oldBufPath, out var oldInfo) ? oldInfo : null;
                     EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes, oldElementInfo);
+                  }
                 }
                 if (srcName != dstName)
                   CopyStructFields(newBlock, srcName, dstName, structType, varTypes);
@@ -571,13 +576,8 @@ public static class MaxonToStandardConversion {
                   var bufferPaths = GetAllManagedBufferPaths(dstName, structTypeName, module.TypeDefs);
                   if (bufferPaths.Count > 0) {
                     managedVarOwners[assignOp.VarName] = bufferPaths;
-                    // Check if this array's element type has managed fields
-                    var elementStructType = GetArrayElementStructType(structTypeName, module.TypeDefs);
-                    if (elementStructType != null) {
-                      var elemFieldInfo = GetManagedElementFieldInfo(elementStructType);
-                      if (elemFieldInfo.Count > 0)
-                        managedVarElementInfo[assignOp.VarName] = elemFieldInfo;
-                    }
+                    // Check each buffer path's containing array type for managed element fields
+                    PopulateManagedBufferElementInfo(bufferPaths, dstName, structTypeName, module.TypeDefs, managedBufferElementInfo);
                   }
                 }
               } else {
@@ -706,8 +706,8 @@ public static class MaxonToStandardConversion {
                     loopScopedVars.Add(varName);
                 }
                 foreach (var varName in loopScopedVars) {
-                  var elementInfo = managedVarElementInfo.TryGetValue(varName, out var info) ? info : null;
                   foreach (var bufferPath in managedVarOwners[varName]) {
+                    var elementInfo = managedBufferElementInfo.TryGetValue(bufferPath, out var info) ? info : null;
                     EmitManagedCleanup(newBlock, varName, bufferPath, varTypes, elementInfo);
                     // Zero capacity to prevent use-after-free on reinitialization
                     var capacityPath = bufferPath[..bufferPath.LastIndexOf('.')] + ".capacity";
@@ -906,7 +906,7 @@ public static class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, managedVarOwners, cstringTrackVars, managedVarElementInfo);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, isStructInstanceMethod, selfStructType, managedVarOwners, cstringTrackVars, managedBufferElementInfo);
               break;
             case MaxonThrowOp throwOp:
               LowerThrow(throwOp, newBlock, valueMap);
@@ -1176,7 +1176,7 @@ public static class MaxonToStandardConversion {
     MlirStructType? selfStructType,
     Dictionary<string, List<string>> managedVarOwners,
     HashSet<string> cstringTrackVars,
-    Dictionary<string, List<(int offset, string typeName)>> managedVarElementInfo) {
+    Dictionary<string, List<(int offset, string typeName)>> managedBufferElementInfo) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -1211,7 +1211,7 @@ public static class MaxonToStandardConversion {
         WriteStructFieldsToPointer(block, tempName, sretLoad.Result, retStructType, varTypes);
       }
 
-      EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedVarElementInfo);
+      EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedBufferElementInfo);
       block.AddOp(new StdReturnOp());
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
@@ -1221,12 +1221,12 @@ public static class MaxonToStandardConversion {
         var retVarName = $"__ret_save_{MlirContext.Current.NextId()}";
         EmitStore(block, newRetVal, retVarName, varTypes);
 
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedVarElementInfo);
+        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedBufferElementInfo);
 
         var retReload = EmitLoad(block, retVarName, varTypes);
         block.AddOp(new StdReturnOp(retReload));
       } else {
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedVarElementInfo);
+        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, managedBufferElementInfo);
         block.AddOp(new StdReturnOp(newRetVal));
       }
     }
@@ -1237,13 +1237,14 @@ public static class MaxonToStandardConversion {
     HashSet<string> cstringTrackVars,
     Dictionary<string, List<string>> managedVarOwners,
     Dictionary<string, string> varTypes,
-    Dictionary<string, List<(int offset, string typeName)>>? managedVarElementInfo = null) {
+    Dictionary<string, List<(int offset, string typeName)>>? managedBufferElementInfo = null) {
     foreach (var csVar in cstringTrackVars)
       EmitTrackCleanup(block, csVar);
     foreach (var (varName, bufferPaths) in managedVarOwners) {
-      var elementInfo = managedVarElementInfo != null && managedVarElementInfo.TryGetValue(varName, out var info) ? info : null;
-      foreach (var bufferPath in bufferPaths)
+      foreach (var bufferPath in bufferPaths) {
+        var elementInfo = managedBufferElementInfo != null && managedBufferElementInfo.TryGetValue(bufferPath, out var info) ? info : null;
         EmitManagedCleanup(block, varName, bufferPath, varTypes, elementInfo);
+      }
     }
   }
 
@@ -3624,6 +3625,34 @@ public static class MaxonToStandardConversion {
     return elementType as MlirStructType;
   }
 
+  /// <summary>
+  /// Resolves the element type for an array field within a composite struct (e.g. Map).
+  /// For inner aliases like KeyArray whose Element type is a generic parameter (Key),
+  /// resolves through the parent struct's TypeParams (Key→String) to get the concrete element type.
+  /// </summary>
+  private static MlirStructType? ResolveArrayElementType(
+    string arrayTypeName, MlirStructType parentStruct, Dictionary<string, MlirType> typeDefs) {
+    // First try direct resolution (works for concrete array types)
+    var direct = GetArrayElementStructType(arrayTypeName, typeDefs);
+    if (direct != null) return direct;
+
+    // For generic inner aliases, the Element type param is an unresolved MlirTypeParameterType.
+    // Resolve it through the parent struct's TypeParams.
+    if (!typeDefs.TryGetValue(arrayTypeName, out var arrayTypeDef) || arrayTypeDef is not MlirStructType arrayStruct)
+      return null;
+    if (arrayStruct.GetField("managed") is not { Type: MlirStructType { Name: "__ManagedMemory" } })
+      return null;
+    if (!arrayStruct.TypeParams.TryGetValue("Element", out var elementType))
+      return null;
+
+    // Element type is a generic parameter (e.g. Key) — resolve through parent's TypeParams
+    if (elementType is MlirTypeParameterType typeParam) {
+      if (parentStruct.TypeParams.TryGetValue(typeParam.ParameterName, out var resolved))
+        return resolved as MlirStructType;
+    }
+    return null;
+  }
+
   private static string? GetManagedFieldName(MlirStructType structType) {
     var managedField = structType.GetField("managed");
     if (managedField != null) return "managed";
@@ -3655,6 +3684,53 @@ public static class MaxonToStandardConversion {
       }
     }
     return result;
+  }
+
+  /// <summary>
+  /// For each buffer path within a struct, determines whether that path's containing array
+  /// has elements with managed fields, and if so, records the element info keyed by buffer path.
+  /// For a Map with String keys, "m.keys.managed.buffer" gets String's element info,
+  /// while "m.values.managed.buffer" and "m.states.managed.buffer" get nothing.
+  /// </summary>
+  private static void PopulateManagedBufferElementInfo(
+    List<string> bufferPaths, string dstName, string structTypeName,
+    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, List<(int offset, string typeName)>> managedBufferElementInfo) {
+    // For simple array types, check the top-level struct directly
+    var topLevelElement = GetArrayElementStructType(structTypeName, typeDefs);
+    if (topLevelElement != null) {
+      var elemFieldInfo = GetManagedElementFieldInfo(topLevelElement);
+      if (elemFieldInfo.Count > 0) {
+        foreach (var bufferPath in bufferPaths)
+          managedBufferElementInfo[bufferPath] = elemFieldInfo;
+      }
+      return;
+    }
+
+    // For composite types (e.g. Map), resolve each buffer path's containing array type
+    if (!typeDefs.TryGetValue(structTypeName, out var typeDef) || typeDef is not MlirStructType structType)
+      return;
+
+    foreach (var bufferPath in bufferPaths) {
+      // Extract the field name from the buffer path
+      // e.g. "m.keys.managed.buffer" → "keys"
+      var suffix = bufferPath[(dstName.Length + 1)..];
+      var dotIdx = suffix.IndexOf('.');
+      if (dotIdx < 0) continue;
+      var fieldName = suffix[..dotIdx];
+
+      var field = structType.GetField(fieldName);
+      if (field?.Type is not MlirStructType fieldStruct) continue;
+
+      // Resolve element type: for generic inner aliases (e.g. KeyArray with Element=Key),
+      // resolve through the parent struct's TypeParams (e.g. Map's Key→String)
+      var elementType = ResolveArrayElementType(fieldStruct.Name, structType, typeDefs);
+      if (elementType == null) continue;
+
+      var elemFieldInfo = GetManagedElementFieldInfo(elementType);
+      if (elemFieldInfo.Count > 0)
+        managedBufferElementInfo[bufferPath] = elemFieldInfo;
+    }
   }
 
   /// <summary>

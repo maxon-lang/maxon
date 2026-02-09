@@ -810,7 +810,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Collect all methods: direct methods plus inherited from extended interfaces
       var allMethods = new List<(MlirInterfaceMethodSignature Method, string SourceInterface)>();
-      CollectInterfaceMethods(iface, ifaceName, allMethods, new HashSet<string>());
+      CollectInterfaceMethods(iface, ifaceName, allMethods, []);
 
       var missingMethods = new List<string>();
       var wrongSignatureMethods = new List<string>();
@@ -5212,6 +5212,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.LeftBracket)) {
       var bracketToken = Current();
       Advance(); // consume '['
+      SkipNewlines();
 
       if (Check(TokenType.RightBracket)) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -5221,6 +5222,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Parse first element to determine if this is a map or array literal
       var firstExpr = ResolveExprValue(ParseExpression());
+      SkipNewlines();
 
       ExprResult.Direct result;
       if (Check(TokenType.Colon)) {
@@ -5943,8 +5945,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var elements = new List<MaxonValue> { firstElement };
     while (Check(TokenType.Comma)) {
       Advance();
+      SkipNewlines();
       if (Check(TokenType.RightBracket)) break; // trailing comma
       elements.Add(ResolveExprValue(ParseExpression()));
+      SkipNewlines();
     }
     Expect(TokenType.RightBracket);
 
@@ -5983,10 +5987,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     while (Check(TokenType.Comma)) {
       Advance(); // consume ','
+      SkipNewlines();
       if (Check(TokenType.RightBracket)) break; // trailing comma
       var key = ResolveExprValue(ParseExpression());
+      SkipNewlines();
       Expect(TokenType.Colon);
       var value = ResolveExprValue(ParseExpression());
+      SkipNewlines();
       keys.Add(key);
       values.Add(value);
     }
@@ -6045,11 +6052,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Used to determine concrete Key/Value types for map literal type alias creation.
   /// </summary>
   private MlirType InferMlirTypeFromElements(MaxonValueKind kind, string? structTypeName, Token errorToken) {
-    if (kind == MaxonValueKind.Struct && structTypeName != null) {
+    if ((kind == MaxonValueKind.Struct || kind == MaxonValueKind.Enum) && structTypeName != null) {
       if (_typeRegistry.TryGetValue(structTypeName, out var type))
         return type;
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Unknown struct type '{structTypeName}' in map literal",
+        $"Unknown type '{structTypeName}' in map literal",
         errorToken.Line, errorToken.Column);
     }
     return kind switch {
@@ -6057,8 +6064,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonValueKind.Float => MlirType.F64,
       MaxonValueKind.Bool => MlirType.I1,
       MaxonValueKind.Byte => MlirType.I8,
-      MaxonValueKind.Enum => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        "Enum types in map literals are not yet supported", errorToken.Line, errorToken.Column),
       MaxonValueKind.Function => throw new CompileError(ErrorCode.SemanticTypeMismatch,
         "Function types in map literals are not supported", errorToken.Line, errorToken.Column),
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -6092,8 +6097,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         ["Value"] = valueType
       };
       RegisterConcreteTypeAlias(autoAliasName, mapSourceTypeName, mapStruct, substitution);
+
+      // Ensure inner array type aliases exist for the Key and Value types
+      // (e.g., __Array_TokenKind for Map<int, TokenKind>)
+      EnsureArrayTypeAliasForType(keyType);
+      EnsureArrayTypeAliasForType(valueType);
     }
     return autoAliasName;
+  }
+
+  /// <summary>
+  /// Ensures a concrete Array type alias exists for the given element type.
+  /// For enum/struct types, calls FindArrayTypeAliasForElement to auto-create if needed.
+  /// Primitive types (int, float, etc.) already have predefined Array aliases.
+  /// </summary>
+  private void EnsureArrayTypeAliasForType(MlirType type) {
+    if (type is MlirEnumType enumType) {
+      FindArrayTypeAliasForElement(MaxonValueKind.Enum, enumType.Name);
+    } else if (type is MlirStructType structType) {
+      FindArrayTypeAliasForElement(MaxonValueKind.Struct, structType.Name);
+    }
+    // Primitive types (i64, f64, etc.) already have predefined aliases (IntArray, FloatArray, etc.)
   }
 
   /// <summary>
@@ -6102,9 +6126,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// For struct element types, auto-creates a type alias if none exists.
   /// </summary>
   private string FindArrayTypeAliasForElement(MaxonValueKind elementKind, string? elementStructTypeName = null) {
-    // For struct elements, search for existing alias or auto-create one
-    if (elementKind == MaxonValueKind.Struct && elementStructTypeName != null) {
-      // Search for an existing typealias of Array with this struct Element type
+    // For struct/enum elements with a type name, search for existing alias or auto-create one
+    if ((elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum) && elementStructTypeName != null) {
+      // Search for an existing typealias of Array with this element type
       foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
         if (sourceTypeName != "Array") continue;
         if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
@@ -6115,13 +6139,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
       }
 
-      // No existing alias - auto-create one (e.g., __Array_Pair)
+      // No existing alias - auto-create one (e.g., __Array_Pair, __Array_TokenKind)
       var autoAliasName = $"__Array_{elementStructTypeName}";
       if (!_typeRegistry.ContainsKey(autoAliasName)
           && _typeRegistry.TryGetValue("Array", out var arrayType)
           && arrayType is MlirStructType arrayStruct
-          && _typeRegistry.TryGetValue(elementStructTypeName, out var elemStructType)) {
-        var substitution = new Dictionary<string, MlirType> { ["Element"] = elemStructType };
+          && _typeRegistry.TryGetValue(elementStructTypeName, out var elemRegisteredType)) {
+        var substitution = new Dictionary<string, MlirType> { ["Element"] = elemRegisteredType };
         RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
       }
       return autoAliasName;
@@ -6133,8 +6157,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonValueKind.Float => "f64",
       MaxonValueKind.Byte => "i8",
       MaxonValueKind.Bool => "i1",
-      MaxonValueKind.Enum => null,
       MaxonValueKind.Function => null,
+      MaxonValueKind.Enum => throw new InvalidOperationException("Enum element kind should have elementStructTypeName set"),
       MaxonValueKind.Struct => throw new InvalidOperationException("Struct element kind should have been handled above"),
       _ => throw new InvalidOperationException($"Unhandled element kind: {elementKind}")
     };
@@ -6206,6 +6230,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           $"Cannot determine element size: unknown struct type '{structElem.TypeName}'",
           Current().Line, Current().Column);
       }
+    } else if (elements[0] is MaxonEnum enumElem) {
+      elementStructTypeName = enumElem.TypeName;
+      elementSize = elementKind.ElementSize();
     } else {
       elementSize = elementKind.ElementSize();
     }
@@ -7194,6 +7221,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (resolvedReturnParams.Count == 1 && resolvedReturnParams.TryGetValue("Element", out var elemType)) {
       if (elemType is MlirStructType elemStruct) {
         return FindArrayTypeAliasForElement(MaxonValueKind.Struct, elemStruct.Name);
+      }
+      if (elemType is MlirEnumType elemEnum) {
+        return FindArrayTypeAliasForElement(MaxonValueKind.Enum, elemEnum.Name);
       }
       var elemKind = elemType.ToValueKind();
       return FindArrayTypeAliasForElement(elemKind);

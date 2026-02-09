@@ -530,6 +530,8 @@ CLEANUP: outer
 DECREF: outer -> rc=0
 FREE #1: 32 bytes (array cleanup)
 CLEANUP: outer
+CLEANUP: <array element>
+CLEANUP: <array element>
 DECREF: outer -> rc=0
 FREE #2: 160 bytes (array cleanup)
 
@@ -541,5 +543,5 @@ Moves:     7
 Increfs:   2
 Decrefs:   2
 Copies:    4
-Cleanups:  4
+Cleanups:  6
 ```

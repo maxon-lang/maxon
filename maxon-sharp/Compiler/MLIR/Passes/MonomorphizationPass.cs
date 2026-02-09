@@ -45,7 +45,7 @@ public static class MonomorphizationPass {
   private static List<Specialization> CollectNeededSpecializations(MlirModule<MaxonOp> module) {
     var specializations = new List<Specialization>();
 
-    foreach (var (aliasName, aliasInfo) in module.TypeAliasSources) {
+    foreach (var (aliasName, aliasInfo) in module.TypeAliasSources.ToList()) {
       if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
       if (aliasInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
 

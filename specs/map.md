@@ -36,8 +36,8 @@ Add a key-value pair to the map. If the key already exists, updates the value.
 
 ```text
 var m = [1: 100, 2: 200]
-m.insert(3, 300)    // Map now has {1: 100, 2: 200, 3: 300}
-m.insert(1, 150)    // Updates key 1 to 150
+m.insert(3, value: 300)    // Map now has {1: 100, 2: 200, 3: 300}
+m.insert(1, value: 150)    // Updates key 1 to 150
 ```
 
 ### get(key) Value
@@ -173,7 +173,7 @@ end 'main'
 ```maxon
 function main() returns int
   var m = [1: 10, 2: 20]
-  m.insert(3, 30)
+  m.insert(3, value: 30)
   return m.count()
 end 'main'
 ```
@@ -185,7 +185,7 @@ end 'main'
 ```maxon
 function main() returns int
   var m = [1: 10, 2: 20]
-  m.insert(1, 100)
+  m.insert(1, value: 100)
   var result = try m.get(1) otherwise 0
   return result
 end 'main'
@@ -198,7 +198,7 @@ end 'main'
 ```maxon
 function main() returns int
   var m = [10: 1]
-  m.insert(20, 2)
+  m.insert(20, value: 2)
   if m.contains(20) 'check'
     return 1
   end 'check'
@@ -260,7 +260,7 @@ typealias IntIntMap = Map with (int, int)
 
 function main() returns int
   var m = IntIntMap{}
-  m.insert(1, 100)
+  m.insert(1, value: 100)
   var result = try m.get(1) otherwise 0
   return result
 end 'main'
@@ -298,7 +298,7 @@ end 'main'
 function main() returns int
   var m = [1: 10, 2: 20, 3: 30]
   m.remove(2)
-  m.insert(2, 200)
+  m.insert(2, value: 200)
   var result = try m.get(2) otherwise 0
   return result
 end 'main'
@@ -317,7 +317,7 @@ end 'Container'
 
 function main() returns int
   var m = IntIntMap{}
-  m.insert(1, 42)
+  m.insert(1, value: 42)
   var c = Container{data: m}
   var result = try c.data.get(1) otherwise 0
   return result
@@ -339,46 +339,56 @@ end 'main'
 1
 ```
 ```stdout
-MOVE: managed
-ALLOC #1: 80 bytes (map buffer)
-ALLOC #2: 16 bytes (map buffer)
-MOVE: managed
-ALLOC #3: 648 bytes (array grow)
+ALLOC #1: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #4: 136 bytes (array grow)
+ALLOC #2: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #5: 136 bytes (array grow)
+ALLOC #3: 768 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-CLEANUP: k
-CLEANUP: k
-MOVE: result
-FREE #1: 80 bytes (map literal keys cleanup)
-FREE #2: 16 bytes (map literal values cleanup)
+MOVE: key
 MOVE: managed
-CLEANUP: existing
+MOVE: key
+MOVE: managed
+CLEANUP: initKeys
+CLEANUP: initValues
 CLEANUP: m
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+DECREF: m -> rc=0
+FREE #1: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 648 bytes (array cleanup)
+FREE #2: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #4: 136 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #5: 136 bytes (array cleanup)
+FREE #3: 768 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 1016 bytes
-Freed:     1016 bytes
+Allocated: 2304 bytes
+Freed:     2304 bytes
 Leaked:    0 bytes
 Moves:     7
 Increfs:   3
 Decrefs:   3
 Copies:    0
-Cleanups:  7
+Cleanups:  21
 ```
 
 <!-- test: string-keys-get-multiple -->
@@ -395,51 +405,58 @@ end 'main'
 30
 ```
 ```stdout
-MOVE: managed
-ALLOC #1: 120 bytes (map buffer)
-ALLOC #2: 24 bytes (map buffer)
-MOVE: managed
-MOVE: managed
-ALLOC #3: 648 bytes (array grow)
+ALLOC #1: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #4: 136 bytes (array grow)
+ALLOC #2: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #5: 136 bytes (array grow)
+ALLOC #3: 768 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-CLEANUP: k
-CLEANUP: k
-CLEANUP: existing
-CLEANUP: k
-MOVE: result
-FREE #1: 120 bytes (map literal keys cleanup)
-FREE #2: 24 bytes (map literal values cleanup)
+MOVE: key
 MOVE: managed
-CLEANUP: existing
+MOVE: key
 MOVE: managed
-CLEANUP: existing
+MOVE: key
+MOVE: managed
+CLEANUP: initKeys
+CLEANUP: initValues
 CLEANUP: m
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+DECREF: m -> rc=0
+FREE #1: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 648 bytes (array cleanup)
+FREE #2: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #4: 136 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #5: 136 bytes (array cleanup)
+FREE #3: 768 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 1064 bytes
-Freed:     1064 bytes
+Allocated: 2304 bytes
+Freed:     2304 bytes
 Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
 Copies:    0
-Cleanups:  10
+Cleanups:  21
 ```
 
 <!-- test: string-keys-contains -->
@@ -457,46 +474,56 @@ end 'main'
 1
 ```
 ```stdout
-MOVE: managed
-ALLOC #1: 80 bytes (map buffer)
-ALLOC #2: 16 bytes (map buffer)
-MOVE: managed
-ALLOC #3: 648 bytes (array grow)
+ALLOC #1: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #4: 136 bytes (array grow)
+ALLOC #2: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #5: 136 bytes (array grow)
+ALLOC #3: 768 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-CLEANUP: k
-CLEANUP: k
-MOVE: result
-FREE #1: 80 bytes (map literal keys cleanup)
-FREE #2: 16 bytes (map literal values cleanup)
+MOVE: key
 MOVE: managed
-CLEANUP: existing
+MOVE: key
+MOVE: managed
+CLEANUP: initKeys
+CLEANUP: initValues
 CLEANUP: m
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+DECREF: m -> rc=0
+FREE #1: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 648 bytes (array cleanup)
+FREE #2: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #4: 136 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #5: 136 bytes (array cleanup)
+FREE #3: 768 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 1016 bytes
-Freed:     1016 bytes
+Allocated: 2304 bytes
+Freed:     2304 bytes
 Leaked:    0 bytes
 Moves:     7
 Increfs:   3
 Decrefs:   3
 Copies:    0
-Cleanups:  7
+Cleanups:  21
 ```
 
 <!-- test: string-keys-insert-update -->
@@ -504,7 +531,7 @@ Cleanups:  7
 ```maxon
 function main() returns int
   var m = ["x": 10]
-  m.insert("x", 99)
+  m.insert("x", value: 99)
   var result = try m.get("x") otherwise 0
   return result
 end 'main'
@@ -513,46 +540,54 @@ end 'main'
 99
 ```
 ```stdout
-MOVE: managed
-ALLOC #1: 40 bytes (map buffer)
-ALLOC #2: 8 bytes (map buffer)
-ALLOC #3: 648 bytes (array grow)
+ALLOC #1: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #4: 136 bytes (array grow)
+ALLOC #2: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #5: 136 bytes (array grow)
+ALLOC #3: 768 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-CLEANUP: k
-MOVE: result
-FREE #1: 40 bytes (map literal keys cleanup)
-FREE #2: 8 bytes (map literal values cleanup)
+MOVE: key
 MOVE: managed
-CLEANUP: existing
-MOVE: managed
-CLEANUP: existing
+CLEANUP: initKeys
+CLEANUP: initValues
 CLEANUP: m
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+DECREF: m -> rc=0
+FREE #1: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 648 bytes (array cleanup)
+FREE #2: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #4: 136 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #5: 136 bytes (array cleanup)
+FREE #3: 768 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 968 bytes
-Freed:     968 bytes
+Allocated: 2304 bytes
+Freed:     2304 bytes
 Leaked:    0 bytes
-Moves:     7
+Moves:     5
 Increfs:   3
 Decrefs:   3
 Copies:    0
-Cleanups:  7
+Cleanups:  21
 ```
 
 <!-- test: string-keys-remove -->
@@ -571,49 +606,59 @@ end 'main'
 2
 ```
 ```stdout
-MOVE: managed
-ALLOC #1: 120 bytes (map buffer)
-ALLOC #2: 24 bytes (map buffer)
-MOVE: managed
-MOVE: managed
-ALLOC #3: 648 bytes (array grow)
+ALLOC #1: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #4: 136 bytes (array grow)
+ALLOC #2: 768 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #5: 136 bytes (array grow)
+ALLOC #3: 768 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-CLEANUP: k
-CLEANUP: k
-CLEANUP: k
-MOVE: result
-FREE #1: 120 bytes (map literal keys cleanup)
-FREE #2: 24 bytes (map literal values cleanup)
+MOVE: key
 MOVE: managed
-CLEANUP: existing
+MOVE: key
 MOVE: managed
+MOVE: key
+MOVE: managed
+CLEANUP: initKeys
+CLEANUP: initValues
+CLEANUP: key
 CLEANUP: m
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+CLEANUP: <array element>
+DECREF: m -> rc=0
+FREE #1: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 648 bytes (array cleanup)
+FREE #2: 768 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #4: 136 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #5: 136 bytes (array cleanup)
+FREE #3: 768 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 1064 bytes
-Freed:     1064 bytes
+Allocated: 2304 bytes
+Freed:     2304 bytes
 Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
 Copies:    0
-Cleanups:  8
+Cleanups:  22
 ```
 
 <!-- test: string-keys-early-return -->
@@ -643,35 +688,6 @@ end 'main'
 ```exitcode
 3
 ```
-```stdout
-MOVE: managed
-ALLOC #1: 40 bytes (map buffer)
-ALLOC #2: 8 bytes (map buffer)
-ALLOC #3: 648 bytes (array grow)
-ALLOC #4: 136 bytes (array grow)
-ALLOC #5: 136 bytes (array grow)
-MOVE: ks
-MOVE: vs
-MOVE: sts
-MOVE: result
-FREE #1: 40 bytes (map literal keys cleanup)
-FREE #2: 8 bytes (map literal values cleanup)
-MOVE: managed
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #3: 648 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #4: 136 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #5: 136 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 968 bytes
-Freed:     968 bytes
-Leaked:    0 bytes
-Moves:     6
 
 <!-- test: map-literal-with-enum-values -->
 ```maxon

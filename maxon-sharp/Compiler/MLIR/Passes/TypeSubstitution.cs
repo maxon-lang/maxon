@@ -78,7 +78,7 @@ internal class TypeSubstitution {
     // For Map<Key=String, Value=i64>, "KeyArray = Array with Key" resolves to StringArray,
     // "ValueArray = Array with Value" resolves to IntArray, etc.
     // Uses the full substitution map (includes conformance params like Element -> StringIntPair).
-    foreach (var (innerAliasName, aliasInfo) in module.TypeAliasSources) {
+    foreach (var (innerAliasName, aliasInfo) in module.TypeAliasSources.ToList()) {
       if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
       bool hasOurTypeParams = aliasInfo.TypeParams.Values.Any(t =>
         t is MlirTypeParameterType tp && map.ContainsKey(tp.ParameterName));
@@ -110,6 +110,7 @@ internal class TypeSubstitution {
 
   /// Searches TypeAliasSources for a concrete alias whose source type matches and whose
   /// type params match the resolved params exactly. Returns the type definition or null.
+  /// If no matching alias exists and the source type is known, auto-creates one.
   private static MlirType? FindConcreteAlias(
       MlirModule<MaxonOp> module,
       string sourceTypeName,
@@ -126,7 +127,31 @@ internal class TypeSubstitution {
       if (match && module.TypeDefs.TryGetValue(candidateName, out var candidateType))
         return candidateType;
     }
-    return null;
+
+    // Auto-create a concrete alias if the source type exists and all params are resolved
+    if (resolvedParams.Values.Any(t => t is MlirTypeParameterType)) return null;
+    if (!module.TypeDefs.TryGetValue(sourceTypeName, out var sourceType)) return null;
+    if (sourceType is not MlirStructType sourceStruct) return null;
+
+    var paramSuffix = string.Join("_", resolvedParams.Values.Select(t => t.Name));
+    var autoAliasName = $"__{sourceTypeName}_{paramSuffix}";
+    if (module.TypeDefs.TryGetValue(autoAliasName, out MlirType? value)) {
+      return value;
+    }
+
+    var concreteFields = new List<MlirStructField>();
+    foreach (var field in sourceStruct.Fields) {
+      var fieldType = resolvedParams.TryGetValue(field.Type.Name, out var concreteType)
+        ? concreteType
+        : field.Type;
+      concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
+    }
+    var newType = new MlirStructType(autoAliasName, concreteFields,
+      conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
+      typeParams: resolvedParams);
+    module.TypeDefs[autoAliasName] = newType;
+    module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
+    return newType;
   }
 
   // --- Queries ---
