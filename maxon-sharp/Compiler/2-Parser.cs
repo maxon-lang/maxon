@@ -3023,12 +3023,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
     _currentBlock!.AddOp(tryCallOp);
 
-    // '!' is syntactic-only (clone marker for struct results from arrays).
-    // The actual struct copy is handled by get()'s return path.
-    if (Check(TokenType.Bang)) {
-      Advance();
-    }
-
     // Check for 'otherwise' clause
     if (!Check(TokenType.Otherwise)) {
       // Propagation form: try func() - propagates error to caller

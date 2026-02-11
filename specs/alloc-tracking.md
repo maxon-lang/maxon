@@ -413,7 +413,7 @@ typealias StringArray = Array with String
 function main() returns int
   var arr = StringArray{}
   arr.push("hi")
-  var s = try arr.get(0)! otherwise "oops"
+  var s = try arr.get(0) otherwise "oops"
   print(s)
   return 0
 end 'main'
@@ -673,7 +673,7 @@ typealias StringArray = Array with String
 function main() returns int
   var arr = StringArray{}
   arr.push("hi")
-  var s = try arr.get(0)! otherwise "oops"
+  var s = try arr.get(0) otherwise "oops"
   print(s)
   return 0
 end 'main'

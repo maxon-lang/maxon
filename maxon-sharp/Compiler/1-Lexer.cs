@@ -94,10 +94,6 @@ public enum TokenType {
   Caret,
   LeftShift,
   RightShift,
-  DotDot,
-  DotDotEquals,
-  DotDotLess,
-  Bang,
   Tilde,
 
   // Formatting
@@ -145,10 +141,6 @@ public record Token(TokenType Type, string Value, int Line, int Column) {
     names[TokenType.Comma] = "','";
     names[TokenType.Colon] = "':'";
     names[TokenType.Dot] = "'.'";
-    names[TokenType.DotDot] = "'..'";
-    names[TokenType.DotDotEquals] = "'..='";
-    names[TokenType.DotDotLess] = "'..<'";
-    names[TokenType.Tilde] = "'~'";
     names[TokenType.Newline] = "newline";
     names[TokenType.Eof] = "end of file";
     return names;
@@ -225,6 +217,7 @@ public class Lexer(string source) {
     { "&", new(TokenType.Ampersand, OperatorCategory.Bitwise, "Bitwise AND operator. Performs bitwise AND operation.") },
     { "|", new(TokenType.Pipe, OperatorCategory.Bitwise, "Bitwise OR operator. Performs bitwise OR operation.") },
     { "^", new(TokenType.Caret, OperatorCategory.Bitwise, "Bitwise XOR operator. Performs bitwise exclusive OR operation.") },
+    { "~", new(TokenType.Tilde, OperatorCategory.Bitwise, "Bitwise NOT operator. Flips all bits of an integer value.") },
     { "==", new(TokenType.EqualsEquals, OperatorCategory.Comparison, "Equality operator. Returns true if operands are equal.") },
     { "!=", new(TokenType.NotEquals, OperatorCategory.Comparison, "Inequality operator. Returns true if operands are not equal.") },
     { ">=", new(TokenType.GreaterEquals, OperatorCategory.Comparison, "Greater than or equal operator. Returns true if left operand is greater than or equal to right operand.") },
@@ -333,18 +326,6 @@ public class Lexer(string source) {
 
     // Multi-character operators
     if (c == '.') {
-      if (Peek(1) == '.') {
-        if (Peek(2) == '=') {
-          Advance(); Advance(); Advance();
-          return new Token(TokenType.DotDotEquals, "..=", startLine, startColumn);
-        }
-        if (Peek(2) == '<') {
-          Advance(); Advance(); Advance();
-          return new Token(TokenType.DotDotLess, "..<", startLine, startColumn);
-        }
-        Advance(); Advance();
-        return new Token(TokenType.DotDot, "..", startLine, startColumn);
-      }
       Advance();
       return new Token(TokenType.Dot, ".", startLine, startColumn);
     }
@@ -358,13 +339,9 @@ public class Lexer(string source) {
       return new Token(TokenType.Equals, "=", startLine, startColumn);
     }
 
-    if (c == '!') {
-      if (Peek(1) == '=') {
-        Advance(); Advance();
-        return new Token(TokenType.NotEquals, "!=", startLine, startColumn);
-      }
-      Advance();
-      return new Token(TokenType.Bang, "!", startLine, startColumn);
+    if (c == '!' && Peek(1) == '=') {
+      Advance(); Advance();
+      return new Token(TokenType.NotEquals, "!=", startLine, startColumn);
     }
 
     if (c == '<') {
