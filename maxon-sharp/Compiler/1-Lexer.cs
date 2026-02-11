@@ -25,6 +25,9 @@ public enum TokenType {
   And,
   Or,
   Not,
+  Xor,
+  Shl,
+  Shr,
   // Type system keywords
   Uses,
   Is,
@@ -89,12 +92,6 @@ public enum TokenType {
   Comma,
   Colon,
   Dot,
-  Ampersand,
-  Pipe,
-  Caret,
-  LeftShift,
-  RightShift,
-  Tilde,
 
   // Formatting
   Newline,
@@ -114,7 +111,6 @@ public enum KeywordCategory {
 }
 
 public enum OperatorCategory {
-  Bitwise,
   Comparison,
   Arithmetic,
   Assignment,
@@ -176,9 +172,12 @@ public class Lexer(string source) {
     { "continue", new(TokenType.Continue, KeywordCategory.Control, "Skips the rest of the current loop iteration and continues with the next iteration.", false) },
     { "true", new(TokenType.True, KeywordCategory.Constant, "Boolean literal representing true.", false) },
     { "false", new(TokenType.False, KeywordCategory.Constant, "Boolean literal representing false.", false) },
-    { "and", new(TokenType.And, KeywordCategory.Logical, "Logical AND operator. Returns true if both operands are true.", false) },
-    { "or", new(TokenType.Or, KeywordCategory.Logical, "Logical OR operator. Returns true if either operand is true.", true) },
-    { "not", new(TokenType.Not, KeywordCategory.Logical, "Logical NOT operator. Negates a boolean value.", false) },
+    { "and", new(TokenType.And, KeywordCategory.Logical, "AND operator. Logical AND on bools, bitwise AND on integers.", false) },
+    { "or", new(TokenType.Or, KeywordCategory.Logical, "OR operator. Logical OR on bools, bitwise OR on integers.", true) },
+    { "not", new(TokenType.Not, KeywordCategory.Logical, "NOT operator. Logical NOT on bools, bitwise NOT on integers.", false) },
+    { "xor", new(TokenType.Xor, KeywordCategory.Logical, "XOR operator. Logical XOR on bools, bitwise XOR on integers.", false) },
+    { "shl", new(TokenType.Shl, KeywordCategory.Logical, "Shift left operator. Shifts integer bits to the left.", false) },
+    { "shr", new(TokenType.Shr, KeywordCategory.Logical, "Shift right operator. Shifts integer bits to the right.", false) },
     { "int", new(TokenType.Int, KeywordCategory.TypeKeyword, "Primitive integer type (64-bit signed).", false) },
     { "float", new(TokenType.Float, KeywordCategory.TypeKeyword, "Primitive floating-point type (64-bit double precision).", false) },
     { "bool", new(TokenType.Bool, KeywordCategory.TypeKeyword, "Primitive boolean type (true or false).", false) },
@@ -212,12 +211,6 @@ public class Lexer(string source) {
 
   // Operator map: { operator_text, TokenType, OperatorCategory, help_text }
   public static readonly Dictionary<string, OperatorInfo> OperatorMap = new() {
-    { "<<", new(TokenType.LeftShift, OperatorCategory.Bitwise, "Bitwise left shift operator. Shifts bits to the left.") },
-    { ">>", new(TokenType.RightShift, OperatorCategory.Bitwise, "Bitwise right shift operator. Shifts bits to the right.") },
-    { "&", new(TokenType.Ampersand, OperatorCategory.Bitwise, "Bitwise AND operator. Performs bitwise AND operation.") },
-    { "|", new(TokenType.Pipe, OperatorCategory.Bitwise, "Bitwise OR operator. Performs bitwise OR operation.") },
-    { "^", new(TokenType.Caret, OperatorCategory.Bitwise, "Bitwise XOR operator. Performs bitwise exclusive OR operation.") },
-    { "~", new(TokenType.Tilde, OperatorCategory.Bitwise, "Bitwise NOT operator. Flips all bits of an integer value.") },
     { "==", new(TokenType.EqualsEquals, OperatorCategory.Comparison, "Equality operator. Returns true if operands are equal.") },
     { "!=", new(TokenType.NotEquals, OperatorCategory.Comparison, "Inequality operator. Returns true if operands are not equal.") },
     { ">=", new(TokenType.GreaterEquals, OperatorCategory.Comparison, "Greater than or equal operator. Returns true if left operand is greater than or equal to right operand.") },
@@ -310,18 +303,6 @@ public class Lexer(string source) {
       case ':':
         Advance();
         return new Token(TokenType.Colon, ":", startLine, startColumn);
-      case '&':
-        Advance();
-        return new Token(TokenType.Ampersand, "&", startLine, startColumn);
-      case '|':
-        Advance();
-        return new Token(TokenType.Pipe, "|", startLine, startColumn);
-      case '^':
-        Advance();
-        return new Token(TokenType.Caret, "^", startLine, startColumn);
-      case '~':
-        Advance();
-        return new Token(TokenType.Tilde, "~", startLine, startColumn);
     }
 
     // Multi-character operators
@@ -345,10 +326,6 @@ public class Lexer(string source) {
     }
 
     if (c == '<') {
-      if (Peek(1) == '<') {
-        Advance(); Advance();
-        return new Token(TokenType.LeftShift, "<<", startLine, startColumn);
-      }
       if (Peek(1) == '=') {
         Advance(); Advance();
         return new Token(TokenType.LessEquals, "<=", startLine, startColumn);
@@ -358,10 +335,6 @@ public class Lexer(string source) {
     }
 
     if (c == '>') {
-      if (Peek(1) == '>') {
-        Advance(); Advance();
-        return new Token(TokenType.RightShift, ">>", startLine, startColumn);
-      }
       if (Peek(1) == '=') {
         Advance(); Advance();
         return new Token(TokenType.GreaterEquals, ">=", startLine, startColumn);

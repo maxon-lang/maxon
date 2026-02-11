@@ -66,7 +66,8 @@ Single-line comments only:
 ```
 and, as, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, ignore, in, int, interface, is, let, match,
-not, or, otherwise, return, static, then, throw, throws, true, try, type, typealias, var, while
+mod, not, or, otherwise, return, shl, shr, static, then, throw, throws, true, try, type,
+typealias, var, while, xor
 ```
 
 ### Literals
@@ -852,12 +853,14 @@ extern function ExitProcess(uExitCode int) returns int
 ### Operator Precedence (highest to lowest)
 
 1. **Postfix**: `.` (member access), `as` (cast), function call `()`
-2. **Unary**: `-` (negation), `not` (logical not)
+2. **Unary**: `-` (negation), `not` (logical/bitwise not)
 3. **Multiplicative**: `*` `/` `mod`
 4. **Additive**: `+` `-`
-5. **Comparison**: `==` `!=` `<` `>` `<=` `>=`
-6. **Logical AND**: `and`
-7. **Logical OR**: `or`
+5. **Shift**: `shl` `shr`
+6. **Comparison**: `==` `!=` `<` `>` `<=` `>=`
+7. **AND**: `and`
+8. **XOR**: `xor`
+9. **OR**: `or`
 
 ### Arithmetic Operators
 
@@ -883,20 +886,32 @@ extern function ExitProcess(uExitCode int) returns int
 | `<=` | Less than or equal | bool |
 | `>=` | Greater than or equal | bool |
 
-### Logical Operators
+### Logical / Bitwise Operators
+
+The keyword operators `and`, `or`, `xor`, and `not` are context-dependent: they perform logical operations on `bool` operands and bitwise operations on `int` operands.
+
+| Operator | On `bool` | On `int` | Example |
+|----------|-----------|----------|---------|
+| `and` | Logical AND | Bitwise AND | `a > 0 and b < 10` / `flags and 0xff` |
+| `or` | Logical OR | Bitwise OR | `x == 1 or x == 2` / `flags or 0x01` |
+| `xor` | Logical XOR | Bitwise XOR | `a xor b` / `value xor mask` |
+| `not` | Logical NOT (unary) | Bitwise NOT (unary) | `not done` / `not mask` |
+
+### Shift Operators
+
+Shift operators work on integers only.
 
 | Operator | Description | Example |
 |----------|-------------|---------|
-| `and` | Logical AND | `a > 0 and b < 10` |
-| `or` | Logical OR | `x == 1 or x == 2` |
-| `not` | Logical NOT | `not done` |
+| `shl` | Shift left | `1 shl 4` (result: 16) |
+| `shr` | Shift right | `256 shr 4` (result: 16) |
 
 ### Unary Operators
 
 | Operator | Description | Example |
 |----------|-------------|---------|
 | `-` | Negation | `-x` |
-| `not` | Logical NOT | `not condition` |
+| `not` | Logical NOT / Bitwise NOT | `not condition` / `not mask` |
 
 ### Parentheses
 Override precedence:

@@ -1811,11 +1811,11 @@ func.func @main() -> i64 {
 ```
 
 <!-- test: identity-or-zero -->
-`x | 0 = x` identity folding.
+`x or 0 = x` identity folding.
 ```maxon
 function main() returns int
   var x = 42
-  return x | 0
+  return x or 0
 end 'main'
 ```
 ```exitcode
@@ -1832,11 +1832,11 @@ func.func @main() -> i64 {
 ```
 
 <!-- test: identity-xor-zero -->
-`x ^ 0 = x` identity folding.
+`x xor 0 = x` identity folding.
 ```maxon
 function main() returns int
   var x = 42
-  return x ^ 0
+  return x xor 0
 end 'main'
 ```
 ```exitcode
@@ -1853,11 +1853,11 @@ func.func @main() -> i64 {
 ```
 
 <!-- test: identity-shift-left-zero -->
-`x << 0 = x` identity folding.
+`x shl 0 = x` identity folding.
 ```maxon
 function main() returns int
   var x = 42
-  return x << 0
+  return x shl 0
 end 'main'
 ```
 ```exitcode
@@ -1874,11 +1874,11 @@ func.func @main() -> i64 {
 ```
 
 <!-- test: identity-shift-right-zero -->
-`x >> 0 = x` identity folding.
+`x shr 0 = x` identity folding.
 ```maxon
 function main() returns int
   var x = 42
-  return x >> 0
+  return x shr 0
 end 'main'
 ```
 ```exitcode
@@ -1895,11 +1895,11 @@ func.func @main() -> i64 {
 ```
 
 <!-- test: absorbing-and-zero -->
-`x & 0 = 0` absorbing element.
+`x and 0 = 0` absorbing element.
 ```maxon
 function main() returns int
   var x = 42
-  return x & 0
+  return x and 0
 end 'main'
 ```
 ```exitcode
@@ -1916,11 +1916,11 @@ func.func @main() -> i64 {
 ```
 
 <!-- test: absorbing-shift-left-zero-lhs -->
-`0 << n = 0` absorbing element.
+`0 shl n = 0` absorbing element.
 ```maxon
 function main() returns int
   var n = 5
-  return 0 << n
+  return 0 shl n
 end 'main'
 ```
 ```exitcode

@@ -1,7 +1,7 @@
 ---
 feature: bitwise-operators
 status: implemented
-keywords: [bitwise, and, or, xor, shift, not, operators]
+keywords: [bitwise, and, or, xor, shift, not, shl, shr, operators]
 category: operators
 ---
 
@@ -9,63 +9,63 @@ category: operators
 
 ## Documentation
 
-Maxon provides bitwise operators for manipulating individual bits of integer values.
+Maxon provides bitwise operators for manipulating individual bits of integer values. The `and`, `or`, `xor`, and `not` keywords are context-dependent: they perform bitwise operations on integers and logical operations on booleans.
 
-### Bitwise AND (`&`)
+### Bitwise AND (`and`)
 
 Returns 1 for each bit position where both operands have 1:
 
 ```maxon
-var a = 12      // 1100 in binary
-var b = 10      // 1010 in binary
-var c = a & b   // 1000 = 8
+var a = 12       // 1100 in binary
+var b = 10       // 1010 in binary
+var c = a and b  // 1000 = 8
 ```
 
-### Bitwise OR (`|`)
+### Bitwise OR (`or`)
 
 Returns 1 for each bit position where either operand has 1:
 
 ```maxon
 var a = 12      // 1100 in binary
 var b = 10      // 1010 in binary
-var c = a | b   // 1110 = 14
+var c = a or b  // 1110 = 14
 ```
 
-### Bitwise XOR (`^`)
+### Bitwise XOR (`xor`)
 
 Returns 1 for each bit position where operands differ:
 
 ```maxon
-var a = 12      // 1100 in binary
-var b = 10      // 1010 in binary
-var c = a ^ b   // 0110 = 6
+var a = 12       // 1100 in binary
+var b = 10       // 1010 in binary
+var c = a xor b  // 0110 = 6
 ```
 
-### Bitwise NOT (`~`)
+### Bitwise NOT (`not`)
 
 Flips all bits of an integer value:
 
 ```maxon
-var a = 5       // ...0101 in binary
-var b = ~a      // ...1010 = -6
+var a = 5        // ...0101 in binary
+var b = not a    // ...1010 = -6
 ```
 
-### Left Shift (`<<`)
+### Left Shift (`shl`)
 
 Shifts bits left by the specified amount, filling with zeros:
 
 ```maxon
 var a = 1
-var b = a << 3  // 1000 = 8
+var b = a shl 3  // 1000 = 8
 ```
 
-### Right Shift (`>>`)
+### Right Shift (`shr`)
 
-Shifts bits right by the specified amount (logical shift, fills with zeros):
+Shifts bits right by the specified amount:
 
 ```maxon
 var a = 16
-var b = a >> 2  // 0100 = 4
+var b = a shr 2  // 0100 = 4
 ```
 
 ## Tests
@@ -75,7 +75,7 @@ var b = a >> 2  // 0100 = 4
 function main() returns int
   var a = 12
   var b = 10
-  return a & b
+  return a and b
 end 'main'
 ```
 ```exitcode
@@ -87,7 +87,7 @@ end 'main'
 function main() returns int
   var a = 12
   var b = 10
-  return a | b
+  return a or b
 end 'main'
 ```
 ```exitcode
@@ -99,7 +99,7 @@ end 'main'
 function main() returns int
   var a = 12
   var b = 10
-  return a ^ b
+  return a xor b
 end 'main'
 ```
 ```exitcode
@@ -110,7 +110,7 @@ end 'main'
 ```maxon
 function main() returns int
   var a = 1
-  return a << 3
+  return a shl 3
 end 'main'
 ```
 ```exitcode
@@ -121,7 +121,7 @@ end 'main'
 ```maxon
 function main() returns int
   var a = 16
-  return a >> 2
+  return a shr 2
 end 'main'
 ```
 ```exitcode
@@ -132,7 +132,7 @@ end 'main'
 ```maxon
 function main() returns int
   var a = 1
-  return a << 4 >> 2
+  return a shl 4 shr 2
 end 'main'
 ```
 ```exitcode
@@ -142,9 +142,9 @@ end 'main'
 <!-- test: bitwise-and-or-precedence -->
 ```maxon
 function main() returns int
-  // & has higher precedence than |
-  // 12 & 10 = 8, then 8 | 1 = 9
-  return 12 & 10 | 1
+  // and has higher precedence than or
+  // 12 and 10 = 8, then 8 or 1 = 9
+  return 12 and 10 or 1
 end 'main'
 ```
 ```exitcode
@@ -154,9 +154,9 @@ end 'main'
 <!-- test: bitwise-xor-precedence -->
 ```maxon
 function main() returns int
-  // & has higher precedence than ^
-  // 12 & 10 = 8, then 8 ^ 3 = 11
-  return 12 & 10 ^ 3
+  // and has higher precedence than xor
+  // 12 and 10 = 8, then 8 xor 3 = 11
+  return 12 and 10 xor 3
 end 'main'
 ```
 ```exitcode
@@ -167,8 +167,8 @@ end 'main'
 ```maxon
 function main() returns int
   // Shift has higher precedence than comparison
-  // 1 << 3 = 8, then 8 > 5 = true
-  if 1 << 3 > 5 'check'
+  // 1 shl 3 = 8, then 8 > 5 = true
+  if 1 shl 3 > 5 'check'
     return 1
   end 'check'
   return 0
@@ -181,8 +181,7 @@ end 'main'
 <!-- test: bitwise-with-logical -->
 ```maxon
 function main() returns int
-  // Logical operators have lower precedence than bitwise
-  var a = 5 & 3        // 1
+  var a = 5 and 3        // 1
   if a > 0 'check'
     return 1
   end 'check'
@@ -196,8 +195,8 @@ end 'main'
 <!-- test: bit-masking -->
 ```maxon
 function main() returns int
-  var flags = 5    // binary 101 (bit 0 and bit 2 set)
-  return flags & 4 // returns 4 (bit 2 is set)
+  var flags = 5         // binary 101 (bit 0 and bit 2 set)
+  return flags and 4    // returns 4 (bit 2 is set)
 end 'main'
 ```
 ```exitcode
@@ -208,8 +207,8 @@ end 'main'
 ```maxon
 function main() returns int
   var flags = 7        // binary 111
-  // Clear bit 1 using XOR
-  flags = flags ^ 2
+  // Clear bit 1 using xor
+  flags = flags xor 2
   return flags         // 5 (binary 101)
 end 'main'
 ```
@@ -222,7 +221,7 @@ end 'main'
 function main() returns int
   // Calculate 2^n using shift
   var n = 5
-  return 1 << n        // 32
+  return 1 shl n        // 32
 end 'main'
 ```
 ```exitcode
@@ -234,7 +233,7 @@ end 'main'
 function main() returns int
   // Divide by 4 using shift
   var value = 100
-  return value >> 2    // 25
+  return value shr 2    // 25
 end 'main'
 ```
 ```exitcode
@@ -246,7 +245,7 @@ end 'main'
 function main() returns int
   // Multiply by 8 using shift
   var value = 25
-  return value << 3    // 200
+  return value shl 3    // 200
 end 'main'
 ```
 ```exitcode
@@ -256,7 +255,7 @@ end 'main'
 <!-- test: bitwise-not-basic -->
 ```maxon
 function main() returns int
-  print("{~0}\n")
+  print("{not 0}\n")
   return 0
 end 'main'
 ```
@@ -271,7 +270,7 @@ end 'main'
 ```maxon
 function main() returns int
   var a = 5
-  print("{~a}\n")
+  print("{not a}\n")
   return 0
 end 'main'
 ```
@@ -286,7 +285,7 @@ end 'main'
 ```maxon
 function main() returns int
   var a = 42
-  return ~~a
+  return not not a
 end 'main'
 ```
 ```exitcode
@@ -297,8 +296,8 @@ end 'main'
 ```maxon
 function main() returns int
   var value = 255    // 0xFF
-  // Clear lower 4 bits: 255 & ~15 = 240
-  return value & ~15
+  // Clear lower 4 bits: 255 and not 15 = 240
+  return value and not 15
 end 'main'
 ```
 ```exitcode
@@ -307,7 +306,7 @@ end 'main'
 
 <!-- test: bitwise-not-const -->
 ```maxon
-let MASK = ~0xFF
+let MASK = not 0xFF
 
 function main() returns int
   print("{MASK}\n")

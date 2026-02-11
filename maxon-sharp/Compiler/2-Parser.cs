@@ -196,23 +196,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
     { TokenType.Or, (MaxonBinOperator.Or, 0) },
-    { TokenType.And, (MaxonBinOperator.And, 1) },
-    { TokenType.EqualsEquals, (MaxonBinOperator.Eq, 2) },
-    { TokenType.NotEquals, (MaxonBinOperator.Ne, 2) },
-    { TokenType.LessThan, (MaxonBinOperator.Lt, 2) },
-    { TokenType.GreaterThan, (MaxonBinOperator.Gt, 2) },
-    { TokenType.LessEquals, (MaxonBinOperator.Le, 2) },
-    { TokenType.GreaterEquals, (MaxonBinOperator.Ge, 2) },
-    { TokenType.Pipe, (MaxonBinOperator.BitOr, 3) },
-    { TokenType.Caret, (MaxonBinOperator.BitXor, 4) },
-    { TokenType.Ampersand, (MaxonBinOperator.BitAnd, 5) },
-    { TokenType.LeftShift, (MaxonBinOperator.Shl, 6) },
-    { TokenType.RightShift, (MaxonBinOperator.Shr, 6) },
-    { TokenType.Plus, (MaxonBinOperator.Add, 7) },
-    { TokenType.Minus, (MaxonBinOperator.Sub, 7) },
-    { TokenType.Star, (MaxonBinOperator.Mul, 8) },
-    { TokenType.Slash, (MaxonBinOperator.Div, 8) },
-    { TokenType.Mod, (MaxonBinOperator.Mod, 8) },
+    { TokenType.Xor, (MaxonBinOperator.BitXor, 1) },
+    { TokenType.And, (MaxonBinOperator.And, 2) },
+    { TokenType.EqualsEquals, (MaxonBinOperator.Eq, 3) },
+    { TokenType.NotEquals, (MaxonBinOperator.Ne, 3) },
+    { TokenType.LessThan, (MaxonBinOperator.Lt, 3) },
+    { TokenType.GreaterThan, (MaxonBinOperator.Gt, 3) },
+    { TokenType.LessEquals, (MaxonBinOperator.Le, 3) },
+    { TokenType.GreaterEquals, (MaxonBinOperator.Ge, 3) },
+    { TokenType.Shl, (MaxonBinOperator.Shl, 4) },
+    { TokenType.Shr, (MaxonBinOperator.Shr, 4) },
+    { TokenType.Plus, (MaxonBinOperator.Add, 5) },
+    { TokenType.Minus, (MaxonBinOperator.Sub, 5) },
+    { TokenType.Star, (MaxonBinOperator.Mul, 6) },
+    { TokenType.Slash, (MaxonBinOperator.Div, 6) },
+    { TokenType.Mod, (MaxonBinOperator.Mod, 6) },
   };
 
   private static readonly Dictionary<string, Func<MaxonValue, (MaxonOp Op, MaxonValue Result)>> BuiltinOps1 = new() {
@@ -1680,40 +1678,70 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // ============================================================================
 
   private object EvalConstExpr(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    return EvalConstLogicalOr(decls, evaluated, evaluating);
+    return EvalConstOr(decls, evaluated, evaluating);
   }
 
-  private object EvalConstLogicalOr(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstLogicalAnd(decls, evaluated, evaluating);
+  private object EvalConstOr(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstXor(decls, evaluated, evaluating);
     while (Check(TokenType.Or)) {
       Advance();
-      var rhs = EvalConstLogicalAnd(decls, evaluated, evaluating);
-      lhs = (bool)lhs || (bool)rhs;
+      var rhs = EvalConstXor(decls, evaluated, evaluating);
+      if (lhs is bool lb && rhs is bool rb) lhs = lb || rb;
+      else if (lhs is long ll && rhs is long rl) lhs = ll | rl;
+      else throw new InvalidOperationException($"Cannot apply 'or' to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
     }
     return lhs;
   }
 
-  private object EvalConstLogicalAnd(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstXor(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstAnd(decls, evaluated, evaluating);
+    while (Check(TokenType.Xor)) {
+      Advance();
+      var rhs = EvalConstAnd(decls, evaluated, evaluating);
+      if (lhs is bool lb && rhs is bool rb) lhs = lb ^ rb;
+      else if (lhs is long ll && rhs is long rl) lhs = ll ^ rl;
+      else throw new InvalidOperationException($"Cannot apply 'xor' to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
+    }
+    return lhs;
+  }
+
+  private object EvalConstAnd(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstComparison(decls, evaluated, evaluating);
     while (Check(TokenType.And)) {
       Advance();
       var rhs = EvalConstComparison(decls, evaluated, evaluating);
-      lhs = (bool)lhs && (bool)rhs;
+      if (lhs is bool lb && rhs is bool rb) lhs = lb && rb;
+      else if (lhs is long ll && rhs is long rl) lhs = ll & rl;
+      else throw new InvalidOperationException($"Cannot apply 'and' to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
     }
     return lhs;
   }
 
   private object EvalConstComparison(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstAddSub(decls, evaluated, evaluating);
+    var lhs = EvalConstShift(decls, evaluated, evaluating);
 
     if (Check(TokenType.EqualsEquals) || Check(TokenType.NotEquals) ||
         Check(TokenType.LessThan) || Check(TokenType.GreaterThan) ||
         Check(TokenType.LessEquals) || Check(TokenType.GreaterEquals)) {
       var opType = Advance().Type;
-      var rhs = EvalConstAddSub(decls, evaluated, evaluating);
+      var rhs = EvalConstShift(decls, evaluated, evaluating);
       return EvalConstComparisonOp(lhs, rhs, opType);
     }
 
+    return lhs;
+  }
+
+  private object EvalConstShift(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+    var lhs = EvalConstAddSub(decls, evaluated, evaluating);
+    while (Check(TokenType.Shl) || Check(TokenType.Shr)) {
+      var op = Advance().Type;
+      var rhs = EvalConstAddSub(decls, evaluated, evaluating);
+      if (lhs is long ll && rhs is long rl) {
+        lhs = op == TokenType.Shl ? ll << (int)rl : ll >> (int)rl;
+      } else {
+        throw new InvalidOperationException($"Cannot apply shift to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
+      }
+    }
     return lhs;
   }
 
@@ -1792,13 +1820,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       Advance();
       var val = EvalConstPrimary(decls, evaluated, evaluating);
       if (val is bool b) return !b;
-      throw new InvalidOperationException($"Cannot apply 'not' to {val?.GetType().Name}");
-    }
-    if (Check(TokenType.Tilde)) {
-      Advance();
-      var val = EvalConstPrimary(decls, evaluated, evaluating);
       if (val is long l) return ~l;
-      throw new InvalidOperationException($"Cannot apply '~' to {val?.GetType().Name}");
+      throw new InvalidOperationException($"Cannot apply 'not' to {val?.GetType().Name}");
     }
     return EvalConstPrimary(decls, evaluated, evaluating);
   }
@@ -5314,9 +5337,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       MaxonValueKind kind;
       MaxonValue promotedLhs, promotedRhs;
+      var resolvedOp = entry.Op;
 
-      if (entry.Op is MaxonBinOperator.And or MaxonBinOperator.Or) {
-        kind = MaxonValueKind.Bool;
+      if (entry.Op is MaxonBinOperator.And or MaxonBinOperator.Or or MaxonBinOperator.BitXor) {
+        var lhsKind = DetermineValueKind(lhsVal);
+        var rhsKind = DetermineValueKind(rhsVal);
+        if (lhsKind == MaxonValueKind.Bool && rhsKind == MaxonValueKind.Bool) {
+          kind = MaxonValueKind.Bool;
+        } else if (lhsKind == MaxonValueKind.Integer && rhsKind == MaxonValueKind.Integer) {
+          kind = MaxonValueKind.Integer;
+          resolvedOp = entry.Op switch {
+            MaxonBinOperator.And => MaxonBinOperator.BitAnd,
+            MaxonBinOperator.Or => MaxonBinOperator.BitOr,
+            MaxonBinOperator.BitXor => MaxonBinOperator.BitXor,
+            _ => entry.Op
+          };
+        } else {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Operator '{opToken.Value}' requires both operands to be the same type (both bool or both int)",
+            opToken.Line, opToken.Column);
+        }
         promotedLhs = lhsVal;
         promotedRhs = rhsVal;
       } else {
@@ -5352,7 +5392,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
       }
 
-      var binOp = new MaxonBinOp(entry.Op, promotedLhs, promotedRhs, kind);
+      var binOp = new MaxonBinOp(resolvedOp, promotedLhs, promotedRhs, kind);
       _currentBlock!.AddOp(binOp);
       lhs = new ExprResult.Direct(binOp.Result);
     }
@@ -5464,27 +5504,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var token = Advance(); // consume 'not'
       var inner = ParsePrimary();
       var innerVal = ResolveExprValue(inner);
-      // Implement 'not' as XOR with true (1)
-      var trueOp = new MaxonLiteralOp(true);
-      _currentBlock!.AddOp(trueOp);
-      var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, trueOp.Result, MaxonValueKind.Bool);
-      _currentBlock!.AddOp(xorOp);
-      return new ExprResult.Direct(xorOp.Result);
-    }
-
-    if (Check(TokenType.Tilde)) {
-      var token = Advance(); // consume '~'
-      var inner = ParsePrimary();
-      var innerVal = ResolveExprValue(inner);
       var kind = DetermineValueKind(innerVal);
-      if (kind != MaxonValueKind.Integer)
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          "Bitwise NOT requires an integer operand", token.Line, token.Column);
-      var allOnesOp = new MaxonLiteralOp(-1L);
-      _currentBlock!.AddOp(allOnesOp);
-      var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, allOnesOp.Result, kind);
-      _currentBlock!.AddOp(xorOp);
-      return new ExprResult.Direct(xorOp.Result);
+      if (kind == MaxonValueKind.Bool) {
+        var trueOp = new MaxonLiteralOp(true);
+        _currentBlock!.AddOp(trueOp);
+        var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, trueOp.Result, MaxonValueKind.Bool);
+        _currentBlock!.AddOp(xorOp);
+        return new ExprResult.Direct(xorOp.Result);
+      }
+      if (kind == MaxonValueKind.Integer) {
+        var allOnesOp = new MaxonLiteralOp(-1L);
+        _currentBlock!.AddOp(allOnesOp);
+        var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, allOnesOp.Result, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(xorOp);
+        return new ExprResult.Direct(xorOp.Result);
+      }
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        "'not' requires a bool or int operand", token.Line, token.Column);
     }
 
     if (Check(TokenType.Self)) {

@@ -40,8 +40,14 @@
 | Unary | `-` `not` |
 | Multiplicative | `*` `/` `mod` |
 | Additive | `+` `-` |
+| Shift | `shl` `shr` |
 | Comparison | `==` `!=` `<` `>` `<=` `>=` |
-| Logical | `and` `or` |
+| AND | `and` |
+| XOR | `xor` |
+| Lowest | `or` |
+
+`and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
+`shl`, `shr` work on integers only.
 
 ## Variables
 
