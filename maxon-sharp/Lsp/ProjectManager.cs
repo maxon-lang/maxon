@@ -6,7 +6,6 @@ namespace MaxonSharp.Lsp;
 
 public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDiagnostics) {
   private readonly ConcurrentDictionary<string, Project> _projects = new();
-  private readonly StdlibCache _stdlibCache = new();
   private readonly Action<DocumentUri, Container<Diagnostic>> _publishDiagnostics = publishDiagnostics;
 
   public Project GetOrCreateProject(string filePath) {
@@ -20,7 +19,7 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
     if (projectRoot != null) {
       var normalizedRoot = Project.NormalizePath(projectRoot);
       return _projects.GetOrAdd(normalizedRoot, _ => {
-        var project = new Project(projectRoot, false, _stdlibCache, _publishDiagnostics);
+        var project = new Project(projectRoot, false, _publishDiagnostics);
         project.LoadFilesFromDisk();
         return project;
       });
@@ -29,7 +28,7 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
     // No build.maxon found — single-file project
     var normalizedFile = Project.NormalizePath(filePath);
     return _projects.GetOrAdd(normalizedFile, _ =>
-      new Project(filePath, true, _stdlibCache, _publishDiagnostics));
+      new Project(filePath, true, _publishDiagnostics));
   }
 
   public Project? FindProjectForFile(string filePath) {

@@ -41,14 +41,8 @@ public class Compiler {
       Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
       // Stage 1-2: Lex and parse all source files into MLIR modules
-      // Parse stdlib first as a seed module, then reset IDs for user code
-      var module = new MlirModule<MaxonOp>();
-
-      var stdlibSources = StdlibLoader.LoadStdlibModules();
-      CompileSources(module, stdlibSources, true);
-
-      foreach (var func in module.Functions)
-        func.IsStdlib = true;
+      // Use cached stdlib module, then parse user code into a clone
+      var module = StdlibLoader.GetStdlibModule();
 
       // Reset IDs so user code starts at %0
       _context.ResetIds();
@@ -88,7 +82,6 @@ public class Compiler {
     var errors = new List<CompileError>();
 
     try {
-      var module = new MlirModule<MaxonOp>();
       var stdlibSources = StdlibLoader.LoadStdlibModules();
 
       // If checking a stdlib file, replace its content in the stdlib sources
@@ -97,12 +90,13 @@ public class Compiler {
         s => Path.GetFullPath(s.Path) == normalizedPath);
 
       if (stdlibIndex >= 0) {
-        stdlibSources[stdlibIndex] = new SourceFile(filePath, content);
-        CompileSources(module, stdlibSources, true);
+        // Stdlib file changed - must re-parse stdlib from scratch
+        var module = new MlirModule<MaxonOp>();
+        var modifiedSources = (SourceFile[])stdlibSources.Clone();
+        modifiedSources[stdlibIndex] = new SourceFile(filePath, content);
+        CompileSources(module, modifiedSources, true);
       } else {
-        CompileSources(module, stdlibSources, true);
-        foreach (var func in module.Functions)
-          func.IsStdlib = true;
+        var module = StdlibLoader.GetStdlibModule();
         context.ResetIds();
         CompileSources(module, [new SourceFile(filePath, content)], false);
       }
@@ -196,6 +190,32 @@ public class Compiler {
 }
 
 public static class StdlibLoader {
+  private static SourceFile[]? _cachedSources;
+  private static MlirModule<MaxonOp>? _cachedStdlibModule;
+  private static readonly object _stdlibLock = new();
+
+  /// Returns a cached parsed stdlib module clone ready for user code compilation.
+  /// The clone has all functions marked IsStdlib=true.
+  public static MlirModule<MaxonOp> GetStdlibModule() {
+    if (_cachedStdlibModule != null)
+      return _cachedStdlibModule.Clone();
+
+    lock (_stdlibLock) {
+      if (_cachedStdlibModule != null)
+        return _cachedStdlibModule.Clone();
+
+      var context = new MlirContext();
+      using var _ = context.PushScope();
+      var module = new MlirModule<MaxonOp>();
+      var sources = LoadStdlibModules();
+      Compiler.CompileSources(module, sources, true);
+      foreach (var func in module.Functions)
+        func.IsStdlib = true;
+      _cachedStdlibModule = module;
+      return module.Clone();
+    }
+  }
+
   public static string? FindStdlibPath() {
     var exeDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
     Logger.Debug(LogCategory.Compiler, $"StdlibLoader: exeDir={exeDir}");
@@ -220,6 +240,8 @@ public static class StdlibLoader {
   }
 
   public static SourceFile[] LoadStdlibModules() {
+    if (_cachedSources != null) return _cachedSources;
+
     var stdlibPath = FindStdlibPath();
     if (stdlibPath == null) return [];
 
@@ -236,7 +258,8 @@ public static class StdlibLoader {
     var sources = new List<SourceFile>();
     foreach (var filePath in files)
       sources.Add(new SourceFile(filePath, File.ReadAllText(filePath)));
-    return [.. sources];
+    _cachedSources = [.. sources];
+    return _cachedSources;
   }
 
   public static SourceFile[] PrependStdlib(SourceFile[] stdlibSources, SourceFile[] userSources) {

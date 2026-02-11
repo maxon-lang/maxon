@@ -10,7 +10,6 @@ namespace MaxonSharp.Lsp;
 public class Project(
   string rootPath,
   bool isSingleFile,
-  StdlibCache stdlibCache,
   Action<DocumentUri, Container<Diagnostic>> publishDiagnostics
   ) {
   public string RootPath { get; } = rootPath;
@@ -23,7 +22,6 @@ public class Project(
   private CancellationTokenSource? _debounceCts;
   private readonly object _debounceLock = new();
 
-  private readonly StdlibCache _stdlibCache = stdlibCache;
   private readonly Action<DocumentUri, Container<Diagnostic>> _publishDiagnostics = publishDiagnostics;
   private readonly bool _isStdlibProject = IsUnderStdlib(rootPath);
 
@@ -120,7 +118,7 @@ public class Project(
       // just fall through to publish empty diagnostics
     } else {
       try {
-        var module = _stdlibCache.CreateModuleWithStdlib();
+        var module = StdlibLoader.GetStdlibModule();
         context.ResetIds();
         Compiler.Compiler.CompileSources(module, sources, false);
 
