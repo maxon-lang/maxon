@@ -572,13 +572,16 @@ public class MaxonEnumTagOp(MaxonValue enumValue, string enumTypeName) : MaxonOp
 }
 
 // Extracts a payload value at a given index from an associated-value enum
-public class MaxonEnumPayloadOp(MaxonValue enumValue, string enumTypeName, int payloadIndex, MaxonValueKind resultKind) : MaxonOp {
+public class MaxonEnumPayloadOp(MaxonValue enumValue, string enumTypeName, int payloadIndex, MaxonValueKind resultKind, string? resultStructTypeName = null) : MaxonOp {
   public override string Mnemonic => $"maxon.enum_payload @{EnumTypeName}[{PayloadIndex}]";
   public MaxonValue EnumValue { get; } = enumValue;
   public string EnumTypeName { get; } = enumTypeName;
   public int PayloadIndex { get; } = payloadIndex;
   public MaxonValueKind ResultKind { get; } = resultKind;
-  public MaxonValue Result { get; } = resultKind.CreateValue();
+  public string? ResultStructTypeName { get; } = resultStructTypeName;
+  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
+    ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!)
+    : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }

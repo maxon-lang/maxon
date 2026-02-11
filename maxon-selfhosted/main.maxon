@@ -1,0 +1,46 @@
+// Self-hosted Maxon compiler entry point.
+// Compiles a Maxon source file to a Windows PE64 executable.
+
+typealias StringArray = Array with String
+typealias ByteArray = Array with byte
+
+function main() returns int
+    let args = CommandLine.args()
+    if args.count() < 1 'noArgs'
+        print("Usage: maxonc <input.maxon> [output.exe]")
+        return 1
+    end 'noArgs'
+
+    let inputPath = try args.get(0) otherwise ""
+
+    // Default output path: replace .maxon with .exe, or use second arg
+    var outputPath = "output.exe"
+    if args.count() >= 2 'hasOutput'
+        outputPath = try args.get(1) otherwise "output.exe"
+    end 'hasOutput'
+
+    // Read source file as bytes for the lexer
+    let sourceBytes = try File.readBinary(inputPath) otherwise 'readErr'
+        print("Error: could not read file '{inputPath}'")
+        return 1
+    end 'readErr'
+
+    // Lexer: bytes -> tokens
+    let tokens = tokenize(sourceBytes)
+
+    // Parser: tokens -> Maxon dialect ops (flat array)
+    let maxonOps = parse(tokens)
+
+    // Lowering: Maxon ops -> Standard ops -> X86 ops
+    let stdOps = lowerMaxonOpsToStd(maxonOps)
+    let x86Ops = lowerStdOpsToX86(stdOps)
+
+    // Emitter: X86 ops -> machine code bytes
+    let codeResult = emit(x86Ops)
+
+    // PE writer: code bytes -> .exe file
+    writePe(outputPath, codeResult: codeResult)
+
+    print("Compiled '{inputPath}' -> '{outputPath}'")
+    return 0
+end 'main'

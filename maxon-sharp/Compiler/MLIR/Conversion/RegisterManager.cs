@@ -66,7 +66,8 @@ public class RegisterManager {
     // 1. Try the next sequential slot (preserves existing test output)
     if (_nextFreshIndex < GprPool.Length) {
       var candidate = GprPool[_nextFreshIndex];
-      if (!_registerContents.ContainsKey(candidate)) {
+      if (!_registerContents.ContainsKey(candidate)
+          && candidate != protect1 && candidate != protect2) {
         _nextFreshIndex++;
         Assign(candidate, value);
         return candidate;
@@ -75,7 +76,8 @@ public class RegisterManager {
 
     // 2. Find any free register in pool order
     foreach (var reg in GprPool) {
-      if (!_registerContents.ContainsKey(reg)) {
+      if (!_registerContents.ContainsKey(reg)
+          && reg != protect1 && reg != protect2) {
         Assign(reg, value);
         return reg;
       }

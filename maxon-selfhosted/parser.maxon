@@ -1,0 +1,143 @@
+// Recursive descent parser.
+// Consumes tokens and emits Maxon dialect ops (no separate AST).
+// Returns a flat array of ops for the main function body.
+
+typealias TokenArray = Array with Token
+typealias MaxonOpArray = Array with MaxonOp
+
+export function parse(tokens TokenArray) returns MaxonOpArray
+    var pos = 0
+
+    pos = skipNewlines(tokens, startPos: pos)
+
+    while pos < tokens.count() 'parseLoop'
+        let token = tokenAt(tokens, pos: pos)
+        let kind = tokenKindTag(token.kind)
+        if kind == 11 'isEof'
+            break
+        end 'isEof'
+        if kind == 0 'isFunction'
+            // Parse this function and return its ops
+            return parseFunction(tokens, startPos: pos)
+        end 'isFunction' else 'notFunction'
+            pos = pos + 1
+        end 'notFunction'
+        pos = skipNewlines(tokens, startPos: pos)
+    end 'parseLoop'
+
+    var empty = MaxonOpArray{}
+    return empty
+end 'parse'
+
+// --- Token kind to integer tag ---
+// kwFunction=0, kwReturns=1, kwReturn=2, kwEnd=3, kwInt=4,
+// intLiteral=5, stringLiteral=6, identifier=7, leftParen=8,
+// rightParen=9, newline=10, eof=11
+
+function tokenKindTag(kind TokenKind) returns int
+    match kind 'tag'
+        TokenKind.kwFunction then return 0
+        TokenKind.kwReturns then return 1
+        TokenKind.kwReturn then return 2
+        TokenKind.kwEnd then return 3
+        TokenKind.kwInt then return 4
+        TokenKind.intLiteral then return 5
+        TokenKind.stringLiteral then return 6
+        TokenKind.identifier then return 7
+        TokenKind.leftParen then return 8
+        TokenKind.rightParen then return 9
+        TokenKind.newline then return 10
+        TokenKind.eof then return 11
+    end 'tag'
+    return 11
+end 'tokenKindTag'
+
+// --- Function parsing ---
+// Returns the ops array directly (flat, no Module/Function/Block wrapper)
+
+function parseFunction(tokens TokenArray, startPos int) returns MaxonOpArray
+    var pos = startPos
+    pos = pos + 1  // skip 'function'
+
+    // Function name
+    let nameToken = tokenAt(tokens, pos: pos)
+    pos = pos + 1
+
+    // Expect '(' ')'
+    pos = pos + 1  // skip '('
+    pos = pos + 1  // skip ')'
+
+    // Parse 'returns' type
+    let nextToken = tokenAt(tokens, pos: pos)
+    let nextKind = tokenKindTag(nextToken.kind)
+    if nextKind == 1 'hasReturns'
+        pos = pos + 1  // skip 'returns'
+        pos = pos + 1  // skip type name
+    end 'hasReturns'
+
+    // Skip newlines
+    pos = skipNewlines(tokens, startPos: pos)
+
+    // Parse body statements into ops
+    var ops = MaxonOpArray{}
+    resetValueIds()
+
+    while pos < tokens.count() 'body'
+        let stmtToken = tokenAt(tokens, pos: pos)
+        let stmtKind = tokenKindTag(stmtToken.kind)
+        if stmtKind == 3 'isEnd'
+            break
+        end 'isEnd'
+        if stmtKind == 2 'isReturn'
+            // Inline return statement parsing
+            pos = pos + 1  // skip 'return'
+            let exprToken = tokenAt(tokens, pos: pos)
+            let exprKind = tokenKindTag(exprToken.kind)
+            if exprKind == 5 'isIntLiteral'
+                let value = parseInt(exprToken.value)
+                let id = nextValueId()
+                ops.push(MaxonOp.literal(id, value: value))
+                ops.push(MaxonOp.returnOp(id))
+                pos = pos + 1
+            end 'isIntLiteral' else 'notIntLiteral'
+                pos = pos + 1
+            end 'notIntLiteral'
+        end 'isReturn' else 'notReturn'
+            pos = pos + 1
+        end 'notReturn'
+        pos = skipNewlines(tokens, startPos: pos)
+    end 'body'
+
+    return ops
+end 'parseFunction'
+
+// --- Helpers ---
+
+function skipNewlines(tokens TokenArray, startPos int) returns int
+    var pos = startPos
+    while pos < tokens.count() 'skip'
+        let token = tokenAt(tokens, pos: pos)
+        let kind = tokenKindTag(token.kind)
+        if kind == 10 'isNewline'
+            pos = pos + 1
+        end 'isNewline' else 'notNewline'
+            return pos
+        end 'notNewline'
+    end 'skip'
+    return pos
+end 'skipNewlines'
+
+function tokenAt(tokens TokenArray, pos int) returns Token
+    return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: "", line: 0, column: 0}
+end 'tokenAt'
+
+function parseInt(s String) returns int
+    var result = 0
+    for ch in s 'digits'
+        let b = try ch.asciiValue() otherwise 0
+        if b >= 48 and b <= 57 'digit'
+            result = result * 10 + (b - 48)
+        end 'digit'
+    end 'digits'
+    return result
+end 'parseInt'

@@ -1,0 +1,361 @@
+// PE64 file writer for Windows executables.
+// Produces a minimal PE with .text and .idata sections.
+
+// ByteBuffer wraps __ManagedMemory for efficient byte-level building.
+// All write operations are methods to ensure self-mutation propagates.
+
+typealias ByteArray = Array with byte
+
+export type ByteBuffer
+    var managed __ManagedMemory
+    var len int
+
+    static function create(capacity int) returns Self
+        return {managed: __managed_memory_create(capacity, 1), len: 0}
+    end 'create'
+
+    export function push(value int)
+        if len >= __managed_memory_capacity(managed) 'grow'
+            var newCap = __managed_memory_capacity(managed) * 2
+            if newCap < 16 'min'
+                newCap = 16
+            end 'min'
+            __managed_memory_grow(managed, newCap)
+        end 'grow'
+        __managed_memory_set_byte(managed, len, value)
+        len = len + 1
+        __managed_memory_set_length(managed, len)
+    end 'push'
+
+    export function getByte(index int) returns int
+        return __managed_memory_byte_at(managed, index)
+    end 'getByte'
+
+    export function setByte(index int, value int)
+        __managed_memory_set_byte(managed, index, value)
+    end 'setByte'
+
+    export function count() returns int
+        return len
+    end 'count'
+
+    export function reserve(capacity int)
+        if capacity > __managed_memory_capacity(managed) 'grow'
+            __managed_memory_grow(managed, capacity)
+        end 'grow'
+    end 'reserve'
+
+    export function toByteArray() returns ByteArray
+        let sliced = __managed_memory_slice(managed, 0, len)
+        return {managed: sliced, iterIndex: 0}
+    end 'toByteArray'
+
+    export function writeWord(value int)
+        let b0 = value and 0xFF
+        let b1 = (value shr 8) and 0xFF
+        push(b0)
+        push(b1)
+    end 'writeWord'
+
+    export function writeDword(value int)
+        let b0 = value and 0xFF
+        let b1 = (value shr 8) and 0xFF
+        let b2 = (value shr 16) and 0xFF
+        let b3 = (value shr 24) and 0xFF
+        push(b0)
+        push(b1)
+        push(b2)
+        push(b3)
+    end 'writeDword'
+
+    export function writeQword(value int)
+        let b0 = value and 0xFF
+        let b1 = (value shr 8) and 0xFF
+        let b2 = (value shr 16) and 0xFF
+        let b3 = (value shr 24) and 0xFF
+        let b4 = (value shr 32) and 0xFF
+        let b5 = (value shr 40) and 0xFF
+        let b6 = (value shr 48) and 0xFF
+        let b7 = (value shr 56) and 0xFF
+        push(b0)
+        push(b1)
+        push(b2)
+        push(b3)
+        push(b4)
+        push(b5)
+        push(b6)
+        push(b7)
+    end 'writeQword'
+
+    export function writeZeros(n int)
+        var i = 0
+        while i < n 'zeros'
+            push(0)
+            i = i + 1
+        end 'zeros'
+    end 'writeZeros'
+
+    export function writeAscii(text String)
+        for ch in text 'chars'
+            let b = try ch.asciiValue() otherwise 0
+            push(b)
+        end 'chars'
+        push(0)
+    end 'writeAscii'
+
+    export function padTo(size int)
+        while len < size 'pad'
+            push(0)
+        end 'pad'
+    end 'padTo'
+
+    export function appendFrom(source ByteBuffer)
+        var i = 0
+        while i < source.count() 'copy'
+            push(source.getByte(i))
+            i = i + 1
+        end 'copy'
+    end 'appendFrom'
+
+    export function patchDword(offset int, value int)
+        let b0 = value and 0xFF
+        let b1 = (value shr 8) and 0xFF
+        let b2 = (value shr 16) and 0xFF
+        let b3 = (value shr 24) and 0xFF
+        setByte(offset, value: b0)
+        setByte(offset + 1, value: b1)
+        setByte(offset + 2, value: b2)
+        setByte(offset + 3, value: b3)
+    end 'patchDword'
+end 'ByteBuffer'
+
+let FILE_ALIGNMENT = 512
+let SECTION_ALIGNMENT = 4096
+
+export function alignUp(value int, alignment int) returns int
+    return (value + alignment - 1) and not (alignment - 1)
+end 'alignUp'
+
+// --- Import section builder ---
+
+type ImportSection
+    export var data ByteBuffer
+    export var iatRva int
+    export var importDirRva int
+    export var importDirSize int
+end 'ImportSection'
+
+function buildImportSection(idataRva int) returns ImportSection
+    var data = ByteBuffer.create(128)
+
+    let iatOffset = 0
+    let iltOffset = 16
+    let importDirOffset = 32
+    let hintNameOffset = 72
+    let dllNameOffset = 86
+
+    // IAT entry: points to hint/name table
+    data.writeQword(idataRva + hintNameOffset)
+    // IAT null terminator
+    data.writeQword(0)
+
+    // ILT entry: same as IAT
+    data.writeQword(idataRva + hintNameOffset)
+    // ILT null terminator
+    data.writeQword(0)
+
+    // Import Directory entry
+    data.writeDword(idataRva + iltOffset)       // OriginalFirstThunk (ILT RVA)
+    data.writeDword(0)                           // TimeDateStamp
+    data.writeDword(0)                           // ForwarderChain
+    data.writeDword(idataRva + dllNameOffset)   // Name RVA
+    data.writeDword(idataRva + iatOffset)       // FirstThunk (IAT RVA)
+
+    // Import Directory null terminator
+    data.writeZeros(20)
+
+    // Hint/Name table: hint (2 bytes) + "ExitProcess\0"
+    data.writeWord(0)
+    data.writeAscii("ExitProcess")
+
+    // DLL name: "kernel32.dll\0"
+    data.writeAscii("kernel32.dll")
+
+    return {
+        data: data,
+        iatRva: idataRva + iatOffset,
+        importDirRva: idataRva + importDirOffset,
+        importDirSize: 20
+    }
+end 'buildImportSection'
+
+// --- Main PE writer ---
+
+export type CodeResult
+    export var code ByteBuffer
+    export var mainCallFixupOffset int
+    export var exitProcessFixupOffset int
+end 'CodeResult'
+
+export function writePe(outputPath String, codeResult CodeResult)
+    var pe = ByteBuffer.create(4096)
+
+    var code = codeResult.code
+    let codeSize = code.count()
+    let numSections = 2
+
+    // Header sizes
+    let headersSize = 64 + 4 + 20 + 240 + (40 * numSections)
+    let headersAligned = alignUp(headersSize, alignment: FILE_ALIGNMENT)
+
+    // .text section
+    let codeSizeAligned = alignUp(codeSize, alignment: FILE_ALIGNMENT)
+    let codeSizeVirtual = alignUp(codeSize, alignment: SECTION_ALIGNMENT)
+    let textRva = SECTION_ALIGNMENT
+
+    // .idata section
+    let idataRva = textRva + codeSizeVirtual
+    let idata = buildImportSection(idataRva)
+    let idataSize = idata.data.count()
+    let idataSizeAligned = alignUp(idataSize, alignment: FILE_ALIGNMENT)
+    let idataSizeVirtual = alignUp(idataSize, alignment: SECTION_ALIGNMENT)
+
+    let imageSize = idataRva + idataSizeVirtual
+
+    // Patch ExitProcess IAT RIP-relative reference in code
+    let ripAtFixup = textRva + codeResult.exitProcessFixupOffset + 4
+    let iatRel = idataRva - ripAtFixup
+    code.patchDword(codeResult.exitProcessFixupOffset, value: iatRel)
+
+    // IAT directory size: 1 entry + null terminator = 16 bytes
+    let iatDirSize = 16
+
+    // === DOS Header (64 bytes) ===
+    pe.writeWord(0x5A4D)      // MZ magic
+    pe.writeZeros(58)          // rest of DOS header
+    pe.writeDword(64)          // e_lfanew = offset to PE signature
+
+    // === PE Signature ===
+    pe.writeDword(0x00004550)  // "PE\0\0"
+
+    // === COFF Header (20 bytes) ===
+    pe.writeWord(0x8664)       // Machine: AMD64
+    pe.writeWord(numSections)  // NumberOfSections
+    pe.writeDword(0)           // TimeDateStamp
+    pe.writeDword(0)           // PointerToSymbolTable
+    pe.writeDword(0)           // NumberOfSymbols
+    pe.writeWord(240)          // SizeOfOptionalHeader
+    pe.writeWord(0x22)         // Characteristics: EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+
+    // === Optional Header PE32+ (240 bytes) ===
+    pe.writeWord(0x20B)        // Magic: PE32+
+    pe.push(14)                // MajorLinkerVersion
+    pe.push(0)                 // MinorLinkerVersion
+    pe.writeDword(codeSizeAligned)    // SizeOfCode
+    pe.writeDword(idataSizeAligned)   // SizeOfInitializedData
+    pe.writeDword(0)                  // SizeOfUninitializedData
+    pe.writeDword(textRva)            // AddressOfEntryPoint
+    pe.writeDword(textRva)            // BaseOfCode
+
+    // PE32+ additional fields
+    pe.writeQword(0x140000000)        // ImageBase
+    pe.writeDword(SECTION_ALIGNMENT)  // SectionAlignment
+    pe.writeDword(FILE_ALIGNMENT)     // FileAlignment
+    pe.writeWord(6)                   // MajorOperatingSystemVersion
+    pe.writeWord(0)                   // MinorOperatingSystemVersion
+    pe.writeWord(0)                   // MajorImageVersion
+    pe.writeWord(0)                   // MinorImageVersion
+    pe.writeWord(6)                   // MajorSubsystemVersion
+    pe.writeWord(0)                   // MinorSubsystemVersion
+    pe.writeDword(0)                  // Win32VersionValue
+    pe.writeDword(imageSize)          // SizeOfImage
+    pe.writeDword(headersAligned)     // SizeOfHeaders
+    pe.writeDword(0)                  // CheckSum
+    pe.writeWord(3)                   // Subsystem: CONSOLE
+    pe.writeWord(0x8160)              // DllCharacteristics
+    pe.writeQword(0x100000)           // SizeOfStackReserve
+    pe.writeQword(0x1000)             // SizeOfStackCommit
+    pe.writeQword(0x100000)           // SizeOfHeapReserve
+    pe.writeQword(0x1000)             // SizeOfHeapCommit
+    pe.writeDword(0)                  // LoaderFlags
+    pe.writeDword(16)                 // NumberOfRvaAndSizes
+
+    // Data directories (16 entries, 8 bytes each)
+    // 0: Export Table
+    pe.writeDword(0)
+    pe.writeDword(0)
+    // 1: Import Table
+    pe.writeDword(idata.importDirRva)
+    pe.writeDword(idata.importDirSize)
+    // 2-11: zeros
+    var i = 2
+    while i < 12 'dirs'
+        pe.writeDword(0)
+        pe.writeDword(0)
+        i = i + 1
+    end 'dirs'
+    // 12: IAT
+    pe.writeDword(idata.iatRva)
+    pe.writeDword(iatDirSize)
+    // 13-15: zeros
+    i = 13
+    while i < 16 'dirs2'
+        pe.writeDword(0)
+        pe.writeDword(0)
+        i = i + 1
+    end 'dirs2'
+
+    // === Section Headers (inlined to avoid ByteBuffer grow-desync) ===
+
+    // .text section header
+    pe.push(0x2E)  // '.'
+    pe.push(0x74)  // 't'
+    pe.push(0x65)  // 'e'
+    pe.push(0x78)  // 'x'
+    pe.push(0x74)  // 't'
+    pe.push(0)
+    pe.push(0)
+    pe.push(0)
+    pe.writeDword(codeSize)         // VirtualSize
+    pe.writeDword(textRva)          // VirtualAddress
+    pe.writeDword(codeSizeAligned)  // SizeOfRawData
+    pe.writeDword(headersAligned)   // PointerToRawData
+    pe.writeDword(0)                // PointerToRelocations
+    pe.writeDword(0)                // PointerToLinenumbers
+    pe.writeWord(0)                 // NumberOfRelocations
+    pe.writeWord(0)                 // NumberOfLinenumbers
+    pe.writeDword(0x60000020)       // Characteristics: CODE | EXECUTE | READ
+
+    // .idata section header
+    pe.push(0x2E)  // '.'
+    pe.push(0x69)  // 'i'
+    pe.push(0x64)  // 'd'
+    pe.push(0x61)  // 'a'
+    pe.push(0x74)  // 't'
+    pe.push(0x61)  // 'a'
+    pe.push(0)
+    pe.push(0)
+    pe.writeDword(idataSize)                          // VirtualSize
+    pe.writeDword(idataRva)                           // VirtualAddress
+    pe.writeDword(idataSizeAligned)                   // SizeOfRawData
+    pe.writeDword(headersAligned + codeSizeAligned)   // PointerToRawData
+    pe.writeDword(0)                                  // PointerToRelocations
+    pe.writeDword(0)                                  // PointerToLinenumbers
+    pe.writeWord(0)                                   // NumberOfRelocations
+    pe.writeWord(0)                                   // NumberOfLinenumbers
+    pe.writeDword(0xC0000040)                         // Characteristics: INITIALIZED_DATA | READ | WRITE
+
+    // Pad headers to alignment
+    pe.padTo(headersAligned)
+
+    // === .text section ===
+    pe.appendFrom(code)
+    pe.padTo(headersAligned + codeSizeAligned)
+
+    // === .idata section ===
+    pe.appendFrom(idata.data)
+    pe.padTo(headersAligned + codeSizeAligned + idataSizeAligned)
+
+    // Write to file
+    try File.writeBinary(outputPath, content: pe.toByteArray()) otherwise ignore
+end 'writePe'

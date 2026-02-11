@@ -4693,13 +4693,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var bindingName = bindings[i];
         var assocType = assocValues[i].Type;
         var bindingKind = assocType.ToValueKind();
+        string? structTypeName = assocType is MlirStructType st ? st.Name : null;
 
-        var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind);
+        var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind, structTypeName);
         _currentBlock!.AddOp(payloadOp);
 
         _currentBlock!.AddOp(new MaxonAssignOp(bindingName, payloadOp.Result,
           isDeclaration: true, isMutable: false, bindingKind));
-        _variables[bindingName] = new VarInfo(bindingKind, false, payloadOp.Result, _currentBlock!);
+        _variables[bindingName] = new VarInfo(bindingKind, false, payloadOp.Result, _currentBlock!, StructTypeName: structTypeName);
       }
     }
   }

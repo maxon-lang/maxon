@@ -1,0 +1,95 @@
+// X86 dialect ops to machine code bytes.
+// Also emits the _start wrapper for the PE entry point.
+
+typealias X86OpArray = Array with X86Op
+
+// Emit X86 ops to machine code.
+// Returns a CodeResult with the code bytes and fixup offsets.
+export function emit(x86Ops X86OpArray) returns CodeResult
+    var code = ByteBuffer.create(256)
+
+    // Emit _start wrapper first (entry point at offset 0)
+    // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0xEC)
+    code.push(0x28)
+
+    // call main (relative call, patched later)
+    code.push(0xE8)
+    let mainCallFixupOffset = code.count()
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // mov ecx, eax (return value -> first arg for ExitProcess)
+    code.push(0x89)
+    code.push(0xC1)
+
+    // call [rip+disp32] ExitProcess (indirect through IAT)
+    code.push(0xFF)
+    code.push(0x15)
+    let exitProcessFixupOffset = code.count()
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // int3 (unreachable)
+    code.push(0xCC)
+
+    // Emit main function body
+    let mainOffset = code.count()
+
+    var oi = 0
+    while oi < x86Ops.count() 'opLoop'
+        let op = try x86Ops.get(oi) otherwise X86Op.epilogue()
+        if op.tag == 0 'isPrologue'
+            // push rbp
+            code.push(0x55)
+            // mov rbp, rsp
+            code.push(0x48)
+            code.push(0x89)
+            code.push(0xE5)
+            // sub rsp, stackSize (only if non-zero)
+            if op.stackSize > 0 'hasSub'
+                code.push(0x48)
+                code.push(0x83)
+                code.push(0xEC)
+                code.push(op.stackSize and 0xFF)
+            end 'hasSub'
+        end 'isPrologue' else 'notPrologue'
+            if op.tag == 1 'isEpilogue'
+                // pop rbp
+                code.push(0x5D)
+                // ret
+                code.push(0xC3)
+            end 'isEpilogue' else 'notEpilogue'
+                if op.tag == 2 'isMovRegImm'
+                    // mov rax, imm32 (sign-extended)
+                    code.push(0x48)
+                    code.push(0xC7)
+                    code.push(0xC0)
+                    // imm32 little-endian
+                    let imm0 = op.value and 0xFF
+                    let imm1 = (op.value shr 8) and 0xFF
+                    let imm2 = (op.value shr 16) and 0xFF
+                    let imm3 = (op.value shr 24) and 0xFF
+                    code.push(imm0)
+                    code.push(imm1)
+                    code.push(imm2)
+                    code.push(imm3)
+                end 'isMovRegImm'
+            end 'notEpilogue'
+        end 'notPrologue'
+        oi = oi + 1
+    end 'opLoop'
+
+    // Patch the relative call to main
+    let callEndOffset = mainCallFixupOffset + 4
+    let relOffset = mainOffset - callEndOffset
+    code.patchDword(mainCallFixupOffset, value: relOffset)
+
+    return {code: code, mainCallFixupOffset: mainCallFixupOffset, exitProcessFixupOffset: exitProcessFixupOffset}
+end 'emit'

@@ -319,3 +319,79 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: shr-in-method-call-arg -->
+```maxon
+type ShrBuf
+  var managed __ManagedMemory
+  var len int
+
+  static function create(capacity int) returns Self
+    return {managed: __managed_memory_create(capacity, 1), len: 0}
+  end 'create'
+
+  export function push(value int)
+    __managed_memory_set_byte(managed, len, value)
+    len = len + 1
+    __managed_memory_set_length(managed, len)
+  end 'push'
+
+  export function getByte(index int) returns int
+    return __managed_memory_byte_at(managed, index)
+  end 'getByte'
+end 'ShrBuf'
+
+function main() returns int
+  var buf = ShrBuf.create(16)
+  buf.push(42)
+  let x = 0xABCD
+  buf.push(x shr 8)
+  return buf.getByte(1)
+end 'main'
+```
+```exitcode
+171
+```
+
+<!-- test: shr-consecutive-method-calls -->
+```maxon
+type ShrBuf2
+  var managed __ManagedMemory
+  var len int
+
+  static function create(capacity int) returns Self
+    return {managed: __managed_memory_create(capacity, 1), len: 0}
+  end 'create'
+
+  export function push(value int)
+    __managed_memory_set_byte(managed, len, value)
+    len = len + 1
+    __managed_memory_set_length(managed, len)
+  end 'push'
+
+  export function getByte(index int) returns int
+    return __managed_memory_byte_at(managed, index)
+  end 'getByte'
+end 'ShrBuf2'
+
+function main() returns int
+  var buf = ShrBuf2.create(16)
+  let value = 0xAABBCCDD
+  buf.push(value and 0xFF)
+  buf.push((value shr 8) and 0xFF)
+  buf.push((value shr 16) and 0xFF)
+  buf.push((value shr 24) and 0xFF)
+  let b0 = buf.getByte(0)
+  let b1 = buf.getByte(1)
+  let b2 = buf.getByte(2)
+  let b3 = buf.getByte(3)
+  if b0 != 0xDD 'c0' return 10 end 'c0'
+  if b1 != 0xCC 'c1' return 20 end 'c1'
+  if b2 != 0xBB 'c2' return 30 end 'c2'
+  if b3 != 0xAA 'c3' return 40 end 'c3'
+  return 0
+end 'main'
+```
+```exitcode
+0
+```

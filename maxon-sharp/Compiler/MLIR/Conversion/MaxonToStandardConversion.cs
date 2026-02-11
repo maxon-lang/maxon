@@ -244,14 +244,28 @@ public static class MaxonToStandardConversion {
               var enumTypeDef = (MlirEnumType)module.TypeDefs[enumConstructOp.EnumTypeName];
               var enumCase = enumTypeDef.GetCase(enumConstructOp.CaseName)!;
 
-              // Store associated values as payload slots
+              // Store associated values as flat payload slots
+              // Struct-typed values are flattened: each field becomes its own slot
+              int slotIdx = 0;
               for (int ai = 0; ai < enumConstructOp.Args.Count; ai++) {
-                var argStdVal = valueMap[enumConstructOp.Args[ai]];
-                EmitStore(newBlock, argStdVal, $"{tempName}.__payload_{ai}", varTypes);
+                if (structVarNames.TryGetValue(enumConstructOp.Args[ai].Id, out var structSrcName)
+                    && enumCase.AssociatedValues![ai].Type is MlirStructType assocStructType) {
+                  // Struct-typed associated value: flatten fields into consecutive payload slots
+                  var flatFields = GetFlatStructFieldPaths(structSrcName, assocStructType);
+                  foreach (var fieldPath in flatFields) {
+                    var loaded = EmitLoad(newBlock, fieldPath, varTypes);
+                    EmitStore(newBlock, loaded, $"{tempName}.__payload_{slotIdx}", varTypes);
+                    slotIdx++;
+                  }
+                } else {
+                  var argStdVal = valueMap[enumConstructOp.Args[ai]];
+                  EmitStore(newBlock, argStdVal, $"{tempName}.__payload_{slotIdx}", varTypes);
+                  slotIdx++;
+                }
               }
-              // Zero-fill any unused payload slots (max payload size - this case's values)
-              int maxPayload = enumTypeDef.Cases.Max(c => c.AssociatedValues?.Count ?? 0);
-              for (int ai = enumConstructOp.Args.Count; ai < maxPayload; ai++) {
+              // Zero-fill any unused payload slots
+              int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef, module.TypeDefs);
+              for (int ai = slotIdx; ai < maxPayload; ai++) {
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
                 EmitStore(newBlock, zeroOp.Result, $"{tempName}.__payload_{ai}", varTypes);
@@ -273,10 +287,27 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumPayloadOp enumPayloadOp: {
-              // Load a payload value from a flattened associated-value enum
+              // Load a payload value from flat payload slots
               var enumPrefix2 = structVarNames[enumPayloadOp.EnumValue.Id];
-              var loaded2 = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{enumPayloadOp.PayloadIndex}", varTypes);
-              valueMap[enumPayloadOp.Result] = loaded2;
+              // Calculate the flat slot offset for this payload index
+              var enumType3 = (MlirEnumType)module.TypeDefs[enumPayloadOp.EnumTypeName];
+              int flatSlotOffset = GetFlatSlotOffset(enumType3, enumPayloadOp.PayloadIndex, module.TypeDefs);
+
+              if (enumPayloadOp.ResultKind == MaxonValueKind.Struct && enumPayloadOp.ResultStructTypeName != null) {
+                // Struct-typed payload: reconstruct struct from consecutive flat slots
+                var structType = (MlirStructType)module.TypeDefs[enumPayloadOp.ResultStructTypeName];
+                var tempStructName = $"__enum_payload_{enumPayloadOp.Result.Id}";
+                var flatFieldPaths = GetFlatStructFieldPaths(tempStructName, structType);
+                for (int fi = 0; fi < flatFieldPaths.Count; fi++) {
+                  var loaded = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset + fi}", varTypes);
+                  EmitStore(newBlock, loaded, flatFieldPaths[fi], varTypes);
+                }
+                structVarNames[enumPayloadOp.Result.Id] = tempStructName;
+                structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
+              } else {
+                var loaded2 = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset}", varTypes);
+                valueMap[enumPayloadOp.Result] = loaded2;
+              }
               break;
             }
             case MaxonEnumParamOp enumParamOp: {
@@ -511,12 +542,12 @@ public static class MaxonToStandardConversion {
                   && module.TypeDefs.TryGetValue(enumSrcType, out var enumTypeForAssign)
                   && enumTypeForAssign is MlirEnumType assignEnumType && assignEnumType.HasAssociatedValues) {
                 var dstName = assignOp.VarName;
-                int maxPayload = assignEnumType.Cases.Max(c => c.AssociatedValues?.Count ?? 0);
                 // Copy tag
                 var tagLoaded = EmitLoad(newBlock, $"{enumSrc}.__tag", varTypes);
                 EmitStore(newBlock, tagLoaded, $"{dstName}.__tag", varTypes);
-                // Copy payload slots
-                for (int pi = 0; pi < maxPayload; pi++) {
+                // Copy payload slots (all are flat i64 slots now)
+                int maxFlatPayload = GetMaxFlatPayloadSlots(assignEnumType, module.TypeDefs);
+                for (int pi = 0; pi < maxFlatPayload; pi++) {
                   var payloadLoaded = EmitLoad(newBlock, $"{enumSrc}.__payload_{pi}", varTypes);
                   EmitStore(newBlock, payloadLoaded, $"{dstName}.__payload_{pi}", varTypes);
                 }
@@ -1882,6 +1913,64 @@ public static class MaxonToStandardConversion {
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"
     && func.ParamTypes[0] is MlirEnumType;
+
+  /// <summary>
+  /// Gets all flat (leaf) field paths for a struct, recursively expanding nested structs.
+  /// </summary>
+  private static List<string> GetFlatStructFieldPaths(string prefix, MlirStructType structType) {
+    var paths = new List<string>();
+    foreach (var field in structType.Fields) {
+      var fieldPath = $"{prefix}.{field.Name}";
+      if (field.Type is MlirStructType nestedType) {
+        paths.AddRange(GetFlatStructFieldPaths(fieldPath, nestedType));
+      } else {
+        paths.Add(fieldPath);
+      }
+    }
+    return paths;
+  }
+
+  /// <summary>
+  /// Counts the flat (leaf) fields in a type — 1 for scalars, recursive sum for structs.
+  /// </summary>
+  private static int CountFlatFields(MlirType type, Dictionary<string, MlirType> typeDefs) {
+    if (type is MlirStructType structType) {
+      return structType.Fields.Sum(f => CountFlatFields(f.Type, typeDefs));
+    }
+    return 1;
+  }
+
+  /// <summary>
+  /// Calculates the max number of flat payload slots needed across all enum cases.
+  /// Struct-typed associated values expand to their flat field count.
+  /// </summary>
+  private static int GetMaxFlatPayloadSlots(MlirEnumType enumType, Dictionary<string, MlirType> typeDefs) {
+    int max = 0;
+    foreach (var c in enumType.Cases) {
+      if (c.AssociatedValues == null) continue;
+      int caseSlots = c.AssociatedValues.Sum(av => CountFlatFields(av.Type, typeDefs));
+      if (caseSlots > max) max = caseSlots;
+    }
+    return max;
+  }
+
+  /// <summary>
+  /// Calculates the flat slot offset for a given payload index within an enum case.
+  /// For example, if payload_0 is a struct with 2 fields, then payload_1 starts at slot 2.
+  /// Uses the first case that has enough associated values to determine the types.
+  /// </summary>
+  private static int GetFlatSlotOffset(MlirEnumType enumType, int payloadIndex, Dictionary<string, MlirType> typeDefs) {
+    // Find a case that has this payload index to determine preceding types
+    foreach (var c in enumType.Cases) {
+      if (c.AssociatedValues == null || payloadIndex >= c.AssociatedValues.Count) continue;
+      int offset = 0;
+      for (int i = 0; i < payloadIndex; i++) {
+        offset += CountFlatFields(c.AssociatedValues[i].Type, typeDefs);
+      }
+      return offset;
+    }
+    return payloadIndex; // fallback
+  }
 
   /// <summary>
   /// Copy all fields from one struct variable to another.

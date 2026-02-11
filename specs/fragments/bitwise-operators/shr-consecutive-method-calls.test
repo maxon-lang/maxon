@@ -1,0 +1,395 @@
+// Test: shr-consecutive-method-calls
+type ShrBuf2
+  var managed __ManagedMemory
+  var len int
+
+  static function create(capacity int) returns Self
+    return {managed: __managed_memory_create(capacity, 1), len: 0}
+  end 'create'
+
+  export function push(value int)
+    __managed_memory_set_byte(managed, len, value)
+    len = len + 1
+    __managed_memory_set_length(managed, len)
+  end 'push'
+
+  export function getByte(index int) returns int
+    return __managed_memory_byte_at(managed, index)
+  end 'getByte'
+end 'ShrBuf2'
+
+function main() returns int
+  var buf = ShrBuf2.create(16)
+  let value = 0xAABBCCDD
+  buf.push(value and 0xFF)
+  buf.push((value shr 8) and 0xFF)
+  buf.push((value shr 16) and 0xFF)
+  buf.push((value shr 24) and 0xFF)
+  let b0 = buf.getByte(0)
+  let b1 = buf.getByte(1)
+  let b2 = buf.getByte(2)
+  let b3 = buf.getByte(3)
+  if b0 != 0xDD 'c0' return 10 end 'c0'
+  if b1 != 0xCC 'c1' return 20 end 'c1'
+  if b2 != 0xBB 'c2' return 30 end 'c2'
+  if b3 != 0xAA 'c3' return 40 end 'c3'
+  return 0
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @ShrBuf2.create(__sret: i64, capacity: i64) {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov [rbp-8], ecx
+    x86.mov eax, 1
+    x86.mov ebx, edx
+    x86.imul ebx, eax
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-56]
+    x86.mov [rbp-16], edx
+    x86.mov ebx, [rbp-64]
+    x86.mov [rbp-24], ebx
+    x86.mov [rbp-32], ebx
+    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], ecx
+    x86.mov esi, [rbp-8]
+    x86.xor edi, edi
+    x86.lea r8, [esi + edi]
+    x86.mov r9, [rbp-40]
+    x86.mov [r8+0], r9
+    x86.mov eax, [rbp-32]
+    x86.mov [r8+8], eax
+    x86.mov eax, [rbp-24]
+    x86.mov [r8+16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [r8+24], eax
+    x86.mov eax, [rbp-48]
+    x86.mov [esi+32], eax
+    x86.epilogue
+    x86.ret
+  }
+  func @ShrBuf2.push(__self_ptr: i64, value: i64) {
+  entry:
+    x86.prologue stack_size=80
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+32]
+    x86.mov [rbp-16], eax
+    x86.xor eax, eax
+    x86.add ecx, eax
+    x86.mov eax, [ecx+24]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [ecx+16]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [ecx+8]
+    x86.mov [rbp-40], eax
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-48], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-24]
+    x86.mov ebx, [rbp-48]
+    x86.mov esi, [rbp-32]
+    x86.mov edi, [rbp-40]
+    x86.mov [rbp-56], edi
+    x86.mov [rbp-64], ecx
+    x86.mov [rbp-72], edx
+    x86.mov [rbp-80], esi
+    x86.mov rcx, rbx
+    x86.mov rdx, rsi
+    x86.mov r8, rdi
+    x86.mov r9, rax
+    x86.call maxon_cow_check
+    x86.mov [rbp-48], eax
+    x86.xor edx, edx
+    x86.mov ebx, [rbp-80]
+    x86.cmp ebx, edx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.mov edi, [rbp-56]
+    x86.test esi, esi
+    x86.mov r8, ebx
+    x86.cmovne r8, edi
+    x86.mov [rbp-32], r8
+    x86.mov r9, [rbp-8]
+    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [eax+16], r8
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-64]
+    x86.add eax, ecx
+    x86.mov edx, [rbp-72]
+    x86.mov byte ptr [eax+0], edxb
+    x86.mov eax, 1
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov [eax+32], ecx
+    x86.mov [rbp-40], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.lea edx, [eax + ecx]
+    x86.mov ecx, [rbp-48]
+    x86.mov [edx+0], ecx
+    x86.mov ecx, [rbp-40]
+    x86.mov [edx+8], ecx
+    x86.mov ecx, [rbp-32]
+    x86.mov [edx+16], ecx
+    x86.mov ecx, [rbp-24]
+    x86.mov [edx+24], ecx
+    x86.mov ecx, [rbp-16]
+    x86.mov [eax+32], ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @ShrBuf2.getByte(__self_ptr: i64, index: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [ecx+32]
+    x86.mov [rbp-16], eax
+    x86.xor eax, eax
+    x86.add ecx, eax
+    x86.mov eax, [ecx+24]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [ecx+16]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [ecx+8]
+    x86.mov [rbp-40], eax
+    x86.mov eax, [ecx+0]
+    x86.mov [rbp-48], eax
+    x86.mov ecx, [rbp-48]
+    x86.add ecx, edx
+    x86.movzx edx, byte ptr [ecx+0]
+    x86.mov ebx, [rbp-8]
+    x86.xor esi, esi
+    x86.lea edi, [ebx + esi]
+    x86.mov r8, [rbp-48]
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-40]
+    x86.mov [edi+8], r9
+    x86.mov eax, [rbp-32]
+    x86.mov [edi+16], eax
+    x86.mov eax, [rbp-24]
+    x86.mov [edi+24], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [ebx+32], eax
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @bitwise-operators.main() -> i64 {
+  entry:
+    x86.prologue stack_size=432
+    x86.mov eax, 16
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.xor edx, edx
+    x86.mov [rbp-16], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-24], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-32], esi
+    x86.xor edi, edi
+    x86.mov [rbp-40], edi
+    x86.lea r8, [rbp-40]
+    x86.mov rcx, r8
+    x86.mov rdx, rax
+    x86.call ShrBuf2.create
+    x86.mov r9, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [rbp-32]
+    x86.mov ebx, [rbp-40]
+    x86.mov rsi, 2864434397
+    x86.mov edi, 255
+    x86.mov r8, esi
+    x86.and r8, edi
+    x86.mov [rbp-48], r9
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], ecx
+    x86.mov [rbp-72], edx
+    x86.mov [rbp-80], ebx
+    x86.lea rax, [rbp-80]
+    x86.mov [rbp-392], esi
+    x86.mov rcx, rax
+    x86.mov rdx, r8
+    x86.call ShrBuf2.push
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-56]
+    x86.mov edx, [rbp-64]
+    x86.mov ebx, [rbp-72]
+    x86.mov esi, [rbp-80]
+    x86.mov edi, 8
+    x86.mov r8, [rbp-392]
+    x86.mov [rbp-400], ecx
+    x86.mov ecx, edi
+    x86.mov r9, r8
+    x86.sar r9, cl
+    x86.mov ecx, 255
+    x86.and r9, ecx
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-400]
+    x86.mov [rbp-96], eax
+    x86.mov [rbp-104], edx
+    x86.mov [rbp-112], ebx
+    x86.mov [rbp-120], esi
+    x86.lea rax, [rbp-120]
+    x86.mov rcx, rax
+    x86.mov rdx, r9
+    x86.call ShrBuf2.push
+    x86.mov eax, [rbp-88]
+    x86.mov ecx, [rbp-96]
+    x86.mov edx, [rbp-104]
+    x86.mov ebx, [rbp-112]
+    x86.mov esi, [rbp-120]
+    x86.mov edi, 16
+    x86.mov r8, [rbp-392]
+    x86.mov [rbp-408], ecx
+    x86.mov ecx, edi
+    x86.mov r9, r8
+    x86.sar r9, cl
+    x86.mov ecx, 255
+    x86.and r9, ecx
+    x86.mov [rbp-128], eax
+    x86.mov eax, [rbp-408]
+    x86.mov [rbp-136], eax
+    x86.mov [rbp-144], edx
+    x86.mov [rbp-152], ebx
+    x86.mov [rbp-160], esi
+    x86.lea rax, [rbp-160]
+    x86.mov rcx, rax
+    x86.mov rdx, r9
+    x86.call ShrBuf2.push
+    x86.mov eax, [rbp-128]
+    x86.mov ecx, [rbp-136]
+    x86.mov edx, [rbp-144]
+    x86.mov ebx, [rbp-152]
+    x86.mov esi, [rbp-160]
+    x86.mov edi, 24
+    x86.mov r8, [rbp-392]
+    x86.mov [rbp-416], ecx
+    x86.mov ecx, edi
+    x86.mov r9, r8
+    x86.sar r9, cl
+    x86.mov ecx, 255
+    x86.and r9, ecx
+    x86.mov [rbp-168], eax
+    x86.mov eax, [rbp-416]
+    x86.mov [rbp-176], eax
+    x86.mov [rbp-184], edx
+    x86.mov [rbp-192], ebx
+    x86.mov [rbp-200], esi
+    x86.lea rax, [rbp-200]
+    x86.mov rcx, rax
+    x86.mov rdx, r9
+    x86.call ShrBuf2.push
+    x86.mov eax, [rbp-168]
+    x86.mov ecx, [rbp-176]
+    x86.mov edx, [rbp-184]
+    x86.mov ebx, [rbp-192]
+    x86.mov esi, [rbp-200]
+    x86.xor edi, edi
+    x86.mov [rbp-208], eax
+    x86.mov [rbp-216], ecx
+    x86.mov [rbp-224], edx
+    x86.mov [rbp-232], ebx
+    x86.mov [rbp-240], esi
+    x86.lea rax, [rbp-240]
+    x86.mov rcx, rax
+    x86.mov rdx, rdi
+    x86.call ShrBuf2.getByte
+    x86.mov ecx, [rbp-208]
+    x86.mov edx, [rbp-216]
+    x86.mov ebx, [rbp-224]
+    x86.mov esi, [rbp-232]
+    x86.mov edi, [rbp-240]
+    x86.mov r8, 1
+    x86.mov [rbp-248], ecx
+    x86.mov [rbp-256], edx
+    x86.mov [rbp-264], ebx
+    x86.mov [rbp-272], esi
+    x86.mov [rbp-280], edi
+    x86.lea rcx, [rbp-280]
+    x86.mov [rbp-424], eax
+    x86.mov rdx, r8
+    x86.call ShrBuf2.getByte
+    x86.mov ecx, [rbp-248]
+    x86.mov edx, [rbp-256]
+    x86.mov ebx, [rbp-264]
+    x86.mov esi, [rbp-272]
+    x86.mov edi, [rbp-280]
+    x86.mov [rbp-288], eax
+    x86.mov eax, 2
+    x86.mov [rbp-296], ecx
+    x86.mov [rbp-304], edx
+    x86.mov [rbp-312], ebx
+    x86.mov [rbp-320], esi
+    x86.mov [rbp-328], edi
+    x86.lea rcx, [rbp-328]
+    x86.mov rdx, rax
+    x86.call ShrBuf2.getByte
+    x86.mov ecx, [rbp-296]
+    x86.mov edx, [rbp-304]
+    x86.mov ebx, [rbp-312]
+    x86.mov esi, [rbp-320]
+    x86.mov edi, [rbp-328]
+    x86.mov [rbp-336], eax
+    x86.mov eax, 3
+    x86.mov [rbp-344], ecx
+    x86.mov [rbp-352], edx
+    x86.mov [rbp-360], ebx
+    x86.mov [rbp-368], esi
+    x86.mov [rbp-376], edi
+    x86.lea rcx, [rbp-376]
+    x86.mov rdx, rax
+    x86.call ShrBuf2.getByte
+    x86.mov [rbp-384], eax
+    x86.mov eax, 221
+    x86.mov ecx, [rbp-424]
+    x86.cmp ecx, eax
+    x86.je bitwise-operators.main.c0_0.after
+  c0_0:
+    x86.mov eax, 10
+    x86.epilogue
+    x86.ret
+  c0_0.after:
+    x86.mov eax, 204
+    x86.mov ecx, [rbp-288]
+    x86.cmp ecx, eax
+    x86.je bitwise-operators.main.c1_1.after
+  c1_1:
+    x86.mov eax, 20
+    x86.epilogue
+    x86.ret
+  c1_1.after:
+    x86.mov eax, 187
+    x86.mov ecx, [rbp-336]
+    x86.cmp ecx, eax
+    x86.je bitwise-operators.main.c2_2.after
+  c2_2:
+    x86.mov eax, 30
+    x86.epilogue
+    x86.ret
+  c2_2.after:
+    x86.mov eax, 170
+    x86.mov ecx, [rbp-384]
+    x86.cmp ecx, eax
+    x86.je bitwise-operators.main.c3_3.after
+  c3_3:
+    x86.mov eax, 40
+    x86.epilogue
+    x86.ret
+  c3_3.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

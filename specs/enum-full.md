@@ -1688,3 +1688,46 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: match-enum-binding-string -->
+```maxon
+enum StringResult
+  ok(value int)
+  err(message String)
+end 'StringResult'
+
+function main() returns int
+  var r = StringResult.err("bad")
+  match r 'handle'
+    ok(v) then return v
+    err(msg) then return msg.byteLength()
+  end 'handle'
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: match-enum-binding-struct -->
+```maxon
+type EnumPoint
+  export var x int
+  export var y int
+end 'EnumPoint'
+
+enum Shape
+  circle(radius int)
+  rect(origin EnumPoint)
+end 'Shape'
+
+function main() returns int
+  var s = Shape.rect(EnumPoint{x: 10, y: 20})
+  match s 'handle'
+    circle(r) then return r
+    rect(p) then return p.x + p.y
+  end 'handle'
+end 'main'
+```
+```exitcode
+30
+```
