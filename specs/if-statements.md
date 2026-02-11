@@ -165,6 +165,33 @@ end 'main'
 2
 ```
 
+<!-- test: if-statements.else-if-in-helper -->
+else-if chains in helper functions must be correctly skipped during pre-scan.
+```maxon
+function classify(x int) returns int
+  if x == 0 'zero'
+    return 0
+  end 'zero' else if x < 10 'small'
+    return 1
+  end 'small' else if x < 100 'medium'
+    return 2
+  end 'medium' else 'large'
+    return 3
+  end 'large'
+end 'classify'
+
+function main() returns int
+  var a = classify(0)
+  var b = classify(5)
+  var c = classify(50)
+  var d = classify(200)
+  return a + b * 10 + c * 100 + d * 1000
+end 'main'
+```
+```exitcode
+3210
+```
+
 <!-- test: if-statements.nested -->
 ```maxon
 function main() returns int

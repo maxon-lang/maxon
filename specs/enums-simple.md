@@ -573,3 +573,74 @@ end 'main'
 1
 ```
 
+<!-- test: keyword-as-case-name -->
+Keywords can be used as enum case names (e.g., `function`, `return`, `end`).
+```maxon
+enum TokenType
+  function
+  return
+  end
+  if
+  else
+  let
+  var
+  identifier
+end 'TokenType'
+
+function main() returns int
+  var t = TokenType.function
+  if t == TokenType.function 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: keyword-case-rawvalue -->
+Keyword-named enum cases have correct ordinal raw values.
+```maxon
+enum TokenType
+  function
+  return
+  end
+  if
+end 'TokenType'
+
+function main() returns int
+  var t = TokenType.end
+  return t.rawValue
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: keyword-case-with-method -->
+Enums with keyword case names can also have methods.
+```maxon
+enum TokenType
+  function
+  return
+  end
+  if
+
+  function isKeyword() returns bool
+    return true
+  end 'isKeyword'
+end 'TokenType'
+
+function main() returns int
+  var t = TokenType.function
+  if t.isKeyword() 'check'
+    return t.rawValue
+  end 'check'
+  return 99
+end 'main'
+```
+```exitcode
+0
+```
+

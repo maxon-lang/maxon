@@ -1,0 +1,48 @@
+// Test: keyword-case-with-method
+enum TokenType
+  function
+  return
+  end
+  if
+
+  function isKeyword() returns bool
+    return true
+  end 'isKeyword'
+end 'TokenType'
+
+function main() returns int
+  var t = TokenType.function
+  if t.isKeyword() 'check'
+    return t.rawValue
+  end 'check'
+  return 99
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @TokenType.isKeyword(self: i64) -> i1 {
+  entry:
+    x86.mov eax, 1
+    x86.ret
+  }
+  func @enums-simple.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.call TokenType.isKeyword
+    x86.test eax, eax
+    x86.je enums-simple.main.check_0.after
+  check_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, 99
+    x86.epilogue
+    x86.ret
+  }
+}
+---

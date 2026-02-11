@@ -263,17 +263,19 @@ public class LspServer {
       return null;
     }
 
-    // Check if it's a keyword
+    // Check if it's a keyword (but not when used as an enum case name)
     if (Lexer.KeywordMap.TryGetValue(word, out var keywordInfo)) {
-      return new Hover {
-        Contents = new MarkedStringsOrMarkupContent(
-          new MarkupContent {
-            Kind = MarkupKind.Markdown,
-            Value = $"**{word}** (keyword)\n\n{keywordInfo.HelpText}"
-          }
-        ),
-        Range = GetWordRange(position, line, word)
-      };
+      if (!IsInsideEnumBody(lines, (int)position.Line)) {
+        return new Hover {
+          Contents = new MarkedStringsOrMarkupContent(
+            new MarkupContent {
+              Kind = MarkupKind.Markdown,
+              Value = $"**{word}** (keyword)\n\n{keywordInfo.HelpText}"
+            }
+          ),
+          Range = GetWordRange(position, line, word)
+        };
+      }
     }
 
     // Check if it's a compiler builtin
@@ -303,6 +305,53 @@ public class LspServer {
     }
 
     return null;
+  }
+
+  /// <summary>
+  /// Returns true if the line is inside an enum body and looks like an enum case name
+  /// (a single word on the line, possibly with = value, not a method body line).
+  /// </summary>
+  private static bool IsInsideEnumBody(string[] lines, int lineIndex) {
+    var line = lines[lineIndex].Trim();
+
+    // Strip trailing comment
+    var commentIdx = line.IndexOf("//");
+    if (commentIdx >= 0) line = line[..commentIdx].Trim();
+
+    // An enum case is a single word (possibly followed by = value)
+    var isEnumCaseLine = false;
+    if (line.Length > 0 && line.All(c => char.IsLetterOrDigit(c) || c == '_')) {
+      isEnumCaseLine = true;
+    } else {
+      var eqIdx = line.IndexOf('=');
+      if (eqIdx > 0) {
+        var name = line[..eqIdx].Trim();
+        isEnumCaseLine = name.Length > 0 && name.All(c => char.IsLetterOrDigit(c) || c == '_');
+      }
+    }
+    if (!isEnumCaseLine) return false;
+
+    // Scan backwards to find enclosing enum declaration
+    for (int i = lineIndex - 1; i >= 0; i--) {
+      var trimmed = lines[i].Trim();
+      if (trimmed.Length == 0 || trimmed.StartsWith("//")) continue;
+
+      // Check for enum declaration (with optional 'export' prefix)
+      var enumCheck = trimmed;
+      if (enumCheck.StartsWith("export ")) enumCheck = enumCheck[7..];
+      if (enumCheck.StartsWith("enum ") && enumCheck.Length > 5 && char.IsUpper(enumCheck[5])) {
+        return true;
+      }
+      // If we hit a top-level construct, we're not in an enum
+      if (trimmed.StartsWith("function ") || trimmed.StartsWith("type ") || trimmed.StartsWith("interface ")) {
+        return false;
+      }
+      var rawLine = lines[i].TrimEnd();
+      if (rawLine.Length > 0 && !char.IsWhiteSpace(rawLine[0]) && trimmed.StartsWith("end ")) {
+        return false;
+      }
+    }
+    return false;
   }
 
   private static string GetWordAtPosition(string line, int character) {

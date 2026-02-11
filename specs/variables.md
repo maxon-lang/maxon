@@ -49,6 +49,22 @@ end 'main'
 30
 ```
 
+<!-- test: top-level-string-constant -->
+Top-level `let` with a string literal value.
+```maxon
+let GREETING = "hello"
+
+function main() returns int
+  if GREETING == "hello" 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: var-explicit-type-error -->
 Explicit type annotations are not allowed on var declarations.
 ```maxon

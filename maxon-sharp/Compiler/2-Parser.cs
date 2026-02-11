@@ -392,7 +392,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   // ============================================================================
   // Pre-scanning for top-level let and var declarations
-  // ============================================================================
+  // ===========================================================================
 
   // Raw constant declaration: stores the token range for the initializer expression
   private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column);
@@ -400,6 +400,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void CollectAndEvaluateTopLevelDecls(MlirModule<MaxonOp> module) {
     var constDecls = new List<ConstantDecl>();
     int savedPos = _pos;
+
+    // Pre-pass: register all top-level typealias names so forward references resolve
+    {
+      int prePos = _pos;
+      int depth = 0;
+      while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
+        var t = _tokens[prePos];
+        if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
+          var aliasName = _tokens[prePos + 1].Value;
+          if (!_typeRegistry.ContainsKey(aliasName))
+            _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
+          prePos += 2;
+        } else { prePos++; }
+      }
+    }
 
     // First pass: scan for top-level declarations (constants, vars, function signatures, type declarations)
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
@@ -983,6 +998,36 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
 
+  /// <summary>
+  /// Check if the current position has 'function IDENTIFIER (' pattern, indicating
+  /// an enum instance method declaration (not a keyword used as an enum case name).
+  /// </summary>
+  private bool IsEnumMethodStart() {
+    if (!Check(TokenType.Function)) return false;
+    if (_pos + 2 >= _tokens.Count) return false;
+    return _tokens[_pos + 1].Type == TokenType.Identifier && _tokens[_pos + 2].Type == TokenType.LeftParen;
+  }
+
+  /// <summary>
+  /// Check if current 'end' token is the block terminator (end 'label') vs an enum case name.
+  /// Block-ending 'end' is followed by a character literal label; case-name 'end' is followed by newline/EOF.
+  /// </summary>
+  private bool IsEndOfBlock() {
+    if (!Check(TokenType.End)) return false;
+    if (_pos + 1 >= _tokens.Count) return true;
+    var next = _tokens[_pos + 1].Type;
+    return next == TokenType.CharacterLiteral;
+  }
+
+  /// <summary>
+  /// Consume the current token as an enum case name. Accepts any non-EOF token.
+  /// </summary>
+  private Token ExpectEnumCaseName() {
+    var token = Current();
+    Advance();
+    return token;
+  }
+
   private void PreScanEnum(MlirModule<MaxonOp> module) {
     Advance(); // consume 'enum'
     var nameToken = Expect(TokenType.Identifier);
@@ -1008,9 +1053,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     MlirType? backingType = null;
     int ordinal = 0;
 
-    while (!Check(TokenType.End) && !Check(TokenType.Function) && !IsAtEnd()) {
+    while (!IsEndOfBlock() && !IsEnumMethodStart() && !IsAtEnd()) {
       SkipNewlines();
-      if (Check(TokenType.End) || Check(TokenType.Function)) break;
+      if (IsEndOfBlock() || IsEnumMethodStart()) break;
 
       // Implicit string-backed ("North") or char-backed ('N'): literal as case name
       if (Check(TokenType.StringLiteral) || Check(TokenType.CharacterLiteral)) {
@@ -1045,7 +1090,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         continue;
       }
 
-      var caseToken = Expect(TokenType.Identifier);
+      var caseToken = ExpectEnumCaseName();
       var caseName = caseToken.Value;
 
       if (!caseNames.Add(caseName)) {
@@ -1582,8 +1627,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) || Check(TokenType.Match)) {
         depth++;
       } else if (Check(TokenType.Else)) {
-        // else 'label' introduces a new block ending with end
-        depth++;
+        // 'else if' is a single construct — the 'if' will increment depth, so 'else' should not.
+        // 'else' on its own (with label) opens a block needing its own 'end'.
+        // Pattern: else 'label' → standalone else; else if → else-if chain
+        int j = _pos + 1;
+        if (j < _tokens.Count && _tokens[j].Type == TokenType.If) {
+          // else if — don't increment (let 'if' handle it)
+        } else {
+          depth++;
+        }
       } else if (Check(TokenType.Otherwise) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.CharacterLiteral) {
         // otherwise 'label' introduces a block ending with end (but not inline otherwise <value>)
         depth++;
@@ -1749,6 +1801,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.FloatLiteral)) {
       var token = Advance();
       return ParseFloatLiteral(token);
+    }
+    if (Check(TokenType.StringLiteral)) {
+      var token = Advance();
+      return token.Value;
     }
     if (Check(TokenType.True)) {
       Advance();
@@ -1957,15 +2013,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var enumType = (MlirEnumType)_typeRegistry[enumName];
 
     // Skip cases (already pre-scanned)
-    while (!Check(TokenType.End) && !Check(TokenType.Function) && !IsAtEnd()) {
+    while (!IsEndOfBlock() && !IsEnumMethodStart() && !IsAtEnd()) {
       SkipNewlines();
-      if (Check(TokenType.End) || Check(TokenType.Function)) break;
+      if (IsEndOfBlock() || IsEnumMethodStart()) break;
       SkipToEndOfLine();
       SkipNewlines();
     }
 
     // Parse instance methods
-    while (Check(TokenType.Function) && !IsAtEnd()) {
+    while (IsEnumMethodStart() && !IsAtEnd()) {
       ParseEnumInstanceMethod(module, enumName, enumType);
       SkipNewlines();
     }
@@ -5439,6 +5495,41 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return ParseFromExpression(token);
       }
 
+      // Check for enum case with keyword name: EnumType.keywordCase
+      if (Check(TokenType.Dot) && PeekNext().Type != TokenType.Identifier
+          && _typeRegistry.TryGetValue(token.Value, out var kwEnumEntry) && kwEnumEntry is MlirEnumType kwEnumType) {
+        var kwMemberName = PeekNext().Value;
+        var kwEnumCase = kwEnumType.GetCase(kwMemberName);
+        if (kwEnumCase != null) {
+          Advance(); // consume '.'
+          Advance(); // consume keyword case name
+          if (kwEnumType.HasAssociatedValues) {
+            var args = new List<MaxonValue>();
+            if (kwEnumCase.AssociatedValues is { Count: > 0 }) {
+              Expect(TokenType.LeftParen);
+              for (int ai = 0; ai < kwEnumCase.AssociatedValues.Count; ai++) {
+                if (ai > 0) Expect(TokenType.Comma);
+                var argExpr = ParseExpression();
+                args.Add(ResolveExprValue(argExpr));
+              }
+              Expect(TokenType.RightParen);
+            }
+            var constructOp = new MaxonEnumConstructOp(token.Value, kwMemberName, kwEnumCase.Ordinal, args);
+            _currentBlock!.AddOp(constructOp);
+            return ParseFieldAccessChain(new ExprResult.Direct(constructOp.Result), token);
+          }
+          MaxonEnumLiteralOp kwEnumLitOp;
+          if (kwEnumType.BackingType == MlirType.F64)
+            kwEnumLitOp = new MaxonEnumLiteralOp(token.Value, kwMemberName, (double)kwEnumCase.RawValue!);
+          else if (kwEnumType.BackingType == MlirType.I64)
+            kwEnumLitOp = new MaxonEnumLiteralOp(token.Value, kwMemberName, (long)kwEnumCase.RawValue!);
+          else
+            kwEnumLitOp = new MaxonEnumLiteralOp(token.Value, kwMemberName, (long)kwEnumCase.Ordinal);
+          _currentBlock!.AddOp(kwEnumLitOp);
+          return ParseFieldAccessChain(new ExprResult.Direct(kwEnumLitOp.Result), token);
+        }
+      }
+
       // Check for qualified name: TypeName.member
       if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
@@ -6039,6 +6130,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private ExprResult.Direct EmitConstantLiteral(object constValue) {
+    if (constValue is string strVal) {
+      var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? "String";
+      var strOp = new MaxonStringLiteralOp(strVal, stringTypeName);
+      _currentBlock!.AddOp(strOp);
+      return new ExprResult.Direct(strOp.Result);
+    }
     if (constValue is EnumConstantValue ec) {
       var enumType = (MlirEnumType)_typeRegistry[ec.EnumTypeName];
       var enumCase = enumType.GetCase(ec.CaseName)!;

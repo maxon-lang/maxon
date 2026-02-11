@@ -3,6 +3,7 @@
     "name": "Maxon",
     "patterns": [
         { "include": "#comments" },
+        { "include": "#enum-body" },
         { "include": "#block-labels" },
         { "include": "#keywords" },
         { "include": "#strings" },
@@ -11,6 +12,43 @@
         { "include": "#operators" }
     ],
     "repository": {
+        "enum-body": {
+            "comment": "Enum declaration body - matches case names (including keywords) as enum members",
+            "begin": "\\b(enum)\\s+([A-Z]\\w*)",
+            "end": "\\b(end)\\s*('[^']*')",
+            "beginCaptures": {
+                "1": { "name": "keyword.other.maxon" },
+                "2": { "name": "entity.name.type.enum.maxon" }
+            },
+            "endCaptures": {
+                "1": { "name": "keyword.control.maxon" },
+                "2": { "name": "entity.name.label.maxon" }
+            },
+            "patterns": [
+                { "include": "#comments" },
+                {
+                    "comment": "Enum case with raw value assignment",
+                    "match": "^\\s+([a-z]\\w*)\\s*(=)",
+                    "captures": {
+                        "1": { "name": "variable.other.enummember.maxon" },
+                        "2": { "name": "keyword.operator.assignment.maxon" }
+                    }
+                },
+                {
+                    "comment": "Enum case name (simple, including keywords used as case names)",
+                    "match": "^\\s+([a-z]\\w*)\\s*$",
+                    "captures": {
+                        "1": { "name": "variable.other.enummember.maxon" }
+                    }
+                },
+                { "include": "#block-labels" },
+                { "include": "#keywords" },
+                { "include": "#strings" },
+                { "include": "#characters" },
+                { "include": "#numbers" },
+                { "include": "#operators" }
+            ]
+        },
         "comments": {
             "patterns": [
                 { "name": "comment.line.double-slash.maxon", "match": "//.*$" },

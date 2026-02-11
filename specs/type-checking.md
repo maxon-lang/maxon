@@ -162,3 +162,26 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: typealias-after-usage -->
+A typealias defined after the type that uses it as a field should resolve correctly.
+```maxon
+type Container
+  export var items ItemArray
+end 'Container'
+
+typealias ItemArray = Array with Item
+
+type Item
+  export let value int
+end 'Item'
+
+function main() returns int
+  var c = Container{items: ItemArray{}}
+  c.items.push({value: 7})
+  return c.items.count()
+end 'main'
+```
+```exitcode
+1
+```
