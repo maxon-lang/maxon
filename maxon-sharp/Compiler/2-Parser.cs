@@ -1794,6 +1794,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (val is bool b) return !b;
       throw new InvalidOperationException($"Cannot apply 'not' to {val?.GetType().Name}");
     }
+    if (Check(TokenType.Tilde)) {
+      Advance();
+      var val = EvalConstPrimary(decls, evaluated, evaluating);
+      if (val is long l) return ~l;
+      throw new InvalidOperationException($"Cannot apply '~' to {val?.GetType().Name}");
+    }
     return EvalConstPrimary(decls, evaluated, evaluating);
   }
 
@@ -5468,6 +5474,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var trueOp = new MaxonLiteralOp(true);
       _currentBlock!.AddOp(trueOp);
       var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, trueOp.Result, MaxonValueKind.Bool);
+      _currentBlock!.AddOp(xorOp);
+      return new ExprResult.Direct(xorOp.Result);
+    }
+
+    if (Check(TokenType.Tilde)) {
+      var token = Advance(); // consume '~'
+      var inner = ParsePrimary();
+      var innerVal = ResolveExprValue(inner);
+      var kind = DetermineValueKind(innerVal);
+      if (kind != MaxonValueKind.Integer)
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          "Bitwise NOT requires an integer operand", token.Line, token.Column);
+      var allOnesOp = new MaxonLiteralOp(-1L);
+      _currentBlock!.AddOp(allOnesOp);
+      var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, allOnesOp.Result, kind);
       _currentBlock!.AddOp(xorOp);
       return new ExprResult.Direct(xorOp.Result);
     }

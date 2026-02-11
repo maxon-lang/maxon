@@ -98,6 +98,7 @@ public enum TokenType {
   DotDotEquals,
   DotDotLess,
   Bang,
+  Tilde,
 
   // Formatting
   Newline,
@@ -147,6 +148,7 @@ public record Token(TokenType Type, string Value, int Line, int Column) {
     names[TokenType.DotDot] = "'..'";
     names[TokenType.DotDotEquals] = "'..='";
     names[TokenType.DotDotLess] = "'..<'";
+    names[TokenType.Tilde] = "'~'";
     names[TokenType.Newline] = "newline";
     names[TokenType.Eof] = "end of file";
     return names;
@@ -324,6 +326,9 @@ public class Lexer(string source) {
       case '^':
         Advance();
         return new Token(TokenType.Caret, "^", startLine, startColumn);
+      case '~':
+        Advance();
+        return new Token(TokenType.Tilde, "~", startLine, startColumn);
     }
 
     // Multi-character operators

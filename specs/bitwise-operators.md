@@ -1,7 +1,7 @@
 ---
 feature: bitwise-operators
 status: implemented
-keywords: [bitwise, and, or, xor, shift, operators]
+keywords: [bitwise, and, or, xor, shift, not, operators]
 category: operators
 ---
 
@@ -39,6 +39,15 @@ Returns 1 for each bit position where operands differ:
 var a = 12      // 1100 in binary
 var b = 10      // 1010 in binary
 var c = a ^ b   // 0110 = 6
+```
+
+### Bitwise NOT (`~`)
+
+Flips all bits of an integer value:
+
+```maxon
+var a = 5       // ...0101 in binary
+var b = ~a      // ...1010 = -6
 ```
 
 ### Left Shift (`<<`)
@@ -242,4 +251,72 @@ end 'main'
 ```
 ```exitcode
 200
+```
+
+<!-- test: bitwise-not-basic -->
+```maxon
+function main() returns int
+  print("{~0}\n")
+  return 0
+end 'main'
+```
+```stdout
+-1
+```
+```exitcode
+0
+```
+
+<!-- test: bitwise-not-value -->
+```maxon
+function main() returns int
+  var a = 5
+  print("{~a}\n")
+  return 0
+end 'main'
+```
+```stdout
+-6
+```
+```exitcode
+0
+```
+
+<!-- test: bitwise-not-double -->
+```maxon
+function main() returns int
+  var a = 42
+  return ~~a
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-not-masking -->
+```maxon
+function main() returns int
+  var value = 255    // 0xFF
+  // Clear lower 4 bits: 255 & ~15 = 240
+  return value & ~15
+end 'main'
+```
+```exitcode
+240
+```
+
+<!-- test: bitwise-not-const -->
+```maxon
+let MASK = ~0xFF
+
+function main() returns int
+  print("{MASK}\n")
+  return 0
+end 'main'
+```
+```stdout
+-256
+```
+```exitcode
+0
 ```

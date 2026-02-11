@@ -722,8 +722,8 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
   private void EmitXorRegReg(X86Register dest, X86Register src) {
     RequireGpr(dest, nameof(EmitXorRegReg));
     RequireGpr(src, nameof(EmitXorRegReg));
-    // XOR r32, r32: 31 /r  (implicitly zero-extends to 64 bits)
-    Rex.NoW().Reg(src).Rm(dest).EmitIf(this);
+    // XOR r/m64, r64: REX.W + 31 /r
+    Rex.W().Reg(src).Rm(dest).Emit(this);
     EmitByte(0x31);
     EmitByte((byte)(0xC0 | (RegCode(src) << 3) | RegCode(dest)));
   }
