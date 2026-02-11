@@ -1611,7 +1611,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void SkipToEndOfLine() {
-    while (!IsAtEnd() && !Check(TokenType.Newline) && Current().Type != TokenType.Eof) {
+    int bracketDepth = 0;
+    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+      if (Check(TokenType.LeftBracket)) bracketDepth++;
+      else if (Check(TokenType.RightBracket)) bracketDepth--;
+      else if (Check(TokenType.Newline) && bracketDepth <= 0) break;
       Advance();
     }
   }
@@ -2580,7 +2584,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!Check(TokenType.RightParen)) {
       int paramIndex = 0;
       do {
-        var paramToken = Expect(TokenType.Identifier);
+        var paramToken = ExpectIdentifierLike();
         var paramType = ParseTypeRef();
         if (Check(TokenType.Equals)) {
           Advance(); // consume '='
@@ -2604,7 +2608,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var paramTypes = new List<MlirType>();
       while (!Check(TokenType.RightParen) && !IsAtEnd()) {
         // Check if this is a named parameter (name Type) or just a type
-        if (Check(TokenType.Identifier) && PeekNext().Type != TokenType.Comma && PeekNext().Type != TokenType.RightParen) {
+        if (CheckIdentifierLike() && PeekNext().Type != TokenType.Comma && PeekNext().Type != TokenType.RightParen) {
           // This looks like "name Type" - skip the name
           Advance(); // consume name
         }
@@ -2772,6 +2776,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var instanceMethodName = $"{varInfo.StructTypeName}.{_tokens[_pos + 2].Value}";
           var resolvedName = ResolveMethodName(instanceMethodName);
           if (resolvedName != null) {
+            _referencedVars.Add(nameToken.Value);
             ParseInstanceMethodCallStatement(varInfo, resolvedName);
             return;
           }
@@ -2833,6 +2838,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         $"Undefined variable '{nameToken.Value}'",
         nameToken.Line, nameToken.Column);
     }
+    _referencedVars.Add(nameToken.Value);
 
     var currentStructTypeName = varInfo.StructTypeName;
     var currentValue = ResolveExprValue(new ExprResult.VarRef(nameToken.Value, varInfo));
@@ -3275,6 +3281,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!_variables.TryGetValue(name, out var varInfo)) {
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
     }
+    _referencedVars.Add(name);
     if (!varInfo.Mutable) {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Variable '{name}' is not mutable", nameToken.Line, nameToken.Column);
     }
@@ -3320,6 +3327,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!_variables.TryGetValue(name, out var varInfo)) {
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
     }
+    _referencedVars.Add(name);
 
     if (!varInfo.Mutable) {
       throw new CompileError(ErrorCode.ParserImmutableVariable,
@@ -4045,15 +4053,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Save the entry block - we'll add the branch to the header from here
     var entryBlock = _currentBlock!;
 
-    // Scan forward to find the loop label (character literal) at end of while line
+    // Scan forward to find the loop label - the last character literal before the newline.
+    // Character literals in the condition (e.g. '\n') must not be confused with the label.
     int savedPos = _pos;
-    while (!Check(TokenType.CharacterLiteral) && !Check(TokenType.Newline) && !IsAtEnd()) {
+    int lastCharLitPos = -1;
+    while (!Check(TokenType.Newline) && !IsAtEnd()) {
+      if (Check(TokenType.CharacterLiteral)) lastCharLitPos = _pos;
       Advance();
     }
-    if (!Check(TokenType.CharacterLiteral)) {
+    if (lastCharLitPos < 0) {
       throw new CompileError(ErrorCode.ParserExpectedToken, "Expected loop label after while condition", Current().Line, Current().Column);
     }
-    var loopSourceLabel = Advance().Value;
+    var loopSourceLabel = _tokens[lastCharLitPos].Value;
     _pos = savedPos; // rewind to parse condition properly
 
     var loopLabel = UniqueLabel(loopSourceLabel);
@@ -5657,7 +5668,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var (args, callee) = ParseCallArgs(qualifiedFuncToken);
             var callOp = CreateFunctionCall(qualifiedFuncToken, args, callee);
             if (callOp.Result != null)
-              return new ExprResult.Direct(callOp.Result);
+              return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), methodToken);
             if (_inTryContext)
               return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
             throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{qualifiedName}' does not return a value", methodToken.Line, methodToken.Column);
@@ -5699,7 +5710,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var siblingCallOp = TrySiblingMethodCall(token);
         if (siblingCallOp != null) {
           if (siblingCallOp.Result != null)
-            return new ExprResult.Direct(siblingCallOp.Result);
+            return ParseFieldAccessChain(new ExprResult.Direct(siblingCallOp.Result), token);
           if (_inTryContext)
             return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
           throw new CompileError(ErrorCode.ParserExpectedExpression, $"Method '{token.Value}' does not return a value", token.Line, token.Column);
@@ -5751,7 +5762,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var (args, callee) = ParseCallArgs(token);
         var callOp = CreateFunctionCall(token, args, callee);
         if (callOp.Result != null)
-          return new ExprResult.Direct(callOp.Result);
+          return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), token);
         if (_inTryContext)
           return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
         throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{token.Value}' does not return a value", token.Line, token.Column);
@@ -5803,6 +5814,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return new ExprResult.Direct(fnRefOp.Result);
       }
 
+      throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
+    }
+
+    // Keywords used as variable names (e.g., parameter named 'with')
+    if (CheckIdentifierLike()) {
+      var token = Advance();
+      if (_variables.TryGetValue(token.Value, out var kwVarInfo)) {
+        _referencedVars.Add(token.Value);
+        return ParseFieldAccessChain(new ExprResult.VarRef(token.Value, kwVarInfo), token);
+      }
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
     }
 
@@ -7153,8 +7174,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (parenDepth == 0) break;
       }
 
-      if (Current().Type == TokenType.Identifier && _pos + 1 < _tokens.Count
-          && _tokens[_pos + 1].Type == TokenType.Colon) {
+      if ((Current().Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(Current().Value))
+          && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.Colon) {
         names.Add(Current().Value);
       }
       _pos++;
@@ -7363,14 +7384,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// instance methods where slot 0 is self).
   /// </summary>
   private void ParseArgList(Token callToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, MlirType>? typeParams = null) {
-    if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+    if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
       ParseNamedArg(callee, args, typeParams);
     } else {
       args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex], typeParams);
     }
 
     while (Check(TokenType.Comma) && Advance() != null) {
-      if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+      if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
         ParseNamedArg(callee, args, typeParams);
       } else {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -8011,6 +8032,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!Check(type)) {
       throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected {Token.DisplayName(type)} but got '{Current().Value}'", Current().Line, Current().Column);
     }
+    return Advance();
+  }
+
+  /// Returns true if the current token can be used as a name (identifier or keyword used as name).
+  private bool CheckIdentifierLike() =>
+    !IsAtEnd() && (Current().Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(Current().Value));
+
+  /// Consumes and returns the current token if it can be used as a name; throws otherwise.
+  private Token ExpectIdentifierLike() {
+    if (!CheckIdentifierLike())
+      throw new CompileError(ErrorCode.ParserExpectedToken, $"Expected identifier but got '{Current().Value}'", Current().Line, Current().Column);
     return Advance();
   }
 

@@ -64,7 +64,8 @@ export type SemanticAnalyzer
         foundMain = true
 
         // main must return int
-        if fn.returnType != TypeKind.typeInt 'notInt'
+        let retType = program.getTypeRef(fn.returnType)
+        if retType.kind != TypeKind.typeInt 'notInt'
           error(ErrorCode.E3003, message: "main function must return int", line: fn.line, column: fn.column)
         end 'notInt'
       end 'isMain'
@@ -104,7 +105,8 @@ export type SemanticAnalyzer
     let exprType = getExprType(expr)
 
     // Check type compatibility
-    if fn.returnType == TypeKind.typeInt 'expectsInt'
+    let retType = program.getTypeRef(fn.returnType)
+    if retType.kind == TypeKind.typeInt 'expectsInt'
       if exprType != TypeKind.typeInt 'wrongType'
         error(ErrorCode.E3003, message: "type mismatch: expected int, got void", line: stmt.line, column: stmt.column)
       end 'wrongType'
