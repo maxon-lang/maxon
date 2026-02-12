@@ -10,11 +10,16 @@ typealias X86OpArray = Array with X86Op
 export function lowerMaxonOpsToStd(maxonOps MaxonOpArray) returns StdOpArray
     var ops = StdOpArray{}
 
-    for mOp in maxonOps 'opLoop'
+    var idx = 0
+    while idx < maxonOps.count() 'opLoop'
+        let mOp = try maxonOps.get(idx) otherwise 'getErr'
+            return ops
+        end 'getErr'
         match mOp 'lower'
             literal(resultId, value) then ops.push(StdOp.constI64(resultId, value))
             returnOp(retValId) then ops.push(StdOp.returnOp(retValId))
         end 'lower'
+        idx = idx + 1
     end 'opLoop'
 
     return ops
@@ -28,11 +33,16 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     // Prologue
     ops.push(X86Op.prologue(0))
 
-    for sOp in stdOps 'opLoop'
+    var idx = 0
+    while idx < stdOps.count() 'opLoop'
+        let sOp = try stdOps.get(idx) otherwise 'getErr'
+            break
+        end 'getErr'
         match sOp 'lower'
             constI64(resultId, value) then ops.push(X86Op.movRegImm(X86Register.rax, value))
             returnOp(retValId) then break
         end 'lower'
+        idx = idx + 1
     end 'opLoop'
 
     // Epilogue
