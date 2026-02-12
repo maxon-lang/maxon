@@ -1831,7 +1831,15 @@ public static class MaxonToStandardConversion {
 
         newArgs.Add(heapPtr);
       } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
-        newArgs.Add(valueMap[arg]);
+        if (valueMap.TryGetValue(arg, out var enumVal)) {
+          newArgs.Add(enumVal);
+        } else if (structVarNames.TryGetValue(arg.Id, out var enumTagPrefix)) {
+          // Simple enum constructed via enum_construct — load its tag
+          var tagVal = EmitLoad(block, $"{enumTagPrefix}.__tag", varTypes);
+          newArgs.Add(tagVal);
+        } else {
+          throw new InvalidOperationException($"Enum arg %{arg.Id} not found in valueMap or structVarNames for call to '{calleeName}'");
+        }
       } else if (calleeFunc.ParamTypes[i] is MlirStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
         // Struct arg: pass the heap pointer directly
         var heapPtr = EmitLoad(block, argStructName, varTypes);

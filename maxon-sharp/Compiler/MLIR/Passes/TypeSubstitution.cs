@@ -40,10 +40,16 @@ internal class TypeSubstitution {
       ["Self"] = concreteAliasType
     };
 
-    // Map associated type names (from uses clause) to concrete types
+    // Map associated type names (from uses clause) to concrete types.
+    // Re-resolve through module.TypeDefs to pick up fully-parsed types
+    // (alias type params may reference stale placeholders from pre-scan ordering)
     foreach (var assocTypeName in sourceStruct.AssociatedTypeNames) {
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
-        map[assocTypeName] = concreteType;
+        if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved) && resolved != concreteType) {
+          map[assocTypeName] = resolved;
+        } else {
+          map[assocTypeName] = concreteType;
+        }
       }
     }
 

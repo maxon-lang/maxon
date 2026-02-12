@@ -1,0 +1,17 @@
+// Maxon dialect -> Standard dialect conversion.
+
+typealias MaxonOpArray = Array with MaxonOp
+typealias StdOpArray = Array with StdOp
+
+export function lowerMaxonOpsToStd(maxonOps MaxonOpArray) returns StdOpArray
+    var ops = StdOpArray{}
+
+    for mOp in maxonOps 'opLoop'
+        match mOp 'lower'
+            literal(resultId, value) then ops.push(StdOp.constI64(resultId, value))
+            returnOp(retValId) then ops.push(StdOp.returnOp(retValId))
+        end 'lower'
+    end 'opLoop'
+
+    return ops
+end 'lowerMaxonOpsToStd'

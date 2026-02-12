@@ -1,0 +1,23 @@
+// Standard dialect -> X86 dialect conversion.
+
+typealias StdOpArray = Array with StdOp
+typealias X86OpArray = Array with X86Op
+
+export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
+    var ops = X86OpArray{}
+
+    // Prologue
+    ops.push(X86Op.prologue(0))
+
+    for sOp in stdOps 'opLoop'
+        match sOp 'lower'
+            constI64(resultId, value) then ops.push(X86Op.movRegImm(X86Register.rax, value))
+            returnOp(retValId) then break
+        end 'lower'
+    end 'opLoop'
+
+    // Epilogue
+    ops.push(X86Op.epilogue)
+
+    return ops
+end 'lowerStdOpsToX86'
