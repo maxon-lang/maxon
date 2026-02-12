@@ -14,11 +14,14 @@ Run the spec tests and fix any failures by modifying the compiler code.
 4. Fix the compiler code in `maxon-sharp/` to make the failing tests pass.
 5. Rebuild and re-run spec tests to verify the fixes.
 6. Repeat until all tests pass.
-7. review the X86 MLIR for that test and ensure registers are handled correctly.
-8. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be review to ensure they are ok.
-9. If any compiler code was changed then review any code changes to see if you can refactor to eliminate duplicated code.
-10. If any compiler code was changed then review any code changes to check that the code does not use default cases. When handling multiple cases if there is not a specific match it should throw an error. Check 'switch' and also the use of 'else'. 
-11. Write a git commit message for these changes.
+7. Fix any problems reported by the IDE
+8. review the X86 MLIR for that test and ensure registers are handled correctly.
+9. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be review to ensure they are ok.
+10. If any compiler code was changed then review any code changes to see if you can refactor to eliminate duplicated code.
+11. If any compiler code was changed then review any code changes to check that the code does not use default cases. When handling 
+multiple cases if there is not a specific match it should throw an error. Check 'switch' and also the use of 'else'. 
+
+12. Write a git commit message for these changes.
 
 ## Guidelines
 

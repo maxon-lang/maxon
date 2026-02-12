@@ -14,6 +14,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MlirFunction<MaxonOp>? _currentFunction;
   private MlirBlock<MaxonOp>? _currentBlock;
   private readonly Dictionary<string, VarInfo> _variables = [];
+  private readonly Stack<HashSet<string>> _scopeStack = new();
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
   private int _closureCounter;
@@ -2738,6 +2739,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Statement parsing
   // ============================================================================
 
+  private void PushScope() {
+    _scopeStack.Push([.. _variables.Keys]);
+  }
+
+  private void PopScope() {
+    var parentKeys = _scopeStack.Pop();
+    var toRemove = _variables.Keys.Where(k => !parentKeys.Contains(k)).ToList();
+    foreach (var name in toRemove) {
+      _variables.Remove(name);
+    }
+  }
+
   private void ParseBodyUntilEnd() {
     bool wasDeadCode = false;
     while (!Check(TokenType.End) && !IsAtEnd()) {
@@ -4041,7 +4054,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Create and parse the then block
     var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
     _currentBlock = thenBlock;
+    PushScope();
     ParseBodyUntilEnd();
+    PopScope();
     var thenEndBlock = _currentBlock; // may differ from thenBlock after nested if/else
 
     // Parse: end 'thenLabel'
@@ -4058,7 +4073,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         elseLabel = $"{thenLabel}.elseif";
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
+        PushScope();
         ParseIf();
+        PopScope();
         elseEndBlock = _currentBlock;
       } else {
         var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
@@ -4067,7 +4084,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
+        PushScope();
         ParseBodyUntilEnd();
+        PopScope();
         elseEndBlock = _currentBlock;
         ExpectEndLabel(elseSourceLabel);
       }
@@ -4171,6 +4190,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Create the then-block
     var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
     _currentBlock = thenBlock;
+    PushScope();
 
     // For binding form, load the result and create a let-binding inside the then-block
     if (bindingName != null && resultVar != null) {
@@ -4194,6 +4214,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     ParseBodyUntilEnd();
+    PopScope();
     var thenEndBlock = _currentBlock;
     ExpectEndLabel(thenSourceLabel);
 
@@ -4218,6 +4239,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
       _currentBlock = elseBlock;
+      PushScope();
 
       // If error binding requested, emit a typed error binding in the else block
       if (errorBindingToken != null) {
@@ -4225,6 +4247,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       ParseBodyUntilEnd();
+      PopScope();
       elseEndBlock = _currentBlock;
       ExpectEndLabel(elseSourceLabel);
     }
@@ -4276,7 +4299,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
+    PushScope();
     ParseBodyUntilEnd();
+    PopScope();
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
@@ -4304,7 +4329,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     string itemName;
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
-      destructureNames = new List<string>();
+      destructureNames = [];
       do {
         if (Check(TokenType.Comma)) Advance();
         destructureNames.Add(Expect(TokenType.Identifier).Value);
@@ -4403,6 +4428,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
+    PushScope();
 
     if (resultVar != null) {
       var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
@@ -4425,6 +4451,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Parse the body
     ParseBodyUntilEnd();
+    PopScope();
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
@@ -5298,6 +5325,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       _currentBlock = caseBodyBlock;
+      PushScope();
 
       // Emit payload bindings for associated-value enum patterns
       if (origEnumTempName != null) {
@@ -5306,6 +5334,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       bool caseHasReturn = Check(TokenType.Return);
       ParseStatement();
+      PopScope();
 
       bool hasFallthrough = false;
       if (Check(TokenType.And) && PeekNext().Type == TokenType.Fallthrough) {

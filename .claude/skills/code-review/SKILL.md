@@ -12,6 +12,7 @@ Review the changes that have been made in the project.
     - Ensure no `switch` statements use `default` cases — all cases must be handled explicitly.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
     - Ensure comments explain "why" not "what".
+    - Fix any problems reported by the IDE
 2. Write a git commit message for these changes.
 
 ## Guidelines

@@ -1,0 +1,232 @@
+---
+feature: block-scoping
+status: stable
+keywords: [scope, scoping, variable, block, lifetime]
+category: semantics
+---
+
+## Documentation
+
+### Overview
+
+Variables declared inside a block are scoped to that block. They are not accessible after the block ends. This applies to all block constructs: `if`, `while`, `for`, and `match`.
+
+Loop iterator variables in `for` loops are also scoped to the loop body and are immutable.
+
+### If Blocks
+
+```text
+if condition 'check'
+  var x = 42
+end 'check'
+// x is not accessible here
+```
+
+### For Loops
+
+The iterator variable is immutable and scoped to the loop body:
+
+```text
+var arr = [1, 2, 3]
+for item in arr 'loop'
+  // item is immutable
+  // item = 99  // error: not mutable
+end 'loop'
+// item is not accessible here
+```
+
+### While Loops
+
+```text
+while condition 'loop'
+  var x = 42
+end 'loop'
+// x is not accessible here
+```
+
+## Tests
+
+<!-- test: for-iterator-immutable -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30]
+  for item in arr 'loop'
+    item = 99
+  end 'loop'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/fragments/block-scoping/for-iterator-immutable.test:5:5: Variable 'item' is not mutable
+```
+
+<!-- test: for-iterator-not-accessible-after -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30]
+  for x in arr 'loop'
+    var y = x
+  end 'loop'
+  return x
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/block-scoping/for-iterator-not-accessible-after.test:7:10: Undefined variable 'x'
+```
+
+<!-- test: for-body-var-not-accessible-after -->
+```maxon
+function main() returns int
+  var arr = [10, 20, 30]
+  for item in arr 'loop'
+    var inside = item
+  end 'loop'
+  return inside
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/block-scoping/for-body-var-not-accessible-after.test:7:10: Undefined variable 'inside'
+```
+
+<!-- test: for-destructured-immutable -->
+```maxon
+function main() returns int
+  var m = [1: 10, 2: 32]
+  for (key, value) in m 'loop'
+    value = 99
+  end 'loop'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/fragments/block-scoping/for-destructured-immutable.test:5:5: Variable 'value' is not mutable
+```
+
+<!-- test: for-destructured-not-accessible-after -->
+```maxon
+function main() returns int
+  var m = [1: 10, 2: 32]
+  for (key, value) in m 'loop'
+    var sum = key + value
+  end 'loop'
+  return key
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/block-scoping/for-destructured-not-accessible-after.test:7:10: Undefined variable 'key'
+```
+
+<!-- test: if-body-var-not-accessible-after -->
+```maxon
+function main() returns int
+  if true 'check'
+    var x = 42
+  end 'check'
+  return x
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/block-scoping/if-body-var-not-accessible-after.test:6:10: Undefined variable 'x'
+```
+
+<!-- test: if-else-body-var-not-accessible-after -->
+```maxon
+function main() returns int
+  if false 'check'
+    var x = 10
+  end 'check' else 'other'
+    var y = 20
+  end 'other'
+  return y
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/block-scoping/if-else-body-var-not-accessible-after.test:8:10: Undefined variable 'y'
+```
+
+<!-- test: while-body-var-not-accessible-after -->
+```maxon
+function main() returns int
+  var i = 0
+  while i < 3 'loop'
+    var x = i
+    i = i + 1
+  end 'loop'
+  return x
+end 'main'
+```
+```maxoncstderr
+error E2004: specs/fragments/block-scoping/while-body-var-not-accessible-after.test:8:10: Undefined variable 'x'
+```
+
+<!-- test: outer-var-accessible-in-block -->
+```maxon
+function main() returns int
+  var sum = 0
+  var arr = [10, 20, 12]
+  for item in arr 'loop'
+    sum = sum + item
+  end 'loop'
+  return sum
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: if-scope-cleanup -->
+<!-- TrackMemory: true -->
+```maxon
+typealias IntArray = Array with int
+
+function main() returns int
+  var outer = IntArray{}
+  outer.resize(3)
+  outer.set(0, value: 10)
+  if true 'block'
+    var inner = IntArray{}
+    inner.resize(5)
+    inner.set(0, value: 20)
+  end 'block'
+  return try outer.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+10
+```
+```stdout
+ALLOC #1: 24 bytes (array grow)
+INCREF: array grow -> rc=1
+ALLOC #2: 40 bytes (array grow)
+INCREF: array grow -> rc=1
+CLEANUP: outer
+DECREF: outer -> rc=0
+FREE #1: 24 bytes (array cleanup)
+CLEANUP: inner
+DECREF: inner -> rc=0
+FREE #2: 40 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 64 bytes
+Freed:     64 bytes
+Leaked:    0 bytes
+Moves:     0
+Increfs:   2
+Decrefs:   2
+Copies:    0
+Cleanups:  2
+```
+
+<!-- test: var-redeclare-after-scope -->
+```maxon
+function main() returns int
+  if true 'check'
+    var x = 10
+  end 'check'
+  var x = 42
+  return x
+end 'main'
+```
+```exitcode
+42
+```
