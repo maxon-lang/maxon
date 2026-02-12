@@ -1,6 +1,5 @@
 // Dialect conversion passes.
 // Maxon dialect -> Standard dialect -> X86 dialect.
-// Flat op arrays to avoid nested struct-in-array issues.
 
 typealias MaxonOpArray = Array with MaxonOp
 typealias StdOpArray = Array with StdOp
@@ -14,13 +13,10 @@ export function lowerMaxonOpsToStd(maxonOps MaxonOpArray) returns StdOpArray
     var oi = 0
     while oi < maxonOps.count() 'opLoop'
         let mOp = try maxonOps.get(oi) otherwise MaxonOp.returnOp(0)
-        if mOp.tag == 0 'literal'
-            ops.push(StdOp.constI64(mOp.resultId, value: mOp.value))
-        end 'literal' else 'notLiteral'
-            if mOp.tag == 1 'returnOp'
-                ops.push(StdOp.returnOp(mOp.retValId))
-            end 'returnOp'
-        end 'notLiteral'
+        match mOp 'lower'
+            literal(resultId, value) then ops.push(StdOp.constI64(resultId, value))
+            returnOp(retValId) then ops.push(StdOp.returnOp(retValId))
+        end 'lower'
         oi = oi + 1
     end 'opLoop'
 
@@ -38,15 +34,15 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     var oi = 0
     while oi < stdOps.count() 'opLoop'
         let sOp = try stdOps.get(oi) otherwise StdOp.returnOp(0)
-        if sOp.tag == 0 'constI64'
-            ops.push(X86Op.movRegImm(X86Register.rax, value: sOp.value))
-        end 'constI64'
-        // tag == 1 is returnOp, handled by epilogue
+        match sOp 'lower'
+            constI64(resultId, value) then ops.push(X86Op.movRegImm(X86Register.rax, value))
+            default then let _noop = 0
+        end 'lower'
         oi = oi + 1
     end 'opLoop'
 
     // Epilogue
-    ops.push(X86Op.epilogue())
+    ops.push(X86Op.epilogue)
 
     return ops
 end 'lowerStdOpsToX86'

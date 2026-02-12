@@ -101,7 +101,7 @@ When `role = 1`, the first case matches (adds 100), falls through to case 2 (add
 
 ## Exhaustiveness for Enums
 
-When matching on enum values without a `default` case, all enum cases must be covered:
+When matching on enum values, all enum cases must be covered. The `default` keyword is not allowed when matching on enums — every case must be listed explicitly:
 
 ```maxon
 enum Direction
@@ -265,8 +265,8 @@ end 'main'
 - `and fallthrough` continues to the next case's statement
 - `and fallthrough` not allowed in match expressions
 - `and fallthrough` cannot be combined with `return`
-- For enums, all cases must be covered unless `default` is present
-- `default` matches any value not matched by previous patterns
+- For enums, all cases must be covered explicitly — `default` is not allowed
+- `default` matches any value not matched by previous patterns (non-enum types only)
 - `default` must be the last case if present
 
 ## Tests
@@ -541,7 +541,7 @@ end 'main'
 2
 ```
 
-<!-- test: match-enum.with-default -->
+<!-- test: error.match-enum-default -->
 ```maxon
 enum Color
   red
@@ -557,8 +557,8 @@ function main() returns int
   end 'check'
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E2044: specs/fragments/match-statements/error.match-enum-default.test:13:3: 'default' is not allowed when matching on enum 'Color', all cases must be listed explicitly
 ```
 
 <!-- test: match-enum.expression -->

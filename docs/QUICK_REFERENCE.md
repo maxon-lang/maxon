@@ -119,6 +119,8 @@ end 'label'
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
+Enum matches must be exhaustive — `default` is not allowed, all cases must be listed explicitly.
+
 ### Match Expression
 ```maxon
 let result = match value 'label'

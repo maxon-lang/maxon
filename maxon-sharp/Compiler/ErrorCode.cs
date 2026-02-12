@@ -39,6 +39,7 @@ public enum ErrorCode {
   ParserMatchDefaultNotLast = 2029,
   ParserMatchMissingBlockId = 2042,
   ParserMatchMismatchedBlockId = 2043,
+  ParserMatchDefaultWithEnum = 2044,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,

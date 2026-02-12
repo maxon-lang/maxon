@@ -1104,7 +1104,8 @@ end 'handle'
 - Multiple patterns can be combined with `or`
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums, all cases must be covered unless `default` is present
+- For enums, all cases must be covered explicitly — `default` is not allowed
+- `default` matches any non-enum value not matched by previous patterns
 - `default` must be the last case if present
 - Enum case patterns: `CaseName(binding1, binding2)` extracts associated values
 

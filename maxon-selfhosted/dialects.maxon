@@ -1,40 +1,17 @@
-// Dialect operations as tagged structs.
-// Uses plain int fields to avoid nested struct flattening issues in arrays.
+// Dialect operations as enums with associated values.
 
 // --- Maxon Dialect Operations ---
-// tag 0 = literal (resultId + value), tag 1 = returnOp (retValId)
 
-export type MaxonOp
-    export var tag int
-    export var resultId int
-    export var value int
-    export var retValId int
-
-    static function literal(resultId int, value int) returns Self
-        return {tag: 0, resultId: resultId, value: value, retValId: 0}
-    end 'literal'
-
-    static function returnOp(retValId int) returns Self
-        return {tag: 1, resultId: 0, value: 0, retValId: retValId}
-    end 'returnOp'
+export enum MaxonOp
+    literal(resultId int, value int)
+    returnOp(retValId int)
 end 'MaxonOp'
 
 // --- Standard Dialect Operations ---
-// tag 0 = constI64 (resultId + value), tag 1 = returnOp (retValId)
 
-export type StdOp
-    export var tag int
-    export var resultId int
-    export var value int
-    export var retValId int
-
-    static function constI64(resultId int, value int) returns Self
-        return {tag: 0, resultId: resultId, value: value, retValId: 0}
-    end 'constI64'
-
-    static function returnOp(retValId int) returns Self
-        return {tag: 1, resultId: 0, value: 0, retValId: retValId}
-    end 'returnOp'
+export enum StdOp
+    constI64(resultId int, value int)
+    returnOp(retValId int)
 end 'StdOp'
 
 // --- X86 Dialect ---
@@ -54,23 +31,8 @@ export enum X86Register
     r11
 end 'X86Register'
 
-// tag 0 = prologue (stackSize), tag 1 = epilogue, tag 2 = movRegImm (dest + value)
-
-export type X86Op
-    export var tag int
-    export var stackSize int
-    export var dest X86Register
-    export var value int
-
-    static function prologue(stackSize int) returns Self
-        return {tag: 0, stackSize: stackSize, dest: X86Register.rax, value: 0}
-    end 'prologue'
-
-    static function epilogue() returns Self
-        return {tag: 1, stackSize: 0, dest: X86Register.rax, value: 0}
-    end 'epilogue'
-
-    static function movRegImm(dest X86Register, value int) returns Self
-        return {tag: 2, stackSize: 0, dest: dest, value: value}
-    end 'movRegImm'
+export enum X86Op
+    prologue(stackSize int)
+    epilogue
+    movRegImm(dest X86Register, value int)
 end 'X86Op'

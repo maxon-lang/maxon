@@ -3,6 +3,41 @@
 
 typealias X86OpArray = Array with X86Op
 
+function emitPrologue(code ByteBuffer, stackSize int)
+    // push rbp
+    code.push(0x55)
+    // mov rbp, rsp
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xE5)
+    // sub rsp, stackSize (only if non-zero)
+    if stackSize > 0 'hasSub'
+        code.push(0x48)
+        code.push(0x83)
+        code.push(0xEC)
+        code.push(stackSize and 0xFF)
+    end 'hasSub'
+end 'emitPrologue'
+
+function emitEpilogue(code ByteBuffer)
+    // pop rbp
+    code.push(0x5D)
+    // ret
+    code.push(0xC3)
+end 'emitEpilogue'
+
+function emitMovRegImm(code ByteBuffer, value int)
+    // mov rax, imm32 (sign-extended)
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0xC0)
+    // imm32 little-endian
+    code.push(value and 0xFF)
+    code.push((value shr 8) and 0xFF)
+    code.push((value shr 16) and 0xFF)
+    code.push((value shr 24) and 0xFF)
+end 'emitMovRegImm'
+
 // Emit X86 ops to machine code.
 // Returns a CodeResult with the code bytes and fixup offsets.
 export function emit(x86Ops X86OpArray) returns CodeResult
@@ -44,45 +79,12 @@ export function emit(x86Ops X86OpArray) returns CodeResult
 
     var oi = 0
     while oi < x86Ops.count() 'opLoop'
-        let op = try x86Ops.get(oi) otherwise X86Op.epilogue()
-        if op.tag == 0 'isPrologue'
-            // push rbp
-            code.push(0x55)
-            // mov rbp, rsp
-            code.push(0x48)
-            code.push(0x89)
-            code.push(0xE5)
-            // sub rsp, stackSize (only if non-zero)
-            if op.stackSize > 0 'hasSub'
-                code.push(0x48)
-                code.push(0x83)
-                code.push(0xEC)
-                code.push(op.stackSize and 0xFF)
-            end 'hasSub'
-        end 'isPrologue' else 'notPrologue'
-            if op.tag == 1 'isEpilogue'
-                // pop rbp
-                code.push(0x5D)
-                // ret
-                code.push(0xC3)
-            end 'isEpilogue' else 'notEpilogue'
-                if op.tag == 2 'isMovRegImm'
-                    // mov rax, imm32 (sign-extended)
-                    code.push(0x48)
-                    code.push(0xC7)
-                    code.push(0xC0)
-                    // imm32 little-endian
-                    let imm0 = op.value and 0xFF
-                    let imm1 = (op.value shr 8) and 0xFF
-                    let imm2 = (op.value shr 16) and 0xFF
-                    let imm3 = (op.value shr 24) and 0xFF
-                    code.push(imm0)
-                    code.push(imm1)
-                    code.push(imm2)
-                    code.push(imm3)
-                end 'isMovRegImm'
-            end 'notEpilogue'
-        end 'notPrologue'
+        let op = try x86Ops.get(oi) otherwise X86Op.epilogue
+        match op 'emit'
+            prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
+            epilogue then emitEpilogue(code)
+            movRegImm(dest, value) then emitMovRegImm(code, value: value)
+        end 'emit'
         oi = oi + 1
     end 'opLoop'
 

@@ -51,40 +51,26 @@ export type ByteBuffer
     end 'toByteArray'
 
     export function writeWord(value int)
-        let b0 = value and 0xFF
-        let b1 = (value shr 8) and 0xFF
-        push(b0)
-        push(b1)
+        push(value and 0xFF)
+        push((value shr 8) and 0xFF)
     end 'writeWord'
 
     export function writeDword(value int)
-        let b0 = value and 0xFF
-        let b1 = (value shr 8) and 0xFF
-        let b2 = (value shr 16) and 0xFF
-        let b3 = (value shr 24) and 0xFF
-        push(b0)
-        push(b1)
-        push(b2)
-        push(b3)
+        push(value and 0xFF)
+        push((value shr 8) and 0xFF)
+        push((value shr 16) and 0xFF)
+        push((value shr 24) and 0xFF)
     end 'writeDword'
 
     export function writeQword(value int)
-        let b0 = value and 0xFF
-        let b1 = (value shr 8) and 0xFF
-        let b2 = (value shr 16) and 0xFF
-        let b3 = (value shr 24) and 0xFF
-        let b4 = (value shr 32) and 0xFF
-        let b5 = (value shr 40) and 0xFF
-        let b6 = (value shr 48) and 0xFF
-        let b7 = (value shr 56) and 0xFF
-        push(b0)
-        push(b1)
-        push(b2)
-        push(b3)
-        push(b4)
-        push(b5)
-        push(b6)
-        push(b7)
+        push(value and 0xFF)
+        push((value shr 8) and 0xFF)
+        push((value shr 16) and 0xFF)
+        push((value shr 24) and 0xFF)
+        push((value shr 32) and 0xFF)
+        push((value shr 40) and 0xFF)
+        push((value shr 48) and 0xFF)
+        push((value shr 56) and 0xFF)
     end 'writeQword'
 
     export function writeZeros(n int)
@@ -118,14 +104,10 @@ export type ByteBuffer
     end 'appendFrom'
 
     export function patchDword(offset int, value int)
-        let b0 = value and 0xFF
-        let b1 = (value shr 8) and 0xFF
-        let b2 = (value shr 16) and 0xFF
-        let b3 = (value shr 24) and 0xFF
-        setByte(offset, value: b0)
-        setByte(offset + 1, value: b1)
-        setByte(offset + 2, value: b2)
-        setByte(offset + 3, value: b3)
+        setByte(offset, value: value and 0xFF)
+        setByte(offset + 1, value: (value shr 8) and 0xFF)
+        setByte(offset + 2, value: (value shr 16) and 0xFF)
+        setByte(offset + 3, value: (value shr 24) and 0xFF)
     end 'patchDword'
 end 'ByteBuffer'
 
@@ -188,6 +170,34 @@ function buildImportSection(idataRva int) returns ImportSection
         importDirSize: 20
     }
 end 'buildImportSection'
+
+// --- Section header writer ---
+
+function writeSectionName(buf ByteBuffer, name String)
+    var written = 0
+    for ch in name 'chars'
+        let b = try ch.asciiValue() otherwise 0
+        buf.push(b)
+        written = written + 1
+    end 'chars'
+    while written < 8 'pad'
+        buf.push(0)
+        written = written + 1
+    end 'pad'
+end 'writeSectionName'
+
+function writeSectionHeader(buf ByteBuffer, name String, virtualSize int, virtualAddress int, rawDataSize int, rawDataPointer int, characteristics int)
+    writeSectionName(buf, name: name)
+    buf.writeDword(virtualSize)
+    buf.writeDword(virtualAddress)
+    buf.writeDword(rawDataSize)
+    buf.writeDword(rawDataPointer)
+    buf.writeDword(0)  // PointerToRelocations
+    buf.writeDword(0)  // PointerToLinenumbers
+    buf.writeWord(0)   // NumberOfRelocations
+    buf.writeWord(0)   // NumberOfLinenumbers
+    buf.writeDword(characteristics)
+end 'writeSectionHeader'
 
 // --- Main PE writer ---
 
@@ -305,45 +315,9 @@ export function writePe(outputPath String, codeResult CodeResult)
         i = i + 1
     end 'dirs2'
 
-    // === Section Headers (inlined to avoid ByteBuffer grow-desync) ===
-
-    // .text section header
-    pe.push(0x2E)  // '.'
-    pe.push(0x74)  // 't'
-    pe.push(0x65)  // 'e'
-    pe.push(0x78)  // 'x'
-    pe.push(0x74)  // 't'
-    pe.push(0)
-    pe.push(0)
-    pe.push(0)
-    pe.writeDword(codeSize)         // VirtualSize
-    pe.writeDword(textRva)          // VirtualAddress
-    pe.writeDword(codeSizeAligned)  // SizeOfRawData
-    pe.writeDword(headersAligned)   // PointerToRawData
-    pe.writeDword(0)                // PointerToRelocations
-    pe.writeDword(0)                // PointerToLinenumbers
-    pe.writeWord(0)                 // NumberOfRelocations
-    pe.writeWord(0)                 // NumberOfLinenumbers
-    pe.writeDword(0x60000020)       // Characteristics: CODE | EXECUTE | READ
-
-    // .idata section header
-    pe.push(0x2E)  // '.'
-    pe.push(0x69)  // 'i'
-    pe.push(0x64)  // 'd'
-    pe.push(0x61)  // 'a'
-    pe.push(0x74)  // 't'
-    pe.push(0x61)  // 'a'
-    pe.push(0)
-    pe.push(0)
-    pe.writeDword(idataSize)                          // VirtualSize
-    pe.writeDword(idataRva)                           // VirtualAddress
-    pe.writeDword(idataSizeAligned)                   // SizeOfRawData
-    pe.writeDword(headersAligned + codeSizeAligned)   // PointerToRawData
-    pe.writeDword(0)                                  // PointerToRelocations
-    pe.writeDword(0)                                  // PointerToLinenumbers
-    pe.writeWord(0)                                   // NumberOfRelocations
-    pe.writeWord(0)                                   // NumberOfLinenumbers
-    pe.writeDword(0xC0000040)                         // Characteristics: INITIALIZED_DATA | READ | WRITE
+    // === Section Headers ===
+    writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned, characteristics: 0x60000020)
+    writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: headersAligned + codeSizeAligned, characteristics: 0xC0000040)
 
     // Pad headers to alignment
     pe.padTo(headersAligned)

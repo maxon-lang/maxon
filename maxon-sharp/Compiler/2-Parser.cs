@@ -4921,12 +4921,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Validates enum exhaustiveness when no default case is present.
+  /// Validates enum exhaustiveness - all cases must be covered, default is not allowed.
   /// </summary>
   private static void ValidateEnumExhaustiveness(
       MlirEnumType? enumType, string? enumTypeName,
       bool hasDefault, HashSet<string> seenEnumCases, Token errorToken) {
-    if (enumType == null || hasDefault) return;
+    if (enumType == null) return;
+    if (hasDefault) {
+      throw new CompileError(ErrorCode.ParserMatchDefaultWithEnum,
+        $"'default' is not allowed when matching on enum '{enumTypeName}', all cases must be listed explicitly",
+        errorToken.Line, errorToken.Column);
+    }
     var missingCases = enumType.Cases
       .Where(c => !seenEnumCases.Contains(c.Name))
       .Select(c => c.Name)
