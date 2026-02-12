@@ -3059,6 +3059,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
     _currentBlock!.AddOp(tryCallOp);
 
+    // Void-returning functions can't be used as values in assignments
+    if (!isStatementContext && tryCallOp.Result == null) {
+      throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
+        $"type mismatch: ''{callOp.Callee}' does not return a value'",
+        tryToken.Line, tryToken.Column);
+    }
+
     // Check for 'otherwise' clause
     if (!Check(TokenType.Otherwise)) {
       // Propagation form: try func() - propagates error to caller

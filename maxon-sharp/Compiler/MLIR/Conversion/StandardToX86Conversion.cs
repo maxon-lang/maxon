@@ -13,9 +13,13 @@ public static class StandardToX86Conversion {
     result.Globals.AddRange(module.Globals);
 
     foreach (var func in module.Functions) {
-      var newFunc = ConvertFunction(func, result);
-      PeepholeOptimize(newFunc);
-      result.AddFunction(newFunc);
+      try {
+        var newFunc = ConvertFunction(func, result);
+        PeepholeOptimize(newFunc);
+        result.AddFunction(newFunc);
+      } catch (Exception ex) {
+        throw new InvalidOperationException($"Error converting function '{func.Name}': {ex.Message}", ex);
+      }
     }
 
     return result;

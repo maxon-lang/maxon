@@ -28,77 +28,65 @@ function compileFiles(sources SourceFileArray, outputPath String) returns String
     return outputPath
 end 'compileFiles'
 
-// Collects all .maxon files from a directory into source file array.
-function collectFiles(directory String) returns SourceFileArray
-    var empty = SourceFileArray{}
-    let entries = try Directory.list(directory) otherwise 'listErr'
-        return empty
-    end 'listErr'
-
-    var sources = SourceFileArray{}
-    var i = 0
-    while i < entries.count() 'loop'
-        let name = try entries.get(i) otherwise 'done'
-            break 'loop'
-        end 'done'
-        if name.endsWith(".maxon") 'isMaxon'
-            let path = "{directory}\\{name}"
-            let bytes = try File.readBinary(path) otherwise 'skip'
-                i = i + 1
-                continue 'loop'
-            end 'skip'
-            sources.push(SourceFile { path: path, content: bytes })
-        end 'isMaxon'
-        i = i + 1
-    end 'loop'
-    return sources
-end 'collectFiles'
-
-// Finds the main file path from a set of sources (looks for "main.maxon").
-function findMainFile(sources SourceFileArray, directory String) returns String
-    var i = 0
-    while i < sources.count() 'loop'
-        let src = try sources.get(i) otherwise 'done'
-            break 'loop'
-        end 'done'
-        if src.path.endsWith("main.maxon") 'found'
-            return src.path
-        end 'found'
-        i = i + 1
-    end 'loop'
-    // Fall back to first file
-    let first = try sources.get(0) otherwise 'empty'
-        return directory
-    end 'empty'
-    return first.path
-end 'findMainFile'
-
-// Build entry point. File path = single file, directory path = project build.
-export function compilePath(path String) throws CompileError
+// Collects source files from a path. Single file = one source, directory = all .maxon files.
+function collectFiles(path String) returns SourceFileArray throws CompileError
     if File.exists(path) 'isFile'
-        let sourceBytes = try File.readBinary(path) otherwise 'readErr'
-            print("Error reading file: {path}\n")
+        let bytes = try File.readBinary(path) otherwise 'readErr'
             throw CompileError.readError
         end 'readErr'
-        let outputPath = changeExtension(path, ext: ".exe")
         var sources = SourceFileArray{}
-        sources.push(SourceFile { path: path, content: sourceBytes })
-        try compileFiles(sources, outputPath: outputPath)
-        return
+        sources.push(SourceFile { path: path, content: bytes })
+        return sources
     end 'isFile'
 
     if Directory.exists(path) 'isDir'
-        let sources = collectFiles(path)
+        let entries = try Directory.list(path) otherwise 'listErr'
+            throw CompileError.directoryNotFound
+        end 'listErr'
+        var sources = SourceFileArray{}
+        for name in entries 'loop'
+            if name.endsWith(".maxon") 'isMaxon'
+                let filePath = "{path}\\{name}"
+                let bytes = try File.readBinary(filePath) otherwise 'skip'
+                    continue 'loop'
+                end 'skip'
+                sources.push(SourceFile { path: filePath, content: bytes })
+            end 'isMaxon'
+        end 'loop'
         if sources.count() == 0 'noFiles'
-            print("No .maxon files found in: {path}\n")
             throw CompileError.noSourceFiles
         end 'noFiles'
-        let mainFile = findMainFile(sources, directory: path)
-        let outputPath = changeExtension(mainFile, ext: ".exe")
-        try compileFiles(sources, outputPath: outputPath)
-        return
+        return sources
     end 'isDir'
 
-    print("File or directory not found: {path}\n")
     throw CompileError.fileNotFound
+end 'collectFiles'
+
+// Finds the source file that declares function main().
+function findMainFile(sources SourceFileArray) returns String throws CompileError
+    var mainFile = ""
+    for src in sources 'loop'
+        let text = try File.readText(src.path) otherwise 'skip'
+            continue 'loop'
+        end 'skip'
+        if text.contains("function main()") 'hasMain'
+            if mainFile != "" 'duplicate'
+                throw CompileError.multipleMainFiles
+            end 'duplicate'
+            mainFile = src.path
+        end 'hasMain'
+    end 'loop'
+    if mainFile == "" 'notFound'
+        throw CompileError.noMainFunction
+    end 'notFound'
+    return mainFile
+end 'findMainFile'
+
+// Build entry point. File path = single file, directory path = project build.
+export function compilePath(path String) returns String throws CompileError
+    let sources = try collectFiles(path)
+    let mainFile = findMainFile(sources, directory: path)
+    let outputPath = changeExtension(mainFile, ext: ".exe")
+    try compileFiles(sources, outputPath: outputPath)
+    return outputPath
 end 'compilePath'

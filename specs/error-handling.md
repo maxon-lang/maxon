@@ -498,6 +498,28 @@ end 'main'
 error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:12:13: type mismatch: ''otherwise ignore' cannot be used in assignment'
 ```
 
+<!-- test: error.void-try-in-assignment -->
+```maxon
+// Assigning from a void-returning try call is an error
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail() throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+  let val = try mayFail() otherwise 'handler'
+    return 1
+  end 'handler'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12:13: type mismatch: ''error-handling.mayFail' does not return a value'
+```
+
 <!-- test: error.binding-match-single-case -->
 ```maxon
 // Test matching on typed error binding
