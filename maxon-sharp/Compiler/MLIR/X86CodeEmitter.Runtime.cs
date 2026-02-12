@@ -33,6 +33,7 @@ public partial class X86CodeEmitter {
     EmitMaxonFindNextFile();
     EmitMaxonFindClose();
     EmitMaxonDirectoryExists();
+    EmitMaxonGetCurrentDirectory();
     EmitMaxonProcessCreate();
     EmitMaxonProcessWait();
     EmitMaxonProcessGetExitCode();
@@ -945,6 +946,25 @@ public partial class X86CodeEmitter {
     EmitSetcc("nz", X86Register.Rax);
     EmitMovzxReg8To64(X86Register.Rax);
     DefineLabel("rt_direx_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_get_current_directory() -> cstring pointer
+  /// Allocates a buffer, calls GetCurrentDirectoryA, returns pointer to the path.
+  /// </summary>
+  private void EmitMaxonGetCurrentDirectory() {
+    EmitRuntimeFunctionStart("maxon_get_current_directory", 0, 0x40);
+    // Allocate 260 bytes (MAX_PATH) for the buffer
+    EmitMovRegImm(X86Register.Rcx, 260);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
+    // GetCurrentDirectoryA(nBufferLength=260, lpBuffer=buffer)
+    EmitMovRegImm(X86Register.Rcx, 260);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitCallImport("kernel32.dll", "GetCurrentDirectoryA");
+    // Return buffer pointer
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
     EmitRuntimeFunctionEnd();
   }
 

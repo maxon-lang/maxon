@@ -1,0 +1,25 @@
+// Test: exported-function-cross-file
+// --- file: helper.maxon
+export function helper() returns int
+  return 42
+end 'helper'
+
+// --- file: main.maxon
+function main() returns int
+  return helper()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @helper.helper() -> i64 {
+  entry:
+    x86.mov eax, 42
+    x86.ret
+  }
+  func @main.main() -> i64 {
+  entry:
+    x86.jmp helper.helper
+  }
+}
+---

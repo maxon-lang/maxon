@@ -221,6 +221,52 @@ end 'main'
 42
 ```
 
+<!-- test: exported-function-cross-file -->
+```maxon
+// --- file: helper.maxon
+export function helper() returns int
+  return 42
+end 'helper'
+
+// --- file: main.maxon
+function main() returns int
+  return helper()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: non-exported-function-same-file -->
+```maxon
+function privateHelper() returns int
+  return 99
+end 'privateHelper'
+
+function main() returns int
+  return privateHelper()
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: error.non-exported-function-cross-file -->
+```maxon
+// --- file: helper.maxon
+function privateHelper() returns int
+  return 99
+end 'privateHelper'
+
+// --- file: main.maxon
+function main() returns int
+  return privateHelper()
+end 'main'
+```
+```maxoncstderr
+error E3008: main.maxon:2:10: function 'privateHelper' is not exported
+```
+
 <!-- test: error.typealias-with-unknown-element-type -->
 ```maxon
 typealias BadArray = Array with UnknownType

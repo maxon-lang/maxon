@@ -607,6 +607,20 @@ public class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKi
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// Converts an error flag (ordinal+1) back to a typed enum value (ordinal)
+// For simple error enums, subtracts 1 from the flag to recover the ordinal.
+// For associated-value error enums, the flag is a heap pointer (no arithmetic needed).
+public class MaxonErrorFlagToEnumOp(MaxonValue errorFlag, string enumTypeName, MaxonValueKind backingKind, bool hasAssociatedValues) : MaxonOp {
+  public override string Mnemonic => $"maxon.error_flag_to_enum @{EnumTypeName}";
+  public MaxonValue ErrorFlag { get; } = errorFlag;
+  public string EnumTypeName { get; } = enumTypeName;
+  public MaxonValueKind BackingKind { get; } = backingKind;
+  public bool HasAssociatedValues { get; } = hasAssociatedValues;
+  public MaxonEnum Result { get; } = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ErrorFlag.ToString()];
+}
+
 // Accesses .rawValue on an enum value
 public class MaxonEnumRawValueOp(MaxonValue enumValue, string enumTypeName, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => $"maxon.enum_rawvalue @{EnumTypeName}";

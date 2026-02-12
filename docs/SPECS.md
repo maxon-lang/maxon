@@ -166,6 +166,44 @@ Type mismatch: cannot perform arithmetic on string
   Location: line 3, column 12
 ```
 
+### Multi-File Tests
+
+To test cross-file behavior (e.g., export visibility, multi-file builds), use `// --- file: name.maxon` markers inside a single `maxon` code block:
+
+```maxon
+// --- file: helper.maxon
+export function helper() returns int
+    return 42
+end 'helper'
+
+// --- file: main.maxon
+function main() returns int
+    return helper()
+end 'main'
+```
+```exitcode
+42
+```
+
+When `// --- file:` markers are present, each section is written to a separate temporary file during compilation. The files are compiled together as a multi-file project. Error messages in `maxoncstderr` blocks use just the filename (not the full path):
+
+```maxon
+// --- file: helper.maxon
+function privateHelper() returns int
+    return 99
+end 'privateHelper'
+
+// --- file: main.maxon
+function main() returns int
+    return privateHelper()
+end 'main'
+```
+```maxoncstderr
+error E3008: main.maxon:2:10: function 'privateHelper' is not exported
+```
+
+When no `// --- file:` markers are present, behavior is unchanged (single-file test).
+
 ## Code Block Rules
 
 1. **`text` blocks** are for non-executable sample code

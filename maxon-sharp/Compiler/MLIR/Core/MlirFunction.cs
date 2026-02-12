@@ -8,6 +8,8 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   public MlirType? ThrowsType { get; } = throwsType;
   public MlirRegion<TOp> Body { get; } = new();
   public bool IsStdlib { get; set; }
+  public bool IsExported { get; set; }
+  public string? SourceFilePath { get; set; }
   public int? SourceLine { get; set; }
   public int? SourceColumn { get; set; }
 }

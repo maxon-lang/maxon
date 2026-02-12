@@ -28,6 +28,11 @@ public class TestCase {
   /// Parsed from `&lt;!-- TrackMemory: true --&gt;` directives in the spec file.
   /// </summary>
   public bool TrackMemory { get; init; }
+  /// <summary>
+  /// For multi-file tests: list of (FileName, Source) pairs.
+  /// When non-null, the test compiles multiple files instead of a single source.
+  /// </summary>
+  public List<(string FileName, string Source)>? SourceFiles { get; init; }
 }
 
 /// <summary>
@@ -81,6 +86,11 @@ public class Fragment {
   /// Whether to compile with --track-allocs for memory tracking output.
   /// </summary>
   public bool TrackMemory { get; init; }
+  /// <summary>
+  /// For multi-file tests: list of (FileName, Source) pairs.
+  /// When non-null, the test compiles multiple files instead of a single source.
+  /// </summary>
+  public List<(string FileName, string Source)>? SourceFiles { get; init; }
 }
 
 /// <summary>

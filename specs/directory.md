@@ -86,6 +86,24 @@ Check if a path is a directory. Alias for `exists`.
 
 **Returns:** `true` if path is a directory, `false` otherwise
 
+### Directory.currentDirectory
+
+Get the current working directory.
+
+**Signature:** `static function currentDirectory() returns String`
+
+**Returns:** The current working directory as a string
+
+**Example:**
+
+```maxon
+function main() returns int
+  let cwd = Directory.currentDirectory()
+  print("{cwd}\n")
+  return 0
+end 'main'
+```
+
 ## Tests
 
 <!-- test: list-directory -->
@@ -180,6 +198,34 @@ function main() returns int
     return 1
   end 'check'
   return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: current-directory-not-empty -->
+```maxon
+function main() returns int
+  let cwd = Directory.currentDirectory()
+  if cwd.count() > 0 'ok'
+    return 42
+  end 'ok'
+  return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: current-directory-is-directory -->
+```maxon
+function main() returns int
+  let cwd = Directory.currentDirectory()
+  if Directory.exists(cwd) 'ok'
+    return 42
+  end 'ok'
+  return 0
 end 'main'
 ```
 ```exitcode

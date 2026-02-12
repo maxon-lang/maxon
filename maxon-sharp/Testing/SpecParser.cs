@@ -123,7 +123,8 @@ public static partial class SpecParser {
         Source = source,
         Expectation = expectation,
         Args = testArgs,
-        TrackMemory = trackMemory
+        TrackMemory = trackMemory,
+        SourceFiles = SplitMultiFileSource(source)
       });
     }
 
@@ -182,6 +183,26 @@ public static partial class SpecParser {
     return tests;
   }
 
+  /// <summary>
+  /// Splits source containing "// --- file: name.maxon" markers into multiple files.
+  /// Returns null if no file markers are found (single-file test).
+  /// </summary>
+  private static List<(string FileName, string Source)>? SplitMultiFileSource(string source) {
+    var matches = FileMarkerRegex().Matches(source);
+    if (matches.Count == 0) return null;
+
+    var files = new List<(string FileName, string Source)>();
+    for (int i = 0; i < matches.Count; i++) {
+      var fileName = matches[i].Groups[1].Value.Trim();
+      var start = matches[i].Index + matches[i].Length;
+      var end = i + 1 < matches.Count ? matches[i + 1].Index : source.Length;
+      var fileSource = source[start..end].Trim();
+      files.Add((fileName, fileSource));
+    }
+
+    return files.Count > 0 ? files : null;
+  }
+
   private static string? ExtractCodeBlock(string content, string language) {
     var pattern = $@"```{Regex.Escape(language)}\r?\n(.*?)```";
     var match = Regex.Match(content, pattern, RegexOptions.Singleline);
@@ -217,4 +238,7 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*TrackMemory:\s*(.+?)\s*-->")]
   private static partial Regex TrackMemoryDirectiveRegex();
+
+  [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline)]
+  private static partial Regex FileMarkerRegex();
 }

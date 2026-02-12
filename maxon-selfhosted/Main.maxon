@@ -1,126 +1,78 @@
 // Self-hosted Maxon compiler entry point.
 // Mirrors maxon-sharp/Program.cs command structure.
 
-typealias StringArray = Array with String
-
 function main() returns int
     let args = CommandLine.args()
 
-    if args.count() < 1 'noArgs'
+    if let command = try args.get(0) 'dispatch'
+        let rest = args.slice(1, endIndex: args.count())
+
+        match command 'cmd'
+            "build" then return runBuild(rest)
+            "run" then return runRun(rest)
+            "spec-test" then return runSpecTests(rest)
+            default then printUsage()
+        end 'cmd'
+    end 'dispatch' else 'noArgs'
         printUsage()
-        return 1
     end 'noArgs'
 
-    let command = try args.get(0) otherwise ""
-
-    if command == "compile" 'cmd'
-        return runCompile(args)
-    end 'cmd'
-    if command == "build" 'cmd'
-        return runBuild(args)
-    end 'cmd'
-    if command == "run" 'cmd'
-        return runRun(args)
-    end 'cmd'
-    if command == "spec-test" 'cmd'
-        return runSpecTests(args)
-    end 'cmd'
-
-    printUsage()
     return 1
 end 'main'
 
 function printUsage()
-    print("Usage: maxon <command> [options]")
-    print("")
-    print("Commands:")
-    print("  compile <file>           Compile a single .maxon file")
-    print("  build [<directory>]      Build a project (default: current directory)")
-    print("  run <file|directory>     Compile and run")
-    print("  spec-test [options]      Run spec tests")
-    print("")
-    print("Build options (compile, build, run):")
-    print("  --emit-ir                Write .mlir file")
-    print("  --dump-stages            Write IR at each pipeline stage")
-    print("  --track-allocs           Track heap allocations and print memory stats")
-    print("")
-    print("Spec test options:")
-    print("  --filter=PATTERN         Run only tests matching pattern")
-    print("")
-    print("Logging (all commands):")
-    print("  --log=LEVEL              Set all log categories to LEVEL")
-    print("  --log=CATEGORY:LEVEL     Set specific category to LEVEL")
-    print("")
-    print("Log levels: none, error, info, debug, trace")
-    print("Log categories: compiler, lexer, parser, semantic, hir, lir, optimizer, codegen, pe, testing")
+    print("Usage: maxon <command> [options]\n")
+    print("\n")
+    print("Commands:\n")
+    print("  build [<file|directory>] Build a project (default: current directory)\n")
+    print("  run <file|directory>     Build and run\n")
+    print("  spec-test [options]      Run spec tests\n")
+    print("\n")
+    print("Build options (build, run):\n")
+    print("  --emit-ir                Write .mlir file\n")
+    print("  --dump-stages            Write IR at each pipeline stage\n")
+    print("  --track-allocs           Track heap allocations and print memory stats\n")
+    print("\n")
+    print("Spec test options:\n")
+    print("  --filter=PATTERN         Run only tests matching pattern\n")
+    print("\n")
+    print("Logging (all commands):\n")
+    print("  --log=LEVEL              Set all log categories to LEVEL\n")
+    print("  --log=CATEGORY:LEVEL     Set specific category to LEVEL\n")
+    print("\n")
+    print("Log levels: none, error, info, debug, trace\n")
+    print("Log categories: compiler, lexer, parser, semantic, hir, lir, optimizer, codegen, pe, testing\n")
 end 'printUsage'
 
-function runCompile(args StringArray) returns int
-    let sourceFile = getNonOptionArg(args)
-    if sourceFile == "" 'noFile'
-        printUsage()
-        return 1
-    end 'noFile'
-
-    let sourceBytes = try File.readBinary(sourceFile) otherwise 'readErr'
-        print("File not found: {sourceFile}")
-        return 1
-    end 'readErr'
-
-    let outputPath = changeExtension(sourceFile, ext: ".exe")
-    return compileAndReport(sourceBytes, outputPath: outputPath)
-end 'runCompile'
-
 function runBuild(args StringArray) returns int
-    let _ = args.count()
-    print("build: not yet implemented")
-    return 1
+    let path = try args.get(0) otherwise Directory.currentDirectory()
+    try compilePath(path) otherwise (e) 'err'
+        match e 'which'
+            CompileError.fileNotFound then print("File or directory not found: {path}\n")
+            CompileError.directoryNotFound then print("Directory not found: {path}\n")
+            CompileError.noSourceFiles then print("No .maxon files found in: {path}\n")
+            CompileError.readError then print("Error reading file: {path}\n")
+        end 'which'
+        return 1
+    end 'err'
+    return 0
 end 'runBuild'
 
 function runRun(args StringArray) returns int
     let _ = args.count()
-    print("run: not yet implemented")
+    print("run: not yet implemented\n")
     return 1
 end 'runRun'
 
 function runSpecTests(args StringArray) returns int
     let _ = args.count()
-    print("spec-test: not yet implemented")
+    print("spec-test: not yet implemented\n")
     return 1
 end 'runSpecTests'
 
-// --- Helpers (mirrors Program.cs helpers) ---
-
-typealias ByteArray = Array with byte
-
-// Returns the first non-option argument after args[0] (the command).
-function getNonOptionArg(args StringArray) returns String
-    var i = 1
-    while i < args.count() 'scan'
-        let arg = try args.get(i) otherwise ""
-        if not arg.startsWith("-") 'found'
-            return arg
-        end 'found'
-        i = i + 1
-    end 'scan'
-    return ""
-end 'getNonOptionArg'
-
 // Replaces the file extension (e.g. ".maxon" -> ".exe").
-function changeExtension(path String, ext String) returns String
+export function changeExtension(path String, ext String) returns String
     let dotIdx = try path.find(".") otherwise path.endIndex()
     let base = path.slice(path.startIndex(), endIndex: dotIdx)
     return base.concat(ext)
 end 'changeExtension'
-
-// Runs the full compilation pipeline and reports the result.
-function compileAndReport(sourceBytes ByteArray, outputPath String) returns int
-    let tokens = tokenize(sourceBytes)
-    let maxonOps = parse(tokens)
-    let stdOps = lowerMaxonOpsToStd(maxonOps)
-    let x86Ops = lowerStdOpsToX86(stdOps)
-    let codeResult = emit(x86Ops)
-    writePe(outputPath, codeResult: codeResult)
-    print("Compiled -> {outputPath}")
-    return 0
-end 'compileAndReport'

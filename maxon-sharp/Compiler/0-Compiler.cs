@@ -209,8 +209,10 @@ public static class StdlibLoader {
       var module = new MlirModule<MaxonOp>();
       var sources = LoadStdlibModules();
       Compiler.CompileSources(module, sources, true);
-      foreach (var func in module.Functions)
+      foreach (var func in module.Functions) {
         func.IsStdlib = true;
+        func.IsExported = true;
+      }
       _cachedStdlibModule = module;
       return module.Clone();
     }

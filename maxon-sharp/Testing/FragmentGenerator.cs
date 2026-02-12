@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace MaxonSharp.Testing;
 
@@ -227,16 +228,41 @@ public static class FragmentGenerator {
 
     // Compile to executable and capture IR (for success expectations only)
     if (test.Expectation is SuccessExpectation) {
-      var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
-      var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, trackAllocs: test.TrackMemory);
-      if (result.Success) {
-        if (result.X86Ir != null) {
-          sb.Append(result.X86Ir.Trim());
-          sb.AppendLine();
+      Compiler.SourceFile[] sources;
+      if (test.SourceFiles != null) {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"maxon-frag-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        try {
+          sources = test.SourceFiles.Select(f => {
+            var path = Path.Combine(tempDir, f.FileName);
+            File.WriteAllText(path, f.Source);
+            return new Compiler.SourceFile(path, f.Source);
+          }).ToArray();
+          var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, trackAllocs: test.TrackMemory);
+          if (result.Success) {
+            if (result.X86Ir != null) {
+              sb.Append(result.X86Ir.Trim());
+              sb.AppendLine();
+            }
+          } else {
+            sb.AppendLine($"// Compilation failed: {result.Error}");
+            error ??= result.Error;
+          }
+        } finally {
+          try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
       } else {
-        sb.AppendLine($"// Compilation failed: {result.Error}");
-        error ??= result.Error;
+        sources = [new Compiler.SourceFile(fragmentPath, sourceWithComment)];
+        var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, trackAllocs: test.TrackMemory);
+        if (result.Success) {
+          if (result.X86Ir != null) {
+            sb.Append(result.X86Ir.Trim());
+            sb.AppendLine();
+          }
+        } else {
+          sb.AppendLine($"// Compilation failed: {result.Error}");
+          error ??= result.Error;
+        }
       }
     }
 
@@ -293,6 +319,9 @@ public static class FragmentGenerator {
       generatedMLIR = ExtractGeneratedIr(irSection);
     }
 
+    // Detect multi-file markers in source
+    var sourceFiles = SplitMultiFileSource(source);
+
     return new Fragment {
       FilePath = fragmentPath,
       TestName = testName,
@@ -300,7 +329,8 @@ public static class FragmentGenerator {
       Expectation = expectation,
       GeneratedMLIR = generatedMLIR,
       Args = fragmentArgs,
-      TrackMemory = fragmentTrackMemory
+      TrackMemory = fragmentTrackMemory,
+      SourceFiles = sourceFiles
     };
   }
 
@@ -363,6 +393,24 @@ public static class FragmentGenerator {
       RequiredRdata = requiredRdata,
       TrackMemory = trackMemory
     }, args, trackMemory);
+  }
+
+  private static readonly Regex FileMarkerPattern = new(@"^// --- file:\s*(.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
+
+  private static List<(string FileName, string Source)>? SplitMultiFileSource(string source) {
+    var matches = FileMarkerPattern.Matches(source);
+    if (matches.Count == 0) return null;
+
+    var files = new List<(string FileName, string Source)>();
+    for (int i = 0; i < matches.Count; i++) {
+      var fileName = matches[i].Groups[1].Value.Trim();
+      var start = matches[i].Index + matches[i].Length;
+      var end = i + 1 < matches.Count ? matches[i + 1].Index : source.Length;
+      var fileSource = source[start..end].Trim();
+      files.Add((fileName, fileSource));
+    }
+
+    return files.Count > 0 ? files : null;
   }
 
   private static string ExtractMultilineValue(string[] lines, ref int i) {

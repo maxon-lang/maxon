@@ -1,0 +1,23 @@
+// Test: non-exported-function-same-file
+function privateHelper() returns int
+  return 99
+end 'privateHelper'
+
+function main() returns int
+  return privateHelper()
+end 'main'
+---
+ExitCode: 99
+---
+module {
+  func @export-keyword.privateHelper() -> i64 {
+  entry:
+    x86.mov eax, 99
+    x86.ret
+  }
+  func @export-keyword.main() -> i64 {
+  entry:
+    x86.jmp export-keyword.privateHelper
+  }
+}
+---

@@ -421,8 +421,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SkipNewlines();
       if (IsAtEnd() || Current().Type == TokenType.Eof) break;
 
-      // Skip 'export' prefix
+      bool isExported = false;
       if (Check(TokenType.Export)) {
+        isExported = true;
         Advance();
       }
 
@@ -448,7 +449,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _globalVars[globalName] = new GlobalVarInfo(kind, true);
       } else if (Check(TokenType.Function)) {
         // Pre-register function signature for forward references
-        PreScanFunction(module, null);
+        PreScanFunction(module, null, isExported);
       } else if (Check(TokenType.Type)) {
         PreScanType(module);
       } else if (Check(TokenType.Enum)) {
@@ -503,7 +504,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Pre-scan a function declaration to register its signature.
   /// Only parses name, params, and return type; skips the body.
   /// </summary>
-  private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType) {
+  private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType, bool isExported = false) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
     var baseName = nameToken.Value;
@@ -536,8 +537,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames);
 
     if (!module.Functions.Any(f => f.Name == registrationName)) {
-      Logger.Debug(LogCategory.Parser, $"PreScanFunction: registering {registrationName} (owningType={owningType ?? "null"})");
+      Logger.Debug(LogCategory.Parser, $"PreScanFunction: registering {registrationName} (owningType={owningType ?? "null"}, exported={isExported})");
       var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
+      func.IsExported = isExported;
+      func.SourceFilePath = _sourceFilePath;
       module.AddFunction(func);
 
       if (paramDefaults.Count > 0) {
@@ -739,7 +742,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Advance(); // consume 'static'
 
         if (Check(TokenType.Function)) {
-          PreScanFunction(module, typeName);
+          PreScanFunction(module, typeName, isFieldExported);
           SkipNewlines();
           continue;
         }
@@ -756,7 +759,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       if (Check(TokenType.Function)) {
-        PreScanInstanceMethod(module, typeName);
+        PreScanInstanceMethod(module, typeName, isFieldExported);
         SkipNewlines();
         continue;
       }
@@ -1563,7 +1566,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _typeAliasSources[aliasName] = sourceName;
   }
 
-  private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
+  private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName, bool isExported = false) {
     Advance(); // consume 'function'
     var nameToken = Expect(TokenType.Identifier);
 
@@ -1596,6 +1599,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Register if not already present (by mangled name)
     if (!module.Functions.Any(f => f.Name == registrationName)) {
       var func = new MlirFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType);
+      func.IsExported = isExported;
+      func.SourceFilePath = _sourceFilePath;
       module.AddFunction(func);
 
       if (paramDefaults.Count > 0) {
@@ -2459,6 +2464,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.Functions.Remove(existing);
     }
     var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
+    if (existing != null) {
+      func.IsExported = existing.IsExported;
+      func.SourceFilePath = existing.SourceFilePath;
+    }
     module.AddFunction(func);
 
     // Store defaults
@@ -3698,6 +3707,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(cmpOp);
         return cmpOp.Result;
       }),
+    ["__get_current_directory"] = RuntimeCallIntrinsic(
+      "Gets the current working directory as a C string.\n\n`__get_current_directory() returns int`",
+      "maxon_get_current_directory", 0, true),
     // === Process intrinsics ===
     ["__process_create"] = RuntimeCallIntrinsic(
       "Creates a process. Returns handle.\n\n`__process_create(cstring_cmd, cstring_cwd) returns int`",
@@ -7130,6 +7142,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   ///   - "greet" finds suffix matches like "helpers.greet", "utils.greet"
   ///   - If multiple matches exist, it's ambiguous and errors
   /// </summary>
+  private bool IsFunctionVisible(MlirFunction<MaxonOp> func) {
+    if (_isStdlib) return true;
+    if (func.IsStdlib || func.IsExported) return true;
+    if (func.SourceFilePath == null || _sourceFilePath == null) return true;
+    return func.SourceFilePath == _sourceFilePath;
+  }
+
   private MlirFunction<MaxonOp> ResolveFunctionName(string functionName, Token functionNameToken) {
     // First, try to find a function in the current file's namespace
     var currentNamespace = DeriveNamespace();
@@ -7141,10 +7160,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return localMatch;
     }
 
-    // Find all other matches: exact match OR suffix match
-    var exactMatches = _currentModule!.Functions.Where(f => f.Name == functionName).ToList();
+    // Find all other matches: exact match OR suffix match, filtered by visibility
+    var exactMatches = _currentModule!.Functions.Where(f => f.Name == functionName && IsFunctionVisible(f)).ToList();
     var suffixPattern = $".{functionName}";
-    var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern)).ToList();
+    var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern) && IsFunctionVisible(f)).ToList();
 
     Logger.Debug(LogCategory.Parser, $"ResolveFunctionName: '{functionName}'");
     Logger.Debug(LogCategory.Parser, $"  Local match ('{qualifiedName}'): {(localMatch != null ? "found" : "not found")}");
@@ -7163,6 +7182,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // No exact matches - try suffix matches
     if (suffixMatches.Count == 0) {
+      // Check if there's a non-visible match to give a better error message
+      var hiddenExact = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName && !IsFunctionVisible(f));
+      var hiddenSuffix = _currentModule!.Functions.FirstOrDefault(f => f.Name.EndsWith(suffixPattern) && !IsFunctionVisible(f));
+      var hidden = hiddenExact ?? hiddenSuffix;
+      if (hidden != null) {
+        throw new CompileError(ErrorCode.SemanticSymbolNotExported,
+          $"function '{functionName}' is not exported",
+          functionNameToken.Line, functionNameToken.Column);
+      }
       throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Undefined function '{functionName}'",
         functionNameToken.Line, functionNameToken.Column);
@@ -7184,18 +7212,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var currentNamespace = DeriveNamespace();
     var qualifiedName = string.IsNullOrEmpty(currentNamespace) ? functionName : $"{currentNamespace}.{functionName}";
 
-    // Check local namespace
+    // Check local namespace (always visible — same file)
     var localMatches = _currentModule!.Functions.Where(f => f.Name == qualifiedName || f.Name.StartsWith(qualifiedName + "$")).ToList();
     if (localMatches.Count > 0) return localMatches;
 
-    // Exact matches (including overload variants)
-    var exactMatches = _currentModule!.Functions.Where(f => f.Name == functionName || f.Name.StartsWith(functionName + "$")).ToList();
+    // Exact matches (including overload variants), filtered by visibility
+    var exactMatches = _currentModule!.Functions.Where(f => (f.Name == functionName || f.Name.StartsWith(functionName + "$")) && IsFunctionVisible(f)).ToList();
     if (exactMatches.Count > 0) return exactMatches;
 
-    // Suffix matches
+    // Suffix matches, filtered by visibility
     var suffixPattern = $".{functionName}";
     var suffixDollar = $".{functionName}$";
-    var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)).ToList();
+    var suffixMatches = _currentModule!.Functions.Where(f => (f.Name.EndsWith(suffixPattern) || f.Name.Contains(suffixDollar)) && IsFunctionVisible(f)).ToList();
     return suffixMatches;
   }
 
@@ -7206,6 +7234,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MlirFunction<MaxonOp> SelectOverloadByNamedArgs(List<MlirFunction<MaxonOp>> candidates, Token callToken) {
     if (candidates.Count == 1) return candidates[0];
     if (candidates.Count == 0) {
+      // Check if there's a non-visible match to give a better error message
+      var functionName = callToken.Value;
+      var suffixPattern = $".{functionName}";
+      var hidden = _currentModule!.Functions.FirstOrDefault(f =>
+        (f.Name == functionName || f.Name.EndsWith(suffixPattern)) && !IsFunctionVisible(f));
+      if (hidden != null) {
+        throw new CompileError(ErrorCode.SemanticSymbolNotExported,
+          $"function '{functionName}' is not exported",
+          callToken.Line, callToken.Column);
+      }
       throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Undefined function '{callToken.Value}'",
         callToken.Line, callToken.Column);

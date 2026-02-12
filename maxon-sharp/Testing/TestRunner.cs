@@ -257,9 +257,23 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
         // Check Required MLIR by compiling fresh with all pipeline stages
         if (successExpectation.RequiredMLIR != null) {
-          var irResult = new Compiler.Compiler().Compile(
-            [new Compiler.SourceFile(fragment.FilePath, fragment.Source)],
-            exePath, returnIr: true);
+          Compiler.SourceFile[] irSources;
+          string? irTempDir = null;
+          if (fragment.SourceFiles != null) {
+            irTempDir = Path.Combine(Path.GetTempPath(), $"maxon-ir-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(irTempDir);
+            irSources = fragment.SourceFiles.Select(f => {
+              var path = Path.Combine(irTempDir, f.FileName);
+              File.WriteAllText(path, f.Source);
+              return new Compiler.SourceFile(path, f.Source);
+            }).ToArray();
+          } else {
+            irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
+          }
+          var irResult = new Compiler.Compiler().Compile(irSources, exePath, returnIr: true);
+          if (irTempDir != null) {
+            try { Directory.Delete(irTempDir, recursive: true); } catch { }
+          }
           if (!irResult.Success || irResult.AllStagesIr == null) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -350,10 +364,37 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
   private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath) {
     try {
-      var result = new Compiler.Compiler().Compile(
-        [new Compiler.SourceFile(fragment.FilePath, fragment.Source)],
-        outputPath, trackAllocs: fragment.TrackMemory);
-      return (result.Success, result.Error);
+      Compiler.SourceFile[] sources;
+      string? tempDir = null;
+
+      if (fragment.SourceFiles != null) {
+        tempDir = Path.Combine(Path.GetTempPath(), $"maxon-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        sources = fragment.SourceFiles.Select(f => {
+          var path = Path.Combine(tempDir, f.FileName);
+          File.WriteAllText(path, f.Source);
+          return new Compiler.SourceFile(path, f.Source);
+        }).ToArray();
+      } else {
+        sources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
+      }
+
+      try {
+        var result = new Compiler.Compiler().Compile(sources, outputPath, trackAllocs: fragment.TrackMemory);
+        var error = result.Error;
+        // Normalize temp directory paths to just filenames for multi-file tests
+        if (error != null && tempDir != null) {
+          var root = Compiler.CompileError.ProjectRoot ?? Environment.CurrentDirectory;
+          var relativeTempDir = Path.GetRelativePath(root, tempDir).Replace('\\', '/');
+          if (!relativeTempDir.EndsWith('/')) relativeTempDir += '/';
+          error = error.Replace(relativeTempDir, "");
+        }
+        return (result.Success, error);
+      } finally {
+        if (tempDir != null) {
+          try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+      }
     } catch (Exception ex) {
       return (false, ex.Message);
     }
