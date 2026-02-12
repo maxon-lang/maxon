@@ -67,8 +67,14 @@ public static class DeadStoreEliminationPass {
 
     // Build CFG: block name → successor block names
     var successors = new Dictionary<string, List<string>>();
-    foreach (var block in blocks) {
-      successors[block.Name] = GetSuccessors(block);
+    for (int bi = 0; bi < blocks.Count; bi++) {
+      var succs = GetSuccessors(blocks[bi]);
+      // Blocks with no terminator (empty or non-branch last op) fall through
+      // to the next physical block
+      if (succs.Count == 0 && bi + 1 < blocks.Count && !EndsWithTerminator(blocks[bi])) {
+        succs = [blocks[bi + 1].Name];
+      }
+      successors[blocks[bi].Name] = succs;
     }
 
     // Compute GEN and KILL for each block
@@ -144,9 +150,14 @@ public static class DeadStoreEliminationPass {
       StdCondBrOp condBr => [condBr.ThenBlock, condBr.ElseBlock],
       StdReturnOp => [],
       StdErrorReturnOp => [],
-      // Non-terminator ops at block end (stores, calls, etc.) have no successors
       _ => [],
     };
+  }
+
+  private static bool EndsWithTerminator(MlirBlock<StandardOp> block) {
+    if (block.Operations.Count == 0) return false;
+    var lastOp = block.Operations[^1];
+    return lastOp is StdBrOp or StdCondBrOp or StdReturnOp or StdErrorReturnOp;
   }
 
   private static HashSet<string> CollectAllVarNames(MlirFunction<StandardOp> func) {

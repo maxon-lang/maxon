@@ -1,5 +1,5 @@
-// Test: error.otherwise-block-with-binding
-// Test try otherwise block with error binding - block is entered on error
+// Test: error.binding-match-single-case
+// Test matching on typed error binding
 enum MyError is Error
   failed
 end 'MyError'
@@ -9,11 +9,13 @@ function mayFail() returns int throws MyError
 end 'mayFail'
 
 function main() returns int
-  var caught = 0
+  var result = 0
   try mayFail() otherwise (e) 'handler'
-    caught = 42
+    match e 'check'
+      MyError.failed then result = 42
+    end 'check'
   end 'handler'
-  return caught
+  return result
 end 'main'
 ---
 ExitCode: 42
@@ -30,17 +32,30 @@ module {
   }
   func @error-handling.main() -> i64 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call error-handling.mayFail
+    x86.mov [rbp-16], edx
     x86.xor ecx, ecx
     x86.cmp edx, ecx
     x86.je error-handling.main.otherwise_continue_1
   otherwise_error_0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.sub eax, ecx
+    x86.mov [rbp-24], eax
+    x86.jmp error-handling.main.check_4.cmp0
+  check_4.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne error-handling.main.check_4.merge
+  check_4.case0:
     x86.mov eax, 42
     x86.mov [rbp-8], eax
-    x86.jmp error-handling.main.otherwise_continue_1
+    x86.jmp error-handling.main.check_4.merge
+  check_4.merge:
   otherwise_continue_1:
     x86.mov eax, [rbp-8]
     x86.epilogue

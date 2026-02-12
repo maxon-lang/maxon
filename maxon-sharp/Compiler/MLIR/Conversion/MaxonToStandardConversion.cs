@@ -357,6 +357,37 @@ public static class MaxonToStandardConversion {
               valueMap[rawValueOp.Result] = enumStdVal;
               break;
             }
+            case MaxonErrorFlagToEnumOp errToEnumOp: {
+              if (errToEnumOp.HasAssociatedValues) {
+                // Associated-value error: the error flag IS the heap pointer
+                // Unpack into flat variables (tag + payload slots)
+                var heapPtr = (StdI64)valueMap[errToEnumOp.ErrorFlag];
+                var retVarName = $"__error_enum_{errToEnumOp.Result.Id}";
+                EmitStore(newBlock, heapPtr, retVarName, varTypes);
+
+                var enumType = (MlirEnumType)module.TypeDefs[errToEnumOp.EnumTypeName];
+                var tagLoaded = EmitStructFieldLoad(newBlock, retVarName, 0, MlirType.I64, varTypes);
+                EmitStore(newBlock, tagLoaded, $"{retVarName}.__tag", varTypes);
+
+                int maxPayload = GetMaxFlatPayloadSlots(enumType, module.TypeDefs);
+                for (int pi = 0; pi < maxPayload; pi++) {
+                  var payloadLoaded = EmitStructFieldLoad(newBlock, retVarName, 8 + pi * 8, MlirType.I64, varTypes);
+                  EmitStore(newBlock, payloadLoaded, $"{retVarName}.__payload_{pi}", varTypes);
+                }
+
+                structVarNames[errToEnumOp.Result.Id] = retVarName;
+                structValueTypes[errToEnumOp.Result.Id] = errToEnumOp.EnumTypeName;
+              } else {
+                // Simple error enum: subtract 1 from error flag to recover ordinal
+                var errorFlagVal = (StdI64)valueMap[errToEnumOp.ErrorFlag];
+                var oneOp = new StdConstI64Op(1);
+                newBlock.AddOp(oneOp);
+                var subOp = new StdSubI64Op(errorFlagVal, oneOp.Result);
+                newBlock.AddOp(subOp);
+                valueMap[errToEnumOp.Result] = subOp.Result;
+              }
+              break;
+            }
             case MaxonEnumStringRawValueOp strRawOp: {
               var enumType = (MlirEnumType)module.TypeDefs[strRawOp.EnumTypeName];
               var ordinalValue = (StdI64)valueMap[strRawOp.EnumValue];
@@ -1031,7 +1062,7 @@ public static class MaxonToStandardConversion {
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, managedVarOwners, cstringTrackVars, managedBufferElementInfo, module.TypeDefs, varNameToStructType);
               break;
             case MaxonThrowOp throwOp:
-              LowerThrow(throwOp, newBlock, valueMap);
+              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
@@ -1438,14 +1469,39 @@ public static class MaxonToStandardConversion {
   private static void LowerThrow(
     MaxonThrowOp throwOp,
     MlirBlock<StandardOp> block,
-    Dictionary<MaxonValue, StdValue> valueMap) {
-    // The error value is the enum ordinal. Add 1 to make it non-zero (0 = success).
-    var errorVal = (StdI64)valueMap[throwOp.ErrorValue];
-    var oneOp = new StdConstI64Op(1);
-    block.AddOp(oneOp);
-    var addOp = new StdAddI64Op(errorVal, oneOp.Result);
-    block.AddOp(addOp);
-    block.AddOp(new StdErrorReturnOp(addOp.Result));
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<int, string> structVarNames,
+    Dictionary<string, string> varTypes,
+    Dictionary<string, MlirType> typeDefs) {
+    // Check if this is an associated-value error enum
+    if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)
+        && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
+        && errorTypeDef is MlirEnumType errorEnumType && errorEnumType.HasAssociatedValues) {
+      // Pack tag + payload into a heap block and return the heap pointer in RDX
+      int maxPayload = GetMaxFlatPayloadSlots(errorEnumType, typeDefs);
+      int heapSize = 8 + maxPayload * 8;
+      var heapPtr = EmitAlloc(block, heapSize);
+
+      // Store tag at offset 0
+      var tagVal = EmitLoad(block, $"{enumPrefix}.__tag", varTypes);
+      block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
+
+      // Store payload slots
+      for (int pi = 0; pi < maxPayload; pi++) {
+        var payloadVal = EmitLoad(block, $"{enumPrefix}.__payload_{pi}", varTypes);
+        block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
+      }
+
+      block.AddOp(new StdErrorReturnOp(heapPtr));
+    } else {
+      // Simple error enum: the error value is the ordinal. Add 1 to make non-zero (0 = success).
+      var errorVal = (StdI64)valueMap[throwOp.ErrorValue];
+      var oneOp = new StdConstI64Op(1);
+      block.AddOp(oneOp);
+      var addOp = new StdAddI64Op(errorVal, oneOp.Result);
+      block.AddOp(addOp);
+      block.AddOp(new StdErrorReturnOp(addOp.Result));
+    }
   }
 
   private static void LowerTryCall(

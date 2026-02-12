@@ -91,12 +91,29 @@ Capture the error for inspection:
 
 ```maxon
 try readFile("config.json") otherwise (e) 'handler'
-  print("Error: ")
-  logError(e)
+  match e 'check'
+    FileError.notFound then print("File not found")
+    FileError.permissionDenied then print("Permission denied")
+    FileError.alreadyExists then print("Already exists")
+  end 'check'
 end 'handler'
 ```
 
-The error is bound to `e` within the block.
+The error is bound to `e` as a typed enum value within the block. You can use `match` to dispatch on specific error cases. For error enums with associated values, you can extract the payload:
+
+```maxon
+enum MyError is Error
+  notFound(code int)
+  failed
+end 'MyError'
+
+try doWork() otherwise (e) 'handler'
+  match e 'check'
+    notFound(code) then print(code)
+    failed then print("failed")
+  end 'check'
+end 'handler'
+```
 
 ### Error Propagation
 
@@ -324,7 +341,7 @@ end 'main'
 
 <!-- test: error.otherwise-block-with-binding -->
 ```maxon
-// Test try otherwise block with error binding
+// Test try otherwise block with error binding - block is entered on error
 enum MyError is Error
   failed
 end 'MyError'
@@ -335,7 +352,7 @@ end 'mayFail'
 
 function main() returns int
   var caught = 0
-  try mayFail() otherwise 'handler'
+  try mayFail() otherwise (e) 'handler'
     caught = 42
   end 'handler'
   return caught
@@ -479,4 +496,144 @@ end 'main'
 ```
 ```maxoncstderr
 error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:12:13: type mismatch: ''otherwise ignore' cannot be used in assignment'
+```
+
+<!-- test: error.binding-match-single-case -->
+```maxon
+// Test matching on typed error binding
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  try mayFail() otherwise (e) 'handler'
+    match e 'check'
+      MyError.failed then result = 42
+    end 'check'
+  end 'handler'
+  return result
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.binding-match-multi-case -->
+```maxon
+// Test matching on error binding with multiple cases
+enum MyError is Error
+  failed
+  timeout
+  notFound
+end 'MyError'
+
+function mayFail(code int) returns int throws MyError
+  if code == 1 'c1'
+    throw MyError.failed
+  end 'c1'
+  if code == 2 'c2'
+    throw MyError.timeout
+  end 'c2'
+  throw MyError.notFound
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  try mayFail(2) otherwise (e) 'handler'
+    match e 'check'
+      MyError.failed then result = 10
+      MyError.timeout then result = 20
+      MyError.notFound then result = 30
+    end 'check'
+  end 'handler'
+  return result
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: error.binding-success-no-block -->
+```maxon
+// Test that error binding block is skipped on success
+enum MyError is Error
+  failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns int throws MyError
+  if shouldFail 'check'
+    throw MyError.failed
+  end 'check'
+  return 100
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  try mayFail(false) otherwise (e) 'handler'
+    result = 99
+  end 'handler'
+  return result
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.assoc-value-throw-catch -->
+```maxon
+// Test error enum with associated value - throw and catch
+enum MyError is Error
+  notFound(code int)
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.notFound(404)
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  try mayFail() otherwise (e) 'handler'
+    match e 'check'
+      notFound(code) then result = code
+      failed then result = 1
+    end 'check'
+  end 'handler'
+  return result
+end 'main'
+```
+```exitcode
+404
+```
+
+<!-- test: error.assoc-value-throw-catch-2 -->
+```maxon
+// Test error enum with associated value - second case
+enum MyError is Error
+  notFound(code int)
+  failed
+end 'MyError'
+
+function mayFail() returns int throws MyError
+  throw MyError.notFound(42)
+end 'mayFail'
+
+function main() returns int
+  var result = 0
+  try mayFail() otherwise (e) 'handler'
+    match e 'check'
+      notFound(code) then result = code
+      failed then result = 0
+    end 'check'
+  end 'handler'
+  return result
+end 'main'
+```
+```exitcode
+42
 ```

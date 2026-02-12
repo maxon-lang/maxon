@@ -538,9 +538,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (!module.Functions.Any(f => f.Name == registrationName)) {
       Logger.Debug(LogCategory.Parser, $"PreScanFunction: registering {registrationName} (owningType={owningType ?? "null"}, exported={isExported})");
-      var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType);
-      func.IsExported = isExported;
-      func.SourceFilePath = _sourceFilePath;
+      var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
+        IsExported = isExported,
+        SourceFilePath = _sourceFilePath
+      };
       module.AddFunction(func);
 
       if (paramDefaults.Count > 0) {
@@ -1598,9 +1599,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Register if not already present (by mangled name)
     if (!module.Functions.Any(f => f.Name == registrationName)) {
-      var func = new MlirFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType);
-      func.IsExported = isExported;
-      func.SourceFilePath = _sourceFilePath;
+      var func = new MlirFunction<MaxonOp>(registrationName, allParamNames, allParamTypes, returnType, throwsType) {
+        IsExported = isExported,
+        SourceFilePath = _sourceFilePath
+      };
       module.AddFunction(func);
 
       if (paramDefaults.Count > 0) {
@@ -3084,7 +3086,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Check for block handler form: otherwise 'label' ... end 'label'
     if (Check(TokenType.CharacterLiteral)) {
-      return EmitTryOtherwiseBlock(tryCallOp, null);
+      return EmitTryOtherwiseBlock(tryCallOp, null, callee?.ThrowsType);
     }
 
     // Check for '(e)' error binding before block label
@@ -3092,7 +3094,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       Advance(); // consume '('
       var errorBindingToken = Expect(TokenType.Identifier);
       Expect(TokenType.RightParen);
-      return EmitTryOtherwiseBlock(tryCallOp, errorBindingToken);
+      return EmitTryOtherwiseBlock(tryCallOp, errorBindingToken, callee?.ThrowsType);
     }
 
     // Default value form: otherwise <expression>
@@ -3182,7 +3184,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
   }
 
-  private ExprResult.Direct EmitTryOtherwiseBlock(MaxonTryCallOp tryCallOp, Token? errorBindingToken) {
+  private ExprResult.Direct EmitTryOtherwiseBlock(MaxonTryCallOp tryCallOp, Token? errorBindingToken, MlirType? errorType = null) {
     var labelToken = Expect(TokenType.CharacterLiteral);
     var blockLabel = labelToken.Value;
 
@@ -3197,9 +3199,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock = errBlock;
 
     if (errorBindingToken != null) {
-      var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(loadErrorOp);
-      _variables[errorBindingToken.Value] = new VarInfo(MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!, null);
+      EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
     }
 
     SkipNewlines();
@@ -3211,6 +3211,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ExpectEndLabel(blockLabel);
 
     return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
+  }
+
+  /// <summary>
+  /// Emits a typed error binding variable in an error handler block.
+  /// When the error type is a known enum, produces a typed enum value for match support.
+  /// </summary>
+  private void EmitErrorBinding(string bindingName, string errorFlagVar, MlirType? errorType) {
+    var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(loadErrorOp);
+
+    if (errorType is MlirEnumType enumType) {
+      var backingKind = GetEnumBackingKind(enumType);
+      var toEnumOp = new MaxonErrorFlagToEnumOp(loadErrorOp.Result, enumType.Name, backingKind, enumType.HasAssociatedValues);
+      _currentBlock!.AddOp(toEnumOp);
+      _currentBlock!.AddOp(new MaxonAssignOp(bindingName, toEnumOp.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
+      _variables[bindingName] = new VarInfo(MaxonValueKind.Enum, false, toEnumOp.Result, _currentBlock!, enumType.Name);
+    } else {
+      _variables[bindingName] = new VarInfo(MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!, null);
+    }
   }
 
   private ExprResult.Direct EmitTryOtherwiseDefault(MaxonTryCallOp tryCallOp) {
@@ -4069,11 +4088,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
       _currentBlock = elseBlock;
 
-      // If error binding requested, load the error flag as a variable in the else block
+      // If error binding requested, emit a typed error binding in the else block
       if (errorBindingToken != null) {
-        var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
-        _currentBlock!.AddOp(loadErrorOp);
-        _variables[errorBindingToken.Value] = new VarInfo(MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!, null);
+        EmitErrorBinding(errorBindingToken.Value, errorFlagVar, callee?.ThrowsType);
       }
 
       ParseBodyUntilEnd();

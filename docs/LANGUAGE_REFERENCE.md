@@ -1394,16 +1394,19 @@ end 'loadData'
 
 #### Block with Error Binding
 
-Capture the error for inspection:
+Capture the error as a typed enum for inspection:
 
 ```maxon
 try readFile("config.json") otherwise (e) 'handler'
-    print("Error occurred")
-    logError(e)
+    match e 'check'
+        FileError.notFound then print("File not found")
+        FileError.permissionDenied then print("Permission denied")
+        FileError.alreadyExists then print("Already exists")
+    end 'check'
 end 'handler'
 ```
 
-The error is bound to the variable `e` within the block, allowing you to inspect or log it.
+The error is bound to the variable `e` as a typed enum value, allowing you to match on specific error cases. For error enums with associated values, you can extract the payload in the match arm.
 
 ```maxon
 function processFile(path String)

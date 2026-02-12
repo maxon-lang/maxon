@@ -11,7 +11,7 @@ public record FragmentGenerationResult(int Generated, int Errors);
 /// <summary>
 /// Generates .test fragment files from spec files.
 /// </summary>
-public static class FragmentGenerator {
+public static partial class FragmentGenerator {
   private const string SpecCountFileName = ".spec_count";
 
   /// <summary>
@@ -233,11 +233,11 @@ public static class FragmentGenerator {
         var tempDir = Path.Combine(Path.GetTempPath(), $"maxon-frag-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
         try {
-          sources = test.SourceFiles.Select(f => {
+          sources = [.. test.SourceFiles.Select(f => {
             var path = Path.Combine(tempDir, f.FileName);
             File.WriteAllText(path, f.Source);
             return new Compiler.SourceFile(path, f.Source);
-          }).ToArray();
+          })];
           var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, trackAllocs: test.TrackMemory);
           if (result.Success) {
             if (result.X86Ir != null) {
@@ -395,7 +395,7 @@ public static class FragmentGenerator {
     }, args, trackMemory);
   }
 
-  private static readonly Regex FileMarkerPattern = new(@"^// --- file:\s*(.+)$", RegexOptions.Multiline | RegexOptions.Compiled);
+  private static readonly Regex FileMarkerPattern = FileMarkerRegex();
 
   private static List<(string FileName, string Source)>? SplitMultiFileSource(string source) {
     var matches = FileMarkerPattern.Matches(source);
@@ -422,4 +422,7 @@ public static class FragmentGenerator {
     }
     return sb.ToString().TrimEnd();
   }
+
+  [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline | RegexOptions.Compiled)]
+  private static partial Regex FileMarkerRegex();
 }

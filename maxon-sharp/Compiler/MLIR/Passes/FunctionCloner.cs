@@ -252,6 +252,7 @@ internal class FunctionCloner {
       case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, ep.EnumTypeName, ep.BackingKind); RegisterResult(ep.Result, c.Result); return c; }
       case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, ev.EnumTypeName, ev.BackingKind); RegisterResult(ev.Result, c.Result); return c; }
       case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(MapValue(er.EnumValue), er.EnumTypeName, er.ResultKind); RegisterResult(er.Result, c.Result); return c; }
+      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(MapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); RegisterResult(ef.Result, c.Result); return c; }
 
       // Global ops
       case MaxonGlobalLoadOp gl: { var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind); RegisterResult(gl.Result, c.Result); return c; }

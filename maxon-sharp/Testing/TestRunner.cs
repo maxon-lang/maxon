@@ -262,11 +262,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           if (fragment.SourceFiles != null) {
             irTempDir = Path.Combine(Path.GetTempPath(), $"maxon-ir-{Guid.NewGuid():N}");
             Directory.CreateDirectory(irTempDir);
-            irSources = fragment.SourceFiles.Select(f => {
+            irSources = [.. fragment.SourceFiles.Select(f => {
               var path = Path.Combine(irTempDir, f.FileName);
               File.WriteAllText(path, f.Source);
               return new Compiler.SourceFile(path, f.Source);
-            }).ToArray();
+            })];
           } else {
             irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
           }
@@ -370,11 +370,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       if (fragment.SourceFiles != null) {
         tempDir = Path.Combine(Path.GetTempPath(), $"maxon-test-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempDir);
-        sources = fragment.SourceFiles.Select(f => {
+        sources = [.. fragment.SourceFiles.Select(f => {
           var path = Path.Combine(tempDir, f.FileName);
           File.WriteAllText(path, f.Source);
           return new Compiler.SourceFile(path, f.Source);
-        }).ToArray();
+        })];
       } else {
         sources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
       }
