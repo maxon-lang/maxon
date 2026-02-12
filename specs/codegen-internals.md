@@ -233,99 +233,125 @@ module {
 module {
   func @codegen-internals.main() -> i64 {
   entry:
+    %1 = arith.constant {value = 0 : i64}
     %2 = arith.constant {value = 1 : i64}
     %3 = arith.constant {value = 0 : i64}
     %4 = arith.constant {value = 8 : i64}
-    %5 = arith.constant {value = 0 : i64}
-    %10 = memref.lea_rdata __const_array_codegen-internals.main_arr
-    %11 = std.ptr_to_i64 %10
-    %12 = arith.constant {value = 0 : i64}
-    %13 = arith.constant {value = 77 : i64}
-    memref.store %4, __selfbuf_14.managed.element_size
-    memref.store %3, __selfbuf_14.managed.capacity
-    memref.store %2, __selfbuf_14.managed.length
-    memref.store %11, __selfbuf_14.managed.buffer
-    memref.store %5, __selfbuf_14.iterIndex
-    %20 = memref.lea __selfbuf_14
-    func.call @IntArray.set %20, %12, %13
-    %21 = memref.load __selfbuf_14.managed.element_size : i64
-    %22 = memref.load __selfbuf_14.managed.capacity : i64
-    %23 = memref.load __selfbuf_14.managed.length : i64
-    %24 = memref.load __selfbuf_14.managed.buffer : i64
-    %25 = memref.load __selfbuf_14.iterIndex : i64
-    %26 = arith.constant {value = 0 : i64}
-    memref.store %21, __selfbuf_27.managed.element_size
-    memref.store %22, __selfbuf_27.managed.capacity
-    memref.store %23, __selfbuf_27.managed.length
-    memref.store %24, __selfbuf_27.managed.buffer
-    memref.store %25, __selfbuf_27.iterIndex
-    %33 = memref.lea __selfbuf_27
-    %34, %35 = func.try_call @IntArray.get %33, %26
-    %41 = arith.constant {value = 0 : i64}
-    memref.store %41, __try_default_2
-    memref.store %34, __try_result_1
-    %42 = arith.constant {value = 0 : i64}
-    %43 = arith.cmpi ne %35, %42
-    cf.cond_br %43 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %5 = arith.constant {value = 32 : i64}
+    %6 = std.call_runtime @maxon_alloc %5
+    memref.store %6, __struct_5
+    %7 = memref.load __struct_5 : i64
+    memref.store_indirect %1, %7+0
+    %8 = memref.load __struct_5 : i64
+    memref.store_indirect %2, %8+8
+    %9 = memref.load __struct_5 : i64
+    memref.store_indirect %3, %9+16
+    %10 = memref.load __struct_5 : i64
+    memref.store_indirect %4, %10+24
+    %11 = arith.constant {value = 0 : i64}
+    %12 = arith.constant {value = 16 : i64}
+    %13 = std.call_runtime @maxon_alloc %12
+    memref.store %13, arr
+    %14 = memref.load arr : i64
+    memref.store_indirect %11, %14+0
+    %15 = memref.load __struct_5 : i64
+    %16 = memref.load arr : i64
+    memref.store_indirect %15, %16+8
+    %17 = memref.lea_rdata __const_array_codegen-internals.main_arr
+    %18 = std.ptr_to_i64 %17
+    %19 = memref.load arr : i64
+    %20 = memref.load_indirect %19+8
+    memref.store_indirect %18, %20+0
+    %21 = arith.constant {value = 0 : i64}
+    %22 = arith.constant {value = 77 : i64}
+    %23 = memref.load arr : i64
+    func.call @IntArray.set %23, %21, %22
+    %24 = arith.constant {value = 0 : i64}
+    %25 = memref.load arr : i64
+    %26, %27 = func.try_call @IntArray.get %25, %24
+    %28 = arith.constant {value = 0 : i64}
+    memref.store %28, __try_default_2
+    memref.store %26, __try_result_1
+    %29 = arith.constant {value = 0 : i64}
+    %30 = arith.cmpi ne %27, %29
+    cf.cond_br %30 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %44 = memref.load __try_default_2 : i64
-    memref.store %44, __try_result_1
+    %31 = memref.load __try_default_2 : i64
+    memref.store %31, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %45 = memref.load __try_result_1 : i64
-    func.return %45
+    %32 = memref.load __try_result_1 : i64
+    func.return %32
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> i64 {
   entry:
-    x86.prologue stack_size=96
-    x86.mov eax, 1
-    x86.xor ecx, ecx
-    x86.mov edx, 8
-    x86.xor ebx, ebx
-    x86.lea_rdata rsi, [__const_array_codegen-internals.main_arr]
-    x86.mov rdi, rsi
-    x86.xor r8, r8
-    x86.mov r9, 77
-    x86.mov [rbp-8], edx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
-    x86.mov [rbp-32], edi
-    x86.mov [rbp-40], ebx
-    x86.lea rax, [rbp-40]
-    x86.mov rcx, rax
-    x86.mov rdx, r8
-    x86.mov r8, r9
-    x86.call IntArray.set
+    x86.prologue stack_size=80
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.xor edx, edx
+    x86.mov ebx, 8
+    x86.mov esi, 32
+    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], ecx
+    x86.mov [rbp-56], edx
+    x86.mov [rbp-64], ebx
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [rbp-40]
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-8]
+    x86.mov eax, [rbp-48]
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-56]
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-64]
+    x86.mov [eax+24], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.mov [rbp-72], eax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-72]
+    x86.mov [eax+0], ecx
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
-    x86.mov edx, [rbp-24]
-    x86.mov ebx, [rbp-32]
-    x86.mov esi, [rbp-40]
-    x86.xor edi, edi
-    x86.mov [rbp-48], eax
-    x86.mov [rbp-56], ecx
-    x86.mov [rbp-64], edx
-    x86.mov [rbp-72], ebx
-    x86.mov [rbp-80], esi
-    x86.lea rax, [rbp-80]
+    x86.mov [ecx+8], eax
+    x86.lea_rdata rax, [__const_array_codegen-internals.main_arr]
     x86.mov rcx, rax
-    x86.mov rdx, rdi
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 77
+    x86.mov edx, [rbp-16]
+    x86.mov r8, rcx
+    x86.mov rcx, rdx
+    x86.mov rdx, rax
+    x86.call IntArray.set
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
     x86.call IntArray.get
     x86.xor ecx, ecx
-    x86.mov [rbp-88], ecx
-    x86.mov [rbp-96], eax
+    x86.mov [rbp-24], ecx
+    x86.mov [rbp-32], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je codegen-internals.main.otherwise_default_continue_4
   otherwise_default_error_3:
-    x86.mov eax, [rbp-88]
-    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
     x86.jmp codegen-internals.main.otherwise_default_continue_4
   otherwise_default_continue_4:
-    x86.mov eax, [rbp-96]
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

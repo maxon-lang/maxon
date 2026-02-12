@@ -521,7 +521,7 @@ MOVE: managed
 COPY: StringArray
 MOVE: inner
 MOVE: managed
-ALLOC #2: 160 bytes (array grow)
+ALLOC #2: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 CLEANUP: outer
@@ -533,11 +533,11 @@ CLEANUP: outer
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: outer -> rc=0
-FREE #2: 160 bytes (array cleanup)
+FREE #2: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 192 bytes
-Freed:     192 bytes
+Allocated: 64 bytes
+Freed:     64 bytes
 Leaked:    0 bytes
 Moves:     7
 Increfs:   2

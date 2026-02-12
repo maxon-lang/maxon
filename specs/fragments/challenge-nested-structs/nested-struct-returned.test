@@ -20,30 +20,39 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @challenge-nested-structs.makeOuter(__sret: i64) {
+  func @challenge-nested-structs.makeOuter() -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
+    x86.prologue stack_size=32
     x86.mov eax, 42
+    x86.mov ecx, 8
+    x86.mov [rbp-24], eax
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-24]
+    x86.mov [edx+0], ebx
+    x86.mov esi, 8
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
     x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-8]
-    x86.xor edx, edx
-    x86.add eax, edx
-    x86.mov edx, [rbp-16]
-    x86.mov [eax+0], edx
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [rbp-16]
+    x86.mov [r8+0], edi
+    x86.mov r9, [rbp-16]
+    x86.mov eax, r9
     x86.epilogue
     x86.ret
   }
   func @challenge-nested-structs.main() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.lea rcx, [rbp-8]
     x86.call challenge-nested-structs.makeOuter
-    x86.mov edx, [rbp-8]
-    x86.mov [rbp-16], edx
-    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, [edx+0]
     x86.mov eax, ebx
     x86.epilogue
     x86.ret

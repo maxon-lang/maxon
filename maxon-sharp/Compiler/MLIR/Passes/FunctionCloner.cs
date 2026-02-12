@@ -422,7 +422,7 @@ internal class FunctionCloner {
     if (structLit.TypeName == "__ManagedMemory" && _concreteElementType != null) {
       for (int i = 0; i < newFieldValues.Count; i++) {
         if (newFieldValues[i].FieldName == "element_size") {
-          int elementSize = _concreteElementType?.SizeInBytes ?? 8;
+          int elementSize = _concreteElementType?.ElementSize ?? 8;
           var elementSizeLitOp = new MaxonLiteralOp((long)elementSize);
           extraOps.Add(elementSizeLitOp);
           newFieldValues[i] = ("element_size", elementSizeLitOp.Result);
@@ -445,6 +445,7 @@ internal class FunctionCloner {
     var isStructElem = _typeSubstitution.TryGetValue(paramKey, out var getElemType) && getElemType is MlirStructType;
     var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind) {
       IsStructElement = isStructElem,
+      StructElementTypeName = isStructElem && getElemType is MlirStructType st ? st.Name : null,
       TypeParamName = memGet.TypeParamName
     };
     RegisterResult(memGet.Result, cloned.Result);
@@ -531,7 +532,7 @@ internal class FunctionCloner {
     foreach (var (_, concreteType) in _typeSubstitution.Entries) {
       if (concreteType is MlirStructType st && st.Name == typeName) {
         if (st.TypeParams != null && st.TypeParams.TryGetValue("Element", out var elemType) && elemType is not MlirTypeParameterType) {
-          return elemType.SizeInBytes;
+          return elemType.ElementSize;
         }
       }
     }

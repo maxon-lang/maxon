@@ -339,21 +339,21 @@ end 'main'
 1
 ```
 ```stdout
-ALLOC #1: 768 bytes (array grow)
+ALLOC #1: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #2: 768 bytes (array grow)
+ALLOC #2: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #3: 768 bytes (array grow)
+ALLOC #3: 128 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-MOVE: key
+MOVE: k
 MOVE: managed
-MOVE: key
+CLEANUP: k
+MOVE: k
 MOVE: managed
-CLEANUP: initKeys
-CLEANUP: initValues
+CLEANUP: k
 CLEANUP: m
 CLEANUP: <array element>
 CLEANUP: <array element>
@@ -372,17 +372,17 @@ CLEANUP: <array element>
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: m -> rc=0
-FREE #1: 768 bytes (array cleanup)
+FREE #1: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #2: 768 bytes (array cleanup)
+FREE #2: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 768 bytes (array cleanup)
+FREE #3: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 2304 bytes
-Freed:     2304 bytes
+Allocated: 384 bytes
+Freed:     384 bytes
 Leaked:    0 bytes
 Moves:     7
 Increfs:   3
@@ -405,23 +405,24 @@ end 'main'
 30
 ```
 ```stdout
-ALLOC #1: 768 bytes (array grow)
+ALLOC #1: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #2: 768 bytes (array grow)
+ALLOC #2: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #3: 768 bytes (array grow)
+ALLOC #3: 128 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-MOVE: key
+MOVE: k
 MOVE: managed
-MOVE: key
+CLEANUP: k
+MOVE: k
 MOVE: managed
-MOVE: key
+CLEANUP: k
+MOVE: k
 MOVE: managed
-CLEANUP: initKeys
-CLEANUP: initValues
+CLEANUP: k
 CLEANUP: m
 CLEANUP: <array element>
 CLEANUP: <array element>
@@ -440,23 +441,23 @@ CLEANUP: <array element>
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: m -> rc=0
-FREE #1: 768 bytes (array cleanup)
+FREE #1: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #2: 768 bytes (array cleanup)
+FREE #2: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 768 bytes (array cleanup)
+FREE #3: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 2304 bytes
-Freed:     2304 bytes
+Allocated: 384 bytes
+Freed:     384 bytes
 Leaked:    0 bytes
 Moves:     9
 Increfs:   3
 Decrefs:   3
 Copies:    0
-Cleanups:  21
+Cleanups:  22
 ```
 
 <!-- test: string-keys-contains -->
@@ -474,21 +475,21 @@ end 'main'
 1
 ```
 ```stdout
-ALLOC #1: 768 bytes (array grow)
+ALLOC #1: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #2: 768 bytes (array grow)
+ALLOC #2: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #3: 768 bytes (array grow)
+ALLOC #3: 128 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-MOVE: key
+MOVE: k
 MOVE: managed
-MOVE: key
+CLEANUP: k
+MOVE: k
 MOVE: managed
-CLEANUP: initKeys
-CLEANUP: initValues
+CLEANUP: k
 CLEANUP: m
 CLEANUP: <array element>
 CLEANUP: <array element>
@@ -507,17 +508,17 @@ CLEANUP: <array element>
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: m -> rc=0
-FREE #1: 768 bytes (array cleanup)
+FREE #1: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #2: 768 bytes (array cleanup)
+FREE #2: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 768 bytes (array cleanup)
+FREE #3: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 2304 bytes
-Freed:     2304 bytes
+Allocated: 384 bytes
+Freed:     384 bytes
 Leaked:    0 bytes
 Moves:     7
 Increfs:   3
@@ -540,19 +541,18 @@ end 'main'
 99
 ```
 ```stdout
-ALLOC #1: 768 bytes (array grow)
+ALLOC #1: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #2: 768 bytes (array grow)
+ALLOC #2: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #3: 768 bytes (array grow)
+ALLOC #3: 128 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-MOVE: key
+MOVE: k
 MOVE: managed
-CLEANUP: initKeys
-CLEANUP: initValues
+CLEANUP: k
 CLEANUP: m
 CLEANUP: <array element>
 CLEANUP: <array element>
@@ -571,23 +571,23 @@ CLEANUP: <array element>
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: m -> rc=0
-FREE #1: 768 bytes (array cleanup)
+FREE #1: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #2: 768 bytes (array cleanup)
+FREE #2: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 768 bytes (array cleanup)
+FREE #3: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 2304 bytes
-Freed:     2304 bytes
+Allocated: 384 bytes
+Freed:     384 bytes
 Leaked:    0 bytes
 Moves:     5
 Increfs:   3
 Decrefs:   3
 Copies:    0
-Cleanups:  21
+Cleanups:  20
 ```
 
 <!-- test: string-keys-remove -->
@@ -606,24 +606,24 @@ end 'main'
 2
 ```
 ```stdout
-ALLOC #1: 768 bytes (array grow)
+ALLOC #1: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #2: 768 bytes (array grow)
+ALLOC #2: 128 bytes (array grow)
 INCREF: array grow -> rc=1
-ALLOC #3: 768 bytes (array grow)
+ALLOC #3: 128 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: ks
 MOVE: vs
 MOVE: sts
-MOVE: key
+MOVE: k
 MOVE: managed
-MOVE: key
+CLEANUP: k
+MOVE: k
 MOVE: managed
-MOVE: key
+CLEANUP: k
+MOVE: k
 MOVE: managed
-CLEANUP: initKeys
-CLEANUP: initValues
-CLEANUP: key
+CLEANUP: k
 CLEANUP: m
 CLEANUP: <array element>
 CLEANUP: <array element>
@@ -642,17 +642,17 @@ CLEANUP: <array element>
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: m -> rc=0
-FREE #1: 768 bytes (array cleanup)
+FREE #1: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #2: 768 bytes (array cleanup)
+FREE #2: 128 bytes (array cleanup)
 CLEANUP: m
 DECREF: m -> rc=0
-FREE #3: 768 bytes (array cleanup)
+FREE #3: 128 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 2304 bytes
-Freed:     2304 bytes
+Allocated: 384 bytes
+Freed:     384 bytes
 Leaked:    0 bytes
 Moves:     9
 Increfs:   3

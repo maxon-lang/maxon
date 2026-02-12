@@ -668,6 +668,8 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, Ma
   public MaxonValue Index { get; } = index;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public bool IsStructElement { get; init; }
+  /// The concrete struct type name when IsStructElement is true
+  public string? StructElementTypeName { get; init; }
   /// When ResultKind is TypeParameter, this identifies which type param (e.g., "Key", "Value", "Element")
   public string? TypeParamName { get; init; }
   // Result is always a scalar or pointer — struct/enum elements produce a pointer to inline data

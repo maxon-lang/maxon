@@ -22,179 +22,154 @@ Stdout: ```
 ```
 ---
 module {
-  func @CharWrapper.init(__sret: i64, value: i64) {
+  func @CharWrapper.init(value: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
-    x86.xor eax, eax
-    x86.add edx, eax
-    x86.mov eax, [edx+24]
-    x86.mov ebx, [edx+16]
-    x86.mov esi, [edx+8]
-    x86.mov edi, [edx+0]
+    x86.mov eax, 8
+    x86.mov rcx, rax
+    x86.call maxon_alloc
     x86.mov [rbp-16], eax
-    x86.mov [rbp-24], ebx
-    x86.mov [rbp-32], esi
-    x86.mov [rbp-40], edi
-    x86.mov eax, [rbp-8]
-    x86.xor edx, edx
-    x86.add eax, edx
-    x86.xor edx, edx
-    x86.add eax, edx
-    x86.mov edx, [rbp-40]
-    x86.mov [eax+0], edx
-    x86.mov edx, [rbp-32]
-    x86.mov [eax+8], edx
-    x86.mov edx, [rbp-24]
-    x86.mov [eax+16], edx
+    x86.mov ecx, [rbp-8]
     x86.mov edx, [rbp-16]
-    x86.mov [eax+24], edx
+    x86.mov [edx+0], ecx
+    x86.mov ebx, [rbp-16]
+    x86.mov eax, ebx
     x86.epilogue
     x86.ret
   }
   func @CharWrapper.len(__self_ptr: i64) -> i64 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
-    x86.xor eax, eax
-    x86.add ecx, eax
-    x86.xor eax, eax
-    x86.add ecx, eax
-    x86.mov eax, [ecx+24]
-    x86.mov edx, [ecx+16]
-    x86.mov ebx, [ecx+8]
-    x86.mov esi, [ecx+0]
-    x86.mov [rbp-16], eax
-    x86.mov [rbp-24], edx
-    x86.mov [rbp-32], ebx
-    x86.mov [rbp-40], esi
-    x86.lea rcx, [rbp-40]
-    x86.call stdlib.Character.byteLength
-    x86.mov edx, [rbp-16]
-    x86.mov [rbp-48], edx
-    x86.mov ebx, [rbp-24]
-    x86.mov [rbp-56], ebx
-    x86.mov esi, [rbp-32]
-    x86.mov [rbp-64], esi
-    x86.mov edi, [rbp-40]
-    x86.mov [rbp-72], edi
-    x86.mov r8, [rbp-8]
-    x86.xor r9, r9
-    x86.add r8, r9
-    x86.xor ecx, ecx
-    x86.add r8, ecx
-    x86.mov ecx, [rbp-72]
-    x86.mov [r8+0], ecx
-    x86.mov ecx, [rbp-64]
-    x86.mov [r8+8], ecx
-    x86.mov ecx, [rbp-56]
-    x86.mov [r8+16], ecx
-    x86.mov ecx, [rbp-48]
-    x86.mov [r8+24], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
     x86.epilogue
-    x86.ret
+    x86.jmp stdlib.Character.byteLength
   }
   func @init-from-literal.main() -> i64 {
   entry:
-    x86.prologue stack_size=256
+    x86.prologue stack_size=176
     x86.lea_rdata rax, [__chr_7]
     x86.mov rcx, rax
     x86.mov edx, 1
-    x86.xor ebx, ebx
-    x86.mov esi, 1
-    x86.xor edi, edi
-    x86.mov [rbp-8], edi
-    x86.xor r8, r8
-    x86.mov [rbp-16], r8
-    x86.xor r9, r9
-    x86.mov [rbp-24], r9
+    x86.mov ebx, 32
+    x86.mov [rbp-112], ecx
+    x86.mov [rbp-120], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-112]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [rbp-120]
+    x86.mov [r8+8], r9
     x86.xor eax, eax
-    x86.mov [rbp-32], eax
-    x86.lea rax, [rbp-32]
-    x86.mov [rbp-40], esi
-    x86.mov [rbp-48], ebx
-    x86.mov [rbp-56], edx
-    x86.mov [rbp-64], ecx
-    x86.lea rcx, [rbp-64]
-    x86.mov rdx, rcx
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
     x86.mov rcx, rax
-    x86.call CharWrapper.init
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
-    x86.mov edx, [rbp-24]
-    x86.mov ebx, [rbp-32]
-    x86.mov [rbp-72], eax
-    x86.mov [rbp-80], ecx
-    x86.mov [rbp-88], edx
-    x86.mov [rbp-96], ebx
-    x86.lea rax, [rbp-96]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call CharWrapper.init
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
     x86.mov rcx, rax
     x86.call CharWrapper.len
     x86.mov ecx, 21
-    x86.mov [rbp-208], eax
+    x86.mov [rbp-128], eax
     x86.call maxon_alloc
-    x86.mov [rbp-104], eax
-    x86.mov rcx, [rbp-208]
+    x86.mov [rbp-32], eax
+    x86.mov rcx, [rbp-128]
     x86.mov rdx, rax
     x86.call maxon_i64_to_string
-    x86.mov ecx, [rbp-104]
-    x86.lea_rdata rdx, [__interp_lit_85]
+    x86.mov ecx, [rbp-32]
+    x86.lea_rdata rdx, [__interp_lit_37]
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.lea esi, [eax + edx]
     x86.mov edi, 1
     x86.lea r8, [esi + edi]
-    x86.mov [rbp-216], eax
-    x86.mov [rbp-224], ecx
-    x86.mov [rbp-232], edx
-    x86.mov [rbp-240], ebx
-    x86.mov [rbp-248], esi
+    x86.mov [rbp-136], eax
+    x86.mov [rbp-144], ecx
+    x86.mov [rbp-152], edx
+    x86.mov [rbp-160], ebx
+    x86.mov [rbp-168], esi
     x86.mov rcx, r8
     x86.call maxon_alloc
     x86.xor ecx, ecx
-    x86.mov [rbp-112], ecx
-    x86.mov [rbp-120], eax
-    x86.mov ecx, [rbp-248]
-    x86.mov [rbp-128], ecx
-    x86.mov ecx, [rbp-224]
-    x86.mov [rbp-136], ecx
-    x86.mov ecx, [rbp-216]
-    x86.mov [rbp-144], ecx
-    x86.mov ecx, [rbp-240]
-    x86.mov [rbp-152], ecx
-    x86.mov ecx, [rbp-232]
-    x86.mov [rbp-160], ecx
-    x86.mov ecx, [rbp-120]
-    x86.mov edx, [rbp-112]
-    x86.add ecx, edx
-    x86.mov edx, [rbp-136]
-    x86.mov ebx, [rbp-144]
-    x86.mov rsi, edx
-    x86.mov rdi, ecx
-    x86.mov rcx, ebx
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-168]
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-144]
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-136]
+    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-160]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-152]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-40]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-64]
+    x86.mov edx, [rbp-72]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
     x86.rep_movsb
-    x86.mov ecx, [rbp-112]
-    x86.mov edx, [rbp-144]
-    x86.add ecx, edx
-    x86.mov [rbp-112], ecx
-    x86.mov ecx, [rbp-120]
-    x86.mov edx, [rbp-112]
-    x86.add ecx, edx
-    x86.mov edx, [rbp-152]
-    x86.mov ebx, [rbp-160]
-    x86.mov rsi, edx
-    x86.mov rdi, ecx
-    x86.mov rcx, ebx
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-72]
+    x86.add eax, ecx
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-40]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-80]
+    x86.mov edx, [rbp-88]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
     x86.rep_movsb
-    x86.mov ecx, [rbp-128]
-    x86.mov edx, 1
-    x86.xor ebx, ebx
-    x86.mov [rbp-168], ebx
-    x86.mov [rbp-176], edx
-    x86.mov [rbp-184], ecx
-    x86.mov [rbp-192], ecx
-    x86.mov [rbp-200], eax
-    x86.lea rax, [rbp-200]
+    x86.mov eax, 32
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-96]
+    x86.mov ecx, [rbp-104]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-104]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-104]
     x86.mov rcx, rax
     x86.call stdlib.Print.print
     x86.xor ecx, ecx

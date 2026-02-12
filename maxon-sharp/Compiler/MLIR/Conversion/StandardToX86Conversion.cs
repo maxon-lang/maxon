@@ -145,8 +145,8 @@ public static class StandardToX86Conversion {
       regManager.Reset();
 
       // In the entry block, save register-based parameters to their stack slots
-      // immediately. This prevents later operations (e.g. LoadStructFieldsFromPointer)
-      // from clobbering parameter registers before the params are stored.
+      // immediately. This prevents later operations from clobbering parameter
+      // registers before the params are stored.
       if (blockIdx == 0) {
         var registerParams = srcBlock.Operations.OfType<StdParamOp>()
           .Where(p => p.Index < RegisterManager.RegisterParamCount).ToList();

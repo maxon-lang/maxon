@@ -67,17 +67,17 @@ public class MlirStructType : MlirType {
     int offset = 0;
     foreach (var field in Fields) {
       field.Offset = offset;
-      // Nested structs use their actual size; scalar types always use 8 bytes (64-bit slots)
-      offset += field.Type is MlirStructType ? field.Type.SizeInBytes : 8;
+      // All fields are 8 bytes: scalars use 64-bit slots, struct fields store heap pointers
+      offset += 8;
     }
   }
 
   private static int ComputeSize(List<MlirStructField> fields) {
-    int size = 0;
-    foreach (var field in fields)
-      size += field.Type is MlirStructType ? field.Type.SizeInBytes : 8;
-    return size;
+    return fields.Count * 8;
   }
+
+  // When stored as array elements, structs are heap pointers (8 bytes)
+  public override int ElementSize => 8;
 
   public MlirStructField? GetField(string name) => Fields.FirstOrDefault(f => f.Name == name);
 }

@@ -21,61 +21,62 @@ end 'main'
 ExitCode: 45
 ---
 module {
-  func @Point.move(__sret: i64, __self_ptr: i64, dx: i64, dy: i64) {
+  func @Point.move(__self_ptr: i64, dx: i64, dy: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
-    x86.mov eax, [edx+8]
-    x86.mov [rbp-24], eax
-    x86.mov eax, [edx+0]
-    x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-32]
-    x86.mov edx, [rbp-24]
-    x86.add eax, r8
-    x86.add edx, r9
-    x86.mov [rbp-40], eax
-    x86.mov [rbp-48], edx
-    x86.mov eax, [rbp-16]
-    x86.mov edx, [rbp-32]
-    x86.mov [eax+0], edx
-    x86.mov edx, [rbp-24]
-    x86.mov [eax+8], edx
     x86.mov eax, [rbp-8]
-    x86.mov edx, [rbp-40]
-    x86.mov [eax+0], edx
-    x86.mov edx, [rbp-48]
-    x86.mov [eax+8], edx
+    x86.mov ebx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov esi, [eax+8]
+    x86.add ebx, edx
+    x86.add esi, r8
+    x86.mov eax, 16
+    x86.mov [rbp-24], ebx
+    x86.mov [rbp-32], esi
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, [rbp-32]
+    x86.mov [ebx+8], esi
+    x86.mov edi, [rbp-16]
+    x86.mov eax, edi
     x86.epilogue
     x86.ret
   }
   func @interfaces.main() -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov eax, 10
     x86.mov ecx, 20
-    x86.mov edx, 5
-    x86.mov ebx, 10
-    x86.xor esi, esi
-    x86.mov [rbp-8], esi
-    x86.xor edi, edi
-    x86.mov [rbp-16], edi
-    x86.lea r8, [rbp-16]
-    x86.mov [rbp-24], ecx
-    x86.mov [rbp-32], eax
-    x86.lea r9, [rbp-32]
-    x86.mov rcx, r8
-    x86.mov r8, rdx
+    x86.mov edx, 16
+    x86.mov [rbp-24], eax
+    x86.mov [rbp-32], ecx
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-24]
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [rbp-32]
+    x86.mov [edi+8], r8
+    x86.mov r9, 5
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-8]
     x86.mov rdx, r9
-    x86.mov r9, rbx
+    x86.mov r8, rax
     x86.call Point.move
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-16], eax
     x86.mov eax, [rbp-16]
-    x86.mov [rbp-48], eax
-    x86.mov eax, [rbp-48]
-    x86.mov ecx, [rbp-40]
-    x86.add eax, ecx
+    x86.mov ecx, [eax+0]
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+8]
+    x86.lea eax, [ecx + edx]
     x86.epilogue
     x86.ret
   }

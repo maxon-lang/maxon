@@ -14,15 +14,26 @@ ExitCode: 55
 module {
   func @structs.main() -> i64 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 5
     x86.movsd xmm0, [rip+__float_50]
+    x86.mov ecx, 16
+    x86.mov [rbp-16], eax
+    x86.movsd [rbp-24], xmm0
+    x86.call maxon_alloc
     x86.mov [rbp-8], eax
-    x86.movsd [rbp-16], xmm0
-    x86.mov ecx, [rbp-8]
-    x86.movsd xmm1, [rbp-16]
-    x86.cvttsd2si edx, xmm1
-    x86.lea eax, [ecx + edx]
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-8]
+    x86.movsd xmm0, [rbp-24]
+    x86.movsd [esi+8], xmm0
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [edi+0]
+    x86.mov r9, [rbp-8]
+    x86.movsd xmm1, [r9+8]
+    x86.cvttsd2si eax, xmm1
+    x86.lea eax, [r8 + eax]
     x86.epilogue
     x86.ret
   }

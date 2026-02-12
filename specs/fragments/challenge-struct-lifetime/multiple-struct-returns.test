@@ -25,78 +25,79 @@ end 'main'
 ExitCode: 111
 ---
 module {
-  func @challenge-struct-lifetime.step1(__sret: i64) {
+  func @challenge-struct-lifetime.step1() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, 1
+    x86.mov ecx, 8
     x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-8]
-    x86.mov edx, [rbp-16]
-    x86.mov [eax+0], edx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-8]
+    x86.mov eax, esi
     x86.epilogue
     x86.ret
   }
-  func @challenge-struct-lifetime.step2(__sret: i64, v: i64) {
+  func @challenge-struct-lifetime.step2(v: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov eax, [edx+0]
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
-    x86.mov edx, 10
-    x86.add eax, edx
-    x86.mov [rbp-24], eax
     x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, 10
+    x86.add edx, eax
+    x86.mov eax, 8
+    x86.mov [rbp-24], edx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
     x86.mov edx, [rbp-24]
-    x86.mov [eax+0], edx
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov eax, ebx
     x86.epilogue
     x86.ret
   }
-  func @challenge-struct-lifetime.step3(__sret: i64, v: i64) {
+  func @challenge-struct-lifetime.step3(v: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov eax, [edx+0]
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
-    x86.mov edx, 100
-    x86.add eax, edx
-    x86.mov [rbp-24], eax
     x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, 100
+    x86.add edx, eax
+    x86.mov eax, 8
+    x86.mov [rbp-24], edx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
     x86.mov edx, [rbp-24]
-    x86.mov [eax+0], edx
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov eax, ebx
     x86.epilogue
     x86.ret
   }
   func @challenge-struct-lifetime.main() -> i64 {
   entry:
-    x86.prologue stack_size=48
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.lea rcx, [rbp-8]
+    x86.prologue stack_size=32
     x86.call challenge-struct-lifetime.step1
-    x86.mov edx, [rbp-8]
-    x86.xor ebx, ebx
-    x86.mov [rbp-16], ebx
-    x86.lea rsi, [rbp-16]
-    x86.mov [rbp-24], edx
-    x86.lea rdi, [rbp-24]
-    x86.mov rcx, rsi
-    x86.mov rdx, rdi
-    x86.call challenge-struct-lifetime.step2
-    x86.mov r8, [rbp-16]
-    x86.xor r9, r9
-    x86.mov [rbp-32], r9
-    x86.lea rax, [rbp-32]
-    x86.mov [rbp-40], r8
-    x86.lea rcx, [rbp-40]
-    x86.mov rdx, rcx
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
     x86.mov rcx, rax
+    x86.call challenge-struct-lifetime.step2
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
     x86.call challenge-struct-lifetime.step3
-    x86.mov eax, [rbp-32]
-    x86.mov [rbp-48], eax
-    x86.mov eax, [rbp-48]
+    x86.mov [rbp-24], eax
+    x86.mov edx, [rbp-24]
+    x86.mov ebx, [edx+0]
+    x86.mov eax, ebx
     x86.epilogue
     x86.ret
   }

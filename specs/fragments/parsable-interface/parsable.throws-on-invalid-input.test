@@ -25,37 +25,15 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @Value.fromString(__sret: i64, input: i64) {
+  func @Value.fromString(input: i64) -> i64 {
   entry:
-    x86.prologue stack_size=144
+    x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov eax, [edx+32]
-    x86.xor ebx, ebx
-    x86.add edx, ebx
-    x86.mov ebx, [edx+24]
-    x86.mov esi, [edx+16]
-    x86.mov edi, [edx+8]
-    x86.mov r8, [edx+0]
-    x86.mov [rbp-16], eax
-    x86.mov [rbp-24], ebx
-    x86.mov [rbp-32], esi
-    x86.mov [rbp-40], edi
-    x86.mov [rbp-48], r8
-    x86.lea rax, [rbp-48]
+    x86.mov eax, [rbp-8]
     x86.mov rcx, rax
     x86.call stdlib.String.byteLength
-    x86.mov ecx, [rbp-16]
-    x86.mov [rbp-56], ecx
-    x86.mov edx, [rbp-24]
-    x86.mov [rbp-64], edx
-    x86.mov ebx, [rbp-32]
-    x86.mov [rbp-72], ebx
-    x86.mov esi, [rbp-40]
-    x86.mov [rbp-80], esi
-    x86.mov edi, [rbp-48]
-    x86.mov [rbp-88], edi
-    x86.xor r8, r8
-    x86.cmp eax, r8
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
     x86.jne Value.fromString.check_0.after
   check_0:
     x86.mov eax, 1
@@ -66,50 +44,60 @@ module {
     x86.epilogue
     x86.ret
   check_0.after:
-    x86.mov eax, [rbp-56]
-    x86.mov [rbp-96], eax
-    x86.mov ecx, [rbp-64]
-    x86.mov [rbp-104], ecx
-    x86.mov edx, [rbp-72]
-    x86.mov [rbp-112], edx
-    x86.mov ebx, [rbp-80]
-    x86.mov [rbp-120], ebx
-    x86.mov esi, [rbp-88]
-    x86.mov [rbp-128], esi
-    x86.lea rdi, [rbp-128]
-    x86.mov rcx, rdi
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, rax
     x86.call stdlib.String.byteLength
-    x86.mov [rbp-136], eax
-    x86.mov r8, [rbp-8]
-    x86.mov r9, [rbp-136]
-    x86.mov [r8+0], r9
+    x86.mov ecx, 8
+    x86.mov [rbp-24], eax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, [rbp-24]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov eax, esi
     x86.xor edx, edx
     x86.epilogue
     x86.ret
   }
   func @parsable-interface.main() -> i64 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=48
     x86.lea_rdata rax, [__str_9]
     x86.mov rcx, rax
     x86.xor edx, edx
-    x86.xor ebx, ebx
-    x86.mov esi, 1
-    x86.xor edi, edi
-    x86.xor r8, r8
-    x86.mov [rbp-8], r8
-    x86.lea r9, [rbp-8]
-    x86.mov [rbp-16], edi
-    x86.mov [rbp-24], esi
-    x86.mov [rbp-32], ebx
-    x86.mov [rbp-40], edx
-    x86.mov [rbp-48], ecx
-    x86.lea rax, [rbp-48]
-    x86.mov rcx, r9
-    x86.mov rdx, rax
-    x86.call Value.fromString
+    x86.mov ebx, 32
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-40]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [rbp-48]
+    x86.mov [r8+8], r9
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
     x86.mov eax, [rbp-8]
-    x86.mov [rbp-56], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call Value.fromString
+    x86.mov [rbp-24], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je parsable-interface.main.otherwise_continue_1
@@ -118,10 +106,11 @@ module {
     x86.epilogue
     x86.ret
   otherwise_continue_1:
-    x86.mov eax, [rbp-56]
-    x86.mov [rbp-64], eax
-    x86.mov ecx, [rbp-64]
-    x86.mov eax, ecx
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, [ecx+0]
+    x86.mov eax, edx
     x86.epilogue
     x86.ret
   }

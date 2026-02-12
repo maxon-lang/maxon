@@ -15,29 +15,30 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @Config.create(__sret: i64) {
+  func @Config.create() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
     x86.mov eax, 42
+    x86.mov ecx, 8
     x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-8]
-    x86.mov edx, [rbp-16]
-    x86.mov [eax+0], edx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-8]
+    x86.mov eax, esi
     x86.epilogue
     x86.ret
   }
   func @export-var-fields.main() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.lea rcx, [rbp-8]
     x86.call Config.create
-    x86.mov edx, [rbp-8]
-    x86.mov [rbp-16], edx
-    x86.mov ebx, [rbp-16]
-    x86.mov eax, ebx
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov eax, ecx
     x86.epilogue
     x86.ret
   }

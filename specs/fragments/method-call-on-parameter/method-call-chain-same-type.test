@@ -32,13 +32,9 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
-    x86.mov eax, [ecx+0]
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.mov [edx+0], ebx
-    x86.mov eax, ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, edx
     x86.epilogue
     x86.ret
   }
@@ -46,21 +42,15 @@ module {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov eax, [ecx+0]
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov eax, [edx+0]
-    x86.mov [rbp-24], eax
-    x86.lea rdx, [rbp-24]
-    x86.mov [rbp-32], ecx
-    x86.mov rcx, rdx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], ebx
+    x86.mov rcx, rax
     x86.call Value.get
-    x86.mov ebx, [rbp-32]
-    x86.add ebx, eax
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-16]
-    x86.mov [esi+0], edi
-    x86.mov eax, ebx
+    x86.mov ecx, [rbp-24]
+    x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret
   }
@@ -68,49 +58,57 @@ module {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov eax, [ecx+0]
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov eax, [edx+0]
-    x86.mov [rbp-24], eax
-    x86.lea rdx, [rbp-24]
-    x86.mov [rbp-32], ecx
-    x86.mov rcx, rdx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], ebx
+    x86.mov rcx, rax
     x86.call Value.get
-    x86.mov ebx, [rbp-32]
-    x86.imul ebx, eax
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-16]
-    x86.mov [esi+0], edi
-    x86.mov eax, ebx
+    x86.mov ecx, [rbp-24]
+    x86.imul ecx, eax
+    x86.mov eax, ecx
     x86.epilogue
     x86.ret
   }
   func @method-call-on-parameter.main() -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.mov eax, 5
-    x86.mov ecx, 3
-    x86.mov edx, 2
+    x86.mov ecx, 8
+    x86.mov [rbp-32], eax
+    x86.call maxon_alloc
     x86.mov [rbp-8], eax
-    x86.lea rbx, [rbp-8]
-    x86.mov [rbp-16], ecx
-    x86.lea rsi, [rbp-16]
-    x86.mov [rbp-40], edx
-    x86.mov rcx, rbx
-    x86.mov rdx, rsi
-    x86.call Value.add
-    x86.mov edi, [rbp-8]
-    x86.mov [rbp-24], edi
-    x86.lea r8, [rbp-24]
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-32]
+    x86.mov [edx+0], ebx
+    x86.mov esi, 3
+    x86.mov edi, 8
+    x86.mov [rbp-40], esi
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov r8, [rbp-16]
     x86.mov r9, [rbp-40]
-    x86.mov [rbp-32], r9
-    x86.lea rcx, [rbp-32]
+    x86.mov [r8+0], r9
+    x86.mov eax, 2
+    x86.mov ecx, 8
     x86.mov [rbp-48], eax
-    x86.mov rdx, rcx
-    x86.mov rcx, r8
-    x86.call Value.multiply
+    x86.call maxon_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-48]
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Value.add
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-24]
+    x86.mov [rbp-56], eax
+    x86.call Value.multiply
+    x86.mov ecx, [rbp-56]
     x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret

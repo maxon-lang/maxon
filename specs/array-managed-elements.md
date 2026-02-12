@@ -49,7 +49,7 @@ end 'main'
 ```stdout
 MOVE: managed
 COPY: String
-ALLOC #1: 192 bytes (array grow)
+ALLOC #1: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 MOVE: managed
 COPY: String
@@ -61,12 +61,12 @@ CLEANUP: items
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: items -> rc=0
-FREE #1: 192 bytes (array cleanup)
+FREE #1: 32 bytes (array cleanup)
 CLEANUP: first
 
 === MEMORY STATS ===
-Allocated: 192 bytes
-Freed:     192 bytes
+Allocated: 32 bytes
+Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   1
@@ -101,17 +101,17 @@ MOVE: managed
 COPY: String
 MOVE: managed
 COPY: String
-ALLOC #1: 320 bytes (array grow)
+ALLOC #1: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: pairs
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: pairs -> rc=0
-FREE #1: 320 bytes (array cleanup)
+FREE #1: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 320 bytes
-Freed:     320 bytes
+Allocated: 32 bytes
+Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     2
 Increfs:   1
@@ -151,18 +151,18 @@ MOVE: managed
 COPY: String
 MOVE: managed
 COPY: String
-ALLOC #1: 544 bytes (array grow)
+ALLOC #1: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: items
 CLEANUP: <array element>
 CLEANUP: <array element>
 CLEANUP: <array element>
 DECREF: items -> rc=0
-FREE #1: 544 bytes (array cleanup)
+FREE #1: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 544 bytes
-Freed:     544 bytes
+Allocated: 32 bytes
+Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     3
 Increfs:   1

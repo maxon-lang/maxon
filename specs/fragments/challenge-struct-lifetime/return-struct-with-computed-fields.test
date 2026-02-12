@@ -16,43 +16,42 @@ end 'main'
 ExitCode: 19
 ---
 module {
-  func @challenge-struct-lifetime.compute(__sret: i64, a: i64, b: i64) {
+  func @challenge-struct-lifetime.compute(a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
-    x86.lea eax, [edx + r8]
-    x86.imul edx, r8
+    x86.lea eax, [ecx + edx]
+    x86.imul ecx, edx
+    x86.mov edx, 16
     x86.mov [rbp-16], eax
-    x86.mov [rbp-24], edx
-    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], ecx
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
     x86.mov edx, [rbp-16]
-    x86.mov [eax+0], edx
-    x86.mov edx, [rbp-24]
-    x86.mov [eax+8], edx
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-24]
+    x86.mov [ebx+8], esi
+    x86.mov edi, [rbp-8]
+    x86.mov eax, edi
     x86.epilogue
     x86.ret
   }
   func @challenge-struct-lifetime.main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 3
     x86.mov ecx, 4
-    x86.xor edx, edx
-    x86.mov [rbp-8], edx
-    x86.xor ebx, ebx
-    x86.mov [rbp-16], ebx
-    x86.lea rsi, [rbp-16]
-    x86.mov rdx, rax
-    x86.mov r8, rcx
-    x86.mov rcx, rsi
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
     x86.call challenge-struct-lifetime.compute
-    x86.mov edi, [rbp-8]
-    x86.mov [rbp-24], edi
-    x86.mov r8, [rbp-16]
-    x86.mov [rbp-32], r8
-    x86.mov r9, [rbp-32]
-    x86.mov eax, [rbp-24]
-    x86.lea eax, [r9 + eax]
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+0]
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [esi+8]
+    x86.lea eax, [ebx + edi]
     x86.epilogue
     x86.ret
   }

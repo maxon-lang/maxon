@@ -453,7 +453,7 @@ public class RegisterManager {
   /// </summary>
   public void EnsureInSpecificRegister(StdValue value, X86Register target, MlirBlock<X86Op> block) {
     var reg = EnsureInRegister(value, block);
-    if (reg != target) {
+    if (reg != target && reg != To32Bit(target)) {
       block.AddOp(new X86MovRegRegOp(target, reg));
     }
   }
@@ -995,15 +995,68 @@ public class RegisterManager {
     SpillRegisterIfNotArg(X86Register.Esi, memCopyArgs, block);
     SpillRegisterIfNotArg(X86Register.Edi, memCopyArgs, block);
     SpillRegisterIfNotArg(X86Register.Ecx, memCopyArgs, block);
-    // Ensure values are in the required registers for rep movsb
-    EnsureInSpecificRegister(srcPtr, X86Register.Rsi, block);
-    EnsureInSpecificRegister(dstPtr, X86Register.Rdi, block);
-    EnsureInSpecificRegister(byteCount, X86Register.Rcx, block);
+
+    // Load all three values into registers, avoiding the target fixed registers
+    // to prevent conflicts during the subsequent parallel assignment.
+    var srcReg = EnsureInRegister(srcPtr, block);
+    var dstReg = EnsureInRegister(dstPtr, block, protect1: srcReg);
+    var cntReg = EnsureInRegister(byteCount, block, protect1: srcReg, protect2: dstReg);
+
+    // Perform a conflict-free parallel assignment to RSI, RDI, RCX.
+    // The moves must be ordered so no target clobbers a source that hasn't
+    // been read yet. We detect conflicts and use a safe ordering.
+    var moves = new List<(X86Register target, X86Register source)>();
+    if (!SamePhysReg(srcReg, X86Register.Esi))
+      moves.Add((X86Register.Rsi, srcReg));
+    if (!SamePhysReg(dstReg, X86Register.Edi))
+      moves.Add((X86Register.Rdi, dstReg));
+    if (!SamePhysReg(cntReg, X86Register.Ecx))
+      moves.Add((X86Register.Rcx, cntReg));
+
+    // Emit moves in an order that avoids clobbering: if a target overlaps a
+    // later source, emit the later move first.
+    var emitted = new HashSet<int>();
+    for (int pass = 0; pass < moves.Count + 1 && emitted.Count < moves.Count; pass++) {
+      for (int i = 0; i < moves.Count; i++) {
+        if (emitted.Contains(i)) continue;
+        // Check if this move's target clobbers any un-emitted source
+        bool conflicts = false;
+        for (int j = 0; j < moves.Count; j++) {
+          if (j == i || emitted.Contains(j)) continue;
+          if (SamePhysReg(moves[i].target, moves[j].source)) {
+            conflicts = true;
+            break;
+          }
+        }
+        if (!conflicts) {
+          block.AddOp(new X86MovRegRegOp(moves[i].target, moves[i].source));
+          emitted.Add(i);
+        }
+      }
+    }
+    // If there's a cycle (e.g., A→B, B→A), break it with a temp via xchg or stack
+    if (emitted.Count < moves.Count) {
+      // Remaining moves form a cycle. Just spill to stack and reload.
+      foreach (var i in Enumerable.Range(0, moves.Count).Except(emitted)) {
+        var (target, source) = moves[i];
+        _nextSpillOffset -= 8;
+        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, source));
+        block.AddOp(new X86MovRegMemOp(target, _nextSpillOffset));
+        emitted.Add(i);
+      }
+    }
+
     block.AddOp(new X86RepMovsbOp());
     // rep movsb clobbers RSI, RDI, RCX — invalidate them
     Invalidate(X86Register.Esi);
     Invalidate(X86Register.Edi);
     Invalidate(X86Register.Ecx);
+  }
+
+  // Check if two register names refer to the same physical register
+  // (e.g., Edi and Rdi, or Eax and Rax).
+  private static bool SamePhysReg(X86Register a, X86Register b) {
+    return a == b || To64Bit(a) == To64Bit(b);
   }
 
   private void SpillRegisterIfNotArg(X86Register reg, HashSet<StdValue> args, MlirBlock<X86Op> block) {
@@ -1243,6 +1296,19 @@ public class RegisterManager {
     X86Register.Esi => X86Register.Rsi,
     X86Register.Edi => X86Register.Rdi,
     _ => reg // R8-R15 and Rax-Rdi are already 64-bit
+  };
+
+  // Normalize a 64-bit register name to its 32-bit form used by the GprPool.
+  private static X86Register To32Bit(X86Register reg) => reg switch {
+    X86Register.Rax => X86Register.Eax,
+    X86Register.Rcx => X86Register.Ecx,
+    X86Register.Rdx => X86Register.Edx,
+    X86Register.Rbx => X86Register.Ebx,
+    X86Register.Rsp => X86Register.Esp,
+    X86Register.Rbp => X86Register.Ebp,
+    X86Register.Rsi => X86Register.Esi,
+    X86Register.Rdi => X86Register.Edi,
+    _ => reg // R8-R15 and 32-bit forms are already canonical
   };
 
   private void AssignXmm(X86XmmRegister reg, StdValue value) {

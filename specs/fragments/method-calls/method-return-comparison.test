@@ -22,24 +22,17 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
-    x86.mov eax, [ecx+0]
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.xor edx, edx
-    x86.cmp ecx, edx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.xor eax, eax
+    x86.cmp edx, eax
     x86.jle Value.isPositive.positive_0.after
   positive_0:
     x86.mov eax, 1
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [rbp-16]
-    x86.mov [ecx+0], edx
     x86.epilogue
     x86.ret
   positive_0.after:
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [rbp-16]
-    x86.mov [ecx+0], edx
     x86.epilogue
     x86.ret
   }
@@ -47,11 +40,17 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 42
+    x86.mov ecx, 8
+    x86.mov [rbp-16], eax
+    x86.call maxon_alloc
     x86.mov [rbp-8], eax
-    x86.lea rcx, [rbp-8]
-    x86.call Value.isPositive
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-8]
+    x86.mov rcx, rsi
     x86.epilogue
-    x86.ret
+    x86.jmp Value.isPositive
   }
 }
 ---
