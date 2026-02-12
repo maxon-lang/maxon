@@ -1290,7 +1290,23 @@ public static class MaxonToStandardConversion {
         // Associated-value enum return: unpack heap pointer into flat vars
         var retEnumType = (MlirEnumType)calleeFunc.ReturnType!;
         var retVarName = $"__callret_{result.Id}";
-        EmitStore(block, callResult, retVarName, varTypes);
+
+        if (isTryCall) {
+          // try_call returns null (0) on error — guard against null dereference
+          // by substituting a dummy allocation when the pointer is null
+          int maxPayloadForSize = GetMaxFlatPayloadSlots(retEnumType, typeDefs);
+          int heapSize = 8 + maxPayloadForSize * 8;
+          var dummyPtr = EmitAlloc(block, heapSize);
+          var zeroConst = new StdConstI64Op(0);
+          block.AddOp(zeroConst);
+          var isNull = new StdCmpI64Op("eq", (StdI64)callResult, zeroConst.Result);
+          block.AddOp(isNull);
+          var safePtr = new StdSelectI64Op(isNull.Result, dummyPtr, (StdI64)callResult);
+          block.AddOp(safePtr);
+          EmitStore(block, safePtr.Result, retVarName, varTypes);
+        } else {
+          EmitStore(block, callResult, retVarName, varTypes);
+        }
 
         // Load tag from offset 0
         var tagLoaded = EmitStructFieldLoad(block, retVarName, 0, MlirType.I64, varTypes);

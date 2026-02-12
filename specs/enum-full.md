@@ -623,6 +623,88 @@ end 'main'
 10
 ```
 
+<!-- test: associated-value-for-iterator -->
+```maxon
+enum Item
+    empty
+    value(n int)
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns int
+    var items = ItemArray{}
+    items.push(Item.value(10))
+    items.push(Item.value(20))
+    items.push(Item.value(12))
+    var total = 0
+    for item in items 'loop'
+        match item 'add'
+            empty then break
+            value(n) then total = total + n
+        end 'add'
+    end 'loop'
+    return total
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: associated-value-for-iterator-mixed -->
+```maxon
+enum Slot
+    none
+    val(n int)
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns int
+    var slots = SlotArray{}
+    slots.push(Slot.val(5))
+    slots.push(Slot.none)
+    slots.push(Slot.val(3))
+    var total = 0
+    for e in slots 'loop'
+        match e 'check'
+            none then total = total + 100
+            val(n) then total = total + n
+        end 'check'
+    end 'loop'
+    return total
+end 'main'
+```
+```exitcode
+108
+```
+
+<!-- test: associated-value-for-iterator-single -->
+```maxon
+enum Box
+    empty
+    full(n int)
+end 'Box'
+
+typealias BoxArray = Array with Box
+
+function main() returns int
+    var boxes = BoxArray{}
+    boxes.push(Box.full(42))
+    var result = 0
+    for b in boxes 'loop'
+        match b 'check'
+            empty then result = 0
+            full(n) then result = n
+        end 'check'
+    end 'loop'
+    return result
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: enum-method -->
 ```maxon
 enum Direction

@@ -77,17 +77,12 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     // Emit main function body
     let mainOffset = code.count()
 
-    var opIdx = 0
-    while opIdx < x86Ops.count() 'opLoop'
-        let op = try x86Ops.get(opIdx) otherwise 'getErr'
-            break
-        end 'getErr'
+    for op in x86Ops 'opLoop'
         match op 'emit'
             prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
             epilogue then emitEpilogue(code)
             movRegImm(dest, value) then emitMovRegImm(code, value: value)
         end 'emit'
-        opIdx = opIdx + 1
     end 'opLoop'
 
     // Patch the relative call to main
