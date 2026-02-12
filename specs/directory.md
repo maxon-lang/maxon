@@ -16,7 +16,7 @@ Directory operations using the `Directory` type.
 Directory operations use function-specific error types:
 
 ```maxon
-enum DirectoryListError is Error
+enum DirectoryListError implements Error
   notFound
 end 'DirectoryListError'
 ```
@@ -27,7 +27,7 @@ List files and directories in a path.
 
 **Signature:** `static function list(path string) returns StringArray throws DirectoryListError`
 
-where `type StringArray is Array with String`
+where `type StringArray implements Array with String`
 
 **Parameters:**
 - `path`: Directory path as a string

@@ -23,10 +23,10 @@ end 'Equatable'
 
 ### Conformance
 
-Declare conformance with `is Equatable` and implement `equals`:
+Declare conformance with `implements Equatable` and implement `equals`:
 
 ```text
-type Point is Equatable
+type Point implements Equatable
   var x int
   var y int
 
@@ -50,7 +50,7 @@ var same = a.equals(b)  // true
 
 <!-- test: basic-equal -->
 ```maxon
-type Point is Equatable
+type Point implements Equatable
   export var x int
   export var y int
 
@@ -74,7 +74,7 @@ end 'main'
 
 <!-- test: basic-not-equal -->
 ```maxon
-type Point is Equatable
+type Point implements Equatable
   export var x int
   export var y int
 
@@ -98,7 +98,7 @@ end 'main'
 
 <!-- test: single-field -->
 ```maxon
-type Wrapper is Equatable
+type Wrapper implements Equatable
   export var value int
 
   function equals(other Wrapper) returns bool
@@ -125,7 +125,7 @@ end 'main'
 
 <!-- test: partial-field-match -->
 ```maxon
-type Point is Equatable
+type Point implements Equatable
   export var x int
   export var y int
 
@@ -149,7 +149,7 @@ end 'main'
 
 <!-- test: self-equality -->
 ```maxon
-type Box is Equatable
+type Box implements Equatable
   export var value int
 
   function equals(other Box) returns bool
@@ -171,7 +171,7 @@ end 'main'
 
 <!-- test: equals-in-function -->
 ```maxon
-type Id is Equatable
+type Id implements Equatable
   export var n int
 
   function equals(other Id) returns bool
@@ -202,7 +202,7 @@ end 'main'
 
 <!-- test: equals-branching -->
 ```maxon
-type Token is Equatable
+type Token implements Equatable
   export var id int
 
   function equals(other Token) returns bool

@@ -15,21 +15,21 @@ Error types must be enums that conform to the `Error` interface:
 
 ```maxon
 // Simple enum error
-enum FileError is Error
+enum FileError implements Error
   notFound
   permissionDenied
   alreadyExists
 end 'FileError'
 
 // Int-backed enum error (for error codes)
-enum HttpError is Error
+enum HttpError implements Error
   badRequest = 400
   notFound = 404
   serverError = 500
 end 'HttpError'
 
 // String-backed enum error (for messages)
-enum ValidationError is Error
+enum ValidationError implements Error
   emptyField = "Field cannot be empty"
   invalidFormat = "Invalid format"
 end 'ValidationError'
@@ -102,7 +102,7 @@ end 'handler'
 The error is bound to `e` as a typed enum value within the block. You can use `match` to dispatch on specific error cases. For error enums with associated values, you can extract the payload:
 
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   notFound(code int)
   failed
 end 'MyError'
@@ -131,7 +131,7 @@ end 'loadConfig'
 <!-- test: error.enum-simple-error -->
 ```maxon
 // Simple enum error type
-enum MyError is Error
+enum MyError implements Error
   invalidInput
   notFound
 end 'MyError'
@@ -147,7 +147,7 @@ end 'main'
 <!-- test: error.enum-int-backed-error -->
 ```maxon
 // Int-backed enum error type (type inferred from values)
-enum MyError is Error
+enum MyError implements Error
   invalidInput = 1
   notFound = 404
 end 'MyError'
@@ -163,7 +163,7 @@ end 'main'
 <!-- test: error.parse-throws-function-signature -->
 ```maxon
 // Functions can declare they throw a specific error type
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: error.throw-and-return-success -->
 ```maxon
 // Test that throwing function can return success value
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -205,7 +205,7 @@ end 'main'
 <!-- test: error.propagate-error-to-caller -->
 ```maxon
 // Test error propagation: inner function throws, middle propagates, outer handles with otherwise
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -230,7 +230,7 @@ end 'main'
 <!-- test: error.otherwise-default-value -->
 ```maxon
 // Test try otherwise with default value
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -250,7 +250,7 @@ end 'main'
 <!-- test: error.otherwise-default-success -->
 ```maxon
 // Test try otherwise when no error occurs
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -273,7 +273,7 @@ end 'main'
 <!-- test: error.otherwise-ignore -->
 ```maxon
 // Test try otherwise ignore
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -293,7 +293,7 @@ end 'main'
 <!-- test: error.otherwise-block -->
 ```maxon
 // Test try otherwise block handler
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -316,7 +316,7 @@ end 'main'
 <!-- test: error.otherwise-block-success -->
 ```maxon
 // Test try otherwise block when no error
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -342,7 +342,7 @@ end 'main'
 <!-- test: error.otherwise-block-with-binding -->
 ```maxon
 // Test try otherwise block with error binding - block is entered on error
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -365,7 +365,7 @@ end 'main'
 <!-- test: error.main-cannot-throw -->
 ```maxon
 // main cannot be declared with throws
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -380,7 +380,7 @@ error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: m
 <!-- disabled-test: error.otherwise-type-mismatch -->
 ```maxon
 // otherwise expression type must match the success type
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -400,7 +400,7 @@ error E3059: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test
 <!-- test: error.throwing-function-requires-try -->
 ```maxon
 // Calling a throwing function without try is an error
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -481,7 +481,7 @@ error E3058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7
 <!-- test: error.otherwise-ignore-in-assignment -->
 ```maxon
 // Using 'otherwise ignore' in an assignment is an error
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -501,7 +501,7 @@ error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment
 <!-- test: error.void-try-in-assignment -->
 ```maxon
 // Assigning from a void-returning try call is an error
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -523,7 +523,7 @@ error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12
 <!-- test: error.binding-match-single-case -->
 ```maxon
 // Test matching on typed error binding
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -548,7 +548,7 @@ end 'main'
 <!-- test: error.binding-match-multi-case -->
 ```maxon
 // Test matching on error binding with multiple cases
-enum MyError is Error
+enum MyError implements Error
   failed
   timeout
   notFound
@@ -583,7 +583,7 @@ end 'main'
 <!-- test: error.binding-success-no-block -->
 ```maxon
 // Test that error binding block is skipped on success
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -609,7 +609,7 @@ end 'main'
 <!-- test: error.assoc-value-throw-catch -->
 ```maxon
 // Test error enum with associated value - throw and catch
-enum MyError is Error
+enum MyError implements Error
   notFound(code int)
   failed
 end 'MyError'
@@ -636,7 +636,7 @@ end 'main'
 <!-- test: error.assoc-value-throw-catch-2 -->
 ```maxon
 // Test error enum with associated value - second case
-enum MyError is Error
+enum MyError implements Error
   notFound(code int)
   failed
 end 'MyError'

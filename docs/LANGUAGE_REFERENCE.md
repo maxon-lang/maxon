@@ -65,7 +65,7 @@ Single-line comments only:
 ### Keywords
 ```
 and, as, bool, break, continue, default, else, end, enum, export, extern,
-fallthrough, false, float, for, function, gives, if, ignore, in, int, interface, is, let, match,
+fallthrough, false, float, for, function, gives, if, ignore, implements, in, int, interface, let, match,
 mod, not, or, otherwise, return, shl, shr, static, then, throw, throws, true, try, type,
 typealias, var, while, xor
 ```
@@ -382,10 +382,10 @@ interface Hashable
 end 'Hashable'
 ```
 
-Structs declare conformance using the `is` keyword:
+Structs declare conformance using the `implements` keyword:
 
 ```maxon
-type Point is Hashable
+type Point implements Hashable
     var x int
     var y int
 
@@ -401,7 +401,7 @@ Interfaces can declare static methods using the `static` keyword. Static interfa
 
 **Interface Notes:**
 - `Self` in interface method parameters/returns refers to the conforming type
-- A type can conform to multiple interfaces: `type Foo is A, B`
+- A type can conform to multiple interfaces: `type Foo implements A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
 - Static interface methods use `static function method()` syntax in implementations
 
@@ -634,16 +634,16 @@ end 'toggle'
 
 ### Enum Interface Conformance
 
-Enums can conform to interfaces using the `is` keyword, similar to types:
+Enums can conform to interfaces using the `implements` keyword, similar to types:
 
 ```maxon
-enum FileError is Error
+enum FileError implements Error
     notFound
     permissionDenied
     alreadyExists
 end 'FileError'
 
-enum HttpError int is Error
+enum HttpError int implements Error
     badRequest = 400
     notFound = 404
     serverError = 500
@@ -651,8 +651,8 @@ end 'HttpError'
 ```
 
 **Notes:**
-- The `is Interface` clause comes after the optional backing type
-- Multiple interfaces can be specified: `enum Foo is A, B`
+- The `implements Interface` clause comes after the optional backing type
+- Multiple interfaces can be specified: `enum Foo implements A, B`
 - The `Error` interface can only be implemented by enums (not types/structs)
 
 ---
@@ -1253,21 +1253,21 @@ Error types are enums that conform to the `Error` interface:
 
 ```maxon
 // Simple enum error
-enum FileError is Error
+enum FileError implements Error
     notFound
     permissionDenied
     alreadyExists
 end 'FileError'
 
 // Int-backed enum error (for error codes)
-enum HttpError int is Error
+enum HttpError int implements Error
     badRequest = 400
     notFound = 404
     serverError = 500
 end 'HttpError'
 
 // String-backed enum error (for messages)
-enum ValidationError String is Error
+enum ValidationError String implements Error
     emptyField = "Field cannot be empty"
     invalidFormat = "Invalid format"
 end 'ValidationError'
@@ -1494,17 +1494,17 @@ The standard library provides error types for built-in operations:
 
 ```maxon
 // Array bounds checking
-enum ArrayError is Error
+enum ArrayError implements Error
     indexOutOfBounds
 end 'ArrayError'
 
 // Map key lookup
-enum MapError is Error
+enum MapError implements Error
     keyNotFound
 end 'MapError'
 
 // Iterator exhaustion
-enum IterationError is Error
+enum IterationError implements Error
     exhausted
 end 'IterationError'
 ```
@@ -1540,7 +1540,7 @@ function readFile(path String) returns String throws FileError
 ### Complete Example
 
 ```maxon
-enum ParseError is Error
+enum ParseError implements Error
     invalidSyntax
     unexpectedEnd
 end 'ParseError'

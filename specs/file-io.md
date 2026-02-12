@@ -16,15 +16,15 @@ File I/O operations using the `File` type.
 File operations use function-specific error types:
 
 ```maxon
-enum FileReadError is Error
+enum FileReadError implements Error
   notFound
 end 'FileReadError'
 
-enum FileWriteError is Error
+enum FileWriteError implements Error
   failed
 end 'FileWriteError'
 
-enum FileDeleteError is Error
+enum FileDeleteError implements Error
   notFound
 end 'FileDeleteError'
 ```
@@ -79,7 +79,7 @@ Read the entire contents of a file as raw bytes.
 
 **Signature:** `static function readBinary(path string) returns ByteArray throws FileReadError`
 
-where `type ByteArray is Array with byte`
+where `type ByteArray implements Array with byte`
 
 **Parameters:**
 - `path`: File path as a string
@@ -107,7 +107,7 @@ Write binary data to a file.
 
 **Signature:** `static function writeBinary(path string, content ByteArray) throws FileWriteError`
 
-where `type ByteArray is Array with byte`
+where `type ByteArray implements Array with byte`
 
 **Parameters:**
 - `path`: File path as a string

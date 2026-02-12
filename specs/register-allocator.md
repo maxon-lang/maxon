@@ -5827,7 +5827,7 @@ module {
 
 <!-- test: error-otherwise-ignore -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -5897,7 +5897,7 @@ module {
 
 <!-- test: error-otherwise-block -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -6005,7 +6005,7 @@ module {
 
 <!-- test: error-propagate-through-caller -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -6167,7 +6167,7 @@ module {
 
 <!-- test: error-multiple-try-calls -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -6410,7 +6410,7 @@ module {
 
 <!-- test: error-throw-in-match -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   invalidInput
   notFound
 end 'MyError'

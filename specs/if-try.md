@@ -67,7 +67,7 @@ The error is bound to `e` and available within the else-block.
 
 <!-- test: if-try-boolean-success -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -92,7 +92,7 @@ end 'main'
 
 <!-- test: if-try-boolean-failure -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -117,7 +117,7 @@ end 'main'
 
 <!-- test: if-try-binding-success -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -141,7 +141,7 @@ end 'main'
 
 <!-- test: if-try-binding-failure -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -165,7 +165,7 @@ end 'main'
 
 <!-- test: if-try-else-block -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -192,7 +192,7 @@ end 'main'
 
 <!-- test: if-try-else-success -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -219,7 +219,7 @@ end 'main'
 
 <!-- test: if-try-binding-with-else -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -245,7 +245,7 @@ end 'main'
 
 <!-- test: if-try-binding-with-else-success -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -271,7 +271,7 @@ end 'main'
 
 <!-- test: if-try-else-with-error-binding -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   first
   second
 end 'MyError'
@@ -302,7 +302,7 @@ end 'main'
 
 <!-- test: if-try-nested -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -329,7 +329,7 @@ end 'main'
 
 <!-- test: if-try-in-loop -->
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -381,7 +381,7 @@ When using if-let with a struct that has multiple managed fields (like Array and
 all managed fields must be properly cleaned up when the binding goes out of scope.
 
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 
@@ -472,7 +472,7 @@ Cleanups:  9
 Test cleanup of deeply nested structs with multiple managed fields at function return.
 
 ```maxon
-enum MyError is Error
+enum MyError implements Error
   failed
 end 'MyError'
 

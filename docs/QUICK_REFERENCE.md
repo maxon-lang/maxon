@@ -137,7 +137,7 @@ end 'label'
 ## Types 
 
 ```maxon
-type Point is Hashable, Describable   // interface conformance
+type Point implements Hashable, Describable   // interface conformance
     export var x int                   // public mutable field
     export let name = "point"   // public immutable with default
     var internal int                   // private field
@@ -178,7 +178,7 @@ interface Container uses Element       // associated type
     function get(index int) returns Element
 end 'Container'
 
-type IntBox is Container with int      // specify associated type
+type IntBox implements Container with int      // specify associated type
     function get(index int) returns int
         // ...
     end 'get'
@@ -245,7 +245,7 @@ end 'Direction'
 
 ```maxon
 // Define error type (must be enum conforming to Error)
-enum FileError is Error
+enum FileError implements Error
     notFound
     permissionDenied
 end 'FileError'
@@ -427,8 +427,6 @@ try c.asciiValue()                   // throws CharacterError
 | `Cloneable` | `clone() -> Self` |
 | `Stringable` | `toString(format) -> String` |
 | `Iterable uses E` | `next() -> E throws IterationError` |
-| `Sized` | `count() -> int` |
-| `Indexed uses E` | `get(i) -> E throws ArrayError`, `set(i, value)` |
 | `Error` | (marker for throwable enums) |
 
 ## Command Line

@@ -577,15 +577,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Parse an 'is' clause (e.g., 'is Equatable') for interface conformance.
+  /// Parse an 'implements' clause (e.g., 'implements Equatable') for interface conformance.
   /// Returns the list of interface names the type conforms to.
   /// </summary>
   private (List<string> Interfaces, Dictionary<string, MlirType> TypeParams) ParseConformanceClause() {
     var names = new List<string>();
     var typeParams = new Dictionary<string, MlirType>();
-    if (!Check(TokenType.Is)) return (names, typeParams);
+    if (!Check(TokenType.Implements)) return (names, typeParams);
 
-    Advance(); // consume 'is'
+    Advance(); // consume 'implements'
     var ifaceName = Expect(TokenType.Identifier).Value;
     names.Add(ifaceName);
     if (Check(TokenType.With)) {
@@ -1399,7 +1399,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Parse optional conformance clause for primitive type extensions
     List<string> primitiveConformances = [];
-    if (interfaceName is "int" or "float" or "bool" or "byte" && Check(TokenType.Is)) {
+    if (interfaceName is "int" or "float" or "bool" or "byte" && Check(TokenType.Implements)) {
       (primitiveConformances, _) = ParseConformanceClause();
     }
 

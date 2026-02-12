@@ -1,7 +1,7 @@
 ---
 feature: interface-conformance
 status: stable
-keywords: [interface, conformance, is, implements, type-checking]
+keywords: [interface, conformance, implements, type-checking]
 category: type-system
 ---
 
@@ -11,14 +11,14 @@ category: type-system
 
 ### Declaring Interface Conformance
 
-Types declare interface conformance using the `is` keyword. The type must implement all methods declared by the interface:
+Types declare interface conformance using the `implements` keyword. The type must implement all methods declared by the interface:
 
 ```text
 interface Printable
   function toString() returns int
 end 'Printable'
 
-type MyType is Printable
+type MyType implements Printable
   function toString() returns int
     return 42
   end 'toString'
@@ -30,7 +30,7 @@ end 'MyType'
 Types can conform to multiple interfaces:
 
 ```text
-type MyType is Interface1, Interface2
+type MyType implements Interface1, Interface2
   // must implement all methods from both interfaces
 end 'MyType'
 ```
@@ -45,7 +45,7 @@ interface Counter
   function increment()
 end 'Counter'
 
-type BadCounter is Counter
+type BadCounter implements Counter
   function get() returns int
     return 0
   end 'get'
@@ -62,7 +62,7 @@ interface Counter
   function increment()
 end 'Counter'
 
-type SimpleCounter is Counter
+type SimpleCounter implements Counter
   var value int
 
   function get() returns int
@@ -95,7 +95,7 @@ interface Writable
   function write(value int)
 end 'Writable'
 
-type Buffer is Readable, Writable
+type Buffer implements Readable, Writable
   var data int
 
   function read() returns int
@@ -124,7 +124,7 @@ interface Counter
   function increment()
 end 'Counter'
 
-type BadCounter is Counter
+type BadCounter implements Counter
   var value int
 
   function get() returns int
@@ -147,7 +147,7 @@ interface Processor
   function process(value int) returns int
 end 'Processor'
 
-type BadProcessor is Processor
+type BadProcessor implements Processor
   function process(value float) returns int
     return 0
   end 'process'
@@ -168,7 +168,7 @@ interface Provider
   function provide() returns int
 end 'Provider'
 
-type BadProvider is Provider
+type BadProvider implements Provider
   function provide() returns float
     return 0.0
   end 'provide'
@@ -189,7 +189,7 @@ interface Simple
   function getValue() returns int
 end 'Simple'
 
-type Extended is Simple
+type Extended implements Simple
   var value int
 
   function getValue() returns int
@@ -231,7 +231,7 @@ end 'main'
 
 <!-- test: error.builtin-interface-stdlib-only -->
 ```maxon
-type MyCollection uses Element is BuiltinArrayLiteral
+type MyCollection uses Element implements BuiltinArrayLiteral
   var managed __ManagedMemory
 
   static function init(managed __ManagedMemory) returns Self

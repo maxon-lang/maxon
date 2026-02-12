@@ -51,11 +51,11 @@ extension Container
 end 'Container'
 ```
 
-When called on a type like `IntArray is Container with int`, the return type `Element` becomes `int`.
+When called on a type like `IntArray implements Container with int`, the return type `Element` becomes `int`.
 
 ### Extension Method Synthesis
 
-When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `type IntArray is Array with int` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `IntArray`.
+When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `type IntArray implements Array with int` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `IntArray`.
 
 ### Transitive Extensions
 
@@ -93,7 +93,7 @@ extension Countable
   end 'count'
 end 'Countable'
 
-type IntList is Countable
+type IntList implements Countable
   var data int
 
   function value() returns int
@@ -123,7 +123,7 @@ extension Summable
   end 'doubled'
 end 'Summable'
 
-type Number is Summable
+type Number implements Summable
   var n int
 
   function value() returns int
@@ -153,14 +153,14 @@ extension Valued
   end 'valPlusTen'
 end 'Valued'
 
-type TypeA is Valued
+type TypeA implements Valued
   var a int
   function val() returns int
     return a
   end 'val'
 end 'TypeA'
 
-type TypeB is Valued
+type TypeB implements Valued
   var b int
   function val() returns int
     return b * 2
@@ -190,7 +190,7 @@ extension Scalable
   end 'scale'
 end 'Scalable'
 
-type Amount is Scalable
+type Amount implements Scalable
   var amount int
 
   function base() returns int
@@ -226,7 +226,7 @@ extension Pointlike
   end 'asSimple'
 end 'Pointlike'
 
-type Coord is Pointlike
+type Coord implements Pointlike
   var cx int
   var cy int
 

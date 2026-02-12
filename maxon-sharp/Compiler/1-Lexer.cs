@@ -30,7 +30,7 @@ public enum TokenType {
   Shr,
   // Type system keywords
   Uses,
-  Is,
+  Implements,
   With,
   Static,
   TypeAlias,
@@ -184,7 +184,7 @@ public class Lexer(string source) {
     { "byte", new(TokenType.Byte, KeywordCategory.TypeKeyword, "Primitive byte type (8-bit unsigned integer).", false) },
     { "uses", new(TokenType.Uses, KeywordCategory.Other, "Declares associated types in an interface.", false) },
     { "typealias", new(TokenType.TypeAlias, KeywordCategory.Other, "Declares a type alias for an existing type or associated type in an interface.", false) },
-    { "is", new(TokenType.Is, KeywordCategory.Logical, "Specifies that a type conforms to an interface.", false) },
+    { "implements", new(TokenType.Implements, KeywordCategory.Logical, "Specifies that a type conforms to an interface.", false) },
     { "with", new(TokenType.With, KeywordCategory.Other, "Specifies interface conformance requirements.", false) },
     { "static", new(TokenType.Static, KeywordCategory.Other, "Declares a static method that doesn't require an instance.", false) },
     { "export", new(TokenType.Export, KeywordCategory.Other, "Makes a function or type visible to other modules.", false) },

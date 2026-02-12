@@ -32,7 +32,7 @@ Associated types can be used in:
 Types bind concrete types to associated types using `with` after the interface name. Interface methods use `function methodName(params)` syntax:
 
 ```maxon
-type IntArray is Container with int
+type IntArray implements Container with int
   var data array of 100 int
   var len int
 
@@ -59,7 +59,7 @@ interface Pair uses First, Second
   function getSecond() returns Second
 end 'Pair'
 
-type IntFloat is Pair with int, float
+type IntFloat implements Pair with int, float
   var a int
   var b float
 
@@ -85,11 +85,11 @@ end 'Iterable'
 
 Different iterators define different element types:
 
-- `Iterator` (for `range()`): `is Iterable with int`
-- `string`: `is Iterable with character` (grapheme cluster)
-- `ByteView`: `is Iterable with byte` (byte value)
-- `UTF16View`: `is Iterable with int` (UTF-16 code unit)
-- `CodepointView`: `is Iterable with int` (Unicode codepoint)
+- `Iterator` (for `range()`): `implements Iterable with int`
+- `string`: `implements Iterable with character` (grapheme cluster)
+- `ByteView`: `implements Iterable with byte` (byte value)
+- `UTF16View`: `implements Iterable with int` (UTF-16 code unit)
+- `CodepointView`: `implements Iterable with int` (Unicode codepoint)
 
 ### For-Loop Type Inference
 
@@ -126,7 +126,7 @@ interface Summable uses Element
   function sum() returns Element
 end 'Summable'
 
-type IntPair is Summable with int
+type IntPair implements Summable with int
   var a int
   var b int
 
@@ -162,7 +162,7 @@ interface HasElement uses Element
   function get() returns Element
 end 'HasElement'
 
-type Broken is HasElement
+type Broken implements HasElement
   var value int
 
   function get() returns int
@@ -188,7 +188,7 @@ interface TwoMethods uses Element
   function second() returns Element
 end 'TwoMethods'
 
-type Partial is TwoMethods with int
+type Partial implements TwoMethods with int
   var value int
 
   function first() returns int
@@ -214,7 +214,7 @@ interface Producer uses Output
   function produce() returns Output
 end 'Producer'
 
-type WrongReturn is Producer with float
+type WrongReturn implements Producer with float
   var value int
 
   function produce() returns int
@@ -240,7 +240,7 @@ interface Wrapper uses Inner
   function unwrap() returns Inner
 end 'Wrapper'
 
-type IntBox is Wrapper with int
+type IntBox implements Wrapper with int
   var value int
 
   function unwrap() returns int
@@ -265,7 +265,7 @@ interface Accumulator uses Item
   function total() returns int
 end 'Accumulator'
 
-type IntSum is Accumulator with int
+type IntSum implements Accumulator with int
   var sum int
 
   function add(item int) returns IntSum
@@ -296,7 +296,7 @@ interface Pair uses First, Second
   function getSecond() returns Second
 end 'Pair'
 
-type IntFloat is Pair with int, float
+type IntFloat implements Pair with int, float
   var a int
   var b float
 
@@ -328,7 +328,7 @@ interface CharSource uses Element
   function getChar() returns Element
 end 'CharSource'
 
-type SingleChar is CharSource with Character
+type SingleChar implements CharSource with Character
   var ch Character
 
   function getChar() returns Character
@@ -356,7 +356,7 @@ interface ByteSource uses Element
   function getByte() returns Element
 end 'ByteSource'
 
-type SingleByte is ByteSource with byte
+type SingleByte implements ByteSource with byte
   var b byte
 
   function getByte() returns byte
@@ -381,7 +381,7 @@ interface NeedsElement uses Element
   function get() returns Element
 end 'NeedsElement'
 
-type Missing is NeedsElement
+type Missing implements NeedsElement
   var value int
 
   function get() returns int
@@ -405,7 +405,7 @@ interface TwoMethods uses Element
   function second() returns Element
 end 'TwoMethods'
 
-type Partial is TwoMethods with int
+type Partial implements TwoMethods with int
   var value int
 
   function first() returns int
@@ -429,7 +429,7 @@ interface Typed uses Output
   function make() returns Output
 end 'Typed'
 
-type WrongType is Typed with float
+type WrongType implements Typed with float
   var value int
 
   function make() returns int
@@ -453,7 +453,7 @@ interface Acceptor uses Input
   function accept(val Input) returns int
 end 'Acceptor'
 
-type WrongParam is Acceptor with float
+type WrongParam implements Acceptor with float
   var value int
 
   function accept(val int) returns int
@@ -477,7 +477,7 @@ interface Countable
   function getCount() returns int
 end 'Countable'
 
-type Counter is Countable
+type Counter implements Countable
   var count int
 
   function getCount() returns int
@@ -501,7 +501,7 @@ interface Addable
   function addOne() returns int
 end 'Addable'
 
-type Number is Addable
+type Number implements Addable
   var value int
 
   function addOne() returns int

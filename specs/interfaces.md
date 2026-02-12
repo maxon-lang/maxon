@@ -1,7 +1,7 @@
 ---
 feature: interfaces
 status: stable
-keywords: [interface, is, with, uses, self, method, conformance]
+keywords: [interface, implements, with, uses, self, method, conformance]
 category: type-system
 ---
 
@@ -25,10 +25,10 @@ Method signatures in interfaces have an implicit `self` parameter of type `Self`
 
 ### Type Conformance
 
-Types declare conformance to interfaces using the `is` keyword:
+Types declare conformance to interfaces using the `implements` keyword:
 
 ```maxon
-type Point is Hashable
+type Point implements Hashable
   var x int
   var y int
 end 'Point'
@@ -37,7 +37,7 @@ end 'Point'
 A type can conform to multiple interfaces:
 
 ```maxon
-type Point is Hashable, Equatable
+type Point implements Hashable, Equatable
   var x int
   var y int
 end 'Point'
@@ -48,7 +48,7 @@ end 'Point'
 Methods implementing interface requirements are defined **inside the type body** using `function methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
 
 ```maxon
-type Point is Hashable
+type Point implements Hashable
   var x int
   var y int
 
@@ -97,7 +97,7 @@ interface Cloneable
   function clone() returns Self
 end 'Cloneable'
 
-type Point is Cloneable
+type Point implements Cloneable
   var x int
   var y int
 
@@ -118,7 +118,7 @@ end 'Container'
 
 typealias InternalIntArray = Array with int
 
-type IntArray is Container with int
+type IntArray implements Container with int
   var data InternalIntArray
 
   function get(index int) returns int
@@ -139,7 +139,7 @@ interface TwoMethods
   function second() returns int
 end 'TwoMethods'
 
-type Incomplete is TwoMethods
+type Incomplete implements TwoMethods
   function first() returns int
     return 1
   end 'first'
@@ -166,7 +166,7 @@ The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and i
 ### Example
 
 ```maxon
-type Point is Hashable
+type Point implements Hashable
   var x int
   var y int
 
@@ -194,7 +194,7 @@ end 'main'
 
 <!-- test: basic-interface -->
 ```maxon
-type Point is Hashable
+type Point implements Hashable
   var x int
   var y int
 
@@ -224,7 +224,7 @@ interface Describable
   function value() returns int
 end 'Describable'
 
-type Counter is Describable
+type Counter implements Describable
   var count int
 
   function describe() returns int
@@ -252,7 +252,7 @@ interface Calculator
   function add(n int) returns int
 end 'Calculator'
 
-type Accumulator is Calculator
+type Accumulator implements Calculator
   var total int
 
   function add(n int) returns int
@@ -272,7 +272,7 @@ end 'main'
 
 <!-- test: multiple-interfaces -->
 ```maxon
-type Point is Hashable, Equatable
+type Point implements Hashable, Equatable
   var x int
   var y int
 
@@ -308,7 +308,7 @@ interface Movable
   function move(dx int, dy int) returns Self
 end 'Movable'
 
-type Point is Movable
+type Point implements Movable
   export var x int
   export var y int
 
@@ -334,7 +334,7 @@ interface Incrementable
   function inc() returns int
 end 'Incrementable'
 
-type Value is Incrementable
+type Value implements Incrementable
   var n int
 
   function inc() returns int
@@ -360,7 +360,7 @@ interface ThreeMethods
   function three() returns int
 end 'ThreeMethods'
 
-type Incomplete is ThreeMethods
+type Incomplete implements ThreeMethods
   var value int
 
   function one() returns int
@@ -414,7 +414,7 @@ interface DerivedInterface extends BaseInterface
 end 'DerivedInterface'
 
 // IncompleteType is missing baseMethod from BaseInterface
-type IncompleteType is DerivedInterface
+type IncompleteType implements DerivedInterface
   var value int
 
   function derivedMethod() returns int
@@ -443,7 +443,7 @@ interface DerivedInterface extends BaseInterface
 end 'DerivedInterface'
 
 // CompleteType implements all methods from both interfaces
-type CompleteType is DerivedInterface
+type CompleteType implements DerivedInterface
   var value int
 
   function baseMethod() returns int

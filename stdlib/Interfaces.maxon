@@ -1,7 +1,7 @@
 /// Core interfaces and error types for type conformance and protocols.
 /// @category Core
 
-// These are auto-discovered when a type declares conformance with 'is'
+// These are auto-discovered when a type declares conformance with 'implements'
 
 // BuiltinStringLiteral - default type for string literals when no explicit type requested
 // The compiler searches for the type implementing this interface when encountering "..."
@@ -35,12 +35,12 @@ end 'BuiltinDictionaryLiteral'
 // Only enums can conform to Error. Error enums represent distinct error conditions
 // and can be thrown and caught using try/throw/catch.
 // Examples:
-//   enum FileError is Error
+//   enum FileError implements Error
 //       notFound
 //       permissionDenied
 //   end 'FileError'
 //
-//   enum HttpError int is Error
+//   enum HttpError int implements Error
 //       notFound = 404
 //       serverError = 500
 //   end 'HttpError'
@@ -48,38 +48,38 @@ export interface Error
 end 'Error'
 
 // ArrayError - errors for indexed collection operations
-export enum ArrayError is Error
+export enum ArrayError implements Error
   indexOutOfBounds
 end 'ArrayError'
 
 // MapError - errors for dictionary/map operations
-export enum MapError is Error
+export enum MapError implements Error
   keyNotFound
 end 'MapError'
 
 // IterationError - errors for iterator exhaustion
-export enum IterationError is Error
+export enum IterationError implements Error
   exhausted
 end 'IterationError'
 
 // EnumError - errors for enum operations
-export enum EnumError is Error
+export enum EnumError implements Error
   invalidName
 end 'EnumError'
 
 // StringError - errors for string operations
-export enum StringError is Error
+export enum StringError implements Error
   notFound
   invalidIndex
 end 'StringError'
 
 // CharacterError - errors for character operations
-export enum CharacterError is Error
+export enum CharacterError implements Error
   notAscii
 end 'CharacterError'
 
 // ParseError - errors for string-to-value parsing operations
-export enum ParseError is Error
+export enum ParseError implements Error
   invalidFormat
 end 'ParseError'
 
@@ -106,7 +106,7 @@ end 'Cloneable'
 // Iterable - types that can be iterated over (used by for-in loops)
 // Types conforming to Iterable throw IterationError.exhausted when done.
 // The next() method advances the iterator and returns the element atomically.
-// Structs provide concrete Element type via 'is Iterable with Type'.
+// Structs provide concrete Element type via 'implements Iterable with Type'.
 export interface Iterable uses Element
   function next() returns Element throws IterationError
 end 'Iterable'
@@ -123,24 +123,6 @@ export extension Iterable
     return result
   end 'map'
 end 'Iterable'
-
-// Sized - types that have a count/length
-export interface Sized
-  function count() returns int
-end 'Sized'
-
-// Indexed - types with integer-based positional access
-export interface Indexed uses Element
-  function get(index int) returns Element throws ArrayError
-  function set(index int, value Element)
-end 'Indexed'
-
-// Unique - set-like types that store unique elements
-export interface Unique uses Element
-  function insert(element Element)
-  function contains(element Element) returns bool
-  function remove(element Element) returns bool
-end 'Unique'
 
 // Stringable - enables custom types to participate in string interpolation
 // Built-in types (int, float, bool, byte, character, string) are handled by the
@@ -162,16 +144,6 @@ end 'FormattedStringable'
 export interface Subscriptable
   function subscript(startIndex int, endIndex int) returns Self
 end 'Subscriptable'
-
-// Dictionary - types that map keys to values
-// Keys must implement Hashable and Equatable for lookup
-// Uses associated types for Key and Value
-export interface Dictionary uses Key, Value
-  function insert(key Key, value Value)
-  function get(key Key) returns Value throws MapError
-  function contains(key Key) returns bool
-  function remove(key Key) returns bool
-end 'Dictionary'
 
 // InitableFromStringLiteral - types that can be initialized from string literals
 // The compiler creates a String from the literal and passes it to init().
