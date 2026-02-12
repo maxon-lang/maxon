@@ -38,6 +38,10 @@ public class MlirType {
     if (type == I1) return "bool";
     if (type == I8) return "byte";
     if (type == Void) return "void";
+    if (type is MlirStructType st && st.IsTuple) {
+      var elems = st.Fields.Select(f => FormatAsSourceName(f.Type));
+      return $"({string.Join(", ", elems)})";
+    }
     return type.Name;
   }
 }
@@ -57,13 +61,15 @@ public class MlirStructType : MlirType {
   public List<string> ConformingInterfaces { get; }
   public Dictionary<string, long> ConstParams { get; }
   public Dictionary<string, MlirType> TypeParams { get; }
+  public bool IsTuple { get; }
 
-  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null) : base(name, ComputeSize(fields)) {
+  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null, bool isTuple = false) : base(name, ComputeSize(fields)) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];
     ConformingInterfaces = conformingInterfaces ?? [];
     ConstParams = constParams ?? [];
     TypeParams = typeParams ?? [];
+    IsTuple = isTuple;
     int offset = 0;
     foreach (var field in Fields) {
       field.Offset = offset;
@@ -80,6 +86,17 @@ public class MlirStructType : MlirType {
   public override int ElementSize => 8;
 
   public MlirStructField? GetField(string name) => Fields.FirstOrDefault(f => f.Name == name);
+
+  public static MlirStructType CreateTupleType(List<MlirType> elementTypes) {
+    var fields = elementTypes.Select((t, i) =>
+      new MlirStructField($"_{i}", t, isExported: true, isMutable: true)).ToList();
+    var name = TupleMangledName(elementTypes);
+    return new MlirStructType(name, fields, isTuple: true);
+  }
+
+  public static string TupleMangledName(List<MlirType> elementTypes) {
+    return "__Tuple_" + string.Join("_", elementTypes.Select(t => t.Name));
+  }
 }
 
 public class MlirInterfaceMethodSignature(string name, List<string> paramTypeNames, List<string> paramNames, string? returnTypeName, bool isStatic = false, string? throwsTypeName = null) {

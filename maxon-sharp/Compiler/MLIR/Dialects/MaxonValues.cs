@@ -12,7 +12,7 @@ public class MaxonFloat(int id) : MaxonValue(id);
 public class MaxonBool(int id) : MaxonValue(id);
 public class MaxonByte(int id) : MaxonValue(id);
 public class MaxonStruct(int id, string typeName) : MaxonValue(id) {
-  public string TypeName { get; } = typeName;
+  public string TypeName { get; set; } = typeName;
 }
 public class MaxonEnum(int id, string typeName) : MaxonValue(id) {
   public string TypeName { get; } = typeName;

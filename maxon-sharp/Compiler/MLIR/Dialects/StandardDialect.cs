@@ -596,6 +596,7 @@ public static class StdValueFactory {
     if (type == MlirType.I8) return new StdI64(MlirContext.Current.NextId());
     if (type == MlirType.I64) return new StdI64(MlirContext.Current.NextId());
     if (type is MlirEnumType) return new StdI64(MlirContext.Current.NextId());
+    if (type is MlirStructType) return new StdI64(MlirContext.Current.NextId());
     throw new InvalidOperationException($"Cannot create StdValue for type: {type}");
   }
 }

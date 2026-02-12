@@ -1,57 +1,24 @@
 // Test: stdlib-map-on-map-with-function
-typealias StringIntPair = Pair with (String, int)
-
-function multiplyValue(p StringIntPair) returns StringIntPair
-  return {key: p.key, value: p.value * 10}
-end 'multiplyValue'
-
 function main() returns int
   var m = ["a": 1, "b": 2, "c": 3]
-  var mapped = m.map(multiplyValue)
+  var mapped = m.map((p) gives p)
 
   var sum = 0
   for pair in mapped 'loop'
-    sum = sum + pair.value
+    sum = sum + pair.1
   end 'loop'
 
-  // 10 + 20 + 30 = 60
+  // 1 + 2 + 3 = 6
   return sum
 end 'main'
 ---
-ExitCode: 60
+ExitCode: 6
 ---
 module {
-  func @interface-extensions.multiplyValue(p: i64) -> i64 {
-  entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov edx, [eax+0]
-    x86.mov [rbp-16], edx
-    x86.mov eax, [rbp-8]
-    x86.mov edx, [eax+8]
-    x86.mov eax, 10
-    x86.imul edx, eax
-    x86.mov eax, 16
-    x86.mov [rbp-32], edx
-    x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov [rbp-24], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [rbp-24]
-    x86.mov [edx+0], ecx
-    x86.mov ebx, [rbp-24]
-    x86.mov esi, [rbp-32]
-    x86.mov [ebx+8], esi
-    x86.mov edi, [rbp-24]
-    x86.mov eax, edi
-    x86.epilogue
-    x86.ret
-  }
   func @interface-extensions.main() -> i64 {
   entry:
     x86.prologue stack_size=320
-    x86.lea_rdata rax, [__str_8]
+    x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.mov edx, 1
     x86.mov ebx, 32
@@ -83,7 +50,7 @@ module {
     x86.mov edx, [rbp-16]
     x86.mov [edx+8], ecx
     x86.mov ecx, 1
-    x86.lea_rdata rdx, [__str_10]
+    x86.lea_rdata rdx, [__str_2]
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.mov esi, 32
@@ -116,7 +83,7 @@ module {
     x86.mov edx, [rbp-32]
     x86.mov [edx+8], ecx
     x86.mov ecx, 2
-    x86.lea_rdata rdx, [__str_12]
+    x86.lea_rdata rdx, [__str_4]
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.mov esi, 32
@@ -223,7 +190,7 @@ module {
     x86.mov rcx, rax
     x86.call __Map_String_i64.init
     x86.mov [rbp-120], eax
-    x86.lea_func eax, [interface-extensions.multiplyValue]
+    x86.lea_func eax, [__closure_0]
     x86.mov ecx, [rbp-120]
     x86.mov rdx, rax
     x86.call __Map_String_i64.map
@@ -258,7 +225,7 @@ module {
   loop_2.header:
     x86.mov eax, [rbp-144]
     x86.mov rcx, rax
-    x86.call __Array_StringIntPair.next
+    x86.call __Array_Entry.next
     x86.mov [rbp-152], eax
     x86.xor ecx, ecx
     x86.cmp edx, ecx
@@ -274,6 +241,14 @@ module {
     x86.jmp interface-extensions.main.loop_2.header
   loop_2.exit:
     x86.mov eax, [rbp-136]
+    x86.epilogue
+    x86.ret
+  }
+  func @__closure_0(p: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

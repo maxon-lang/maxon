@@ -1,0 +1,44 @@
+// Test: three-element-tuple
+function main() returns int
+  var t = (1, 2, 39)
+  return t.0 + t.1 + t.2
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @tuples.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.mov edx, 39
+    x86.mov ebx, 24
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], ecx
+    x86.mov [rbp-32], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-16]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [rbp-24]
+    x86.mov [r8+8], r9
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-32]
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+8]
+    x86.add ecx, edx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+16]
+    x86.lea eax, [ecx + edx]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

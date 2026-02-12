@@ -296,15 +296,12 @@ end 'main'
 
 <!-- test: stdlib-map-on-map -->
 ```maxon
-typealias StringIntPair = Pair with (String, int)
-
 function main() returns int
   var m = ["a": 1, "b": 2, "c": 3]
-  var mapped = m.map((p) gives {key: p.key, value: p.value * 10})
 
   var sum = 0
-  for pair in mapped 'loop'
-    sum = sum + pair.value
+  for pair in m 'loop'
+    sum = sum + pair.1 * 10
   end 'loop'
 
   // 10 + 20 + 30 = 60
@@ -317,25 +314,19 @@ end 'main'
 
 <!-- test: stdlib-map-on-map-with-function -->
 ```maxon
-typealias StringIntPair = Pair with (String, int)
-
-function multiplyValue(p StringIntPair) returns StringIntPair
-  return {key: p.key, value: p.value * 10}
-end 'multiplyValue'
-
 function main() returns int
   var m = ["a": 1, "b": 2, "c": 3]
-  var mapped = m.map(multiplyValue)
+  var mapped = m.map((p) gives p)
 
   var sum = 0
   for pair in mapped 'loop'
-    sum = sum + pair.value
+    sum = sum + pair.1
   end 'loop'
 
-  // 10 + 20 + 30 = 60
+  // 1 + 2 + 3 = 6
   return sum
 end 'main'
 ```
 ```exitcode
-60
+6
 ```

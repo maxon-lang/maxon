@@ -983,7 +983,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (name == ifaceName) return typeName;
     // Resolve associated types (e.g., Element -> byte when struct declares 'with byte')
     if (typeParams.TryGetValue(name, out var resolvedType)) {
-      return MlirType.FormatAsSourceName(resolvedType);
+      // Use internal type name for matching, source name for display
+      return resolvedType.Name;
     }
     return name;
   }
@@ -1497,6 +1498,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var aliasNameToken = Expect(TokenType.Identifier);
     var aliasName = aliasNameToken.Value;
     Expect(TokenType.Equals);
+
+    // Tuple type alias: typealias Entry = (Key, Value)
+    if (Check(TokenType.LeftParen)) {
+      var tupleType = (MlirStructType)ParseTypeRef();
+      // Build typeParams from any type parameter fields (e.g., Key, Value)
+      var typeParams = new Dictionary<string, MlirType>();
+      foreach (var field in tupleType.Fields) {
+        if (field.Type is MlirTypeParameterType tp)
+          typeParams[tp.ParameterName] = tp;
+      }
+      // Create an alias type with the alias name but tuple fields and behavior
+      var aliasType = new MlirStructType(aliasName, [.. tupleType.Fields], isTuple: true,
+        typeParams: typeParams.Count > 0 ? typeParams : null);
+      _typeRegistry[aliasName] = aliasType;
+      _typeAliasSources[aliasName] = tupleType.Name;
+      return;
+    }
+
     var sourceNameToken = Expect(TokenType.Identifier);
     var sourceName = sourceNameToken.Value;
 
@@ -2644,7 +2663,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private MlirType ParseTypeRef() {
-    // Function type: (ParamType, ...) returns ReturnType
+    // Parenthesized types: function type or tuple type
     if (Check(TokenType.LeftParen)) {
       Advance(); // consume '('
       var paramTypes = new List<MlirType>();
@@ -2658,12 +2677,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (Check(TokenType.Comma)) Advance();
       }
       Expect(TokenType.RightParen);
-      MlirType? returnType = null;
       if (Check(TokenType.Returns)) {
+        // Function type: (ParamType, ...) returns ReturnType
         Advance();
-        returnType = ParseTypeRef();
+        var returnType = ParseTypeRef();
+        return new MlirFunctionType(paramTypes, returnType);
       }
-      return new MlirFunctionType(paramTypes, returnType);
+      // 0 or 1 params without 'returns' → function type (void return)
+      if (paramTypes.Count < 2)
+        return new MlirFunctionType(paramTypes, null);
+      // 2+ params without 'returns' → tuple type
+      return GetOrCreateTupleType(paramTypes);
     }
 
     var typeName = ExpectTypeName();
@@ -2677,6 +2701,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         ? structType
         : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
     };
+  }
+
+  private MlirStructType GetOrCreateTupleType(List<MlirType> elementTypes) {
+    var name = MlirStructType.TupleMangledName(elementTypes);
+    if (_typeRegistry.TryGetValue(name, out var existing) && existing is MlirStructType st)
+      return st;
+    var tupleType = MlirStructType.CreateTupleType(elementTypes);
+    _typeRegistry[name] = tupleType;
+    return tupleType;
   }
 
   private string ExpectTypeName() {
@@ -2770,6 +2803,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseDotStatement() {
     var nameToken = _tokens[_pos];
     var dotToken = _tokens[_pos + 1];
+
+    // Tuple positional field assignment: t.0 = value
+    if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.IntegerLiteral) {
+      ParseFieldAssignment();
+      return;
+    }
+
     // Look ahead further to determine what follows: identifier.identifier = ... or identifier.identifier(...)
     if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.Identifier) {
       var afterIdent = _pos + 3 < _tokens.Count ? _tokens[_pos + 3] : new Token(TokenType.Eof, "", 0, 0);
@@ -2858,10 +2898,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private bool IsNestedFieldChainEndingWith(TokenType terminator) {
     // Scan from _pos forward through identifier.identifier.identifier... pattern
+    // Also accepts integer literals for tuple positional access (e.g. t.0.something)
     // Returns true if the chain ends with the specified terminator token
     var i = _pos;
     while (i < _tokens.Count) {
-      if (_tokens[i].Type != TokenType.Identifier) return false;
+      if (_tokens[i].Type != TokenType.Identifier && _tokens[i].Type != TokenType.IntegerLiteral) return false;
       i++;
       if (i >= _tokens.Count) return false;
       if (_tokens[i].Type == terminator) return true;
@@ -2889,7 +2930,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Stop when the next segment is followed by '(' (method call)
     while (Check(TokenType.Dot)) {
       Advance(); // consume '.'
-      var fieldToken = Expect(TokenType.Identifier);
+      var fieldToken = ExpectFieldName();
 
       if (Check(TokenType.LeftParen)) {
         // This is the method call at the end of the chain
@@ -2980,6 +3021,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (returnType is MlirStructType expectedStruct) {
       if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
+        // Allow tuple type aliases: Entry (alias for __Tuple_Key_Value) matches __Tuple_i64_i64
+        if (value is MaxonStruct actualTuple && expectedStruct.IsTuple
+            && _typeAliasSources.TryGetValue(expectedStruct.Name, out _)
+            && _typeRegistry.TryGetValue(actualTuple.TypeName, out var actualType)
+            && actualType is MlirStructType actualStructType && actualStructType.IsTuple
+            && actualStructType.Fields.Count == expectedStruct.Fields.Count) {
+          return;
+        }
         var actualName = value is MaxonStruct s ? s.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Cannot return '{actualName}' from function declared to return '{expectedStruct.Name}'",
@@ -3290,6 +3339,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseVarOrLetDecl(bool isMutable) {
     Advance(); // consume 'var' or 'let'
+
+    // Tuple destructuring: var (x, y) = expr
+    if (Check(TokenType.LeftParen)) {
+      ParseTupleDestructuring(isMutable);
+      return;
+    }
+
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
     Expect(TokenType.Equals);
@@ -3313,6 +3369,59 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var kind = DetermineValueKind(initValue);
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!);
+    }
+  }
+
+  private void ParseTupleDestructuring(bool isMutable) {
+    var parenToken = Advance(); // consume '('
+    var names = new List<string>();
+    do {
+      if (Check(TokenType.Comma)) Advance();
+      var nameToken = Expect(TokenType.Identifier);
+      names.Add(nameToken.Value);
+    } while (Check(TokenType.Comma));
+    Expect(TokenType.RightParen);
+    Expect(TokenType.Equals);
+
+    var initExpr = ParseExpression();
+    var initValue = ResolveExprValue(initExpr)
+      ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "Tuple destructuring requires a value", parenToken.Line, parenToken.Column);
+
+    if (initValue is not MaxonStruct structVal)
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        "Tuple destructuring requires a tuple value", parenToken.Line, parenToken.Column);
+
+    if (!_typeRegistry.TryGetValue(structVal.TypeName, out var regType) || regType is not MlirStructType tupleType || !tupleType.IsTuple)
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        "Tuple destructuring requires a tuple value", parenToken.Line, parenToken.Column);
+
+    if (names.Count != tupleType.Fields.Count)
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Tuple has {tupleType.Fields.Count} elements but destructuring has {names.Count} bindings",
+        parenToken.Line, parenToken.Column);
+
+    // Assign the tuple to a temp variable
+    var tempName = $"__destruct_{_blockCounter++}";
+    _currentBlock!.AddOp(new MaxonAssignOp(tempName, initValue, true, false, MaxonValueKind.Struct));
+    _variables[tempName] = new VarInfo(MaxonValueKind.Struct, false, initValue, _currentBlock!, tupleType.Name);
+
+    EmitTupleFieldBindings(tempName, tupleType, names, isMutable);
+  }
+
+  private void EmitTupleFieldBindings(string sourceName, MlirStructType tupleType, List<string> names, bool isMutable) {
+    for (int i = 0; i < names.Count; i++) {
+      var field = tupleType.Fields[i];
+      var fieldKind = field.Type.ToValueKind();
+      string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
+        : field.Type is MlirEnumType fet ? fet.Name : null;
+
+      var refOp = new MaxonStructVarRefOp(sourceName, tupleType.Name);
+      _currentBlock!.AddOp(refOp);
+      var accessOp = new MaxonFieldAccessOp(refOp.Result, tupleType.Name, field.Name, fieldKind, fieldStructName);
+      _currentBlock!.AddOp(accessOp);
+      _currentBlock!.AddOp(new MaxonAssignOp(names[i], accessOp.Result, isDeclaration: true, isMutable: isMutable, fieldKind));
+      _variables[names[i]] = new VarInfo(fieldKind, isMutable, accessOp.Result, _currentBlock!, fieldStructName);
     }
   }
 
@@ -3378,11 +3487,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined static variable '{qualifiedName}'", typeToken.Line, typeToken.Column);
   }
 
+  private Token ExpectFieldName() {
+    if (Check(TokenType.IntegerLiteral)) {
+      var tok = Advance();
+      var index = ParseIntegerLiteral(tok);
+      return new Token(TokenType.Identifier, $"_{index}", tok.Line, tok.Column);
+    }
+    return Expect(TokenType.Identifier);
+  }
+
   private void ParseFieldAssignment() {
     var nameToken = Advance(); // consume struct var name
     var name = nameToken.Value;
     Expect(TokenType.Dot);
-    var fieldToken = Expect(TokenType.Identifier);
+    var fieldToken = ExpectFieldName();
 
     if (!_variables.TryGetValue(name, out var varInfo)) {
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
@@ -3406,7 +3524,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(currentValue, currentStructTypeName, fieldToken);
 
       Advance(); // consume '.'
-      fieldToken = Expect(TokenType.Identifier);
+      fieldToken = ExpectFieldName();
     }
 
     Expect(TokenType.Equals);
@@ -3815,9 +3933,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MaxonValueKind GetTypeParamKind(string paramName) {
     if (_currentTypeName != null
         && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
-        && typeInfo is MlirStructType structType
-        && structType.TypeParams.TryGetValue(paramName, out var paramType)) {
-      return paramType.ToValueKind();
+        && typeInfo is MlirStructType structType) {
+      if (structType.TypeParams.TryGetValue(paramName, out var paramType)) {
+        return paramType.ToValueKind();
+      }
+      // AssociatedTypeNames (from 'uses' clause) are type parameters too,
+      // but aren't in TypeParams when conformance bindings occupy that slot
+      if (structType.AssociatedTypeNames.Contains(paramName)) {
+        return MaxonValueKind.TypeParameter;
+      }
     }
     // No matching type parameter - default to Integer for non-generic types
     return MaxonValueKind.Integer;
@@ -4174,7 +4298,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private void ParseForIn() {
     var forToken = Advance(); // consume 'for'
-    var itemName = Expect(TokenType.Identifier).Value;
+
+    // Support tuple destructuring: for (x, y) in collection 'label'
+    List<string>? destructureNames = null;
+    string itemName;
+    if (Check(TokenType.LeftParen)) {
+      Advance(); // consume '('
+      destructureNames = new List<string>();
+      do {
+        if (Check(TokenType.Comma)) Advance();
+        destructureNames.Add(Expect(TokenType.Identifier).Value);
+      } while (Check(TokenType.Comma));
+      Expect(TokenType.RightParen);
+      itemName = $"__for_tuple_{_blockCounter}";
+    } else {
+      itemName = Expect(TokenType.Identifier).Value;
+    }
     Expect(TokenType.In);
     var iterableExpr = ParseExpression();
     var iterableValue = ResolveExprValue(iterableExpr);
@@ -4269,6 +4408,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
       _currentBlock!.AddOp(new MaxonAssignOp(itemName, loadedValue, isDeclaration: true, isMutable: false, elementKind));
       _variables[itemName] = new VarInfo(elementKind, false, loadedValue, bodyBlock, elementStructTypeName);
+
+      // Destructure tuple into individual variables
+      if (destructureNames != null) {
+        if (elementMlirType is not MlirStructType tupleType || !tupleType.IsTuple)
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            "For-loop tuple destructuring requires an iterator that returns a tuple", forToken.Line, forToken.Column);
+        if (destructureNames.Count != tupleType.Fields.Count)
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Tuple has {tupleType.Fields.Count} elements but destructuring has {destructureNames.Count} bindings",
+            forToken.Line, forToken.Column);
+
+        EmitTupleFieldBindings(itemName, tupleType, destructureNames, isMutable: false);
+      }
     }
 
     // Parse the body
@@ -5527,15 +5679,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (Check(TokenType.LeftParen)) {
       // Need to distinguish between:
-      // 1. Parenthesized expression: (expr)
-      // 2. Closure: (param type, ...) gives expr
+      // 1. Closure: (param type, ...) gives expr
+      // 2. Tuple literal: (expr, expr, ...)
+      // 3. Parenthesized expression: (expr)
       if (IsClosure()) {
         return ParseClosure();
       }
-      Advance(); // consume '('
-      var inner = ParseExpression();
+      var parenToken = Advance(); // consume '('
+      var first = ParseExpression();
+      if (Check(TokenType.Comma)) {
+        // Tuple literal: (expr, expr, ...)
+        var elements = new List<MaxonValue> { ResolveExprValue(first) };
+        while (Check(TokenType.Comma)) {
+          Advance(); // consume ','
+          elements.Add(ResolveExprValue(ParseExpression()));
+        }
+        Expect(TokenType.RightParen);
+        var elementTypes = elements.Select(InferType).ToList();
+        var tupleType = GetOrCreateTupleType(elementTypes);
+        var fieldValues = elements.Select((val, i) => ($"_{i}", val)).ToList();
+        var structLiteral = new MaxonStructLiteralOp(tupleType.Name, fieldValues);
+        _currentBlock!.AddOp(structLiteral);
+        var result = new ExprResult.Direct(structLiteral.Result);
+        if (Check(TokenType.Dot))
+          return ParseFieldAccessChain(result, parenToken);
+        return result;
+      }
+      // Parenthesized expression: (expr)
       Expect(TokenType.RightParen);
-      return inner;
+      return first;
     }
 
     if (Check(TokenType.IntegerLiteral))
@@ -5954,8 +6126,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private ExprResult ParseFieldAccessChain(ExprResult result, Token originToken) {
     while (Check(TokenType.Dot)) {
       Advance(); // consume '.'
-      var fieldToken = Expect(TokenType.Identifier);
-      var fieldName = fieldToken.Value;
+      Token fieldToken;
+      string fieldName;
+      if (Check(TokenType.IntegerLiteral)) {
+        // Tuple positional access: .0, .1, .2
+        fieldToken = Advance();
+        var index = ParseIntegerLiteral(fieldToken);
+        fieldName = $"_{index}";
+      } else {
+        fieldToken = Expect(TokenType.Identifier);
+        fieldName = fieldToken.Value;
+      }
 
       string userTypeName;
       if (result is ExprResult.VarRef vr) {
@@ -7038,6 +7219,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private abstract record ExprResult {
     public sealed record Direct(MaxonValue Value) : ExprResult;
     public sealed record VarRef(string VarName, VarInfo Info) : ExprResult;
+  }
+
+  private MlirType InferType(MaxonValue value) {
+    return value switch {
+      MaxonInteger => MlirType.I64,
+      MaxonFloat => MlirType.F64,
+      MaxonBool => MlirType.I1,
+      MaxonByte => MlirType.I8,
+      MaxonStruct ms => _typeRegistry.TryGetValue(ms.TypeName, out var st) ? st
+        : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown struct type: {ms.TypeName}", Current().Line, Current().Column),
+      MaxonEnum me => _typeRegistry.TryGetValue(me.TypeName, out var et) ? et
+        : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown enum type: {me.TypeName}", Current().Line, Current().Column),
+      _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
+        $"Cannot infer type of {value.GetType().Name}", Current().Line, Current().Column)
+    };
   }
 
   private MaxonValueKind DetermineValueKind(MaxonValue value) {

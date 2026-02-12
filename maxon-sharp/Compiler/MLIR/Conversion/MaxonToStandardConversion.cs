@@ -524,7 +524,7 @@ public static class MaxonToStandardConversion {
               // For non-variable managed fields (e.g. String literals), emit MOVE+COPY tracking.
               // Skip tracking for internal/builtin struct types (initializers, not transfers).
               if (_trackAllocs && !structLitOp.TypeName.StartsWith("__")
-                  && GetManagedFieldName(structType) == null) {
+                  && structType != null && GetManagedFieldName(structType) == null) {
                 // Check if this struct literal is consumed as a non-self arg to a mutating call.
                 // If so, the call handler emits MOVE/COPY tracking — skip Phase 1 here to avoid doubling.
                 bool consumedByMutatingCall = false;
@@ -565,7 +565,7 @@ public static class MaxonToStandardConversion {
               // Phase 2: MOVE for variable-backed managed fields (ownership transfer).
               // Must run for ALL struct types (including auto-generated like __Map_String_i64)
               // to prevent double-free when the parent struct and source variable share buffers.
-              if (_trackAllocs && GetManagedFieldName(structType) == null) {
+              if (_trackAllocs && structType != null && GetManagedFieldName(structType) == null) {
                 foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                   if (structVarNames.TryGetValue(fieldVal.Id, out var srcVarName)
                       && managedVarOwners.ContainsKey(srcVarName)) {
@@ -736,6 +736,23 @@ public static class MaxonToStandardConversion {
               if (parentTypeName != null && module.TypeDefs.TryGetValue(parentTypeName, out var ptDef) && ptDef is MlirStructType pst)
                 parentStructType = pst;
               var fieldDef = parentStructType?.GetField(fieldAccess.FieldName);
+              // If the field has an unresolved type parameter type (e.g., Entry._1 = Value),
+              // resolve by finding a concrete alias with the same source type.
+              if (fieldDef != null && fieldDef.Type is MlirTypeParameterType && parentTypeName != null
+                  && module.TypeAliasSources.TryGetValue(parentTypeName, out var parentAliasInfo)) {
+                foreach (var (candidateName, candidateInfo) in module.TypeAliasSources) {
+                  if (candidateName == parentTypeName) continue;
+                  if (candidateInfo.SourceTypeName != parentAliasInfo.SourceTypeName) continue;
+                  if (candidateInfo.TypeParams == null || candidateInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+                  if (module.TypeDefs.TryGetValue(candidateName, out var candidateDef) && candidateDef is MlirStructType candidateSt) {
+                    var resolvedField = candidateSt.GetField(fieldAccess.FieldName);
+                    if (resolvedField != null && resolvedField.Type is not MlirTypeParameterType) {
+                      fieldDef = resolvedField;
+                      break;
+                    }
+                  }
+                }
+              }
 
               if (fieldAccess.ResultKind == MaxonValueKind.Struct) {
                 // Struct-typed field: load the nested struct's heap pointer and store it in a temp var

@@ -1,0 +1,52 @@
+// Test: tuple-as-return
+function makePair(a int, b int) returns (int, int)
+  return (a, b)
+end 'makePair'
+
+function main() returns int
+  var t = makePair(10, b: 32)
+  return t.0 + t.1
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @tuples.makePair(a: i64, b: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 16
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], edx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-24]
+    x86.mov [ebx+8], esi
+    x86.mov edi, [rbp-8]
+    x86.mov eax, edi
+    x86.epilogue
+    x86.ret
+  }
+  func @tuples.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 10
+    x86.mov ecx, 32
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call tuples.makePair
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+0]
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [esi+8]
+    x86.lea eax, [ebx + edi]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -17,23 +17,31 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 /// </summary>
 public static class MonomorphizationPass {
   public static void Run(MlirModule<MaxonOp> module) {
-    var specializations = CollectNeededSpecializations(module);
+    var allSpecializations = new List<Specialization>();
 
-    if (specializations.Count == 0) return;
+    // Iterate until no new specializations are found (handles transitive type aliases
+    // like Array with Entry where Entry is itself a type alias resolved during an earlier round)
+    while (true) {
+      var specializations = CollectNeededSpecializations(module);
+      if (specializations.Count == 0) break;
 
-    // Clone functions with type substitutions
-    var newFunctions = new List<MlirFunction<MaxonOp>>();
-    foreach (var spec in specializations) {
-      var clonedFunc = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution).Clone();
-      newFunctions.Add(clonedFunc);
-      Logger.Debug(LogCategory.Mlir, $"Monomorphized {spec.SourceFunc.Name} -> {clonedFunc.Name}");
+      var newFunctions = new List<MlirFunction<MaxonOp>>();
+      foreach (var spec in specializations) {
+        var clonedFunc = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution).Clone();
+        newFunctions.Add(clonedFunc);
+        Logger.Debug(LogCategory.Mlir, $"Monomorphized {spec.SourceFunc.Name} -> {clonedFunc.Name}");
+      }
+
+      foreach (var func in newFunctions) {
+        module.Functions.Add(func);
+      }
+
+      allSpecializations.AddRange(specializations);
     }
 
-    foreach (var func in newFunctions) {
-      module.Functions.Add(func);
+    if (allSpecializations.Count > 0) {
+      RewriteCallSites(module, allSpecializations);
     }
-
-    RewriteCallSites(module, specializations);
   }
 
   internal record Specialization(
@@ -145,6 +153,11 @@ public static class MonomorphizationPass {
               Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
               var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
                 call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+              // Update the result value's type name to match the resolved type
+              if (newResultStructTypeName != null && call.Result is MaxonStruct resultStruct
+                  && resultStruct.TypeName != newResultStructTypeName) {
+                resultStruct.TypeName = newResultStructTypeName;
+              }
               block.Operations[i] = call is MaxonTryCallOp tryCall
                 ? new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName)
                 : new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);

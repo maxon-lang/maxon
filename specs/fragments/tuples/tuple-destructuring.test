@@ -1,19 +1,17 @@
-// Test: int-pair-as-return
-typealias IntPair = Pair with (int, int)
-
-function makePair(k int, v int) returns IntPair
-  return {key: k, value: v}
+// Test: tuple-destructuring
+function makePair(a int, b int) returns (int, int)
+  return (a, b)
 end 'makePair'
 
 function main() returns int
-  var p = makePair(10, v: 32)
-  return p.key + p.value
+  var (x, y) = makePair(10, b: 32)
+  return x + y
 end 'main'
 ---
 ExitCode: 42
 ---
 module {
-  func @pair.makePair(k: i64, v: i64) -> i64 {
+  func @tuples.makePair(a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
     x86.mov eax, 16
@@ -33,14 +31,14 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @pair.main() -> i64 {
+  func @tuples.main() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 32
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call pair.makePair
+    x86.call tuples.makePair
     x86.mov [rbp-8], eax
     x86.mov edx, [rbp-8]
     x86.mov ebx, [edx+0]
