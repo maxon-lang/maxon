@@ -23,6 +23,7 @@ public class RegisterManager {
   private readonly Dictionary<StdValue, X86Register> _valueToRegister = [];
   private readonly Dictionary<StdValue, int> _valueStackHome = [];
   private readonly Dictionary<X86Register, int> _lastUsed = [];
+  private readonly Dictionary<StdValue, long> _constantValues = [];
   private int _currentOpIndex;
 
   // Spill slot allocation: offsets grow downward (more negative) from the variable area
@@ -109,6 +110,13 @@ public class RegisterManager {
       return reg;
     }
 
+    // Constant rematerialization: re-emit the immediate instead of loading from stack
+    if (_constantValues.TryGetValue(value, out var immediate)) {
+      var reloadReg = AllocateRegister(value, block, protect1, protect2);
+      EmitImmediateToRegister(reloadReg, immediate, block);
+      return reloadReg;
+    }
+
     // Not in a register — must reload from stack
     if (_valueStackHome.TryGetValue(value, out var displacement)) {
       var reloadReg = AllocateRegister(value, block, protect1, protect2);
@@ -124,11 +132,19 @@ public class RegisterManager {
   /// Uses 64-bit register for values that don't fit in 32 bits.
   /// </summary>
   public void EmitLoadImmediate(StdValue result, long immediate, MlirBlock<X86Op> block) {
+    _constantValues[result] = immediate;
     var gpr = AllocateRegister(result, block);
+    EmitImmediateToRegister(gpr, immediate, block);
+  }
+
+  /// <summary>
+  /// Emit instructions to load an immediate value into a specific register.
+  /// Shared by initial constant loading and rematerialization.
+  /// </summary>
+  private static void EmitImmediateToRegister(X86Register gpr, long immediate, MlirBlock<X86Op> block) {
     if (immediate == 0) {
       block.AddOp(new X86XorRegRegOp(gpr, gpr));
     } else if (immediate < int.MinValue || immediate > int.MaxValue) {
-      // Value doesn't fit in 32 bits - need 64-bit register
       block.AddOp(new X86MovRegImmOp(To64Bit(gpr), immediate));
     } else {
       block.AddOp(new X86MovRegImmOp(gpr, immediate));
@@ -278,7 +294,8 @@ public class RegisterManager {
   /// </summary>
   private void SpillRegisterIfOccupied(X86Register reg, MlirBlock<X86Op> block) {
     if (!_registerContents.TryGetValue(reg, out var existing)) return;
-    if (!_valueStackHome.ContainsKey(existing)) {
+    // Constants can be rematerialized — no need to store to stack
+    if (!_valueStackHome.ContainsKey(existing) && !_constantValues.ContainsKey(existing)) {
       _nextSpillOffset -= 8;
       block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg));
       _valueStackHome[existing] = _nextSpillOffset;
@@ -519,13 +536,16 @@ public class RegisterManager {
     // can evict the previous arg under high register pressure.
     var argSources = new X86Register?[regArgCount];
     int?[] argStackHomes = new int?[regArgCount];
+    long?[] argConstants = new long?[regArgCount];
     foreach (int i in gprArgs) {
       if (_valueToRegister.TryGetValue(args[i], out var reg))
         argSources[i] = To64Bit(reg);
+      else if (_constantValues.TryGetValue(args[i], out var imm))
+        argConstants[i] = imm;
       else if (_valueStackHome.TryGetValue(args[i], out var disp))
         argStackHomes[i] = disp;
       else
-        throw new InvalidOperationException($"RegisterManager: call arg %{args[i].Id} has no register and no stack home");
+        throw new InvalidOperationException($"RegisterManager: call arg %{args[i].Id} has no register, no constant, and no stack home");
     }
 
     // For indirect calls, secure the callee in a non-arg register before
@@ -548,21 +568,25 @@ public class RegisterManager {
       targetRegs[i] = To64Bit(CallConvRegs[i]);
     }
 
-    // Pass 1: mark GPR args already in their target register
+    // Pass 1: mark GPR args already in their target register,
+    // and mark constants as placed (they'll be emitted in Pass 4)
     foreach (int i in gprArgs) {
+      if (argConstants[i] != null)
+        continue; // handled in Pass 4
       if (SamePhysicalRegister(argSources[i], targetRegs[i]))
         placed[i] = true;
     }
 
-    // Pass 2: repeatedly place register args whose target is free
+    // Pass 2: repeatedly place register/stack args whose target is free
     bool progress = true;
     while (progress) {
       progress = false;
       foreach (int i in gprArgs) {
-        if (placed[i]) continue;
+        if (placed[i] || argConstants[i] != null) continue;
         bool targetBlocked = false;
         foreach (int j in gprArgs) {
-          if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
+          if (j != i && !placed[j] && argConstants[j] == null
+              && SamePhysicalRegister(argSources[j], targetRegs[i])) {
             targetBlocked = true;
             break;
           }
@@ -580,19 +604,30 @@ public class RegisterManager {
 
     // Pass 3: resolve remaining conflicts with xchg (only register-register cycles)
     foreach (int i in gprArgs) {
-      if (placed[i]) continue;
+      if (placed[i] || argConstants[i] != null) continue;
       if (SamePhysicalRegister(argSources[i], targetRegs[i])) {
         placed[i] = true;
         continue;
       }
       block.AddOp(new X86XchgRegRegOp(argSources[i]!.Value, targetRegs[i]));
       foreach (int j in gprArgs) {
-        if (j != i && !placed[j] && SamePhysicalRegister(argSources[j], targetRegs[i])) {
+        if (j != i && !placed[j] && argConstants[j] == null
+            && SamePhysicalRegister(argSources[j], targetRegs[i])) {
           argSources[j] = argSources[i];
           break;
         }
       }
       placed[i] = true;
+    }
+
+    // Pass 4: place constant args last — they have no source register so can't
+    // conflict, and placing them last avoids being clobbered by earlier moves
+    foreach (int i in gprArgs) {
+      if (placed[i]) continue;
+      if (argConstants[i] is { } constVal) {
+        EmitImmediateToRegister(targetRegs[i], constVal, block);
+        placed[i] = true;
+      }
     }
 
     block.AddOp(emitCallOp());
@@ -835,6 +870,7 @@ public class RegisterManager {
     foreach (var reg in CallerSavedRegisters) {
       if (_registerContents.TryGetValue(reg, out var value)
         && !_valueStackHome.ContainsKey(value)
+        && !_constantValues.ContainsKey(value)
         && !(consumedByCall != null && consumedByCall.Contains(value))) {
         _nextSpillOffset -= 8;
         block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg));
@@ -1321,12 +1357,14 @@ public class RegisterManager {
   /// Find the least-recently-used register, optionally filtering to values with a stack home.
   /// Returns null if no eligible register is found.
   /// </summary>
-  private X86Register? FindLruRegister(X86Register? protect1, X86Register? protect2, bool requireStackHome) {
+  private X86Register? FindLruRegister(X86Register? protect1, X86Register? protect2,
+      bool requireStackHome = false, bool requireConstant = false) {
     X86Register? bestReg = null;
     int bestLastUsed = int.MaxValue;
 
     foreach (var (reg, value) in _registerContents) {
       if (reg == protect1 || reg == protect2) continue;
+      if (requireConstant && !_constantValues.ContainsKey(value)) continue;
       if (requireStackHome && !_valueStackHome.ContainsKey(value)) continue;
       var lastUsed = _lastUsed.GetValueOrDefault(reg, 0);
       if (lastUsed < bestLastUsed) {
@@ -1345,8 +1383,10 @@ public class RegisterManager {
   /// Protected registers will not be evicted.
   /// </summary>
   private void Evict(MlirBlock<X86Op> block, X86Register? protect1 = null, X86Register? protect2 = null) {
-    // Prefer evicting values that have a stack home (no spill store needed)
-    var bestReg = FindLruRegister(protect1, protect2, requireStackHome: true)
+    // Prefer evicting constants (rematerializable, no store needed),
+    // then values with a stack home (no store needed), then anything else
+    var bestReg = FindLruRegister(protect1, protect2, requireConstant: true)
+      ?? FindLruRegister(protect1, protect2, requireStackHome: true)
       ?? FindLruRegister(protect1, protect2, requireStackHome: false);
 
     if (bestReg != null) {

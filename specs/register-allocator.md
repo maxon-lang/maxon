@@ -507,7 +507,6 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=32
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -516,18 +515,14 @@ module {
     x86.mov edi, 6
     x86.mov r8, 7
     x86.mov r9, 8
-    x86.mov [rbp-8], eax
     x86.mov eax, 9
-    x86.mov [rbp-16], ecx
     x86.mov ecx, 10
-    x86.mov [rbp-24], edx
-    x86.mov edx, [rbp-16]
-    x86.mov [rbp-32], ebx
-    x86.mov ebx, [rbp-8]
+    x86.mov edx, 2
+    x86.mov ebx, 1
     x86.add ebx, edx
-    x86.mov edx, [rbp-24]
+    x86.mov edx, 3
     x86.add ebx, edx
-    x86.mov edx, [rbp-32]
+    x86.mov edx, 4
     x86.add ebx, edx
     x86.add ebx, esi
     x86.add ebx, edi
@@ -535,7 +530,6 @@ module {
     x86.add ebx, r9
     x86.add ebx, eax
     x86.lea eax, [ebx + ecx]
-    x86.epilogue
     x86.ret
   }
 }
@@ -667,7 +661,6 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=96
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -676,42 +669,32 @@ module {
     x86.mov edi, 6
     x86.mov r8, 7
     x86.mov r9, 8
-    x86.mov [rbp-8], eax
     x86.mov eax, 9
-    x86.mov [rbp-16], ecx
     x86.mov ecx, 10
-    x86.mov [rbp-24], edx
     x86.mov edx, 11
-    x86.mov [rbp-32], ebx
     x86.mov ebx, 12
-    x86.mov [rbp-40], esi
     x86.mov esi, 13
-    x86.mov [rbp-48], edi
     x86.mov edi, 14
-    x86.mov [rbp-56], r8
     x86.mov r8, 15
-    x86.mov [rbp-64], r9
     x86.mov r9, 16
-    x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-80], ecx
-    x86.mov ecx, [rbp-8]
+    x86.mov eax, 2
+    x86.mov ecx, 1
     x86.add ecx, eax
-    x86.mov eax, [rbp-24]
+    x86.mov eax, 3
     x86.add ecx, eax
-    x86.mov eax, [rbp-32]
+    x86.mov eax, 4
     x86.add ecx, eax
-    x86.mov eax, [rbp-40]
+    x86.mov eax, 5
     x86.add ecx, eax
-    x86.mov eax, [rbp-48]
+    x86.mov eax, 6
     x86.add ecx, eax
-    x86.mov eax, [rbp-56]
+    x86.mov eax, 7
     x86.add ecx, eax
-    x86.mov eax, [rbp-64]
+    x86.mov eax, 8
     x86.add ecx, eax
-    x86.mov eax, [rbp-72]
+    x86.mov eax, 9
     x86.add ecx, eax
-    x86.mov eax, [rbp-80]
+    x86.mov eax, 10
     x86.add ecx, eax
     x86.add ecx, edx
     x86.add ecx, ebx
@@ -721,12 +704,10 @@ module {
     x86.add ecx, r9
     x86.mov eax, 256
     x86.mov ebx, eax
-    x86.mov [rbp-88], eax
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
     x86.mov eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -882,7 +863,6 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=128
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -891,58 +871,44 @@ module {
     x86.mov edi, 6
     x86.mov r8, 7
     x86.mov r9, 8
-    x86.mov [rbp-8], eax
     x86.mov eax, 9
-    x86.mov [rbp-16], ecx
     x86.mov ecx, 10
-    x86.mov [rbp-24], edx
     x86.mov edx, 11
-    x86.mov [rbp-32], ebx
     x86.mov ebx, 12
-    x86.mov [rbp-40], esi
     x86.mov esi, 13
-    x86.mov [rbp-48], edi
     x86.mov edi, 14
-    x86.mov [rbp-56], r8
     x86.mov r8, 15
-    x86.mov [rbp-64], r9
     x86.mov r9, 16
-    x86.mov [rbp-72], eax
     x86.mov eax, 17
-    x86.mov [rbp-80], ecx
     x86.mov ecx, 18
-    x86.mov [rbp-88], edx
     x86.mov edx, 19
-    x86.mov [rbp-96], ebx
     x86.mov ebx, 20
-    x86.mov [rbp-104], esi
-    x86.mov esi, [rbp-16]
-    x86.mov [rbp-112], edi
-    x86.mov edi, [rbp-8]
+    x86.mov esi, 2
+    x86.mov edi, 1
     x86.add edi, esi
-    x86.mov esi, [rbp-24]
+    x86.mov esi, 3
     x86.add edi, esi
-    x86.mov esi, [rbp-32]
+    x86.mov esi, 4
     x86.add edi, esi
-    x86.mov esi, [rbp-40]
+    x86.mov esi, 5
     x86.add edi, esi
-    x86.mov esi, [rbp-48]
+    x86.mov esi, 6
     x86.add edi, esi
-    x86.mov esi, [rbp-56]
+    x86.mov esi, 7
     x86.add edi, esi
-    x86.mov esi, [rbp-64]
+    x86.mov esi, 8
     x86.add edi, esi
-    x86.mov esi, [rbp-72]
+    x86.mov esi, 9
     x86.add edi, esi
-    x86.mov esi, [rbp-80]
+    x86.mov esi, 10
     x86.add edi, esi
-    x86.mov esi, [rbp-88]
+    x86.mov esi, 11
     x86.add edi, esi
-    x86.mov esi, [rbp-96]
+    x86.mov esi, 12
     x86.add edi, esi
-    x86.mov esi, [rbp-104]
+    x86.mov esi, 13
     x86.add edi, esi
-    x86.mov esi, [rbp-112]
+    x86.mov esi, 14
     x86.add edi, esi
     x86.add edi, r8
     x86.add edi, r9
@@ -952,12 +918,10 @@ module {
     x86.add edi, ebx
     x86.mov eax, 256
     x86.mov ecx, eax
-    x86.mov [rbp-120], eax
     x86.mov eax, edi
     x86.cqo
     x86.idiv ecx
     x86.mov eax, edx
-    x86.epilogue
     x86.ret
   }
 }
@@ -1209,13 +1173,10 @@ module {
   }
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 2
-    x86.mov [rbp-8], eax
     x86.call register-allocator.getForty
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, 2
     x86.lea eax, [ecx + eax]
-    x86.epilogue
     x86.ret
   }
 }
@@ -1309,18 +1270,16 @@ module {
   }
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov eax, 5
-    x86.mov [rbp-8], eax
     x86.call register-allocator.getTen
     x86.mov ecx, 7
-    x86.mov [rbp-16], eax
-    x86.mov [rbp-24], ecx
+    x86.mov [rbp-8], eax
     x86.call register-allocator.getTwo
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-8]
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 5
     x86.add ebx, edx
-    x86.mov esi, [rbp-24]
+    x86.mov esi, 7
     x86.add ebx, esi
     x86.lea eax, [ebx + eax]
     x86.epilogue
@@ -1398,7 +1357,6 @@ module {
     x86.add ecx, eax
     x86.mov eax, 256
     x86.mov ebx, eax
-    x86.mov [rbp-16], eax
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
@@ -2009,7 +1967,7 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
@@ -2034,7 +1992,6 @@ module {
     x86.mov eax, 256
     x86.mov ecx, [rbp-8]
     x86.mov ebx, eax
-    x86.mov [rbp-24], eax
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
@@ -2207,7 +2164,6 @@ module {
     x86.mov eax, 2
     x86.mov ecx, [rbp-32]
     x86.mov ebx, eax
-    x86.mov [rbp-40], eax
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
@@ -2369,7 +2325,7 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
@@ -2409,7 +2365,6 @@ module {
     x86.mov eax, 256
     x86.mov ecx, [rbp-8]
     x86.mov ebx, eax
-    x86.mov [rbp-24], eax
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
@@ -3203,7 +3158,6 @@ module {
   }
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -3212,18 +3166,16 @@ module {
     x86.mov edi, 6
     x86.mov r8, 7
     x86.mov r9, 8
-    x86.mov [rbp-8], eax
     x86.mov eax, 9
     x86.sub rsp, 16
     x86.mov [rsp+0], eax
     x86.mov rax, r8
     x86.mov r8, rdx
     x86.mov rdx, rcx
-    x86.mov rcx, [rbp-8]
     x86.xchg rbx, r9
+    x86.mov rcx, 1
     x86.call register-allocator.sum9
     x86.add rsp, 16
-    x86.epilogue
     x86.ret
   }
 }
@@ -4152,19 +4104,16 @@ module {
   }
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 42
     x86.mov ecx, 1
     x86.mov edx, 2
     x86.mov ebx, 3
     x86.mov esi, 4
-    x86.mov [rbp-8], eax
     x86.mov r8, rbx
     x86.mov r9, rsi
     x86.call register-allocator.useRegs
-    x86.mov edi, [rbp-8]
+    x86.mov edi, 42
     x86.lea eax, [edi + eax]
-    x86.epilogue
     x86.ret
   }
 }
@@ -4369,18 +4318,14 @@ module {
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov eax, 100
     x86.mov ecx, 7
     x86.mov edx, 10
-    x86.mov [rbp-8], eax
-    x86.mov [rbp-16], edx
     x86.cqo
     x86.idiv ecx
-    x86.mov ebx, [rbp-16]
+    x86.mov ebx, 10
     x86.imul edx, ebx
     x86.mov eax, edx
-    x86.epilogue
     x86.ret
   }
 }

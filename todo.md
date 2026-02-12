@@ -154,6 +154,5 @@ Value: Vectors straight-line code. If you manually write x1 = a[0] + b[0]; x2 = 
 Optimizations
 1	X86 peephole pass — eliminate mov [stack], reg; mov reg2, [stack] → mov reg2, reg, and repeated loads of same slot	High	Moderate
 2	Stack-slot-to-register tracking in RegisterManager — skip loads when value is already in a register	High	High
-3	Constant rematerialization — re-emit xor/mov imm instead of spilling constants across calls	Medium	Low
 4	Generalized store forwarding — extend beyond adjacent pairs at the Standard IR level	Medium	Moderate
 5	Smarter pre-call spills — skip spilling values whose last use is this call (even non-arguments)	Low-Med	Low
