@@ -1,0 +1,59 @@
+// Test: match-break.labeled
+function main() returns int
+  var result = 0
+  match 3 'outer'
+    1 then result = 10
+    2 then result = 20
+    3 then break 'outer'
+    default then result = 99
+  end 'outer'
+  return result
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @match-statements.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 3
+    x86.mov [rbp-16], ecx
+    x86.jmp match-statements.main.outer_0.cmp0
+  outer_0.cmp0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne match-statements.main.outer_0.cmp1
+  outer_0.case0:
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.outer_0.merge
+  outer_0.cmp1:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne match-statements.main.outer_0.cmp2
+  outer_0.case1:
+    x86.mov eax, 20
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.outer_0.merge
+  outer_0.cmp2:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.jne match-statements.main.outer_0.case3
+  outer_0.case2:
+    x86.jmp match-statements.main.outer_0.merge
+  outer_0.case3:
+    x86.mov eax, 99
+    x86.mov [rbp-8], eax
+    x86.jmp match-statements.main.outer_0.merge
+  outer_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

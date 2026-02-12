@@ -1,0 +1,74 @@
+// Test: associated-value-function-param-empty
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function process(c Container) returns int
+    match c 'handle'
+        empty then return 0
+        value(n) then return n
+    end 'handle'
+end 'process'
+
+function main() returns int
+    var c = Container.empty
+    return process(c)
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @enum-full.process(c: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+8]
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], eax
+    x86.jmp enum-full.process.handle_0.cmp0
+  handle_0.cmp0:
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne enum-full.process.handle_0.cmp1
+  handle_0.case0:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  handle_0.cmp1:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne enum-full.process.handle_0.merge
+  handle_0.case1:
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  handle_0.merge:
+  }
+  func @enum-full.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov ebx, [rbp-8]
+    x86.mov [eax+0], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov [eax+8], esi
+    x86.mov rcx, rax
+    x86.epilogue
+    x86.jmp enum-full.process
+  }
+}
+---

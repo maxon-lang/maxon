@@ -257,11 +257,38 @@ end 'main'
 0
 ```
 
+## Break
+
+Use `break` in a match arm to exit the match early without executing any further code in the arm:
+
+```text
+match value 'label'
+  1 then break                  // exits the match
+  2 then break 'label'          // labeled break (same effect)
+  default then doSomething()
+end 'label'
+```
+
+When a match is inside a loop, an unlabeled `break` exits the match. Use a labeled break to exit the loop instead:
+
+```text
+while condition 'loop'
+  match value 'check'
+    1 then break              // exits match, continues loop
+    2 then break 'loop'       // exits loop
+    default then process()
+  end 'check'
+end 'loop'
+```
+
+`break` is not allowed in match expressions (with `gives`), since every arm must produce a value.
+
 ## Rules
 
 - Block identifier required after `match <expression>` and on `end`
 - Each case is a single line with exactly one statement
 - All patterns in a case must be type-compatible with the scrutinee
+- `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case's statement
 - `and fallthrough` not allowed in match expressions
 - `and fallthrough` cannot be combined with `return`
@@ -1029,3 +1056,76 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: match-break.basic -->
+```maxon
+function main() returns int
+  var result = 0
+  match 2 'check'
+    1 then result = 10
+    2 then break
+    default then result = 99
+  end 'check'
+  return result
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-break.labeled -->
+```maxon
+function main() returns int
+  var result = 0
+  match 3 'outer'
+    1 then result = 10
+    2 then result = 20
+    3 then break 'outer'
+    default then result = 99
+  end 'outer'
+  return result
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: match-break.inside-loop -->
+```maxon
+function main() returns int
+  var result = 0
+  var i = 0
+  while i < 5 'loop'
+    match i 'check'
+      3 then break 'loop'
+      default then result = result + 1
+    end 'check'
+    i = i + 1
+  end 'loop'
+  return result
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: match-break.exits-match-not-loop -->
+```maxon
+function main() returns int
+  var result = 0
+  var i = 0
+  while i < 3 'loop'
+    match i 'check'
+      1 then break
+      default then result = result + 10
+    end 'check'
+    result = result + 1
+    i = i + 1
+  end 'loop'
+  return result
+end 'main'
+```
+```exitcode
+23
+```
+

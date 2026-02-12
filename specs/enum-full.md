@@ -503,6 +503,126 @@ end 'main'
 1
 ```
 
+<!-- test: associated-value-function-param -->
+```maxon
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function process(c Container) returns int
+    match c 'handle'
+        empty then return 0
+        value(n) then return n
+    end 'handle'
+end 'process'
+
+function main() returns int
+    var c = Container.value(42)
+    return process(c)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: associated-value-function-param-empty -->
+```maxon
+enum Container
+    empty
+    value(n int)
+end 'Container'
+
+function process(c Container) returns int
+    match c 'handle'
+        empty then return 0
+        value(n) then return n
+    end 'handle'
+end 'process'
+
+function main() returns int
+    var c = Container.empty
+    return process(c)
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: associated-value-function-return -->
+```maxon
+enum Result
+    success(value int)
+    failure(code int)
+end 'Result'
+
+function getResult(succeed bool) returns Result
+    if succeed 'check'
+        return Result.success(42)
+    end 'check'
+    return Result.failure(99)
+end 'getResult'
+
+function main() returns int
+    var r = getResult(true)
+    match r 'handle'
+        success(v) then return v
+        failure(c) then return c
+    end 'handle'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: associated-value-function-param-multi -->
+```maxon
+enum TwoParts
+    none
+    values(a int, b int)
+end 'TwoParts'
+
+function sum(p TwoParts) returns int
+    match p 'handle'
+        none then return 0
+        values(a, b) then return a + b
+    end 'handle'
+end 'sum'
+
+function main() returns int
+    var p = TwoParts.values(10, 20)
+    return sum(p)
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: associated-value-array-push -->
+```maxon
+enum Item
+    empty
+    value(n int)
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns int
+    var items = ItemArray{}
+    items.push(Item.value(10))
+    items.push(Item.value(20))
+    items.push(Item.empty)
+    var first = try items.get(0) otherwise Item.empty
+    match first 'check'
+        empty then return 0
+        value(n) then return n
+    end 'check'
+end 'main'
+```
+```exitcode
+10
+```
+
 <!-- test: enum-method -->
 ```maxon
 enum Direction

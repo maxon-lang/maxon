@@ -113,8 +113,12 @@ match value 'label'
     1..=10 then inRange()          // range pattern: 1 to 10 inclusive
     11..<20 then nearRange()       // range pattern: 11 to 19 (exclusive upper)
     pattern then action() and fallthrough
+    42 then break                  // exit match early
     default then fallback()
 end 'label'
+
+break            // exits innermost match
+break 'label'    // exits match (or loop) with that label
 ```
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).

@@ -168,7 +168,7 @@ public class Lexer(string source) {
     { "while", new(TokenType.While, KeywordCategory.Control, "Loop that continues while the condition is true.", true) },
     { "for", new(TokenType.For, KeywordCategory.Control, "Loop that iterates over a range or collection.", true) },
     { "in", new(TokenType.In, KeywordCategory.Control, "Used in for loops to specify the range or collection to iterate over.", false) },
-    { "break", new(TokenType.Break, KeywordCategory.Control, "Exits the current loop immediately.", false) },
+    { "break", new(TokenType.Break, KeywordCategory.Control, "Exits the current loop or match statement.", false) },
     { "continue", new(TokenType.Continue, KeywordCategory.Control, "Skips the rest of the current loop iteration and continues with the next iteration.", false) },
     { "true", new(TokenType.True, KeywordCategory.Constant, "Boolean literal representing true.", false) },
     { "false", new(TokenType.False, KeywordCategory.Constant, "Boolean literal representing false.", false) },

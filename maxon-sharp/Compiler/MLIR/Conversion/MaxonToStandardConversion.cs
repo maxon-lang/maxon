@@ -57,7 +57,8 @@ public static class MaxonToStandardConversion {
       // - Struct instance method 'self' param is passed as a heap pointer (i64)
       // - Enum instance method 'self' param is passed as a scalar
       // - Other struct params are passed as heap pointers (i64)
-      // - Enum params are passed as scalars
+      // - Simple enum params are passed as scalars
+      // - Associated-value enum params are passed as heap pointers (i64)
       // - Struct return is an i64 heap pointer returned normally
       var newParamNames = new List<string>();
       var newParamTypes = new List<MlirType>();
@@ -79,8 +80,14 @@ public static class MaxonToStandardConversion {
           newParamNames.Add("self");
           newParamTypes.Add(backingMlirType);
           flatIdx++;
+        } else if (func.ParamTypes[i] is MlirEnumType { HasAssociatedValues: true }) {
+          // Associated-value enum param: pass as heap pointer (i64), like structs
+          structParamPtrIndex[i] = flatIdx;
+          newParamNames.Add(func.ParamNames[i]);
+          newParamTypes.Add(MlirType.I64);
+          flatIdx++;
         } else if (func.ParamTypes[i] is MlirEnumType enumParamType) {
-          // Enum param: pass as scalar
+          // Simple enum param: pass as scalar
           var backingMlirType = ResolveEnumBackingMlirType(enumParamType);
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(backingMlirType);
@@ -103,6 +110,9 @@ public static class MaxonToStandardConversion {
       MlirType? newReturnType;
       if (retStructType != null) {
         // Struct return: return heap pointer as i64
+        newReturnType = MlirType.I64;
+      } else if (func.ReturnType is MlirEnumType { HasAssociatedValues: true }) {
+        // Associated-value enum return: return heap pointer as i64
         newReturnType = MlirType.I64;
       } else if (func.ReturnType is MlirEnumType retEnumType) {
         newReturnType = ResolveEnumBackingMlirType(retEnumType);
@@ -285,15 +295,36 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumParamOp enumParamOp: {
-              int adjustedIndex = enumParamOp.Index;
-              if (enumParamOp.BackingKind == MaxonValueKind.Float) {
+              // Check if this is an associated-value enum (passed as heap pointer)
+              if (module.TypeDefs.TryGetValue(enumParamOp.EnumTypeName, out var epType)
+                  && epType is MlirEnumType epEnumType && epEnumType.HasAssociatedValues) {
+                // Receive heap pointer, unpack tag + payload into flat vars
+                int ptrFlatIdx = structParamPtrIndex[enumParamOp.Index];
+                var ptrVal = new StdI64(MlirContext.Current.NextId());
+                newBlock.AddOp(new StdParamOp(ptrFlatIdx, enumParamOp.Name, ptrVal));
+                EmitStore(newBlock, ptrVal, enumParamOp.Name, varTypes);
+
+                // Load tag from offset 0
+                var tagLoaded = EmitStructFieldLoad(newBlock, enumParamOp.Name, 0, MlirType.I64, varTypes);
+                EmitStore(newBlock, tagLoaded, $"{enumParamOp.Name}.__tag", varTypes);
+
+                // Load payload slots
+                int maxPayload = GetMaxFlatPayloadSlots(epEnumType, module.TypeDefs);
+                for (int pi = 0; pi < maxPayload; pi++) {
+                  var payloadLoaded = EmitStructFieldLoad(newBlock, enumParamOp.Name, 8 + pi * 8, MlirType.I64, varTypes);
+                  EmitStore(newBlock, payloadLoaded, $"{enumParamOp.Name}.__payload_{pi}", varTypes);
+                }
+
+                structVarNames[enumParamOp.Result.Id] = enumParamOp.Name;
+                structValueTypes[enumParamOp.Result.Id] = enumParamOp.EnumTypeName;
+              } else if (enumParamOp.BackingKind == MaxonValueKind.Float) {
                 var stdResult = new StdF64(MlirContext.Current.NextId());
-                newBlock.AddOp(new StdParamOp(adjustedIndex, enumParamOp.Name, stdResult));
+                newBlock.AddOp(new StdParamOp(enumParamOp.Index, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
               } else if (enumParamOp.BackingKind == MaxonValueKind.Integer) {
                 var stdResult = new StdI64(MlirContext.Current.NextId());
-                newBlock.AddOp(new StdParamOp(adjustedIndex, enumParamOp.Name, stdResult));
+                newBlock.AddOp(new StdParamOp(enumParamOp.Index, enumParamOp.Name, stdResult));
                 valueMap[enumParamOp.Result] = stdResult;
                 EmitStore(newBlock, stdResult, enumParamOp.Name, varTypes);
               } else {
@@ -997,7 +1028,7 @@ public static class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, managedVarOwners, cstringTrackVars, managedBufferElementInfo, module.TypeDefs, varNameToStructType);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, managedVarOwners, cstringTrackVars, managedBufferElementInfo, module.TypeDefs, varNameToStructType);
               break;
             case MaxonThrowOp throwOp:
               LowerThrow(throwOp, newBlock, valueMap);
@@ -1226,11 +1257,14 @@ public static class MaxonToStandardConversion {
       }
     }
 
-    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee);
+    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs);
+
+    // Check if callee returns an associated-value enum (passed as heap pointer)
+    bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirEnumType cret && cret.HasAssociatedValues;
 
     // Emit call or try_call
-    // Struct returns are now i64 heap pointers returned normally
-    StdValue? callResult = calleeRetStructType != null
+    // Struct returns and associated-value enum returns are i64 heap pointers
+    StdValue? callResult = calleeRetStructType != null || calleeRetAssocEnum
       ? new StdI64(MlirContext.Current.NextId())
       : ResolveCallResultType(resultKind, calleeFunc.ReturnType);
     if (isTryCall) {
@@ -1252,6 +1286,25 @@ public static class MaxonToStandardConversion {
         EmitStore(block, callResult, retVarName, varTypes);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = calleeRetStructType.Name;
+      } else if (calleeRetAssocEnum && callResult != null) {
+        // Associated-value enum return: unpack heap pointer into flat vars
+        var retEnumType = (MlirEnumType)calleeFunc.ReturnType!;
+        var retVarName = $"__callret_{result.Id}";
+        EmitStore(block, callResult, retVarName, varTypes);
+
+        // Load tag from offset 0
+        var tagLoaded = EmitStructFieldLoad(block, retVarName, 0, MlirType.I64, varTypes);
+        EmitStore(block, tagLoaded, $"{retVarName}.__tag", varTypes);
+
+        // Load payload slots
+        int maxPayload = GetMaxFlatPayloadSlots(retEnumType, typeDefs);
+        for (int pi = 0; pi < maxPayload; pi++) {
+          var payloadLoaded = EmitStructFieldLoad(block, retVarName, 8 + pi * 8, MlirType.I64, varTypes);
+          EmitStore(block, payloadLoaded, $"{retVarName}.__payload_{pi}", varTypes);
+        }
+
+        structVarNames[result.Id] = retVarName;
+        structValueTypes[result.Id] = retEnumType.Name;
       } else if (callResult != null) {
         valueMap[result] = callResult;
       }
@@ -1265,6 +1318,7 @@ public static class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
     Dictionary<string, List<string>> managedVarOwners,
     HashSet<string> cstringTrackVars,
     Dictionary<string, List<(int offset, string typeName)>> managedBufferElementInfo,
@@ -1280,6 +1334,31 @@ public static class MaxonToStandardConversion {
 
     // No self write-back needed: with heap refs, all field mutations go through
     // the heap pointer directly, so the caller sees changes automatically.
+
+    // Associated-value enum return: pack into heap block
+    if (retOp.Value != null
+        && structVarNames.TryGetValue(retOp.Value.Id, out var enumRetPrefix)
+        && structValueTypes.TryGetValue(retOp.Value.Id, out var enumRetTypeName)
+        && typeDefs.TryGetValue(enumRetTypeName, out var enumRetTypeDef)
+        && enumRetTypeDef is MlirEnumType enumRetType && enumRetType.HasAssociatedValues) {
+      int maxPayload = GetMaxFlatPayloadSlots(enumRetType, typeDefs);
+      int heapSize = 8 + maxPayload * 8;
+      var heapPtr = EmitAlloc(block, heapSize);
+
+      // Store tag at offset 0
+      var tagVal = EmitLoad(block, $"{enumRetPrefix}.__tag", varTypes);
+      block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
+
+      // Store payload slots
+      for (int pi = 0; pi < maxPayload; pi++) {
+        var payloadVal = EmitLoad(block, $"{enumRetPrefix}.__payload_{pi}", varTypes);
+        block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
+      }
+
+      EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
+      block.AddOp(new StdReturnOp(heapPtr));
+      return;
+    }
 
     if (retStructType != null && retOp.Value != null) {
       // Struct return: return the heap pointer as i64
@@ -1698,6 +1777,7 @@ public static class MaxonToStandardConversion {
   /// <summary>
   /// Lower call/try_call arguments for the standard calling convention.
   /// Struct args are passed as heap pointers (i64) directly.
+  /// Associated-value enum args are packed into heap blocks and passed as pointers.
   /// Returns null (no self buffer needed with heap-allocated structs).
   /// </summary>
   private static string? FlattenCallArgs(
@@ -1708,13 +1788,32 @@ public static class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     List<StdValue> newArgs,
-    string calleeName) {
+    string calleeName,
+    Dictionary<string, MlirType> typeDefs) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
 
     for (int i = 0; i < args.Count; i++) {
       var arg = args[i];
       if (calleeIsEnumInstance && i == 0) {
         newArgs.Add(valueMap[arg]);
+      } else if (calleeFunc.ParamTypes[i] is MlirEnumType enumArgType && enumArgType.HasAssociatedValues
+                 && structVarNames.TryGetValue(arg.Id, out var enumPrefix)) {
+        // Associated-value enum: pack tag + payload into a heap block
+        int maxPayload = GetMaxFlatPayloadSlots(enumArgType, typeDefs);
+        int heapSize = 8 + maxPayload * 8;
+        var heapPtr = EmitAlloc(block, heapSize);
+
+        // Store tag at offset 0
+        var tagVal = EmitLoad(block, $"{enumPrefix}.__tag", varTypes);
+        block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
+
+        // Store payload slots
+        for (int pi = 0; pi < maxPayload; pi++) {
+          var payloadVal = EmitLoad(block, $"{enumPrefix}.__payload_{pi}", varTypes);
+          block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
+        }
+
+        newArgs.Add(heapPtr);
       } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {

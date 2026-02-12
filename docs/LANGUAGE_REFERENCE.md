@@ -1055,6 +1055,7 @@ match expression 'label'
     pattern then statement
     pattern1 or pattern2 then statement
     pattern then statement and fallthrough
+    pattern then break
     default then statement
 end 'label'
 ```
@@ -1081,6 +1082,22 @@ end 'cascade'
 
 When `x = 1`, the first case matches, adds 10, then falls through to case 2 (adds 20), giving a total of 30.
 
+**With Break:**
+
+Use `break` in a match arm to exit the match without executing any code for that arm. An unlabeled `break` exits the innermost match. A labeled `break` can target any enclosing match or loop:
+
+```maxon
+while running 'loop'
+    match state 'check'
+        0 then break              // exits match, continues loop
+        1 then break 'loop'       // exits loop
+        default then process()
+    end 'check'
+end 'loop'
+```
+
+`break` is not allowed in match expressions (with `gives`), since every arm must produce a value.
+
 **Enum Case Pattern Matching:**
 
 For enums with associated values, use `CaseName(bindings)` syntax to extract values:
@@ -1102,6 +1119,7 @@ end 'handle'
 - Block identifier required after `match expression` and on `end`
 - Each case is a single line with one statement
 - Multiple patterns can be combined with `or`
+- `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
 - For enums, all cases must be covered explicitly — `default` is not allowed

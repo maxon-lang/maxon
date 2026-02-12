@@ -18,6 +18,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private int _blockCounter;
   private int _closureCounter;
   private readonly Stack<LoopContext> _loopStack = new();
+  private readonly Stack<MatchContext> _matchStack = new();
   private bool _inTryContext;
   private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
     ? new(seedModule.TypeDefs) : [];
@@ -193,6 +194,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
+  private record MatchContext(string SourceLabel, string MergeLabel);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
     { TokenType.Or, (MaxonBinOperator.Or, 0) },
@@ -4250,14 +4252,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseBreak() {
     var token = Advance(); // consume 'break'
-    var loop = ResolveLoopTarget(token);
-    _currentBlock!.AddOp(new MaxonBrOp(loop.ExitLabel));
+    var exitLabel = ResolveBreakTarget(token);
+    _currentBlock!.AddOp(new MaxonBrOp(exitLabel));
   }
 
   private void ParseContinue() {
     var token = Advance(); // consume 'continue'
     var loop = ResolveLoopTarget(token);
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
+  }
+
+  private string ResolveBreakTarget(Token keyword) {
+    if (_matchStack.Count == 0 && _loopStack.Count == 0) {
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"'{keyword.Value}' can only be used inside a loop or match", keyword.Line, keyword.Column);
+    }
+    if (Check(TokenType.CharacterLiteral)) {
+      var labelToken = Advance();
+      foreach (var ctx in _matchStack) {
+        if (ctx.SourceLabel == labelToken.Value) return ctx.MergeLabel;
+      }
+      foreach (var ctx in _loopStack) {
+        if (ctx.SourceLabel == labelToken.Value) return ctx.ExitLabel;
+      }
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"No enclosing loop or match with label '{labelToken.Value}'", labelToken.Line, labelToken.Column);
+    }
+    // Unlabeled break: prefer match if we're inside one, otherwise loop
+    if (_matchStack.Count > 0) return _matchStack.Peek().MergeLabel;
+    return _loopStack.Peek().ExitLabel;
   }
 
   private LoopContext ResolveLoopTarget(Token keyword) {
@@ -5043,6 +5064,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     bool hasDefault = false;
     bool defaultSeen = false;
 
+    _matchStack.Push(new MatchContext(sourceLabel, mergeLabel));
     int caseIndex = 0;
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
@@ -5116,6 +5138,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       caseIndex++;
       SkipNewlines();
     }
+    _matchStack.Pop();
 
     var endToken = ExpectMatchEndLabel(sourceLabel);
     ValidateEnumExhaustiveness(enumType, enumTypeName, hasDefault, seenEnumCases, endToken);
