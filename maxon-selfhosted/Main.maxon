@@ -47,14 +47,12 @@ end 'printUsage'
 function runBuild(args StringArray) returns int
     let path = try args.get(0) otherwise Directory.currentDirectory()
 
-    let outputPath = try compilePath(path) otherwise (e) 'err'
+    let outputPath = try compile(path) otherwise (e) 'err'
         match e 'which'
             CompileError.fileNotFound then print("File or directory not found: {path}\n")
             CompileError.directoryNotFound then print("Directory not found: {path}\n")
             CompileError.noSourceFiles then print("No .maxon files found in: {path}\n")
             CompileError.readError then print("Error reading file: {path}\n")
-            CompileError.multipleMainFiles then print("Multiple files declare main() in: {path}\n")
-            CompileError.noMainFunction then print("No function main() found in: {path}\n")
         end 'which'
         return 1
     end 'err'

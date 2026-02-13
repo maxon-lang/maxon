@@ -1,5 +1,58 @@
 // Self-hosted Maxon compiler core.
 
+// Compiles a file or directory and returns the output executable path.
+export function compile(path String) returns String throws CompileError
+    var sources = SourceFileArray{}
+
+    if File.exists(path) 'isFile'
+        let bytes = try File.readBinary(path) otherwise 'readErr'
+            throw CompileError.readError
+        end 'readErr'
+        sources.push({ path: path, content: bytes })
+    end 'isFile' else 'notFile'
+        if Directory.exists(path) 'isDir'
+            let entries = try Directory.list(path) otherwise 'listErr'
+                throw CompileError.directoryNotFound
+            end 'listErr'
+
+            for name in entries 'loop'
+                if name.endsWith(".maxon") 'isMaxon'
+                    let filePath = "{path}\\{name}"
+                    let bytes = try File.readBinary(filePath) otherwise 'skip'
+                        continue
+                    end 'skip'
+                    sources.push({ path: filePath, content: bytes })
+                end 'isMaxon'
+            end 'loop'
+        end 'isDir' else 'notDir'
+            throw CompileError.fileNotFound
+        end 'notDir'
+    end 'notFile'
+
+    if sources.count() == 0 'noFiles'
+        throw CompileError.noSourceFiles
+    end 'noFiles'
+
+    var allOps = MaxonOpArray{}
+    for source in sources 'compile'
+        let tokens = tokenize(source.content)
+        let ops = parse(tokens)
+        allOps.append(ops)
+    end 'compile'
+
+    let stdOps = lowerMaxonOpsToStd(allOps)
+    let x86Ops = lowerStdOpsToX86(stdOps)
+    let codeResult = emit(x86Ops)
+
+    let first = try sources.get(0) otherwise 'unreachable'
+        throw CompileError.noSourceFiles
+    end 'unreachable'
+    let outputPath = changeExtension(first.path, ext: ".exe")
+    writePe(outputPath, codeResult: codeResult)
+
+    return outputPath
+end 'compile'
+
 export enum CompileError implements Error
     fileNotFound
     directoryNotFound
@@ -13,64 +66,3 @@ type SourceFile
 end 'SourceFile'
 
 typealias SourceFileArray = Array with SourceFile
-
-// Compiles source files and writes the output executable.
-function compileFiles(sources SourceFileArray, outputPath String) returns String throws CompileError
-    let source = try sources.get(0) otherwise 'noSource'
-        throw CompileError.noSourceFiles
-    end 'noSource'
-
-    let tokens = tokenize(source.content)
-    let maxonOps = parse(tokens)
-    let stdOps = lowerMaxonOpsToStd(maxonOps)
-    let x86Ops = lowerStdOpsToX86(stdOps)
-    let codeResult = emit(x86Ops)
-
-    writePe(outputPath, codeResult: codeResult)
-
-    return outputPath
-end 'compileFiles'
-
-// Collects source files from a path (single file or directory).
-function collectFiles(path String) returns SourceFileArray throws CompileError
-    if File.exists(path) 'isFile'
-        let bytes = try File.readBinary(path) otherwise 'readErr'
-            throw CompileError.readError
-        end 'readErr'
-        return [{ path: path, content: bytes }]
-    end 'isFile'
-
-    if Directory.exists(path) 'isDir'
-        let entries = try Directory.list(path) otherwise 'listErr'
-            throw CompileError.directoryNotFound
-        end 'listErr'
-
-        var sources = SourceFileArray{}
-        for name in entries 'loop'
-            if name.endsWith(".maxon") 'isMaxon'
-                let filePath = "{path}\\{name}"
-                let bytes = try File.readBinary(filePath) otherwise 'skip'
-                    continue
-                end 'skip'
-                sources.push({ path: filePath, content: bytes })
-            end 'isMaxon'
-        end 'loop'
-
-        if sources.count() == 0 'noFiles'
-            throw CompileError.noSourceFiles
-        end 'noFiles'
-
-        return sources
-    end 'isDir'
-
-    throw CompileError.fileNotFound
-end 'collectFiles'
-
-// Build entry point. File path = single file, directory path = project build.
-export function compilePath(path String) returns String throws CompileError
-    let sources = try collectFiles(path)
-    let mainFile = sources.get(0)
-    let outputPath = changeExtension(mainFile.path, ext: ".exe")
-    try compileFiles(sources, outputPath: outputPath)
-    return outputPath
-end 'compilePath'
