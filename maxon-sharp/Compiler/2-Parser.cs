@@ -5655,6 +5655,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var opToken = Advance(); // consume operator
       var rhs = ParseExpression(entry.Precedence + 1);
 
+      // Type parameter operands require where-clause constraints for comparison operators
+      ValidateTypeParameterConstraints(lhs, rhs, entry.Op, opToken);
+
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
 
@@ -7486,6 +7489,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
+
+  private void ValidateTypeParameterConstraints(ExprResult lhs, ExprResult rhs, MaxonBinOperator op, Token opToken) {
+    if (!IsComparisonOp(op)) return;
+    var requiredInterface = op is MaxonBinOperator.Eq or MaxonBinOperator.Ne ? "Equatable" : "Comparable";
+
+    foreach (var expr in new[] { lhs, rhs }) {
+      if (expr is not ExprResult.VarRef v || v.Info.Kind != MaxonValueKind.TypeParameter) continue;
+      var typeParamName = v.Info.StructTypeName;
+      if (typeParamName == null) continue;
+
+      if (_currentTypeName == null
+          || !_typeRegistry.TryGetValue(_currentTypeName, out var currentType)
+          || currentType is not MlirStructType currentStruct
+          || !currentStruct.WhereConstraints.TryGetValue(typeParamName, out var constraints)
+          || !constraints.Contains(requiredInterface)) {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Operator '{opToken.Value}' requires type parameter '{typeParamName}' to be constrained with 'where {typeParamName} is {requiredInterface}'",
+          opToken.Line, opToken.Column);
+      }
+    }
+  }
 
   private static bool IsComparisonOp(MaxonBinOperator op) =>
     op is MaxonBinOperator.Eq or MaxonBinOperator.Ne or MaxonBinOperator.Lt

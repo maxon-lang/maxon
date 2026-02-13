@@ -1,0 +1,62 @@
+// Test: where-clauses.eq-with-equatable
+type Box uses T where T is Equatable
+    var item T
+
+    export function eq(other T) returns bool
+        return item == other
+    end 'eq'
+end 'Box'
+
+typealias IntBox = Box with int
+
+function main() returns int
+    var b = IntBox{item: 42}
+    if b.eq(other: 42) 'yes'
+        return 1
+    end 'yes'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @where-clauses.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 42
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 42
+    x86.mov [edx+0], ebx
+    x86.mov esi, 42
+    x86.mov edi, [rbp-8]
+    x86.mov rcx, rdi
+    x86.mov rdx, rsi
+    x86.call IntBox.eq
+    x86.test eax, eax
+    x86.je where-clauses.main.yes_0.after
+  yes_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  yes_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @IntBox.eq(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.cmp ebx, edx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.epilogue
+    x86.ret
+  }
+}
+---

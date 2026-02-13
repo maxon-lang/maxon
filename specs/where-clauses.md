@@ -222,3 +222,53 @@ end 'main'
 ```maxoncstderr
 error E3017: specs/fragments/where-clauses/where-clauses.and-violation.test:20:11: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
 ```
+
+### Equality on unconstrained type parameter requires Equatable
+
+Using `==` or `!=` on a type parameter that isn't constrained with `where T is Equatable` should produce a compile error:
+
+<!-- test: where-clauses.eq-requires-equatable -->
+```maxon
+type Box uses T
+    var item T
+
+    export function eq(other T) returns bool
+        return item == other
+    end 'eq'
+end 'Box'
+
+function main() returns int
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/where-clauses/where-clauses.eq-requires-equatable.test:6:21: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
+```
+
+### Equality on Equatable-constrained type parameter compiles
+
+When the type parameter is properly constrained, `==` should work:
+
+<!-- test: where-clauses.eq-with-equatable -->
+```maxon
+type Box uses T where T is Equatable
+    var item T
+
+    export function eq(other T) returns bool
+        return item == other
+    end 'eq'
+end 'Box'
+
+typealias IntBox = Box with int
+
+function main() returns int
+    var b = IntBox{item: 42}
+    if b.eq(other: 42) 'yes'
+        return 1
+    end 'yes'
+    return 0
+end 'main'
+```
+```exitcode
+1
+```
