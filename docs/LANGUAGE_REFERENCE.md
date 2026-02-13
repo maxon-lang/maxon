@@ -14,6 +14,8 @@ This reference provides complete syntax and semantics for the Maxon programming 
 3. [Types](#types)
    - [Type Conversions](#type-conversions)
 4. [Types (Composite)](#types-composite)
+   - [Interface Extensions](#interface-extensions)
+   - [Conditional Extensions](#conditional-extensions)
 5. [Enums](#enums)
 6. [Variables](#variables)
 7. [Functions](#functions)
@@ -432,6 +434,126 @@ When creating a type alias, the compiler checks that concrete types satisfy the 
 ```maxon
 typealias StringMap = Map with (String, int)  // OK: String implements Hashable
 ```
+
+### Interface Extensions
+
+Extensions add methods to interfaces that are automatically available on all types conforming to that interface. Unlike regular interface methods that each conforming type must implement, extension methods have a single implementation that works for all conformers.
+
+**Declaration:**
+
+```maxon
+extension Iterable
+  function count() returns int
+    var n = 0
+    for _ in self 'loop'
+      n = n + 1
+    end 'loop'
+    return n
+  end 'count'
+end 'Iterable'
+```
+
+**How Extensions Work:**
+- The method becomes available on all types that conform to the interface
+- The `self` keyword refers to the concrete type instance
+- Extension methods can call any method required by the interface
+- Associated types from the interface are resolved to the concrete type's bindings
+
+**Using Associated Types:**
+
+Extensions can use the interface's associated types. These are automatically substituted with the concrete type's associated type bindings:
+
+```maxon
+interface Container uses Element
+  function get(index int) returns Element
+end 'Container'
+
+extension Container
+  function first() returns Element
+    return self.get(0)
+  end 'first'
+end 'Container'
+```
+
+When called on a type like `IntArray implements Container with int`, the return type `Element` becomes `int`.
+
+**Extension Method Synthesis:**
+
+When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `IntArray` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `IntArray`.
+
+**Extension Rules:**
+- Declared with `extension InterfaceName ... end 'InterfaceName'`
+- Methods use `self` to access the conforming type instance
+- Associated types resolve to the concrete type's bindings
+- Extensions from parent interfaces are applied transitively
+
+### Conditional Extensions
+
+Extensions can include a `where` clause to restrict which conforming types receive the extension methods. Only types whose associated type bindings satisfy the constraints will have the methods synthesized.
+
+**Syntax:**
+
+```maxon
+extension Iterable where Element is Equatable
+  function contains(element Element) returns bool
+    for item in self 'loop'
+      if item == element 'found'
+        return true
+      end 'found'
+    end 'loop'
+    return false
+  end 'contains'
+end 'Iterable'
+```
+
+The `where` clause follows the same syntax as type-level where clauses: `where TypeParam is Interface`, with `and` for multiple interfaces on the same parameter.
+
+**Behavior:**
+
+When a type conforms to the extended interface, the compiler checks whether the type's associated type bindings satisfy the `where` constraints:
+- If they do, the extension methods are synthesized for that type
+- If they don't, the methods are silently skipped (no error)
+
+For example, `Array with int` conforms to `Iterable`. Since `int` implements `Equatable`, the `contains` method is available on `Array with int`. A hypothetical `Array with SomeNonEquatableType` would not receive the `contains` method.
+
+**Multiple Constraints:**
+
+Multiple constraints on the same parameter use `and`:
+
+```maxon
+extension Container where Key is Hashable and Equatable
+  // Methods available only when Key is both Hashable and Equatable
+end 'Container'
+```
+
+**Mixing Unconditional and Conditional Extensions:**
+
+An interface can have both unconditional extensions and conditional extensions. Types that don't satisfy the `where` clause still receive the unconditional extension methods:
+
+```maxon
+extension Seq
+  function countItems() returns int
+    var n = 0
+    for _ in self 'loop'
+      n = n + 1
+    end 'loop'
+    return n
+  end 'countItems'
+end 'Seq'
+
+extension Seq where Element is Equatable
+  function includes(target Element) returns bool
+    for item in self 'loop'
+      if item == target 'yes'
+        return true
+      end 'yes'
+    end 'loop'
+    return false
+  end 'includes'
+end 'Seq'
+```
+
+In this example, all types conforming to `Seq` get `countItems()`, but only those whose `Element` implements `Equatable` get `includes()`.
 
 ---
 

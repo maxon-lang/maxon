@@ -1,0 +1,253 @@
+// Test: conditional-extensions.partial-availability
+interface Seq uses Element
+  function next() returns Element throws IterationError
+end 'Seq'
+
+extension Seq
+  function countItems() returns int
+    var n = 0
+    for _ in self 'loop'
+      n = n + 1
+    end 'loop'
+    return n
+  end 'countItems'
+end 'Seq'
+
+extension Seq where Element is Equatable
+  function includes(target Element) returns bool
+    for item in self 'loop'
+      if item == target 'yes'
+        return true
+      end 'yes'
+    end 'loop'
+    return false
+  end 'includes'
+end 'Seq'
+
+type NotEq
+  export var n int
+end 'NotEq'
+
+typealias NotEqArray = Array with NotEq
+
+type NotEqSeq implements Seq with NotEq
+  var items NotEqArray
+  var idx int
+
+  function next() returns NotEq throws IterationError
+    if idx >= items.count() 'done'
+      throw IterationError.exhausted
+    end 'done'
+    var v = try items.get(idx) otherwise 'bail'
+      throw IterationError.exhausted
+    end 'bail'
+    idx = idx + 1
+    return v
+  end 'next'
+end 'NotEqSeq'
+
+function main() returns int
+  var s = NotEqSeq{items: [NotEq{n: 1}, NotEq{n: 2}], idx: 0}
+  return s.countItems()
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @NotEqSeq.countItems(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-8]
+    x86.mov edx, 16
+    x86.mov [rbp-32], eax
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, 16
+    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov esi, [rbp-48]
+    x86.mov edi, [esi+0]
+    x86.mov [eax+0], edi
+    x86.mov r8, [esi+8]
+    x86.mov r9, 32
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], r8
+    x86.mov rcx, r9
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-64]
+    x86.mov edx, [ecx+0]
+    x86.mov [eax+0], edx
+    x86.mov edx, [ecx+8]
+    x86.mov [eax+8], edx
+    x86.mov edx, [ecx+16]
+    x86.mov [eax+16], edx
+    x86.mov edx, [ecx+24]
+    x86.mov [eax+24], edx
+    x86.mov ecx, [rbp-56]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-40]
+    x86.mov [eax+0], ecx
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, [ecx+8]
+    x86.mov [eax+8], edx
+    x86.mov [rbp-24], eax
+    x86.jmp NotEqSeq.countItems.loop_0.header
+  loop_0.header:
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, rax
+    x86.call NotEqSeq.next
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.jne NotEqSeq.countItems.loop_0.exit
+  loop_0:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.jmp NotEqSeq.countItems.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @NotEqSeq.next(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+8]
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov [rbp-16], ebx
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-48], edx
+    x86.mov rcx, rax
+    x86.call NotEqArray.count
+    x86.mov ecx, [rbp-48]
+    x86.cmp ecx, eax
+    x86.jl NotEqSeq.next.done_0.after
+  done_0:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  done_0.after:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-24], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+8]
+    x86.mov esi, [rbp-24]
+    x86.mov rcx, rsi
+    x86.mov rdx, rbx
+    x86.call NotEqArray.get
+    x86.mov [rbp-32], eax
+    x86.xor edi, edi
+    x86.cmp edx, edi
+    x86.je NotEqSeq.next.otherwise_continue_2
+  otherwise_error_1:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  otherwise_continue_2:
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
+    x86.mov ecx, 1
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+8]
+    x86.add ebx, ecx
+    x86.mov esi, [rbp-8]
+    x86.mov [esi+8], ebx
+    x86.mov edi, [rbp-40]
+    x86.mov eax, edi
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @conditional-extensions.main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 1
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 1
+    x86.mov [edx+0], ebx
+    x86.mov esi, 2
+    x86.mov edi, 8
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov r8, [rbp-16]
+    x86.mov r9, 2
+    x86.mov [r8+0], r9
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.xor eax, eax
+    x86.mov ecx, 2
+    x86.xor edx, edx
+    x86.mov ebx, 8
+    x86.mov esi, 32
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 2
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-40]
+    x86.mov [ecx+8], eax
+    x86.lea rax, [rbp-24]
+    x86.mov rcx, rax
+    x86.mov eax, [rbp-40]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-48]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-48]
+    x86.xor ecx, ecx
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-48]
+    x86.mov rcx, rax
+    x86.call NotEqSeq.countItems
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -188,6 +188,20 @@ end 'IntBox'
 type Map uses Key, Value where Key is Hashable           // single constraint
 type Pair uses A, B where A is Hashable and Equatable    // multiple interfaces with 'and'
 type Multi uses A, B where A is Hashable, B is Cloneable // multiple params with ','
+
+// Interface extensions: add methods to all conforming types
+extension Container
+  function first() returns Element
+    return self.get(0)
+  end 'first'
+end 'Container'
+
+// Conditional extensions: restrict by associated type constraints
+extension Iterable where Element is Equatable
+  function contains(element Element) returns bool
+    // only available when Element implements Equatable
+  end 'contains'
+end 'Iterable'
 ```
 
 ## Enums

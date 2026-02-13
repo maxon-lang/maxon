@@ -887,6 +887,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
+  /// <summary>
+  /// Check whether a concrete type name conforms to a given interface.
+  /// </summary>
+  private bool TypeConformsToInterface(string concreteTypeName, string requiredInterface) {
+    if (_typeRegistry.TryGetValue(concreteTypeName, out var typeEntry)) {
+      if (typeEntry is MlirStructType st && st.ConformingInterfaces.Contains(requiredInterface))
+        return true;
+      if (typeEntry is MlirEnumType et && et.ConformingInterfaces.Contains(requiredInterface))
+        return true;
+    }
+    if (_primitiveConformances.TryGetValue(concreteTypeName, out var extInterfaces)
+        && extInterfaces.Contains(requiredInterface))
+      return true;
+    return false;
+  }
+
   private void ValidateWhereConstraints(
       MlirStructType sourceStruct, Dictionary<string, MlirType> substitution,
       string sourceName, Token errorToken) {
@@ -896,25 +912,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (concreteType is MlirTypeParameterType) continue;
 
       var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
-      // Check that the concrete type conforms to all required interfaces
       foreach (var requiredInterface in requiredInterfaces) {
-        bool satisfies = false;
-        if (_typeRegistry.TryGetValue(concreteTypeName, out var typeEntry)) {
-          if (typeEntry is MlirStructType st)
-            satisfies = st.ConformingInterfaces.Contains(requiredInterface);
-          else if (typeEntry is MlirEnumType et)
-            satisfies = et.ConformingInterfaces.Contains(requiredInterface);
-        }
-        // Also check extension-declared conformance (e.g., `extension int implements Hashable`)
-        if (!satisfies && _primitiveConformances.TryGetValue(concreteTypeName, out var extInterfaces))
-          satisfies = extInterfaces.Contains(requiredInterface);
-
-        if (!satisfies)
+        if (!TypeConformsToInterface(concreteTypeName, requiredInterface))
           throw new CompileError(ErrorCode.SemanticWhereConstraintViolation,
             $"Type '{concreteTypeName}' does not satisfy constraint '{requiredInterface}' required by type parameter '{paramName}' of '{sourceName}'",
             errorToken.Line, errorToken.Column);
       }
     }
+  }
+
+  /// <summary>
+  /// Check whether a conforming type's associated type bindings satisfy all where constraints.
+  /// Used by conditional extensions to filter which types receive the extension methods.
+  /// </summary>
+  private bool TypeSatisfiesWhereConstraints(
+      MlirStructType structType, Dictionary<string, List<string>> whereConstraints) {
+    foreach (var (paramName, requiredInterfaces) in whereConstraints) {
+      if (!structType.TypeParams.TryGetValue(paramName, out var concreteType)) return false;
+      // Unresolved type parameters are allowed (generic synthesis will handle them)
+      if (concreteType is MlirTypeParameterType) continue;
+
+      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      foreach (var requiredInterface in requiredInterfaces) {
+        if (!TypeConformsToInterface(concreteTypeName, requiredInterface))
+          return false;
+      }
+    }
+    return true;
   }
 
   /// <summary>
@@ -1506,6 +1530,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       (primitiveConformances, _) = ParseConformanceClause();
     }
 
+    // Parse optional where clause for conditional extensions
+    _interfaceAssociatedTypes.TryGetValue(interfaceName, out var extAssocTypeNames);
+    var extensionWhereConstraints = ParseWhereClause(extAssocTypeNames ?? []);
+
     SkipNewlines();
     var typealiasPositions = new List<int>();
     var functionPositions = new List<int>();
@@ -1555,7 +1583,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return;
     }
 
-    _interfaceAssociatedTypes.TryGetValue(interfaceName, out var assocTypeNames);
+    var assocTypeNames = extAssocTypeNames;
 
     // Snapshot before iterating — PreScanTypeAlias modifies _typeRegistry
     var conformingTypes = new List<(string Name, MlirStructType Type)>();
@@ -1563,6 +1591,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (type is not MlirStructType structType) continue;
       if (!structType.ConformingInterfaces.Contains(interfaceName)) continue;
       if (_typeAliasSources.ContainsKey(typeName)) continue;
+      // For conditional extensions, skip concrete types whose bindings don't satisfy the constraints
+      // (generic types with unresolved params are allowed through for generic synthesis)
+      if (extensionWhereConstraints.Count > 0
+          && !TypeSatisfiesWhereConstraints(structType, extensionWhereConstraints)) continue;
       conformingTypes.Add((typeName, structType));
     }
 
@@ -1586,7 +1618,46 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         PreScanTypeAlias();
       }
 
-      processFunction(module, functionPositions, typeName);
+      // Temporarily add extension where constraints to the struct type so method
+      // body parsing can resolve calls on constrained type parameters
+      Dictionary<string, List<string>>? addedConstraints = null;
+      if (extensionWhereConstraints.Count > 0) {
+        addedConstraints = [];
+        foreach (var (paramName, interfaces) in extensionWhereConstraints) {
+          if (!structType.WhereConstraints.ContainsKey(paramName)) {
+            structType.WhereConstraints[paramName] = [.. interfaces];
+            addedConstraints[paramName] = structType.WhereConstraints[paramName];
+          }
+        }
+      }
+
+      // Filter out extension methods that conflict with existing methods on this type
+      var filteredFuncPositions = functionPositions;
+      if (extensionWhereConstraints.Count > 0) {
+        var namespace_ = DeriveNamespace(includeFilename: false);
+        var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+        filteredFuncPositions = [.. functionPositions.Where(pos => {
+          if (pos + 1 >= _tokens.Count) return true;
+          var methodName = _tokens[pos + 1].Value;
+          var fullName = $"{qualifiedTypeName}.{methodName}";
+          return !module.Functions.Any(f => f.Name == fullName || f.Name.StartsWith(fullName + "$"));
+        })];
+      }
+
+      int funcCountBefore = module.Functions.Count;
+      processFunction(module, filteredFuncPositions, typeName);
+
+      // Tag functions from conditional extensions so monomorphization can filter them
+      if (extensionWhereConstraints.Count > 0) {
+        for (int i = funcCountBefore; i < module.Functions.Count; i++) {
+          module.Functions[i].ExtensionWhereConstraints = extensionWhereConstraints;
+        }
+        // Clean up temporarily added constraints
+        if (addedConstraints != null) {
+          foreach (var paramName in addedConstraints.Keys)
+            structType.WhereConstraints.Remove(paramName);
+        }
+      }
 
       RemoveAssociatedTypePlaceholders(registeredParams);
     }
@@ -5017,6 +5088,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (structA.TypeParams.Count != structB.TypeParams.Count) return false;
     foreach (var (key, valueA) in structA.TypeParams) {
       if (!structB.TypeParams.TryGetValue(key, out var valueB)) return false;
+      // If either is still a generic type parameter, consider it compatible
+      // (monomorphization will specialize the concrete types later)
+      if (valueA is MlirTypeParameterType || valueB is MlirTypeParameterType) continue;
       if (valueA.Name != valueB.Name) return false;
     }
     return true;

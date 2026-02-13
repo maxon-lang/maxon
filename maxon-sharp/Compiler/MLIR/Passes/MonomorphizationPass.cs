@@ -74,6 +74,11 @@ public static class MonomorphizationPass {
         if (!isSourceMethod && !isSuffixMatch) continue;
         if (!NeedsSpecialization(func, sourceStruct)) continue;
 
+        // Skip conditional extension methods whose where constraints aren't satisfied
+        if (func.ExtensionWhereConstraints != null
+            && !SatisfiesWhereConstraints(func.ExtensionWhereConstraints, aliasInfo.TypeParams, module))
+          continue;
+
         string methodName;
         if (isSourceMethod) {
           methodName = func.Name[sourcePrefix.Length..];
@@ -102,6 +107,38 @@ public static class MonomorphizationPass {
     if (func.ReturnType is MlirTypeParameterType) return true;
     if (func.ReturnType != null && IsAssociatedType(func.ReturnType, sourceStruct)) return true;
 
+    return false;
+  }
+
+  /// <summary>
+  /// Check whether concrete type params satisfy conditional extension where constraints.
+  /// </summary>
+  private static bool SatisfiesWhereConstraints(
+      Dictionary<string, List<string>> whereConstraints,
+      Dictionary<string, MlirType> typeParams,
+      MlirModule<MaxonOp> module) {
+    foreach (var (paramName, requiredInterfaces) in whereConstraints) {
+      if (!typeParams.TryGetValue(paramName, out var concreteType)) return false;
+      if (concreteType is MlirTypeParameterType) return false;
+
+      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      foreach (var requiredInterface in requiredInterfaces) {
+        if (!TypeConformsToInterface(concreteTypeName, requiredInterface, module)) return false;
+      }
+    }
+    return true;
+  }
+
+  private static bool TypeConformsToInterface(string typeName, string interfaceName, MlirModule<MaxonOp> module) {
+    if (module.TypeDefs.TryGetValue(typeName, out var typeEntry)) {
+      if (typeEntry is MlirStructType st && st.ConformingInterfaces.Contains(interfaceName))
+        return true;
+      if (typeEntry is MlirEnumType et && et.ConformingInterfaces.Contains(interfaceName))
+        return true;
+    }
+    if (module.PrimitiveConformances.TryGetValue(typeName, out var extInterfaces)
+        && extInterfaces.Contains(interfaceName))
+      return true;
     return false;
   }
 

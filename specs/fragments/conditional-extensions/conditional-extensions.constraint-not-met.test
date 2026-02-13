@@ -1,0 +1,35 @@
+// Test: conditional-extensions.constraint-not-met
+interface Holder uses Item
+  function get() returns Item
+end 'Holder'
+
+extension Holder where Item is Comparable
+  function isGreater(other Item) returns bool
+    return self.get().compare(other) > 0
+  end 'isGreater'
+end 'Holder'
+
+type NotComparable
+  var x int
+end 'NotComparable'
+
+type MyHolder implements Holder with NotComparable
+  var item NotComparable
+
+  function get() returns NotComparable
+    return item
+  end 'get'
+end 'MyHolder'
+
+function main() returns int
+  var h = MyHolder{item: NotComparable{x: 5}}
+  // isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
+  var r = h.isGreater(NotComparable{x: 3})
+  return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:27:13: Type 'MyHolder' has no field named 'isGreater'
+```
+---
+---
