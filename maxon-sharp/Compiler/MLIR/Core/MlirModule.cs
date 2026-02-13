@@ -28,6 +28,9 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Interface associated type names (interfaceName -> list of 'uses' type names)
   public Dictionary<string, List<string>> InterfaceAssociatedTypes { get; } = [];
 
+  // Primitive type conformances from extension blocks (e.g., "int" -> ["Hashable", "Equatable"])
+  public Dictionary<string, List<string>> PrimitiveConformances { get; } = [];
+
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
   }
@@ -42,6 +45,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in TypeAliasSources) clone.TypeAliasSources[k] = v;
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
+    foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];
     return clone;
   }
 

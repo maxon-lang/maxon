@@ -58,6 +58,7 @@ public enum ErrorCode {
   SemanticUnexportedFieldAccess = 3014,
   SemanticRedundantTypeAnnotation = 3015,
   SemanticPartialInterfaceImpl = 3016,
+  SemanticWhereConstraintViolation = 3017,
   SemanticEnumDuplicateCase = 3030,
   SemanticEnumDuplicateRawValue = 3031,
   SemanticEnumRawValueTypeMismatch = 3032,

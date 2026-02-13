@@ -183,6 +183,11 @@ type IntBox implements Container with int      // specify associated type
         // ...
     end 'get'
 end 'IntBox'
+
+// Where clauses: constrain type parameters to require interface conformance
+type Map uses Key, Value where Key is Hashable           // single constraint
+type Pair uses A, B where A is Hashable and Equatable    // multiple interfaces with 'and'
+type Multi uses A, B where A is Hashable, B is Cloneable // multiple params with ','
 ```
 
 ## Enums

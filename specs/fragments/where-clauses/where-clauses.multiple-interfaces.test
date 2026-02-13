@@ -1,0 +1,73 @@
+// Test: where-clauses.multiple-interfaces
+interface HasName
+    function name() returns int
+end 'HasName'
+
+interface HasAge
+    function age() returns int
+end 'HasAge'
+
+type Person implements HasName, HasAge
+    var _age int
+
+    function name() returns int
+        return 1
+    end 'name'
+
+    function age() returns int
+        return self._age
+    end 'age'
+end 'Person'
+
+type Registry uses T where T is HasName and HasAge
+    export var item T
+end 'Registry'
+
+typealias PersonRegistry = Registry with Person
+
+function main() returns int
+    var p = Person{_age: 30}
+    var r = PersonRegistry{item: p}
+    return r.item.age()
+end 'main'
+---
+ExitCode: 30
+---
+module {
+  func @Person.age(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+  func @where-clauses.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 30
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 30
+    x86.mov [edx+0], ebx
+    x86.mov esi, 8
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [rbp-16]
+    x86.mov [r8+0], edi
+    x86.mov r9, [rbp-16]
+    x86.mov eax, [r9+0]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, rax
+    x86.epilogue
+    x86.jmp Person.age
+  }
+}
+---

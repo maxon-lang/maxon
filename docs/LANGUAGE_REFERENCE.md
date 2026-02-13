@@ -67,7 +67,7 @@ Single-line comments only:
 and, as, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, ignore, implements, in, int, interface, let, match,
 mod, not, or, otherwise, return, shl, shr, static, then, throw, throws, true, try, type,
-typealias, var, while, xor
+typealias, var, where, while, xor
 ```
 
 ### Literals
@@ -404,6 +404,34 @@ Interfaces can declare static methods using the `static` keyword. Static interfa
 - A type can conform to multiple interfaces: `type Foo implements A, B`
 - Methods implementing interface requirements follow the same syntax as regular methods
 - Static interface methods use `static function method()` syntax in implementations
+
+### Where Clauses (Type Parameter Constraints)
+
+The `where` clause constrains type parameters to require specific interface conformance. This enables the compiler to verify method calls on type parameters and to reject concrete types that don't satisfy the constraints.
+
+```maxon
+type Map uses Key, Value implements BuiltinDictionaryLiteral where Key is Hashable
+    // Key is guaranteed to have hash() method
+end 'Map'
+```
+
+Multiple interfaces on the same parameter use `and`:
+
+```maxon
+type Container uses T where T is Hashable and Equatable
+```
+
+Multiple constrained parameters use comma separation:
+
+```maxon
+type Pair uses A, B where A is Hashable, B is Cloneable
+```
+
+When creating a type alias, the compiler checks that concrete types satisfy the constraints:
+
+```maxon
+typealias StringMap = Map with (String, int)  // OK: String implements Hashable
+```
 
 ---
 
