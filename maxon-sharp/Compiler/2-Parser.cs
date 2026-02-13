@@ -861,11 +861,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           (fieldType, defaultValue) = ParseFieldDefault();
         } else {
           fieldType = ParseTypeRef();
-          // Provide implicit defaults for primitive types
-          if (fieldType == MlirType.I64) defaultValue = new IntegerAttr(0, MlirType.I64);
-          else if (fieldType == MlirType.F64) defaultValue = new FloatAttr(0.0, MlirType.F64);
-          else if (fieldType == MlirType.I1) defaultValue = new IntegerAttr(0, MlirType.I1);
-          else if (fieldType == MlirType.I8) defaultValue = new IntegerAttr(0, MlirType.I8);
         }
 
         fields.Add(new MlirStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
@@ -7035,13 +7030,38 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       do {
         SkipNewlines();
         var fieldNameToken = Expect(TokenType.Identifier);
+        _ = structType.GetField(fieldNameToken.Value) ?? throw new CompileError(ErrorCode.SemanticUnknownField,
+            $"Type '{typeName}' has no field '{fieldNameToken.Value}'",
+            fieldNameToken.Line, fieldNameToken.Column);
+
+        if (!providedFields.Add(fieldNameToken.Value)) {
+          throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+            $"Duplicate field '{fieldNameToken.Value}' in '{typeName}' literal",
+            fieldNameToken.Line, fieldNameToken.Column);
+        }
         Expect(TokenType.Colon);
         var value = ResolveExprValue(ParseExpression());
         fieldValues.Add((fieldNameToken.Value, value));
-        providedFields.Add(fieldNameToken.Value);
       } while (Check(TokenType.Comma) && Advance() != null);
     }
     SkipNewlines();
+
+    // Validate all exported fields are provided when user supplies any fields
+    // (empty {} is allowed as zero-initialization)
+    if (providedFields.Count > 0) {
+      var missingFields = new List<string>();
+      foreach (var field in structType.Fields) {
+        if (!field.IsExported) continue;
+        if (providedFields.Contains(field.Name)) continue;
+        if (field.DefaultValue != null) continue;
+        missingFields.Add(field.Name);
+      }
+      if (missingFields.Count > 0) {
+        throw new CompileError(ErrorCode.SemanticUnknownField,
+          $"Missing required field{(missingFields.Count > 1 ? "s" : "")} for type '{typeName}': {string.Join(", ", missingFields)}",
+          Current().Line, Current().Column);
+      }
+    }
 
     // Fill in defaults for unspecified fields
     foreach (var field in structType.Fields) {
@@ -7094,9 +7114,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var zeroResult = EmitZeroStructLiteral(fieldStructType, structType.TypeParams);
             fieldValues.Add((field.Name, zeroResult));
           } else {
-            throw new CompileError(ErrorCode.ParserExpectedExpression,
-              $"Field '{field.Name}' of type '{typeName}' requires a value (no default defined)",
-              Current().Line, Current().Column);
+            // Zero-initialize primitive fields not provided
+            var zeroVal = new MaxonLiteralOp(0L);
+            _currentBlock!.AddOp(zeroVal);
+            fieldValues.Add((field.Name, zeroVal.Result));
           }
         } else {
           var errorToken = new Token(TokenType.Identifier, field.Name, Current().Line, Current().Column);

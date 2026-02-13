@@ -59,6 +59,7 @@ public enum ErrorCode {
   SemanticRedundantTypeAnnotation = 3015,
   SemanticPartialInterfaceImpl = 3016,
   SemanticWhereConstraintViolation = 3017,
+  SemanticUnknownField = 3018,
   SemanticEnumDuplicateCase = 3030,
   SemanticEnumDuplicateRawValue = 3031,
   SemanticEnumRawValueTypeMismatch = 3032,

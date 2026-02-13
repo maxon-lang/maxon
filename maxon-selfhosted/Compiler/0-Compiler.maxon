@@ -21,12 +21,15 @@ function compileFiles(sources SourceFileArray, outputPath String) returns String
     let source = try sources.get(0) otherwise 'noSource'
         throw CompileError.noSourceFiles
     end 'noSource'
+
     let tokens = tokenize(source.content)
     let maxonOps = parse(tokens)
     let stdOps = lowerMaxonOpsToStd(maxonOps)
     let x86Ops = lowerStdOpsToX86(stdOps)
     let codeResult = emit(x86Ops)
+
     writePe(outputPath, codeResult: codeResult)
+
     return outputPath
 end 'compileFiles'
 
@@ -43,6 +46,7 @@ function collectFiles(path String) returns SourceFileArray throws CompileError
         let entries = try Directory.list(path) otherwise 'listErr'
             throw CompileError.directoryNotFound
         end 'listErr'
+
         var sources = SourceFileArray{}
         for name in entries 'loop'
             if name.endsWith(".maxon") 'isMaxon'
@@ -50,12 +54,14 @@ function collectFiles(path String) returns SourceFileArray throws CompileError
                 let bytes = try File.readBinary(filePath) otherwise 'skip'
                     continue
                 end 'skip'
-                sources.push(SourceFile { path: filePath, content: bytes })
+                sources.push({ path: filePath, content: bytes })
             end 'isMaxon'
         end 'loop'
+
         if sources.count() == 0 'noFiles'
             throw CompileError.noSourceFiles
         end 'noFiles'
+
         return sources
     end 'isDir'
 

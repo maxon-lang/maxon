@@ -2060,8 +2060,8 @@ public static class MaxonToStandardConversion {
     // Second pass: catch returns that reference var refs of array literals
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
-        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.ContainsKey(ret.Value.Id)) {
-          escaping.Add(arrayLiterals[ret.Value.Id].Result.Id);
+        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.TryGetValue(ret.Value.Id, out MaxonStructLiteralOp? value)) {
+          escaping.Add(value.Result.Id);
         }
       }
     }
@@ -2448,7 +2448,7 @@ public static class MaxonToStandardConversion {
     var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
     // Load capacity before COW check — needed to determine if old buffer was heap-allocated (tracked)
-    StdI64 oldCapacity = null;
+    StdI64? oldCapacity = null;
     if (_trackAllocs) {
       oldCapacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
       var oldCapVar = $"__grow_oldcap_{MlirContext.Current.NextId()}";
@@ -2467,7 +2467,7 @@ public static class MaxonToStandardConversion {
     block.AddOp(newByteSizeOp);
 
     // Track the old buffer being freed by realloc
-    if (_trackAllocs) {
+    if (_trackAllocs && oldCapacity != null) {
       // DECREF only if old buffer was heap-allocated (capacity > 0 before COW)
       EmitTrackDecrefIfHeap(block, "array grow", 0, oldCapacity);
 
@@ -3703,18 +3703,6 @@ public static class MaxonToStandardConversion {
     var rcOp = new StdConstI64Op(refcount);
     block.AddOp(rcOp);
     block.AddOp(new StdCallRuntimeOp("maxon_track_incref", [tagPtr, tagLen, rcOp.Result]));
-  }
-
-  /// <summary>
-  /// Emit tracking call: DECREF: tag -> rc=N
-  /// </summary>
-  private static void EmitTrackDecref(
-    MlirBlock<StandardOp> block, string tag, long refcount) {
-    if (!_trackAllocs) return;
-    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
-    var rcOp = new StdConstI64Op(refcount);
-    block.AddOp(rcOp);
-    block.AddOp(new StdCallRuntimeOp("maxon_track_decref", [tagPtr, tagLen, rcOp.Result]));
   }
 
   /// <summary>
