@@ -3097,7 +3097,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseDotStatement() {
     var nameToken = _tokens[_pos];
-    var dotToken = _tokens[_pos + 1];
 
     // Tuple positional field assignment: t.0 = value
     if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.IntegerLiteral) {

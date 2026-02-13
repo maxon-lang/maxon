@@ -8,26 +8,26 @@ export function compile(path String) returns String throws CompileError
         let bytes = try File.readBinary(path) otherwise 'readErr'
             throw CompileError.readError
         end 'readErr'
-        sources.push({ path: path, content: bytes })
-    end 'isFile' else 'notFile'
-        if Directory.exists(path) 'isDir'
-            let entries = try Directory.list(path) otherwise 'listErr'
-                throw CompileError.directoryNotFound
-            end 'listErr'
 
-            for name in entries 'loop'
-                if name.endsWith(".maxon") 'isMaxon'
-                    let filePath = "{path}\\{name}"
-                    let bytes = try File.readBinary(filePath) otherwise 'skip'
-                        continue
-                    end 'skip'
-                    sources.push({ path: filePath, content: bytes })
-                end 'isMaxon'
-            end 'loop'
-        end 'isDir' else 'notDir'
-            throw CompileError.fileNotFound
-        end 'notDir'
-    end 'notFile'
+        sources.push({ path: path, content: bytes })
+    end 'isFile' else if Directory.exists(path) 'isDir'
+        let entries = try Directory.list(path) otherwise 'listErr'
+            throw CompileError.directoryNotFound
+        end 'listErr'
+
+        for name in entries 'loop'
+            if name.endsWith(".maxon") 'isMaxon'
+                let filePath = "{path}\\{name}"
+                let bytes = try File.readBinary(filePath) otherwise 'skip'
+                    continue
+                end 'skip'
+
+                sources.push({ path: filePath, content: bytes })
+            end 'isMaxon'
+        end 'loop'
+    end 'isDir' else 'notFound'
+        throw CompileError.fileNotFound
+    end 'notFound'
 
     if sources.count() == 0 'noFiles'
         throw CompileError.noSourceFiles
@@ -41,12 +41,15 @@ export function compile(path String) returns String throws CompileError
     end 'compile'
 
     let stdOps = lowerMaxonOpsToStd(allOps)
+
     let x86Ops = lowerStdOpsToX86(stdOps)
+
     let codeResult = emit(x86Ops)
 
     let first = try sources.get(0) otherwise 'unreachable'
         throw CompileError.noSourceFiles
     end 'unreachable'
+
     let outputPath = changeExtension(first.path, ext: ".exe")
     writePe(outputPath, codeResult: codeResult)
 
@@ -66,3 +69,10 @@ type SourceFile
 end 'SourceFile'
 
 typealias SourceFileArray = Array with SourceFile
+
+// Replaces the file extension (e.g. ".maxon" -> ".exe").
+function changeExtension(path String, ext String) returns String
+    let dotIdx = try path.findLast(".") otherwise path.endIndex()
+    let base = path.slice(path.startIndex(), endIndex: dotIdx)
+    return base.concat(ext)
+end 'changeExtension'

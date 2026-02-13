@@ -36,7 +36,7 @@ var s = "hello world"
 s.startsWith("hello")      // true
 s.endsWith("world")        // true
 s.contains("lo wo")        // true
-s.find("world")            // 6 (index, or -1 if not found)
+s.findFirst("world")            // 6 (index, or -1 if not found)
 ```
 
 ### String Concatenation
@@ -130,7 +130,7 @@ Create a substring view that shares storage with the original string:
 ```maxon
 var s = "hello world"
 var start = s.startIndex()
-var spaceIdx = try s.find(" ") otherwise return  // find throws StringError.notFound if not found
+var spaceIdx = try s.findFirst(" ") otherwise return  // find throws StringError.notFound if not found
 var sub = s.slice(start, endIndex: spaceIdx)  // "hello" - shares storage with s
 print(sub)
 ```
@@ -373,9 +373,9 @@ end 'main'
 ```maxon
 function main() returns int
   var s = "hello world"
-  var idx = try s.find("world") otherwise s.endIndex()
+  var idx = try s.findFirst("world") otherwise s.endIndex()
   print("{idx.charIndex()}\n")
-  var idx2 = try s.find("xyz") otherwise s.endIndex()
+  var idx2 = try s.findFirst("xyz") otherwise s.endIndex()
   if idx2 == s.endIndex() 'not_found'
     print("-1\n")
   end 'not_found'
@@ -1345,7 +1345,7 @@ end 'main'
 function main() returns int
   var s = "hello world"
   var start = s.startIndex()
-  var spaceIdx = try s.find(" ") otherwise s.endIndex()
+  var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
   var sub = s.slice(start, endIndex: spaceIdx)
   print(sub)
   return 0
@@ -1401,7 +1401,7 @@ end 'main'
 function main() returns int
   var s = "abcdef"
   var start = s.startIndex()
-  var idx = try s.find("d") otherwise s.endIndex()
+  var idx = try s.findFirst("d") otherwise s.endIndex()
   var sub = s.slice(start, endIndex: idx)
   for c in sub 'loop'
     print("{c}\n")
@@ -1468,7 +1468,7 @@ Demonstrates that sliced strings work correctly.
 function main() returns int
   var s = "hello world"
   var start = s.startIndex()
-  var spaceIdx = try s.find(" ") otherwise s.endIndex()
+  var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
   var sub = s.slice(start, endIndex: spaceIdx)
   print("{sub}\n")
   return 0

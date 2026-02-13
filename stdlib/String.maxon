@@ -117,7 +117,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     return findManaged(_managed, needle: needle._managed) >= 0
   end 'contains'
 
-  export function find(needle String) returns StringIndex throws StringError
+  export function findFirst(needle String) returns StringIndex throws StringError
     var byteIdx = findManaged(_managed, needle: needle._managed)
     if byteIdx < 0 'not_found'
       throw StringError.notFound
@@ -125,7 +125,27 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     // Convert byte index to grapheme (char) index
     var charIdx = byteIndexToGraphemeIndex(_managed, byteIdx: byteIdx)
     return {_charIndex: charIdx, _bytePos: byteIdx}
-  end 'find'
+  end 'findFirst'
+
+  export function findLast(needle String) returns StringIndex throws StringError
+    var needleLen = __managed_memory_len(needle._managed)
+    var selfLen = __managed_memory_len(_managed)
+    var lastByteIdx = 0 - 1
+    var searchPos = 0
+    while searchPos <= selfLen - needleLen 'scan'
+      var idx = findManagedRange(_managed, offset: searchPos, len: selfLen - searchPos, needle: needle._managed)
+      if idx < 0 'done'
+        break 'scan'
+      end 'done'
+      lastByteIdx = searchPos + idx
+      searchPos = lastByteIdx + 1
+    end 'scan'
+    if lastByteIdx < 0 'not_found'
+      throw StringError.notFound
+    end 'not_found'
+    var charIdx = byteIndexToGraphemeIndex(_managed, byteIdx: lastByteIdx)
+    return {_charIndex: charIdx, _bytePos: lastByteIdx}
+  end 'findLast'
 
   // Slicing - returns a new String backed by slice into this string's buffer
   // Use endIndex for end position, or length for character count
