@@ -128,6 +128,11 @@ public class Compiler {
       }
     }
 
+    // Typealias type params may reference placeholder types from PreScan (e.g.,
+    // `FooArray = Array with FooEnum` prescanned before FooEnum gets its cases).
+    // Now that all types are fully defined, update the references.
+    RefreshTypeAliasTypeParams(module);
+
     // Full parse with all signatures known
     foreach (var source in sources) {
       try {
@@ -139,6 +144,20 @@ public class Compiler {
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
         throw;
+      }
+    }
+  }
+
+  private static void RefreshTypeAliasTypeParams(MlirModule<MaxonOp> module) {
+    foreach (var (_, type) in module.TypeDefs) {
+      if (type is not MlirStructType structType || structType.TypeParams.Count == 0)
+        continue;
+      foreach (var key in structType.TypeParams.Keys.ToList()) {
+        var paramType = structType.TypeParams[key];
+        if (paramType is MlirTypeParameterType)
+          continue;
+        if (module.TypeDefs.TryGetValue(paramType.Name, out var currentType) && currentType != paramType)
+          structType.TypeParams[key] = currentType;
       }
     }
   }
