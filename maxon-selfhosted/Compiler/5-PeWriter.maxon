@@ -208,6 +208,7 @@ export type CodeResult
 end 'CodeResult'
 
 export function writePe(outputPath String, codeResult CodeResult)
+    logDebug(LogCategory.pe, message: "Writing PE file: {outputPath}")
     var pe = ByteBuffer.create(4096)
 
     var code = codeResult.code
@@ -231,6 +232,9 @@ export function writePe(outputPath String, codeResult CodeResult)
     let idataSizeVirtual = alignUp(idataSize, alignment: SECTION_ALIGNMENT)
 
     let imageSize = idataRva + idataSizeVirtual
+
+    logDebug(LogCategory.pe, message: "Code section: {codeSize} bytes")
+    logDebug(LogCategory.pe, message: "Import section: {idataSize} bytes")
 
     // Patch ExitProcess IAT RIP-relative reference in code
     let ripAtFixup = textRva + codeResult.exitProcessFixupOffset + 4
@@ -332,4 +336,5 @@ export function writePe(outputPath String, codeResult CodeResult)
 
     // Write to file
     try File.writeBinary(outputPath, content: pe.toByteArray()) otherwise ignore
+    logDebug(LogCategory.pe, message: "PE write complete")
 end 'writePe'

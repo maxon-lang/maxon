@@ -244,3 +244,57 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: top-level-var-enum-initializer -->
+```maxon
+enum Color
+    Red
+    Green
+    Blue
+end 'Color'
+
+var current = Color.Green
+
+function main() returns int
+  if current == Color.Green 'check'
+    current = Color.Blue
+    if current == Color.Blue 'check2'
+      return 42
+    end 'check2'
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: top-level-var-const-expr -->
+```maxon
+let BASE = 20
+var offset = BASE + 1
+
+function main() returns int
+  offset = offset * 2
+  return offset
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: top-level-var-array-literal -->
+```maxon
+var items = [10, 20, 30]
+
+function main() returns int
+  items.set(1, value: 12)
+  let a = try items.get(0) otherwise 0
+  let b = try items.get(1) otherwise 0
+  let c = try items.get(2) otherwise 0
+  return a + b + c
+end 'main'
+```
+```exitcode
+52
+```

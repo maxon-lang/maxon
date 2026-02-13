@@ -507,17 +507,25 @@ public class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string 
 // Global variable operations (for top-level var and static var)
 // ============================================================================
 
-public class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind) : MaxonOp {
+public class MaxonGlobalLoadOp : MaxonOp {
   public override string Mnemonic => $"maxon.global_load @{GlobalName}";
-  public string GlobalName { get; } = globalName;
-  public MaxonValueKind ValueKind { get; } = kind;
-  public MaxonValue Result { get; } = kind.CreateValue();
+  public string GlobalName { get; }
+  public MaxonValueKind ValueKind { get; }
+  public string? EnumTypeName { get; }
+  public MaxonValue Result { get; }
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> {
       ["global"] = new StringAttr(GlobalName),
-      ["type"] = new TypeAttr(ValueKind.ToMlirType())
+      ["type"] = new TypeAttr(ValueKind == MaxonValueKind.Enum ? MlirType.I64 : ValueKind.ToMlirType())
     };
+
+  public MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, string? enumTypeName = null) {
+    GlobalName = globalName;
+    ValueKind = kind;
+    EnumTypeName = enumTypeName;
+    Result = enumTypeName != null ? new MaxonEnum(MlirContext.Current.NextId(), enumTypeName) : kind.CreateValue();
+  }
 }
 
 // Creates an enum value for a specific case
@@ -664,7 +672,7 @@ public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueK
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> {
       ["global"] = new StringAttr(GlobalName),
-      ["type"] = new TypeAttr(ValueKind.ToMlirType())
+      ["type"] = new TypeAttr(ValueKind == MaxonValueKind.Enum ? MlirType.I64 : ValueKind.ToMlirType())
     };
 }
 
@@ -825,6 +833,15 @@ public class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
 // Write a C string to stdout, returns number of bytes written
 public class MaxonCStringWriteStdoutOp(MaxonValue cstrPtr) : MaxonOp {
   public override string Mnemonic => "maxon.cstring_write_stdout";
+  public MaxonValue CstrPtr { get; } = cstrPtr;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Write a C string to stderr, returns number of bytes written
+public class MaxonCStringWriteStderrOp(MaxonValue cstrPtr) : MaxonOp {
+  public override string Mnemonic => "maxon.cstring_write_stderr";
   public MaxonValue CstrPtr { get; } = cstrPtr;
   public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];

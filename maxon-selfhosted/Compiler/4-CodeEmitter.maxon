@@ -41,6 +41,7 @@ end 'emitMovRegImm'
 // Emit X86 ops to machine code.
 // Returns a CodeResult with the code bytes and fixup offsets.
 export function emit(x86Ops X86OpArray) returns CodeResult
+    logDebug(LogCategory.codegen, message: "Emitting machine code")
     var code = ByteBuffer.create(256)
 
     // Emit _start wrapper first (entry point at offset 0)
@@ -90,5 +91,6 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     let relOffset = mainOffset - callEndOffset
     code.patchDword(mainCallFixupOffset, value: relOffset)
 
+    logDebug(LogCategory.codegen, message: "Emitted {code.count()} bytes of machine code")
     return {code: code, mainCallFixupOffset: mainCallFixupOffset, exitProcessFixupOffset: exitProcessFixupOffset}
 end 'emit'

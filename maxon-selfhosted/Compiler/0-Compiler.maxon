@@ -2,6 +2,7 @@
 
 // Compiles a file or directory and returns the output executable path.
 export function compile(path String) returns String throws CompileError
+    logDebug(LogCategory.compiler, message: "Starting compilation")
     var sources = SourceFileArray{}
 
     if File.exists(path) 'isFile'
@@ -33,6 +34,7 @@ export function compile(path String) returns String throws CompileError
         throw CompileError.noSourceFiles
     end 'noFiles'
 
+    logDebug(LogCategory.compiler, message: "Compiling {sources.count()} source files")
     var allOps = MaxonOpArray{}
     for source in sources 'compile'
         let tokens = tokenize(source.content)
@@ -40,9 +42,12 @@ export function compile(path String) returns String throws CompileError
         allOps.append(ops)
     end 'compile'
 
+    logDebug(LogCategory.mlir, message: "Starting MLIR pipeline")
     let stdOps = lowerMaxonOpsToStd(allOps)
+    logDebug(LogCategory.mlir, message: "Lowered Maxon to Standard")
 
     let x86Ops = lowerStdOpsToX86(stdOps)
+    logDebug(LogCategory.mlir, message: "Lowered Standard to X86")
 
     let codeResult = emit(x86Ops)
 
@@ -53,6 +58,7 @@ export function compile(path String) returns String throws CompileError
     let outputPath = changeExtension(first.path, ext: ".exe")
     writePe(outputPath, codeResult: codeResult)
 
+    logInfo(LogCategory.compiler, message: "Wrote {codeResult.code.count()} bytes code to {outputPath}")
     return outputPath
 end 'compile'
 

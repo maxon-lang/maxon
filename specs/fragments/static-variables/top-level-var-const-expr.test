@@ -1,0 +1,24 @@
+// Test: top-level-var-const-expr
+let BASE = 20
+var offset = BASE + 1
+
+function main() returns int
+  offset = offset * 2
+  return offset
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @static-variables.main() -> i64 {
+  entry:
+    x86.mov eax, [rip+offset]
+    x86.mov ecx, 2
+    x86.imul eax, ecx
+    x86.mov [rip+offset], eax
+    x86.mov edx, [rip+offset]
+    x86.mov eax, edx
+    x86.ret
+  }
+}
+---

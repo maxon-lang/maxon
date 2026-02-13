@@ -381,7 +381,7 @@ public class Lexer(string source) {
       return ScanNumber(startLine, startColumn);
     }
 
-    // Identifier or keyword
+    // Identifier or keyword: starts with letter or underscore, continues with alphanumeric or underscore
     if (char.IsLetter(c) || c == '_') {
       return ScanIdentifier(startLine, startColumn);
     }

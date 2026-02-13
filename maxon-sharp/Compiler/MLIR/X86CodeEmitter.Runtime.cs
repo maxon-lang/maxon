@@ -16,6 +16,7 @@ public partial class X86CodeEmitter {
     EmitMaxonCowCheck();
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
+    EmitMaxonWriteStderr();
     EmitMaxonI64ToString();
     EmitMaxonF64ToString();
     EmitMaxonBoolToString();
@@ -191,6 +192,33 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
     EmitCallImport("kernel32.dll", "WriteFile");
     // Return bytes written
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_write_stderr(cstr_ptr_in_rcx) -> bytes_written_in_rax</summary>
+  private void EmitMaxonWriteStderr() {
+    EmitRuntimeFunctionStart("maxon_write_stderr", 1, 0x40);
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rax, 0);
+    DefineLabel("rt_stderr_strlen_loop");
+    EmitBytes(0x0F, 0xB6, 0x0C, 0x02);
+    EmitBytes(0x84, 0xC9);
+    EmitJcc("z", "rt_stderr_strlen_done");
+    EmitBytes(0x48, 0xFF, 0xC0);
+    EmitJmp("rt_stderr_strlen_loop");
+    DefineLabel("rt_stderr_strlen_done");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+    // GetStdHandle(STD_ERROR_HANDLE = -12)
+    EmitMovRegImm(X86Register.Rcx, -12);
+    EmitCallImport("kernel32.dll", "GetStdHandle");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);
+    EmitMovRegMem(X86Register.R8, -0x10, 8);
+    EmitBytes(0x4C, 0x8D, 0x4D, 0xE0);
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "WriteFile");
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitRuntimeFunctionEnd();
   }

@@ -1094,6 +1094,12 @@ public static class MaxonToStandardConversion {
                   valueMap[globalLoad.Result] = loadOp.Result;
                   break;
                 }
+                case MaxonValueKind.Enum: {
+                  var loadOp = new StdGlobalLoadI64Op(globalLoad.GlobalName);
+                  newBlock.AddOp(loadOp);
+                  valueMap[globalLoad.Result] = loadOp.Result;
+                  break;
+                }
                 default:
                   throw new InvalidOperationException($"Unsupported global variable type: {globalLoad.ValueKind}");
               }
@@ -1110,6 +1116,9 @@ public static class MaxonToStandardConversion {
                   break;
                 case MaxonValueKind.Bool:
                   newBlock.AddOp(new StdGlobalStoreI1Op((StdBool)mappedValue, globalStore.GlobalName));
+                  break;
+                case MaxonValueKind.Enum:
+                  newBlock.AddOp(new StdGlobalStoreI64Op((StdI64)mappedValue, globalStore.GlobalName));
                   break;
                 default:
                   throw new InvalidOperationException($"Unsupported global variable type: {globalStore.ValueKind}");
@@ -1172,6 +1181,9 @@ public static class MaxonToStandardConversion {
               break;
             case MaxonCStringWriteStdoutOp writeStdoutOp:
               LowerCStringWriteStdout(writeStdoutOp, newBlock, valueMap);
+              break;
+            case MaxonCStringWriteStderrOp writeStderrOp:
+              LowerCStringWriteStderr(writeStderrOp, newBlock, valueMap);
               break;
             case MaxonStringLiteralOp stringLitOp:
               LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result);
@@ -2710,6 +2722,21 @@ public static class MaxonToStandardConversion {
     var cstrPtr = (StdI64)valueMap[op.CstrPtr];
     var result = new StdI64(MlirContext.Current.NextId());
     block.AddOp(new StdCallRuntimeOp("maxon_write_stdout", [cstrPtr], result));
+    valueMap[op.Result] = result;
+  }
+
+  /// <summary>
+  /// __cstring_write_stderr(cstrPtr): write a null-terminated C string to stderr.
+  /// Calls maxon_write_stderr runtime function which uses GetStdHandle + WriteFile.
+  /// Returns the number of bytes written.
+  /// </summary>
+  private static void LowerCStringWriteStderr(
+    MaxonCStringWriteStderrOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap) {
+    var cstrPtr = (StdI64)valueMap[op.CstrPtr];
+    var result = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_write_stderr", [cstrPtr], result));
     valueMap[op.Result] = result;
   }
 

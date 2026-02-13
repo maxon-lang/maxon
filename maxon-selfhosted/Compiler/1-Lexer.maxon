@@ -1,6 +1,180 @@
 // Tokenizer for Maxon source code.
 // Operates on a byte array (UTF-8 source) for efficient byte-level scanning.
 
+export function tokenize(source ByteArray) returns TokenArray
+    logDebug(LogCategory.lexer, message: "Starting lexer")
+    var tokens = TokenArray{}
+    var pos = 0
+    var line = 1
+    var column = 1
+    let len = source.count()
+
+    while pos < len 'scan'
+        let ch = try source.get(pos) otherwise 0 as byte
+        let b = ch as int
+
+        // Skip spaces and tabs
+        if b == SPACE or b == TAB 'ws'
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'ws'
+
+        // Skip carriage return
+        if b == CR 'cr'
+            pos = pos + 1
+            continue
+        end 'cr'
+
+        // Newline
+        if b == LF 'nl'
+            tokens.push({kind: TokenKind.newline, value: "", line: line, column: column})
+            pos = pos + 1
+            line = line + 1
+            column = 1
+            continue
+        end 'nl'
+
+        // Left paren
+        if b == LPAREN 'lp'
+            tokens.push({kind: TokenKind.leftParen, value: "(", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'lp'
+
+        // Right paren
+        if b == RPAREN 'rp'
+            tokens.push({kind: TokenKind.rightParen, value: ")", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'rp'
+
+        // String literal (single-quoted for end labels): 'xxx'
+        if b == QUOTE 'str'
+            let startCol = column
+            pos = pos + 1
+            column = column + 1
+            let strStart = pos
+            while pos < len 'strBody'
+                let sc = try source.get(pos) otherwise 0 as byte
+                let sb = sc as int
+                if sb == QUOTE 'endStr'
+                    break
+                end 'endStr'
+                pos = pos + 1
+                column = column + 1
+            end 'strBody'
+            let strVal = sliceToString(source, startPos: strStart, endPos: pos)
+            pos = pos + 1
+            column = column + 1
+            tokens.push({kind: TokenKind.stringLiteral, value: strVal, line: line, column: startCol})
+            continue
+        end 'str'
+
+        // Integer literal: digit sequence
+        if isDigit(b) 'num'
+            let startCol = column
+            let numStart = pos
+            while pos < len 'digits'
+                let dc = try source.get(pos) otherwise 0 as byte
+                let db = dc as int
+                if not isDigit(db) 'endNum'
+                    break
+                end 'endNum'
+                pos = pos + 1
+                column = column + 1
+            end 'digits'
+            let numVal = sliceToString(source, startPos: numStart, endPos: pos)
+            tokens.push({kind: TokenKind.intLiteral, value: numVal, line: line, column: startCol})
+            continue
+        end 'num'
+
+        // Identifier or keyword: starts with letter or underscore, continues with alphanumeric or underscore
+        if isAlpha(b) 'ident'
+            let startCol = column
+            let startPos = pos
+            while pos < len 'identBody'
+                let ic = try source.get(pos) otherwise 0 as byte
+                let ib = ic as int
+                if not isAlphaNum(ib) 'endIdent'
+                    break
+                end 'endIdent'
+                pos = pos + 1
+                column = column + 1
+            end 'identBody'
+            let identVal = sliceToString(source, startPos: startPos, endPos: pos)
+            let kind = classifyIdentifier(identVal)
+            tokens.push({kind: kind, value: identVal, line: line, column: startCol})
+            continue
+        end 'ident'
+
+        // Skip comment lines (// ...)
+        if b == 47 and pos + 1 < len 'comment'
+            let nextByte = try source.get(pos + 1) otherwise 0 as byte
+            if nextByte as int == 47 'lineComment'
+                while pos < len 'skipComment'
+                    let cc = try source.get(pos) otherwise 0 as byte
+                    if cc as int == LF 'endComment'
+                        break
+                    end 'endComment'
+                    pos = pos + 1
+                end 'skipComment'
+                continue
+            end 'lineComment'
+        end 'comment'
+
+        // Unknown character, skip
+        pos = pos + 1
+        column = column + 1
+    end 'scan'
+
+    tokens.push({kind: TokenKind.eof, value: "", line: line, column: column})
+    logDebug(LogCategory.lexer, message: "Lexer complete: {tokens.count()} tokens")
+    return tokens
+end 'tokenize'
+
+// --- Helpers ---
+
+function isDigit(b int) returns bool
+    return b >= 48 and b <= 57
+end 'isDigit'
+
+// Valid identifier start: letter (A-Z, a-z) or underscore
+function isAlpha(b int) returns bool
+    return (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
+end 'isAlpha'
+
+// Valid identifier continuation: letter, digit, or underscore
+function isAlphaNum(b int) returns bool
+    return isAlpha(b) or isDigit(b)
+end 'isAlphaNum'
+
+function sliceToString(source ByteArray, startPos int, endPos int) returns String
+    let sliceLen = endPos - startPos
+    var mem = __managed_memory_create(sliceLen, 1)
+    var i = 0
+    while i < sliceLen 'copy'
+        let ch = try source.get(startPos + i) otherwise 0 as byte
+        __managed_memory_set_byte(mem, i, ch as int)
+        i = i + 1
+    end 'copy'
+    __managed_memory_set_length(mem, sliceLen)
+    return {_managed: mem, _iterPos: 0}
+end 'sliceToString'
+
+function classifyIdentifier(name String) returns TokenKind
+    match name 'kw'
+        "function" then return TokenKind.kwFunction
+        "returns" then return TokenKind.kwReturns
+        "return" then return TokenKind.kwReturn
+        "end" then return TokenKind.kwEnd
+        "int" then return TokenKind.kwInt
+        default then return TokenKind.identifier
+    end 'kw'
+end 'classifyIdentifier'
+
 typealias ByteArray = Array with byte
 typealias TokenArray = Array with Token
 
@@ -34,172 +208,3 @@ let LF = 10
 let LPAREN = 40
 let RPAREN = 41
 let QUOTE = 39
-
-export function tokenize(source ByteArray) returns TokenArray
-    var tokens = TokenArray{}
-    var pos = 0
-    var line = 1
-    var column = 1
-    let len = source.count()
-    while pos < len 'scan'
-        let ch = try source.get(pos) otherwise 0 as byte
-        let b = ch as int
-
-        // Skip spaces and tabs
-        if b == SPACE or b == TAB 'ws'
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'ws'
-
-        // Skip carriage return
-        if b == CR 'cr'
-            pos = pos + 1
-            continue
-        end 'cr'
-
-        // Newline
-        if b == LF 'nl'
-            tokens.push(Token{kind: TokenKind.newline, value: "", line: line, column: column})
-            pos = pos + 1
-            line = line + 1
-            column = 1
-            continue
-        end 'nl'
-
-        // Left paren
-        if b == LPAREN 'lp'
-            tokens.push(Token{kind: TokenKind.leftParen, value: "(", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'lp'
-
-        // Right paren
-        if b == RPAREN 'rp'
-            tokens.push(Token{kind: TokenKind.rightParen, value: ")", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'rp'
-
-        // String literal (single-quoted for end labels): 'xxx'
-        if b == QUOTE 'str'
-            let startCol = column
-            pos = pos + 1
-            column = column + 1
-            let strStart = pos
-            while pos < len 'strBody'
-                let sc = try source.get(pos) otherwise 0 as byte
-                let sb = sc as int
-                if sb == QUOTE 'endStr'
-                    break
-                end 'endStr'
-                pos = pos + 1
-                column = column + 1
-            end 'strBody'
-            let strVal = sliceToString(source, startPos: strStart, endPos: pos)
-            pos = pos + 1
-            column = column + 1
-            tokens.push(Token{kind: TokenKind.stringLiteral, value: strVal, line: line, column: startCol})
-            continue
-        end 'str'
-
-        // Integer literal: digit sequence
-        if isDigit(b) 'num'
-            let startCol = column
-            let numStart = pos
-            while pos < len 'digits'
-                let dc = try source.get(pos) otherwise 0 as byte
-                let db = dc as int
-                if not isDigit(db) 'endNum'
-                    break
-                end 'endNum'
-                pos = pos + 1
-                column = column + 1
-            end 'digits'
-            let numVal = sliceToString(source, startPos: numStart, endPos: pos)
-            tokens.push(Token{kind: TokenKind.intLiteral, value: numVal, line: line, column: startCol})
-            continue
-        end 'num'
-
-        // Identifier or keyword: alpha sequence
-        if isAlpha(b) 'ident'
-            let startCol = column
-            let startPos = pos
-            while pos < len 'identBody'
-                let ic = try source.get(pos) otherwise 0 as byte
-                let ib = ic as int
-                if not isAlphaNum(ib) 'endIdent'
-                    break
-                end 'endIdent'
-                pos = pos + 1
-                column = column + 1
-            end 'identBody'
-            let identVal = sliceToString(source, startPos: startPos, endPos: pos)
-            let kind = classifyIdentifier(identVal)
-            tokens.push(Token{kind: kind, value: identVal, line: line, column: startCol})
-            continue
-        end 'ident'
-
-        // Skip comment lines (// ...)
-        if b == 47 and pos + 1 < len 'comment'
-            let nextByte = try source.get(pos + 1) otherwise 0 as byte
-            if nextByte as int == 47 'lineComment'
-                while pos < len 'skipComment'
-                    let cc = try source.get(pos) otherwise 0 as byte
-                    if cc as int == LF 'endComment'
-                        break
-                    end 'endComment'
-                    pos = pos + 1
-                end 'skipComment'
-                continue
-            end 'lineComment'
-        end 'comment'
-
-        // Unknown character, skip
-        pos = pos + 1
-        column = column + 1
-    end 'scan'
-
-    tokens.push(Token{kind: TokenKind.eof, value: "", line: line, column: column})
-    return tokens
-end 'tokenize'
-
-// --- Helpers ---
-
-function isDigit(b int) returns bool
-    return b >= 48 and b <= 57
-end 'isDigit'
-
-function isAlpha(b int) returns bool
-    return (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
-end 'isAlpha'
-
-function isAlphaNum(b int) returns bool
-    return isAlpha(b) or isDigit(b)
-end 'isAlphaNum'
-
-function sliceToString(source ByteArray, startPos int, endPos int) returns String
-    let sliceLen = endPos - startPos
-    var mem = __managed_memory_create(sliceLen, 1)
-    var i = 0
-    while i < sliceLen 'copy'
-        let ch = try source.get(startPos + i) otherwise 0 as byte
-        __managed_memory_set_byte(mem, i, ch as int)
-        i = i + 1
-    end 'copy'
-    __managed_memory_set_length(mem, sliceLen)
-    return {_managed: mem, _iterPos: 0}
-end 'sliceToString'
-
-function classifyIdentifier(name String) returns TokenKind
-    match name 'kw'
-        "function" then return TokenKind.kwFunction
-        "returns" then return TokenKind.kwReturns
-        "return" then return TokenKind.kwReturn
-        "end" then return TokenKind.kwEnd
-        "int" then return TokenKind.kwInt
-        default then return TokenKind.identifier
-    end 'kw'
-end 'classifyIdentifier'

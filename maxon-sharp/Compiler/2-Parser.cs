@@ -29,13 +29,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
   private Dictionary<string, object> _topLevelConstants = [];
 
-  // Top-level array let declarations deferred to main function body
+  // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
-  private record DeferredArrayLet(string Name, int TokenStart, int TokenEnd, int Line, int Column);
-  private readonly List<DeferredArrayLet> _deferredArrayLets = [];
+  private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column);
+  private readonly List<DeferredDecl> _deferredArrayLets = [];
+  private readonly List<DeferredDecl> _deferredGlobalVars = [];
+  private readonly List<DeferredDecl> _deferredArrayVars = [];
 
   // Global mutable variables (name -> type info)
-  private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable);
+  private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null);
   private readonly Dictionary<string, GlobalVarInfo> _globalVars = [];
 
   // Default parameter values (funcName -> index -> value)
@@ -463,7 +465,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         int exprStart = _pos;
         SkipToEndOfLine();
         if (_tokens[exprStart].Type == TokenType.LeftBracket) {
-          _deferredArrayLets.Add(new DeferredArrayLet(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+          _deferredArrayLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         } else {
           constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -471,11 +473,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Advance(); // consume 'var'
         var nameToken = Expect(TokenType.Identifier);
         Expect(TokenType.Equals);
-        var (fieldType, defaultValue) = ParseFieldDefault();
-        var globalName = nameToken.Value;
-        var kind = fieldType.ToValueKind();
-        module.Globals.Add(new MlirGlobal(globalName, fieldType, defaultValue));
-        _globalVars[globalName] = new GlobalVarInfo(kind, true);
+        int exprStart = _pos;
+        SkipToEndOfLine();
+        if (_tokens[exprStart].Type == TokenType.LeftBracket) {
+          _deferredArrayVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        } else {
+          _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        }
       } else if (Check(TokenType.Function)) {
         // Pre-register function signature for forward references
         PreScanFunction(module, null, isExported);
@@ -507,23 +511,50 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     _topLevelConstants = evaluated;
+
+    // Evaluate deferred global vars using the same constant expression evaluator
+    foreach (var deferred in _deferredGlobalVars) {
+      int savedPos2 = _pos;
+      _pos = deferred.TokenStart;
+      var value = EvalConstExpr(constDecls, evaluated, evaluating);
+      _pos = savedPos2;
+
+      var (fieldType, defaultValue) = ConstValueToAttribute(value, deferred.Line, deferred.Column);
+      var kind = fieldType.ToValueKind();
+      string? enumTypeName = value is EnumConstantValue ecv ? ecv.EnumTypeName : null;
+      module.Globals.Add(new MlirGlobal(deferred.Name, fieldType, defaultValue));
+      _globalVars[deferred.Name] = new GlobalVarInfo(kind, true, enumTypeName);
+    }
+  }
+
+  private (MlirType type, MlirAttribute attr) ConstValueToAttribute(object value, int line, int column) {
+    if (value is EnumConstantValue ec && _typeRegistry.TryGetValue(ec.EnumTypeName, out var enumType)) {
+      return (enumType, new IntegerAttr(ec.Ordinal, MlirType.I64));
+    }
+    return value switch {
+      long l => (MlirType.I64, new IntegerAttr(l, MlirType.I64)),
+      double d => (MlirType.F64, new FloatAttr(d, MlirType.F64)),
+      bool b => (MlirType.I1, new IntegerAttr(b ? 1 : 0, MlirType.I1)),
+      _ => throw new CompileError(ErrorCode.ParserExpectedExpression,
+        $"Unsupported constant expression type for var initializer: {value.GetType().Name}", line, column)
+    };
   }
 
   /// <summary>
-  /// Emit deferred top-level array let declarations at the start of the main function body.
+  /// Emit deferred top-level array declarations at the start of the main function body.
   /// Re-parses each saved token range to produce array literal ops in the current block.
   /// </summary>
-  private void EmitDeferredArrayLets() {
-    foreach (var deferred in _deferredArrayLets) {
+  private void EmitDeferredArrayDecls(List<DeferredDecl> deferred, bool isMutable) {
+    foreach (var decl in deferred) {
       int savedPos = _pos;
-      _pos = deferred.TokenStart;
+      _pos = decl.TokenStart;
 
       var arrayResult = ParseArrayLiteral();
       var arrayValue = arrayResult.Value;
 
-      var assignOp = new MaxonAssignOp(deferred.Name, arrayValue, isDeclaration: true, isMutable: false, MaxonValueKind.Struct);
+      var assignOp = new MaxonAssignOp(decl.Name, arrayValue, isDeclaration: true, isMutable: isMutable, MaxonValueKind.Struct);
       _currentBlock!.AddOp(assignOp);
-      _variables[deferred.Name] = new VarInfo(MaxonValueKind.Struct, false, arrayValue, _currentBlock!, "Array");
+      _variables[decl.Name] = new VarInfo(MaxonValueKind.Struct, isMutable, arrayValue, _currentBlock!, "Array");
 
       _pos = savedPos;
     }
@@ -2616,8 +2647,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var fieldName = Expect(TokenType.Identifier).Value;
+    var fieldToken = _tokens[_pos - 1];
     Expect(TokenType.Equals);
-    var (fieldType, defaultValue) = ParseFieldDefault();
+
+    var value = EvalConstExpr([], _topLevelConstants, []);
+    var (fieldType, defaultValue) = ConstValueToAttribute(value, fieldToken.Line, fieldToken.Column);
     var qualifiedName = $"{typeName}.{fieldName}";
 
     if (isMutable) {
@@ -2906,9 +2940,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     func.SourceColumn = nameToken.Column;
     EmitParameters(paramNames, paramTypes, paramTokens);
 
-    // Emit deferred top-level array lets at start of main
+    // Emit deferred top-level array lets/vars at start of main
     if (baseName == "main") {
-      EmitDeferredArrayLets();
+      EmitDeferredArrayDecls(_deferredArrayLets, isMutable: false);
+      EmitDeferredArrayDecls(_deferredArrayVars, isMutable: true);
     }
 
     ParseBodyUntilEnd();
@@ -4061,6 +4096,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var cstrPtr = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
         var op = new MaxonCStringWriteStdoutOp(cstrPtr);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__cstring_write_stderr"] = new(
+      "Writes a null-terminated C string to stderr.\n\n`__cstring_write_stderr(cstring_ptr) returns int`",
+      p => {
+        var cstrPtr = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonCStringWriteStderrOp(cstrPtr);
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
@@ -6226,7 +6270,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
           Advance(); // consume '.'
           Advance(); // consume member name
-          var loadOp = new MaxonGlobalLoadOp(qualifiedName, globalInfo.Kind);
+          var loadOp = new MaxonGlobalLoadOp(qualifiedName, globalInfo.Kind, globalInfo.EnumTypeName);
           _currentBlock!.AddOp(loadOp);
           return new ExprResult.Direct(loadOp.Result);
         }
@@ -6443,7 +6487,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Check for global variable reference
       if (_globalVars.TryGetValue(token.Value, out var globalVarInfo)) {
-        var loadOp = new MaxonGlobalLoadOp(token.Value, globalVarInfo.Kind);
+        var loadOp = new MaxonGlobalLoadOp(token.Value, globalVarInfo.Kind, globalVarInfo.EnumTypeName);
         _currentBlock!.AddOp(loadOp);
         return new ExprResult.Direct(loadOp.Result);
       }

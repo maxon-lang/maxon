@@ -1,0 +1,46 @@
+// Test: top-level-var-enum-initializer
+enum Color
+    Red
+    Green
+    Blue
+end 'Color'
+
+var current = Color.Green
+
+function main() returns int
+  if current == Color.Green 'check'
+    current = Color.Blue
+    if current == Color.Blue 'check2'
+      return 42
+    end 'check2'
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @static-variables.main() -> i64 {
+  entry:
+    x86.mov eax, [rip+current]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne static-variables.main.check_0.merge
+  check_0:
+    x86.mov eax, 2
+    x86.mov [rip+current], eax
+    x86.mov ecx, [rip+current]
+    x86.mov edx, 2
+    x86.cmp ecx, edx
+    x86.jne static-variables.main.check2_1.after
+  check2_1:
+    x86.mov eax, 42
+    x86.ret
+  check2_1.after:
+    x86.jmp static-variables.main.check_0.merge
+  check_0.merge:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

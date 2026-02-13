@@ -59,10 +59,17 @@ Single-line comments only:
 ```
 
 ### Identifiers
-- Start with letter or underscore: `[a-zA-Z_]`
-- Followed by letters, digits, or underscores: `[a-zA-Z0-9_]*`
-- Case-sensitive
-- Cannot be keywords
+
+Identifiers name variables, functions, types, and other declarations.
+
+- **Starts with a letter or underscore**: Cannot start with a digit, since the compiler uses the first character to distinguish names from number literals.
+- **Alphanumeric content**: After the first character, letters (`a-z`, `A-Z`), digits (`0-9`), and underscores (`_`) are allowed.
+- **Case-sensitive**: `myVar` and `MyVar` are different identifiers.
+- **Cannot be keywords**: Reserved words like `if`, `for`, `return` cannot be used as identifiers.
+
+```
+identifier = [a-zA-Z_][a-zA-Z0-9_]*
+```
 
 ### Keywords
 ```

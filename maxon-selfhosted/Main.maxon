@@ -44,8 +44,42 @@ function printUsage()
     print("Log categories: compiler, lexer, parser, semantic, hir, lir, optimizer, codegen, pe, testing\n")
 end 'printUsage'
 
+// Processes --log= options from args and returns remaining args.
+function processLogArgs(args StringArray) returns StringArray
+    var remaining = StringArray{}
+    var i = 0
+    while i < args.count() 'loop'
+        let arg = try args.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+        if arg.startsWith("--log=") 'isLog'
+            let eqIdx = try arg.findFirst("=") otherwise 'bad'
+                print("Invalid --log option: {arg}\n")
+                i = i + 1
+                continue
+            end 'bad'
+            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
+                print("Invalid --log option: {arg}\n")
+                i = i + 1
+                continue
+            end 'bad2'
+            let optionStr = arg.slice(afterEq, endIndex: arg.endIndex())
+            let ok = parseLogOption(optionStr)
+            if not ok 'badOption'
+                print("Invalid --log option: {arg}\n")
+            end 'badOption'
+        end 'isLog' else 'notLog'
+            remaining.push(arg)
+        end 'notLog'
+        i = i + 1
+    end 'loop'
+    return remaining
+end 'processLogArgs'
+
 function runBuild(args StringArray) returns int
-    let path = try args.get(0) otherwise Directory.currentDirectory()
+    let cleanArgs = processLogArgs(args)
+    let path = try cleanArgs.get(0) otherwise Directory.currentDirectory()
 
     let outputPath = try compile(path) otherwise (e) 'err'
         match e 'which'
@@ -63,13 +97,15 @@ function runBuild(args StringArray) returns int
 end 'runBuild'
 
 function runRun(args StringArray) returns int
-    let _ = args.count()
+    let cleanArgs = processLogArgs(args)
+    let _ = cleanArgs.count()
     print("run: not yet implemented\n")
     return 1
 end 'runRun'
 
 function runSpecTests(args StringArray) returns int
-    let _ = args.count()
+    let cleanArgs = processLogArgs(args)
+    let _ = cleanArgs.count()
     print("spec-test: not yet implemented\n")
     return 1
 end 'runSpecTests'

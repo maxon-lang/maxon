@@ -274,6 +274,24 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     end 'convert'
     return {_managed: _managed, _iterPos: 0}
   end 'toLower'
+
+  export function toUpper() returns String
+    var len = __managed_memory_len(_managed)
+    if len == 0 'empty'
+      return {_managed: _managed, _iterPos: 0}
+    end 'empty'
+
+    var i = 0
+    while i < len 'convert'
+      var b = __managed_memory_byte_at(_managed, i)
+      // ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
+      if b >= 97 and b <= 122 'is_lower'
+        __managed_memory_set_byte(_managed, i, b - 32)
+      end 'is_lower'
+      i = i + 1
+    end 'convert'
+    return {_managed: _managed, _iterPos: 0}
+  end 'toUpper'
 end 'String'
 
 // StringIndex type - type-safe string position

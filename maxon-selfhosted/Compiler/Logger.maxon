@@ -1,0 +1,104 @@
+// Logging system for the self-hosted compiler.
+// Mirrors maxon-sharp/Logger.cs with per-category log levels.
+
+export enum LogLevel
+    NONE
+    ERROR
+    INFO
+    DEBUG
+    TRACE
+end 'LogLevel'
+
+export enum LogCategory
+    compiler
+    lexer
+    parser
+    semantic
+    mlir
+    codegen
+    pe
+    testing
+
+    function code() returns String
+        match self 'code'
+            LogCategory.compiler then return "CMP"
+            LogCategory.lexer then return "LEX"
+            LogCategory.parser then return "PAR"
+            LogCategory.semantic then return "SEM"
+            LogCategory.mlir then return "MLR"
+            LogCategory.codegen then return "GEN"
+            LogCategory.pe then return "PE "
+            LogCategory.testing then return "TST"
+        end 'code'
+    end 'code'
+end 'LogCategory'
+
+var _catLevels = [LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO]
+
+export function setLogLevel(level LogLevel)
+    for i in 0..<_catLevels.length 'reset'
+        _catLevels[i] = level.rawValue
+    end 'reset'
+end 'setLogLevel'
+
+export function setCategoryLevel(category LogCategory, level LogLevel)
+    _catLevels[category.rawValue] = level.rawValue
+end 'setCategoryLevel'
+
+function getCategoryLevel(category LogCategory) returns int
+    return _catLevels[category.rawValue]
+end 'getCategoryLevel'
+
+function isEnabled(category LogCategory, level LogLevel) returns bool
+    return level.rawValue <= getCategoryLevel(category)
+end 'isEnabled'
+
+export function logError(category LogCategory, message String)
+    log(category, level: LogLevel.ERROR, message: message)
+end 'logError'
+
+export function logInfo(category LogCategory, message String)
+    log(category, level: LogLevel.INFO, message: message)
+end 'logInfo'
+
+export function logDebug(category LogCategory, message String)
+    log(category, level: LogLevel.DEBUG, message: message)
+end 'logDebug'
+
+export function logTrace(category LogCategory, message String)
+    log(category, level: LogLevel.TRACE, message: message)
+end 'logTrace'
+
+function log(category LogCategory, level LogLevel, message String)
+    if isEnabled(category, level: level) 'check'
+        printError("[{LogCategory.code(self: category)}] {level.name}: {message}\n")
+    end 'check'
+end 'log'
+
+// Parses a log option string like "debug" or "lexer:trace".
+export function parseLogOption(option String) returns bool
+    let colonIdx = try option.findFirst(":") otherwise 'globalLevel'
+        let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
+            return false
+        end 'badLevel'
+        setLogLevel(level)
+        return true
+    end 'globalLevel'
+
+    let categoryStr = option.slice(option.startIndex(), endIndex: colonIdx)
+    let afterColon = try option.indexAfter(colonIdx) otherwise 'noLevel'
+        return false
+    end 'noLevel'
+    let levelStr = option.slice(afterColon, endIndex: option.endIndex())
+
+    let category = try LogCategory.fromName(categoryStr) otherwise 'badCat'
+        return false
+    end 'badCat'
+
+    let level = try LogLevel.fromName(levelStr.toUpper()) otherwise 'badLevel2'
+        return false
+    end 'badLevel2'
+
+    setCategoryLevel(category, level: level)
+    return true
+end 'parseLogOption'
