@@ -136,6 +136,36 @@ end 'main'
 error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:27:13: Type 'MyHolder' has no field named 'isGreater'
 ```
 
+### Conditional extension on a type (not an interface)
+
+Extensions can target types directly, not just interfaces. This is useful when the method needs type-specific capabilities (e.g., `get()` on Array).
+
+<!-- test: conditional-extensions.type-extension -->
+```maxon
+type Box uses Item
+  export var item Item
+end 'Box'
+
+extension Box where Item is Equatable
+  function matches(other Item) returns bool
+    return item == other
+  end 'matches'
+end 'Box'
+
+typealias IntBox = Box with int
+
+function main() returns int
+  var b = IntBox{item: 42}
+  if b.matches(42) 'yes'
+    return 1
+  end 'yes'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
 ### Conditional extension on stdlib Array with contains
 
 The real motivation: Array.contains requiring Element is Equatable.

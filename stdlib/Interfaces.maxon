@@ -124,45 +124,6 @@ export extension Iterable
   end 'map'
 end 'Iterable'
 
-// Conditional extension: contains is only available when Element is Equatable
-export extension Iterable where Element is Equatable
-  typealias ElementArray = Array with Element
-
-  function contains(elements ElementArray) returns bool
-    var selfArr = self.map((x) gives x)
-    let selfLen = selfArr.count()
-    let elemLen = elements.count()
-    if elemLen == 0 'empty'
-      return true
-    end 'empty'
-    var i = 0
-    while i <= selfLen - elemLen 'scan'
-      var j = 0
-      var matched = true
-      while j < elemLen 'cmp'
-        let a = try selfArr.get(i + j) otherwise 'bail'
-          matched = false
-          break
-        end 'bail'
-        let b = try elements.get(j) otherwise 'bail2'
-          matched = false
-          break
-        end 'bail2'
-        if a != b 'ne'
-          matched = false
-          break
-        end 'ne'
-        j = j + 1
-      end 'cmp'
-      if matched 'found'
-        return true
-      end 'found'
-      i = i + 1
-    end 'scan'
-    return false
-  end 'contains'
-end 'Iterable'
-
 // Stringable - enables custom types to participate in string interpolation
 // Built-in types (int, float, bool, byte, character, string) are handled by the
 // compiler directly and do not need to implement this interface.

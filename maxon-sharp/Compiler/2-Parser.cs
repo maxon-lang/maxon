@@ -1532,6 +1532,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Parse optional where clause for conditional extensions
     _interfaceAssociatedTypes.TryGetValue(interfaceName, out var extAssocTypeNames);
+    // For type extensions (e.g., extension Array where ...), use the struct's own associated type names
+    if (extAssocTypeNames == null && _typeRegistry.TryGetValue(interfaceName, out var extTypeVal)
+        && extTypeVal is MlirStructType extStruct && extStruct.AssociatedTypeNames.Count > 0) {
+      extAssocTypeNames = extStruct.AssociatedTypeNames;
+    }
     var extensionWhereConstraints = ParseWhereClause(extAssocTypeNames ?? []);
 
     SkipNewlines();
@@ -1583,6 +1588,40 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return;
     }
 
+    // Type extensions: extension on a generic struct (e.g., extension Array where Element is Equatable)
+    if (_typeRegistry.TryGetValue(interfaceName, out var targetTypeEntry)
+        && targetTypeEntry is MlirStructType targetStruct
+        && targetStruct.AssociatedTypeNames.Count > 0) {
+      _currentTypeName = interfaceName;
+
+      // Bind associated type names as unresolved type parameters (generic synthesis)
+      var registeredParams = new List<string>();
+      foreach (var assocName in targetStruct.AssociatedTypeNames) {
+        _typeRegistry[assocName] = new MlirTypeParameterType(assocName);
+        registeredParams.Add(assocName);
+      }
+
+      foreach (var pos in typealiasPositions) {
+        _pos = pos;
+        PreScanTypeAlias();
+      }
+
+      var addedConstraints = InjectWhereConstraints(targetStruct, extensionWhereConstraints);
+      var filteredFuncPositions = FilterConflictingExtensionMethods(
+        functionPositions, interfaceName, extensionWhereConstraints, module);
+
+      int funcCountBefore = module.Functions.Count;
+      processFunction(module, filteredFuncPositions, interfaceName);
+
+      TagAndCleanupConditionalExtension(
+        module, funcCountBefore, extensionWhereConstraints, targetStruct, addedConstraints);
+
+      RemoveAssociatedTypePlaceholders(registeredParams);
+      _currentTypeName = null;
+      _pos = endPos;
+      return;
+    }
+
     var assocTypeNames = extAssocTypeNames;
 
     // Snapshot before iterating — PreScanTypeAlias modifies _typeRegistry
@@ -1618,52 +1657,73 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         PreScanTypeAlias();
       }
 
-      // Temporarily add extension where constraints to the struct type so method
-      // body parsing can resolve calls on constrained type parameters
-      Dictionary<string, List<string>>? addedConstraints = null;
-      if (extensionWhereConstraints.Count > 0) {
-        addedConstraints = [];
-        foreach (var (paramName, interfaces) in extensionWhereConstraints) {
-          if (!structType.WhereConstraints.ContainsKey(paramName)) {
-            structType.WhereConstraints[paramName] = [.. interfaces];
-            addedConstraints[paramName] = structType.WhereConstraints[paramName];
-          }
-        }
-      }
-
-      // Filter out extension methods that conflict with existing methods on this type
-      var filteredFuncPositions = functionPositions;
-      if (extensionWhereConstraints.Count > 0) {
-        var namespace_ = DeriveNamespace(includeFilename: false);
-        var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
-        filteredFuncPositions = [.. functionPositions.Where(pos => {
-          if (pos + 1 >= _tokens.Count) return true;
-          var methodName = _tokens[pos + 1].Value;
-          var fullName = $"{qualifiedTypeName}.{methodName}";
-          return !module.Functions.Any(f => f.Name == fullName || f.Name.StartsWith(fullName + "$"));
-        })];
-      }
+      var addedConstraints = InjectWhereConstraints(structType, extensionWhereConstraints);
+      var filteredFuncPositions = FilterConflictingExtensionMethods(
+        functionPositions, typeName, extensionWhereConstraints, module);
 
       int funcCountBefore = module.Functions.Count;
       processFunction(module, filteredFuncPositions, typeName);
 
-      // Tag functions from conditional extensions so monomorphization can filter them
-      if (extensionWhereConstraints.Count > 0) {
-        for (int i = funcCountBefore; i < module.Functions.Count; i++) {
-          module.Functions[i].ExtensionWhereConstraints = extensionWhereConstraints;
-        }
-        // Clean up temporarily added constraints
-        if (addedConstraints != null) {
-          foreach (var paramName in addedConstraints.Keys)
-            structType.WhereConstraints.Remove(paramName);
-        }
-      }
+      TagAndCleanupConditionalExtension(
+        module, funcCountBefore, extensionWhereConstraints, structType, addedConstraints);
 
       RemoveAssociatedTypePlaceholders(registeredParams);
     }
 
     _currentTypeName = null;
     _pos = endPos;
+  }
+
+  /// Temporarily inject where constraints into a struct type so method body parsing
+  /// can resolve interface method calls on constrained type parameters.
+  /// Returns the constraints that were added (for cleanup), or null if none were added.
+  private static Dictionary<string, List<string>>? InjectWhereConstraints(
+      MlirStructType structType, Dictionary<string, List<string>> whereConstraints) {
+    if (whereConstraints.Count == 0) return null;
+    Dictionary<string, List<string>>? added = null;
+    foreach (var (paramName, interfaces) in whereConstraints) {
+      if (!structType.WhereConstraints.ContainsKey(paramName)) {
+        structType.WhereConstraints[paramName] = [.. interfaces];
+        added ??= [];
+        added[paramName] = structType.WhereConstraints[paramName];
+      }
+    }
+    return added;
+  }
+
+  /// Remove temporarily injected where constraints from a struct type.
+  private static void RemoveInjectedWhereConstraints(
+      MlirStructType structType, Dictionary<string, List<string>>? addedConstraints) {
+    if (addedConstraints == null) return;
+    foreach (var paramName in addedConstraints.Keys)
+      structType.WhereConstraints.Remove(paramName);
+  }
+
+  /// Filter out extension methods that conflict with existing methods on the target type.
+  private List<int> FilterConflictingExtensionMethods(
+      List<int> functionPositions, string typeName,
+      Dictionary<string, List<string>> whereConstraints, MlirModule<MaxonOp> module) {
+    if (whereConstraints.Count == 0) return functionPositions;
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+    return [.. functionPositions.Where(pos => {
+      if (pos + 1 >= _tokens.Count) return true;
+      var methodName = _tokens[pos + 1].Value;
+      var fullName = $"{qualifiedTypeName}.{methodName}";
+      return !module.Functions.Any(f => f.Name == fullName || f.Name.StartsWith(fullName + "$"));
+    })];
+  }
+
+  /// Tag newly-added functions with where constraints and clean up injected constraints.
+  private static void TagAndCleanupConditionalExtension(
+      MlirModule<MaxonOp> module, int funcCountBefore,
+      Dictionary<string, List<string>> whereConstraints,
+      MlirStructType structType, Dictionary<string, List<string>>? addedConstraints) {
+    if (whereConstraints.Count == 0) return;
+    for (int i = funcCountBefore; i < module.Functions.Count; i++) {
+      module.Functions[i].ExtensionWhereConstraints = whereConstraints;
+    }
+    RemoveInjectedWhereConstraints(structType, addedConstraints);
   }
 
   /// <summary>
