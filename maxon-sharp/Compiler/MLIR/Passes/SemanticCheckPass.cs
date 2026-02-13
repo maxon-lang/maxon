@@ -12,6 +12,14 @@ public static class SemanticCheckPass {
     var mainFunc = mainMatches.FirstOrDefault()
       ?? throw new CompileError(ErrorCode.SemanticNoMain, "No 'main' function found");
 
+    if (mainMatches.Count > 1) {
+      var second = mainMatches[1];
+      throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+        $"Multiple 'main' functions found", second.SourceLine, second.SourceColumn) {
+        FilePath = second.SourceFilePath
+      };
+    }
+
     // E3002: main must return int
     if (mainFunc.ReturnType == null || mainFunc.ReturnType != MlirType.I64) {
       throw new CompileError(ErrorCode.SemanticMainWrongReturnType, "Function 'main' must return int");

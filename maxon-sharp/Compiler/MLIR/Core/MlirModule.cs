@@ -58,6 +58,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
           Functions.Remove(existing);
           Functions.Add(func);
           existingByName[func.Name] = func;
+        } else if (func.Body.Blocks.Count > 0 && existing.Body.Blocks.Count > 0
+                   && !ReferenceEquals(func, existing)) {
+          throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+            $"Duplicate function '{func.Name}'", func.SourceLine, func.SourceColumn);
         }
       } else {
         Functions.Add(func);

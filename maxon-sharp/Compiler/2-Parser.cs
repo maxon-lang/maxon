@@ -2747,7 +2747,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MlirFunction<MaxonOp> SetupFunctionParsing(
       MlirModule<MaxonOp> module, string funcName,
       List<string> paramNames, List<MlirType> paramTypes,
-      Dictionary<int, MlirAttribute> paramDefaults, MlirType? returnType, MlirType? throwsType = null) {
+      Dictionary<int, MlirAttribute> paramDefaults, MlirType? returnType, MlirType? throwsType = null,
+      int? nameLine = null, int? nameColumn = null) {
     // Determine the registration name (may be mangled for overloads)
     var registrationName = funcName;
     // Check if this function has been mangled (overload exists)
@@ -2758,6 +2759,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Replace pre-registered stub with full function (or create new one)
     var existing = module.Functions.FirstOrDefault(f => f.Name == registrationName);
+    if (existing != null && existing.Body.Blocks.Count > 0) {
+      throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+        $"Duplicate function '{funcName}'", nameLine, nameColumn);
+    }
     if (existing != null) {
       module.Functions.Remove(existing);
     }
@@ -2895,7 +2900,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var throwsType = ParseThrowsClause();
 
     SkipNewlines();
-    var func = SetupFunctionParsing(module, name, paramNames, paramTypes, paramDefaults, returnType, throwsType);
+    var func = SetupFunctionParsing(module, name, paramNames, paramTypes, paramDefaults, returnType, throwsType,
+      nameLine: nameToken.Line, nameColumn: nameToken.Column);
     func.SourceLine = nameToken.Line;
     func.SourceColumn = nameToken.Column;
     EmitParameters(paramNames, paramTypes, paramTokens);

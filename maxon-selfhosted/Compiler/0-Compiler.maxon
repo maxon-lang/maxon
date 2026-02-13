@@ -5,8 +5,6 @@ export enum CompileError implements Error
     directoryNotFound
     noSourceFiles
     readError
-    multipleMainFiles
-    noMainFunction
 end 'CompileError'
 
 type SourceFile
@@ -33,8 +31,7 @@ function compileFiles(sources SourceFileArray, outputPath String) returns String
     return outputPath
 end 'compileFiles'
 
-// Collects source files from a path and validates exactly one contains main().
-// The main file is always first in the returned array.
+// Collects source files from a path (single file or directory).
 function collectFiles(path String) returns SourceFileArray throws CompileError
     if File.exists(path) 'isFile'
         let bytes = try File.readBinary(path) otherwise 'readErr'
@@ -49,20 +46,12 @@ function collectFiles(path String) returns SourceFileArray throws CompileError
         end 'listErr'
 
         var sources = SourceFileArray{}
-        var mainIndex = -1
-        let mainSig = ByteArray.from("function main()".bytes())
         for name in entries 'loop'
             if name.endsWith(".maxon") 'isMaxon'
                 let filePath = "{path}\\{name}"
                 let bytes = try File.readBinary(filePath) otherwise 'skip'
                     continue
                 end 'skip'
-                if bytes.contains(mainSig) 'hasMain'
-                    if mainIndex != -1 'duplicate'
-                        throw CompileError.multipleMainFiles
-                    end 'duplicate'
-                    mainIndex = sources.count()
-                end 'hasMain'
                 sources.push({ path: filePath, content: bytes })
             end 'isMaxon'
         end 'loop'
@@ -70,16 +59,6 @@ function collectFiles(path String) returns SourceFileArray throws CompileError
         if sources.count() == 0 'noFiles'
             throw CompileError.noSourceFiles
         end 'noFiles'
-
-        if mainIndex == -1 'noMain'
-            throw CompileError.noMainFunction
-        end 'noMain'
-
-        if mainIndex != 0 'swap'
-            let mainFile = sources.get(mainIndex)
-            sources.set(mainIndex, value: sources.get(0))
-            sources.set(0, value: mainFile)
-        end 'swap'
 
         return sources
     end 'isDir'
