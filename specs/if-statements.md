@@ -256,3 +256,18 @@ end 'main'
 ```exitcode
 42
 ```
+
+### Single-line block bodies are not allowed
+
+Block bodies must start on a new line after the label.
+
+<!-- test: if-statements.single-line-block-rejected -->
+```maxon
+function main() returns int
+  if true 'x' return 1 end 'x'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: specs/fragments/if-statements/if-statements.single-line-block-rejected.test:3:15: Expected newline after block label, got 'return'
+```

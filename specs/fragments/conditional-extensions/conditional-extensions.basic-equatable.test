@@ -44,6 +44,130 @@ ExitCode: 1
 ---
 module {
   func @IntList.has(__self_ptr: i64, target: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=80
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, 16
+    x86.mov [rbp-40], eax
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, 16
+    x86.mov [rbp-48], eax
+    x86.mov [rbp-56], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov esi, [rbp-56]
+    x86.mov edi, [esi+0]
+    x86.mov [eax+0], edi
+    x86.mov r8, [esi+8]
+    x86.mov r9, 32
+    x86.mov [rbp-64], eax
+    x86.mov [rbp-72], r8
+    x86.mov rcx, r9
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-72]
+    x86.mov edx, [ecx+0]
+    x86.mov [eax+0], edx
+    x86.mov edx, [ecx+8]
+    x86.mov [eax+8], edx
+    x86.mov edx, [ecx+16]
+    x86.mov [eax+16], edx
+    x86.mov edx, [ecx+24]
+    x86.mov [eax+24], edx
+    x86.mov ecx, [rbp-64]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-48]
+    x86.mov [eax+0], ecx
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, [ecx+8]
+    x86.mov [eax+8], edx
+    x86.mov [rbp-24], eax
+    x86.jmp IntList.has.loop_0.header
+  loop_0.header:
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, rax
+    x86.call IntList.next
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.jne IntList.has.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-16]
+    x86.cmp eax, ecx
+    x86.jne IntList.has.found_3.after
+  found_3:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  found_3.after:
+    x86.jmp IntList.has.loop_0.header
+  loop_0.exit:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @IntList.next(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+8]
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov [rbp-16], ebx
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-40], edx
+    x86.mov rcx, rax
+    x86.call IntArray.count
+    x86.mov ecx, [rbp-40]
+    x86.cmp ecx, eax
+    x86.jl IntList.next.done_0.after
+  done_0:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  done_0.after:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-24], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+8]
+    x86.mov esi, [rbp-24]
+    x86.mov rcx, rsi
+    x86.mov rdx, rbx
+    x86.call IntArray.get
+    x86.mov [rbp-32], eax
+    x86.xor edi, edi
+    x86.cmp edx, edi
+    x86.je IntList.next.otherwise_continue_2
+  otherwise_error_1:
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  otherwise_continue_2:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 1
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+8]
+    x86.add ebx, ecx
+    x86.mov esi, [rbp-8]
+    x86.mov [esi+8], ebx
+    x86.xor edx, edx
+    x86.epilogue
+    x86.ret
   }
   func @conditional-extensions.main() -> i64 {
   entry:

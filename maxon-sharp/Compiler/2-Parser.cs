@@ -1710,7 +1710,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (pos + 1 >= _tokens.Count) return true;
       var methodName = _tokens[pos + 1].Value;
       var fullName = $"{qualifiedTypeName}.{methodName}";
-      return !module.Functions.Any(f => f.Name == fullName || f.Name.StartsWith(fullName + "$"));
+      // Only filter if a function with an actual body exists — bodyless stubs from pre-scan should not block parsing
+      return !module.Functions.Any(f => (f.Name == fullName || f.Name.StartsWith(fullName + "$"))
+          && f.Body.Blocks.Count > 0);
     })];
   }
 
@@ -3517,7 +3519,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
     }
 
-    SkipNewlines();
+    ExpectNewline();
     ParseBodyUntilEnd();
     if (!BlockEndsWithTerminator(errBlock)) {
       _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
@@ -4292,7 +4294,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Parse then-block label
     var thenSourceLabel = Expect(TokenType.CharacterLiteral).Value;
     var thenLabel = UniqueLabel(thenSourceLabel);
-    SkipNewlines();
+    ExpectNewline();
 
     // Save entry block to append cond_br later
     var entryBlock = _currentBlock!;
@@ -4326,7 +4328,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       } else {
         var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
         elseLabel = UniqueLabel(elseSourceLabel);
-        SkipNewlines();
+        ExpectNewline();
 
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
@@ -4481,7 +4483,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       var elseSourceLabel = Expect(TokenType.CharacterLiteral).Value;
       elseLabel = UniqueLabel(elseSourceLabel);
-      SkipNewlines();
+      ExpectNewline();
 
       elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
       _currentBlock = elseBlock;
@@ -4536,7 +4538,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Consume the label (already parsed above, but we need to advance past it)
     Expect(TokenType.CharacterLiteral);
-    SkipNewlines();
+    ExpectNewline();
 
     // Emit cond_br: if condition is true, go to body; else go to exit
     headerBlock.AddOp(new MaxonCondBrOp(condition, bodyLabel, exitLabel));
@@ -4589,7 +4591,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var iterableExpr = ParseExpression();
     var iterableValue = ResolveExprValue(iterableExpr);
     var loopSourceLabel = Expect(TokenType.CharacterLiteral).Value;
-    SkipNewlines();
+    ExpectNewline();
 
     var iterableTypeName = ((iterableValue is MaxonStruct ms) ? ms.TypeName : _currentTypeName) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
         "Cannot determine type for 'for-in' iterable expression",
@@ -8714,6 +8716,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     while (Check(TokenType.Newline) || Check(TokenType.DocComment)) {
       Advance();
     }
+  }
+
+  /// Require at least one newline after a block label, then skip remaining newlines.
+  private void ExpectNewline() {
+    if (!Check(TokenType.Newline)) {
+      var token = Current();
+      throw new CompileError(ErrorCode.ParserUnexpectedToken,
+        $"Expected newline after block label, got '{token.Value}'",
+        token.Line, token.Column);
+    }
+    SkipNewlines();
   }
 
   private Token Current() => _pos < _tokens.Count ? _tokens[_pos] : new Token(TokenType.Eof, "", 0, 0);
