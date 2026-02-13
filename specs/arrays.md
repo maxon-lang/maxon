@@ -630,3 +630,87 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: array-literal-return-from-function -->
+```maxon
+function makeNumbers() returns IntArray
+  return [10, 20, 30]
+end 'makeNumbers'
+
+function main() returns int
+  var nums = makeNumbers()
+  var a = try nums.get(0) otherwise 0
+  var b = try nums.get(1) otherwise 0
+  var c = try nums.get(2) otherwise 0
+  return a + b + c
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: array-literal-return-push-no-leak -->
+<!-- TrackMemory: true -->
+```maxon
+function makeNumbers(a int, b int) returns IntArray
+  var arr = [a, b]
+  arr.push(a + b)
+  return arr
+end 'makeNumbers'
+
+function main() returns int
+  var nums = makeNumbers(10, b: 20)
+  var c = try nums.get(2) otherwise 0
+  return c
+end 'main'
+```
+```exitcode
+30
+```
+```stdout
+ALLOC #1: 16 bytes (array literal)
+INCREF: array literal -> rc=1
+DECREF: array grow -> rc=0
+FREE #1: 16 bytes (array grow)
+ALLOC #2: 32 bytes (array grow)
+INCREF: array grow -> rc=1
+CLEANUP: nums
+DECREF: nums -> rc=0
+FREE #2: 32 bytes (array cleanup)
+
+=== MEMORY STATS ===
+Allocated: 48 bytes
+Freed:     48 bytes
+Leaked:    0 bytes
+Moves:     0
+Increfs:   2
+Decrefs:   2
+Copies:    0
+Cleanups:  1
+```
+
+<!-- test: array-literal-struct-return-from-function -->
+```maxon
+type Point
+  export var x int
+  export var y int
+end 'Point'
+
+typealias PointArray = Array with Point
+
+function makePoints() returns PointArray
+  var p1 = Point{x: 1, y: 2}
+  var p2 = Point{x: 3, y: 4}
+  return [p1, p2]
+end 'makePoints'
+
+function main() returns int
+  var pts = makePoints()
+  var p0 = try pts.get(0) otherwise Point{x: 0, y: 0}
+  var p1 = try pts.get(1) otherwise Point{x: 0, y: 0}
+  return p0.x + p1.y
+end 'main'
+```
+```exitcode
+5
+```

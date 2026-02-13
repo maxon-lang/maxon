@@ -5,6 +5,8 @@ export enum CompileError implements Error
     directoryNotFound
     noSourceFiles
     readError
+    multipleMainFiles
+    noMainFunction
 end 'CompileError'
 
 type SourceFile
@@ -34,9 +36,7 @@ function collectFiles(path String) returns SourceFileArray throws CompileError
         let bytes = try File.readBinary(path) otherwise 'readErr'
             throw CompileError.readError
         end 'readErr'
-        var sources = SourceFileArray{}
-        sources.push(SourceFile { path: path, content: bytes })
-        return sources
+        return [{ path: path, content: bytes }]
     end 'isFile'
 
     if Directory.exists(path) 'isDir'
@@ -48,7 +48,7 @@ function collectFiles(path String) returns SourceFileArray throws CompileError
             if name.endsWith(".maxon") 'isMaxon'
                 let filePath = "{path}\\{name}"
                 let bytes = try File.readBinary(filePath) otherwise 'skip'
-                    continue 'loop'
+                    continue
                 end 'skip'
                 sources.push(SourceFile { path: filePath, content: bytes })
             end 'isMaxon'
@@ -85,7 +85,7 @@ end 'findMainFile'
 // Build entry point. File path = single file, directory path = project build.
 export function compilePath(path String) returns String throws CompileError
     let sources = try collectFiles(path)
-    let mainFile = findMainFile(sources, directory: path)
+    let mainFile = findMainFile(sources)
     let outputPath = changeExtension(mainFile, ext: ".exe")
     try compileFiles(sources, outputPath: outputPath)
     return outputPath

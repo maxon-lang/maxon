@@ -47,6 +47,7 @@ public static class MaxonToStandardConversion {
       }
 
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
+      var escapingArrayLiterals = FindEscapingArrayLiterals(func);
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
@@ -493,7 +494,51 @@ public static class MaxonToStandardConversion {
                   var rdataPtrOp = new StdPtrToI64Op(leaRdataOp.Result);
                   newBlock.AddOp(rdataPtrOp);
                   rdataPtr = rdataPtrOp.Result;
+                } else if (escapingArrayLiterals.Contains(structLitOp.Result.Id)) {
+                  // Heap-allocate the buffer and copy element data from stack.
+                  // Stack-local element variables become invalid when the function returns,
+                  // so the buffer must live on the heap for the array to be safely returned or passed.
+                  var leaOp = new StdLeaOp(structLitOp.ArrayLiteralTag);
+                  newBlock.AddOp(leaOp);
+                  var stackPtr = new StdPtrToI64Op(leaOp.Result);
+                  newBlock.AddOp(stackPtr);
+
+                  // Load element_size from the managed memory struct that was already lowered
+                  StdI64 elemSizeVal;
+                  if (structLitOp.TypeName == "__ManagedMemory") {
+                    elemSizeVal = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+                  } else {
+                    var managedFieldForSize = structType.GetField("managed")!;
+                    var managedPtrForSize = (StdI64)EmitStructFieldLoad(newBlock, tempName, managedFieldForSize.Offset, MlirType.I64, varTypes);
+                    var loadElemSize = new StdLoadIndirectOp(managedPtrForSize, ManagedFieldElementSize, MlirType.I64);
+                    newBlock.AddOp(loadElemSize);
+                    elemSizeVal = (StdI64)loadElemSize.Result;
+                  }
+
+                  var countOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
+                  newBlock.AddOp(countOp);
+                  var totalSize = new StdMulI64Op(countOp.Result, elemSizeVal);
+                  newBlock.AddOp(totalSize);
+
+                  var heapBuf = EmitAlloc(newBlock, totalSize.Result);
+                  var copyResult = new StdI64(MlirContext.Current.NextId());
+                  newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
+
+                  if (_trackAllocs) {
+                    var bufVar = $"__escape_buf_{MlirContext.Current.NextId()}";
+                    EmitStore(newBlock, heapBuf, bufVar, varTypes);
+                    var sizeVar = $"__escape_size_{MlirContext.Current.NextId()}";
+                    EmitStore(newBlock, totalSize.Result, sizeVar, varTypes);
+                    var bufReload = (StdI64)EmitLoad(newBlock, bufVar, varTypes);
+                    var sizeReload = (StdI64)EmitLoad(newBlock, sizeVar, varTypes);
+                    EmitTrackAlloc(newBlock, bufReload, sizeReload, "array literal");
+                    EmitTrackIncref(newBlock, "array literal", 1);
+                    heapBuf = (StdI64)EmitLoad(newBlock, bufVar, varTypes);
+                  }
+
+                  rdataPtr = heapBuf;
                 } else {
+                  // Stack buffer is safe — array is only used within this function
                   var leaOp = new StdLeaOp(structLitOp.ArrayLiteralTag);
                   newBlock.AddOp(leaOp);
                   var castOp = new StdPtrToI64Op(leaOp.Result);
@@ -501,10 +546,20 @@ public static class MaxonToStandardConversion {
                   rdataPtr = castOp.Result;
                 }
 
+                // Only set capacity for heap-allocated escape buffers, NOT for constant/rdata buffers
+                var usedHeapEscape = escapingArrayLiterals.Contains(structLitOp.Result.Id)
+                  && !module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id);
                 if (structLitOp.TypeName == "__ManagedMemory") {
                   // buffer is directly on this struct at offset 0
                   var bufferField = structType.GetField("buffer")!;
                   EmitStructFieldStore(newBlock, rdataPtr, tempName, bufferField.Offset, MlirType.I64, varTypes);
+                  // Heap escape buffers are writable — set capacity to element count
+                  // so COW check knows this buffer is heap-owned (capacity=0 means read-only/rdata)
+                  if (usedHeapEscape) {
+                    var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
+                    newBlock.AddOp(capOp);
+                    EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+                  }
                 } else {
                   // Outer struct (Array, Vector): load the managed field's heap pointer, then store buffer on it
                   var managedField = structType.GetField("managed")!;
@@ -513,6 +568,13 @@ public static class MaxonToStandardConversion {
                   var managedType = (MlirStructType)managedField.Type;
                   var bufferField = managedType.GetField("buffer")!;
                   newBlock.AddOp(new StdStoreIndirectOp(rdataPtr, managedHeapPtr, bufferField.Offset, MlirType.I64));
+                  // Heap escape buffers are writable — set capacity to element count
+                  if (usedHeapEscape) {
+                    var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
+                    newBlock.AddOp(capOp);
+                    var capField = managedType.GetField("capacity")!;
+                    newBlock.AddOp(new StdStoreIndirectOp(capOp.Result, managedHeapPtr, capField.Offset, MlirType.I64));
+                  }
                 }
               }
 
@@ -1963,6 +2025,51 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// Finds array literal struct ops whose buffer must be heap-allocated because
+  /// the value escapes the function (via return or call argument).
+  /// </summary>
+  private static HashSet<int> FindEscapingArrayLiterals(MlirFunction<MaxonOp> func) {
+    var escaping = new HashSet<int>();
+
+    // Map: value ID -> struct literal op (for array literals only)
+    var arrayLiterals = new Dictionary<int, MaxonStructLiteralOp>();
+    // Map: variable name -> original array literal ID
+    var varToArrayLiteral = new Dictionary<string, int>();
+
+    // Array literal buffers escape when returned from the function, since the
+    // stack frame is destroyed. Call arguments are safe because the callee
+    // runs while the caller's stack is still alive.
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonStructLiteralOp structLit && structLit.ArrayLiteralTag != null) {
+          arrayLiterals[structLit.Result.Id] = structLit;
+        }
+        if (op is MaxonAssignOp assign && arrayLiterals.ContainsKey(assign.Value.Id)) {
+          varToArrayLiteral[assign.VarName] = assign.Value.Id;
+        }
+        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.ContainsKey(ret.Value.Id)) {
+          escaping.Add(ret.Value.Id);
+        }
+        // Track struct_var_ref so indirect returns (var x = [...]; return x) are caught
+        if (op is MaxonStructVarRefOp varRef && varToArrayLiteral.TryGetValue(varRef.VarName, out var litId)) {
+          arrayLiterals.TryAdd(varRef.Result.Id, arrayLiterals[litId]);
+        }
+      }
+    }
+
+    // Second pass: catch returns that reference var refs of array literals
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.ContainsKey(ret.Value.Id)) {
+          escaping.Add(arrayLiterals[ret.Value.Id].Result.Id);
+        }
+      }
+    }
+
+    return escaping;
+  }
+
+  /// <summary>
   /// Resolve the standard-level result value type for a call or try_call.
   /// </summary>
   private static StdValue? ResolveCallResultType(MaxonValueKind? resultKind, MlirType? calleeReturnType) {
@@ -2340,6 +2447,15 @@ public static class MaxonToStandardConversion {
     // Load element_size from the managed struct via heap pointer
     var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
+    // Load capacity before COW check — needed to determine if old buffer was heap-allocated (tracked)
+    StdI64 oldCapacity = null;
+    if (_trackAllocs) {
+      oldCapacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
+      var oldCapVar = $"__grow_oldcap_{MlirContext.Current.NextId()}";
+      EmitStore(block, oldCapacity, oldCapVar, varTypes);
+      oldCapacity = (StdI64)EmitLoad(block, oldCapVar, varTypes);
+    }
+
     EmitCowCheck(block, managedVarName, varTypes, elemSize);
     var newCap = (StdI64)valueMap[op.NewCapacity];
 
@@ -2349,6 +2465,18 @@ public static class MaxonToStandardConversion {
     // Compute new byte size = newCap * elementSize
     var newByteSizeOp = new StdMulI64Op(newCap, elemSize);
     block.AddOp(newByteSizeOp);
+
+    // Track the old buffer being freed by realloc
+    if (_trackAllocs) {
+      // DECREF only if old buffer was heap-allocated (capacity > 0 before COW)
+      EmitTrackDecrefIfHeap(block, "array grow", 0, oldCapacity);
+
+      var oldBufVar = $"__grow_oldbuf_{MlirContext.Current.NextId()}";
+      EmitStore(block, oldBuffer, oldBufVar, varTypes);
+      var oldBufReload = (StdI64)EmitLoad(block, oldBufVar, varTypes);
+      EmitTrackFree(block, oldBufReload, "array grow");
+      oldBuffer = (StdI64)EmitLoad(block, oldBufVar, varTypes);
+    }
 
     // Realloc: grows buffer in-place or allocates new, copies old data, frees old
     var newBufferResult = new StdI64(MlirContext.Current.NextId());
@@ -3578,6 +3706,30 @@ public static class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// Emit tracking call: DECREF: tag -> rc=N
+  /// </summary>
+  private static void EmitTrackDecref(
+    MlirBlock<StandardOp> block, string tag, long refcount) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    var rcOp = new StdConstI64Op(refcount);
+    block.AddOp(rcOp);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_decref", [tagPtr, tagLen, rcOp.Result]));
+  }
+
+  /// <summary>
+  /// Emit conditional DECREF: only fires if capacity > 0 (heap-allocated/tracked buffer).
+  /// </summary>
+  private static void EmitTrackDecrefIfHeap(
+    MlirBlock<StandardOp> block, string tag, long refcount, StdI64 capacity) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    var rcOp = new StdConstI64Op(refcount);
+    block.AddOp(rcOp);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_decref_if_heap", [tagPtr, tagLen, rcOp.Result, capacity]));
+  }
+
+  /// <summary>
   /// Emit tracking call: CLEANUP: tag
   /// </summary>
   private static void EmitTrackCleanup(
@@ -3605,6 +3757,16 @@ public static class MaxonToStandardConversion {
     if (!_trackAllocs) return;
     var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
     block.AddOp(new StdCallRuntimeOp("maxon_track_copy", [tagPtr, tagLen]));
+  }
+
+  /// <summary>
+  /// Emit tracking call: FREE #N: X bytes (tag)
+  /// </summary>
+  private static void EmitTrackFree(
+    MlirBlock<StandardOp> block, StdI64 ptr, string tag) {
+    if (!_trackAllocs) return;
+    var (tagPtr, tagLen) = EmitTrackingTagLoad(block, tag);
+    block.AddOp(new StdCallRuntimeOp("maxon_track_free", [ptr, tagPtr, tagLen]));
   }
 
   /// <summary>

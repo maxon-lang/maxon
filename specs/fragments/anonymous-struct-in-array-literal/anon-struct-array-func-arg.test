@@ -1,0 +1,150 @@
+// Test: anon-struct-array-func-arg
+type Item
+  export var value int
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function sumItems(items ItemArray) returns int
+  var total = 0
+  for item in items 'loop'
+    total = total + item.value
+  end 'loop'
+  return total
+end 'sumItems'
+
+function main() returns int
+  return sumItems([{ value: 10 }, { value: 20 }, { value: 12 }])
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @anonymous-struct-in-array-literal.sumItems(items: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-8]
+    x86.mov edx, 16
+    x86.mov [rbp-48], eax
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-48]
+    x86.mov edx, [ecx+0]
+    x86.mov [eax+0], edx
+    x86.mov ebx, [ecx+8]
+    x86.mov esi, 32
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], ebx
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.mov edi, [rbp-64]
+    x86.mov r8, [edi+0]
+    x86.mov [eax+0], r8
+    x86.mov r9, [edi+8]
+    x86.mov [eax+8], r9
+    x86.mov ecx, [edi+16]
+    x86.mov [eax+16], ecx
+    x86.mov ecx, [edi+24]
+    x86.mov [eax+24], ecx
+    x86.mov ecx, [rbp-56]
+    x86.mov [ecx+8], eax
+    x86.mov [rbp-24], ecx
+    x86.jmp anonymous-struct-in-array-literal.sumItems.loop_0.header
+  loop_0.header:
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, rax
+    x86.call ItemArray.next
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.jne anonymous-struct-in-array-literal.sumItems.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, [rbp-16]
+    x86.add ebx, edx
+    x86.mov [rbp-16], ebx
+    x86.jmp anonymous-struct-in-array-literal.sumItems.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @anonymous-struct-in-array-literal.main() -> i64 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov eax, 10
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 10
+    x86.mov [edx+0], ebx
+    x86.mov esi, 20
+    x86.mov edi, 8
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov r8, [rbp-16]
+    x86.mov r9, 20
+    x86.mov [r8+0], r9
+    x86.mov ecx, 12
+    x86.mov edx, 8
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 12
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-40], eax
+    x86.xor eax, eax
+    x86.mov ecx, 3
+    x86.xor edx, edx
+    x86.mov ebx, 8
+    x86.mov esi, 32
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-48]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, 3
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-48]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-56]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-56]
+    x86.mov [ecx+8], eax
+    x86.lea rax, [rbp-40]
+    x86.mov rcx, rax
+    x86.mov eax, [rbp-56]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, rax
+    x86.call anonymous-struct-in-array-literal.sumItems
+    x86.epilogue
+    x86.ret
+  }
+}
+---

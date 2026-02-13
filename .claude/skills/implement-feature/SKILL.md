@@ -60,6 +60,7 @@ The user will describe the feature they want. You will create the spec, write th
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
     - Ensure comments explain "why" not "what".
     - Fix any problems reported by the IDE
+    - Ensure you have not duplicated any helpers
 17. Update documentation
 18. Write a git commit message for these changes.
 
@@ -73,3 +74,4 @@ The user will describe the feature they want. You will create the spec, write th
 - Any old 3-digit error codes (e.g., E022) in spec files need to be updated to the new 4-digit error codes.
 - If the feature requires new runtime functions, add them in `X86CodeEmitter.Runtime.cs`.
 - Keep the x86 code generation correct — watch for short jump overflow (max +/-127 bytes) and 32-bit register truncation (image base is above 4GB).
+- If you find an issue, fix it properly. It doesn't matter if it is pre-existing.

@@ -1107,6 +1107,7 @@ public partial class X86CodeEmitter {
     DefineRdata("rdata_track_rparen", System.Text.Encoding.UTF8.GetBytes(")\n"));
     DefineRdata("rdata_track_arrow_rc", System.Text.Encoding.UTF8.GetBytes(" -> rc="));
     DefineRdata("rdata_track_newline", System.Text.Encoding.UTF8.GetBytes("\n"));
+    DefineRdata("rdata_track_zero_newline", System.Text.Encoding.UTF8.GetBytes("0\n"));
     DefineRdata("rdata_track_summary_header", System.Text.Encoding.UTF8.GetBytes("\n=== MEMORY STATS ===\n"));
     DefineRdata("rdata_track_summary_allocated", System.Text.Encoding.UTF8.GetBytes("Allocated: "));
     DefineRdata("rdata_track_summary_freed", System.Text.Encoding.UTF8.GetBytes("Freed:     "));
@@ -1126,6 +1127,7 @@ public partial class X86CodeEmitter {
     EmitMaxonTrackFree();
     EmitMaxonTrackIncref();
     EmitMaxonTrackDecref();
+    EmitMaxonTrackDecrefIfHeap();
     EmitMaxonTrackMove();
     EmitMaxonTrackCopy();
     EmitMaxonTrackCleanup();
@@ -1274,6 +1276,11 @@ public partial class X86CodeEmitter {
   private void EmitMaxonTrackFree() {
     EmitRuntimeFunctionStart("maxon_track_free", 3, 0xC0);
 
+    // Skip NULL pointers — nothing to free
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_track_free_done");
+
     // Look up ptr in __track_table
     EmitGlobalLeaReg(X86Register.R10, "__track_table");
     EmitBytes(0x4D, 0x31, 0xDB); // XOR r11, r11 (loop counter)
@@ -1316,10 +1323,8 @@ public partial class X86CodeEmitter {
     EmitJmp("rt_track_free_find_slot");
 
     DefineLabel("rt_track_free_not_found");
-    // Not found: set id and size to 0 for printing
-    EmitMovRegImm(X86Register.Rax, 0);
-    EmitMovMemReg(-0x20, X86Register.Rax, 8); // id = 0
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // size = 0
+    // Not found: skip printing (untracked allocation, e.g. from COW check)
+    EmitJmp("rt_track_free_done");
 
     DefineLabel("rt_track_free_found");
 
@@ -1364,6 +1369,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rdx, 2);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
 
+    DefineLabel("rt_track_free_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -1452,6 +1458,29 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rdx, 1);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_print_str")); EmitDword(0);
 
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_track_decref_if_heap(tag_ptr_in_rcx, tag_len_in_rdx, new_rc_in_r8, capacity_in_r9)
+  /// Only emits DECREF if capacity > 0 (meaning buffer was heap-allocated/tracked).
+  /// Skips silently for COW-allocated buffers (capacity=0 before COW check).
+  /// </summary>
+  private void EmitMaxonTrackDecrefIfHeap() {
+    EmitRuntimeFunctionStart("maxon_track_decref_if_heap", 4, 0x80);
+
+    // Check capacity (r9 → [rbp-32])
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // capacity
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_track_decref_if_heap_done");
+
+    // Capacity > 0: call maxon_track_decref(tag_ptr, tag_len, new_rc)
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // tag_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // tag_len
+    EmitMovRegMem(X86Register.R8, -0x18, 8);  // new_rc
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_track_decref")); EmitDword(0);
+
+    DefineLabel("rt_track_decref_if_heap_done");
     EmitRuntimeFunctionEnd();
   }
 
