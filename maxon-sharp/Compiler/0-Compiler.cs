@@ -163,7 +163,11 @@ public class Compiler {
         module.TypeDefs.TryAdd(tokens[i + 1].Value, new MlirEnumType(tokens[i + 1].Value, [], null, []));
         i += 1;
       } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
-        module.TypeDefs.TryAdd(tokens[i + 1].Value, new MlirStructType(tokens[i + 1].Value, []));
+        var ifaceName = tokens[i + 1].Value;
+        module.TypeDefs.TryAdd(ifaceName, new MlirInterfaceType(ifaceName, []));
+        var assocNames = ParseUsesClauseTokens(tokens, i + 2);
+        if (assocNames.Count > 0)
+          module.InterfaceAssociatedTypes.TryAdd(ifaceName, assocNames);
         i += 1;
       }
     }

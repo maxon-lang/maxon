@@ -277,7 +277,7 @@ public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, Max
 
 public class MaxonCallOp : MaxonOp {
   public override string Mnemonic => $"maxon.call @{Callee}";
-  public string Callee { get; }
+  public string Callee { get; set; }
   public List<MaxonValue> Args { get; }
   public MaxonValue? Result { get; protected set; }
   public MaxonValueKind? ResultKind { get; }

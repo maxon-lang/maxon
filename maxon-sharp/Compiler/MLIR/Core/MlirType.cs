@@ -62,16 +62,19 @@ public class MlirStructType : MlirType {
   public Dictionary<string, long> ConstParams { get; }
   public Dictionary<string, MlirType> TypeParams { get; }
   public bool IsTuple { get; }
+  // True when this type represents a typealias of an interface (e.g., typealias ElementIterable = Iterable with Element)
+  public bool IsInterfaceAlias { get; }
   // Maps type parameter names to required interface names (from where clauses)
   public Dictionary<string, List<string>> WhereConstraints { get; }
 
-  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null) : base(name, ComputeSize(fields)) {
+  public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];
     ConformingInterfaces = conformingInterfaces ?? [];
     ConstParams = constParams ?? [];
     TypeParams = typeParams ?? [];
     IsTuple = isTuple;
+    IsInterfaceAlias = isInterfaceAlias;
     WhereConstraints = whereConstraints ?? [];
     int offset = 0;
     foreach (var field in Fields) {

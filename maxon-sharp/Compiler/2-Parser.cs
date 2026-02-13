@@ -535,7 +535,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private void PreScanFunction(MlirModule<MaxonOp> module, string? owningType, bool isExported = false) {
     Advance(); // consume 'function'
-    var nameToken = Expect(TokenType.Identifier);
+    var nameToken = ExpectIdentifierLike();
     var baseName = nameToken.Value;
 
     // Construct function name with namespace
@@ -1433,7 +1433,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       Advance(); // consume 'function'
-      var methodName = Expect(TokenType.Identifier).Value;
+      var methodName = ExpectIdentifierLike().Value;
 
       Expect(TokenType.LeftParen);
       var paramNames = new List<string>();
@@ -1762,6 +1762,40 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!_typeRegistry.TryGetValue(sourceName, out var sourceType))
       throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {sourceName}", sourceNameToken.Line, sourceNameToken.Column);
 
+    // Interface alias: typealias ElementIterable = Iterable with Element
+    if (sourceType is MlirInterfaceType) {
+      var assocTypeNames = _interfaceAssociatedTypes.TryGetValue(sourceName, out var names) ? names : [];
+      if (assocTypeNames.Count == 0)
+        throw new CompileError(ErrorCode.ParserExpectedType, $"Interface '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
+
+      Expect(TokenType.With);
+      var ifaceConcreteTypes = new List<MlirType>();
+      if (Check(TokenType.LeftParen)) {
+        Advance();
+        ifaceConcreteTypes.Add(ParseTypeRef());
+        while (Check(TokenType.Comma)) { Advance(); ifaceConcreteTypes.Add(ParseTypeRef()); }
+        Expect(TokenType.RightParen);
+      } else {
+        ifaceConcreteTypes.Add(ParseTypeRef());
+      }
+
+      if (ifaceConcreteTypes.Count != assocTypeNames.Count)
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          $"Interface '{sourceName}' expects {assocTypeNames.Count} type argument(s), got {ifaceConcreteTypes.Count}",
+          aliasNameToken.Line, aliasNameToken.Column);
+
+      var ifaceSubstitution = new Dictionary<string, MlirType>();
+      for (int i = 0; i < assocTypeNames.Count; i++)
+        ifaceSubstitution[assocTypeNames[i]] = ifaceConcreteTypes[i];
+
+      _typeRegistry[aliasName] = new MlirStructType(aliasName, [],
+        conformingInterfaces: [sourceName],
+        typeParams: ifaceSubstitution,
+        isInterfaceAlias: true);
+      _typeAliasSources[aliasName] = sourceName;
+      return;
+    }
+
     if (sourceType is not MlirStructType sourceStruct)
       throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' is not a struct type", sourceNameToken.Line, sourceNameToken.Column);
 
@@ -1830,7 +1864,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName, bool isExported = false) {
     Advance(); // consume 'function'
-    var nameToken = Expect(TokenType.Identifier);
+    var nameToken = ExpectIdentifierLike();
 
     // Construct qualified method name with namespace
     var namespace_ = DeriveNamespace(includeFilename: false);
@@ -2336,7 +2370,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseEnumInstanceMethod(MlirModule<MaxonOp> module, string enumName, MlirEnumType enumType) {
     Expect(TokenType.Function);
-    var nameToken = Expect(TokenType.Identifier);
+    var nameToken = ExpectIdentifierLike();
     var methodName = $"{enumName}.{nameToken.Value}";
     Logger.Debug(LogCategory.Parser, $"Parsing enum instance method: {methodName}");
 
@@ -2606,7 +2640,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseStaticMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
-    var nameToken = Expect(TokenType.Identifier);
+    var nameToken = ExpectIdentifierLike();
 
     // Construct qualified method name: namespace.TypeName.methodName
     // Don't include filename in namespace since typeName is already the type
@@ -2637,7 +2671,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseInstanceMethod(MlirModule<MaxonOp> module, string typeName) {
     Expect(TokenType.Function);
-    var nameToken = Expect(TokenType.Identifier);
+    var nameToken = ExpectIdentifierLike();
 
     // Construct qualified method name: namespace.TypeName.methodName
     // Don't include filename in namespace since typeName is already the type
@@ -2840,7 +2874,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseFunction(MlirModule<MaxonOp> module) {
     Expect(TokenType.Function);
-    var nameToken = Expect(TokenType.Identifier);
+    var nameToken = ExpectIdentifierLike();
     var baseName = nameToken.Value;
 
     // Top-level functions get qualified with file-based namespace
@@ -3066,7 +3100,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     // Look ahead further to determine what follows: identifier.identifier = ... or identifier.identifier(...)
-    if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.Identifier) {
+    if (_pos + 2 < _tokens.Count && IsIdentifierLikeToken(_tokens[_pos + 2])) {
       var afterIdent = _pos + 3 < _tokens.Count ? _tokens[_pos + 3] : new Token(TokenType.Eof, "", 0, 0);
 
       // Check if it's a qualified name (Type.member)
@@ -3099,11 +3133,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       if (afterIdent.Type == TokenType.LeftParen) {
         // Check for static/qualified function call: Type.method(...)
-        var suffixPattern = $".{qualifiedName}";
-        if (_currentModule!.Functions.Any(f => f.Name == qualifiedName
-            || f.Name.EndsWith(suffixPattern)
-            || f.Name.StartsWith(qualifiedName + "$")
-            || f.Name.Contains(suffixPattern + "$"))) {
+        if (ResolveMethodName(qualifiedName) != null) {
           ParseQualifiedCallStatement();
           return;
         }
@@ -4265,7 +4295,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var qualifiedToken = new Token(TokenType.Identifier, qualifiedName, methodToken.Line, methodToken.Column);
 
     var (args, callee) = ParseCallArgs(qualifiedToken);
-    CreateFunctionCall(qualifiedToken, args, callee);
+    var callOp = CreateFunctionCall(qualifiedToken, args, callee);
+    OverrideCalleeForTypeAlias(callOp, typeToken.Value, qualifiedName);
   }
 
   private void ParseInstanceMethodCallStatement(VarInfo varInfo, string methodName) {
@@ -4600,20 +4631,53 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var iterableType = _typeRegistry.TryGetValue(iterableTypeName, out var regType)
       ? regType as MlirStructType : null;
 
-    // Resolve the next() method name
-    var nextMethodName = ResolveMethodName($"{iterableTypeName}.next") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Type '{iterableTypeName}' does not implement Iterable (missing next() method)",
-        forToken.Line, forToken.Column);
+    string nextMethodName;
+    MlirType? elementMlirType;
 
-    // Determine the element type from next()'s return type
-    var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
-      ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
-    var elementMlirType = nextFunc.ReturnType;
-    // Resolve type parameter to concrete type using the iterable's type params
-    if (elementMlirType is MlirTypeParameterType tp
-        && iterableType?.TypeParams.TryGetValue(tp.ParameterName, out var concreteElemType) == true) {
-      elementMlirType = concreteElemType;
+    if (iterableType is { IsInterfaceAlias: true }) {
+      // Interface alias: resolve next() from the interface definition
+      var ifaceName = iterableType.ConformingInterfaces[0];
+      nextMethodName = $"{iterableTypeName}.next";
+
+      // Get element type from interface method signature + type params
+      var ifaceType = _typeRegistry.TryGetValue(ifaceName, out var ifType) ? ifType as MlirInterfaceType : null;
+      var nextSig = ifaceType?.Methods.FirstOrDefault(m => m.Name == "next")
+        ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Interface '{ifaceName}' has no next() method", forToken.Line, forToken.Column);
+
+      // Resolve the return type through the alias's type params
+      if (nextSig.ReturnTypeName != null && iterableType.TypeParams.TryGetValue(nextSig.ReturnTypeName, out var resolvedElemType)) {
+        elementMlirType = resolvedElemType;
+      } else if (nextSig.ReturnTypeName != null && _typeRegistry.TryGetValue(nextSig.ReturnTypeName, out var regElemType)) {
+        elementMlirType = regElemType;
+      } else {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Cannot resolve element type for interface '{ifaceName}' iterator", forToken.Line, forToken.Column);
+      }
+
+      // Create stub function so calls can reference it (monomorphization rewrites later)
+      if (!_currentModule!.Functions.Any(f => f.Name == nextMethodName)) {
+        var stubFunc = new MlirFunction<MaxonOp>(nextMethodName,
+          ["self"], [iterableType], elementMlirType,
+          _typeRegistry.TryGetValue("IterationError", out var iterErrType) ? iterErrType : null);
+        _currentModule.Functions.Add(stubFunc);
+      }
+    } else {
+      // Concrete type: resolve next() from the module's functions
+      nextMethodName = ResolveMethodName($"{iterableTypeName}.next") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Type '{iterableTypeName}' does not implement Iterable (missing next() method)",
+          forToken.Line, forToken.Column);
+
+      var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
+        ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
+      elementMlirType = nextFunc.ReturnType;
+      // Resolve type parameter to concrete type using the iterable's type params
+      if (elementMlirType is MlirTypeParameterType tp
+          && iterableType?.TypeParams.TryGetValue(tp.ParameterName, out var concreteElemType) == true) {
+        elementMlirType = concreteElemType;
+      }
     }
+
     // Resolve to canonical type (pre-scanned stubs may have 0 fields)
     if (elementMlirType is MlirStructType retStruct
         && _typeRegistry.TryGetValue(retStruct.Name, out var canonical)
@@ -5141,7 +5205,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (argSource != null && paramSource != null && argSource == paramSource) {
       return HaveMatchingTypeParams(argTypeName, paramTypeName);
     }
+    // Interface alias: accept any arg type that conforms to the required interface
+    if (_typeRegistry.TryGetValue(paramTypeName, out var paramTypeEntry)
+        && paramTypeEntry is MlirStructType paramStruct
+        && paramStruct.IsInterfaceAlias) {
+      return ArgConformsToInterfaceAlias(argTypeName, paramStruct);
+    }
     return false;
+  }
+
+  private bool ArgConformsToInterfaceAlias(string argTypeName, MlirStructType interfaceAlias) {
+    var requiredInterface = interfaceAlias.ConformingInterfaces[0];
+    if (!TypeConformsToInterface(argTypeName, requiredInterface))
+      return false;
+    // If the interface alias has concrete type params, verify they match
+    if (interfaceAlias.TypeParams.Count > 0
+        && _typeRegistry.TryGetValue(argTypeName, out var argTypeEntry)
+        && argTypeEntry is MlirStructType argStruct) {
+      foreach (var (paramName, requiredType) in interfaceAlias.TypeParams) {
+        if (requiredType is MlirTypeParameterType) continue;
+        if (!argStruct.TypeParams.TryGetValue(paramName, out var argParamType))
+          return false;
+        if (argParamType is MlirTypeParameterType) continue;
+        if (argParamType.Name != requiredType.Name)
+          return false;
+      }
+    }
+    return true;
   }
 
   private bool HaveMatchingTypeParams(string typeA, string typeB) {
@@ -6117,7 +6207,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       // Check for qualified name: TypeName.member
-      if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier) {
+      if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
 
         // Check for compile-time constant
@@ -6230,23 +6320,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // Check for qualified function call: TypeName.method(...)
         // _pos is at '.', _pos+1 is 'method', _pos+2 should be '('
         if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftParen) {
-          // Find all matches (exact, suffix, or mangled overloads)
-          var exactMatches = _currentModule!.Functions.Where(f => f.Name == qualifiedName || f.Name.StartsWith(qualifiedName + "$")).ToList();
-          var suffixMatches = _currentModule!.Functions.Where(f => f.Name.EndsWith($".{qualifiedName}") || f.Name.Contains($".{qualifiedName}$")).ToList();
-          var totalMatches = exactMatches.Count + suffixMatches.Count;
+          var resolvedQualified = ResolveMethodName(qualifiedName);
 
-          if (totalMatches > 0) {
+          if (resolvedQualified != null) {
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
             Advance(); // consume '('
-            var qualifiedFuncToken = new Token(TokenType.Identifier, qualifiedName, methodToken.Line, methodToken.Column);
+            var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedQualified, methodToken.Line, methodToken.Column);
             var (args, callee) = ParseCallArgs(qualifiedFuncToken);
             var callOp = CreateFunctionCall(qualifiedFuncToken, args, callee);
+            OverrideCalleeForTypeAlias(callOp, token.Value, qualifiedName);
             if (callOp.Result != null)
               return ParseFieldAccessChain(new ExprResult.Direct(callOp.Result), methodToken);
             if (_inTryContext)
               return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
-            throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{qualifiedName}' does not return a value", methodToken.Line, methodToken.Column);
+            throw new CompileError(ErrorCode.ParserExpectedExpression, $"Function '{resolvedQualified}' does not return a value", methodToken.Line, methodToken.Column);
           }
         }
       }
@@ -8744,9 +8832,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return Advance();
   }
 
+  /// If the callee was resolved through a type alias, override it with the alias-qualified name
+  /// so Stage 1 monomorphization can match and specialize it correctly.
+  private void OverrideCalleeForTypeAlias(MaxonCallOp callOp, string aliasTypeName, string aliasQualifiedName) {
+    if (callOp.Callee != aliasQualifiedName && _typeAliasSources.ContainsKey(aliasTypeName)) {
+      callOp.Callee = aliasQualifiedName;
+      if (callOp.Result is MaxonStruct resultStruct)
+        resultStruct.TypeName = aliasTypeName;
+    }
+  }
+
+  /// Returns true if the given token can be used as a name (identifier or keyword used as name).
+  private static bool IsIdentifierLikeToken(Token token) =>
+    token.Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(token.Value);
+
   /// Returns true if the current token can be used as a name (identifier or keyword used as name).
   private bool CheckIdentifierLike() =>
-    !IsAtEnd() && (Current().Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(Current().Value));
+    !IsAtEnd() && IsIdentifierLikeToken(Current());
 
   /// Consumes and returns the current token if it can be used as a name; throws otherwise.
   private Token ExpectIdentifierLike() {

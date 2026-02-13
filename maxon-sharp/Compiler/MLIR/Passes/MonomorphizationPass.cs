@@ -42,6 +42,9 @@ public static class MonomorphizationPass {
     if (allSpecializations.Count > 0) {
       RewriteCallSites(module, allSpecializations);
     }
+
+    // Stage 2: Specialize functions with interface alias parameters per call-site arg type
+    RunInterfaceAliasSpecialization(module);
   }
 
   internal record Specialization(
@@ -230,6 +233,347 @@ public static class MonomorphizationPass {
       if (block.Operations[j] is MaxonAssignOp assign && assign.Value == result) {
         block.Operations[j] = new MaxonAssignOp(assign.VarName, assign.Value, assign.IsDeclaration, assign.IsMutable, newKind.Value);
       }
+    }
+  }
+
+  // ============================================================================
+  // Stage 2: Interface alias parameter specialization
+  // ============================================================================
+
+  private record InterfaceAliasSpec(
+    MlirFunction<MaxonOp> SourceFunc,
+    string SpecializedName,
+    Dictionary<string, MlirType> Substitution);
+
+  private static void RunInterfaceAliasSpecialization(MlirModule<MaxonOp> module) {
+    // Find all interface alias types
+    var interfaceAliases = new Dictionary<string, MlirStructType>();
+    foreach (var (name, type) in module.TypeDefs) {
+      if (type is MlirStructType st && st.IsInterfaceAlias)
+        interfaceAliases[name] = st;
+    }
+    if (interfaceAliases.Count == 0) return;
+
+    // Find functions with interface alias parameter types
+    var ifaceFuncs = new Dictionary<string, (MlirFunction<MaxonOp> Func, List<(int Index, string AliasName)> Params)>();
+    foreach (var func in module.Functions) {
+      List<(int, string)>? ifaceParams = null;
+      for (int i = 0; i < func.ParamTypes.Count; i++) {
+        if (func.ParamTypes[i] is MlirStructType paramSt && interfaceAliases.ContainsKey(paramSt.Name)) {
+          ifaceParams ??= [];
+          ifaceParams.Add((i, paramSt.Name));
+        }
+      }
+      if (ifaceParams != null) {
+        ifaceFuncs[func.Name] = (func, ifaceParams);
+      }
+    }
+    if (ifaceFuncs.Count == 0) return;
+
+    // Scan call sites to determine concrete arg types
+    var specs = new List<InterfaceAliasSpec>();
+    var callSiteRewrites = new List<(MlirBlock<MaxonOp> Block, int OpIndex, string NewCallee)>();
+
+    foreach (var func in module.Functions.ToList()) {
+      foreach (var block in func.Body.Blocks) {
+        for (int i = 0; i < block.Operations.Count; i++) {
+          var op = block.Operations[i];
+          string? callee = null;
+          List<MaxonValue>? args = null;
+          if (op is MaxonCallOp call) { callee = call.Callee; args = call.Args; }
+          else if (op is MaxonTryCallOp tryCall) { callee = tryCall.Callee; args = tryCall.Args; }
+          if (callee == null || args == null) continue;
+          if (!ifaceFuncs.TryGetValue(callee, out var ifaceInfo)) continue;
+
+          // Build substitution map from interface alias → concrete arg type
+          var substitution = new Dictionary<string, MlirType>();
+          var nameParts = new List<string>();
+          foreach (var (paramIdx, aliasName) in ifaceInfo.Params) {
+            if (paramIdx >= args.Count) continue;
+            if (args[paramIdx] is not MaxonStruct argStruct) continue;
+            var concreteTypeName = argStruct.TypeName;
+            if (module.TypeDefs.TryGetValue(concreteTypeName, out var concreteType)) {
+              substitution[aliasName] = concreteType;
+              nameParts.Add(concreteTypeName);
+            }
+          }
+          if (substitution.Count == 0) continue;
+
+          var specializedName = $"{callee}${string.Join("$", nameParts)}";
+
+          // Record the spec if not already seen
+          if (!specs.Any(s => s.SpecializedName == specializedName)) {
+            specs.Add(new InterfaceAliasSpec(ifaceInfo.Func, specializedName, substitution));
+          }
+          callSiteRewrites.Add((block, i, specializedName));
+        }
+      }
+    }
+
+    if (specs.Count == 0) return;
+
+    // Create specialized functions
+    foreach (var spec in specs) {
+      var subMap = new Dictionary<string, MlirType>(spec.Substitution);
+      // Also add Self mapping to preserve the function's owning type
+      var dotIdx = spec.SourceFunc.Name.LastIndexOf('.');
+      if (dotIdx > 0) {
+        var ownerTypeName = spec.SourceFunc.Name[..dotIdx];
+        if (module.TypeDefs.TryGetValue(ownerTypeName, out var ownerType))
+          subMap.TryAdd("Self", ownerType);
+        subMap.TryAdd(ownerTypeName, module.TypeDefs.GetValueOrDefault(ownerTypeName) ?? new MlirStructType(ownerTypeName, []));
+      }
+      var typeSub = new InterfaceAliasTypeSubstitution(subMap);
+      var clonedFunc = CloneWithInterfaceAliasSubstitution(spec.SourceFunc, spec.SpecializedName, typeSub);
+      module.Functions.Add(clonedFunc);
+      Logger.Debug(LogCategory.Mlir, $"Interface alias specialization: {spec.SourceFunc.Name} -> {spec.SpecializedName}");
+    }
+
+    // Rewrite call sites
+    var funcLookup = module.Functions.ToDictionary(f => f.Name, f => f);
+    foreach (var (block, opIndex, newCallee) in callSiteRewrites) {
+      var op = block.Operations[opIndex];
+      if (op is MaxonCallOp call) {
+        var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
+          call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+        block.Operations[opIndex] = new MaxonCallOp(newCallee, call.Args, call.Result, resultKind, resultStructTypeName);
+      } else if (op is MaxonTryCallOp tryCall) {
+        var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
+          tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
+        block.Operations[opIndex] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, resultKind, resultStructTypeName);
+      }
+    }
+
+    // Remove stub functions (interface alias method stubs with no body)
+    module.Functions.RemoveAll(f => {
+      var dotIdx = f.Name.LastIndexOf('.');
+      if (dotIdx <= 0) return false;
+      var typePart = f.Name[..dotIdx];
+      return interfaceAliases.ContainsKey(typePart) && f.Body.Blocks.Count == 0;
+    });
+  }
+
+  /// Minimal type substitution for interface alias specialization.
+  /// Maps interface alias type names to concrete types for callee rewriting.
+  private class InterfaceAliasTypeSubstitution(Dictionary<string, MlirType> map) {
+    public MlirType SubstituteType(MlirType type) {
+      if (type is MlirStructType st && map.TryGetValue(st.Name, out var newType))
+        return newType;
+      return type;
+    }
+
+    public string SubstituteCallee(string callee) {
+      var dotIdx = callee.LastIndexOf('.');
+      if (dotIdx > 0) {
+        var typePart = callee[..dotIdx];
+        if (map.TryGetValue(typePart, out var newType))
+          return $"{newType.Name}.{callee[(dotIdx + 1)..]}";
+      }
+      return callee;
+    }
+
+    public string SubstituteName(string name) {
+      return map.TryGetValue(name, out var newType) ? newType.Name : name;
+    }
+
+    public bool TryGetValue(string key, out MlirType value) => map.TryGetValue(key, out value!);
+  }
+
+  /// Clone a function replacing interface alias types/callees with concrete types.
+  private static MlirFunction<MaxonOp> CloneWithInterfaceAliasSubstitution(
+      MlirFunction<MaxonOp> source, string newName, InterfaceAliasTypeSubstitution sub) {
+    var newParamTypes = source.ParamTypes.Select(t => sub.SubstituteType(t)).ToList();
+    var newReturnType = source.ReturnType != null ? sub.SubstituteType(source.ReturnType) : null;
+
+    var newFunc = new MlirFunction<MaxonOp>(
+      newName, [.. source.ParamNames], newParamTypes, newReturnType, source.ThrowsType) {
+      IsStdlib = source.IsStdlib,
+      SourceLine = source.SourceLine,
+      SourceColumn = source.SourceColumn
+    };
+
+    // Clone blocks and operations with callee substitution
+    var valueMap = new Dictionary<int, MaxonValue>();
+
+    MaxonValue MapValue(MaxonValue old) {
+      if (valueMap.TryGetValue(old.Id, out var mapped)) return mapped;
+      var newId = MlirContext.Current.NextId();
+      MaxonValue newVal = old switch {
+        MaxonInteger => new MaxonInteger(newId),
+        MaxonFloat => new MaxonFloat(newId),
+        MaxonBool => new MaxonBool(newId),
+        MaxonByte => new MaxonByte(newId),
+        MaxonStruct s => new MaxonStruct(newId, sub.SubstituteName(s.TypeName)),
+        MaxonEnum e => new MaxonEnum(newId, e.TypeName),
+        MaxonFunctionPtr => new MaxonFunctionPtr(newId),
+        _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
+      };
+      valueMap[old.Id] = newVal;
+      return newVal;
+    }
+
+    foreach (var block in source.Body.Blocks) {
+      var newBlock = newFunc.Body.AddBlock(block.Name);
+      foreach (var op in block.Operations) {
+        var cloned = CloneOpWithCalleeSub(op, sub, MapValue, valueMap);
+        newBlock.AddOp(cloned);
+      }
+    }
+
+    return newFunc;
+  }
+
+  /// Clone a single op, substituting callees that reference interface alias types.
+  private static MaxonOp CloneOpWithCalleeSub(
+      MaxonOp op, InterfaceAliasTypeSubstitution sub, Func<MaxonValue, MaxonValue> mapValue, Dictionary<int, MaxonValue> valueMap) {
+    switch (op) {
+      case MaxonTryCallOp tryCall: {
+        var newCallee = sub.SubstituteCallee(tryCall.Callee);
+        var newArgs = tryCall.Args.Select(mapValue).ToList();
+        var resultStructTypeName = tryCall.ResultStructTypeName != null ? sub.SubstituteName(tryCall.ResultStructTypeName) : null;
+        var cloned = new MaxonTryCallOp(newCallee, newArgs, tryCall.ResultKind, resultStructTypeName);
+        if (tryCall.Result != null && cloned.Result != null)
+          valueMap[tryCall.Result.Id] = cloned.Result;
+        valueMap[tryCall.ErrorFlag.Id] = cloned.ErrorFlag;
+        return cloned;
+      }
+      case MaxonCallOp call: {
+        var newCallee = sub.SubstituteCallee(call.Callee);
+        var newArgs = call.Args.Select(mapValue).ToList();
+        var resultStructTypeName = call.ResultStructTypeName != null ? sub.SubstituteName(call.ResultStructTypeName) : null;
+        var cloned = new MaxonCallOp(newCallee, newArgs, call.Result != null ? mapValue(call.Result) : null, call.ResultKind, resultStructTypeName);
+        return cloned;
+      }
+      case MaxonAssignOp assign:
+        return new MaxonAssignOp(assign.VarName, mapValue(assign.Value), assign.IsDeclaration, assign.IsMutable, assign.ValueKind);
+      case MaxonParamOp param: {
+        var cloned = new MaxonParamOp(param.Index, param.Name, param.ValueKind);
+        valueMap[param.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonStructParamOp sp: {
+        var cloned = new MaxonStructParamOp(sp.Index, sp.Name, sub.SubstituteName(sp.StructTypeName));
+        valueMap[sp.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonVarRefOp varRef: {
+        var cloned = new MaxonVarRefOp(varRef.VarName, varRef.ValueKind);
+        valueMap[varRef.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonStructVarRefOp sv: {
+        var cloned = new MaxonStructVarRefOp(sv.VarName, sub.SubstituteName(sv.StructTypeName));
+        valueMap[sv.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonLiteralOp lit: {
+        var cloned = lit.ValueKind switch {
+          MaxonValueKind.Integer => new MaxonLiteralOp(lit.IntValue),
+          MaxonValueKind.Float => new MaxonLiteralOp(lit.FloatValue),
+          MaxonValueKind.Bool => new MaxonLiteralOp(lit.BoolValue),
+          _ => throw new InvalidOperationException($"Unsupported literal kind: {lit.ValueKind}")
+        };
+        valueMap[lit.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonBinOp binOp: {
+        var cloned = new MaxonBinOp(binOp.Operator, mapValue(binOp.Lhs), mapValue(binOp.Rhs), binOp.OperandKind);
+        valueMap[binOp.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonCondBrOp cb:
+        return new MaxonCondBrOp(mapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
+      case MaxonBrOp br:
+        return new MaxonBrOp(br.Target);
+      case MaxonReturnOp ret:
+        return new MaxonReturnOp(ret.Value != null ? mapValue(ret.Value) : null, ret.IsErrorPropagation);
+      case MaxonThrowOp th:
+        return new MaxonThrowOp(mapValue(th.ErrorValue), th.ErrorTypeName);
+      case MaxonStructLiteralOp structLit: {
+        var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, mapValue(fv.Value))).ToList();
+        var cloned = new MaxonStructLiteralOp(sub.SubstituteName(structLit.TypeName), newFieldValues) {
+          ArrayLiteralTag = structLit.ArrayLiteralTag,
+          ArrayLiteralCount = structLit.ArrayLiteralCount
+        };
+        valueMap[structLit.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonFieldAccessOp fa: {
+        var cloned = new MaxonFieldAccessOp(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, fa.ResultKind,
+          fa.ResultStructTypeName != null ? sub.SubstituteName(fa.ResultStructTypeName) : null);
+        valueMap[fa.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonFieldAssignOp fa:
+        return new MaxonFieldAssignOp(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, mapValue(fa.NewValue));
+      case MaxonManagedMemGetOp memGet: {
+        var cloned = new MaxonManagedMemGetOp(mapValue(memGet.ManagedStruct), mapValue(memGet.Index), memGet.ResultKind) {
+          IsStructElement = memGet.IsStructElement,
+          StructElementTypeName = memGet.StructElementTypeName,
+          TypeParamName = memGet.TypeParamName
+        };
+        valueMap[memGet.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonManagedMemSetOp memSet:
+        return new MaxonManagedMemSetOp(mapValue(memSet.ManagedStruct), mapValue(memSet.Index), mapValue(memSet.Value), memSet.ElementKind) {
+          IsStructElement = memSet.IsStructElement
+        };
+      case MaxonManagedMemCreateOp mc: {
+        var cloned = new MaxonManagedMemCreateOp(mapValue(mc.Count), mc.ElementSize);
+        valueMap[mc.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonManagedMemGrowOp mg:
+        return new MaxonManagedMemGrowOp(mapValue(mg.ManagedStruct), mapValue(mg.NewCapacity));
+      case MaxonManagedMemShiftOp ms:
+        return new MaxonManagedMemShiftOp(mapValue(ms.ManagedStruct), mapValue(ms.Index), mapValue(ms.Count), ms.ShiftRight);
+      case MaxonManagedMemConcatOp mc: {
+        var cloned = new MaxonManagedMemConcatOp(mapValue(mc.Lhs), mapValue(mc.Rhs));
+        valueMap[mc.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonManagedMemSliceOp sl: {
+        var cloned = new MaxonManagedMemSliceOp(mapValue(sl.Managed), mapValue(sl.Start), mapValue(sl.End));
+        valueMap[sl.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonCallRuntimeOp cr: {
+        var na = cr.Args.Select(mapValue).ToList();
+        var cloned = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null);
+        if (cr.Result != null && cloned.Result != null) valueMap[cr.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonTruncOp t: { var c = new MaxonTruncOp(mapValue(t.Input)); valueMap[t.Result.Id] = c.Result; return c; }
+      case MaxonIntToFloatOp i: { var c = new MaxonIntToFloatOp(mapValue(i.Input)); valueMap[i.Result.Id] = c.Result; return c; }
+      case MaxonCastOp ca: { var c = new MaxonCastOp(mapValue(ca.Input), ca.TargetKind); valueMap[ca.Result.Id] = c.Result; return c; }
+      case MaxonBitcastF64ToI64Op bc: { var c = new MaxonBitcastF64ToI64Op(mapValue(bc.Input)); valueMap[bc.Result.Id] = c.Result; return c; }
+      case MaxonAbsOp a: { var c = new MaxonAbsOp(mapValue(a.Input)); valueMap[a.Result.Id] = c.Result; return c; }
+      case MaxonSqrtOp s: { var c = new MaxonSqrtOp(mapValue(s.Input)); valueMap[s.Result.Id] = c.Result; return c; }
+      case MaxonFloorOp f: { var c = new MaxonFloorOp(mapValue(f.Input)); valueMap[f.Result.Id] = c.Result; return c; }
+      case MaxonCeilOp ce: { var c = new MaxonCeilOp(mapValue(ce.Input)); valueMap[ce.Result.Id] = c.Result; return c; }
+      case MaxonRoundOp r: { var c = new MaxonRoundOp(mapValue(r.Input)); valueMap[r.Result.Id] = c.Result; return c; }
+      case MaxonMinOp mi: { var c = new MaxonMinOp(mapValue(mi.Lhs), mapValue(mi.Rhs)); valueMap[mi.Result.Id] = c.Result; return c; }
+      case MaxonMaxOp ma: { var c = new MaxonMaxOp(mapValue(ma.Lhs), mapValue(ma.Rhs)); valueMap[ma.Result.Id] = c.Result; return c; }
+      case MaxonEnumLiteralOp el: { var c = el.BackingKind == MaxonValueKind.Float ? new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.IntValue); valueMap[el.Result.Id] = c.Result; return c; }
+      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, ep.EnumTypeName, ep.BackingKind); valueMap[ep.Result.Id] = c.Result; return c; }
+      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, ev.EnumTypeName, ev.BackingKind); valueMap[ev.Result.Id] = c.Result; return c; }
+      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(mapValue(er.EnumValue), er.EnumTypeName, er.ResultKind); valueMap[er.Result.Id] = c.Result; return c; }
+      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(mapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); valueMap[ef.Result.Id] = c.Result; return c; }
+      case MaxonGlobalLoadOp gl: { var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind); valueMap[gl.Result.Id] = c.Result; return c; }
+      case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, mapValue(gs.Value), gs.ValueKind);
+      case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); valueMap[fp.Result.Id] = c.Result; return c; }
+      case MaxonFunctionRefOp fr: { var c = new MaxonFunctionRefOp(fr.FunctionName, fr.FunctionType); valueMap[fr.Result.Id] = c.Result; return c; }
+      case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, fv.FunctionType); valueMap[fv.Result.Id] = c.Result; return c; }
+      case MaxonIndirectCallOp indirect: {
+        var newCallee = mapValue(indirect.Callee);
+        var newArgs = indirect.Args.Select(mapValue).ToList();
+        var cloned = new MaxonIndirectCallOp(newCallee, indirect.CalleeType, newArgs, indirect.ResultKind, indirect.ResultStructTypeName);
+        if (indirect.Result != null && cloned.Result != null) valueMap[indirect.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      default:
+        throw new InvalidOperationException($"Interface alias specialization: unhandled op type {op.GetType().Name}");
     }
   }
 }
