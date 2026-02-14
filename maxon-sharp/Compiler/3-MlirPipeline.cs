@@ -63,6 +63,9 @@ public class MlirPipeline {
     var x86Module = StandardToX86Conversion.Run(stdModule);
     Logger.Debug(LogCategory.Mlir, "Lowered Standard to X86");
 
+    // Peephole optimization on X86 ops
+    PeepholePass.Run(x86Module);
+
     // Capture x86 stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {
