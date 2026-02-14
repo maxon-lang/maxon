@@ -754,18 +754,27 @@ public static class StandardToX86Conversion {
   }
 
   /// <summary>
-  /// Peephole optimization: fuse add+mov into lea.
-  /// Pattern: add rX, rY; mov rZ, rX (where rX is dead after) → lea rZ, [rX + rY]
+  /// Peephole optimization on x86 ops.
+  /// - add rX, rY; mov rZ, rX → lea rZ, [rX + rY] (when rX is dead after)
+  /// - mov rX, [rbp+off]; mov rY, rX → mov rY, [rbp+off] (when rX is dead after)
   /// </summary>
   private static void PeepholeOptimize(MlirFunction<X86Op> func) {
     foreach (var block in func.Body.Blocks) {
       var ops = block.Operations;
       for (int i = 0; i < ops.Count - 1; i++) {
-        if (ops[i] is X86AddRegRegOp add && ops[i + 1] is X86MovRegRegOp mov
-            && mov.Src == add.Dest && mov.Dest != add.Dest) {
-          // Check that add.Dest (rX) is not read after the mov
-          if (!IsRegReadAfter(ops, i + 2, add.Dest)) {
+        if (ops[i + 1] is X86MovRegRegOp mov) {
+          // add rX, rY; mov rZ, rX → lea rZ, [rX + rY]
+          if (ops[i] is X86AddRegRegOp add
+              && mov.Src == add.Dest && mov.Dest != add.Dest
+              && !IsRegReadAfter(ops, i + 2, add.Dest)) {
             ops[i] = new X86LeaRegRegRegOp(mov.Dest, add.Dest, add.Src);
+            ops.RemoveAt(i + 1);
+          }
+          // mov rX, [rbp+off]; mov rY, rX → mov rY, [rbp+off]
+          else if (ops[i] is X86MovRegMemOp load
+              && To64Bit(mov.Src) == To64Bit(load.Dest) && mov.Dest != load.Dest
+              && !IsRegReadAfter(ops, i + 2, load.Dest)) {
+            ops[i] = new X86MovRegMemOp(mov.Dest, load.Displacement, load.SizeInBytes);
             ops.RemoveAt(i + 1);
           }
         }

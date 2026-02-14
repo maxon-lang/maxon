@@ -14,13 +14,14 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @first-class-functions.calculate(f: fn(i64, i64) returns i64, a: i64, b: i64) -> i64 {
+  func @first-class-functions.calculate(f: i64, __env_f: i64, a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
     x86.mov r10, ecx
-    x86.mov rcx, rdx
-    x86.mov rdx, r8
+    x86.mov rcx, r8
+    x86.mov r8, rdx
+    x86.mov rdx, r9
     x86.call r10
     x86.epilogue
     x86.ret
@@ -35,9 +36,11 @@ module {
     x86.lea_func eax, [first-class-functions.add]
     x86.mov ecx, 15
     x86.mov edx, 27
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
+    x86.xor ebx, ebx
+    x86.mov r8, rcx
+    x86.mov r9, rdx
     x86.mov rcx, rax
+    x86.mov rdx, rbx
     x86.jmp first-class-functions.calculate
   }
 }

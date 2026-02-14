@@ -3498,8 +3498,7 @@ module {
     x86.mov ebx, [rbp-24]
     x86.add ebx, eax
     x86.mov [rbp-24], ebx
-    x86.mov esi, [rbp-48]
-    x86.mov rcx, rsi
+    x86.mov rcx, [rbp-48]
     x86.call register-allocator.identity
     x86.mov edi, [rbp-40]
     x86.add edi, eax
