@@ -182,6 +182,18 @@ public static class StandardToX86Conversion {
         }
       }
 
+      // Pre-scan: compute register hints for values consumed by return ops
+      foreach (var op in srcBlock.Operations) {
+        if (op is StdReturnOp retHint && retHint.ReturnValue != null) {
+          if (retHint.ReturnValue is StdPtr)
+            regManager.SetRegisterHint(retHint.ReturnValue, X86Register.Rax);
+          else if (retHint.ReturnValue is StdI64 or StdI32 or StdBool)
+            regManager.SetRegisterHint(retHint.ReturnValue, X86Register.Eax);
+        } else if (op is StdErrorReturnOp errRetHint) {
+          regManager.SetRegisterHint(errRetHint.ErrorFlag, X86Register.Edx);
+        }
+      }
+
       foreach (var op in srcBlock.Operations) {
         if (preHandledOps.Contains(op)) { currentOpIndex++; continue; }
         // If there's a pending comparison result and this op is NOT a condBr

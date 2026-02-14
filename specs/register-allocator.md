@@ -1417,8 +1417,7 @@ module {
     x86.cvtsi2sd xmm1, ecx
     x86.movsd xmm2, xmm0
     x86.divsd xmm2, xmm1
-    x86.cvttsd2si edx, xmm2
-    x86.mov eax, edx
+    x86.cvttsd2si eax, xmm2
     x86.ret
   }
 }
@@ -1488,8 +1487,7 @@ module {
     x86.cvtsi2sd xmm3, eax
     x86.movsd xmm4, xmm2
     x86.subsd xmm4, xmm3
-    x86.cvttsd2si ebx, xmm4
-    x86.mov eax, ebx
+    x86.cvttsd2si eax, xmm4
     x86.ret
   }
 }
@@ -4264,8 +4262,7 @@ module {
     x86.divsd xmm5, xmm4
     x86.movsd xmm6, xmm2
     x86.addsd xmm6, xmm5
-    x86.cvttsd2si esi, xmm6
-    x86.mov eax, esi
+    x86.cvttsd2si eax, xmm6
     x86.ret
   }
 }
@@ -6076,8 +6073,7 @@ module {
     x86.cmp edx, eax
     x86.je register-allocator.middle.try_continue_1
   propagate_error_0:
-    x86.mov eax, [rbp-8]
-    x86.mov edx, eax
+    x86.mov edx, [rbp-8]
     x86.xor eax, eax
     x86.epilogue
     x86.ret

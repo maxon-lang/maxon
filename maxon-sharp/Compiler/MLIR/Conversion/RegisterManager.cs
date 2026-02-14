@@ -24,6 +24,7 @@ public class RegisterManager {
   private readonly Dictionary<StdValue, int> _valueStackHome = [];
   private readonly Dictionary<X86Register, int> _lastUsed = [];
   private readonly Dictionary<StdValue, long> _constantValues = [];
+  private readonly Dictionary<StdValue, X86Register> _registerHints = [];
   private int _currentOpIndex;
 
   // Spill slot allocation: offsets grow downward (more negative) from the variable area
@@ -58,12 +59,39 @@ public class RegisterManager {
   private readonly Dictionary<StdValue, X86XmmRegister> _valuePreviousXmm = [];
 
   /// <summary>
+  /// Record a preferred register for a value. AllocateRegister will try to
+  /// honor this hint when the preferred register is available.
+  /// </summary>
+  public void SetRegisterHint(StdValue value, X86Register preferredReg) {
+    _registerHints[value] = preferredReg;
+  }
+
+  /// <summary>
   /// Allocate a physical register for a new value.
   /// May evict an existing value if all registers are occupied.
   /// Protected registers will not be evicted.
   /// </summary>
   private X86Register AllocateRegister(StdValue value, MlirBlock<X86Op> block,
     X86Register? protect1 = null, X86Register? protect2 = null) {
+    // 0. Try the hinted register first
+    if (_registerHints.TryGetValue(value, out var hinted)) {
+      var hinted32 = To32Bit(hinted);
+      if (!SamePhysicalRegister(hinted32, protect1) && !SamePhysicalRegister(hinted32, protect2)) {
+        if (!_registerContents.ContainsKey(hinted32)) {
+          Assign(hinted32, value);
+          return hinted32;
+        }
+        // If the hinted register holds a rematerializable constant, evict it
+        if (_registerContents.TryGetValue(hinted32, out var occupant) && _constantValues.ContainsKey(occupant)) {
+          _valueToRegister.Remove(occupant);
+          _registerContents.Remove(hinted32);
+          _lastUsed.Remove(hinted32);
+          Assign(hinted32, value);
+          return hinted32;
+        }
+      }
+    }
+
     // 1. Try the next sequential slot (preserves existing test output)
     if (_nextFreshIndex < GprPool.Length) {
       var candidate = GprPool[_nextFreshIndex];
@@ -1245,6 +1273,7 @@ public class RegisterManager {
     _valueToXmm.Clear();
     _valueXmmStackHome.Clear();
     _xmmLastUsed.Clear();
+    _registerHints.Clear();
 
     if (_nextSpillOffset < _minSpillOffset)
       _minSpillOffset = _nextSpillOffset;
