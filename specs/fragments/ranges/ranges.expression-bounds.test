@@ -1,0 +1,64 @@
+// Test: ranges.expression-bounds
+function getStart() returns int
+    return 1
+end 'getStart'
+
+function getEnd() returns int
+    return 4
+end 'getEnd'
+
+function main() returns int
+    var sum = 0
+    for i in getStart() to getEnd() 'loop'
+        sum = sum + i
+    end 'loop'
+    return sum
+end 'main'
+---
+ExitCode: 10
+---
+module {
+  func @ranges.getStart() -> i64 {
+  entry:
+    x86.mov eax, 1
+    x86.ret
+  }
+  func @ranges.getEnd() -> i64 {
+  entry:
+    x86.mov eax, 4
+    x86.ret
+  }
+  func @ranges.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.call ranges.getStart
+    x86.mov [rbp-32], eax
+    x86.call ranges.getEnd
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-32]
+    x86.mov [rbp-24], ecx
+    x86.jmp ranges.main.loop_0.header
+  loop_0.header:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-16]
+    x86.cmp eax, ecx
+    x86.jg ranges.main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 1
+    x86.add ecx, edx
+    x86.mov [rbp-24], ecx
+    x86.mov ebx, [rbp-8]
+    x86.add ebx, eax
+    x86.mov [rbp-8], ebx
+    x86.jmp ranges.main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

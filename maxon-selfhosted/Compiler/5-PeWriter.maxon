@@ -301,23 +301,13 @@ export function writePe(outputPath String, codeResult CodeResult)
     // 1: Import Table
     pe.writeDword(idata.importDirRva)
     pe.writeDword(idata.importDirSize)
-    // 2-11: zeros
-    var i = 2
-    while i < 12 'dirs'
-        pe.writeDword(0)
-        pe.writeDword(0)
-        i = i + 1
-    end 'dirs'
+    // 2-11: zeros (10 entries x 8 bytes)
+    pe.writeZeros(80)
     // 12: IAT
     pe.writeDword(idata.iatRva)
     pe.writeDword(iatDirSize)
-    // 13-15: zeros
-    i = 13
-    while i < 16 'dirs2'
-        pe.writeDword(0)
-        pe.writeDword(0)
-        i = i + 1
-    end 'dirs2'
+    // 13-15: zeros (3 entries x 8 bytes)
+    pe.writeZeros(24)
 
     // === Section Headers ===
     writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned, characteristics: 0x60000020)

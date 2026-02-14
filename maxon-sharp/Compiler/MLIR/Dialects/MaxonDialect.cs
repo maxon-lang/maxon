@@ -507,25 +507,18 @@ public class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string 
 // Global variable operations (for top-level var and static var)
 // ============================================================================
 
-public class MaxonGlobalLoadOp : MaxonOp {
+public class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, string? enumTypeName = null) : MaxonOp {
   public override string Mnemonic => $"maxon.global_load @{GlobalName}";
-  public string GlobalName { get; }
-  public MaxonValueKind ValueKind { get; }
-  public string? EnumTypeName { get; }
-  public MaxonValue Result { get; }
+  public string GlobalName { get; } = globalName;
+  public MaxonValueKind ValueKind { get; } = kind;
+  public string? EnumTypeName { get; } = enumTypeName;
+  public MaxonValue Result { get; } = enumTypeName != null ? new MaxonEnum(MlirContext.Current.NextId(), enumTypeName) : kind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> {
       ["global"] = new StringAttr(GlobalName),
       ["type"] = new TypeAttr(ValueKind == MaxonValueKind.Enum ? MlirType.I64 : ValueKind.ToMlirType())
     };
-
-  public MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, string? enumTypeName = null) {
-    GlobalName = globalName;
-    ValueKind = kind;
-    EnumTypeName = enumTypeName;
-    Result = enumTypeName != null ? new MaxonEnum(MlirContext.Current.NextId(), enumTypeName) : kind.CreateValue();
-  }
 }
 
 // Creates an enum value for a specific case

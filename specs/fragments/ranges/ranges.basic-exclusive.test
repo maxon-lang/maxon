@@ -1,0 +1,44 @@
+// Test: ranges.basic-exclusive
+function main() returns int
+    var sum = 0
+    for i in 1 upto 5 'loop'
+        sum = sum + i
+    end 'loop'
+    return sum
+end 'main'
+---
+ExitCode: 10
+---
+module {
+  func @ranges.main() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov edx, 5
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], ecx
+    x86.jmp ranges.main.loop_0.header
+  loop_0.header:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-16]
+    x86.cmp eax, ecx
+    x86.jge ranges.main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 1
+    x86.add ecx, edx
+    x86.mov [rbp-24], ecx
+    x86.mov ebx, [rbp-8]
+    x86.add ebx, eax
+    x86.mov [rbp-8], ebx
+    x86.jmp ranges.main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

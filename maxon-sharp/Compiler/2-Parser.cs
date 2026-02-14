@@ -4670,6 +4670,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Expect(TokenType.In);
     var iterableExpr = ParseExpression();
     var iterableValue = ResolveExprValue(iterableExpr);
+
+    // Range expression: `for i in start to end` or `for i in start upto end`
+    if (Check(TokenType.To) || Check(TokenType.Upto)) {
+      var inclusive = Check(TokenType.To);
+      Advance(); // consume 'to' or 'upto'
+      var endExpr = ParseExpression();
+      var endValue = ResolveExprValue(endExpr);
+      var loopSourceLabel2 = Expect(TokenType.CharacterLiteral).Value;
+      ExpectNewline();
+
+      // Validate that the start value's type implements Strideable
+      var startKind = DetermineValueKind(iterableValue);
+      var endKind = DetermineValueKind(endValue);
+      if (startKind != endKind)
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          "Range start and end must be the same type", forToken.Line, forToken.Column);
+
+      ValidateStrideableConformance(startKind, iterableValue, forToken);
+
+      ParseRangeForLoop(itemName, iterableValue, endValue, startKind, inclusive, loopSourceLabel2, forToken,
+        iterableValue is MaxonStruct sms ? sms.TypeName : null);
+      return;
+    }
+
     var loopSourceLabel = Expect(TokenType.CharacterLiteral).Value;
     ExpectNewline();
 
@@ -4822,6 +4846,125 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     // Create exit block
+    var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
+    _currentBlock = exitBlock;
+  }
+
+  private void ValidateStrideableConformance(MaxonValueKind kind, MaxonValue value, Token forToken) {
+    if (kind == MaxonValueKind.Integer) return; // int always implements Strideable
+
+    if (kind == MaxonValueKind.Struct && value is MaxonStruct ms) {
+      if (_typeRegistry.TryGetValue(ms.TypeName, out var regType) && regType is MlirStructType st
+          && st.ConformingInterfaces.Contains("Strideable")) {
+        return;
+      }
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Type '{ms.TypeName}' does not implement Strideable (required for range expressions)",
+        forToken.Line, forToken.Column);
+    }
+
+    throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      "Range expressions require a type that implements Strideable",
+      forToken.Line, forToken.Column);
+  }
+
+  // Desugars `for i in start to/upto end 'label'` into a while loop:
+  //   var __range_current = start
+  //   while __range_current <= end 'label'  (or < for upto)
+  //     let i = __range_current
+  //     __range_current = __range_current + 1  (or advancedBy(1) for structs)
+  //     <body>
+  //   end 'label'
+  private void ParseRangeForLoop(string itemName, MaxonValue startValue, MaxonValue endValue,
+      MaxonValueKind elementKind, bool inclusive, string loopSourceLabel, Token forToken,
+      string? structTypeName) {
+    var loopLabel = UniqueLabel(loopSourceLabel);
+    var headerLabel = $"{loopLabel}.header";
+    var bodyLabel = loopLabel;
+    var exitLabel = $"{loopLabel}.exit";
+
+    // Store end bound for comparison in header
+    var endVarName = $"__range_end_{_blockCounter}";
+    _currentBlock!.AddOp(new MaxonAssignOp(endVarName, endValue, isDeclaration: true, isMutable: false, elementKind));
+    _variables[endVarName] = new VarInfo(elementKind, false, endValue, _currentBlock!, structTypeName);
+
+    // Create mutable counter initialized to start
+    var counterVarName = $"__range_current_{_blockCounter}";
+    _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, startValue, isDeclaration: true, isMutable: true, elementKind));
+    _variables[counterVarName] = new VarInfo(elementKind, true, startValue, _currentBlock!, structTypeName);
+
+    // Branch to header
+    _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
+
+    // Header block: compare counter with end bound
+    var headerBlock = _currentFunction!.Body.AddBlock(headerLabel);
+    _currentBlock = headerBlock;
+
+    var currentVal = EmitVarRefOp(counterVarName, elementKind, structTypeName);
+    var endVal = EmitVarRefOp(endVarName, elementKind, structTypeName);
+
+    MaxonValue condResult;
+    var cmpOp2 = inclusive ? MaxonBinOperator.Le : MaxonBinOperator.Lt;
+
+    if (elementKind == MaxonValueKind.Struct && structTypeName != null) {
+      // Use Comparable.compare() for struct types
+      var compareMethodName = $"{structTypeName}.compare";
+      var cmpToken = new Token(TokenType.Identifier, compareMethodName, forToken.Line, forToken.Column);
+      var callOp = CreateFunctionCall(cmpToken, [currentVal, endVal]);
+      var zeroLit = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(zeroLit);
+      var cmpBinOp = new MaxonBinOp(cmpOp2, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
+      _currentBlock!.AddOp(cmpBinOp);
+      condResult = cmpBinOp.Result;
+    } else {
+      var cmpBinOp = new MaxonBinOp(cmpOp2, currentVal, endVal, elementKind);
+      _currentBlock!.AddOp(cmpBinOp);
+      condResult = cmpBinOp.Result;
+    }
+
+    headerBlock.AddOp(new MaxonCondBrOp(condResult, bodyLabel, exitLabel));
+
+    // Body block
+    var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
+    _currentBlock = bodyBlock;
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
+    PushScope();
+
+    // Bind loop variable: let i = __range_current
+    var loadedCurrent = EmitVarRefOp(counterVarName, elementKind, structTypeName);
+    _currentBlock!.AddOp(new MaxonAssignOp(itemName, loadedCurrent, isDeclaration: true, isMutable: false, elementKind));
+    _variables[itemName] = new VarInfo(elementKind, false, loadedCurrent, bodyBlock, structTypeName);
+
+    // Increment counter: __range_current = __range_current + 1
+    var preIncrementVal = EmitVarRefOp(counterVarName, elementKind, structTypeName);
+    if (elementKind == MaxonValueKind.Struct && structTypeName != null) {
+      // Use Strideable.advancedBy(1)
+      var advancedByName = $"{structTypeName}.advancedBy";
+      var advToken = new Token(TokenType.Identifier, advancedByName, forToken.Line, forToken.Column);
+      var oneLit = new MaxonLiteralOp(1L);
+      _currentBlock!.AddOp(oneLit);
+      var advCall = CreateFunctionCall(advToken, [preIncrementVal, oneLit.Result]);
+      _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, advCall.Result!, isDeclaration: false, isMutable: true, elementKind));
+    } else {
+      var oneLit = new MaxonLiteralOp(1L);
+      _currentBlock!.AddOp(oneLit);
+      var addOp = new MaxonBinOp(MaxonBinOperator.Add, preIncrementVal, oneLit.Result, elementKind);
+      _currentBlock!.AddOp(addOp);
+      _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, addOp.Result, isDeclaration: false, isMutable: true, elementKind));
+    }
+
+    // Parse the body statements
+    ParseBodyUntilEnd();
+    PopScope();
+    _loopStack.Pop();
+    ExpectEndLabel(loopSourceLabel);
+
+    // Branch back to header
+    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonBrOp(headerLabel));
+    }
+
+    // Exit block
     var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);
     _currentBlock = exitBlock;
   }

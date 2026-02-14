@@ -1,0 +1,67 @@
+// Test: ranges.nested-ranges
+function main() returns int
+    var sum = 0
+    for i in 1 to 3 'outer'
+        for j in 1 to 3 'inner'
+            sum = sum + i * j
+        end 'inner'
+    end 'outer'
+    return sum
+end 'main'
+---
+ExitCode: 36
+---
+module {
+  func @ranges.main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov edx, 3
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], ecx
+    x86.jmp ranges.main.outer_0.header
+  outer_0.header:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-16]
+    x86.cmp eax, ecx
+    x86.jg ranges.main.outer_0.exit
+  outer_0:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 1
+    x86.add ecx, edx
+    x86.mov [rbp-24], ecx
+    x86.mov ebx, 1
+    x86.mov esi, 3
+    x86.mov [rbp-40], esi
+    x86.mov [rbp-48], ebx
+    x86.jmp ranges.main.inner_1.header
+  inner_1.header:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-40]
+    x86.cmp eax, ecx
+    x86.jg ranges.main.inner_1.exit
+  inner_1:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-48]
+    x86.mov edx, 1
+    x86.add ecx, edx
+    x86.mov [rbp-48], ecx
+    x86.mov ebx, [rbp-32]
+    x86.imul ebx, eax
+    x86.mov esi, [rbp-8]
+    x86.add esi, ebx
+    x86.mov [rbp-8], esi
+    x86.jmp ranges.main.inner_1.header
+  inner_1.exit:
+    x86.jmp ranges.main.outer_0.header
+  outer_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

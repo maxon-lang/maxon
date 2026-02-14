@@ -883,7 +883,7 @@ public static class MaxonToStandardConversion {
 
               var key = (binOp.Operator, binOp.OperandKind);
               if (!BinOpFactories.TryGetValue(key, out var factory))
-                throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind}");
+                throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind} in func {func.Name} block {block.Name}");
 
               if (!valueMap.TryGetValue(binOp.Lhs, out StdValue? lhs))
                 throw new InvalidOperationException($"BinOp LHS %{binOp.Lhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");

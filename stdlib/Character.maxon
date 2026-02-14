@@ -2,7 +2,7 @@
 /// @category Text
 
 // Character receives __ManagedMemory directly for literal initialization via BuiltinCharLiteral.
-export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable
+export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Strideable
   var _managed __ManagedMemory
 
   // Default type for character literals - compiler discovers this via BuiltinCharLiteral interface
@@ -90,6 +90,29 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
     return {_managed: _managed, _iterPos: 0}
   end 'toString'
 
+  // Decode the first Unicode codepoint from the UTF-8 bytes
+  function _codepoint() returns int
+    var i0 = __managed_memory_byte_at(_managed, 0) as int
+    if i0 < 128 'ascii'
+      return i0
+    end 'ascii'
+    var i1 = __managed_memory_byte_at(_managed, 1) as int
+    if i0 < 224 'two_byte'
+      return ((i0 and 31) shl 6) or (i1 and 63)
+    end 'two_byte'
+    var i2 = __managed_memory_byte_at(_managed, 2) as int
+    if i0 < 240 'three_byte'
+      return ((i0 and 15) shl 12) or ((i1 and 63) shl 6) or (i2 and 63)
+    end 'three_byte'
+    var i3 = __managed_memory_byte_at(_managed, 3) as int
+    return ((i0 and 7) shl 18) or ((i1 and 63) shl 12) or ((i2 and 63) shl 6) or (i3 and 63)
+  end '_codepoint'
+
+  // Strideable conformance - advance by n Unicode codepoints
+  function advancedBy(n int) returns Character
+    return Character._fromCodepoint(_codepoint() + n)
+  end 'advancedBy'
+
   // Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
   export function asciiValue() returns int throws CharacterError
     var len = __managed_memory_len(_managed)
@@ -102,4 +125,37 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
     end 'check_ascii'
     return b
   end 'asciiValue'
+
+  // Create a Character from a Unicode codepoint value
+  // Uses bit shifts instead of division (int / int produces float in Maxon)
+  static function _fromCodepoint(cp int) returns Character
+    if cp < 128 'enc_ascii'
+      var m = __managed_memory_create(1, 1)
+      __managed_memory_set_byte(m, 0, cp)
+      __managed_memory_set_length(m, 1)
+      return {_managed: m}
+    end 'enc_ascii'
+    if cp < 2048 'enc_two'
+      var m = __managed_memory_create(2, 1)
+      __managed_memory_set_byte(m, 0, 192 or (cp shr 6))
+      __managed_memory_set_byte(m, 1, 128 or (cp and 63))
+      __managed_memory_set_length(m, 2)
+      return {_managed: m}
+    end 'enc_two'
+    if cp < 65536 'enc_three'
+      var m = __managed_memory_create(3, 1)
+      __managed_memory_set_byte(m, 0, 224 or (cp shr 12))
+      __managed_memory_set_byte(m, 1, 128 or ((cp shr 6) and 63))
+      __managed_memory_set_byte(m, 2, 128 or (cp and 63))
+      __managed_memory_set_length(m, 3)
+      return {_managed: m}
+    end 'enc_three'
+    var m = __managed_memory_create(4, 1)
+    __managed_memory_set_byte(m, 0, 240 or (cp shr 18))
+    __managed_memory_set_byte(m, 1, 128 or ((cp shr 12) and 63))
+    __managed_memory_set_byte(m, 2, 128 or ((cp shr 6) and 63))
+    __managed_memory_set_byte(m, 3, 128 or (cp and 63))
+    __managed_memory_set_length(m, 4)
+    return {_managed: m}
+  end '_fromCodepoint'
 end 'Character'

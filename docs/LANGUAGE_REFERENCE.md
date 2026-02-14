@@ -1197,9 +1197,48 @@ for variable in iterable 'label'
 end 'label'
 ```
 
+**Iterating over collections:**
+```maxon
+var numbers = [1, 2, 3, 4, 5]
+for num in numbers 'loop'
+    print("{num}")
+end 'loop'
+```
+
+**Iterating over ranges:**
+
+Ranges are created using `to` (inclusive) or `upto` (exclusive) expressions:
+
+```maxon
+// Inclusive range: 1, 2, 3, 4, 5
+for i in 1 to 5 'loop'
+    print("{i}")
+end 'loop'
+
+// Exclusive range: 1, 2, 3, 4
+for i in 1 upto 5 'loop'
+    print("{i}")
+end 'loop'
+
+// Character ranges
+for c in 'a' to 'z' 'loop'
+    print("{c}")
+end 'loop'
+```
+
+Ranges work with any type implementing the `Strideable` interface:
+
+```maxon
+interface Strideable
+    function advancedBy(n int) returns Self
+end 'Strideable'
+```
+
+The standard library provides `Strideable` conformance for `int` and `Character`.
+
 **Notes:**
 - Loop variable is immutable (like `let`)
-- Currently supports ranges (`start..end`)
+- Ranges use `to` for inclusive end and `upto` for exclusive end
 - Desugars to while loop with iterator interface
 
 ### Match Statement

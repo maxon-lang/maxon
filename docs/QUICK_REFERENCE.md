@@ -103,6 +103,11 @@ continue 'loop'   // labeled continue
 ```maxon
 for item in array 'loop' ... end 'loop'
 for char in string 'loop' ... end 'loop'
+
+// Ranges
+for i in 1 to 5 'loop' ... end 'loop'       // inclusive: 1, 2, 3, 4, 5
+for i in 1 upto 5 'loop' ... end 'loop'     // exclusive: 1, 2, 3, 4
+for c in 'a' to 'z' 'loop' ... end 'loop'   // character range
 ```
 
 ### Match Statement
@@ -446,6 +451,7 @@ try c.asciiValue()                   // throws CharacterError
 | `Cloneable` | `clone() -> Self` |
 | `Stringable` | `toString(format) -> String` |
 | `Iterable uses E` | `next() -> E throws IterationError` |
+| `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
 | `Error` | (marker for throwable enums) |
 
 ## Command Line
