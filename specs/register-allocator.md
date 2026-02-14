@@ -5789,14 +5789,14 @@ end 'main'
 module {
   func @register-allocator.mayFail() -> i64 {
   entry:
-    %0 = maxon.enum_literal @MyError.failed
-    maxon.throw @MyError %0
+    %8 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %8
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %3, %2 = maxon.try_call @register-allocator.mayFail
-    %4 = maxon.literal {value = 42 : i64}
-    maxon.return %4
+    %11, %10 = maxon.try_call @register-allocator.mayFail
+    %12 = maxon.literal {value = 42 : i64}
+    maxon.return %12
   }
 }
 === standard
@@ -5862,27 +5862,27 @@ end 'main'
 module {
   func @register-allocator.mayFail() -> i64 {
   entry:
-    %0 = maxon.enum_literal @MyError.failed
-    maxon.throw @MyError %0
+    %8 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %8
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %1 = maxon.literal {value = 0 : i64}
-    maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4, %3 = maxon.try_call @register-allocator.mayFail
-    maxon.assign %3 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %4 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %3, %5 {op = ne} {kind = i64}
-    maxon.cond_br %6 [then: otherwise_error_0, else: otherwise_continue_1]
+    %9 = maxon.literal {value = 0 : i64}
+    maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12, %11 = maxon.try_call @register-allocator.mayFail
+    maxon.assign %11 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %12 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %13 = maxon.literal {value = 0 : i64}
+    %14 = maxon.binop %11, %13 {op = ne} {kind = i64}
+    maxon.cond_br %14 [then: otherwise_error_0, else: otherwise_continue_1]
   otherwise_error_0:
-    %7 = maxon.literal {value = 42 : i64}
-    maxon.assign %7 {var = result} {kind = i64} {mut = 1 : i1}
+    %15 = maxon.literal {value = 42 : i64}
+    maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_continue_1
   otherwise_continue_1:
-    %8 = maxon.var_ref {var = __try_result_3} {type = i64}
-    %9 = maxon.var_ref {var = result} {type = i64}
-    maxon.return %9
+    %16 = maxon.var_ref {var = __try_result_3} {type = i64}
+    %17 = maxon.var_ref {var = result} {type = i64}
+    maxon.return %17
   }
 }
 === standard
@@ -5972,42 +5972,42 @@ end 'main'
 module {
   func @register-allocator.inner() -> i64 {
   entry:
-    %0 = maxon.enum_literal @MyError.failed
-    maxon.throw @MyError %0
+    %8 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %8
   }
   func @register-allocator.middle() -> i64 {
   entry:
-    %3, %2 = maxon.try_call @register-allocator.inner
-    maxon.assign %2 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %3 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 0 : i64}
-    %5 = maxon.binop %2, %4 {op = ne} {kind = i64}
-    maxon.cond_br %5 [then: propagate_error_0, else: try_continue_1]
+    %11, %10 = maxon.try_call @register-allocator.inner
+    maxon.assign %10 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %11 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %10, %12 {op = ne} {kind = i64}
+    maxon.cond_br %13 [then: propagate_error_0, else: try_continue_1]
   propagate_error_0:
-    %6 = maxon.var_ref {var = __try_error_2} {type = i64}
-    maxon.return %6
+    %14 = maxon.var_ref {var = __try_error_2} {type = i64}
+    maxon.return %14
   try_continue_1:
-    %7 = maxon.var_ref {var = __try_result_3} {type = i64}
-    maxon.assign %7 {var = x} {kind = i64} {decl = 1 : i1}
-    maxon.return %7
+    %15 = maxon.var_ref {var = __try_result_3} {type = i64}
+    maxon.assign %15 {var = x} {kind = i64} {decl = 1 : i1}
+    maxon.return %15
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %10, %9 = maxon.try_call @register-allocator.middle
-    %11 = maxon.literal {value = 99 : i64}
-    maxon.assign %11 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %10 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %12 = maxon.literal {value = 0 : i64}
-    %13 = maxon.binop %9, %12 {op = ne} {kind = i64}
-    maxon.cond_br %13 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    %18, %17 = maxon.try_call @register-allocator.middle
+    %19 = maxon.literal {value = 99 : i64}
+    maxon.assign %19 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %18 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.literal {value = 0 : i64}
+    %21 = maxon.binop %17, %20 {op = ne} {kind = i64}
+    maxon.cond_br %21 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
-    %14 = maxon.var_ref {var = __try_default_1} {type = i64}
-    maxon.assign %14 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    %22 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %22 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %15 = maxon.var_ref {var = __try_result_0} {type = i64}
-    maxon.assign %15 {var = x} {kind = i64} {decl = 1 : i1}
-    maxon.return %15
+    %23 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %23 {var = x} {kind = i64} {decl = 1 : i1}
+    maxon.return %23
   }
 }
 === standard
@@ -6138,68 +6138,68 @@ end 'main'
 module {
   func @register-allocator.getA() -> i64 {
   entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.return %0
+    %8 = maxon.literal {value = 10 : i64}
+    maxon.return %8
   }
   func @register-allocator.getB() -> i64 {
   entry:
-    %1 = maxon.literal {value = 20 : i64}
-    maxon.return %1
+    %9 = maxon.literal {value = 20 : i64}
+    maxon.return %9
   }
   func @register-allocator.getC() -> i64 {
   entry:
-    %2 = maxon.enum_literal @MyError.failed
-    maxon.throw @MyError %2
+    %10 = maxon.enum_literal @MyError.failed
+    maxon.throw @MyError %10
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %5, %4 = maxon.try_call @register-allocator.getA
-    %6 = maxon.literal {value = 0 : i64}
-    maxon.assign %6 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %5 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %7 = maxon.literal {value = 0 : i64}
-    %8 = maxon.binop %4, %7 {op = ne} {kind = i64}
-    maxon.cond_br %8 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
-  otherwise_default_error_2:
-    %9 = maxon.var_ref {var = __try_default_1} {type = i64}
-    maxon.assign %9 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_3
-  otherwise_default_continue_3:
-    %10 = maxon.var_ref {var = __try_result_0} {type = i64}
-    maxon.assign %10 {var = a} {kind = i64} {decl = 1 : i1}
-    %13, %12 = maxon.try_call @register-allocator.getB
+    %13, %12 = maxon.try_call @register-allocator.getA
     %14 = maxon.literal {value = 0 : i64}
-    maxon.assign %14 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %13 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %14 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %15 = maxon.literal {value = 0 : i64}
     %16 = maxon.binop %12, %15 {op = ne} {kind = i64}
-    maxon.cond_br %16 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %17 = maxon.var_ref {var = __try_default_5} {type = i64}
-    maxon.assign %17 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %18 = maxon.var_ref {var = __try_result_4} {type = i64}
-    maxon.assign %18 {var = b} {kind = i64} {decl = 1 : i1}
-    %21, %20 = maxon.try_call @register-allocator.getC
-    %22 = maxon.literal {value = 12 : i64}
-    maxon.assign %22 {var = __try_default_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %21 {var = __try_result_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.cond_br %16 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+  otherwise_default_error_2:
+    %17 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %17 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_continue_3:
+    %18 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
+    %21, %20 = maxon.try_call @register-allocator.getB
+    %22 = maxon.literal {value = 0 : i64}
+    maxon.assign %22 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %21 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %23 = maxon.literal {value = 0 : i64}
     %24 = maxon.binop %20, %23 {op = ne} {kind = i64}
-    maxon.cond_br %24 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
+    maxon.cond_br %24 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+  otherwise_default_error_6:
+    %25 = maxon.var_ref {var = __try_default_5} {type = i64}
+    maxon.assign %25 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_7
+  otherwise_default_continue_7:
+    %26 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.assign %26 {var = b} {kind = i64} {decl = 1 : i1}
+    %29, %28 = maxon.try_call @register-allocator.getC
+    %30 = maxon.literal {value = 12 : i64}
+    maxon.assign %30 {var = __try_default_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %29 {var = __try_result_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %31 = maxon.literal {value = 0 : i64}
+    %32 = maxon.binop %28, %31 {op = ne} {kind = i64}
+    maxon.cond_br %32 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
   otherwise_default_error_10:
-    %25 = maxon.var_ref {var = __try_default_9} {type = i64}
-    maxon.assign %25 {var = __try_result_8} {kind = i64} {mut = 1 : i1}
+    %33 = maxon.var_ref {var = __try_default_9} {type = i64}
+    maxon.assign %33 {var = __try_result_8} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_default_continue_11
   otherwise_default_continue_11:
-    %26 = maxon.var_ref {var = __try_result_8} {type = i64}
-    maxon.assign %26 {var = c} {kind = i64} {decl = 1 : i1}
-    %27 = maxon.var_ref {var = a} {type = i64}
-    %28 = maxon.var_ref {var = b} {type = i64}
-    %29 = maxon.binop %27, %28 {op = add} {kind = i64}
-    %30 = maxon.binop %29, %26 {op = add} {kind = i64}
-    maxon.return %30
+    %34 = maxon.var_ref {var = __try_result_8} {type = i64}
+    maxon.assign %34 {var = c} {kind = i64} {decl = 1 : i1}
+    %35 = maxon.var_ref {var = a} {type = i64}
+    %36 = maxon.var_ref {var = b} {type = i64}
+    %37 = maxon.binop %35, %36 {op = add} {kind = i64}
+    %38 = maxon.binop %37, %34 {op = add} {kind = i64}
+    maxon.return %38
   }
 }
 === standard
@@ -6377,67 +6377,67 @@ end 'main'
 module {
   func @register-allocator.lookup(key: i64) -> i64 {
   entry:
-    %0 = maxon.param {index = 0 : i32} {name = key} {type = i64}
-    maxon.assign %0 {var = __match_dispatch_0} {kind = i64} {decl = 1 : i1}
+    %8 = maxon.param {index = 0 : i32} {name = key} {type = i64}
+    maxon.assign %8 {var = __match_dispatch_0} {kind = i64} {decl = 1 : i1}
     maxon.br dispatch_0.cmp0
   dispatch_0.cmp0:
-    %1 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
-    %2 = maxon.literal {value = 1 : i64}
-    %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
-    maxon.cond_br %3 [then: dispatch_0.case0, else: dispatch_0.cmp1]
+    %9 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
+    %10 = maxon.literal {value = 1 : i64}
+    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
+    maxon.cond_br %11 [then: dispatch_0.case0, else: dispatch_0.cmp1]
   dispatch_0.case0:
-    %4 = maxon.literal {value = 100 : i64}
-    maxon.return %4
+    %12 = maxon.literal {value = 100 : i64}
+    maxon.return %12
   dispatch_0.cmp1:
-    %5 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
-    %6 = maxon.literal {value = 2 : i64}
-    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
-    maxon.cond_br %7 [then: dispatch_0.case1, else: dispatch_0.case2]
+    %13 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
+    %14 = maxon.literal {value = 2 : i64}
+    %15 = maxon.binop %13, %14 {op = eq} {kind = i64}
+    maxon.cond_br %15 [then: dispatch_0.case1, else: dispatch_0.case2]
   dispatch_0.case1:
-    %8 = maxon.literal {value = 200 : i64}
-    maxon.return %8
+    %16 = maxon.literal {value = 200 : i64}
+    maxon.return %16
   dispatch_0.case2:
-    %9 = maxon.enum_literal @MyError.notFound
-    maxon.throw @MyError %9
+    %17 = maxon.enum_literal @MyError.notFound
+    maxon.throw @MyError %17
   dispatch_0.merge:
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %10 = maxon.literal {value = 2 : i64}
-    %13, %12 = maxon.try_call @register-allocator.lookup %10
-    %14 = maxon.literal {value = 0 : i64}
-    maxon.assign %14 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %15 = maxon.literal {value = 0 : i64}
-    %16 = maxon.binop %12, %15 {op = ne} {kind = i64}
-    maxon.cond_br %16 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    %18 = maxon.literal {value = 2 : i64}
+    %21, %20 = maxon.try_call @register-allocator.lookup %18
+    %22 = maxon.literal {value = 0 : i64}
+    maxon.assign %22 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %21 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %23 = maxon.literal {value = 0 : i64}
+    %24 = maxon.binop %20, %23 {op = ne} {kind = i64}
+    maxon.cond_br %24 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
-    %17 = maxon.var_ref {var = __try_default_1} {type = i64}
-    maxon.assign %17 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
+    %25 = maxon.var_ref {var = __try_default_1} {type = i64}
+    maxon.assign %25 {var = __try_result_0} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %18 = maxon.var_ref {var = __try_result_0} {type = i64}
-    maxon.assign %18 {var = a} {kind = i64} {decl = 1 : i1}
-    %19 = maxon.literal {value = 99 : i64}
-    %22, %21 = maxon.try_call @register-allocator.lookup %19
-    %23 = maxon.literal {value = 42 : i64}
-    maxon.assign %23 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %22 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %24 = maxon.literal {value = 0 : i64}
-    %25 = maxon.binop %21, %24 {op = ne} {kind = i64}
-    maxon.cond_br %25 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+    %26 = maxon.var_ref {var = __try_result_0} {type = i64}
+    maxon.assign %26 {var = a} {kind = i64} {decl = 1 : i1}
+    %27 = maxon.literal {value = 99 : i64}
+    %30, %29 = maxon.try_call @register-allocator.lookup %27
+    %31 = maxon.literal {value = 42 : i64}
+    maxon.assign %31 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %30 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %32 = maxon.literal {value = 0 : i64}
+    %33 = maxon.binop %29, %32 {op = ne} {kind = i64}
+    maxon.cond_br %33 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
-    %26 = maxon.var_ref {var = __try_default_5} {type = i64}
-    maxon.assign %26 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
+    %34 = maxon.var_ref {var = __try_default_5} {type = i64}
+    maxon.assign %34 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %27 = maxon.var_ref {var = __try_result_4} {type = i64}
-    maxon.assign %27 {var = b} {kind = i64} {decl = 1 : i1}
-    %28 = maxon.literal {value = 256 : i64}
-    %29 = maxon.binop %27, %28 {op = mod} {kind = i64}
-    %30 = maxon.var_ref {var = a} {type = i64}
-    %31 = maxon.binop %30, %29 {op = add} {kind = i64}
-    maxon.return %31
+    %35 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.assign %35 {var = b} {kind = i64} {decl = 1 : i1}
+    %36 = maxon.literal {value = 256 : i64}
+    %37 = maxon.binop %35, %36 {op = mod} {kind = i64}
+    %38 = maxon.var_ref {var = a} {type = i64}
+    %39 = maxon.binop %38, %37 {op = add} {kind = i64}
+    maxon.return %39
   }
 }
 === standard

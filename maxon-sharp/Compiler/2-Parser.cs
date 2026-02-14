@@ -32,10 +32,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
   private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column);
-  private readonly List<DeferredDecl> _deferredArrayLets = [];
+  private readonly List<DeferredDecl> _deferredExprLets = [];
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
-  private readonly List<DeferredDecl> _deferredArrayVars = [];
-  private readonly List<DeferredDecl> _deferredStructVars = [];
+  private readonly List<DeferredDecl> _deferredExprVars = [];
 
   // Global mutable variables (name -> type info)
   private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null);
@@ -469,8 +468,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Expect(TokenType.Equals);
         int exprStart = _pos;
         SkipToEndOfLine();
-        if (_tokens[exprStart].Type == TokenType.LeftBracket) {
-          _deferredArrayLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        if (IsComplexInitializer(exprStart)) {
+          _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         } else {
           constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -480,12 +479,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Expect(TokenType.Equals);
         int exprStart = _pos;
         SkipToEndOfLine();
-        if (_tokens[exprStart].Type == TokenType.LeftBracket) {
-          _deferredArrayVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
-        } else if (_tokens[exprStart].Type == TokenType.Identifier
-                   && exprStart + 1 < _tokens.Count
-                   && _tokens[exprStart + 1].Type == TokenType.LeftBrace) {
-          _deferredStructVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        if (IsComplexInitializer(exprStart)) {
+          _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         } else {
           _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -535,21 +530,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _globalVars[deferred.Name] = new GlobalVarInfo(kind, true, enumTypeName);
     }
 
-    // Register array vars as globals (initialized at runtime in main)
-    foreach (var deferred in _deferredArrayVars) {
+    // Register deferred expression vars/lets as globals (initialized at runtime in main)
+    foreach (var deferred in _deferredExprVars) {
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: "Array");
+      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: InferDeferredTypeName(deferred));
     }
-    foreach (var deferred in _deferredArrayLets) {
+    foreach (var deferred in _deferredExprLets) {
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: "Array");
-    }
-
-    // Register struct constructor vars as globals (initialized at runtime in main)
-    foreach (var deferred in _deferredStructVars) {
-      var typeName = _tokens[deferred.TokenStart].Value;
-      module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: typeName);
+      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: InferDeferredTypeName(deferred));
     }
   }
 
@@ -567,25 +555,108 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Emit deferred top-level array declarations at the start of the main function body.
-  /// Re-parses each saved token range to produce array literal ops, then stores them in globals.
+  /// Check if a global var/let initializer needs deferred parsing via ParseExpression.
+  /// Array literals, map literals, and struct constructors can't be evaluated as constants.
   /// </summary>
-  private void EmitDeferredArrayDecls(List<DeferredDecl> deferred) {
-    foreach (var decl in deferred) {
-      int savedPos = _pos;
-      _pos = decl.TokenStart;
-
-      var arrayResult = ParseArrayLiteral();
-      var arrayValue = arrayResult.Value;
-
-      _currentBlock!.AddOp(new MaxonGlobalStoreOp(decl.Name, arrayValue, MaxonValueKind.Struct));
-
-      _pos = savedPos;
-    }
+  private bool IsComplexInitializer(int exprStart) {
+    if (_tokens[exprStart].Type == TokenType.LeftBracket) return true;
+    if (_tokens[exprStart].Type == TokenType.Identifier
+        && exprStart + 1 < _tokens.Count
+        && _tokens[exprStart + 1].Type == TokenType.LeftBrace) return true;
+    return false;
   }
 
-  private void EmitDeferredStructVarDecls() {
-    foreach (var decl in _deferredStructVars) {
+  /// <summary>
+  /// Infer a preliminary TypeName for a deferred global from its tokens.
+  /// For struct constructors (Identifier{}) use the identifier; for [k:v] creates
+  /// a concrete Map type alias; for [...] use "Array".
+  /// </summary>
+  private string InferDeferredTypeName(DeferredDecl deferred) {
+    if (_tokens[deferred.TokenStart].Type == TokenType.Identifier)
+      return _tokens[deferred.TokenStart].Value;
+    if (_tokens[deferred.TokenStart].Type == TokenType.LeftBracket && IsMapLiteralAt(deferred.TokenStart))
+      return InferMapTypeAlias(deferred.TokenStart);
+    return "Array";
+  }
+
+  /// <summary>
+  /// Peek at tokens starting from a '[' to determine if it's a map literal ([k: v, ...])
+  /// vs an array literal ([v, v, ...]). Tracks nesting to avoid false matches on ':' inside
+  /// nested expressions like [foo(a: 1)].
+  /// </summary>
+  private bool IsMapLiteralAt(int bracketPos) {
+    int depth = 0;
+    for (int i = bracketPos; i < _tokens.Count; i++) {
+      var type = _tokens[i].Type;
+      if (type == TokenType.LeftParen || type == TokenType.LeftBracket || type == TokenType.LeftBrace)
+        depth++;
+      else if (type == TokenType.RightParen || type == TokenType.RightBracket || type == TokenType.RightBrace) {
+        depth--;
+        if (depth <= 0) return false;
+      } else if (type == TokenType.Colon && depth == 1)
+        return true;
+      else if (type == TokenType.Comma && depth == 1)
+        return false;
+    }
+    return false;
+  }
+
+  /// <summary>
+  /// Create the concrete Map type alias for a map literal by peeking at the first
+  /// key:value pair tokens. This enables monomorphization to find the right specialization
+  /// before function bodies that reference the global are parsed.
+  /// </summary>
+  private string InferMapTypeAlias(int bracketPos) {
+    int pos = bracketPos + 1; // skip '['
+    while (pos < _tokens.Count && _tokens[pos].Type == TokenType.Newline) pos++;
+
+    var keyType = InferTypeFromTokens(pos, out var keyEnd);
+    pos = keyEnd;
+    while (pos < _tokens.Count && _tokens[pos].Type == TokenType.Newline) pos++;
+    if (pos < _tokens.Count && _tokens[pos].Type == TokenType.Colon) pos++;
+    while (pos < _tokens.Count && _tokens[pos].Type == TokenType.Newline) pos++;
+
+    var valueType = InferTypeFromTokens(pos, out _);
+
+    var mapSourceTypeName = FindTypeImplementingInterface("BuiltinDictionaryLiteral") ?? "Map";
+    return FindOrCreateMapTypeAlias(mapSourceTypeName, keyType, valueType);
+  }
+
+  /// <summary>
+  /// Infer the MlirType of a simple expression from tokens without parsing.
+  /// Handles: integer/float/string/char literals and Type.case enum references.
+  /// </summary>
+  private MlirType InferTypeFromTokens(int pos, out int endPos) {
+    endPos = pos + 1;
+    if (pos >= _tokens.Count) return MlirType.I64;
+
+    var token = _tokens[pos];
+    if (token.Type == TokenType.IntegerLiteral) return MlirType.I64;
+    if (token.Type == TokenType.FloatLiteral) return MlirType.F64;
+    if (token.Type == TokenType.StringLiteral) {
+      if (_typeRegistry.TryGetValue("String", out var strType)) return strType;
+      return MlirType.I64;
+    }
+    if (token.Type == TokenType.CharacterLiteral) {
+      if (_typeRegistry.TryGetValue("Character", out var charType)) return charType;
+      return MlirType.I64;
+    }
+    // Enum/struct reference: Type.case
+    if (token.Type == TokenType.Identifier && pos + 2 < _tokens.Count
+        && _tokens[pos + 1].Type == TokenType.Dot) {
+      endPos = pos + 3;
+      if (_typeRegistry.TryGetValue(token.Value, out var type)) return type;
+    }
+    return MlirType.I64;
+  }
+
+  /// <summary>
+  /// Emit deferred top-level expression declarations at the start of the main function body.
+  /// Re-parses each saved token range via ParseExpression, then stores the result in globals.
+  /// TypeName is determined from the expression result (Array, Map typealias, struct name, etc).
+  /// </summary>
+  private void EmitDeferredExprDecls(List<DeferredDecl> deferred, bool isMutable) {
+    foreach (var decl in deferred) {
       int savedPos = _pos;
       _pos = decl.TokenStart;
 
@@ -593,6 +664,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var value = ResolveExprValue(exprResult);
 
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(decl.Name, value, MaxonValueKind.Struct));
+
+      // Update GlobalVarInfo with the actual TypeName from the parsed expression
+      if (value is MaxonStruct ms)
+        _globalVars[decl.Name] = new GlobalVarInfo(MaxonValueKind.Struct, isMutable, TypeName: ms.TypeName);
+      else if (value is MaxonEnum me)
+        _globalVars[decl.Name] = new GlobalVarInfo(MaxonValueKind.Enum, isMutable, EnumTypeName: me.TypeName);
 
       _pos = savedPos;
     }
@@ -3112,11 +3189,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     func.SourceColumn = nameToken.Column;
     EmitParameters(paramNames, paramTypes, paramTokens);
 
-    // Emit deferred top-level array/struct lets/vars at start of main
+    // Emit deferred top-level expression lets/vars at start of main
     if (baseName == "main") {
-      EmitDeferredArrayDecls(_deferredArrayLets);
-      EmitDeferredArrayDecls(_deferredArrayVars);
-      EmitDeferredStructVarDecls();
+      EmitDeferredExprDecls(_deferredExprLets, isMutable: false);
+      EmitDeferredExprDecls(_deferredExprVars, isMutable: true);
     }
 
     ParseBodyUntilEnd();

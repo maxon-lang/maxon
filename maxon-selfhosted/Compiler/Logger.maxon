@@ -20,19 +20,21 @@ export enum LogCategory
     testing = "TST"
 end 'LogCategory'
 
-typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
-
-var categoryLevels = CategoryLevelMap{}
+var categoryLevels = [
+    LogCategory.compiler: LogLevel.INFO,
+    LogCategory.lexer: LogLevel.INFO,
+    LogCategory.parser: LogLevel.INFO,
+    LogCategory.semantic: LogLevel.INFO,
+    LogCategory.mlir: LogLevel.INFO,
+    LogCategory.codegen: LogLevel.INFO,
+    LogCategory.pe: LogLevel.INFO,
+    LogCategory.testing: LogLevel.INFO
+]
 
 export function setLogLevel(level LogLevel)
-    categoryLevels.insert(LogCategory.compiler, value: level)
-    categoryLevels.insert(LogCategory.lexer, value: level)
-    categoryLevels.insert(LogCategory.parser, value: level)
-    categoryLevels.insert(LogCategory.semantic, value: level)
-    categoryLevels.insert(LogCategory.mlir, value: level)
-    categoryLevels.insert(LogCategory.codegen, value: level)
-    categoryLevels.insert(LogCategory.pe, value: level)
-    categoryLevels.insert(LogCategory.testing, value: level)
+    for (category, _) in categoryLevels 'each'
+        categoryLevels.insert(category, value: level)
+    end 'each'
 end 'setLogLevel'
 
 export function setCategoryLevel(category LogCategory, level LogLevel)
@@ -40,7 +42,7 @@ export function setCategoryLevel(category LogCategory, level LogLevel)
 end 'setCategoryLevel'
 
 function getCategoryLevel(category LogCategory) returns LogLevel
-    return try categoryLevels.get(category) otherwise LogLevel.NONE
+    return try categoryLevels.get(category) otherwise LogLevel.INFO
 end 'getCategoryLevel'
 
 function isEnabled(category LogCategory, level LogLevel) returns bool
