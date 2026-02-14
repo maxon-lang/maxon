@@ -1,0 +1,94 @@
+// Test: closure-capture.map-with-capture
+type Level
+  export var rawValue int
+end 'Level'
+
+function main() returns int
+  var level = Level{rawValue: 5}
+  var arr = [1, 2, 3]
+  var result = arr.map((_ int) gives level.rawValue)
+  return result.count()
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @closure-capture.main() -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 5
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 5
+    x86.mov [edx+0], ebx
+    x86.xor esi, esi
+    x86.mov edi, 3
+    x86.xor r8, r8
+    x86.mov r9, 8
+    x86.mov eax, 32
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 3
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov [ecx+8], eax
+    x86.lea_rdata rax, [__const_array_closure-capture.main_arr]
+    x86.mov rcx, rax
+    x86.mov eax, [rbp-24]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.lea_func eax, [__closure_0]
+    x86.mov ecx, 8
+    x86.mov [rbp-48], eax
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-8]
+    x86.mov [eax+0], ecx
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-32]
+    x86.mov rdx, [rbp-48]
+    x86.mov r8, rcx
+    x86.mov rcx, rax
+    x86.call IntArray.map
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.mov rcx, rax
+    x86.epilogue
+    x86.jmp stdlib.Array.count
+  }
+  func @__closure_0(_: i64, __env: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov [rbp-16], ebx
+    x86.mov eax, [rbp-16]
+    x86.mov ebx, [eax+0]
+    x86.mov eax, ebx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

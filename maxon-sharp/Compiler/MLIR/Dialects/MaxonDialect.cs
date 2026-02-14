@@ -196,6 +196,35 @@ public class MaxonFunctionRefOp(string functionName, MlirFunctionType functionTy
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// Creates a closure with captured values from the enclosing scope
+public class MaxonClosureCreateOp(string functionName, MlirFunctionType functionType,
+    List<MaxonValue> capturedValues, List<string> capturedNames,
+    List<MaxonValueKind> capturedKinds, List<string?> capturedStructTypes) : MaxonOp {
+  public override string Mnemonic => $"maxon.closure_create @{FunctionName}";
+  public string FunctionName { get; } = functionName;
+  public MlirFunctionType FunctionType { get; } = functionType;
+  public List<MaxonValue> CapturedValues { get; } = capturedValues;
+  public List<string> CapturedNames { get; } = capturedNames;
+  public List<MaxonValueKind> CapturedKinds { get; } = capturedKinds;
+  public List<string?> CapturedStructTypes { get; } = capturedStructTypes;
+  public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [.. CapturedValues.Select(v => v.ToString())];
+}
+
+// Inside a capturing closure: loads a captured value from the environment pointer
+public class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, string? structTypeName = null) : MaxonOp {
+  public override string Mnemonic => $"maxon.closure_env_load {Name}[{Index}]";
+  public int Index { get; } = index;
+  public string Name { get; } = name;
+  public MaxonValueKind Kind { get; } = kind;
+  public string? StructTypeName { get; } = structTypeName;
+  public MaxonValue Result { get; } = kind == MaxonValueKind.Struct
+      ? new MaxonStruct(MlirContext.Current.NextId(), structTypeName!)
+      : kind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
 // Function var ref: loads a function pointer from a variable in a different block
 public class MaxonFunctionVarRefOp(string varName, MlirFunctionType functionType) : MaxonOp {
   public override string Mnemonic => $"maxon.function_var_ref {VarName}";

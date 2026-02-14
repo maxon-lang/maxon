@@ -259,7 +259,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   };
 
   // VarInfo now tracks struct type name for struct variables, or function type for function variables
-  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null, MlirFunctionType? FnTypeName = null);
+  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false);
+
+  // Tracks captured variables during closure parsing
+  private record CaptureInfo(string Name, MaxonValueKind Kind, MaxonValue OuterValue, string? StructTypeName);
+  private List<CaptureInfo>? _closureCaptures;
 
   // Tracks parameter locations for unused parameter error reporting
   private readonly List<(string Name, int Line, int Column)> _paramLocations = [];
@@ -554,7 +558,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Emit deferred top-level array declarations at the start of the main function body.
   /// Re-parses each saved token range to produce array literal ops, then stores them in globals.
   /// </summary>
-  private void EmitDeferredArrayDecls(List<DeferredDecl> deferred, bool isMutable) {
+  private void EmitDeferredArrayDecls(List<DeferredDecl> deferred) {
     foreach (var decl in deferred) {
       int savedPos = _pos;
       _pos = decl.TokenStart;
@@ -2950,8 +2954,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Emit deferred top-level array lets/vars at start of main
     if (baseName == "main") {
-      EmitDeferredArrayDecls(_deferredArrayLets, isMutable: false);
-      EmitDeferredArrayDecls(_deferredArrayVars, isMutable: true);
+      EmitDeferredArrayDecls(_deferredArrayLets);
+      EmitDeferredArrayDecls(_deferredArrayVars);
     }
 
     ParseBodyUntilEnd();
@@ -7841,6 +7845,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       case ExprResult.Direct d:
         return d.Value;
       case ExprResult.VarRef v:
+        // Captured variable inside a closure: emit env load instead of normal var ref
+        if (v.Info.IsCaptured && _closureCaptures != null) {
+          return EmitClosureCapture(v.VarName, v.Info);
+        }
         // Struct/enum variables always need a fresh var_ref op so each reference
         // gets a unique SSA value ID (prevents aliasing in structVarNames when
         // multiple variables share the same underlying value).
@@ -7865,6 +7873,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return refOp.Result;
     }
     throw new InvalidOperationException($"Unknown expression result type: {expr.GetType().Name}");
+  }
+
+  /// <summary>
+  /// Records a captured variable and emits a MaxonClosureEnvLoadOp to load it from the environment.
+  /// </summary>
+  private MaxonValue EmitClosureCapture(string varName, VarInfo info) {
+    // Check if already captured; reuse the same index
+    int captureIndex = _closureCaptures!.FindIndex(c => c.Name == varName);
+    if (captureIndex < 0) {
+      captureIndex = _closureCaptures.Count;
+      _closureCaptures.Add(new CaptureInfo(varName, info.Kind, info.Value, info.StructTypeName));
+    }
+    var envLoadOp = new MaxonClosureEnvLoadOp(captureIndex, varName, info.Kind, info.StructTypeName);
+    _currentBlock!.AddOp(envLoadOp);
+    return envLoadOp.Result;
   }
 
   private abstract record ExprResult {
@@ -8907,6 +8930,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var savedBlock = _currentBlock;
     var savedFunction = _currentFunction;
     var savedReferencedVars = new HashSet<string>(_referencedVars);
+    var savedClosureCaptures = _closureCaptures;
 
     // Use inferred return type if available, so struct literal syntax works in body
     MlirType? inferredReturnType = inferredFnType?.ReturnType;
@@ -8916,8 +8940,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     _currentFunction = closureFunc;
     _currentBlock = closureFunc.Body.AddBlock("entry");
-    _variables.Clear();
+    _closureCaptures = [];
     _referencedVars.Clear();
+
+    // Build new variable scope: closure params + outer vars marked as captured
+    var closureParamNames = new HashSet<string>(paramNames);
+    _variables.Clear();
 
     // Add closure parameters to scope
     for (int i = 0; i < paramNames.Count; i++) {
@@ -8935,6 +8963,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var paramOp = new MaxonParamOp(i, paramNames[i], pKind);
         _currentBlock.AddOp(paramOp);
         _variables[paramNames[i]] = new VarInfo(pKind, false, paramOp.Result, _currentBlock);
+      }
+    }
+
+    // Add outer variables as captured entries (excluding closure params and 'self')
+    foreach (var kv in savedVars) {
+      if (!closureParamNames.Contains(kv.Key) && kv.Key != "self") {
+        _variables[kv.Key] = kv.Value with { IsCaptured = true };
       }
     }
 
@@ -8968,8 +9003,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       returnType = returnKind.ToMlirType();
     }
 
+    // Collect captures discovered during body parsing
+    var captures = _closureCaptures;
+    var hasCaptures = captures.Count > 0;
+
+    // Build the final closure function signature, adding hidden __env param if captures exist
+    var finalParamNames = new List<string>(paramNames);
+    var finalParamTypes = new List<MlirType>(paramTypes);
+    if (hasCaptures) {
+      finalParamNames.Add("__env");
+      finalParamTypes.Add(MlirType.I64);
+      // Prepend __env param op to entry block so it gets stored as a variable
+      var envParamOp = new MaxonParamOp(paramNames.Count, "__env", MaxonValueKind.Integer);
+      var entryBlock = closureFunc.Body.Blocks[0];
+      entryBlock.Operations.Insert(0, envParamOp);
+    }
+
     // Create the final function with proper return type
-    var finalClosureFunc = new MlirFunction<MaxonOp>(closureName, paramNames, paramTypes, returnType, null) {
+    var finalClosureFunc = new MlirFunction<MaxonOp>(closureName, finalParamNames, finalParamTypes, returnType, null) {
       IsStdlib = false,
     };
     // Copy the body from the temporary function
@@ -8987,13 +9038,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentFunction = savedFunction;
     _referencedVars.Clear();
     foreach (var v in savedReferencedVars) _referencedVars.Add(v);
+    // Captured variables are used by the outer function (passed into the closure environment)
+    foreach (var c in captures) _referencedVars.Add(c.Name);
+    _closureCaptures = savedClosureCaptures;
 
-    // Create a function reference to the closure
+    // Create a function reference or closure create op
     var fnType = new MlirFunctionType(paramTypes, returnType);
-    var fnRefOp = new MaxonFunctionRefOp(closureName, fnType);
-    _currentBlock!.AddOp(fnRefOp);
-
-    return new ExprResult.Direct(fnRefOp.Result);
+    if (hasCaptures) {
+      var capturedValues = captures.Select(c => c.OuterValue).ToList();
+      var capturedNames = captures.Select(c => c.Name).ToList();
+      var capturedKinds = captures.Select(c => c.Kind).ToList();
+      var capturedStructTypes = captures.Select(c => c.StructTypeName).ToList();
+      var closureCreateOp = new MaxonClosureCreateOp(closureName, fnType,
+        capturedValues, capturedNames, capturedKinds, capturedStructTypes);
+      _currentBlock!.AddOp(closureCreateOp);
+      return new ExprResult.Direct(closureCreateOp.Result);
+    } else {
+      var fnRefOp = new MaxonFunctionRefOp(closureName, fnType);
+      _currentBlock!.AddOp(fnRefOp);
+      return new ExprResult.Direct(fnRefOp.Result);
+    }
   }
 
   private int ExpectEndLabel(string expectedLabel) {

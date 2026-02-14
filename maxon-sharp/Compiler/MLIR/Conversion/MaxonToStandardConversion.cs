@@ -66,9 +66,12 @@ public static class MaxonToStandardConversion {
 
       // Map from original struct param index to its flat param index (pointer slot)
       var structParamPtrIndex = new Dictionary<int, int>();
+      // Map from original param index to flat param index (for all params)
+      var paramFlatIndex = new Dictionary<int, int>();
       int flatIdx = newParamNames.Count;
 
       for (int i = 0; i < func.ParamNames.Count; i++) {
+        paramFlatIndex[i] = flatIdx;
         if (isStructInstanceMethod && i == 0) {
           // Struct instance method self param: pass as pointer (i64)
           newParamNames.Add("__self_ptr");
@@ -99,6 +102,14 @@ public static class MaxonToStandardConversion {
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(MlirType.I64);
           flatIdx++;
+        } else if (func.ParamTypes[i] is MlirFunctionType) {
+          // Function-typed param: fn_ptr + hidden env_ptr (2 slots)
+          newParamNames.Add(func.ParamNames[i]);
+          newParamTypes.Add(MlirType.I64);
+          flatIdx++;
+          newParamNames.Add($"__env_{func.ParamNames[i]}");
+          newParamTypes.Add(MlirType.I64);
+          flatIdx++;
         } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(func.ParamTypes[i]);
@@ -126,6 +137,8 @@ public static class MaxonToStandardConversion {
       var valueMap = new Dictionary<MaxonValue, StdValue>();
       var literalMap = new Dictionary<MaxonValue, MaxonLiteralOp>();
       var varTypes = new Dictionary<string, string>();
+      // Maps function pointer StdValue IDs to the variable name holding the env_ptr
+      var fnEnvVarNames = new Dictionary<int, string>();
       // Maps MaxonStruct value IDs to their variable name prefix (for field access)
       var structVarNames = new Dictionary<int, string>();
       // Maps value IDs to their struct type name (for cases where the value is not a MaxonStruct
@@ -186,7 +199,8 @@ public static class MaxonToStandardConversion {
           switch (op) {
             case MaxonParamOp paramOp: {
               var stdResult = paramOp.ValueKind.CreateStdValue();
-              newBlock.AddOp(new StdParamOp(paramOp.Index, paramOp.Name, stdResult));
+              int pFlatIdx = paramFlatIndex.GetValueOrDefault(paramOp.Index, paramOp.Index);
+              newBlock.AddOp(new StdParamOp(pFlatIdx, paramOp.Name, stdResult));
               valueMap[paramOp.Result] = stdResult;
               EmitStore(newBlock, stdResult, paramOp.Name, varTypes);
               break;
@@ -1154,21 +1168,27 @@ public static class MaxonToStandardConversion {
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, managedVarOwners, mutatingFunctions);
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, managedVarOwners, mutatingFunctions, fnEnvVarNames);
               if (_trackAllocs && callOp.Callee.EndsWith(".cstr") && callOp.Result != null)
                 cstringResultIds.Add(callOp.Result.Id);
               break;
             case MaxonFunctionRefOp fnRefOp:
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
               break;
+            case MaxonClosureCreateOp closureCreateOp:
+              LowerClosureCreate(closureCreateOp, newBlock, valueMap, varTypes, structVarNames, fnEnvVarNames);
+              break;
+            case MaxonClosureEnvLoadOp envLoadOp:
+              LowerClosureEnvLoad(envLoadOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
+              break;
             case MaxonFunctionParamOp fnParamOp:
-              LowerFunctionParam(fnParamOp, newBlock, valueMap, varTypes);
+              LowerFunctionParam(fnParamOp, newBlock, valueMap, varTypes, fnEnvVarNames, paramFlatIndex);
               break;
             case MaxonFunctionVarRefOp fnVarRefOp:
-              LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap);
+              LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap, varTypes, fnEnvVarNames);
               break;
             case MaxonIndirectCallOp indirectCallOp:
-              LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
+              LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames);
               break;
             case MaxonReturnOp retOp:
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, managedVarOwners, cstringTrackVars, managedBufferElementInfo, module.TypeDefs, varNameToStructType);
@@ -1313,10 +1333,11 @@ public static class MaxonToStandardConversion {
     Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     Dictionary<string, List<string>> managedVarOwners,
-    HashSet<string> mutatingFunctions) {
+    HashSet<string> mutatingFunctions,
+    Dictionary<int, string>? fnEnvVarNames = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
       isTryCall: false, funcLookup, block, valueMap, varTypes, structVarNames,
-      structValueTypes, typeDefs, managedVarOwners, mutatingFunctions);
+      structValueTypes, typeDefs, managedVarOwners, mutatingFunctions, fnEnvVarNames: fnEnvVarNames);
   }
 
   /// <summary>
@@ -1338,7 +1359,8 @@ public static class MaxonToStandardConversion {
     Dictionary<string, MlirType> typeDefs,
     Dictionary<string, List<string>>? managedVarOwners,
     HashSet<string>? mutatingFunctions,
-    MaxonValue? errorFlagValue = null) {
+    MaxonValue? errorFlagValue = null,
+    Dictionary<int, string>? fnEnvVarNames = null) {
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
     // Use the resolved fully-qualified name for call emission (e.g., "String.hash" → "stdlib.String.hash")
@@ -1403,7 +1425,7 @@ public static class MaxonToStandardConversion {
       }
     }
 
-    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs);
+    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs, fnEnvVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
     bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirEnumType cret && cret.HasAssociatedValues;
@@ -1976,7 +1998,8 @@ public static class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     List<StdValue> newArgs,
     string calleeName,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    Dictionary<int, string>? fnEnvVarNames = null) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
 
     for (int i = 0; i < args.Count; i++) {
@@ -2018,6 +2041,19 @@ public static class MaxonToStandardConversion {
       } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
         // Struct arg from managed memory get — the value is already a pointer
         newArgs.Add(rawPtrValue);
+      } else if (calleeFunc.ParamTypes[i] is MlirFunctionType) {
+        // Function-typed arg: pass fn_ptr + env_ptr
+        newArgs.Add(valueMap[arg]);
+        // Look up and pass the associated env_ptr
+        var fnStdVal = valueMap[arg];
+        if (fnEnvVarNames != null && fnEnvVarNames.TryGetValue(fnStdVal.Id, out var envVarName)) {
+          var envPtr = EmitLoad(block, envVarName, varTypes);
+          newArgs.Add(envPtr);
+        } else {
+          var zeroConst = new StdConstI64Op(0);
+          block.AddOp(zeroConst);
+          newArgs.Add(zeroConst.Result);
+        }
       } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
         newArgs.Add(valueMap[arg]);
       } else {
@@ -3604,31 +3640,106 @@ public static class MaxonToStandardConversion {
     var refOp = new StdFuncRefOp(fnRefOp.FunctionName);
     block.AddOp(refOp);
     valueMap[fnRefOp.Result] = refOp.Result;
+    // Non-capturing: no env_ptr stored. LowerIndirectCall will inline 0.
+  }
+
+  private static void LowerClosureCreate(
+      MaxonClosureCreateOp closureOp,
+      MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap,
+      Dictionary<string, string> varTypes,
+      Dictionary<int, string> structVarNames,
+      Dictionary<int, string> fnEnvVarNames) {
+    // Create function reference
+    var refOp = new StdFuncRefOp(closureOp.FunctionName);
+    block.AddOp(refOp);
+    valueMap[closureOp.Result] = refOp.Result;
+
+    // Allocate environment to hold captured values (each 8 bytes)
+    int envSize = closureOp.CapturedValues.Count * 8;
+    var envPtr = EmitAlloc(block, envSize);
+
+    // Store each captured value into the environment
+    for (int i = 0; i < closureOp.CapturedValues.Count; i++) {
+      var capturedMaxonVal = closureOp.CapturedValues[i];
+      StdValue capturedStdVal;
+      if (closureOp.CapturedKinds[i] == MaxonValueKind.Struct
+          && structVarNames.TryGetValue(capturedMaxonVal.Id, out var capturedStructName)) {
+        capturedStdVal = EmitLoad(block, capturedStructName, varTypes);
+      } else {
+        capturedStdVal = valueMap[capturedMaxonVal];
+      }
+
+      block.AddOp(new StdStoreIndirectOp(capturedStdVal, envPtr, i * 8, MlirType.I64));
+    }
+
+    // Track the env_ptr for this closure
+    var envVarName = $"__env_{refOp.Result.Id}";
+    EmitStore(block, envPtr, envVarName, varTypes);
+    fnEnvVarNames[refOp.Result.Id] = envVarName;
+  }
+
+  private static void LowerClosureEnvLoad(
+      MaxonClosureEnvLoadOp envLoadOp,
+      MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap,
+      Dictionary<string, string> varTypes,
+      Dictionary<int, string> structVarNames,
+      Dictionary<int, string> structValueTypes) {
+    // Load the __env parameter (stored as a variable during function lowering)
+    var envBasePtr = EmitLoad(block, "__env", varTypes);
+    // Load captured value at the appropriate offset
+    var loadOp = new StdLoadIndirectOp(envBasePtr, envLoadOp.Index * 8, MlirType.I64);
+    block.AddOp(loadOp);
+
+    if (envLoadOp.Kind == MaxonValueKind.Struct) {
+      // Struct captures are heap pointers — track in structVarNames and structValueTypes
+      var structVarName = $"__capture_{envLoadOp.Name}";
+      EmitStore(block, loadOp.Result, structVarName, varTypes);
+      structVarNames[envLoadOp.Result.Id] = structVarName;
+      if (envLoadOp.StructTypeName != null)
+        structValueTypes[envLoadOp.Result.Id] = envLoadOp.StructTypeName;
+    }
+    valueMap[envLoadOp.Result] = loadOp.Result;
   }
 
   private static void LowerFunctionParam(
       MaxonFunctionParamOp fnParamOp,
       MlirBlock<StandardOp> block,
       Dictionary<MaxonValue, StdValue> valueMap,
-      Dictionary<string, string> varTypes) {
-    int flatIdx = fnParamOp.Index;
+      Dictionary<string, string> varTypes,
+      Dictionary<int, string> fnEnvVarNames,
+      Dictionary<int, int> paramFlatIndex) {
+    int flatIdx = paramFlatIndex.GetValueOrDefault(fnParamOp.Index, fnParamOp.Index);
     var paramOp = new StdParamOp(flatIdx, fnParamOp.Name, new StdPtr(MlirContext.Current.NextId()));
     block.AddOp(paramOp);
     valueMap[fnParamOp.Result] = paramOp.Result;
     // Store function pointer to variable so it can be loaded later via StdLoadI64Op
     block.AddOp(new StdStorePtrOp((StdPtr)paramOp.Result, fnParamOp.Name));
     varTypes[fnParamOp.Name] = "ptr";
+    // Receive the hidden env_ptr (next parameter slot)
+    var envVarName = $"__env_{fnParamOp.Name}";
+    var envParamOp = new StdParamOp(flatIdx + 1, envVarName, new StdI64(MlirContext.Current.NextId()));
+    block.AddOp(envParamOp);
+    EmitStore(block, envParamOp.Result, envVarName, varTypes);
+    fnEnvVarNames[paramOp.Result.Id] = envVarName;
   }
 
   private static void LowerFunctionVarRef(
       MaxonFunctionVarRefOp fnVarRefOp,
       MlirBlock<StandardOp> block,
-      Dictionary<MaxonValue, StdValue> valueMap) {
+      Dictionary<MaxonValue, StdValue> valueMap,
+      Dictionary<string, string> varTypes,
+      Dictionary<int, string> fnEnvVarNames) {
     // Function pointers are stored as 8-byte integers (pointers)
     var loadOp = new StdLoadI64Op(fnVarRefOp.VarName);
     block.AddOp(loadOp);
-    // Wrap as StdPtr for consistency
     valueMap[fnVarRefOp.Result] = loadOp.Result;
+    // Also load and track the associated env_ptr
+    var srcEnvVarName = $"__env_{fnVarRefOp.VarName}";
+    if (varTypes.ContainsKey(srcEnvVarName)) {
+      fnEnvVarNames[loadOp.Result.Id] = srcEnvVarName;
+    }
   }
 
   private static void LowerIndirectCall(
@@ -3637,7 +3748,8 @@ public static class MaxonToStandardConversion {
       Dictionary<MaxonValue, StdValue> valueMap,
       Dictionary<string, string> varTypes,
       Dictionary<int, string> structVarNames,
-      Dictionary<string, MlirType> typeDefs) {
+      Dictionary<string, MlirType> typeDefs,
+      Dictionary<int, string> fnEnvVarNames) {
     var calleeValue = valueMap[indirectCallOp.Callee];
     var newArgs = new List<StdValue>();
 
@@ -3650,6 +3762,17 @@ public static class MaxonToStandardConversion {
       } else {
         newArgs.Add(valueMap[arg]);
       }
+    }
+
+    // Append hidden env_ptr argument for closure support
+    if (fnEnvVarNames.TryGetValue(calleeValue.Id, out var envVarName)) {
+      var envPtr = EmitLoad(block, envVarName, varTypes);
+      newArgs.Add(envPtr);
+    } else {
+      // No env tracked — pass 0 (no captures)
+      var zeroConst = new StdConstI64Op(0);
+      block.AddOp(zeroConst);
+      newArgs.Add(zeroConst.Result);
     }
 
     StdValue? resultValue = null;

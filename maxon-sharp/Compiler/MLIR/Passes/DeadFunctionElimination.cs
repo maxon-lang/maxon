@@ -42,6 +42,8 @@ public static class DeadFunctionElimination {
             EnqueueCallee(call.Callee);
           if (op is MaxonFunctionRefOp fnRef)
             EnqueueCallee(fnRef.FunctionName);
+          if (op is MaxonClosureCreateOp closureCreate)
+            EnqueueCallee(closureCreate.FunctionName);
         }
       }
     }
