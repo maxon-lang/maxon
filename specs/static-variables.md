@@ -298,3 +298,57 @@ end 'main'
 ```exitcode
 52
 ```
+
+<!-- test: top-level-var-array-cross-function -->
+```maxon
+var scores = [10, 20, 30]
+
+function getTotal() returns int
+  let a = try scores.get(0) otherwise 0
+  let b = try scores.get(1) otherwise 0
+  let c = try scores.get(2) otherwise 0
+  return a + b + c
+end 'getTotal'
+
+function setScore(index int, value int)
+  scores.set(index, value: value)
+end 'setScore'
+
+function main() returns int
+  setScore(1, value: 12)
+  return getTotal()
+end 'main'
+```
+```exitcode
+52
+```
+
+<!-- test: top-level-var-array-mutate-cross-function -->
+```maxon
+var counters = [0, 0, 0]
+
+function increment(index int)
+  let current = try counters.get(index) otherwise 0
+  counters.set(index, value: current + 1)
+end 'increment'
+
+function total() returns int
+  let a = try counters.get(0) otherwise 0
+  let b = try counters.get(1) otherwise 0
+  let c = try counters.get(2) otherwise 0
+  return a + b + c
+end 'total'
+
+function main() returns int
+  increment(0)
+  increment(0)
+  increment(1)
+  increment(2)
+  increment(2)
+  increment(2)
+  return total()
+end 'main'
+```
+```exitcode
+6
+```

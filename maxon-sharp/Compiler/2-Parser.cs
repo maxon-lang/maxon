@@ -37,7 +37,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly List<DeferredDecl> _deferredArrayVars = [];
 
   // Global mutable variables (name -> type info)
-  private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null);
+  private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null);
   private readonly Dictionary<string, GlobalVarInfo> _globalVars = [];
 
   // Default parameter values (funcName -> index -> value)
@@ -525,6 +525,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.Globals.Add(new MlirGlobal(deferred.Name, fieldType, defaultValue));
       _globalVars[deferred.Name] = new GlobalVarInfo(kind, true, enumTypeName);
     }
+
+    // Register array vars as globals (initialized at runtime in main)
+    foreach (var deferred in _deferredArrayVars) {
+      module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
+      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: "Array");
+    }
+    foreach (var deferred in _deferredArrayLets) {
+      module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
+      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: "Array");
+    }
   }
 
   private (MlirType type, MlirAttribute attr) ConstValueToAttribute(object value, int line, int column) {
@@ -542,7 +552,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// <summary>
   /// Emit deferred top-level array declarations at the start of the main function body.
-  /// Re-parses each saved token range to produce array literal ops in the current block.
+  /// Re-parses each saved token range to produce array literal ops, then stores them in globals.
   /// </summary>
   private void EmitDeferredArrayDecls(List<DeferredDecl> deferred, bool isMutable) {
     foreach (var decl in deferred) {
@@ -552,9 +562,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var arrayResult = ParseArrayLiteral();
       var arrayValue = arrayResult.Value;
 
-      var assignOp = new MaxonAssignOp(decl.Name, arrayValue, isDeclaration: true, isMutable: isMutable, MaxonValueKind.Struct);
-      _currentBlock!.AddOp(assignOp);
-      _variables[decl.Name] = new VarInfo(MaxonValueKind.Struct, isMutable, arrayValue, _currentBlock!, "Array");
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(decl.Name, arrayValue, MaxonValueKind.Struct));
 
       _pos = savedPos;
     }
@@ -3188,6 +3196,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             return;
           }
         }
+
+        // Check for instance method call on global struct var: globalVar.method(...)
+        if (_globalVars.TryGetValue(nameToken.Value, out var gVarInfo) && gVarInfo.TypeName != null) {
+          var instanceMethodName = $"{gVarInfo.TypeName}.{_tokens[_pos + 2].Value}";
+          var resolvedName = ResolveMethodName(instanceMethodName);
+          if (resolvedName != null) {
+            ParseGlobalStructMethodCallStatement(nameToken, gVarInfo, resolvedName);
+            return;
+          }
+        }
       }
     }
 
@@ -4357,6 +4375,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var structVal = varInfo.Value;
     var qualifiedToken = new Token(TokenType.Identifier, methodName, methodToken.Line, methodToken.Column);
     var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, structVal);
+    CreateFunctionCall(qualifiedToken, args, callee);
+  }
+
+  private void ParseGlobalStructMethodCallStatement(Token nameToken, GlobalVarInfo gVarInfo, string methodName) {
+    Advance(); // consume variable name
+    Advance(); // consume '.'
+    var methodToken = Advance(); // consume method name
+    Advance(); // consume '('
+
+    var loadOp = new MaxonGlobalLoadOp(nameToken.Value, gVarInfo.Kind,
+      structTypeName: gVarInfo.TypeName);
+    _currentBlock!.AddOp(loadOp);
+
+    var qualifiedToken = new Token(TokenType.Identifier, methodName, methodToken.Line, methodToken.Column);
+    var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, loadOp.Result);
     CreateFunctionCall(qualifiedToken, args, callee);
   }
 
@@ -6630,9 +6663,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Check for global variable reference
       if (_globalVars.TryGetValue(token.Value, out var globalVarInfo)) {
-        var loadOp = new MaxonGlobalLoadOp(token.Value, globalVarInfo.Kind, globalVarInfo.EnumTypeName);
+        var loadOp = new MaxonGlobalLoadOp(token.Value, globalVarInfo.Kind, globalVarInfo.EnumTypeName,
+          structTypeName: globalVarInfo.Kind == MaxonValueKind.Struct ? globalVarInfo.TypeName : null);
         _currentBlock!.AddOp(loadOp);
-        return new ExprResult.Direct(loadOp.Result);
+        var globalResult = new ExprResult.Direct(loadOp.Result);
+        if (globalVarInfo.Kind == MaxonValueKind.Struct)
+          return ParseFieldAccessChain(globalResult, token);
+        return globalResult;
       }
 
       // Variable reference

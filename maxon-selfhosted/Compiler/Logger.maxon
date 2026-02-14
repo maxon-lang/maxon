@@ -1,4 +1,4 @@
-// Logging system for the self-hosted compiler.
+// Logging system for the compiler.
 // Mirrors maxon-sharp/Logger.cs with per-category log levels.
 
 export enum LogLevel
@@ -33,20 +33,22 @@ export enum LogCategory
     end 'code'
 end 'LogCategory'
 
-var categoryLevels = [LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO, LogLevel.INFO]
+var categoryLevels = [2, 2, 2, 2, 2, 2, 2, 2]
 
 export function setLogLevel(level LogLevel)
-    for i in 0 to categoryLevels.length 'reset'
-        categoryLevels[i] = level.rawValue
+    var i = 0
+    while i < categoryLevels.count() 'reset'
+        categoryLevels.set(i, value: level.rawValue)
+        i = i + 1
     end 'reset'
 end 'setLogLevel'
 
 export function setCategoryLevel(category LogCategory, level LogLevel)
-    categoryLevels[category.rawValue] = level.rawValue
+    categoryLevels.set(category.rawValue, value: level.rawValue)
 end 'setCategoryLevel'
 
 function getCategoryLevel(category LogCategory) returns int
-    return categoryLevels[category.rawValue]
+    return try categoryLevels.get(category.rawValue) otherwise 0
 end 'getCategoryLevel'
 
 function isEnabled(category LogCategory, level LogLevel) returns bool
@@ -71,7 +73,7 @@ end 'logTrace'
 
 function log(category LogCategory, level LogLevel, message String)
     if isEnabled(category, level: level) 'check'
-        printError("[{LogCategory.code(self: category)}] {level.name}: {message}\n")
+        printError("[{category.code()}] {level.name}: {message}\n")
     end 'check'
 end 'log'
 
