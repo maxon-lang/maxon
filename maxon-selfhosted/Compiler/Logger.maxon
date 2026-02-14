@@ -10,45 +10,41 @@ export enum LogLevel
 end 'LogLevel'
 
 export enum LogCategory
-    compiler
-    lexer
-    parser
-    semantic
-    mlir
-    codegen
-    pe
-    testing
-
-    function code() returns String
-        match self 'code'
-            LogCategory.compiler then return "CMP"
-            LogCategory.lexer then return "LEX"
-            LogCategory.parser then return "PAR"
-            LogCategory.semantic then return "SEM"
-            LogCategory.mlir then return "MLR"
-            LogCategory.codegen then return "GEN"
-            LogCategory.pe then return "PE "
-            LogCategory.testing then return "TST"
-        end 'code'
-    end 'code'
+    compiler = "CMP"
+    lexer = "LEX"
+    parser = "PAR"
+    semantic = "SEM"
+    mlir = "MLR"
+    codegen = "GEN"
+    pe = "PE "
+    testing = "TST"
 end 'LogCategory'
 
-var categoryLevels = [2, 2, 2, 2, 2, 2, 2, 2]
+typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
+
+var categoryLevels = CategoryLevelMap{}
 
 export function setLogLevel(level LogLevel)
-    categoryLevels = categoryLevels.map((_) gives level.rawValue)
+    categoryLevels.insert(LogCategory.compiler, value: level)
+    categoryLevels.insert(LogCategory.lexer, value: level)
+    categoryLevels.insert(LogCategory.parser, value: level)
+    categoryLevels.insert(LogCategory.semantic, value: level)
+    categoryLevels.insert(LogCategory.mlir, value: level)
+    categoryLevels.insert(LogCategory.codegen, value: level)
+    categoryLevels.insert(LogCategory.pe, value: level)
+    categoryLevels.insert(LogCategory.testing, value: level)
 end 'setLogLevel'
 
 export function setCategoryLevel(category LogCategory, level LogLevel)
-    categoryLevels.set(category.rawValue, value: level.rawValue)
+    categoryLevels.insert(category, value: level)
 end 'setCategoryLevel'
 
-function getCategoryLevel(category LogCategory) returns int
-    return try categoryLevels.get(category.rawValue) otherwise 0
+function getCategoryLevel(category LogCategory) returns LogLevel
+    return try categoryLevels.get(category) otherwise LogLevel.NONE
 end 'getCategoryLevel'
 
 function isEnabled(category LogCategory, level LogLevel) returns bool
-    return level.rawValue <= getCategoryLevel(category)
+    return level.rawValue <= getCategoryLevel(category).rawValue
 end 'isEnabled'
 
 export function logError(category LogCategory, message String)
@@ -69,7 +65,7 @@ end 'logTrace'
 
 function log(category LogCategory, level LogLevel, message String)
     if isEnabled(category, level: level) 'check'
-        printError("[{category.code()}] {level.name}: {message}\n")
+        printError("[{category.rawValue}] {level.name}: {message}\n")
     end 'check'
 end 'log'
 

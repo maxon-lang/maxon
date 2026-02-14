@@ -35,6 +35,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly List<DeferredDecl> _deferredArrayLets = [];
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
   private readonly List<DeferredDecl> _deferredArrayVars = [];
+  private readonly List<DeferredDecl> _deferredStructVars = [];
 
   // Global mutable variables (name -> type info)
   private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null);
@@ -481,6 +482,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         SkipToEndOfLine();
         if (_tokens[exprStart].Type == TokenType.LeftBracket) {
           _deferredArrayVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+        } else if (_tokens[exprStart].Type == TokenType.Identifier
+                   && exprStart + 1 < _tokens.Count
+                   && _tokens[exprStart + 1].Type == TokenType.LeftBrace) {
+          _deferredStructVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         } else {
           _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -539,6 +544,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
       _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: "Array");
     }
+
+    // Register struct constructor vars as globals (initialized at runtime in main)
+    foreach (var deferred in _deferredStructVars) {
+      var typeName = _tokens[deferred.TokenStart].Value;
+      module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
+      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: typeName);
+    }
   }
 
   private (MlirType type, MlirAttribute attr) ConstValueToAttribute(object value, int line, int column) {
@@ -567,6 +579,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var arrayValue = arrayResult.Value;
 
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(decl.Name, arrayValue, MaxonValueKind.Struct));
+
+      _pos = savedPos;
+    }
+  }
+
+  private void EmitDeferredStructVarDecls() {
+    foreach (var decl in _deferredStructVars) {
+      int savedPos = _pos;
+      _pos = decl.TokenStart;
+
+      var exprResult = ParseExpression();
+      var value = ResolveExprValue(exprResult);
+
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(decl.Name, value, MaxonValueKind.Struct));
 
       _pos = savedPos;
     }
@@ -1406,13 +1432,58 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var existingEnum = (MlirEnumType)value;
-    _typeRegistry[enumName] = new MlirEnumType(enumName, cases, backingType, existingEnum.ConformingInterfaces);
+    var finalInterfaces = new List<string>(existingEnum.ConformingInterfaces);
+
+    // Auto-add Hashable and Equatable for enums without associated values
+    bool hasAssocValues = cases.Any(c => c.AssociatedValues is { Count: > 0 });
+    if (!hasAssocValues) {
+      if (!finalInterfaces.Contains("Hashable")) finalInterfaces.Add("Hashable");
+      if (!finalInterfaces.Contains("Equatable")) finalInterfaces.Add("Equatable");
+    }
+
+    var finalEnumType = new MlirEnumType(enumName, cases, backingType, finalInterfaces);
+    _typeRegistry[enumName] = finalEnumType;
+
+    // Pre-register synthetic hash() and equals() methods for enums without associated values
+    if (!hasAssocValues) {
+      PreRegisterSyntheticEnumMethods(module, enumName, finalEnumType);
+    }
+
     _currentTypeName = null;
 
     // consume 'end'
     if (Check(TokenType.End)) Advance();
     // Skip end label
     if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  /// <summary>
+  /// Pre-register synthetic hash() and equals() method signatures for enums.
+  /// These are registered during pre-scan so monomorphization can find them.
+  /// </summary>
+  private void PreRegisterSyntheticEnumMethods(MlirModule<MaxonOp> module, string enumName, MlirEnumType enumType) {
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
+
+    // hash() -> int
+    var hashName = $"{qualifiedTypeName}.hash";
+    if (!module.Functions.Any(f => f.Name == hashName)) {
+      var hashFunc = new MlirFunction<MaxonOp>(
+        hashName, ["self"], [(MlirType)enumType], MlirType.I64, null) {
+        SourceFilePath = _sourceFilePath
+      };
+      module.AddFunction(hashFunc);
+    }
+
+    // equals(other Self) -> bool
+    var equalsName = $"{qualifiedTypeName}.equals";
+    if (!module.Functions.Any(f => f.Name == equalsName)) {
+      var equalsFunc = new MlirFunction<MaxonOp>(
+        equalsName, ["self", "other"], [(MlirType)enumType, (MlirType)enumType], MlirType.I1, null) {
+        SourceFilePath = _sourceFilePath
+      };
+      module.AddFunction(equalsFunc);
+    }
   }
 
   /// <summary>
@@ -2407,6 +2478,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SkipNewlines();
     }
 
+    // Synthesize hash() and equals() for enums without associated values
+    if (!enumType.HasAssociatedValues) {
+      SynthesizeEnumHashAndEquals(module, enumName, enumType);
+    }
+
     _currentTypeName = null;
     ExpectEndLabel(enumName);
   }
@@ -2456,6 +2532,90 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ParseBodyUntilEnd();
     ExpectEndLabel(nameToken.Value);
     FinishFunctionBody(nameToken.Value, nameToken, returnType);
+  }
+
+  /// <summary>
+  /// Synthesize hash() and equals() method bodies for an enum type.
+  /// hash() delegates to self.rawValue.hash(); equals() delegates to rawValue comparison.
+  /// </summary>
+  private void SynthesizeEnumHashAndEquals(MlirModule<MaxonOp> module, string enumName, MlirEnumType enumType) {
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? enumName : $"{namespace_}.{enumName}";
+    var backingKind = GetEnumBackingKind(enumType);
+
+    // Determine backing type name for method dispatch
+    string backingTypeName;
+    if (enumType.BackingType is MlirStringBackingType) backingTypeName = "String";
+    else if (enumType.BackingType is MlirCharBackingType) backingTypeName = "Character";
+    else if (enumType.BackingType == MlirType.F64) backingTypeName = "float";
+    else if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) backingTypeName = "int";
+    else throw new InvalidOperationException($"Unsupported enum backing type for Hashable: {enumType.BackingType}");
+
+    // --- hash() ---
+    var hashName = $"{qualifiedTypeName}.hash";
+    var hashFunc = module.Functions.First(f => f.Name == hashName);
+    module.Functions.Remove(hashFunc);
+    hashFunc = new MlirFunction<MaxonOp>(hashName, ["self"], [(MlirType)enumType], MlirType.I64, null) {
+      SourceFilePath = _sourceFilePath
+    };
+    module.AddFunction(hashFunc);
+    var hashBlock = hashFunc.Body.AddBlock("entry");
+
+    // self param
+    var selfParam = new MaxonEnumParamOp(0, "self", enumName, backingKind);
+    hashBlock.AddOp(selfParam);
+
+    var rawValue = EmitEnumRawValueExtraction(hashBlock, selfParam.Result, enumType, enumName, backingKind);
+
+    // Call backingType.hash(rawValue)
+    var hashCall = new MaxonCallOp($"{backingTypeName}.hash", [rawValue], MaxonValueKind.Integer);
+    hashBlock.AddOp(hashCall);
+    hashBlock.AddOp(new MaxonReturnOp(hashCall.Result));
+
+    // --- equals() ---
+    var equalsName = $"{qualifiedTypeName}.equals";
+    var equalsFunc = module.Functions.First(f => f.Name == equalsName);
+    module.Functions.Remove(equalsFunc);
+    equalsFunc = new MlirFunction<MaxonOp>(equalsName, ["self", "other"], [(MlirType)enumType, (MlirType)enumType], MlirType.I1, null) {
+      SourceFilePath = _sourceFilePath
+    };
+    module.AddFunction(equalsFunc);
+    var equalsBlock = equalsFunc.Body.AddBlock("entry");
+
+    var selfParam2 = new MaxonEnumParamOp(0, "self", enumName, backingKind);
+    equalsBlock.AddOp(selfParam2);
+    var otherParam = new MaxonEnumParamOp(1, "other", enumName, backingKind);
+    equalsBlock.AddOp(otherParam);
+
+    var selfRaw = EmitEnumRawValueExtraction(equalsBlock, selfParam2.Result, enumType, enumName, backingKind);
+    var otherRaw = EmitEnumRawValueExtraction(equalsBlock, otherParam.Result, enumType, enumName, backingKind);
+
+    // Call backingType.equals(selfRaw, otherRaw)
+    var equalsCall = new MaxonCallOp($"{backingTypeName}.equals", [selfRaw, otherRaw], MaxonValueKind.Bool);
+    equalsBlock.AddOp(equalsCall);
+    equalsBlock.AddOp(new MaxonReturnOp(equalsCall.Result));
+  }
+
+  /// <summary>
+  /// Emit ops to extract the raw value from an enum value, dispatching to the
+  /// correct op type based on backing type (String, Character, or numeric).
+  /// </summary>
+  private static MaxonValue EmitEnumRawValueExtraction(
+      MlirBlock<MaxonOp> block, MaxonValue enumValue, MlirEnumType enumType,
+      string enumName, MaxonValueKind backingKind) {
+    if (enumType.BackingType is MlirStringBackingType) {
+      var rawOp = new MaxonEnumStringRawValueOp(enumValue, enumName, isChar: false);
+      block.AddOp(rawOp);
+      return rawOp.Result;
+    }
+    if (enumType.BackingType is MlirCharBackingType) {
+      var rawOp = new MaxonEnumStringRawValueOp(enumValue, enumName, isChar: true);
+      block.AddOp(rawOp);
+      return rawOp.Result;
+    }
+    var numericRawOp = new MaxonEnumRawValueOp(enumValue, enumName, backingKind);
+    block.AddOp(numericRawOp);
+    return numericRawOp.Result;
   }
 
   private static MaxonValueKind GetEnumBackingKind(MlirEnumType enumType) {
@@ -2952,10 +3112,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     func.SourceColumn = nameToken.Column;
     EmitParameters(paramNames, paramTypes, paramTokens);
 
-    // Emit deferred top-level array lets/vars at start of main
+    // Emit deferred top-level array/struct lets/vars at start of main
     if (baseName == "main") {
       EmitDeferredArrayDecls(_deferredArrayLets);
       EmitDeferredArrayDecls(_deferredArrayVars);
+      EmitDeferredStructVarDecls();
     }
 
     ParseBodyUntilEnd();

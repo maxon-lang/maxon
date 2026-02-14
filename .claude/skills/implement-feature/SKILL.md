@@ -75,3 +75,4 @@ The user will describe the feature they want. You will create the spec, write th
 - If the feature requires new runtime functions, add them in `X86CodeEmitter.Runtime.cs`.
 - Keep the x86 code generation correct — watch for short jump overflow (max +/-127 bytes) and 32-bit register truncation (image base is above 4GB).
 - If you find an issue, fix it properly. It doesn't matter if it is pre-existing.
+- If any tests that use RequiredMLIR fail you can regenerate the required MLIR by using `--update-requiredmlir`

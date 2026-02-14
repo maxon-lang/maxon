@@ -1,0 +1,32 @@
+// Test: enum-hash-direct
+enum Direction
+  north
+  south
+  east
+  west
+end 'Direction'
+
+function main() returns int
+  var d = Direction.south
+  var h = d.hash()
+  return h
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Direction.hash(self: i64) -> i64 {
+  entry:
+    x86.jmp stdlib.int.hash
+  }
+  func @enum-hashable.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.epilogue
+    x86.jmp Direction.hash
+  }
+}
+---
