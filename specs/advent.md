@@ -69,7 +69,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = y} {type = i64}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add} {optimalType = i64}
     maxon.return %2
   }
   func @advent.main() -> i64 {
@@ -138,7 +138,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 1 : i64}
-    %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = mul} {optimalType = i64}
     maxon.return %2
   }
   func @advent.main() -> i64 {
@@ -152,7 +152,7 @@ module {
     maxon.assign %9 {var = __try_default_1} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %8 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %7, %10 {op = ne} {kind = i64}
+    %11 = maxon.binop %7, %10 {op = ne}
     maxon.cond_br %11 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
     %12 = maxon.struct_var_ref __try_default_1
@@ -165,7 +165,7 @@ module {
     maxon.assign %17 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %16 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %18 = maxon.literal {value = 0 : i64}
-    %19 = maxon.binop %15, %18 {op = ne} {kind = i64}
+    %19 = maxon.binop %15, %18 {op = ne}
     maxon.cond_br %19 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
     %20 = maxon.var_ref {var = __try_default_5} {type = i64}
@@ -349,7 +349,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
-    %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = mul} {optimalType = i64}
     maxon.return %2
   }
   func @advent.main() -> i64 {
@@ -363,7 +363,7 @@ module {
     maxon.assign %9 {var = __try_default_1} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %8 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %7, %10 {op = ne} {kind = i64}
+    %11 = maxon.binop %7, %10 {op = ne}
     maxon.cond_br %11 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
     %12 = maxon.struct_var_ref __try_default_1
@@ -376,7 +376,7 @@ module {
     maxon.assign %17 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %16 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %18 = maxon.literal {value = 0 : i64}
-    %19 = maxon.binop %15, %18 {op = ne} {kind = i64}
+    %19 = maxon.binop %15, %18 {op = ne}
     maxon.cond_br %19 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
     %20 = maxon.var_ref {var = __try_default_5} {type = i64}

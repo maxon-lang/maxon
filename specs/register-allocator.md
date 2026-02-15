@@ -110,7 +110,7 @@ module {
   entry:
     %0 = maxon.literal {value = 30 : i64}
     %1 = maxon.literal {value = 12 : i64}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add}
     maxon.return %2
   }
 }
@@ -158,7 +158,7 @@ module {
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 12 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add}
     maxon.return %2
   }
 }
@@ -201,7 +201,7 @@ module {
   entry:
     %0 = maxon.literal {value = 21 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.binop %0, %0 {op = add} {kind = i64}
+    %1 = maxon.binop %0, %0 {op = add}
     maxon.return %1
   }
 }
@@ -246,13 +246,13 @@ module {
     %0 = maxon.literal {value = 10 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 5 : i64}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add}
     maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 7 : i64}
-    %4 = maxon.binop %2, %3 {op = add} {kind = i64}
+    %4 = maxon.binop %2, %3 {op = add}
     maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %5 = maxon.literal {value = 20 : i64}
-    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    %6 = maxon.binop %4, %5 {op = add}
     maxon.assign %6 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.return %6
   }
@@ -307,11 +307,11 @@ module {
     %0 = maxon.literal {value = 100 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 80 : i64}
-    %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = sub}
     maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 22 : i64}
     maxon.assign %3 {var = x} {kind = i64} {mut = 1 : i1}
-    %4 = maxon.binop %3, %2 {op = add} {kind = i64}
+    %4 = maxon.binop %3, %2 {op = add}
     maxon.return %4
   }
 }
@@ -375,11 +375,11 @@ module {
     maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %5 = maxon.literal {value = 6 : i64}
     maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %7 = maxon.binop %6, %2 {op = add} {kind = i64}
-    %8 = maxon.binop %7, %3 {op = add} {kind = i64}
-    %9 = maxon.binop %8, %4 {op = add} {kind = i64}
-    %10 = maxon.binop %9, %5 {op = add} {kind = i64}
+    %6 = maxon.binop %0, %1 {op = add}
+    %7 = maxon.binop %6, %2 {op = add}
+    %8 = maxon.binop %7, %3 {op = add}
+    %9 = maxon.binop %8, %4 {op = add}
+    %10 = maxon.binop %9, %5 {op = add}
     maxon.return %10
   }
 }
@@ -465,15 +465,15 @@ module {
     maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %9 = maxon.literal {value = 10 : i64}
     maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %10 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %11 = maxon.binop %10, %2 {op = add} {kind = i64}
-    %12 = maxon.binop %11, %3 {op = add} {kind = i64}
-    %13 = maxon.binop %12, %4 {op = add} {kind = i64}
-    %14 = maxon.binop %13, %5 {op = add} {kind = i64}
-    %15 = maxon.binop %14, %6 {op = add} {kind = i64}
-    %16 = maxon.binop %15, %7 {op = add} {kind = i64}
-    %17 = maxon.binop %16, %8 {op = add} {kind = i64}
-    %18 = maxon.binop %17, %9 {op = add} {kind = i64}
+    %10 = maxon.binop %0, %1 {op = add}
+    %11 = maxon.binop %10, %2 {op = add}
+    %12 = maxon.binop %11, %3 {op = add}
+    %13 = maxon.binop %12, %4 {op = add}
+    %14 = maxon.binop %13, %5 {op = add}
+    %15 = maxon.binop %14, %6 {op = add}
+    %16 = maxon.binop %15, %7 {op = add}
+    %17 = maxon.binop %16, %8 {op = add}
+    %18 = maxon.binop %17, %9 {op = add}
     maxon.return %18
   }
 }
@@ -597,23 +597,23 @@ module {
     maxon.assign %14 {var = o} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %15 = maxon.literal {value = 16 : i64}
     maxon.assign %15 {var = p} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %17 = maxon.binop %16, %2 {op = add} {kind = i64}
-    %18 = maxon.binop %17, %3 {op = add} {kind = i64}
-    %19 = maxon.binop %18, %4 {op = add} {kind = i64}
-    %20 = maxon.binop %19, %5 {op = add} {kind = i64}
-    %21 = maxon.binop %20, %6 {op = add} {kind = i64}
-    %22 = maxon.binop %21, %7 {op = add} {kind = i64}
-    %23 = maxon.binop %22, %8 {op = add} {kind = i64}
-    %24 = maxon.binop %23, %9 {op = add} {kind = i64}
-    %25 = maxon.binop %24, %10 {op = add} {kind = i64}
-    %26 = maxon.binop %25, %11 {op = add} {kind = i64}
-    %27 = maxon.binop %26, %12 {op = add} {kind = i64}
-    %28 = maxon.binop %27, %13 {op = add} {kind = i64}
-    %29 = maxon.binop %28, %14 {op = add} {kind = i64}
-    %30 = maxon.binop %29, %15 {op = add} {kind = i64}
+    %16 = maxon.binop %0, %1 {op = add}
+    %17 = maxon.binop %16, %2 {op = add}
+    %18 = maxon.binop %17, %3 {op = add}
+    %19 = maxon.binop %18, %4 {op = add}
+    %20 = maxon.binop %19, %5 {op = add}
+    %21 = maxon.binop %20, %6 {op = add}
+    %22 = maxon.binop %21, %7 {op = add}
+    %23 = maxon.binop %22, %8 {op = add}
+    %24 = maxon.binop %23, %9 {op = add}
+    %25 = maxon.binop %24, %10 {op = add}
+    %26 = maxon.binop %25, %11 {op = add}
+    %27 = maxon.binop %26, %12 {op = add}
+    %28 = maxon.binop %27, %13 {op = add}
+    %29 = maxon.binop %28, %14 {op = add}
+    %30 = maxon.binop %29, %15 {op = add}
     %31 = maxon.literal {value = 256 : i64}
-    %32 = maxon.binop %30, %31 {op = mod} {kind = i64}
+    %32 = maxon.binop %30, %31 {op = mod}
     maxon.return %32
   }
 }
@@ -787,27 +787,27 @@ module {
     maxon.assign %18 {var = s} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %19 = maxon.literal {value = 20 : i64}
     maxon.assign %19 {var = t} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %20 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %21 = maxon.binop %20, %2 {op = add} {kind = i64}
-    %22 = maxon.binop %21, %3 {op = add} {kind = i64}
-    %23 = maxon.binop %22, %4 {op = add} {kind = i64}
-    %24 = maxon.binop %23, %5 {op = add} {kind = i64}
-    %25 = maxon.binop %24, %6 {op = add} {kind = i64}
-    %26 = maxon.binop %25, %7 {op = add} {kind = i64}
-    %27 = maxon.binop %26, %8 {op = add} {kind = i64}
-    %28 = maxon.binop %27, %9 {op = add} {kind = i64}
-    %29 = maxon.binop %28, %10 {op = add} {kind = i64}
-    %30 = maxon.binop %29, %11 {op = add} {kind = i64}
-    %31 = maxon.binop %30, %12 {op = add} {kind = i64}
-    %32 = maxon.binop %31, %13 {op = add} {kind = i64}
-    %33 = maxon.binop %32, %14 {op = add} {kind = i64}
-    %34 = maxon.binop %33, %15 {op = add} {kind = i64}
-    %35 = maxon.binop %34, %16 {op = add} {kind = i64}
-    %36 = maxon.binop %35, %17 {op = add} {kind = i64}
-    %37 = maxon.binop %36, %18 {op = add} {kind = i64}
-    %38 = maxon.binop %37, %19 {op = add} {kind = i64}
+    %20 = maxon.binop %0, %1 {op = add}
+    %21 = maxon.binop %20, %2 {op = add}
+    %22 = maxon.binop %21, %3 {op = add}
+    %23 = maxon.binop %22, %4 {op = add}
+    %24 = maxon.binop %23, %5 {op = add}
+    %25 = maxon.binop %24, %6 {op = add}
+    %26 = maxon.binop %25, %7 {op = add}
+    %27 = maxon.binop %26, %8 {op = add}
+    %28 = maxon.binop %27, %9 {op = add}
+    %29 = maxon.binop %28, %10 {op = add}
+    %30 = maxon.binop %29, %11 {op = add}
+    %31 = maxon.binop %30, %12 {op = add}
+    %32 = maxon.binop %31, %13 {op = add}
+    %33 = maxon.binop %32, %14 {op = add}
+    %34 = maxon.binop %33, %15 {op = add}
+    %35 = maxon.binop %34, %16 {op = add}
+    %36 = maxon.binop %35, %17 {op = add}
+    %37 = maxon.binop %36, %18 {op = add}
+    %38 = maxon.binop %37, %19 {op = add}
     %39 = maxon.literal {value = 256 : i64}
-    %40 = maxon.binop %38, %39 {op = mod} {kind = i64}
+    %40 = maxon.binop %38, %39 {op = mod}
     maxon.return %40
   }
 }
@@ -955,25 +955,25 @@ module {
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 20 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add}
     maxon.assign %2 {var = ab} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 30 : i64}
     maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %4 = maxon.literal {value = 40 : i64}
     maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.binop %3, %4 {op = add} {kind = i64}
+    %5 = maxon.binop %3, %4 {op = add}
     maxon.assign %5 {var = cd} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.literal {value = 50 : i64}
     maxon.assign %6 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %7 = maxon.literal {value = 60 : i64}
     maxon.assign %7 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.binop %6, %7 {op = add} {kind = i64}
+    %8 = maxon.binop %6, %7 {op = add}
     maxon.assign %8 {var = ef} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %9 = maxon.binop %2, %5 {op = add} {kind = i64}
-    %10 = maxon.binop %9, %8 {op = add} {kind = i64}
+    %9 = maxon.binop %2, %5 {op = add}
+    %10 = maxon.binop %9, %8 {op = add}
     maxon.assign %10 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %11 = maxon.literal {value = 256 : i64}
-    %12 = maxon.binop %10, %11 {op = mod} {kind = i64}
+    %12 = maxon.binop %10, %11 {op = mod}
     maxon.return %12
   }
 }
@@ -1054,25 +1054,25 @@ module {
     %2 = maxon.literal {value = 0 : i64}
     maxon.assign %2 {var = sum3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 10 : i64}
-    %4 = maxon.binop %0, %3 {op = add} {kind = i64}
+    %4 = maxon.binop %0, %3 {op = add}
     maxon.assign %4 {var = sum1} {kind = i64} {mut = 1 : i1}
     %5 = maxon.literal {value = 20 : i64}
-    %6 = maxon.binop %1, %5 {op = add} {kind = i64}
+    %6 = maxon.binop %1, %5 {op = add}
     maxon.assign %6 {var = sum2} {kind = i64} {mut = 1 : i1}
     %7 = maxon.literal {value = 30 : i64}
-    %8 = maxon.binop %2, %7 {op = add} {kind = i64}
+    %8 = maxon.binop %2, %7 {op = add}
     maxon.assign %8 {var = sum3} {kind = i64} {mut = 1 : i1}
     %9 = maxon.literal {value = 5 : i64}
-    %10 = maxon.binop %4, %9 {op = add} {kind = i64}
+    %10 = maxon.binop %4, %9 {op = add}
     maxon.assign %10 {var = sum1} {kind = i64} {mut = 1 : i1}
     %11 = maxon.literal {value = 10 : i64}
-    %12 = maxon.binop %6, %11 {op = add} {kind = i64}
+    %12 = maxon.binop %6, %11 {op = add}
     maxon.assign %12 {var = sum2} {kind = i64} {mut = 1 : i1}
     %13 = maxon.literal {value = 15 : i64}
-    %14 = maxon.binop %8, %13 {op = add} {kind = i64}
+    %14 = maxon.binop %8, %13 {op = add}
     maxon.assign %14 {var = sum3} {kind = i64} {mut = 1 : i1}
-    %15 = maxon.binop %10, %12 {op = add} {kind = i64}
-    %16 = maxon.binop %15, %14 {op = add} {kind = i64}
+    %15 = maxon.binop %10, %12 {op = add}
+    %16 = maxon.binop %15, %14 {op = add}
     maxon.return %16
   }
 }
@@ -1145,7 +1145,7 @@ module {
     maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.call @register-allocator.getForty
     maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.binop %1, %2 {op = add} {kind = i64}
+    %3 = maxon.binop %1, %2 {op = add}
     maxon.return %3
   }
 }
@@ -1226,9 +1226,9 @@ module {
     maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %5 = maxon.call @register-allocator.getTwo
     maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.binop %2, %3 {op = add} {kind = i64}
-    %7 = maxon.binop %6, %4 {op = add} {kind = i64}
-    %8 = maxon.binop %7, %5 {op = add} {kind = i64}
+    %6 = maxon.binop %2, %3 {op = add}
+    %7 = maxon.binop %6, %4 {op = add}
+    %8 = maxon.binop %7, %5 {op = add}
     maxon.return %8
   }
 }
@@ -1317,9 +1317,9 @@ module {
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.call @register-allocator.compute
     maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.binop %1, %2 {op = add} {kind = i64}
+    %3 = maxon.binop %1, %2 {op = add}
     %4 = maxon.literal {value = 256 : i64}
-    %5 = maxon.binop %3, %4 {op = mod} {kind = i64}
+    %5 = maxon.binop %3, %4 {op = mod}
     maxon.return %5
   }
 }
@@ -1413,7 +1413,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add} {optimalType = i64}
     maxon.return %2
   }
   func @register-allocator.main() -> i64 {
@@ -1481,7 +1481,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add} {optimalType = i64}
     maxon.return %2
   }
   func @register-allocator.main() -> i64 {
@@ -1552,7 +1552,7 @@ module {
     %0 = maxon.literal {value = 10 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 10 : i64}
-    %2 = maxon.binop %0, %1 {op = eq} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = eq}
     maxon.cond_br %2 [then: check_0, else: other_1]
   check_0:
     %3 = maxon.literal {value = 42 : i64}
@@ -1625,7 +1625,7 @@ module {
     %2 = maxon.literal {value = 0 : i64}
     maxon.assign %2 {var = extra} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 1 : i64}
-    %4 = maxon.binop %1, %3 {op = eq} {kind = i64}
+    %4 = maxon.binop %1, %3 {op = eq}
     maxon.cond_br %4 [then: check_0, else: other_1]
   check_0:
     %5 = maxon.literal {value = 2 : i64}
@@ -1638,7 +1638,7 @@ module {
   check_0.merge:
     %7 = maxon.var_ref {var = base} {type = i64}
     %8 = maxon.var_ref {var = extra} {type = i64}
-    %9 = maxon.binop %7, %8 {op = add} {kind = i64}
+    %9 = maxon.binop %7, %8 {op = add}
     maxon.return %9
   }
 }
@@ -1720,12 +1720,12 @@ module {
   loop_0.header:
     %1 = maxon.literal {value = 42 : i64}
     %2 = maxon.var_ref {var = i} {type = i64}
-    %3 = maxon.binop %2, %1 {op = lt} {kind = i64}
+    %3 = maxon.binop %2, %1 {op = lt}
     maxon.cond_br %3 [then: loop_0, else: loop_0.exit]
   loop_0:
     %4 = maxon.literal {value = 1 : i64}
     %5 = maxon.var_ref {var = i} {type = i64}
-    %6 = maxon.binop %5, %4 {op = add} {kind = i64}
+    %6 = maxon.binop %5, %4 {op = add}
     maxon.assign %6 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.exit:
@@ -1811,22 +1811,22 @@ module {
   loop_0.header:
     %2 = maxon.literal {value = 10 : i64}
     %3 = maxon.var_ref {var = i} {type = i64}
-    %4 = maxon.binop %3, %2 {op = lt} {kind = i64}
+    %4 = maxon.binop %3, %2 {op = lt}
     maxon.cond_br %4 [then: loop_0, else: loop_0.exit]
   loop_0:
     %5 = maxon.var_ref {var = sum} {type = i64}
     %6 = maxon.var_ref {var = i} {type = i64}
-    %7 = maxon.binop %5, %6 {op = add} {kind = i64}
+    %7 = maxon.binop %5, %6 {op = add}
     maxon.assign %7 {var = sum} {kind = i64} {mut = 1 : i1}
     %8 = maxon.literal {value = 1 : i64}
     %9 = maxon.var_ref {var = i} {type = i64}
-    %10 = maxon.binop %9, %8 {op = add} {kind = i64}
+    %10 = maxon.binop %9, %8 {op = add}
     maxon.assign %10 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.exit:
     %11 = maxon.literal {value = 256 : i64}
     %12 = maxon.var_ref {var = sum} {type = i64}
-    %13 = maxon.binop %12, %11 {op = mod} {kind = i64}
+    %13 = maxon.binop %12, %11 {op = mod}
     maxon.return %13
   }
 }
@@ -1939,45 +1939,45 @@ module {
   loop_0.header:
     %4 = maxon.literal {value = 20 : i64}
     %5 = maxon.var_ref {var = i} {type = i64}
-    %6 = maxon.binop %5, %4 {op = lt} {kind = i64}
+    %6 = maxon.binop %5, %4 {op = lt}
     maxon.cond_br %6 [then: loop_0, else: loop_0.exit]
   loop_0:
     %7 = maxon.literal {value = 2 : i64}
     %8 = maxon.var_ref {var = i} {type = i64}
-    %9 = maxon.binop %8, %7 {op = mod} {kind = i64}
+    %9 = maxon.binop %8, %7 {op = mod}
     %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
+    %11 = maxon.binop %9, %10 {op = eq}
     maxon.cond_br %11 [then: even_1, else: odd_2]
   even_1:
     %12 = maxon.var_ref {var = even_sum} {type = i64}
     %13 = maxon.var_ref {var = i} {type = i64}
-    %14 = maxon.binop %12, %13 {op = add} {kind = i64}
+    %14 = maxon.binop %12, %13 {op = add}
     maxon.assign %14 {var = even_sum} {kind = i64} {mut = 1 : i1}
     %15 = maxon.literal {value = 1 : i64}
     %16 = maxon.var_ref {var = count} {type = i64}
-    %17 = maxon.binop %16, %15 {op = add} {kind = i64}
+    %17 = maxon.binop %16, %15 {op = add}
     maxon.assign %17 {var = count} {kind = i64} {mut = 1 : i1}
     maxon.br even_1.merge
   odd_2:
     %18 = maxon.var_ref {var = odd_sum} {type = i64}
     %19 = maxon.var_ref {var = i} {type = i64}
-    %20 = maxon.binop %18, %19 {op = add} {kind = i64}
+    %20 = maxon.binop %18, %19 {op = add}
     maxon.assign %20 {var = odd_sum} {kind = i64} {mut = 1 : i1}
     maxon.br even_1.merge
   even_1.merge:
     %21 = maxon.literal {value = 1 : i64}
     %22 = maxon.var_ref {var = i} {type = i64}
-    %23 = maxon.binop %22, %21 {op = add} {kind = i64}
+    %23 = maxon.binop %22, %21 {op = add}
     maxon.assign %23 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.exit:
     %24 = maxon.var_ref {var = even_sum} {type = i64}
     %25 = maxon.var_ref {var = odd_sum} {type = i64}
-    %26 = maxon.binop %24, %25 {op = add} {kind = i64}
+    %26 = maxon.binop %24, %25 {op = add}
     %27 = maxon.var_ref {var = count} {type = i64}
-    %28 = maxon.binop %26, %27 {op = add} {kind = i64}
+    %28 = maxon.binop %26, %27 {op = add}
     %29 = maxon.literal {value = 256 : i64}
-    %30 = maxon.binop %28, %29 {op = mod} {kind = i64}
+    %30 = maxon.binop %28, %29 {op = mod}
     maxon.return %30
   }
 }
@@ -2139,37 +2139,37 @@ module {
   loop_0.header:
     %2 = maxon.literal {value = 10 : i64}
     %3 = maxon.var_ref {var = i} {type = i64}
-    %4 = maxon.binop %3, %2 {op = le} {kind = i64}
+    %4 = maxon.binop %3, %2 {op = le}
     maxon.cond_br %4 [then: loop_0, else: loop_0.exit]
   loop_0:
     %5 = maxon.literal {value = 5 : i64}
     %6 = maxon.var_ref {var = i} {type = i64}
-    %7 = maxon.binop %6, %5 {op = le} {kind = i64}
+    %7 = maxon.binop %6, %5 {op = le}
     maxon.cond_br %7 [then: first_1, else: second_2]
   first_1:
     %8 = maxon.var_ref {var = result} {type = i64}
     %9 = maxon.var_ref {var = i} {type = i64}
-    %10 = maxon.binop %8, %9 {op = add} {kind = i64}
+    %10 = maxon.binop %8, %9 {op = add}
     maxon.assign %10 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br first_1.merge
   second_2:
     %11 = maxon.literal {value = 2 : i64}
     %12 = maxon.var_ref {var = i} {type = i64}
-    %13 = maxon.binop %12, %11 {op = mul} {kind = i64}
+    %13 = maxon.binop %12, %11 {op = mul}
     %14 = maxon.var_ref {var = result} {type = i64}
-    %15 = maxon.binop %14, %13 {op = add} {kind = i64}
+    %15 = maxon.binop %14, %13 {op = add}
     maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br first_1.merge
   first_1.merge:
     %16 = maxon.literal {value = 1 : i64}
     %17 = maxon.var_ref {var = i} {type = i64}
-    %18 = maxon.binop %17, %16 {op = add} {kind = i64}
+    %18 = maxon.binop %17, %16 {op = add}
     maxon.assign %18 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.exit:
     %19 = maxon.literal {value = 256 : i64}
     %20 = maxon.var_ref {var = result} {type = i64}
-    %21 = maxon.binop %20, %19 {op = mod} {kind = i64}
+    %21 = maxon.binop %20, %19 {op = mod}
     maxon.return %21
   }
 }
@@ -2305,7 +2305,7 @@ module {
   outer_0.header:
     %2 = maxon.literal {value = 5 : i64}
     %3 = maxon.var_ref {var = i} {type = i64}
-    %4 = maxon.binop %3, %2 {op = lt} {kind = i64}
+    %4 = maxon.binop %3, %2 {op = lt}
     maxon.cond_br %4 [then: outer_0, else: outer_0.exit]
   outer_0:
     %5 = maxon.literal {value = 0 : i64}
@@ -2314,22 +2314,22 @@ module {
   inner_1.header:
     %6 = maxon.literal {value = 4 : i64}
     %7 = maxon.var_ref {var = j} {type = i64}
-    %8 = maxon.binop %7, %6 {op = lt} {kind = i64}
+    %8 = maxon.binop %7, %6 {op = lt}
     maxon.cond_br %8 [then: inner_1, else: inner_1.exit]
   inner_1:
     %9 = maxon.literal {value = 1 : i64}
     %10 = maxon.var_ref {var = total} {type = i64}
-    %11 = maxon.binop %10, %9 {op = add} {kind = i64}
+    %11 = maxon.binop %10, %9 {op = add}
     maxon.assign %11 {var = total} {kind = i64} {mut = 1 : i1}
     %12 = maxon.literal {value = 1 : i64}
     %13 = maxon.var_ref {var = j} {type = i64}
-    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
     maxon.br inner_1.header
   inner_1.exit:
     %15 = maxon.literal {value = 1 : i64}
     %16 = maxon.var_ref {var = i} {type = i64}
-    %17 = maxon.binop %16, %15 {op = add} {kind = i64}
+    %17 = maxon.binop %16, %15 {op = add}
     maxon.assign %17 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br outer_0.header
   outer_0.exit:
@@ -2461,7 +2461,7 @@ module {
   outer_0.header:
     %2 = maxon.literal {value = 5 : i64}
     %3 = maxon.var_ref {var = i} {type = i64}
-    %4 = maxon.binop %3, %2 {op = le} {kind = i64}
+    %4 = maxon.binop %3, %2 {op = le}
     maxon.cond_br %4 [then: outer_0, else: outer_0.exit]
   outer_0:
     %5 = maxon.literal {value = 1 : i64}
@@ -2470,22 +2470,22 @@ module {
   inner_1.header:
     %6 = maxon.var_ref {var = j} {type = i64}
     %7 = maxon.var_ref {var = i} {type = i64}
-    %8 = maxon.binop %6, %7 {op = le} {kind = i64}
+    %8 = maxon.binop %6, %7 {op = le}
     maxon.cond_br %8 [then: inner_1, else: inner_1.exit]
   inner_1:
     %9 = maxon.literal {value = 1 : i64}
     %10 = maxon.var_ref {var = total} {type = i64}
-    %11 = maxon.binop %10, %9 {op = add} {kind = i64}
+    %11 = maxon.binop %10, %9 {op = add}
     maxon.assign %11 {var = total} {kind = i64} {mut = 1 : i1}
     %12 = maxon.literal {value = 1 : i64}
     %13 = maxon.var_ref {var = j} {type = i64}
-    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
     maxon.br inner_1.header
   inner_1.exit:
     %15 = maxon.literal {value = 1 : i64}
     %16 = maxon.var_ref {var = i} {type = i64}
-    %17 = maxon.binop %16, %15 {op = add} {kind = i64}
+    %17 = maxon.binop %16, %15 {op = add}
     maxon.assign %17 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br outer_0.header
   outer_0.exit:
@@ -2611,7 +2611,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
-    %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = mul} {optimalType = i64}
     maxon.return %2
   }
   func @register-allocator.main() -> i64 {
@@ -2624,17 +2624,17 @@ module {
   loop_0.header:
     %5 = maxon.literal {value = 5 : i64}
     %6 = maxon.var_ref {var = i} {type = i64}
-    %7 = maxon.binop %6, %5 {op = lt} {kind = i64}
+    %7 = maxon.binop %6, %5 {op = lt}
     maxon.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
     %8 = maxon.var_ref {var = i} {type = i64}
     %9 = maxon.call @register-allocator.double %8
     %10 = maxon.var_ref {var = sum} {type = i64}
-    %11 = maxon.binop %10, %9 {op = add} {kind = i64}
+    %11 = maxon.binop %10, %9 {op = add}
     maxon.assign %11 {var = sum} {kind = i64} {mut = 1 : i1}
     %12 = maxon.literal {value = 1 : i64}
     %13 = maxon.var_ref {var = i} {type = i64}
-    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.exit:
@@ -2739,15 +2739,15 @@ module {
   entry:
     %0 = maxon.literal {value = 1 : i64}
     %1 = maxon.literal {value = 2 : i64}
-    %2 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = add}
     %3 = maxon.literal {value = 3 : i64}
-    %4 = maxon.binop %2, %3 {op = mul} {kind = i64}
+    %4 = maxon.binop %2, %3 {op = mul}
     %5 = maxon.literal {value = 4 : i64}
-    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    %6 = maxon.binop %4, %5 {op = add}
     %7 = maxon.literal {value = 2 : i64}
-    %8 = maxon.binop %6, %7 {op = mul} {kind = i64}
+    %8 = maxon.binop %6, %7 {op = mul}
     %9 = maxon.literal {value = 6 : i64}
-    %10 = maxon.binop %8, %9 {op = add} {kind = i64}
+    %10 = maxon.binop %8, %9 {op = add}
     maxon.return %10
   }
 }
@@ -2815,9 +2815,9 @@ module {
     maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 2 : i64}
     maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %5 = maxon.binop %2, %3 {op = sub} {kind = i64}
-    %6 = maxon.binop %4, %5 {op = mul} {kind = i64}
+    %4 = maxon.binop %0, %1 {op = add}
+    %5 = maxon.binop %2, %3 {op = sub}
+    %6 = maxon.binop %4, %5 {op = mul}
     maxon.return %6
   }
 }
@@ -2874,10 +2874,10 @@ module {
     %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
     %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
     %4 = maxon.param {index = 4 : i32} {name = e} {type = i64}
-    %5 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %6 = maxon.binop %5, %2 {op = add} {kind = i64}
-    %7 = maxon.binop %6, %3 {op = add} {kind = i64}
-    %8 = maxon.binop %7, %4 {op = add} {kind = i64}
+    %5 = maxon.binop %0, %1 {op = add} {optimalType = i64}
+    %6 = maxon.binop %5, %2 {op = add} {optimalType = i64}
+    %7 = maxon.binop %6, %3 {op = add} {optimalType = i64}
+    %8 = maxon.binop %7, %4 {op = add} {optimalType = i64}
     maxon.return %8
   }
   func @register-allocator.main() -> i64 {
@@ -2970,14 +2970,14 @@ module {
     %6 = maxon.param {index = 6 : i32} {name = g} {type = i64}
     %7 = maxon.param {index = 7 : i32} {name = h} {type = i64}
     %8 = maxon.param {index = 8 : i32} {name = i} {type = i64}
-    %9 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %10 = maxon.binop %9, %2 {op = add} {kind = i64}
-    %11 = maxon.binop %10, %3 {op = add} {kind = i64}
-    %12 = maxon.binop %11, %4 {op = add} {kind = i64}
-    %13 = maxon.binop %12, %5 {op = add} {kind = i64}
-    %14 = maxon.binop %13, %6 {op = add} {kind = i64}
-    %15 = maxon.binop %14, %7 {op = add} {kind = i64}
-    %16 = maxon.binop %15, %8 {op = add} {kind = i64}
+    %9 = maxon.binop %0, %1 {op = add} {optimalType = i64}
+    %10 = maxon.binop %9, %2 {op = add} {optimalType = i64}
+    %11 = maxon.binop %10, %3 {op = add} {optimalType = i64}
+    %12 = maxon.binop %11, %4 {op = add} {optimalType = i64}
+    %13 = maxon.binop %12, %5 {op = add} {optimalType = i64}
+    %14 = maxon.binop %13, %6 {op = add} {optimalType = i64}
+    %15 = maxon.binop %14, %7 {op = add} {optimalType = i64}
+    %16 = maxon.binop %15, %8 {op = add} {optimalType = i64}
     maxon.return %16
   }
   func @register-allocator.main() -> i64 {
@@ -3102,7 +3102,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 1 : i64}
-    %2 = maxon.binop %0, %1 {op = le} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = le} {optimalType = i64}
     maxon.cond_br %2 [then: base_0, else: base_0.after]
   base_0:
     %3 = maxon.literal {value = 1 : i64}
@@ -3110,10 +3110,10 @@ module {
   base_0.after:
     %4 = maxon.literal {value = 1 : i64}
     %5 = maxon.var_ref {var = n} {type = i64}
-    %6 = maxon.binop %5, %4 {op = sub} {kind = i64}
+    %6 = maxon.binop %5, %4 {op = sub}
     %7 = maxon.call @register-allocator.factorial %6
     %8 = maxon.var_ref {var = n} {type = i64}
-    %9 = maxon.binop %8, %7 {op = mul} {kind = i64}
+    %9 = maxon.binop %8, %7 {op = mul}
     maxon.return %9
   }
   func @register-allocator.main() -> i64 {
@@ -3121,7 +3121,7 @@ module {
     %10 = maxon.literal {value = 5 : i64}
     %11 = maxon.call @register-allocator.factorial %10
     %12 = maxon.literal {value = 256 : i64}
-    %13 = maxon.binop %11, %12 {op = mod} {kind = i64}
+    %13 = maxon.binop %11, %12 {op = mod}
     maxon.return %13
   }
 }
@@ -3250,41 +3250,41 @@ module {
   loop_0.header:
     %8 = maxon.literal {value = 3 : i64}
     %9 = maxon.var_ref {var = i} {type = i64}
-    %10 = maxon.binop %9, %8 {op = lt} {kind = i64}
+    %10 = maxon.binop %9, %8 {op = lt}
     maxon.cond_br %10 [then: loop_0, else: loop_0.exit]
   loop_0:
     %11 = maxon.var_ref {var = b} {type = i64}
     %12 = maxon.call @register-allocator.identity %11
     %13 = maxon.var_ref {var = a} {type = i64}
-    %14 = maxon.binop %13, %12 {op = add} {kind = i64}
+    %14 = maxon.binop %13, %12 {op = add}
     maxon.assign %14 {var = a} {kind = i64} {mut = 1 : i1}
     %15 = maxon.var_ref {var = d} {type = i64}
     %16 = maxon.call @register-allocator.identity %15
     %17 = maxon.var_ref {var = c} {type = i64}
-    %18 = maxon.binop %17, %16 {op = add} {kind = i64}
+    %18 = maxon.binop %17, %16 {op = add}
     maxon.assign %18 {var = c} {kind = i64} {mut = 1 : i1}
     %19 = maxon.var_ref {var = f} {type = i64}
     %20 = maxon.call @register-allocator.identity %19
     %21 = maxon.var_ref {var = e} {type = i64}
-    %22 = maxon.binop %21, %20 {op = add} {kind = i64}
+    %22 = maxon.binop %21, %20 {op = add}
     maxon.assign %22 {var = e} {kind = i64} {mut = 1 : i1}
     %23 = maxon.literal {value = 1 : i64}
     %24 = maxon.var_ref {var = i} {type = i64}
-    %25 = maxon.binop %24, %23 {op = add} {kind = i64}
+    %25 = maxon.binop %24, %23 {op = add}
     maxon.assign %25 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.exit:
     %26 = maxon.var_ref {var = a} {type = i64}
     %27 = maxon.var_ref {var = c} {type = i64}
-    %28 = maxon.binop %26, %27 {op = add} {kind = i64}
+    %28 = maxon.binop %26, %27 {op = add}
     %29 = maxon.var_ref {var = d} {type = i64}
-    %30 = maxon.binop %28, %29 {op = add} {kind = i64}
+    %30 = maxon.binop %28, %29 {op = add}
     %31 = maxon.var_ref {var = e} {type = i64}
-    %32 = maxon.binop %30, %31 {op = add} {kind = i64}
+    %32 = maxon.binop %30, %31 {op = add}
     %33 = maxon.var_ref {var = f} {type = i64}
-    %34 = maxon.binop %32, %33 {op = add} {kind = i64}
+    %34 = maxon.binop %32, %33 {op = add}
     %35 = maxon.literal {value = 256 : i64}
-    %36 = maxon.binop %34, %35 {op = mod} {kind = i64}
+    %36 = maxon.binop %34, %35 {op = mod}
     maxon.return %36
   }
 }
@@ -3457,10 +3457,10 @@ module {
     maxon.assign %3 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %4 = maxon.literal {value = 20 : i64}
     maxon.assign %4 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.binop %3, %4 {op = add} {kind = i64}
+    %5 = maxon.binop %3, %4 {op = add}
     maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.trunc %2
-    %7 = maxon.binop %6, %5 {op = add} {kind = i64}
+    %7 = maxon.binop %6, %5 {op = add}
     maxon.return %7
   }
 }
@@ -3534,7 +3534,7 @@ module {
   outer_0.header:
     %3 = maxon.literal {value = 3 : i64}
     %4 = maxon.var_ref {var = i} {type = i64}
-    %5 = maxon.binop %4, %3 {op = lt} {kind = i64}
+    %5 = maxon.binop %4, %3 {op = lt}
     maxon.cond_br %5 [then: outer_0, else: outer_0.exit]
   outer_0:
     %6 = maxon.literal {value = 0 : i64}
@@ -3543,35 +3543,35 @@ module {
   inner_1.header:
     %7 = maxon.literal {value = 3 : i64}
     %8 = maxon.var_ref {var = j} {type = i64}
-    %9 = maxon.binop %8, %7 {op = lt} {kind = i64}
+    %9 = maxon.binop %8, %7 {op = lt}
     maxon.cond_br %9 [then: inner_1, else: inner_1.exit]
   inner_1:
     %10 = maxon.var_ref {var = i} {type = i64}
     %11 = maxon.var_ref {var = j} {type = i64}
-    %12 = maxon.binop %10, %11 {op = eq} {kind = i64}
+    %12 = maxon.binop %10, %11 {op = eq}
     maxon.cond_br %12 [then: diag_2, else: diag_2.merge]
   diag_2:
     %13 = maxon.literal {value = 1 : i64}
     %14 = maxon.var_ref {var = total} {type = i64}
-    %15 = maxon.binop %14, %13 {op = add} {kind = i64}
+    %15 = maxon.binop %14, %13 {op = add}
     maxon.assign %15 {var = total} {kind = i64} {mut = 1 : i1}
     maxon.br diag_2.merge
   diag_2.merge:
     %16 = maxon.literal {value = 1 : i64}
     %17 = maxon.var_ref {var = j} {type = i64}
-    %18 = maxon.binop %17, %16 {op = add} {kind = i64}
+    %18 = maxon.binop %17, %16 {op = add}
     maxon.assign %18 {var = j} {kind = i64} {mut = 1 : i1}
     maxon.br inner_1.header
   inner_1.exit:
     %19 = maxon.literal {value = 1 : i64}
     %20 = maxon.var_ref {var = i} {type = i64}
-    %21 = maxon.binop %20, %19 {op = add} {kind = i64}
+    %21 = maxon.binop %20, %19 {op = add}
     maxon.assign %21 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br outer_0.header
   outer_0.exit:
     %22 = maxon.var_ref {var = sentinel} {type = i64}
     %23 = maxon.var_ref {var = total} {type = i64}
-    %24 = maxon.binop %22, %23 {op = add} {kind = i64}
+    %24 = maxon.binop %22, %23 {op = add}
     maxon.return %24
   }
 }
@@ -3722,19 +3722,19 @@ module {
   loop_0.header:
     %3 = maxon.literal {value = 13 : i64}
     %4 = maxon.var_ref {var = i} {type = i64}
-    %5 = maxon.binop %4, %3 {op = lt} {kind = i64}
+    %5 = maxon.binop %4, %3 {op = lt}
     maxon.cond_br %5 [then: loop_0, else: loop_0.exit]
   loop_0:
     %6 = maxon.var_ref {var = a} {type = i64}
     %7 = maxon.var_ref {var = b} {type = i64}
-    %8 = maxon.binop %6, %7 {op = add} {kind = i64}
+    %8 = maxon.binop %6, %7 {op = add}
     maxon.assign %8 {var = temp} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %9 = maxon.var_ref {var = b} {type = i64}
     maxon.assign %9 {var = a} {kind = i64} {mut = 1 : i1}
     maxon.assign %8 {var = b} {kind = i64} {mut = 1 : i1}
     %10 = maxon.literal {value = 1 : i64}
     %11 = maxon.var_ref {var = i} {type = i64}
-    %12 = maxon.binop %11, %10 {op = add} {kind = i64}
+    %12 = maxon.binop %11, %10 {op = add}
     maxon.assign %12 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.exit:
@@ -3857,11 +3857,11 @@ module {
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
     %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
     %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
-    %4 = maxon.binop %0, %1 {op = add} {kind = i64}
+    %4 = maxon.binop %0, %1 {op = add} {optimalType = i64}
     maxon.assign %4 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.binop %2, %3 {op = add} {kind = i64}
+    %5 = maxon.binop %2, %3 {op = add} {optimalType = i64}
     maxon.assign %5 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.binop %4, %5 {op = add} {kind = i64}
+    %6 = maxon.binop %4, %5 {op = add}
     maxon.assign %6 {var = z} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.return %6
   }
@@ -3875,7 +3875,7 @@ module {
     %11 = maxon.literal {value = 4 : i64}
     %12 = maxon.call @register-allocator.useRegs %8, %9, %10, %11
     maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %13 = maxon.binop %7, %12 {op = add} {kind = i64}
+    %13 = maxon.binop %7, %12 {op = add}
     maxon.return %13
   }
 }
@@ -3960,7 +3960,7 @@ module {
     %2 = maxon.call @register-allocator.getInt
     maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.trunc %1
-    %4 = maxon.binop %3, %2 {op = add} {kind = i64}
+    %4 = maxon.binop %3, %2 {op = add}
     maxon.return %4
   }
 }
@@ -4040,9 +4040,9 @@ module {
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.literal {value = 10 : i64}
     maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.binop %0, %1 {op = mod} {kind = i64}
+    %3 = maxon.binop %0, %1 {op = mod}
     maxon.assign %3 {var = rem} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.binop %3, %2 {op = mul} {kind = i64}
+    %4 = maxon.binop %3, %2 {op = mul}
     maxon.return %4
   }
 }
@@ -4098,7 +4098,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
     %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-    %2 = maxon.binop %0, %1 {op = sub} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = sub} {optimalType = i64}
     maxon.return %2
   }
   func @register-allocator.main() -> i64 {
@@ -4110,7 +4110,7 @@ module {
     %5 = maxon.call @register-allocator.sub %4, %3
     maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.literal {value = 45 : i64}
-    %7 = maxon.binop %5, %6 {op = add} {kind = i64}
+    %7 = maxon.binop %5, %6 {op = add}
     maxon.return %7
   }
 }
@@ -4192,13 +4192,13 @@ module {
     maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %7 = maxon.literal {value = 7 : i64}
     maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.binop %0, %1 {op = sub} {kind = i64}
-    %9 = maxon.binop %8, %2 {op = sub} {kind = i64}
-    %10 = maxon.binop %9, %3 {op = sub} {kind = i64}
-    %11 = maxon.binop %10, %4 {op = sub} {kind = i64}
-    %12 = maxon.binop %11, %5 {op = sub} {kind = i64}
-    %13 = maxon.binop %12, %6 {op = sub} {kind = i64}
-    %14 = maxon.binop %13, %7 {op = sub} {kind = i64}
+    %8 = maxon.binop %0, %1 {op = sub}
+    %9 = maxon.binop %8, %2 {op = sub}
+    %10 = maxon.binop %9, %3 {op = sub}
+    %11 = maxon.binop %10, %4 {op = sub}
+    %12 = maxon.binop %11, %5 {op = sub}
+    %13 = maxon.binop %12, %6 {op = sub}
+    %14 = maxon.binop %13, %7 {op = sub}
     maxon.return %14
   }
 }
@@ -4282,7 +4282,7 @@ module {
     maxon.assign %2 {var = z} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 1 : i64}
     %4 = maxon.literal {value = 2 : i64}
-    %5 = maxon.binop %3, %4 {op = lt} {kind = i64}
+    %5 = maxon.binop %3, %4 {op = lt}
     maxon.cond_br %5 [then: branch_0, else: other_1]
   branch_0:
     %6 = maxon.literal {value = 10 : i64}
@@ -4303,9 +4303,9 @@ module {
   branch_0.merge:
     %12 = maxon.var_ref {var = x} {type = i64}
     %13 = maxon.var_ref {var = y} {type = i64}
-    %14 = maxon.binop %12, %13 {op = add} {kind = i64}
+    %14 = maxon.binop %12, %13 {op = add}
     %15 = maxon.var_ref {var = z} {type = i64}
-    %16 = maxon.binop %14, %15 {op = add} {kind = i64}
+    %16 = maxon.binop %14, %15 {op = add}
     maxon.return %16
   }
 }
@@ -4407,7 +4407,7 @@ module {
   check_0.cmp0:
     %1 = maxon.var_ref {var = __match_check_0} {type = i64}
     %2 = maxon.literal {value = 1 : i64}
-    %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
+    %3 = maxon.binop %1, %2 {op = eq}
     maxon.cond_br %3 [then: check_0.case0, else: check_0.cmp1]
   check_0.case0:
     %4 = maxon.literal {value = 10 : i64}
@@ -4415,7 +4415,7 @@ module {
   check_0.cmp1:
     %5 = maxon.var_ref {var = __match_check_0} {type = i64}
     %6 = maxon.literal {value = 2 : i64}
-    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
+    %7 = maxon.binop %5, %6 {op = eq}
     maxon.cond_br %7 [then: check_0.case1, else: check_0.case2]
   check_0.case1:
     %8 = maxon.literal {value = 20 : i64}
@@ -4520,7 +4520,7 @@ module {
   process_0.cmp0:
     %2 = maxon.var_ref {var = __match_process_0} {type = i64}
     %3 = maxon.literal {value = 1 : i64}
-    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    %4 = maxon.binop %2, %3 {op = eq}
     maxon.cond_br %4 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %5 = maxon.literal {value = 100 : i64}
@@ -4529,7 +4529,7 @@ module {
   process_0.cmp1:
     %6 = maxon.var_ref {var = __match_process_0} {type = i64}
     %7 = maxon.literal {value = 2 : i64}
-    %8 = maxon.binop %6, %7 {op = eq} {kind = i64}
+    %8 = maxon.binop %6, %7 {op = eq}
     maxon.cond_br %8 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %9 = maxon.literal {value = 200 : i64}
@@ -4642,11 +4642,11 @@ module {
   check_0.cmp0:
     %1 = maxon.var_ref {var = __match_check_0} {type = i64}
     %2 = maxon.literal {value = 1 : i64}
-    %3 = maxon.binop %1, %2 {op = eq} {kind = i64}
+    %3 = maxon.binop %1, %2 {op = eq}
     %4 = maxon.var_ref {var = __match_check_0} {type = i64}
     %5 = maxon.literal {value = 2 : i64}
-    %6 = maxon.binop %4, %5 {op = eq} {kind = i64}
-    %7 = maxon.binop %3, %6 {op = or} {kind = i1}
+    %6 = maxon.binop %4, %5 {op = eq}
+    %7 = maxon.binop %3, %6 {op = or}
     maxon.cond_br %7 [then: check_0.case0, else: check_0.cmp1]
   check_0.case0:
     %8 = maxon.literal {value = 10 : i64}
@@ -4654,11 +4654,11 @@ module {
   check_0.cmp1:
     %9 = maxon.var_ref {var = __match_check_0} {type = i64}
     %10 = maxon.literal {value = 3 : i64}
-    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
+    %11 = maxon.binop %9, %10 {op = eq}
     %12 = maxon.var_ref {var = __match_check_0} {type = i64}
     %13 = maxon.literal {value = 4 : i64}
-    %14 = maxon.binop %12, %13 {op = eq} {kind = i64}
-    %15 = maxon.binop %11, %14 {op = or} {kind = i1}
+    %14 = maxon.binop %12, %13 {op = eq}
+    %15 = maxon.binop %11, %14 {op = or}
     maxon.cond_br %15 [then: check_0.case1, else: check_0.case2]
   check_0.case1:
     %16 = maxon.literal {value = 20 : i64}
@@ -4790,34 +4790,34 @@ module {
   cascade_0.cmp0:
     %2 = maxon.var_ref {var = __match_cascade_0} {type = i64}
     %3 = maxon.literal {value = 1 : i64}
-    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    %4 = maxon.binop %2, %3 {op = eq}
     maxon.cond_br %4 [then: cascade_0.case0, else: cascade_0.cmp1]
   cascade_0.case0:
     %5 = maxon.literal {value = 10 : i64}
     %6 = maxon.var_ref {var = result} {type = i64}
-    %7 = maxon.binop %6, %5 {op = add} {kind = i64}
+    %7 = maxon.binop %6, %5 {op = add}
     maxon.assign %7 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br cascade_0.case1
   cascade_0.cmp1:
     %8 = maxon.var_ref {var = __match_cascade_0} {type = i64}
     %9 = maxon.literal {value = 2 : i64}
-    %10 = maxon.binop %8, %9 {op = eq} {kind = i64}
+    %10 = maxon.binop %8, %9 {op = eq}
     maxon.cond_br %10 [then: cascade_0.case1, else: cascade_0.cmp2]
   cascade_0.case1:
     %11 = maxon.literal {value = 20 : i64}
     %12 = maxon.var_ref {var = result} {type = i64}
-    %13 = maxon.binop %12, %11 {op = add} {kind = i64}
+    %13 = maxon.binop %12, %11 {op = add}
     maxon.assign %13 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br cascade_0.case2
   cascade_0.cmp2:
     %14 = maxon.var_ref {var = __match_cascade_0} {type = i64}
     %15 = maxon.literal {value = 3 : i64}
-    %16 = maxon.binop %14, %15 {op = eq} {kind = i64}
+    %16 = maxon.binop %14, %15 {op = eq}
     maxon.cond_br %16 [then: cascade_0.case2, else: cascade_0.case3]
   cascade_0.case2:
     %17 = maxon.literal {value = 30 : i64}
     %18 = maxon.var_ref {var = result} {type = i64}
-    %19 = maxon.binop %18, %17 {op = add} {kind = i64}
+    %19 = maxon.binop %18, %17 {op = add}
     maxon.assign %19 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br cascade_0.merge
   cascade_0.case3:
@@ -4964,7 +4964,7 @@ module {
   eval_0.cmp0:
     %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %3 = maxon.literal {value = 1 : i64}
-    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    %4 = maxon.binop %2, %3 {op = eq}
     maxon.cond_br %4 [then: eval_0.case0, else: eval_0.cmp1]
   eval_0.case0:
     %5 = maxon.literal {value = 10 : i64}
@@ -4973,7 +4973,7 @@ module {
   eval_0.cmp1:
     %6 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %7 = maxon.literal {value = 2 : i64}
-    %8 = maxon.binop %6, %7 {op = eq} {kind = i64}
+    %8 = maxon.binop %6, %7 {op = eq}
     maxon.cond_br %8 [then: eval_0.case1, else: eval_0.case2]
   eval_0.case1:
     %9 = maxon.literal {value = 20 : i64}
@@ -5090,11 +5090,11 @@ module {
   eval_0.cmp0:
     %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %3 = maxon.literal {value = 1 : i64}
-    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    %4 = maxon.binop %2, %3 {op = eq}
     %5 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %6 = maxon.literal {value = 2 : i64}
-    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
-    %8 = maxon.binop %4, %7 {op = or} {kind = i1}
+    %7 = maxon.binop %5, %6 {op = eq}
+    %8 = maxon.binop %4, %7 {op = or}
     maxon.cond_br %8 [then: eval_0.case0, else: eval_0.cmp1]
   eval_0.case0:
     %9 = maxon.literal {value = 10 : i64}
@@ -5103,11 +5103,11 @@ module {
   eval_0.cmp1:
     %10 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %11 = maxon.literal {value = 3 : i64}
-    %12 = maxon.binop %10, %11 {op = eq} {kind = i64}
+    %12 = maxon.binop %10, %11 {op = eq}
     %13 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %14 = maxon.literal {value = 4 : i64}
-    %15 = maxon.binop %13, %14 {op = eq} {kind = i64}
-    %16 = maxon.binop %12, %15 {op = or} {kind = i1}
+    %15 = maxon.binop %13, %14 {op = eq}
+    %16 = maxon.binop %12, %15 {op = or}
     maxon.cond_br %16 [then: eval_0.case1, else: eval_0.case2]
   eval_0.case1:
     %17 = maxon.literal {value = 20 : i64}
@@ -5250,7 +5250,7 @@ module {
   eval_0.cmp0:
     %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %3 = maxon.literal {value = 1 : i64}
-    %4 = maxon.binop %2, %3 {op = eq} {kind = i64}
+    %4 = maxon.binop %2, %3 {op = eq}
     maxon.cond_br %4 [then: eval_0.case0, else: eval_0.cmp1]
   eval_0.case0:
     %5 = maxon.literal {value = 10 : i64}
@@ -5259,7 +5259,7 @@ module {
   eval_0.cmp1:
     %6 = maxon.var_ref {var = __match_eval_0} {type = i64}
     %7 = maxon.literal {value = 2 : i64}
-    %8 = maxon.binop %6, %7 {op = eq} {kind = i64}
+    %8 = maxon.binop %6, %7 {op = eq}
     maxon.cond_br %8 [then: eval_0.case1, else: eval_0.case2]
   eval_0.case1:
     %9 = maxon.literal {value = 20 : i64}
@@ -5272,7 +5272,7 @@ module {
   eval_0.merge:
     %11 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
     %12 = maxon.literal {value = 2 : i64}
-    %13 = maxon.binop %11, %12 {op = mul} {kind = i64}
+    %13 = maxon.binop %11, %12 {op = mul}
     maxon.assign %13 {var = doubled} {kind = i64} {decl = 1 : i1}
     maxon.return %13
   }
@@ -5380,7 +5380,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 2 : i64}
-    %2 = maxon.binop %0, %1 {op = mul} {kind = i64}
+    %2 = maxon.binop %0, %1 {op = mul} {optimalType = i64}
     maxon.return %2
   }
   func @register-allocator.main() -> i64 {
@@ -5394,7 +5394,7 @@ module {
   process_0.cmp0:
     %5 = maxon.var_ref {var = __match_process_0} {type = i64}
     %6 = maxon.literal {value = 1 : i64}
-    %7 = maxon.binop %5, %6 {op = eq} {kind = i64}
+    %7 = maxon.binop %5, %6 {op = eq}
     maxon.cond_br %7 [then: process_0.case0, else: process_0.cmp1]
   process_0.case0:
     %8 = maxon.literal {value = 10 : i64}
@@ -5404,7 +5404,7 @@ module {
   process_0.cmp1:
     %10 = maxon.var_ref {var = __match_process_0} {type = i64}
     %11 = maxon.literal {value = 2 : i64}
-    %12 = maxon.binop %10, %11 {op = eq} {kind = i64}
+    %12 = maxon.binop %10, %11 {op = eq}
     maxon.cond_br %12 [then: process_0.case1, else: process_0.case2]
   process_0.case1:
     %13 = maxon.literal {value = 20 : i64}
@@ -5621,7 +5621,7 @@ module {
     maxon.assign %11 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %12 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %13 = maxon.literal {value = 0 : i64}
-    %14 = maxon.binop %11, %13 {op = ne} {kind = i64}
+    %14 = maxon.binop %11, %13 {op = ne}
     maxon.cond_br %14 [then: otherwise_error_0, else: otherwise_continue_1]
   otherwise_error_0:
     %15 = maxon.literal {value = 42 : i64}
@@ -5729,7 +5729,7 @@ module {
     maxon.assign %10 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %11 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 0 : i64}
-    %13 = maxon.binop %10, %12 {op = ne} {kind = i64}
+    %13 = maxon.binop %10, %12 {op = ne}
     maxon.cond_br %13 [then: propagate_error_0, else: try_continue_1]
   propagate_error_0:
     %14 = maxon.var_ref {var = __try_error_2} {type = i64}
@@ -5746,7 +5746,7 @@ module {
     maxon.assign %19 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %18 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %20 = maxon.literal {value = 0 : i64}
-    %21 = maxon.binop %17, %20 {op = ne} {kind = i64}
+    %21 = maxon.binop %17, %20 {op = ne}
     maxon.cond_br %21 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
     %22 = maxon.var_ref {var = __try_default_1} {type = i64}
@@ -5906,7 +5906,7 @@ module {
     maxon.assign %14 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %13 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %15 = maxon.literal {value = 0 : i64}
-    %16 = maxon.binop %12, %15 {op = ne} {kind = i64}
+    %16 = maxon.binop %12, %15 {op = ne}
     maxon.cond_br %16 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
     %17 = maxon.var_ref {var = __try_default_1} {type = i64}
@@ -5920,7 +5920,7 @@ module {
     maxon.assign %22 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %23 = maxon.literal {value = 0 : i64}
-    %24 = maxon.binop %20, %23 {op = ne} {kind = i64}
+    %24 = maxon.binop %20, %23 {op = ne}
     maxon.cond_br %24 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
     %25 = maxon.var_ref {var = __try_default_5} {type = i64}
@@ -5934,7 +5934,7 @@ module {
     maxon.assign %30 {var = __try_default_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %29 {var = __try_result_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %31 = maxon.literal {value = 0 : i64}
-    %32 = maxon.binop %28, %31 {op = ne} {kind = i64}
+    %32 = maxon.binop %28, %31 {op = ne}
     maxon.cond_br %32 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
   otherwise_default_error_10:
     %33 = maxon.var_ref {var = __try_default_9} {type = i64}
@@ -5945,8 +5945,8 @@ module {
     maxon.assign %34 {var = c} {kind = i64} {decl = 1 : i1}
     %35 = maxon.var_ref {var = a} {type = i64}
     %36 = maxon.var_ref {var = b} {type = i64}
-    %37 = maxon.binop %35, %36 {op = add} {kind = i64}
-    %38 = maxon.binop %37, %34 {op = add} {kind = i64}
+    %37 = maxon.binop %35, %36 {op = add}
+    %38 = maxon.binop %37, %34 {op = add}
     maxon.return %38
   }
 }
@@ -6131,7 +6131,7 @@ module {
   dispatch_0.cmp0:
     %9 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
     %10 = maxon.literal {value = 1 : i64}
-    %11 = maxon.binop %9, %10 {op = eq} {kind = i64}
+    %11 = maxon.binop %9, %10 {op = eq}
     maxon.cond_br %11 [then: dispatch_0.case0, else: dispatch_0.cmp1]
   dispatch_0.case0:
     %12 = maxon.literal {value = 100 : i64}
@@ -6139,7 +6139,7 @@ module {
   dispatch_0.cmp1:
     %13 = maxon.var_ref {var = __match_dispatch_0} {type = i64}
     %14 = maxon.literal {value = 2 : i64}
-    %15 = maxon.binop %13, %14 {op = eq} {kind = i64}
+    %15 = maxon.binop %13, %14 {op = eq}
     maxon.cond_br %15 [then: dispatch_0.case1, else: dispatch_0.case2]
   dispatch_0.case1:
     %16 = maxon.literal {value = 200 : i64}
@@ -6157,7 +6157,7 @@ module {
     maxon.assign %22 {var = __try_default_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %21 {var = __try_result_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %23 = maxon.literal {value = 0 : i64}
-    %24 = maxon.binop %20, %23 {op = ne} {kind = i64}
+    %24 = maxon.binop %20, %23 {op = ne}
     maxon.cond_br %24 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
     %25 = maxon.var_ref {var = __try_default_1} {type = i64}
@@ -6172,7 +6172,7 @@ module {
     maxon.assign %31 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %30 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %32 = maxon.literal {value = 0 : i64}
-    %33 = maxon.binop %29, %32 {op = ne} {kind = i64}
+    %33 = maxon.binop %29, %32 {op = ne}
     maxon.cond_br %33 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
     %34 = maxon.var_ref {var = __try_default_5} {type = i64}
@@ -6182,9 +6182,9 @@ module {
     %35 = maxon.var_ref {var = __try_result_4} {type = i64}
     maxon.assign %35 {var = b} {kind = i64} {decl = 1 : i1}
     %36 = maxon.literal {value = 256 : i64}
-    %37 = maxon.binop %35, %36 {op = mod} {kind = i64}
+    %37 = maxon.binop %35, %36 {op = mod}
     %38 = maxon.var_ref {var = a} {type = i64}
-    %39 = maxon.binop %38, %37 {op = add} {kind = i64}
+    %39 = maxon.binop %38, %37 {op = add}
     maxon.return %39
   }
 }

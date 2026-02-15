@@ -1,7 +1,7 @@
 ---
 feature: codegen-internals
 status: stable
-keywords: [rdata, cow, managed-memory, strings, stack-probing]
+keywords: [rdata, cow, managed-memory, strings, stack-probing, signedness, width, i32]
 category: dev
 ---
 
@@ -218,7 +218,7 @@ module {
     maxon.assign %15 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.assign %14 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %16 = maxon.literal {value = 0 : i64}
-    %17 = maxon.binop %13, %16 {op = ne} {kind = i64}
+    %17 = maxon.binop %13, %16 {op = ne}
     maxon.cond_br %17 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
     %18 = maxon.var_ref {var = __try_default_2} {type = i64}
@@ -487,4 +487,418 @@ end 'main'
 ```
 ```RequiredRdata
 utf8 "hello world\0"
+```
+
+<!-- test: i32-unsigned-add -->
+```maxon
+typealias SmallInt = int(0 to 1000)
+
+function main() returns Integer
+  var a = SmallInt{10}
+  var b = SmallInt{3}
+  return a + b
+end 'main'
+```
+```exitcode
+13
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = add} {optimalType = u32}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 10 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.addi %2, %3
+    %5 = arith.extui %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.mov eax, 10
+    x86.mov ecx, 3
+    x86.mov edx, eax
+    x86.mov ebx, ecx
+    x86.lea eax, [edx + ebx]
+    x86.ret
+  }
+}
+```
+
+<!-- test: i32-unsigned-div -->
+```maxon
+typealias SmallInt = int(0 to 1000)
+
+function main() returns Integer
+  var a = SmallInt{20}
+  var b = SmallInt{3}
+  return a / b
+end 'main'
+```
+```exitcode
+6
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = u32}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.divui %2, %3
+    %5 = arith.extui %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
+    x86.mov edx, eax
+    x86.mov ebx, ecx
+    x86.mov [rbp-8], edx
+    x86.mov eax, edx
+    x86.xor edx, edx
+    x86.div32 ebx
+    x86.mov esi, eax
+    x86.mov eax, esi
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: i32-signed-div -->
+```maxon
+typealias Temp = int(-100000 to 100000)
+
+function main() returns Integer
+  var a = Temp{20}
+  var b = Temp{3}
+  return a / b
+end 'main'
+```
+```exitcode
+6
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = i32}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.divsi %2, %3
+    %5 = arith.extsi %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
+    x86.mov edx, eax
+    x86.mov ebx, ecx
+    x86.mov [rbp-8], edx
+    x86.mov eax, edx
+    x86.cdq
+    x86.idiv32 ebx
+    x86.movsxd rsi, eax
+    x86.mov eax, esi
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: i32-unsigned-cmp -->
+```maxon
+typealias SmallInt = int(0 to 1000)
+
+function main() returns Integer
+  var a = SmallInt{10}
+  var b = SmallInt{3}
+  if a > b 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = gt} {optimalType = u32}
+    maxon.cond_br %2 [then: check_0, else: check_0.after]
+  check_0:
+    %3 = maxon.literal {value = 1 : i64}
+    maxon.return %3
+  check_0.after:
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 10 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.cmpui ugt %2, %3
+    cf.cond_br %4 [then: check_0, else: check_0.after]
+  check_0:
+    %5 = arith.constant {value = 1 : i64}
+    func.return %5
+  check_0.after:
+    %6 = arith.constant {value = 0 : i64}
+    func.return %6
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.mov eax, 10
+    x86.mov ecx, 3
+    x86.mov edx, eax
+    x86.mov ebx, ecx
+    x86.cmp edx, ebx
+    x86.jbe codegen-internals.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+```
+
+<!-- test: i32-unsigned-mod -->
+```maxon
+typealias SmallInt = int(0 to 1000)
+
+function main() returns Integer
+  var a = SmallInt{20}
+  var b = SmallInt{3}
+  return a mod b
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = mod} {optimalType = u32}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.remui %2, %3
+    %5 = arith.extui %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
+    x86.mov edx, eax
+    x86.mov ebx, ecx
+    x86.mov [rbp-8], edx
+    x86.mov eax, edx
+    x86.xor edx, edx
+    x86.div32 ebx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+
+<!-- test: i64-signed-no-narrowing -->
+```maxon
+typealias BigInt = int(-1000000000000 to 1000000000000)
+
+function main() returns Integer
+  var a = BigInt{20}
+  var b = BigInt{3}
+  return a / b
+end 'main'
+```
+```exitcode
+6
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = i64}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.divsi %0, %1
+    func.return %2
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.mov eax, 20
+    x86.mov ecx, 3
+    x86.cqo
+    x86.idiv ecx
+    x86.ret
+  }
+}
+```
+
+<!-- test: i8-range-uses-i32-arithmetic -->
+```maxon
+typealias Tiny = int(0 to 100)
+
+function main() returns Integer
+  var a = Tiny{21}
+  var b = Tiny{3}
+  return a / b
+end 'main'
+```
+```exitcode
+7
+```
+```RequiredMLIR
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 21 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = u8}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 21 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.divui %2, %3
+    %5 = arith.extui %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 21
+    x86.mov ecx, 3
+    x86.mov edx, eax
+    x86.mov ebx, ecx
+    x86.mov [rbp-8], edx
+    x86.mov eax, edx
+    x86.xor edx, edx
+    x86.div32 ebx
+    x86.mov esi, eax
+    x86.mov eax, esi
+    x86.epilogue
+    x86.ret
+  }
+}
 ```

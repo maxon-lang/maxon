@@ -2,64 +2,75 @@
 // Calculate eigenvalue using the power method
 // For n = 5500, result should be approximately 1.274224153
 
-function evalA(i int, j int) returns float
-	var ij = i + j
-	var denom = ((ij * (ij + 1)) / 2) + i + 1
-	return 1.0 / denom
+typealias VectorIndex = int(0 to 5500)
+typealias Iteration = int(0 to 10)
+typealias VectorComponent = float(0.0 to max)
+typealias Vector = Array with VectorComponent
+
+function evalA(row VectorIndex, col VectorIndex) returns VectorComponent
+	let indexSum = row + col
+	let denominator = ((indexSum * (indexSum + 1)) / 2) + row + 1
+	return 1.0 / denominator
 end 'evalA'
 
-function times(v Array of float, u Array of float, n int) returns int
-	for i in range(0, n) 'outer'
-		v[i] = 0.0
-		for j in range(0, n) 'inner'
-			v[i] = v[i] + (u[j] * evalA(i, j))
+function multiplyByMatrix(resultVector Vector, inputVector Vector, dimension VectorIndex)
+	for row in 0 upto dimension 'outer'
+		var accumulator = 0.0
+		for col in 0 upto dimension 'inner'
+			let inputComponent = try inputVector.get(col) otherwise 0.0
+			accumulator = accumulator + (inputComponent * evalA(VectorIndex{row}, col: VectorIndex{col}))
 		end 'inner'
+		resultVector.set(row, value: accumulator)
 	end 'outer'
-	return 0
-end 'times'
+end 'multiplyByMatrix'
 
-function timesTransp(v Array of float, u Array of float, n int) returns int
-	for i in range(0, n) 'outer'
-		v[i] = 0.0
-		for j in range(0, n) 'inner'
-			v[i] = v[i] + (u[j] * evalA(j, i))
+function multiplyByTranspose(resultVector Vector, inputVector Vector, dimension VectorIndex)
+	for row in 0 upto dimension 'outer'
+		var accumulator = 0.0
+		for col in 0 upto dimension 'inner'
+			let inputComponent = try inputVector.get(col) otherwise 0.0
+			accumulator = accumulator + (inputComponent * evalA(VectorIndex{col}, col: VectorIndex{row}))
 		end 'inner'
+		resultVector.set(row, value: accumulator)
 	end 'outer'
-	return 0
-end 'timesTransp'
+end 'multiplyByTranspose'
 
-function ATimesTransp(v Array of float, u Array of float, x Array of float, n int) returns int
-	times(x, u, n)
-	timesTransp(v, x, n)
-	return 0
-end 'ATimesTransp'
+function applyAtA(resultVector Vector, inputVector Vector, workspace Vector, dimension VectorIndex)
+	multiplyByMatrix(workspace, inputVector: inputVector, dimension: dimension)
+	multiplyByTranspose(resultVector, inputVector: workspace, dimension: dimension)
+end 'applyAtA'
 
-function main() returns int
-	var n = 5500
+function main() returns Integer
+	let problemSize = VectorIndex{5500}
 
-	var u = Array of 5500 float
-	var v = Array of 5500 float
-	var x = Array of 5500 float
+	let eigenvector = Vector{}
+	eigenvector.resize(5500)
+	let previousVector = Vector{}
+	previousVector.resize(5500)
+	let workspace = Vector{}
+	workspace.resize(5500)
 
-	for i in range(0, n) 'init'
-		u[i] = 1.0
+	for index in 0 upto problemSize 'init'
+		eigenvector.set(index, value: 1.0)
 	end 'init'
 
-	var iter = 0
-	while iter < 10 'iter'
-		ATimesTransp(v, u, x, n)
-		ATimesTransp(u, v, x, n)
-		iter = iter + 1
-	end 'iter'
+	var iteration = Iteration{0}
+	while iteration < 10 'iterate'
+		applyAtA(previousVector, inputVector: eigenvector, workspace: workspace, dimension: problemSize)
+		applyAtA(eigenvector, inputVector: previousVector, workspace: workspace, dimension: problemSize)
+		iteration = Iteration{iteration + 1}
+	end 'iterate'
 
-	var vBv = 0.0
-	var vv = 0.0
-	for i in range(0, n) 'calc'
-		vBv = vBv + (u[i] * v[i])
-		vv = vv + (v[i] * v[i])
-	end 'calc'
+	var numerator = 0.0
+	var denominator = 0.0
+	for index in 0 upto problemSize 'rayleigh'
+		let uComponent = try eigenvector.get(index) otherwise 0.0
+		let vComponent = try previousVector.get(index) otherwise 0.0
+		numerator = numerator + (uComponent * vComponent)
+		denominator = denominator + (vComponent * vComponent)
+	end 'rayleigh'
 
-	var result = sqrt(vBv / vv)
+	let spectralNorm = sqrt(numerator / denominator)
 
-	return trunc(result * 1000000000.0)
+	return trunc(spectralNorm * 1000000000.0)
 end 'main'

@@ -1,0 +1,57 @@
+// Test: i32-unsigned-mod
+typealias SmallInt = int(0 to 1000)
+
+function main() returns Integer
+  var a = SmallInt{20}
+  var b = SmallInt{3}
+  return a mod b
+end 'main'
+---
+ExitCode: 2
+RequiredMLIR: ```
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = mod} {optimalType = u32}
+    maxon.return %2
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.remui %2, %3
+    %5 = arith.extui %4
+    func.return %5
+  }
+}
+=== x86
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
+    x86.mov edx, eax
+    x86.mov ebx, ecx
+    x86.mov [rbp-8], edx
+    x86.mov eax, edx
+    x86.xor edx, edx
+    x86.div32 ebx
+    x86.mov eax, edx
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+---
