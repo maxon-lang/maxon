@@ -12,6 +12,9 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);
 
+// Deferred global variable initialization: stores tokens for expressions that must be evaluated at main() entry
+public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column);
+
 public class MlirModule<TOp> where TOp : IPrintableOp {
   public List<MlirFunction<TOp>> Functions { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
@@ -31,6 +34,9 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Primitive type conformances from extension blocks (e.g., "int" -> ["Hashable", "Equatable"])
   public Dictionary<string, List<string>> PrimitiveConformances { get; } = [];
 
+  // Deferred global var/let initializations from all source files, emitted at start of main()
+  public List<DeferredGlobalInit> DeferredGlobalInits { get; } = [];
+
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
   }
@@ -46,6 +52,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];
+    clone.DeferredGlobalInits.AddRange(DeferredGlobalInits);
     return clone;
   }
 
@@ -75,5 +82,9 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in other.TypeAliasSources) TypeAliasSources.TryAdd(k, v);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);
     foreach (var (k, v) in other.InterfaceAssociatedTypes) InterfaceAssociatedTypes.TryAdd(k, v);
+    foreach (var init in other.DeferredGlobalInits) {
+      if (!DeferredGlobalInits.Any(d => d.Name == init.Name))
+        DeferredGlobalInits.Add(init);
+    }
   }
 }

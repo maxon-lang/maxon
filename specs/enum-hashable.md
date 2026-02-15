@@ -256,3 +256,24 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: enum-map-for-in-insert -->
+```maxon
+enum Color
+  red
+  green
+  blue
+end 'Color'
+
+function main() returns int
+  var m = [Color.red: 10, Color.green: 20, Color.blue: 30]
+  for (color, score) in m 'loop'
+    m.insert(color, value: score + 1)
+  end 'loop'
+  var result = try m.get(Color.red) otherwise 0
+  return result
+end 'main'
+```
+```exitcode
+11
+```

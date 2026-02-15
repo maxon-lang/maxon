@@ -5,7 +5,7 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler;
 
 public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null) {
-  private readonly List<Token> _tokens = tokens;
+  private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
   private int _pos;
@@ -402,6 +402,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _interfaceAssociatedTypes.TryAdd(name, assocTypes);
     foreach (var (aliasName, aliasInfo) in source.TypeAliasSources)
       _typeAliasSources.TryAdd(aliasName, aliasInfo.SourceTypeName);
+    // Carry forward deferred global inits so the main() parser can emit cross-file inits
+    foreach (var init in source.DeferredGlobalInits) {
+      if (!target.DeferredGlobalInits.Any(d => d.Name == init.Name))
+        target.DeferredGlobalInits.Add(init);
+    }
   }
 
   /// <summary>
@@ -470,6 +475,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         SkipToEndOfLine();
         if (IsComplexInitializer(exprStart)) {
           _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+          module.DeferredGlobalInits.Add(new DeferredGlobalInit(
+            nameToken.Value, _tokens, exprStart, _pos, IsMutable: false, nameToken.Line, nameToken.Column));
         } else {
           constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -481,6 +488,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         SkipToEndOfLine();
         if (IsComplexInitializer(exprStart)) {
           _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+          module.DeferredGlobalInits.Add(new DeferredGlobalInit(
+            nameToken.Value, _tokens, exprStart, _pos, IsMutable: true, nameToken.Line, nameToken.Column));
         } else {
           _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -656,23 +665,45 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// TypeName is determined from the expression result (Array, Map typealias, struct name, etc).
   /// </summary>
   private void EmitDeferredExprDecls(List<DeferredDecl> deferred, bool isMutable) {
-    foreach (var decl in deferred) {
-      int savedPos = _pos;
-      _pos = decl.TokenStart;
+    foreach (var decl in deferred)
+      EmitSingleDeferredGlobalInit(decl.Name, _tokens, decl.TokenStart, isMutable);
+  }
 
-      var exprResult = ParseExpression();
-      var value = ResolveExprValue(exprResult);
+  /// <summary>
+  /// Emit deferred global inits from other files in a multi-file build.
+  /// Skips names already handled by the current parser's local deferred lists.
+  /// </summary>
+  private void EmitCrossFileDeferredGlobalInits() {
+    var localNames = new HashSet<string>(
+      _deferredExprLets.Select(d => d.Name).Concat(_deferredExprVars.Select(d => d.Name)));
 
-      _currentBlock!.AddOp(new MaxonGlobalStoreOp(decl.Name, value, MaxonValueKind.Struct));
-
-      // Update GlobalVarInfo with the actual TypeName from the parsed expression
-      if (value is MaxonStruct ms)
-        _globalVars[decl.Name] = new GlobalVarInfo(MaxonValueKind.Struct, isMutable, TypeName: ms.TypeName);
-      else if (value is MaxonEnum me)
-        _globalVars[decl.Name] = new GlobalVarInfo(MaxonValueKind.Enum, isMutable, EnumTypeName: me.TypeName);
-
-      _pos = savedPos;
+    foreach (var init in _currentModule!.DeferredGlobalInits) {
+      if (localNames.Contains(init.Name)) continue;
+      EmitSingleDeferredGlobalInit(init.Name, init.Tokens, init.TokenStart, init.IsMutable);
     }
+  }
+
+  /// <summary>
+  /// Parse and emit a single deferred global variable initialization.
+  /// Temporarily swaps the token list and position if needed.
+  /// </summary>
+  private void EmitSingleDeferredGlobalInit(string name, List<Token> tokens, int tokenStart, bool isMutable) {
+    var savedTokens = _tokens;
+    int savedPos = _pos;
+    _tokens = tokens;
+    _pos = tokenStart;
+
+    var exprResult = ParseExpression();
+    var value = ResolveExprValue(exprResult);
+    _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Struct));
+
+    if (value is MaxonStruct ms)
+      _globalVars[name] = new GlobalVarInfo(MaxonValueKind.Struct, isMutable, TypeName: ms.TypeName);
+    else if (value is MaxonEnum me)
+      _globalVars[name] = new GlobalVarInfo(MaxonValueKind.Enum, isMutable, EnumTypeName: me.TypeName);
+
+    _tokens = savedTokens;
+    _pos = savedPos;
   }
 
   /// <summary>
@@ -3193,6 +3224,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (baseName == "main") {
       EmitDeferredExprDecls(_deferredExprLets, isMutable: false);
       EmitDeferredExprDecls(_deferredExprVars, isMutable: true);
+      EmitCrossFileDeferredGlobalInits();
     }
 
     ParseBodyUntilEnd();
@@ -5030,6 +5062,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         && _typeRegistry.TryGetValue(retStruct.Name, out var canonical)
         && canonical is MlirStructType canonicalStruct) {
       elementMlirType = canonicalStruct;
+    }
+
+    // Resolve tuple type parameter fields to concrete types using the iterable's type params.
+    // Entry is (Key, Value) with MlirTypeParameterType fields — substitute with concrete types.
+    if (elementMlirType is MlirStructType tupleElem && tupleElem.IsTuple
+        && tupleElem.Fields.Any(f => f.Type is MlirTypeParameterType)
+        && iterableType?.TypeParams is { Count: > 0 }) {
+      var resolvedFields = tupleElem.Fields.Select(f => {
+        if (f.Type is MlirTypeParameterType tp
+            && iterableType.TypeParams.TryGetValue(tp.ParameterName, out var concreteType))
+          return new MlirStructField(f.Name, concreteType, f.IsExported, f.IsMutable, f.DefaultValue);
+        return f;
+      }).ToList();
+      elementMlirType = new MlirStructType(tupleElem.Name, resolvedFields, isTuple: true);
     }
     var elementKind = elementMlirType!.ToValueKind();
     var elementStructTypeName = elementMlirType switch {
@@ -7323,39 +7369,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     };
     _currentBlock!.AddOp(op);
     return new ExprResult.Direct(op.Result);
-  }
-
-  /// <summary>
-  /// Parse a struct literal: {field: value, ...} or TypeName{field: value, ...}
-  /// The opening '{' has NOT been consumed yet.
-  /// </summary>
-  /// <summary>
-  /// Parses an array literal: [expr, expr, ...].
-  /// Creates a stack-allocated __ManagedMemory struct and wraps it in an Array struct.
-  /// </summary>
-  private ExprResult.Direct ParseArrayLiteral() {
-    var (managedStruct, arrayTag, elementCount, elementKind, elementStructTypeName) = EmitArrayLiteralElements();
-
-    // Find the appropriate typealias for this element type
-    // e.g., byte -> ByteArray, int -> IntArray, Pair -> __Array_Pair
-    var arrayTypeName = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
-
-    // Create Array struct: {iterIndex: 0, managed: <managed>}
-    var iterIndexLit = new MaxonLiteralOp(0L);
-    _currentBlock!.AddOp(iterIndexLit);
-
-    var arrayFields = new List<(string Name, MaxonValue Value)> {
-      ("iterIndex", iterIndexLit.Result),
-      ("managed", managedStruct.Result)
-    };
-    var arrayStruct = new MaxonStructLiteralOp(arrayTypeName, arrayFields);
-    _currentBlock!.AddOp(arrayStruct);
-
-    // Record the element variable names for lowering to resolve the buffer
-    arrayStruct.ArrayLiteralTag = arrayTag;
-    arrayStruct.ArrayLiteralCount = elementCount;
-
-    return new ExprResult.Direct(arrayStruct.Result);
   }
 
   /// <summary>
