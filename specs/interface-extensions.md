@@ -101,7 +101,7 @@ type IntList implements Countable
   end 'value'
 end 'IntList'
 
-function main() returns Integer
+function main() returns ExitCode
   var list = IntList{data: 5}
   return list.count()
 end 'main'
@@ -131,7 +131,7 @@ type Number implements Summable
   end 'value'
 end 'Number'
 
-function main() returns Integer
+function main() returns ExitCode
   var num = Number{n: 21}
   return num.doubled()
 end 'main'
@@ -167,7 +167,7 @@ type TypeB implements Valued
   end 'val'
 end 'TypeB'
 
-function main() returns Integer
+function main() returns ExitCode
   var ta = TypeA{a: 5}
   var tb = TypeB{b: 10}
   return ta.valPlusTen() + tb.valPlusTen()
@@ -198,7 +198,7 @@ type Amount implements Scalable
   end 'base'
 end 'Amount'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Amount{amount: 7}
   return a.scale(6)
 end 'main'
@@ -239,7 +239,7 @@ type Coord implements Pointlike
   end 'getY'
 end 'Coord'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Coord{cx: 10, cy: 32}
   var p = c.asSimple()
   return p.x + p.y
@@ -252,7 +252,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-array -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var nums = [1, 2, 3, 4, 5]
   var doubled = nums.map((x Integer) gives x * 2)
   
@@ -274,7 +274,7 @@ end 'main'
 ```maxon
 typealias IntSet = Set with int
 
-function main() returns Integer
+function main() returns ExitCode
   var s = IntSet{}
   s.insert(10)
   s.insert(20)
@@ -296,7 +296,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-map -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["a": 1, "b": 2, "c": 3]
 
   var sum = 0
@@ -314,7 +314,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-map-with-function -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["a": 1, "b": 2, "c": 3]
   var mapped = m.map((p) gives p)
 

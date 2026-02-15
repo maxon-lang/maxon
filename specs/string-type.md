@@ -155,7 +155,7 @@ When you assign a string to another variable, they share storage. If either is m
 
 <!-- test: basic-declaration -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   if s == "hello" 'check'
     return 0
@@ -169,7 +169,7 @@ end 'main'
 
 <!-- test: empty-string -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = ""
   if s == "" 'check'
     return 0
@@ -183,7 +183,7 @@ end 'main'
 
 <!-- test: long-string -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "this string is longer than fifteen bytes"
   if s == "this string is longer than fifteen bytes" 'check'
     return 0
@@ -197,7 +197,7 @@ end 'main'
 
 <!-- test: inequality -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   if s != "world" 'check'
     return 0
@@ -211,7 +211,7 @@ end 'main'
 
 <!-- test: equality-with-logical-and -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   var c = 'A'
   if s == "hello" and c == 'A' 'check'
@@ -226,7 +226,7 @@ end 'main'
 
 <!-- test: print-string -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   print(s)
   return 0
@@ -241,7 +241,7 @@ hello
 
 <!-- test: print-literal -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   print("Hello, World!")
   return 0
 end 'main'
@@ -255,7 +255,7 @@ Hello, World!
 
 <!-- test: string-interpolation-concatenation -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = "hello"
   var b = "world"
   var c = "{a} {b}"
@@ -272,7 +272,7 @@ hello world
 
 <!-- test: count-method -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   print("{s.count()}\n")
   return 0
@@ -287,7 +287,7 @@ end 'main'
 
 <!-- test: isEmpty-method -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var empty = ""
   var nonempty = "hello"
   if empty.isEmpty() 'check1'
@@ -311,7 +311,7 @@ end 'main'
 
 <!-- test: startsWith -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   if s.startsWith("hello") 'c1'
     print("1\n")
@@ -331,7 +331,7 @@ end 'main'
 
 <!-- test: endsWith -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   if s.endsWith("world") 'c1'
     print("1\n")
@@ -351,7 +351,7 @@ end 'main'
 
 <!-- test: contains -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   if s.contains("lo wo") 'c1'
     print("1\n")
@@ -371,7 +371,7 @@ end 'main'
 
 <!-- test: find -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var idx = try s.findFirst("world") otherwise s.endIndex()
   print("{idx.charIndex()}\n")
@@ -392,7 +392,7 @@ end 'main'
 
 <!-- test: replace-single -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var result = s.replace("world", with: "there")
   print(result)
@@ -408,7 +408,7 @@ hello there
 
 <!-- test: replace-multiple -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "aaa bbb aaa"
   var result = s.replace("aaa", with: "x")
   print(result)
@@ -424,7 +424,7 @@ x bbb x
 
 <!-- test: replace-no-match -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var result = s.replace("xyz", with: "abc")
   print(result)
@@ -440,7 +440,7 @@ hello world
 
 <!-- test: replace-empty-needle -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   var result = s.replace("", with: "x")
   print(result)
@@ -456,7 +456,7 @@ hello
 
 <!-- test: replace-with-empty -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var result = s.replace("o", with: "")
   print(result)
@@ -472,7 +472,7 @@ hell wrld
 
 <!-- test: replace-adjacent -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "aaaa"
   var result = s.replace("aa", with: "b")
   print(result)
@@ -488,7 +488,7 @@ bb
 
 <!-- test: replaceFirst-single -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var result = s.replaceFirst("o", with: "0")
   print(result)
@@ -504,7 +504,7 @@ hell0 world
 
 <!-- test: replaceFirst-multiple-occurrences -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "aaa bbb aaa"
   var result = s.replaceFirst("aaa", with: "x")
   print(result)
@@ -520,7 +520,7 @@ x bbb aaa
 
 <!-- test: replaceFirst-no-match -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var result = s.replaceFirst("xyz", with: "abc")
   print(result)
@@ -536,7 +536,7 @@ hello world
 
 <!-- test: for-in-string -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "abc"
   for c in s 'loop'
     print("{c}\n")
@@ -555,7 +555,7 @@ c
 
 <!-- test: byteview-iteration -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "abc"
   for b in s.bytes() 'loop'
     print("{b}\n")
@@ -574,7 +574,7 @@ end 'main'
 
 <!-- test: utf16-ascii -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "ABC"
   for u in s.utf16() 'loop'
     print("{u}\n")
@@ -593,7 +593,7 @@ end 'main'
 
 <!-- test: utf16-bmp -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "αβγ"
   for u in s.utf16() 'loop'
     print("{u}\n")
@@ -612,7 +612,7 @@ end 'main'
 
 <!-- test: utf16-surrogate-pair -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "😀"
   for u in s.utf16() 'loop'
     print("{u}\n")
@@ -630,7 +630,7 @@ end 'main'
 
 <!-- test: utf16-mixed -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "A😀B"
   for u in s.utf16() 'loop'
     print("{u}\n")
@@ -650,7 +650,7 @@ end 'main'
 
 <!-- test: utf16-length -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "A😀B"
   var view = s.utf16()
   print("{view.count()}\n")
@@ -666,7 +666,7 @@ end 'main'
 
 <!-- test: utf16-is-lead-surrogate -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // 0xD83D = 55357 (high surrogate for 😀)
   if utf16IsLeadSurrogate(55357) 'c1'
     print("1\n")
@@ -689,7 +689,7 @@ end 'main'
 
 <!-- test: utf16-is-trail-surrogate -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // 0xDE00 = 56832 (low surrogate for 😀)
   if utf16IsTrailSurrogate(56832) 'c4'
     print("1\n")
@@ -712,7 +712,7 @@ end 'main'
 
 <!-- test: utf16-is-surrogate -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if utf16IsSurrogate(55357) 'c7'
     print("1\n")
   end 'c7'
@@ -735,7 +735,7 @@ end 'main'
 
 <!-- test: utf16-width -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   print("{utf16Width(65)}\n")      // ASCII 'A' = 1 code unit
   print("{utf16Width(945)}\n")     // Greek α = 1 code unit (BMP)
   print("{utf16Width(128512)}\n")  // 😀 U+1F600 = 2 code units
@@ -753,7 +753,7 @@ end 'main'
 
 <!-- test: utf16-encode-surrogates -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // 😀 U+1F600 = 128512
   print("{utf16LeadSurrogate(128512)}\n")   // 55357 (0xD83D)
   print("{utf16TrailSurrogate(128512)}\n")  // 56832 (0xDE00)
@@ -770,7 +770,7 @@ end 'main'
 
 <!-- test: utf16-decode-surrogates -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Decode surrogate pair back to codepoint
   var cp = utf16DecodeSurrogates(55357, low: 56832)
   print("{cp}\n")  // 128512 (U+1F600)
@@ -786,7 +786,7 @@ end 'main'
 
 <!-- test: utf16-is-bmp -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if utf16IsBmp(65) 'c10'
     print("1\n")       // ASCII
   end 'c10'
@@ -813,7 +813,7 @@ end 'main'
 
 <!-- test: utf16-valid-surrogate-pair -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if utf16IsValidSurrogatePair(55357, low: 56832) 'c14'
     print("1\n")  // valid pair
   end 'c14'
@@ -835,7 +835,7 @@ end 'main'
 
 <!-- test: heap-string-data-access -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Verify heap-allocated string data is accessible via bytes()
   var s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   // Read first byte ('A' = 65)
@@ -865,7 +865,7 @@ end 'main'
 
 <!-- test: heap-string-equality -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = "This string is definitely longer than fifteen bytes"
   var b = "This string is definitely longer than fifteen bytes"
   if a == b 'check'
@@ -885,7 +885,7 @@ end 'main'
 
 <!-- test: heap-string-inequality -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = "This string is definitely longer than fifteen bytes"
   var b = "This string is definitely longer than fifteen chars"
   if a != b 'check'
@@ -905,7 +905,7 @@ end 'main'
 
 <!-- test: heap-string-iteration -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
   var sum = 0
   // Iterate over bytes directly to test heap string iteration
@@ -925,7 +925,7 @@ end 'main'
 
 <!-- test: heap-string-byteview -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
   var count = 0
   for b in s.bytes() 'loop'
@@ -948,7 +948,7 @@ end 'main'
 <!-- disabled-test: memory-tracking-simple-interp -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = "hello"
   var b = "world"
   var s = "{a} {b}"
@@ -996,7 +996,7 @@ Cleanups:  4
 String interpolation with multiple parts creates a single allocation with O(n) copy.
 All intermediate buffers use stack allocation for primitives.
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = "a"
   var b = "b"
   var c = "c"
@@ -1050,7 +1050,7 @@ Cleanups:  6
 String accumulation in loop properly releases old values on reassignment.
 The final value is released at scope exit. Uses efficient O(n) interpolation.
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = ""
   var x = "x"
   var i = 0
@@ -1112,7 +1112,7 @@ Cleanups:  6
 <!-- disabled-test: memory-tracking-no-leak-scope-exit -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if true 'scope'
     var temp = "heap allocated string here!"
     print("{temp.count()}\n")
@@ -1149,7 +1149,7 @@ Cleanups:  2
 
 <!-- test: toLower -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "HELLO"
   print(s.toLower())
   return 0
@@ -1165,7 +1165,7 @@ hello
 <!-- test: bytes-count-method -->
 ### bytes().count() Method
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   print("{s.bytes().count()}\n")
   return 0
@@ -1181,7 +1181,7 @@ end 'main'
 <!-- disabled-test: bytes-count-multibyte -->
 ### bytes().count() with Multi-byte Characters
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "café"
   print("{s.bytes().count()}\n")  // 5 bytes (c=1, a=1, f=1, é=2)
   return 0
@@ -1197,7 +1197,7 @@ end 'main'
 <!-- disabled-test: count-graphemes -->
 ### count Returns Grapheme Count
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "café"
   print("{s.count()}\n")  // 4 graphemes
   return 0
@@ -1213,7 +1213,7 @@ end 'main'
 <!-- test: count-vs-bytes-count -->
 ### count vs bytes().count()
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "🇺🇸"  // Flag emoji (1 grapheme, 8 bytes)
   print("{s.count()}\n")
   print("{s.bytes().count()}\n")
@@ -1231,7 +1231,7 @@ end 'main'
 <!-- test: grapheme-iteration-emoji -->
 ### Grapheme Iteration with Emoji
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "a🎉b"
   var count = 0
   for c in s 'loop'
@@ -1253,7 +1253,7 @@ a🎉b
 <!-- test: grapheme-iteration-flag -->
 ### Grapheme Iteration with Flag Emoji
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "🇺🇸🇬🇧"  // Two flag emojis
   var count = 0
   for c in s 'loop'
@@ -1275,7 +1275,7 @@ end 'main'
 <!-- test: grapheme-iteration-zwj -->
 ### Grapheme Iteration with ZWJ Sequence
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
   var count = 0
   for c in s 'loop'
@@ -1297,7 +1297,7 @@ end 'main'
 <!-- test: codepoints-view -->
 ### Codepoints View
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "Aé"  // A (1 codepoint) + é (1 codepoint if precomposed)
   for cp in s.codepoints() 'loop'
     print("{cp}\n")
@@ -1315,7 +1315,7 @@ end 'main'
 
 <!-- test: string-reassignment -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   print("{s.count()}\n")
 
@@ -1342,7 +1342,7 @@ end 'main'
 <!-- test: slice-basic -->
 ### Basic String Slicing
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var start = s.startIndex()
   var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
@@ -1361,7 +1361,7 @@ hello
 <!-- test: slice-full -->
 ### Slice Entire String
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   var start = s.startIndex()
   var endIdx = s.endIndex()
@@ -1380,7 +1380,7 @@ hello
 <!-- test: slice-empty -->
 ### Empty Slice
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   var start = s.startIndex()
   var sub = s.slice(start, endIndex: start)
@@ -1398,7 +1398,7 @@ end 'main'
 <!-- test: slice-iteration -->
 ### Iterate Over Sliced String
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "abcdef"
   var start = s.startIndex()
   var idx = try s.findFirst("d") otherwise s.endIndex()
@@ -1421,7 +1421,7 @@ c
 <!-- test: cow-mutation-copies -->
 ### COW Mutation Creates Copy
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var original = "HELLO"
   var copy = original
   copy = copy.toLower()
@@ -1441,7 +1441,7 @@ hello
 <!-- test: cow-original-unchanged -->
 ### COW Original Unchanged After Copy Mutation
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = "TEST STRING"
   var b = a
   var c = a
@@ -1465,7 +1465,7 @@ TEST STRING
 ### Slice Is Independent After Parent Goes Out of Scope
 Demonstrates that sliced strings work correctly.
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var start = s.startIndex()
   var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()

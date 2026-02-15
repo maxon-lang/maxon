@@ -477,7 +477,7 @@ public static class MonomorphizationPass {
         return cloned;
       }
       case MaxonBinOp binOp: {
-        var cloned = new MaxonBinOp(binOp.Operator, mapValue(binOp.Lhs), mapValue(binOp.Rhs), binOp.OperandKind);
+        var cloned = new MaxonBinOp(binOp.Operator, mapValue(binOp.Lhs), mapValue(binOp.Rhs), binOp.OperandKind, binOp.OptimalType);
         valueMap[binOp.Result.Id] = cloned.Result;
         return cloned;
       }
@@ -546,7 +546,7 @@ public static class MonomorphizationPass {
       }
       case MaxonTruncOp t: { var c = new MaxonTruncOp(mapValue(t.Input)); valueMap[t.Result.Id] = c.Result; return c; }
       case MaxonIntToFloatOp i: { var c = new MaxonIntToFloatOp(mapValue(i.Input)); valueMap[i.Result.Id] = c.Result; return c; }
-      case MaxonCastOp ca: { var c = new MaxonCastOp(mapValue(ca.Input), ca.TargetKind); valueMap[ca.Result.Id] = c.Result; return c; }
+      case MaxonCastOp ca: { var c = new MaxonCastOp(mapValue(ca.Input), ca.TargetKind, ca.SourceOptimalType); valueMap[ca.Result.Id] = c.Result; return c; }
       case MaxonBitcastF64ToI64Op bc: { var c = new MaxonBitcastF64ToI64Op(mapValue(bc.Input)); valueMap[bc.Result.Id] = c.Result; return c; }
       case MaxonAbsOp a: { var c = new MaxonAbsOp(mapValue(a.Input)); valueMap[a.Result.Id] = c.Result; return c; }
       case MaxonSqrtOp s: { var c = new MaxonSqrtOp(mapValue(s.Input)); valueMap[s.Result.Id] = c.Result; return c; }

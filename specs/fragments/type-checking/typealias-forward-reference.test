@@ -5,7 +5,7 @@ type Foo
   let value Integer
 end 'Foo'
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = FooArray{}
   arr.push({value: 42})
   return arr.count() - 1
@@ -14,7 +14,7 @@ end 'main'
 ExitCode: 0
 ---
 module {
-  func @type-checking.main() -> i64 {
+  func @type-checking.main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor eax, eax
@@ -65,6 +65,24 @@ module {
     x86.call FooArray.count
     x86.mov ecx, 1
     x86.sub eax, ecx
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je type-checking.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_18]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

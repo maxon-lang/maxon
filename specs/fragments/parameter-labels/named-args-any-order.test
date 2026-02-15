@@ -3,7 +3,7 @@ function subtract(a Integer, b Integer) returns Integer
   return a - b
 end 'subtract'
 
-function main() returns Integer
+function main() returns ExitCode
   return subtract(b: 3, a: 10)
 end 'main'
 ---
@@ -16,12 +16,33 @@ module {
     x86.mov eax, ecx
     x86.ret
   }
-  func @parameter-labels.main() -> i64 {
+  func @parameter-labels.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 3
     x86.mov ecx, 10
     x86.mov rdx, rax
-    x86.jmp parameter-labels.subtract
+    x86.call parameter-labels.subtract
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je parameter-labels.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ---

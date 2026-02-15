@@ -28,7 +28,7 @@ Multiplication, division, and modulo have higher precedence than addition and su
 ### Example
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 10
   var b = 3
   var sum = a + b          // 13
@@ -63,7 +63,7 @@ end 'main'
 
 <!-- test: addition -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 5 + 3
 end 'main'
 ```
@@ -74,7 +74,7 @@ end 'main'
 
 <!-- test: multiplication -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 6 * 7
 end 'main'
 ```
@@ -85,7 +85,7 @@ end 'main'
 
 <!-- test: precedence -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 2 + 3 * 4
 end 'main'
 ```
@@ -96,7 +96,7 @@ end 'main'
 
 <!-- test: division-truncating-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 20 / 3
 end 'main'
 ```
@@ -107,7 +107,7 @@ end 'main'
 
 <!-- test: trunc-division-optimizes -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 20 / 3             // int/int = truncating int, returns 6
 end 'main'
 ```
@@ -118,7 +118,7 @@ end 'main'
 
 <!-- test: variable-division-optimizes -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 7
   var b = 2
   return a / b              // int/int = truncating int, returns 3
@@ -131,7 +131,7 @@ end 'main'
 
 <!-- test: negative-division -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var neg = -7
   let a = neg / 2           // -7/2 = -3 (truncating toward zero)
   if a == -3 'pass'
@@ -147,7 +147,7 @@ end 'main'
 
 <!-- test: modulo -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 17 mod 5
 end 'main'
 ```
@@ -158,7 +158,7 @@ end 'main'
 
 <!-- test: complex-expression -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 10
   var b = 3
   var result = (a + b) * 2 - a / b

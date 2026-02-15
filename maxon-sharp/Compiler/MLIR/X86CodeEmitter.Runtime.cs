@@ -19,6 +19,7 @@ public partial class X86CodeEmitter {
     EmitMaxonWriteStderr();
     EmitMaxonPanic();
     EmitMaxonI64ToString();
+    EmitMaxonU64ToString();
     EmitMaxonF64ToString();
     EmitMaxonBoolToString();
     EmitMaxonCommandLineCount();
@@ -330,6 +331,78 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x18, 8);
 
     DefineLabel("rt_i64str_epilogue");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_u64_to_string(value_in_rcx, buffer_ptr_in_rdx) -> length_in_rax
+  /// Converts an unsigned 64-bit integer to its decimal string representation.
+  /// Writes into caller-provided buffer (must be >= 21 bytes). Returns byte count.
+  /// Same algorithm as i64_to_string but without sign handling.
+  /// Stack: [rbp-8]=value, [rbp-16]=buffer
+  /// </summary>
+  private void EmitMaxonU64ToString() {
+    EmitRuntimeFunctionStart("maxon_u64_to_string", 2);
+
+    // Special case: value == 0
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("nz", "rt_u64str_not_zero");
+    // Write '0' to buffer[0], null to buffer[1]
+    EmitBytes(0xC6, 0x02, 0x30); // MOV byte [rdx], '0'
+    EmitBytes(0xC6, 0x42, 0x01, 0x00); // MOV byte [rdx+1], 0
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitJmp("rt_u64str_epilogue");
+
+    // not_zero: no sign check needed for unsigned
+    DefineLabel("rt_u64str_not_zero");
+
+    // R9 = buffer + 20 (write position, work backwards from end)
+    EmitMovRegReg(X86Register.R9, X86Register.Rdx); // R9 = buffer
+    EmitAddRegImm(X86Register.R9, 20); // R9 = buffer + 20
+    EmitBytes(0x41, 0xC6, 0x01, 0x00); // MOV byte [r9], 0 (null terminator)
+
+    // digit_loop: divide rcx by 10, write remainder as digit
+    DefineLabel("rt_u64str_digit_loop");
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9 (move write position back)
+    // RAX = value (for DIV)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = value
+    EmitMovRegImm(X86Register.Rcx, 10);
+    // Zero RDX before unsigned DIV
+    EmitBytes(0x48, 0x31, 0xD2); // XOR rdx, rdx
+    EmitBytes(0x48, 0xF7, 0xF1); // DIV rcx (RAX = quotient, RDX = remainder)
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // store quotient back
+    // Convert remainder to ASCII digit: RDX + '0'
+    EmitAddRegImm(X86Register.Rdx, 0x30); // RDX += '0'
+    // Write digit: MOV byte [r9], dl
+    EmitBytes(0x41, 0x88, 0x11); // MOV byte [r9], dl
+    // Check if quotient is zero
+    EmitBytes(0x48, 0x83, 0x7D, 0xF8, 0x00); // CMP qword [rbp-8], 0
+    EmitJcc("nz", "rt_u64str_digit_loop");
+
+    // No sign prefix needed — copy from R9 to buffer start, compute length
+    // Length = (buffer + 20) - R9
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitAddRegImm(X86Register.Rax, 20);
+    EmitBytes(0x4C, 0x29, 0xC8); // SUB rax, r9 => RAX = length
+
+    // Copy the digits from R9 to buffer start
+    // RSI = R9 (src), RDI = buffer (dst), RCX = length
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // save length to [rbp-24]
+    EmitBytes(0x4C, 0x89, 0xCE); // MOV rsi, r9
+    EmitMovRegMem(X86Register.Rdi, -0x10, 8); // RDI = buffer
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = length
+    EmitBytes(0xF3, 0xA4); // REP MOVSB
+
+    // Null-terminate at buffer[length]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = buffer
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = length
+    EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx
+    EmitBytes(0xC6, 0x00, 0x00); // MOV byte [rax], 0
+
+    // Return length
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+
+    DefineLabel("rt_u64str_epilogue");
     EmitRuntimeFunctionEnd();
   }
 

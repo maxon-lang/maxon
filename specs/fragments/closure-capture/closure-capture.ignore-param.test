@@ -3,7 +3,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   var value = 42
   var result = apply(f: (_ Integer) gives value, x: 99)
   return result
@@ -22,13 +22,13 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @closure-capture.main() -> i64 {
+  func @closure-capture.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 42
     x86.lea_func ecx, [__closure_0]
     x86.mov edx, 8
-    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], ecx
     x86.mov rcx, rdx
     x86.call maxon_alloc
     x86.mov ebx, 42
@@ -36,11 +36,30 @@ module {
     x86.mov [rbp-8], eax
     x86.mov esi, 99
     x86.mov edi, [rbp-8]
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-24]
     x86.mov rdx, rdi
     x86.mov r8, rsi
+    x86.call closure-capture.apply
+    x86.mov [rbp-16], eax
+    x86.xor r8, r8
+    x86.cmp eax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
+    x86.cmp rax, rcx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je closure-capture.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_15]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp closure-capture.apply
+    x86.ret
   }
   func @__closure_0(_: i64, __env: i64) -> i64 {
   entry:

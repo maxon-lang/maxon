@@ -1,5 +1,5 @@
 // Test: power-of-two
-function main() returns Integer
+function main() returns ExitCode
   // Calculate 2^n using shift
   var n = 5
   return 1 shl n        // 32
@@ -8,14 +8,33 @@ end 'main'
 ExitCode: 32
 ---
 module {
-  func @bitwise-operators.main() -> i64 {
+  func @bitwise-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 5
     x86.mov ecx, 1
     x86.mov edx, ecx
     x86.mov ecx, eax
     x86.shl edx, cl
-    x86.mov eax, edx
+    x86.mov [rbp-8], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je bitwise-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

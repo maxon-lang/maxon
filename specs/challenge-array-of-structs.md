@@ -21,7 +21,7 @@ type Point
   export var y Integer
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p1 = Point{x: 1, y: 2}
   var p2 = Point{x: 3, y: 4}
   var points = [p1, p2]
@@ -41,7 +41,7 @@ type Pair
   export var second Integer
 end 'Pair'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Pair{first: 10, second: 20}
   var arr = [p]
   var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
@@ -68,7 +68,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-function main() returns Integer
+function main() returns ExitCode
   var items = ItemArray{}
   items.push({color: Color.red})
   items.push({color: Color.green})
@@ -102,7 +102,7 @@ end 'Task'
 
 typealias TaskArray = Array with Task
 
-function main() returns Integer
+function main() returns ExitCode
   var tasks = TaskArray{}
   tasks.push({status: Status.pending})
   tasks.push({status: Status.active})

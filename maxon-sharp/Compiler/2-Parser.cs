@@ -266,6 +266,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // VarInfo now tracks struct type name for struct variables, or function type for function variables
   private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false);
 
+  private MlirType? GetOptimalType(MaxonValue value) {
+    // Look up the variable's ranged type to get the optimal type for codegen
+    foreach (var (_, info) in _variables) {
+      if (info.Value.Id == value.Id && info.StructTypeName != null
+          && _typeRegistry.TryGetValue(info.StructTypeName, out var rt)
+          && rt is MlirRangedPrimitiveType rpt) {
+        return rpt.OptimalType;
+      }
+    }
+    return null;
+  }
+
   // Tracks captured variables during closure parsing
   private record CaptureInfo(string Name, MaxonValueKind Kind, MaxonValue OuterValue, string? StructTypeName);
   private List<CaptureInfo>? _closureCaptures;
@@ -1245,6 +1257,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private static string ResolveTypeName(string sourceTypeName) {
     return sourceTypeName switch {
       "int" => MlirType.I64.Name,
+
       "float" => MlirType.F64.Name,
       "bool" => MlirType.I1.Name,
       "byte" => MlirType.I8.Name,
@@ -2142,6 +2155,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return (baseTypeName, keyword) switch {
         ("int", "min") => (double)long.MinValue,
         ("int", "max") => (double)long.MaxValue,
+
         ("float", "min") => double.MinValue,
         ("float", "max") => double.MaxValue,
         ("byte", "min") => 0,
@@ -3384,6 +3398,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
+
       "float" => _parsingTypeAliasRhs || _parsingExtension || _isStdlib
         ? MlirType.F64
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -3413,6 +3428,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private string ExpectTypeName() {
     if (Check(TokenType.Int)) return Advance().Value;
+
     if (Check(TokenType.Float)) return Advance().Value;
     if (Check(TokenType.Bool)) return Advance().Value;
     if (Check(TokenType.Byte)) return Advance().Value;
@@ -3433,6 +3449,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           Current().Line, Current().Column);
       Advance(); return MaxonValueKind.Integer;
     }
+
     if (Check(TokenType.Float)) {
       if (!_isStdlib)
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -3754,6 +3771,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var value = ResolveExprValue(ParseExpression());
         _anonymousStructTypeHint = savedHint;
         CheckReturnType(value, returnToken);
+        value = CheckReturnRange(value, returnToken);
         _currentBlock!.AddOp(new MaxonReturnOp(value));
       }
     } else {
@@ -3805,6 +3823,47 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     throw new CompileError(ErrorCode.SemanticTypeMismatch,
       $"Cannot return '{KindToTypeName(valueKind)}' from function declared to return '{KindToTypeName(expectedKind)}'",
       returnToken.Line, returnToken.Column);
+  }
+
+  private MaxonValue CheckReturnRange(MaxonValue value, Token returnToken) {
+    if (_currentFunction?.ReturnType is not MlirRangedPrimitiveType rangedType)
+      return value;
+
+    // No check needed when the range covers the full base type range
+    if (rangedType.IsFullBaseRange)
+      return value;
+
+    var expectedKind = rangedType.BaseType == MlirType.I64 ? MaxonValueKind.Integer
+      : rangedType.BaseType == MlirType.F64 ? MaxonValueKind.Float
+      : rangedType.BaseType == MlirType.I8 ? MaxonValueKind.Byte
+      : throw new InvalidOperationException();
+
+    // Compile-time range check for literal constants
+    bool isLiteral = false;
+    if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == value) {
+      double numericValue = litOp.ValueKind switch {
+        MaxonValueKind.Integer => (double)litOp.IntValue,
+        MaxonValueKind.Float => litOp.FloatValue,
+        MaxonValueKind.Byte => (double)litOp.IntValue,
+        _ => double.NaN
+      };
+      if (!double.IsNaN(numericValue)) {
+        isLiteral = true;
+        var upperLimit = rangedType.UpperInclusive ? rangedType.UpperBound : rangedType.UpperBound - 1;
+        if (numericValue < rangedType.LowerBound || numericValue > upperLimit) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Value {litOp.IntValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
+            returnToken.Line, returnToken.Column);
+        }
+      }
+    }
+
+    // Runtime range check for non-constant values
+    if (!isLiteral) {
+      value = EmitRuntimeRangeCheck(value, rangedType, expectedKind);
+    }
+
+    return value;
   }
 
   private void ParseThrow() {
@@ -4117,9 +4176,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, FnTypeName: fnType);
     } else {
       var kind = DetermineValueKind(initValue);
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       var rangedTypeName = _lastRangedTypeName;
       _lastRangedTypeName = null;
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName);
     }
   }
@@ -4671,6 +4730,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private static readonly Dictionary<string, (MlirType Type, MaxonValueKind Kind)> PrimitiveTypes = new() {
     ["int"] = (MlirType.I64, MaxonValueKind.Integer),
+
     ["float"] = (MlirType.F64, MaxonValueKind.Float),
     ["bool"] = (MlirType.I1, MaxonValueKind.Bool),
     ["byte"] = (MlirType.I8, MaxonValueKind.Byte),
@@ -5301,7 +5361,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void ValidateStrideableConformance(MaxonValueKind kind, MaxonValue value, Token forToken) {
-    if (kind == MaxonValueKind.Integer) return; // int always implements Strideable
+    if (kind is MaxonValueKind.Integer) return; // integers always implement Strideable
 
     if (kind == MaxonValueKind.Struct && value is MaxonStruct ms) {
       if (_typeRegistry.TryGetValue(ms.TypeName, out var regType) && regType is MlirStructType st
@@ -6626,7 +6686,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // int / float or float / int still produces float
       }
 
-      var binOp = new MaxonBinOp(resolvedOp, promotedLhs, promotedRhs, kind);
+      MlirType? optimalType = null;
+      if (kind == MaxonValueKind.Integer) {
+        optimalType = GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs);
+      }
+      var binOp = new MaxonBinOp(resolvedOp, promotedLhs, promotedRhs, kind, optimalType);
       _currentBlock!.AddOp(binOp);
       lhs = new ExprResult.Direct(binOp.Result);
     }
@@ -6770,10 +6834,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(xorOp);
         return new ExprResult.Direct(xorOp.Result);
       }
-      if (kind == MaxonValueKind.Integer) {
+      if (kind is MaxonValueKind.Integer) {
         var allOnesOp = new MaxonLiteralOp(-1L);
         _currentBlock!.AddOp(allOnesOp);
-        var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, allOnesOp.Result, MaxonValueKind.Integer);
+        var xorOp = new MaxonBinOp(MaxonBinOperator.BitXor, innerVal, allOnesOp.Result, kind);
         _currentBlock!.AddOp(xorOp);
         return new ExprResult.Direct(xorOp.Result);
       }
@@ -7273,6 +7337,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             Expect(TokenType.RightParen);
             var resultKind = ifaceMethod.ReturnTypeName switch {
               "int" => MaxonValueKind.Integer,
+
               "float" => MaxonValueKind.Float,
               "bool" => MaxonValueKind.Bool,
               "byte" => MaxonValueKind.Byte,
@@ -7354,7 +7419,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         "No type implements BuiltinStringLiteral (String type not found in stdlib)",
         token.Line, token.Column);
 
-    var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec)>();
+    var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)>();
     var text = token.Value;
     var pos = 0;
     var literalBuf = new System.Text.StringBuilder();
@@ -7374,7 +7439,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
       } else if (text[pos] == '{') {
         if (literalBuf.Length > 0) {
-          parts.Add((true, literalBuf.ToString(), null, null));
+          parts.Add((true, literalBuf.ToString(), null, null, (MlirType?)null));
           literalBuf.Clear();
         }
         pos++; // skip '{'
@@ -7396,7 +7461,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           exprText = exprText[..colonIdx];
         }
 
-        var exprValue = ParseInterpolationExpression(exprText);
+        var (exprValue, _exprKind) = ParseInterpolationExpressionWithKind(exprText);
+        var exprOptimalType = GetOptimalType(exprValue);
 
         // Non-String structs need a toString call — emit it here as a regular MaxonCallOp
         // so DCE sees it naturally, just like any other function call
@@ -7426,7 +7492,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           exprValue = callOp.Result!;
         }
 
-        parts.Add((false, null, exprValue, formatSpec));
+        parts.Add((false, null, exprValue, formatSpec, exprOptimalType));
       } else {
         literalBuf.Append(text[pos]);
         pos++;
@@ -7434,7 +7500,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     if (literalBuf.Length > 0) {
-      parts.Add((true, literalBuf.ToString(), null, null));
+      parts.Add((true, literalBuf.ToString(), null, null, (MlirType?)null));
     }
 
     // If no expression parts, emit a regular string literal with escaped content
@@ -7450,7 +7516,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return interpOp.Result;
   }
 
-  private MaxonValue ParseInterpolationExpression(string exprText) {
+  /// Returns the resolved value and its value kind (needed to distinguish signed vs unsigned in interpolation).
+  private (MaxonValue Value, MaxonValueKind Kind) ParseInterpolationExpressionWithKind(string exprText) {
     var lexer = new Lexer(exprText);
     var exprTokens = lexer.Tokenize();
 
@@ -7464,7 +7531,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     try {
       var exprResult = ParseExpression();
-      return ResolveExprValue(exprResult);
+      var kind = exprResult switch {
+        ExprResult.VarRef v => v.Info.Kind,
+        ExprResult.Direct d => GetValueKind(d.Value),
+        ExprResult _ => throw new InvalidOperationException($"Unexpected ExprResult type: {exprResult.GetType().Name}"),
+      };
+      return (ResolveExprValue(exprResult), kind);
     } finally {
       _tokens.Clear();
       _tokens.AddRange(savedTokens);
@@ -8505,7 +8577,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var lhsKind = DetermineValueKind(lhs);
     var rhsKind = DetermineValueKind(rhs);
 
-    if (lhsKind == rhsKind) return (lhsKind, lhs, rhs);
+    if (lhsKind == rhsKind) {
+      return (lhsKind, lhs, rhs);
+    }
 
     // Comparisons do not allow implicit int/float promotion
     if (IsComparisonOp(op)) {
@@ -8518,7 +8592,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (IsSmallIntLiteral(lhs))
           return (MaxonValueKind.Byte, lhs, rhs);
       }
-
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"type mismatch: 'cannot compare {KindToTypeName(lhsKind)} with {KindToTypeName(rhsKind)}'",
         opToken.Line, opToken.Column);
@@ -8531,6 +8604,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       $"Cannot operate on {KindToTypeName(lhsKind)} and {KindToTypeName(rhsKind)}",
       opToken.Line, opToken.Column);
   }
+
 
   private bool IsSmallIntLiteral(MaxonValue value) {
     // Check if this value is an int literal in 0-255 range
@@ -9212,6 +9286,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
+    _lastRangedTypeName = null;
     return callOp;
   }
 
@@ -9232,6 +9307,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
     _currentBlock!.AddOp(callOp);
+    _lastRangedTypeName = null;
     return callOp;
   }
 

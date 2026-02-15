@@ -64,7 +64,7 @@ function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(3, b: 4)
 end 'main'
 ```
@@ -81,7 +81,7 @@ function add() returns Integer
   return 3 + 4
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add()
 end 'main'
 ```
@@ -96,7 +96,7 @@ function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(10, b: 20)
 end 'main'
 ```
@@ -115,7 +115,7 @@ function quadruple(x Integer) returns Integer
   return double(double(x))
 end 'quadruple'
 
-function main() returns Integer
+function main() returns ExitCode
   return quadruple(3)
 end 'main'
 ```
@@ -130,7 +130,7 @@ function doNothing()
   var x = 1
 end 'doNothing'
 
-function main() returns Integer
+function main() returns ExitCode
   doNothing()
   return 0
 end 'main'
@@ -146,7 +146,7 @@ function foo() int
   return 0
 end 'foo'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -161,7 +161,7 @@ function useSecond(_ Integer, b Integer) returns Integer
   return b
 end 'useSecond'
 
-function main() returns Integer
+function main() returns ExitCode
   return useSecond(10, b: 42)
 end 'main'
 ```

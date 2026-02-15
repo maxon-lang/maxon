@@ -1,5 +1,5 @@
 // Test: math-intrinsic-with-int
-function main() returns Integer
+function main() returns ExitCode
   var x = 16
   var result = sqrt(x)
   return trunc(result)
@@ -8,12 +8,32 @@ end 'main'
 ExitCode: 4
 ---
 module {
-  func @contextual-literal-typing.main() -> i64 {
+  func @contextual-literal-typing.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 16
     x86.cvtsi2sd xmm0, eax
     x86.sqrtsd xmm1, xmm0
-    x86.cvttsd2si eax, xmm1
+    x86.cvttsd2si ecx, xmm1
+    x86.mov [rbp-8], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je contextual-literal-typing.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

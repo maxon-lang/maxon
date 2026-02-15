@@ -1,7 +1,7 @@
 // Test: array-in-loop
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   var i = 0
   var sum = 0
   while i < 3 'loop'
@@ -47,9 +47,9 @@ Cleanups:  3
 ```
 ---
 module {
-  func @alloc-tracking.main() -> i64 {
+  func @alloc-tracking.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
@@ -151,6 +151,24 @@ module {
     x86.jmp alloc-tracking.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-16]
+    x86.mov [rbp-72], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je alloc-tracking.main.__range_ok_5
+  __range_panic_5:
+    x86.lea_rdata rax, [__panic_msg_36]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_5:
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }

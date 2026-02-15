@@ -7,7 +7,7 @@ type Value
   end 'create'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value.create()
   v.n = 42
   return v.n
@@ -30,7 +30,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @export-var-fields.main() -> i64 {
+  func @export-var-fields.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.call Value.create
@@ -39,7 +39,25 @@ module {
     x86.mov ecx, [rbp-8]
     x86.mov [ecx+0], eax
     x86.mov edx, [rbp-8]
-    x86.mov eax, [edx+0]
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-16], ebx
+    x86.xor esi, esi
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rbx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je export-var-fields.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_12]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

@@ -1,7 +1,7 @@
 // Test: count-single
 typealias Vec1 = Vector with 1 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec1{}
   return v.count()
 end 'main'
@@ -9,9 +9,9 @@ end 'main'
 ExitCode: 1
 ---
 module {
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.mov edx, 1
@@ -48,9 +48,29 @@ module {
     x86.mov eax, [rbp-16]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov rcx, [rbp-16]
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call Vec1.count
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je vector.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_15]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
     x86.epilogue
-    x86.jmp Vec1.count
+    x86.ret
   }
 }
 ---

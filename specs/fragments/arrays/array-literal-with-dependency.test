@@ -3,7 +3,7 @@ let FIRST = 10
 let SECOND = 20
 let values = [FIRST, SECOND, 30]
 
-function main() returns Integer
+function main() returns ExitCode
   var v0 = try values.get(0) otherwise 0
   var v1 = try values.get(1) otherwise 0
   var v2 = try values.get(2) otherwise 0
@@ -13,9 +13,9 @@ end 'main'
 ExitCode: 60
 ---
 module {
-  func @arrays.main() -> i64 {
+  func @arrays.main() -> u32 {
   entry:
-    x86.prologue stack_size=128
+    x86.prologue stack_size=144
     x86.mov eax, 10
     x86.mov ecx, 20
     x86.mov edx, 30
@@ -116,7 +116,25 @@ module {
     x86.mov ecx, [rbp-72]
     x86.mov edx, [rbp-104]
     x86.add ecx, edx
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-136], ecx
+    x86.xor ebx, ebx
+    x86.cmp ecx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rcx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je arrays.main.__range_ok_13
+  __range_panic_13:
+    x86.lea_rdata rax, [__panic_msg_49]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_13:
+    x86.mov eax, [rbp-136]
     x86.epilogue
     x86.ret
   }

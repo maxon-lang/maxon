@@ -1,5 +1,5 @@
 // Test: docs-example-3
-function main() returns Integer
+function main() returns ExitCode
   var x = 2
   let result = match x 'convert'
     1 gives 10
@@ -14,9 +14,9 @@ end 'main'
 ExitCode: 20
 ---
 module {
-  func @match-simple.main() -> i64 {
+  func @match-simple.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 2
     x86.mov [rbp-8], eax
     x86.jmp match-simple.main.convert_0.cmp0
@@ -53,6 +53,24 @@ module {
     x86.jmp match-simple.main.convert_0.merge
   convert_0.merge:
     x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je match-simple.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_21]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

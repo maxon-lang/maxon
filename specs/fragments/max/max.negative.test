@@ -1,5 +1,5 @@
 // Test: max.negative
-function main() returns Integer
+function main() returns ExitCode
   var x = max(-5.0, 3.0)
   return trunc(x)
 end 'main'
@@ -7,13 +7,33 @@ end 'main'
 ExitCode: 3
 ---
 module {
-  func @max.main() -> i64 {
+  func @max.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_-5]
     x86.movsd xmm1, [rip+__float_3]
     x86.movsd xmm2, xmm0
     x86.maxsd xmm2, xmm1
     x86.cvttsd2si eax, xmm2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je max.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_9]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

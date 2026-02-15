@@ -1,7 +1,7 @@
 // Test: stdlib-map-on-set
 typealias IntSet = Set with int
 
-function main() returns Integer
+function main() returns ExitCode
   var s = IntSet{}
   s.insert(10)
   s.insert(20)
@@ -20,9 +20,9 @@ end 'main'
 ExitCode: 63
 ---
 module {
-  func @interface-extensions.main() -> i64 {
+  func @interface-extensions.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
+    x86.prologue stack_size=112
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -130,17 +130,17 @@ module {
     x86.mov [rbp-56], eax
     x86.mov eax, [rbp-48]
     x86.mov ecx, 16
-    x86.mov [rbp-80], eax
+    x86.mov [rbp-88], eax
     x86.call maxon_alloc
-    x86.mov ecx, [rbp-80]
+    x86.mov ecx, [rbp-88]
     x86.mov edx, [ecx+0]
     x86.mov [eax+0], edx
     x86.mov edx, [ecx+8]
     x86.mov ecx, 32
-    x86.mov [rbp-88], eax
-    x86.mov [rbp-96], edx
+    x86.mov [rbp-96], eax
+    x86.mov [rbp-104], edx
     x86.call maxon_alloc
-    x86.mov ecx, [rbp-96]
+    x86.mov ecx, [rbp-104]
     x86.mov edx, [ecx+0]
     x86.mov [eax+0], edx
     x86.mov edx, [ecx+8]
@@ -149,7 +149,7 @@ module {
     x86.mov [eax+16], edx
     x86.mov edx, [ecx+24]
     x86.mov [eax+24], edx
-    x86.mov ecx, [rbp-88]
+    x86.mov ecx, [rbp-96]
     x86.mov [ecx+8], eax
     x86.mov [rbp-64], ecx
     x86.jmp interface-extensions.main.loop_0.header
@@ -169,6 +169,24 @@ module {
     x86.jmp interface-extensions.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-56]
+    x86.mov [rbp-80], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je interface-extensions.main.__range_ok_3
+  __range_panic_3:
+    x86.lea_rdata rax, [__panic_msg_43]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_3:
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

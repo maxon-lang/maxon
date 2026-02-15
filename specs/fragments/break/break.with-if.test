@@ -1,5 +1,5 @@
 // Test: break.with-if
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   while true 'loop'
     x = x + 1
@@ -13,7 +13,7 @@ end 'main'
 ExitCode: 10
 ---
 module {
-  func @break.main() -> i64 {
+  func @break.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor eax, eax
@@ -37,6 +37,24 @@ module {
     x86.jmp break.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je break.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_rdata rax, [__panic_msg_13]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

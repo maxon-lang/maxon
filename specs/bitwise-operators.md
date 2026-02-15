@@ -72,7 +72,7 @@ var b = a shr 2  // 0100 = 4
 
 <!-- test: bitwise-and -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 12
   var b = 10
   return a and b
@@ -84,7 +84,7 @@ end 'main'
 
 <!-- test: bitwise-or -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 12
   var b = 10
   return a or b
@@ -96,7 +96,7 @@ end 'main'
 
 <!-- test: bitwise-xor -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 12
   var b = 10
   return a xor b
@@ -108,7 +108,7 @@ end 'main'
 
 <!-- test: left-shift -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 1
   return a shl 3
 end 'main'
@@ -119,7 +119,7 @@ end 'main'
 
 <!-- test: right-shift -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 16
   return a shr 2
 end 'main'
@@ -130,7 +130,7 @@ end 'main'
 
 <!-- test: shift-chained -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 1
   return a shl 4 shr 2
 end 'main'
@@ -141,7 +141,7 @@ end 'main'
 
 <!-- test: bitwise-and-or-precedence -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // and has higher precedence than or
   // 12 and 10 = 8, then 8 or 1 = 9
   return 12 and 10 or 1
@@ -153,7 +153,7 @@ end 'main'
 
 <!-- test: bitwise-xor-precedence -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // and has higher precedence than xor
   // 12 and 10 = 8, then 8 xor 3 = 11
   return 12 and 10 xor 3
@@ -165,7 +165,7 @@ end 'main'
 
 <!-- test: shift-vs-comparison -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Shift has higher precedence than comparison
   // 1 shl 3 = 8, then 8 > 5 = true
   if 1 shl 3 > 5 'check'
@@ -180,7 +180,7 @@ end 'main'
 
 <!-- test: bitwise-with-logical -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 5 and 3        // 1
   if a > 0 'check'
     return 1
@@ -194,7 +194,7 @@ end 'main'
 
 <!-- test: bit-masking -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var flags = 5         // binary 101 (bit 0 and bit 2 set)
   return flags and 4    // returns 4 (bit 2 is set)
 end 'main'
@@ -205,7 +205,7 @@ end 'main'
 
 <!-- test: bit-clear -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var flags = 7        // binary 111
   // Clear bit 1 using xor
   flags = flags xor 2
@@ -218,7 +218,7 @@ end 'main'
 
 <!-- test: power-of-two -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Calculate 2^n using shift
   var n = 5
   return 1 shl n        // 32
@@ -230,7 +230,7 @@ end 'main'
 
 <!-- test: divide-by-power-of-two -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Divide by 4 using shift
   var value = 100
   return value shr 2    // 25
@@ -242,7 +242,7 @@ end 'main'
 
 <!-- test: multiply-by-power-of-two -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Multiply by 8 using shift
   var value = 25
   return value shl 3    // 200
@@ -254,7 +254,7 @@ end 'main'
 
 <!-- test: bitwise-not-basic -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   print("{not 0}\n")
   return 0
 end 'main'
@@ -268,7 +268,7 @@ end 'main'
 
 <!-- test: bitwise-not-value -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 5
   print("{not a}\n")
   return 0
@@ -283,7 +283,7 @@ end 'main'
 
 <!-- test: bitwise-not-double -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 42
   return not not a
 end 'main'
@@ -294,7 +294,7 @@ end 'main'
 
 <!-- test: bitwise-not-masking -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var value = 255    // 0xFF
   // Clear lower 4 bits: 255 and not 15 = 240
   return value and not 15
@@ -308,7 +308,7 @@ end 'main'
 ```maxon
 let MASK = not 0xFF
 
-function main() returns Integer
+function main() returns ExitCode
   print("{MASK}\n")
   return 0
 end 'main'
@@ -341,7 +341,7 @@ type ShrBuf
   end 'getByte'
 end 'ShrBuf'
 
-function main() returns Integer
+function main() returns ExitCode
   var buf = ShrBuf.create(16)
   buf.push(42)
   let x = 0xABCD
@@ -374,7 +374,7 @@ type ShrBuf2
   end 'getByte'
 end 'ShrBuf2'
 
-function main() returns Integer
+function main() returns ExitCode
   var buf = ShrBuf2.create(16)
   let value = 0xAABBCCDD
   buf.push(value and 0xFF)

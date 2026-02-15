@@ -16,7 +16,7 @@ Maxon uses contextual literal typing to allow integer and byte literals to adapt
 Integer literals in the range 0-255 can be compared directly with byte values:
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 100 as Byte
   if b == 50 'check'
     return 1
@@ -31,7 +31,7 @@ end 'main'
 Byte variables can be compared directly with int literals in the 0-255 range:
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 200 as Byte
   if b == 200 'check'
     return 1
@@ -58,7 +58,7 @@ end 'check'
 To compare, cast explicitly:
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   var y = 5.0
   if (x as Float) == y 'check'
@@ -76,7 +76,7 @@ end 'main'
 Math intrinsics like `sin`, `cos`, `sqrt`, etc. accept both int and float arguments (int is promoted to float):
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = sqrt(16.0)
   return trunc(x)
 end 'main'
@@ -89,7 +89,7 @@ end 'main'
 
 <!-- test: int-literal-vs-byte-valid -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 42 as Byte
   if b == 42 'check'
     return 1
@@ -103,7 +103,7 @@ end 'main'
 
 <!-- test: int-literal-vs-byte-out-of-range -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 100 as Byte
   if b == 300 'check'
     return 1
@@ -117,7 +117,7 @@ error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-byte-out-o
 
 <!-- test: int-vs-float-error -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   var y = 5.0
   if x == y 'check'
@@ -132,7 +132,7 @@ error E3005: specs/fragments/contextual-literal-typing/int-vs-float-error.test:5
 
 <!-- test: float-vs-int-error -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5.0
   var y = 5
   if x == y 'check'
@@ -147,7 +147,7 @@ error E3005: specs/fragments/contextual-literal-typing/float-vs-int-error.test:5
 
 <!-- test: int-literal-vs-float-error -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5.0
   if x == 5 'check'
     return 1
@@ -161,7 +161,7 @@ error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-float-erro
 
 <!-- test: float-literal-vs-int-error -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   if x == 5.0 'check'
     return 1
@@ -175,7 +175,7 @@ error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-erro
 
 <!-- test: explicit-cast-int-to-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   var y = 5.0
   if (x as Float) == y 'check'
@@ -190,7 +190,7 @@ end 'main'
 
 <!-- test: explicit-cast-float-to-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   var y = 5.0
   if x == trunc(y) 'check'
@@ -205,7 +205,7 @@ end 'main'
 
 <!-- test: math-intrinsic-with-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 16
   var result = sqrt(x)
   return trunc(result)
@@ -217,7 +217,7 @@ end 'main'
 
 <!-- test: math-intrinsic-with-float-literal -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = sqrt(16.0)
   return trunc(x)
 end 'main'
@@ -228,7 +228,7 @@ end 'main'
 
 <!-- test: byte-vs-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 50 as Byte
   var b = 50 as Byte
   if a == b 'check'
@@ -243,7 +243,7 @@ end 'main'
 
 <!-- test: int-vs-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 1000
   var b = 1000
   if a == b 'check'
@@ -258,7 +258,7 @@ end 'main'
 
 <!-- test: float-vs-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 3.14
   var b = 3.14
   if a == b 'check'

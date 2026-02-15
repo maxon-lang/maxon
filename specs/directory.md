@@ -39,7 +39,7 @@ where `type StringArray implements Array with String`
 **Example:**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let files = try Directory.list("./") otherwise 'err'
     print("Failed to list directory")
     return 1
@@ -65,7 +65,7 @@ Check if a path exists and is a directory.
 **Example:**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if Directory.exists("bin") 'check'
     print("bin is a directory")
   end 'check' else 'nodir'
@@ -97,7 +97,7 @@ Get the current working directory.
 **Example:**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let cwd = Directory.currentDirectory()
   print("{cwd}\n")
   return 0
@@ -108,7 +108,7 @@ end 'main'
 
 <!-- test: list-directory -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let files = try Directory.list("../bin") otherwise 'err'
     return 0
   end 'err'
@@ -131,7 +131,7 @@ end 'main'
 
 <!-- test: list-directory-count -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let files = try Directory.list("../bin") otherwise 'err'
     return 99
   end 'err'
@@ -148,7 +148,7 @@ end 'main'
 
 <!-- test: list-nonexistent-directory -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var files = try Directory.list("nonexistent_dir_12345") otherwise 'err'
     print("Directory not found")
     return 0
@@ -166,7 +166,7 @@ Directory not found
 
 <!-- test: directory-exists -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if Directory.exists("../bin") 'check'
     return 42
   end 'check'
@@ -179,7 +179,7 @@ end 'main'
 
 <!-- test: directory-is-directory -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if Directory.isDirectory("../bin") 'check'
     return 42
   end 'check'
@@ -192,7 +192,7 @@ end 'main'
 
 <!-- test: file-is-not-directory -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Test that a nonexistent path is not a directory
   if Directory.isDirectory("nonexistent_path_12345") 'check'
     return 1
@@ -206,7 +206,7 @@ end 'main'
 
 <!-- test: current-directory-not-empty -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let cwd = Directory.currentDirectory()
   if cwd.count() > 0 'ok'
     return 42
@@ -220,7 +220,7 @@ end 'main'
 
 <!-- test: current-directory-is-directory -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let cwd = Directory.currentDirectory()
   if Directory.exists(cwd) 'ok'
     return 42

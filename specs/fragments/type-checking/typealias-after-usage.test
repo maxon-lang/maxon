@@ -9,7 +9,7 @@ type Item
   export let value Integer
 end 'Item'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container{items: ItemArray{}}
   c.items.push({value: 7})
   return c.items.count()
@@ -18,9 +18,9 @@ end 'main'
 ExitCode: 1
 ---
 module {
-  func @type-checking.main() -> i64 {
+  func @type-checking.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -77,9 +77,29 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov ecx, [eax+0]
     x86.mov [rbp-48], ecx
-    x86.mov rcx, [rbp-48]
+    x86.mov eax, [rbp-48]
+    x86.mov rcx, rax
+    x86.call ItemArray.count
+    x86.mov [rbp-56], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je type-checking.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_20]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-56]
     x86.epilogue
-    x86.jmp ItemArray.count
+    x86.ret
   }
 }
 ---

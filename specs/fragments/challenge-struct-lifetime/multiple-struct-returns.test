@@ -15,7 +15,7 @@ function step3(v Value) returns Value
   return {n: v.n + 100}
 end 'step3'
 
-function main() returns Integer
+function main() returns ExitCode
   var v1 = step1()
   var v2 = step2(v1)
   var v3 = step3(v2)
@@ -79,7 +79,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @challenge-struct-lifetime.main() -> i64 {
+  func @challenge-struct-lifetime.main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.call challenge-struct-lifetime.step1
@@ -92,7 +92,25 @@ module {
     x86.call challenge-struct-lifetime.step3
     x86.mov [rbp-24], eax
     x86.mov edx, [rbp-24]
-    x86.mov eax, [edx+0]
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-32], ebx
+    x86.xor esi, esi
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rbx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je challenge-struct-lifetime.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_26]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

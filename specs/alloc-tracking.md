@@ -25,7 +25,7 @@ maxon compile --track-allocs myprogram.maxon
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 10
   var arr = IntArray{}
   arr.resize(size)
@@ -57,7 +57,7 @@ Cleanups:  1
 <!-- test: no-alloc-empty-program -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 42
 end 'main'
 ```
@@ -82,7 +82,7 @@ Cleanups:  0
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let size1 = 5
   let size2 = 10
   var arr1 = IntArray{}
@@ -127,7 +127,7 @@ Cleanups:  2
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -164,7 +164,7 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -205,7 +205,7 @@ function sum_first(arr IntArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'sum_first'
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -239,7 +239,7 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let a = 2
   let b = 5
   var arr = IntArray{}
@@ -278,7 +278,7 @@ function readFirst(arr IntArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'readFirst'
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -318,7 +318,7 @@ function getElement(arr IntArray, idx Integer) returns Integer
   return try arr.get(idx) otherwise 0
 end 'getElement'
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -357,7 +357,7 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   var i = 0
   var sum = 0
   while i < 3 'loop'
@@ -410,7 +410,7 @@ Array of strings should be properly cleaned up in a main function that doesn't u
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = StringArray{}
   arr.push("hi")
   var s = try arr.get(0) otherwise "oops"
@@ -453,7 +453,7 @@ function mutateFirst(arr IntArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -500,7 +500,7 @@ function doubleAddTen(arr IntArray) returns Integer
   return addTen(arr)
 end 'doubleAddTen'
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -544,7 +544,7 @@ function writeIt(arr IntArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'writeIt'
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr1 = IntArray{}
   arr1.resize(size)
@@ -591,7 +591,7 @@ Zero-size arrays don't allocate memory.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 0
   var arr = IntArray{}
   arr.resize(size)
@@ -625,7 +625,7 @@ Reassigning a heap array frees the old memory and allocates new memory.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -669,7 +669,7 @@ Array of strings should be properly cleaned up when going out of scope.
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = StringArray{}
   arr.push("hi")
   var s = try arr.get(0) otherwise "oops"

@@ -6,7 +6,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-function main() returns Integer
+function main() returns ExitCode
   var items = ItemArray{}
   items.push({name: "hello world that needs heap allocation", value: 1})
   items.push({name: "another long string for heap allocation", value: 2})
@@ -47,9 +47,9 @@ Cleanups:  5
 ```
 ---
 module {
-  func @array-managed-elements.main() -> i64 {
+  func @array-managed-elements.main() -> u32 {
   entry:
-    x86.prologue stack_size=304
+    x86.prologue stack_size=288
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -85,12 +85,12 @@ module {
     x86.mov rcx, rax
     x86.mov eax, 38
     x86.mov edx, 32
-    x86.mov [rbp-248], ecx
+    x86.mov [rbp-256], ecx
     x86.mov rcx, rdx
     x86.call maxon_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-248]
+    x86.mov ecx, [rbp-256]
     x86.mov [eax+0], ecx
     x86.mov eax, [rbp-24]
     x86.mov ecx, 38
@@ -140,12 +140,12 @@ module {
     x86.mov rcx, rax
     x86.mov eax, 39
     x86.mov edx, 32
-    x86.mov [rbp-256], ecx
+    x86.mov [rbp-264], ecx
     x86.mov rcx, rdx
     x86.call maxon_alloc
     x86.mov [rbp-48], eax
     x86.mov eax, [rbp-48]
-    x86.mov ecx, [rbp-256]
+    x86.mov ecx, [rbp-264]
     x86.mov [eax+0], ecx
     x86.mov eax, [rbp-48]
     x86.mov ecx, 39
@@ -199,14 +199,14 @@ module {
     x86.mov rbx, rcx
     x86.xor ecx, ecx
     x86.mov esi, 32
-    x86.mov [rbp-264], eax
-    x86.mov [rbp-272], edx
-    x86.mov [rbp-280], ebx
+    x86.mov [rbp-272], eax
+    x86.mov [rbp-280], edx
+    x86.mov [rbp-288], ebx
     x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-72], eax
     x86.mov eax, [rbp-72]
-    x86.mov ecx, [rbp-280]
+    x86.mov ecx, [rbp-288]
     x86.mov [eax+0], ecx
     x86.mov eax, [rbp-72]
     x86.xor ecx, ecx
@@ -247,10 +247,10 @@ module {
     x86.mov eax, 6
     x86.mov rdx, rax
     x86.call maxon_track_copy
-    x86.mov eax, [rbp-264]
+    x86.mov eax, [rbp-272]
     x86.mov [rbp-96], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-272]
+    x86.mov ecx, [rbp-280]
     x86.cmp ecx, eax
     x86.je array-managed-elements.main.otherwise_default_continue_3
   otherwise_default_error_2:
@@ -276,22 +276,22 @@ module {
     x86.lea ebx, [eax + ecx]
     x86.mov esi, 1
     x86.lea edi, [ebx + esi]
-    x86.mov [rbp-248], eax
-    x86.mov [rbp-256], edx
-    x86.mov [rbp-264], ebx
-    x86.mov [rbp-272], r8
+    x86.mov [rbp-256], eax
+    x86.mov [rbp-264], edx
+    x86.mov [rbp-272], ebx
+    x86.mov [rbp-280], r8
     x86.mov rcx, rdi
     x86.call maxon_alloc
     x86.xor ecx, ecx
     x86.mov [rbp-128], ecx
     x86.mov [rbp-136], eax
-    x86.mov eax, [rbp-264]
-    x86.mov [rbp-144], eax
     x86.mov eax, [rbp-272]
+    x86.mov [rbp-144], eax
+    x86.mov eax, [rbp-280]
     x86.mov [rbp-152], eax
-    x86.mov eax, [rbp-248]
-    x86.mov [rbp-160], eax
     x86.mov eax, [rbp-256]
+    x86.mov [rbp-160], eax
+    x86.mov eax, [rbp-264]
     x86.mov [rbp-168], eax
     x86.mov eax, 1
     x86.mov [rbp-176], eax
@@ -342,47 +342,63 @@ module {
     x86.xor eax, eax
     x86.mov ecx, [rbp-192]
     x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-192]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-192]
     x86.call stdlib.Print.print
     x86.mov ecx, [rbp-104]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-200], edx
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rbx, 4294967295
+    x86.cmp rdx, rbx
+    x86.setg edx
+    x86.movzx edx, edxb
+    x86.or ecx, edx
+    x86.test ecx, ecx
+    x86.je array-managed-elements.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_rdata rax, [__panic_msg_36]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_4:
+    x86.mov eax, [rbp-200]
+    x86.mov [rbp-208], eax
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-208], edx
-    x86.mov ecx, [rbp-208]
-    x86.mov edx, [ecx+16]
-    x86.mov ecx, [rbp-208]
-    x86.mov ebx, [ecx+0]
-    x86.lea_rdata rcx, [__track_tag_3]
-    x86.mov rsi, rcx
+    x86.mov [rbp-216], edx
+    x86.mov ebx, [rbp-216]
+    x86.mov esi, [ebx+16]
+    x86.mov edi, [rbp-216]
+    x86.mov r8, [edi+0]
+    x86.lea_rdata r9, [__track_tag_3]
+    x86.mov rax, r9
     x86.mov ecx, 5
-    x86.mov [rbp-280], eax
-    x86.mov [rbp-288], edx
-    x86.mov [rbp-296], ebx
+    x86.mov [rbp-256], esi
+    x86.mov [rbp-264], r8
     x86.mov rdx, rcx
-    x86.mov rcx, rsi
+    x86.mov rcx, rax
     x86.call maxon_track_cleanup
-    x86.mov eax, [rbp-208]
+    x86.mov eax, [rbp-216]
     x86.mov ecx, [eax+8]
-    x86.mov eax, [rbp-208]
+    x86.mov eax, [rbp-216]
     x86.mov edx, [eax+24]
-    x86.lea_rdata rax, [__managed_offsets_184]
+    x86.lea_rdata rax, [__managed_offsets_192]
     x86.mov rbx, rax
     x86.mov eax, 1
-    x86.mov esi, [rbp-296]
-    x86.mov [rbp-216], esi
-    x86.mov edi, [rbp-288]
-    x86.mov [rbp-224], edi
+    x86.mov esi, [rbp-264]
+    x86.mov [rbp-224], esi
+    x86.mov edi, [rbp-256]
+    x86.mov [rbp-232], edi
     x86.mov r8, rdx
     x86.mov r9, rbx
     x86.mov rdx, rcx
     x86.mov rcx, rsi
     x86.mov rsi, rax
     x86.call maxon_cleanup_array_elements
-    x86.mov eax, [rbp-216]
-    x86.mov ecx, [rbp-224]
+    x86.mov eax, [rbp-224]
+    x86.mov ecx, [rbp-232]
     x86.lea_rdata rdx, [__track_tag_3]
     x86.mov rbx, rdx
     x86.mov edx, 5
@@ -392,13 +408,13 @@ module {
     x86.call maxon_cleanup_managed_free
     x86.mov eax, [rbp-104]
     x86.mov ecx, [eax+0]
-    x86.mov [rbp-232], ecx
-    x86.mov eax, [rbp-232]
-    x86.mov ecx, [eax+0]
     x86.mov [rbp-240], ecx
     x86.mov eax, [rbp-240]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-248], ecx
+    x86.mov eax, [rbp-248]
     x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-240]
+    x86.mov eax, [rbp-248]
     x86.mov edx, [eax+0]
     x86.lea_rdata rax, [__track_tag_4]
     x86.mov rbx, rax
@@ -406,7 +422,7 @@ module {
     x86.mov r8, rbx
     x86.mov r9, rax
     x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-200]
+    x86.mov eax, [rbp-208]
     x86.epilogue
     x86.ret
   }

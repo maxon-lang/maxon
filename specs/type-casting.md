@@ -67,7 +67,7 @@ For float-to-integer conversion, use the explicit conversion functions:
 
 <!-- test: int-literal-to-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 42 as Byte
   return b as Integer
 end 'main'
@@ -78,7 +78,7 @@ end 'main'
 
 <!-- test: int-literal-zero-to-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 0 as Byte
   return b as Integer
 end 'main'
@@ -89,7 +89,7 @@ end 'main'
 
 <!-- test: int-literal-max-to-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 255 as Byte
   return b as Integer
 end 'main'
@@ -100,7 +100,7 @@ end 'main'
 
 <!-- test: byte-to-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 100 as Byte
   return b as Integer
 end 'main'
@@ -111,7 +111,7 @@ end 'main'
 
 <!-- test: byte-to-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 50 as Byte
   var f = b as Float
   return trunc(f)
@@ -123,7 +123,7 @@ end 'main'
 
 <!-- test: int-to-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 42
   var f = x as Float
   return trunc(f)
@@ -135,7 +135,7 @@ end 'main'
 
 <!-- test: int-literal-to-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var f = 99 as Float
   return trunc(f)
 end 'main'
@@ -146,7 +146,7 @@ end 'main'
 
 <!-- test: same-type-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 42
   return x as Integer
 end 'main'
@@ -157,7 +157,7 @@ end 'main'
 
 <!-- test: same-type-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var f = 42.0
   var g = f as Float
   return trunc(g)
@@ -169,7 +169,7 @@ end 'main'
 
 <!-- test: same-type-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 42 as Byte
   var c = b as Byte
   return c as Integer
@@ -181,7 +181,7 @@ end 'main'
 
 <!-- test: cast-in-expression -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 10 as Byte
   var result = b as Integer + 32
   return result
@@ -193,7 +193,7 @@ end 'main'
 
 <!-- test: chained-byte-int-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 25 as Byte
   var i = b as Integer
   var f = i as Float
@@ -208,7 +208,7 @@ end 'main'
 
 <!-- test: error.int-var-to-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   var b = x as Byte
   return 0
@@ -220,7 +220,7 @@ error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:4:13: Canno
 
 <!-- test: error.int-literal-out-of-range -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 256 as Byte
   return 0
 end 'main'
@@ -231,7 +231,7 @@ error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:3:
 
 <!-- test: error.negative-literal-to-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = -1 as Byte
   return 0
 end 'main'
@@ -242,7 +242,7 @@ error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:3:
 
 <!-- test: error.float-to-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5.0 as Integer
   return 0
 end 'main'
@@ -253,7 +253,7 @@ error E3009: specs/fragments/type-casting/error.float-to-int.test:3:15: Cannot c
 
 <!-- test: error.float-to-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5.0 as Byte
   return 0
 end 'main'
@@ -264,7 +264,7 @@ error E3009: specs/fragments/type-casting/error.float-to-byte.test:3:15: Cannot 
 
 <!-- test: error.bool-to-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = true
   var x = b as Integer
   return 0
@@ -276,7 +276,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-int.test:4:13: Cannot ca
 
 <!-- test: error.bool-to-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = true
   var x = b as Float
   return 0
@@ -288,7 +288,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-float.test:4:13: Cannot 
 
 <!-- test: error.bool-to-byte -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = true
   var x = b as Byte
   return 0
@@ -300,7 +300,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-byte.test:4:13: Cannot c
 
 <!-- test: error.int-to-bool -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0 as bool
   return 0
 end 'main'
@@ -311,7 +311,7 @@ error E3009: specs/fragments/type-casting/error.int-to-bool.test:3:13: Cannot ca
 
 <!-- test: error.float-to-bool -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0.0 as bool
   return 0
 end 'main'
@@ -322,7 +322,7 @@ error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:15: Cannot 
 
 <!-- test: error.byte-to-bool -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 42 as Byte
   var x = b as bool
   return 0

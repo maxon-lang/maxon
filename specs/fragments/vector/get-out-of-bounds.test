@@ -1,19 +1,22 @@
 // Test: get-out-of-bounds
 typealias Vec2 = Vector with 2 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec2{}
   v.set(0, value: 10)
   var result = try v.get(5) otherwise -1
-  return result
+  print("{result}\n")
+  return 0
 end 'main'
 ---
-ExitCode: -1
+Stdout: ```
+-1
+```
 ---
 module {
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=160
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.mov edx, 2
@@ -73,6 +76,89 @@ module {
     x86.jmp vector.main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov eax, [rbp-32]
+    x86.mov ecx, 21
+    x86.mov [rbp-120], eax
+    x86.call maxon_alloc
+    x86.mov [rbp-40], eax
+    x86.mov rcx, [rbp-120]
+    x86.mov rdx, rax
+    x86.call maxon_i64_to_string
+    x86.mov edx, [rbp-40]
+    x86.lea_rdata rbx, [__interp_lit_38]
+    x86.mov rsi, rbx
+    x86.mov edi, 1
+    x86.lea r8, [eax + edi]
+    x86.mov r9, 1
+    x86.lea ecx, [r8 + r9]
+    x86.mov [rbp-128], eax
+    x86.mov [rbp-136], edx
+    x86.mov [rbp-144], esi
+    x86.mov [rbp-152], r8
+    x86.call maxon_alloc
+    x86.xor ecx, ecx
+    x86.mov [rbp-48], ecx
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-152]
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-136]
+    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-128]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-144]
+    x86.mov [rbp-88], eax
+    x86.mov eax, 1
+    x86.mov [rbp-96], eax
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-48]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-72]
+    x86.mov edx, [rbp-80]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-80]
+    x86.add eax, ecx
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-48]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-88]
+    x86.mov edx, [rbp-96]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, 32
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-104]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-104]
+    x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-104]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-104]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-112], eax
+    x86.mov eax, [rbp-104]
+    x86.mov ecx, [rbp-112]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-112]
+    x86.mov [ecx+8], eax
+    x86.mov rcx, [rbp-112]
+    x86.call stdlib.Print.print
+    x86.xor ecx, ecx
+    x86.mov eax, ecx
     x86.epilogue
     x86.ret
   }

@@ -1,5 +1,5 @@
 // Test: grow.preserves-elements
-function main() returns Integer
+function main() returns ExitCode
   var s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
   var allPresent = 1
   var i = 1
@@ -15,9 +15,9 @@ end 'main'
 ExitCode: 1
 ---
 module {
-  func @set.main() -> i64 {
+  func @set.main() -> u32 {
   entry:
-    x86.prologue stack_size=160
+    x86.prologue stack_size=176
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -125,6 +125,24 @@ module {
     x86.jmp set.main.check_1.header
   check_1.exit:
     x86.mov eax, [rbp-152]
+    x86.mov [rbp-168], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je set.main.__range_ok_3
+  __range_panic_3:
+    x86.lea_rdata rax, [__panic_msg_43]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_3:
+    x86.mov eax, [rbp-168]
     x86.epilogue
     x86.ret
   }

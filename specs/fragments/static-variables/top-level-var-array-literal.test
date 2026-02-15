@@ -1,7 +1,7 @@
 // Test: top-level-var-array-literal
 var items = [10, 20, 30]
 
-function main() returns Integer
+function main() returns ExitCode
   items.set(1, value: 12)
   let a = try items.get(0) otherwise 0
   let b = try items.get(1) otherwise 0
@@ -12,7 +12,7 @@ end 'main'
 ExitCode: 52
 ---
 module {
-  func @static-variables.main() -> i64 {
+  func @static-variables.main() -> u32 {
   entry:
     x86.prologue stack_size=144
     x86.mov eax, 10
@@ -124,7 +124,25 @@ module {
     x86.mov ecx, [rbp-80]
     x86.mov edx, [rbp-112]
     x86.add ecx, edx
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-144], ecx
+    x86.xor ebx, ebx
+    x86.cmp ecx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rcx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je static-variables.main.__range_ok_13
+  __range_panic_13:
+    x86.lea_rdata rax, [__panic_msg_52]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_13:
+    x86.mov eax, [rbp-144]
     x86.epilogue
     x86.ret
   }

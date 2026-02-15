@@ -17,7 +17,7 @@ type IntList implements Countable
   end 'value'
 end 'IntList'
 
-function main() returns Integer
+function main() returns ExitCode
   var list = IntList{data: 5}
   return list.count()
 end 'main'
@@ -30,7 +30,7 @@ module {
     x86.mov eax, 42
     x86.ret
   }
-  func @interface-extensions.main() -> i64 {
+  func @interface-extensions.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 5
@@ -41,8 +41,27 @@ module {
     x86.mov ebx, 5
     x86.mov [edx+0], ebx
     x86.mov rcx, [rbp-8]
+    x86.call IntList.count
+    x86.mov [rbp-16], eax
+    x86.xor edi, edi
+    x86.cmp eax, edi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.cmp rax, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je interface-extensions.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_14]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp IntList.count
+    x86.ret
   }
 }
 ---

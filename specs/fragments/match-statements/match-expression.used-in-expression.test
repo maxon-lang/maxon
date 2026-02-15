@@ -1,5 +1,5 @@
 // Test: match-expression.used-in-expression
-function main() returns Integer
+function main() returns ExitCode
   var x = 2
   let doubled = match x 'eval'
     1 gives 10
@@ -12,9 +12,9 @@ end 'main'
 ExitCode: 40
 ---
 module {
-  func @match-statements.main() -> i64 {
+  func @match-statements.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 2
     x86.mov [rbp-8], eax
     x86.jmp match-statements.main.eval_0.cmp0
@@ -44,6 +44,24 @@ module {
     x86.mov eax, [rbp-16]
     x86.mov ecx, 2
     x86.imul eax, ecx
+    x86.mov [rbp-24], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je match-statements.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_19]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

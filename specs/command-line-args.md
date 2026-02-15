@@ -83,7 +83,7 @@ end 'main'
 
 <!-- test: args-length-no-extra -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Without extra args, count should be 0 (no user arguments)
   let args = CommandLine.args()
   return args.count()
@@ -96,7 +96,7 @@ end 'main'
 <!-- test: args-with-one-arg -->
 <!-- Args: hello -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   return args.count()
 end 'main'
@@ -108,7 +108,7 @@ end 'main'
 <!-- test: args-with-multiple-args -->
 <!-- Args: one two three -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   return args.count()
 end 'main'
@@ -120,7 +120,7 @@ end 'main'
 <!-- test: access-first-arg -->
 <!-- Args: hello -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var arg = try args.get(0) otherwise ""
   print(arg)
@@ -137,7 +137,7 @@ hello
 <!-- test: access-multiple-args -->
 <!-- Args: foo bar baz -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var arg1 = try args.get(0) otherwise ""
   var arg2 = try args.get(1) otherwise ""
@@ -163,7 +163,7 @@ baz
 <!-- test: iterate-args -->
 <!-- Args: a b c -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var i = 0
   while i < args.count() 'loop'
@@ -187,7 +187,7 @@ c
 <!-- test: numeric-args -->
 <!-- Args: 42 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   // Args are strings, just verify we can access them
   if args.count() == 1 'check'
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: empty-string-arg -->
 <!-- Args: "" -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   // Empty quoted arg
   var arg = try args.get(0) otherwise "x"
@@ -225,7 +225,7 @@ end 'main'
 <!-- test: arg-with-equals -->
 <!-- Args: --key=value -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var arg = try args.get(0) otherwise ""
   print(arg)
@@ -241,7 +241,7 @@ end 'main'
 
 <!-- test: executable-path -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let exe = CommandLine.executablePath()
   // Just verify it returns something (the actual path varies)
   if exe.byteLength() > 0 'check'

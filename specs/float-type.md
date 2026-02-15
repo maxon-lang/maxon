@@ -28,7 +28,7 @@ function circleArea(radius Float) returns Float
   return 3.14159 * radius * radius
 end 'circleArea'
 
-function main() returns Integer
+function main() returns ExitCode
   var area = circleArea(5.0)
   return trunc(area)  // Returns 78
 end 'main'
@@ -42,7 +42,7 @@ end 'main'
 
 <!-- test: basic-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 3.14
   var y = 2.0
   var z = x + y
@@ -57,7 +57,7 @@ end 'main'
 
 <!-- test: float-comparison -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 3.5
   var y = 2.1
   if x > y 'check'
@@ -73,7 +73,7 @@ end 'main'
 
 <!-- test: float-arithmetic -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 10.0
   var b = 3.0
   var result = a / b
@@ -87,7 +87,7 @@ end 'main'
 
 <!-- test: float-promotion -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   var y = 2.0
   var result = x + y

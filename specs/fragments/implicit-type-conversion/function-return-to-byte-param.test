@@ -7,7 +7,7 @@ function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
 
-function main() returns Integer
+function main() returns ExitCode
   return takeByte(getInt())
 end 'main'
 ---
@@ -24,13 +24,34 @@ module {
     x86.mov eax, ecx
     x86.ret
   }
-  func @implicit-type-conversion.main() -> i64 {
+  func @implicit-type-conversion.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.call implicit-type-conversion.getInt
     x86.mov ecx, 255
     x86.and eax, ecx
     x86.mov rcx, rax
-    x86.jmp implicit-type-conversion.takeByte
+    x86.call implicit-type-conversion.takeByte
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je implicit-type-conversion.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ---

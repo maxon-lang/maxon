@@ -12,7 +12,7 @@ type Simple
   end 'sum'
 end 'Simple'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Simple.make(20, b: 22)
   return s.sum()
 end 'main'
@@ -51,7 +51,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @export-var-fields.main() -> i64 {
+  func @export-var-fields.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 20
@@ -60,9 +60,29 @@ module {
     x86.mov rcx, rax
     x86.call Simple.make
     x86.mov [rbp-8], eax
-    x86.mov rcx, [rbp-8]
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call Simple.sum
+    x86.mov [rbp-16], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je export-var-fields.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_17]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp Simple.sum
+    x86.ret
   }
 }
 ---

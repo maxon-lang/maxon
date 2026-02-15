@@ -40,7 +40,7 @@ function add(a Integer, b Integer) returns Integer
   return a
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(5, b: 10)
 end 'main'
 ```
@@ -54,7 +54,7 @@ function test(a Integer, b Integer, c Integer) returns Integer
   return a
 end 'test'
 
-function main() returns Integer
+function main() returns ExitCode
   return test(1, b: 2, c: 3)
 end 'main'
 ```
@@ -68,7 +68,7 @@ function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(5, b: 10)
 end 'main'
 ```
@@ -83,7 +83,7 @@ function multiply(a Integer, b Integer) returns Integer
   return a * b
 end 'multiply'
 
-function main() returns Integer
+function main() returns ExitCode
   return multiply(7, b: 6)
 end 'main'
 ```
@@ -98,7 +98,7 @@ function doNothing(x Integer, y Integer)
   var z = 42
 end 'doNothing'
 
-function main() returns Integer
+function main() returns ExitCode
   doNothing(1, 2)
   return 0
 end 'main'

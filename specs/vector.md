@@ -113,7 +113,7 @@ end 'loop'
 ```maxon
 typealias Vec3 = Vector with 3 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec3{}
   return try v.get(0) otherwise -1
 end 'main'
@@ -126,7 +126,7 @@ end 'main'
 ```maxon
 typealias Vec4 = Vector with 4 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec4{}
   return v.count()
 end 'main'
@@ -139,7 +139,7 @@ end 'main'
 ```maxon
 typealias Vec3 = Vector with 3 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec3{}
   v.set(0, value: 42)
   return try v.get(0) otherwise 0
@@ -153,7 +153,7 @@ end 'main'
 ```maxon
 typealias Vec3 = Vector with 3 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec3{}
   v.set(0, value: 10)
   v.set(1, value: 20)
@@ -173,14 +173,15 @@ Accessing an index beyond the fixed size throws ArrayError.
 ```maxon
 typealias Vec2 = Vector with 2 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec2{}
   v.set(0, value: 10)
   var result = try v.get(5) otherwise -1
-  return result
+  print("{result}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -1
 ```
 
@@ -188,14 +189,15 @@ end 'main'
 ```maxon
 typealias Vec2 = Vector with 2 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec2{}
   v.set(0, value: 10)
   var result = try v.get(-1) otherwise -1
-  return result
+  print("{result}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -1
 ```
 
@@ -204,7 +206,7 @@ Setting an out-of-bounds index is a no-op, matching Array behavior.
 ```maxon
 typealias Vec2 = Vector with 2 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec2{}
   v.set(0, value: 10)
   v.set(5, value: 99)
@@ -219,7 +221,7 @@ end 'main'
 ```maxon
 typealias Vec1 = Vector with 1 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec1{}
   v.set(0, value: 77)
   return try v.get(0) otherwise 0
@@ -233,7 +235,7 @@ end 'main'
 ```maxon
 typealias Vec10 = Vector with 10 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec10{}
   var i = 0
   while i < 10 'fill'
@@ -253,7 +255,7 @@ end 'main'
 ```maxon
 typealias Vec1 = Vector with 1 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec1{}
   return v.count()
 end 'main'
@@ -266,7 +268,7 @@ end 'main'
 ```maxon
 typealias Vec3 = Vector with 3 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec3{}
   v.set(1, value: 10)
   v.set(1, value: 42)
@@ -281,7 +283,7 @@ end 'main'
 ```maxon
 typealias Vec2F = Vector with 2 float
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec2F{}
   v.set(0, value: 2.5)
   v.set(1, value: 3.5)
@@ -298,7 +300,7 @@ end 'main'
 ```maxon
 typealias ByteVec4 = Vector with 4 byte
 
-function main() returns Integer
+function main() returns ExitCode
   var v = ByteVec4{}
   v.set(0, value: 10)
   v.set(1, value: 20)
@@ -324,7 +326,7 @@ function sum(v Vec3) returns Integer
   return a + b + c
 end 'sum'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec3{}
   v.set(0, value: 10)
   v.set(1, value: 20)
@@ -347,7 +349,7 @@ function makeVec(a Integer, b Integer) returns Vec2
   return v
 end 'makeVec'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = makeVec(30, b: 12)
   var a = try v.get(0) otherwise 0
   var b = try v.get(1) otherwise 0
@@ -362,7 +364,7 @@ end 'main'
 ```maxon
 typealias Vec4 = Vector with 4 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec4{}
   v.set(0, value: 1)
   v.set(1, value: 2)
@@ -391,7 +393,7 @@ function makeVec() returns Vec3
   return v
 end 'makeVec'
 
-function main() returns Integer
+function main() returns ExitCode
   let v = makeVec()
   var a = try v.get(0) otherwise 0
   var b = try v.get(1) otherwise 0
@@ -405,7 +407,7 @@ end 'main'
 
 <!-- test: from-array-literal -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [10, 20, 30]
   return try v.get(0) otherwise 0
 end 'main'
@@ -416,7 +418,7 @@ end 'main'
 
 <!-- test: from-array-literal-sum -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [10, 20, 30]
   var a = try v.get(0) otherwise 0
   var b = try v.get(1) otherwise 0
@@ -430,7 +432,7 @@ end 'main'
 
 <!-- test: from-array-literal-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [1.5, 2.5]
   var a = try v.get(0) otherwise 0.0
   var b = try v.get(1) otherwise 0.0
@@ -443,7 +445,7 @@ end 'main'
 
 <!-- test: from-array-literal-iterate -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [1, 2, 3, 4]
   var sum = 0
   for elem in v 'loop'
@@ -458,7 +460,7 @@ end 'main'
 
 <!-- test: from-array-literal-single -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [99]
   return try v.get(0) otherwise 0
 end 'main'
@@ -479,7 +481,7 @@ function sum(v Vec3) returns Integer
   return a + b + c
 end 'sum'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [10, 20, 12]
   return sum(v)
 end 'main'
@@ -492,7 +494,7 @@ end 'main'
 ```maxon
 typealias Vec5 = Vector with 5 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec5{}
   v.set(0, value: 10)
   v.set(1, value: 20)

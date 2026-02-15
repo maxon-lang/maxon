@@ -1,5 +1,5 @@
 // Test: complex-expression
-function main() returns Integer
+function main() returns ExitCode
   var a = 10
   var b = 3
   var result = (a + b) * 2 - a / b
@@ -9,7 +9,7 @@ end 'main'
 ExitCode: 23
 ---
 module {
-  func @arithmetic-operators.main() -> i64 {
+  func @arithmetic-operators.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 10
@@ -17,12 +17,29 @@ module {
     x86.lea edx, [eax + ecx]
     x86.mov ebx, 2
     x86.imul edx, ebx
-    x86.mov [rbp-8], edx
+    x86.mov [rbp-16], edx
     x86.cqo
     x86.idiv ecx
-    x86.mov esi, [rbp-8]
+    x86.mov esi, [rbp-16]
     x86.sub esi, eax
-    x86.mov eax, esi
+    x86.mov [rbp-8], esi
+    x86.xor edi, edi
+    x86.cmp esi, edi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.cmp rsi, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je arithmetic-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_12]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

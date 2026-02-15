@@ -26,7 +26,7 @@ type MyString implements InitableFromStringLiteral
   end 'len'
 end 'MyString'
 
-function main() returns Integer
+function main() returns ExitCode
   var ms = MyString from "hello"
   print("{ms.len()}\n")
   return 0
@@ -56,7 +56,7 @@ type MyChar implements InitableFromCharLiteral
   end 'len'
 end 'MyChar'
 
-function main() returns Integer
+function main() returns ExitCode
   var mc = MyChar from 'A'
   print("{mc.len()}\n")
   return 0
@@ -86,7 +86,7 @@ type Wrapper implements InitableFromStringLiteral
   end 'len'
 end 'Wrapper'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = Wrapper from "hello"
   print("{w.len()}\n")
   return 0
@@ -110,7 +110,7 @@ type Wrapper implements InitableFromStringLiteral
   end 'len'
 end 'Wrapper'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = Wrapper from ""
   print("len: {w.len()}\n")
   return 0
@@ -134,7 +134,7 @@ type CharWrapper implements InitableFromCharLiteral
   end 'len'
 end 'CharWrapper'
 
-function main() returns Integer
+function main() returns ExitCode
   var cw = CharWrapper from 'X'
   print("{cw.len()}\n")
   return 0

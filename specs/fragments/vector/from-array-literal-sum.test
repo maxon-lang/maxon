@@ -1,5 +1,5 @@
 // Test: from-array-literal-sum
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [10, 20, 30]
   var a = try v.get(0) otherwise 0
   var b = try v.get(1) otherwise 0
@@ -10,7 +10,7 @@ end 'main'
 ExitCode: 60
 ---
 module {
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
     x86.prologue stack_size=112
     x86.mov eax, 10
@@ -100,7 +100,25 @@ module {
     x86.mov ecx, [rbp-64]
     x86.mov edx, [rbp-88]
     x86.add ecx, edx
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-112], ecx
+    x86.xor ebx, ebx
+    x86.cmp ecx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rcx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je vector.main.__range_ok_13
+  __range_panic_13:
+    x86.lea_rdata rax, [__panic_msg_48]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_13:
+    x86.mov eax, [rbp-112]
     x86.epilogue
     x86.ret
   }

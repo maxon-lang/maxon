@@ -46,7 +46,7 @@ export function multiply(x Integer, y Integer) returns Integer
   return x * y
 end 'multiply'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(3, b: 4)  // Called from within same file
 end 'main'
 ```
@@ -63,7 +63,7 @@ export function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(10, b: 20)
 end 'main'
 ```
@@ -82,7 +82,7 @@ export function triple(x Integer) returns Integer
   return x * 3
 end 'triple'
 
-function main() returns Integer
+function main() returns ExitCode
   return double(5) + triple(4)
 end 'main'
 ```
@@ -101,7 +101,7 @@ function sum_three(a Integer, b Integer, c Integer) returns Integer
   return add(add(a, b: b), b: c)
 end 'sum_three'
 
-function main() returns Integer
+function main() returns ExitCode
   return sum_three(1, b: 2, c: 3)
 end 'main'
 ```

@@ -13,7 +13,7 @@ function doubleAddTen(arr IntArray) returns Integer
   return addTen(arr)
 end 'doubleAddTen'
 
-function main() returns Integer
+function main() returns ExitCode
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -124,9 +124,9 @@ module {
     x86.epilogue
     x86.jmp alloc-tracking.addTen
   }
-  func @alloc-tracking.main() -> i64 {
+  func @alloc-tracking.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.mov eax, 5
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -179,20 +179,40 @@ module {
     x86.mov rcx, rax
     x86.call alloc-tracking.doubleAddTen
     x86.mov [rbp-24], eax
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-32], ecx
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-32]
-    x86.mov edx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rbx, rax
-    x86.mov eax, 3
-    x86.mov r8, rbx
-    x86.mov r9, rax
-    x86.call maxon_cleanup_managed
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je alloc-tracking.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_57]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
     x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+8]
+    x86.mov [rbp-40], edx
+    x86.mov ebx, [rbp-40]
+    x86.mov esi, [ebx+16]
+    x86.mov edi, [rbp-40]
+    x86.mov r8, [edi+0]
+    x86.lea_rdata r9, [__track_tag_0]
+    x86.mov rax, r9
+    x86.mov ecx, 3
+    x86.mov rdx, r8
+    x86.mov r8, rax
+    x86.mov r9, rcx
+    x86.mov rcx, rsi
+    x86.call maxon_cleanup_managed
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

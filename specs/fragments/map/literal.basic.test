@@ -1,5 +1,5 @@
 // Test: literal.basic
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
   return m.count()
 end 'main'
@@ -7,7 +7,7 @@ end 'main'
 ExitCode: 3
 ---
 module {
-  func @map.main() -> i64 {
+  func @map.main() -> u32 {
   entry:
     x86.prologue stack_size=80
     x86.mov eax, 1
@@ -79,8 +79,27 @@ module {
     x86.mov rcx, rax
     x86.call __Map_i64_i64.init
     x86.mov [rbp-72], eax
-    x86.mov rcx, [rbp-72]
+    x86.mov eax, [rbp-72]
+    x86.mov rcx, rax
     x86.call __Map_i64_i64.count
+    x86.mov [rbp-80], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je map.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_rdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

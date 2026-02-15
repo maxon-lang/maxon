@@ -1,5 +1,5 @@
 // Test: match-statement-fallthrough
-function main() returns Integer
+function main() returns ExitCode
   var x = 1
   var result = 0
   match x 'cascade'
@@ -62,12 +62,23 @@ module {
     maxon.br cascade_0.merge
   cascade_0.merge:
     %21 = maxon.var_ref {var = result} {type = i64}
-    maxon.return %21
+    maxon.assign %21 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %22 = maxon.literal {value = 0 : i64}
+    %23 = maxon.binop %21, %22 {op = lt}
+    %24 = maxon.literal {value = 4294967295 : i64}
+    %25 = maxon.binop %21, %24 {op = gt}
+    %26 = maxon.binop %23, %25 {op = or}
+    maxon.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_1:
+    %28 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.return %28
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 0 : i64}
@@ -113,14 +124,27 @@ module {
     cf.br cascade_0.merge
   cascade_0.merge:
     %21 = memref.load result : i64
-    func.return %21
+    memref.store %21, __range_val_1
+    %22 = arith.constant {value = 0 : i64}
+    %23 = arith.cmpi lt %21, %22
+    %24 = arith.constant {value = 4294967295 : i64}
+    %25 = arith.cmpi gt %21, %24
+    %26 = arith.ori1 %23, %25
+    cf.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %27 = memref.lea_rdata __panic_msg_27
+    %28 = std.ptr_to_i64 %27
+    std.call_runtime @maxon_panic %28
+  __range_ok_1:
+    %29 = memref.load __range_val_1 : i64
+    func.return %29
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 1
     x86.xor ecx, ecx
     x86.mov [rbp-8], ecx
@@ -165,6 +189,24 @@ module {
     x86.jmp register-allocator.main.cascade_0.merge
   cascade_0.merge:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je register-allocator.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_27]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

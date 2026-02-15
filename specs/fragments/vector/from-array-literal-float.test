@@ -1,5 +1,5 @@
 // Test: from-array-literal-float
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [1.5, 2.5]
   var a = try v.get(0) otherwise 0.0
   var b = try v.get(1) otherwise 0.0
@@ -9,7 +9,7 @@ end 'main'
 ExitCode: 4
 ---
 module {
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
     x86.prologue stack_size=80
     x86.movsd xmm0, [rip+__float_1.5]
@@ -81,6 +81,24 @@ module {
     x86.movsd xmm2, xmm1
     x86.addsd xmm2, xmm0
     x86.cvttsd2si eax, xmm2
+    x86.mov [rbp-80], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je vector.main.__range_ok_9
+  __range_panic_9:
+    x86.lea_rdata rax, [__panic_msg_36]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_9:
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

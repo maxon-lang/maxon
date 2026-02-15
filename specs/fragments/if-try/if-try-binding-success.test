@@ -10,7 +10,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   if let value = try mayFail(true) 'check'
     return value
   end 'check'
@@ -38,7 +38,7 @@ module {
     x86.xor edx, edx
     x86.ret
   }
-  func @if-try.main() -> i64 {
+  func @if-try.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 1
@@ -50,6 +50,24 @@ module {
     x86.jne if-try.main.check_2.after
   check_2:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je if-try.main.__range_ok_3
+  __range_panic_3:
+    x86.lea_rdata rax, [__panic_msg_25]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_3:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   check_2.after:

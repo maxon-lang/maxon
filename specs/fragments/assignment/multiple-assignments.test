@@ -1,5 +1,5 @@
 // Test: multiple-assignments
-function main() returns Integer
+function main() returns ExitCode
   var x = 10
   var y = 20
   x = y
@@ -10,11 +10,31 @@ end 'main'
 ExitCode: 50
 ---
 module {
-  func @assignment.main() -> i64 {
+  func @assignment.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 30
     x86.add eax, ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je assignment.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_9]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

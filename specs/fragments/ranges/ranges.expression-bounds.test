@@ -7,7 +7,7 @@ function getEnd() returns Integer
     return 4
 end 'getEnd'
 
-function main() returns Integer
+function main() returns ExitCode
     var sum = 0
     for i in getStart() to getEnd() 'loop'
         sum = sum + i
@@ -28,16 +28,16 @@ module {
     x86.mov eax, 4
     x86.ret
   }
-  func @ranges.main() -> i64 {
+  func @ranges.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call ranges.getStart
-    x86.mov [rbp-32], eax
+    x86.mov [rbp-40], eax
     x86.call ranges.getEnd
     x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-32]
+    x86.mov ecx, [rbp-40]
     x86.mov [rbp-24], ecx
     x86.jmp ranges.main.loop_0.header
   loop_0.header:
@@ -57,6 +57,24 @@ module {
     x86.jmp ranges.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je ranges.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_20]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

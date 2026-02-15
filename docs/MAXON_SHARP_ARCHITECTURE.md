@@ -464,7 +464,7 @@ Converts Arith and Func operations to X86 instructions. For each function, it cr
 
 Runs before dialect conversions. Currently validates:
 - **E3001:** A `main` function must exist in the module
-- **E3002:** The `main` function must return `int` (MlirType.I64)
+- **E3002:** The `main` function must return `ExitCode`
 
 
 ## Stage 4: Code Emission

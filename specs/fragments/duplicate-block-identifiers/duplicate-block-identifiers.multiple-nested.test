@@ -1,5 +1,5 @@
 // Test: duplicate-block-identifiers.multiple-nested
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   if true 'outer'
     x = 1
@@ -14,7 +14,7 @@ end 'main'
 ExitCode: 2
 ---
 module {
-  func @duplicate-block-identifiers.main() -> i64 {
+  func @duplicate-block-identifiers.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor eax, eax
@@ -38,6 +38,24 @@ module {
     x86.jmp duplicate-block-identifiers.main.outer_0.merge
   outer_0.merge:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je duplicate-block-identifiers.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

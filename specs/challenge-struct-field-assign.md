@@ -20,7 +20,7 @@ type Counter
   export var value Integer
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{value: 10}
   c.value = 42
   return c.value
@@ -39,7 +39,7 @@ type Config
   export var count Integer
 end 'Config'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Config{id: 1, count: 0}
   c.id = 2
   return c.id
@@ -59,7 +59,7 @@ type Outer
   export var inner Inner
 end 'Outer'
 
-function main() returns Integer
+function main() returns ExitCode
   var i = Inner{x: 10}
   var o = Outer{inner: i}
   o.inner.x = 42

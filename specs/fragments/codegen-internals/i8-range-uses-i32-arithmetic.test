@@ -1,7 +1,7 @@
 // Test: i8-range-uses-i32-arithmetic
 typealias Tiny = int(0 to 100)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Tiny{21}
   var b = Tiny{3}
   return a / b
@@ -18,37 +18,80 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = u8}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 21 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.trunci %0
     %3 = arith.trunci %1
     %4 = arith.divui %2, %3
-    %5 = arith.extui %4
-    func.return %5
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extui %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extui %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_rdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 21
     x86.mov ecx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov [rbp-8], edx
+    x86.mov [rbp-12], edx
     x86.mov eax, edx
     x86.xor edx, edx
     x86.div32 ebx
-    x86.mov esi, eax
-    x86.mov eax, esi
+    x86.mov [rbp-4], eax
+    x86.xor esi, esi
+    x86.mov edi, eax
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.mov ecx, eax
+    x86.cmp rcx, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-4]
     x86.epilogue
     x86.ret
   }

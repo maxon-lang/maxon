@@ -45,6 +45,13 @@ public class X86MovRegRegOp(X86Register dest, X86Register src) : X86Op {
   public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
+// MOVSXD r64, r/m32: sign-extend 32-bit to 64-bit
+public class X86MovsxdOp(X86Register dest, X86Register src) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.movsxd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
 public class X86XchgRegRegOp(X86Register a, X86Register b) : X86Op {
   public X86Register A { get; } = a;
   public X86Register B { get; } = b;
@@ -111,6 +118,11 @@ public class X86ShlRegClOp(X86Register dest) : X86Op {
 public class X86SarRegClOp(X86Register dest) : X86Op {
   public X86Register Dest { get; } = dest;
   public override string Mnemonic => $"x86.sar {Dest.ToString().ToLower()}, cl";
+}
+
+public class X86ShrRegClOp(X86Register dest) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public override string Mnemonic => $"x86.shr {Dest.ToString().ToLower()}, cl";
 }
 
 public class X86ImulRegRegOp(X86Register dest, X86Register src) : X86Op {
@@ -298,9 +310,31 @@ public class X86CqoOp : X86Op {
   public override string Mnemonic => "x86.cqo";
 }
 
+// CDQ: sign-extend EAX into EDX:EAX (32-bit, for 32-bit IDIV)
+public class X86CdqOp : X86Op {
+  public override string Mnemonic => "x86.cdq";
+}
+
 public class X86IdivRegOp(X86Register divisor) : X86Op {
   public X86Register Divisor { get; } = divisor;
   public override string Mnemonic => $"x86.idiv {Divisor.ToString().ToLower()}";
+}
+
+// 32-bit signed division (no REX.W)
+public class X86IdivReg32Op(X86Register divisor) : X86Op {
+  public X86Register Divisor { get; } = divisor;
+  public override string Mnemonic => $"x86.idiv32 {Divisor.ToString().ToLower()}";
+}
+
+public class X86DivRegOp(X86Register divisor) : X86Op {
+  public X86Register Divisor { get; } = divisor;
+  public override string Mnemonic => $"x86.div {Divisor.ToString().ToLower()}";
+}
+
+// 32-bit unsigned division (no REX.W)
+public class X86DivReg32Op(X86Register divisor) : X86Op {
+  public X86Register Divisor { get; } = divisor;
+  public override string Mnemonic => $"x86.div32 {Divisor.ToString().ToLower()}";
 }
 
 // LEA dest, [rbp+disp] - load effective address of a stack variable

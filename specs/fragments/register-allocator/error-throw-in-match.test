@@ -12,7 +12,7 @@ function lookup(key Integer) returns Integer throws MyError
   end 'dispatch'
 end 'lookup'
 
-function main() returns Integer
+function main() returns ExitCode
   let a = try lookup(2) otherwise 0
   let b = try lookup(99) otherwise 42
   return a + b mod 256
@@ -84,7 +84,18 @@ module {
     %37 = maxon.binop %35, %36 {op = mod}
     %38 = maxon.var_ref {var = a} {type = i64}
     %39 = maxon.binop %38, %37 {op = add}
-    maxon.return %39
+    maxon.assign %39 {var = __range_val_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %40 = maxon.literal {value = 0 : i64}
+    %41 = maxon.binop %39, %40 {op = lt}
+    %42 = maxon.literal {value = 4294967295 : i64}
+    %43 = maxon.binop %39, %42 {op = gt}
+    %44 = maxon.binop %41, %43 {op = or}
+    maxon.cond_br %44 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_8:
+    %46 = maxon.var_ref {var = __range_val_8} {type = i64}
+    maxon.return %46
   }
 }
 === standard
@@ -117,7 +128,7 @@ module {
     func.error_return %11
   dispatch_0.merge:
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %12 = arith.constant {value = 2 : i64}
     %13, %14 = func.try_call @register-allocator.lookup %12
@@ -152,7 +163,20 @@ module {
     %29 = arith.remsi %27, %28
     %30 = memref.load a : i64
     %31 = arith.addi %30, %29
-    func.return %31
+    memref.store %31, __range_val_8
+    %32 = arith.constant {value = 0 : i64}
+    %33 = arith.cmpi lt %31, %32
+    %34 = arith.constant {value = 4294967295 : i64}
+    %35 = arith.cmpi gt %31, %34
+    %36 = arith.ori1 %33, %35
+    cf.cond_br %36 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
+    %37 = memref.lea_rdata __panic_msg_45
+    %38 = std.ptr_to_i64 %37
+    std.call_runtime @maxon_panic %38
+  __range_ok_8:
+    %39 = memref.load __range_val_8 : i64
+    func.return %39
   }
 }
 === x86
@@ -192,9 +216,9 @@ module {
     x86.ret
   dispatch_0.merge:
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.mov eax, 2
     x86.mov rcx, rax
     x86.call register-allocator.lookup
@@ -226,11 +250,29 @@ module {
   otherwise_default_continue_7:
     x86.mov eax, [rbp-40]
     x86.mov ecx, 256
-    x86.mov [rbp-48], eax
+    x86.mov [rbp-56], eax
     x86.cqo
     x86.idiv ecx
     x86.mov eax, [rbp-24]
     x86.add eax, edx
+    x86.mov [rbp-48], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je register-allocator.main.__range_ok_8
+  __range_panic_8:
+    x86.lea_rdata rax, [__panic_msg_45]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_8:
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }

@@ -11,7 +11,7 @@ type SingleByte implements ByteSource with Byte
   end 'getByte'
 end 'SingleByte'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = SingleByte{b: 42 as Byte}
   var b = s.getByte()
   return b as Integer
@@ -20,7 +20,7 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @SingleByte.getByte(__self_ptr: i64) -> i8 {
+  func @SingleByte.getByte(__self_ptr: i64) -> u8 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -30,23 +30,42 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @associated-types.main() -> i64 {
+  func @associated-types.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 42
     x86.mov ecx, 255
     x86.and eax, ecx
     x86.mov edx, 8
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], eax
     x86.mov rcx, rdx
     x86.call maxon_alloc
     x86.mov [rbp-8], eax
     x86.mov ebx, [rbp-8]
-    x86.mov esi, [rbp-16]
+    x86.mov esi, [rbp-24]
     x86.mov byte ptr [ebx+0], esib
     x86.mov rcx, [rbp-8]
+    x86.call SingleByte.getByte
+    x86.mov [rbp-16], eax
+    x86.xor r8, r8
+    x86.cmp eax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
+    x86.cmp rax, rcx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je associated-types.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_13]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp SingleByte.getByte
+    x86.ret
   }
 }
 ---

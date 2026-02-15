@@ -312,7 +312,7 @@ enum Direction
   west
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   var dir = Direction.north
   if dir == Direction.north 'check'
     return 1
@@ -332,7 +332,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Color.red
   c = Color.blue
   if c == Color.blue 'check'
@@ -353,7 +353,7 @@ enum Status
   done
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Status.pending
   if s != Status.active 'check'
     return 1
@@ -373,7 +373,7 @@ enum Status
   done
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   var s1 = Status.pending
   var s2 = Status.pending
   var s3 = Status.active
@@ -403,7 +403,7 @@ function isOn(s Status) returns bool
   return false
 end 'isOn'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = Status.on
   if isOn(status) 'test'
     return 1
@@ -429,7 +429,7 @@ function getResult(succeed bool) returns Result
   return Result.failure
 end 'getResult'
 
-function main() returns Integer
+function main() returns ExitCode
   var r = getResult(true)
   if r == Result.success 'handle'
     return 1
@@ -449,7 +449,7 @@ enum HttpStatus
   serverError = 500
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = HttpStatus.ok
   if status.rawValue == 200 'check'
     return 1
@@ -469,7 +469,7 @@ enum Priority
   high = 10
 end 'Priority'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Priority.high
   if p.rawValue > 5 'check'
     return 1
@@ -489,7 +489,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.value(42)
   var e = Container.empty
   // Construction works - verify by checking tags are different
@@ -517,7 +517,7 @@ function process(c Container) returns Integer
     end 'handle'
 end 'process'
 
-function main() returns Integer
+function main() returns ExitCode
     var c = Container.value(42)
     return process(c)
 end 'main'
@@ -540,7 +540,7 @@ function process(c Container) returns Integer
     end 'handle'
 end 'process'
 
-function main() returns Integer
+function main() returns ExitCode
     var c = Container.empty
     return process(c)
 end 'main'
@@ -563,7 +563,7 @@ function getResult(succeed bool) returns Result
     return Result.failure(99)
 end 'getResult'
 
-function main() returns Integer
+function main() returns ExitCode
     var r = getResult(true)
     match r 'handle'
         success(v) then return v
@@ -589,7 +589,7 @@ function sum(p TwoParts) returns Integer
     end 'handle'
 end 'sum'
 
-function main() returns Integer
+function main() returns ExitCode
     var p = TwoParts.values(10, 20)
     return sum(p)
 end 'main'
@@ -607,7 +607,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-function main() returns Integer
+function main() returns ExitCode
     var items = ItemArray{}
     items.push(Item.value(10))
     items.push(Item.value(20))
@@ -632,7 +632,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-function main() returns Integer
+function main() returns ExitCode
     var items = ItemArray{}
     items.push(Item.value(10))
     items.push(Item.value(20))
@@ -660,7 +660,7 @@ end 'Slot'
 
 typealias SlotArray = Array with Slot
 
-function main() returns Integer
+function main() returns ExitCode
     var slots = SlotArray{}
     slots.push(Slot.val(5))
     slots.push(Slot.none)
@@ -688,7 +688,7 @@ end 'Box'
 
 typealias BoxArray = Array with Box
 
-function main() returns Integer
+function main() returns ExitCode
     var boxes = BoxArray{}
     boxes.push(Box.full(42))
     var result = 0
@@ -719,7 +719,7 @@ enum Direction
   end 'isNorth'
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   let d = Direction.north
   if d.isNorth() 'test'
     return 1
@@ -745,7 +745,7 @@ enum Toggle
   end 'flip'
 end 'Toggle'
 
-function main() returns Integer
+function main() returns ExitCode
   let t = Toggle.on
   let flipped = t.flip()
   if flipped == Toggle.off 'check'
@@ -765,7 +765,7 @@ enum Color
   red
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -780,7 +780,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   let _c = Color.green
   return 0
 end 'main'
@@ -796,7 +796,7 @@ enum Status
   success = 200
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -811,7 +811,7 @@ enum Status
   fail = "error"
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -826,7 +826,7 @@ enum Result
   failure
 end 'Result'
 
-function main() returns Integer
+function main() returns ExitCode
   let _r = Result.success(1, 2)
   return 0
 end 'main'
@@ -841,7 +841,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   let _c = Container.value("hello")
   return 0
 end 'main'
@@ -857,7 +857,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.value(42)
   match c 'extract'
     empty then return 0
@@ -876,7 +876,7 @@ enum Result
   failure(code Integer)
 end 'Result'
 
-function main() returns Integer
+function main() returns ExitCode
   var r = Result.failure(99)
   match r 'handle'
     success(v) then return v
@@ -895,7 +895,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.value(10)
   var result = match c 'get'
     empty gives 0
@@ -915,7 +915,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.empty
   match c 'check'
     empty then return 1
@@ -933,7 +933,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.value(42)
   match c 'extract'
     value(a, b) then return a
@@ -951,7 +951,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.value(42)
   match c 'extract'
     unknown(x) then return x
@@ -970,7 +970,7 @@ enum Direction
   east
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   var d = Direction.south
   return d.rawValue
 end 'main'
@@ -987,7 +987,7 @@ enum StringBacked
   "East"
 end 'StringBacked'
 
-function main() returns Integer
+function main() returns ExitCode
   var dir = StringBacked.North
   if dir == StringBacked.South 'check'
     return 0
@@ -1007,7 +1007,7 @@ enum CharBacked
   'E'
 end 'CharBacked'
 
-function main() returns Integer
+function main() returns ExitCode
   var dir = CharBacked.N
   if dir == CharBacked.S 'check'
     return 0
@@ -1027,7 +1027,7 @@ enum Direction
   East = 'e'
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   var d = Direction.North
   if d == Direction.South 'check'
     return 0
@@ -1047,7 +1047,7 @@ enum FloatBacked
   East = 3.3
 end 'FloatBacked'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = FloatBacked.North
   if f == FloatBacked.South 'check'
     return 0
@@ -1067,7 +1067,7 @@ enum Weights
   heavy = 3.5
 end 'Weights'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = Weights.medium
   var rawVal = w.rawValue
   if rawVal > 2.0 'check'
@@ -1088,7 +1088,7 @@ enum HttpStatus
   serverError = 500
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = HttpStatus.notFound
   var code = status.rawValue
   if code == 404 'check'
@@ -1108,7 +1108,7 @@ enum Planet
   mars = "Mars"
 end 'Planet'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Planet.mars
   var name = p.rawValue
   if name == "Mars" 'check'
@@ -1129,7 +1129,7 @@ enum Direction
   "East"
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   var d = Direction.South
   var name = d.rawValue
   if name == "South" 'check'
@@ -1150,7 +1150,7 @@ enum CardSuit
   Spades = 'S'
 end 'CardSuit'
 
-function main() returns Integer
+function main() returns ExitCode
   var suit = CardSuit.Diamonds
   var ch = suit.rawValue
   if ch == 'D' 'check'
@@ -1172,7 +1172,7 @@ enum Compass
   'W'
 end 'Compass'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Compass.E
   var ch = c.rawValue
   if ch == 'E' 'check'
@@ -1196,7 +1196,7 @@ function getName() returns String
   return "Mars"
 end 'getName'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Planet.mars
   var name = p.rawValue
   var expected = getName()
@@ -1217,7 +1217,7 @@ enum Planet
   mars = "Mars"
 end 'Planet'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Planet.earth
   p = Planet.mars
   var name = p.rawValue
@@ -1242,7 +1242,7 @@ function getRaw(w Weights) returns Float
   return w.rawValue
 end 'getRaw'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = Weights.medium
   var raw = getRaw(w)
   if raw > 2.0 'check'
@@ -1266,7 +1266,7 @@ function getCode(s HttpStatus) returns Integer
   return s.rawValue
 end 'getCode'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = HttpStatus.notFound
   var code = getCode(status)
   if code == 404 'check'
@@ -1291,7 +1291,7 @@ function getName(p Planet) returns String
   return p.rawValue
 end 'getName'
 
-function main() returns Integer
+function main() returns ExitCode
   var planet = Planet.mars
   var name = getName(planet)
   if name == "Mars" 'check'
@@ -1316,7 +1316,7 @@ function getLetter(g Grade) returns Character
   return g.rawValue
 end 'getLetter'
 
-function main() returns Integer
+function main() returns ExitCode
   var grade = Grade.good
   var letter = getLetter(grade)
   if letter == 'B' 'check'
@@ -1336,7 +1336,7 @@ enum Mixed
   second = "two"
 end 'Mixed'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -1352,7 +1352,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Color.green
   var n = c.name
   if n == "green" 'check'
@@ -1372,7 +1372,7 @@ enum HttpStatus
   notFound = 404
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = HttpStatus.notFound
   if s.name == "notFound" 'check'
     return 1
@@ -1391,7 +1391,7 @@ enum Planet
   mars = "Mars"
 end 'Planet'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Planet.mars
   // rawValue is "Mars", name is "mars"
   if p.name == "mars" 'check'
@@ -1417,7 +1417,7 @@ function getName(d Direction) returns String
   return d.name
 end 'getName'
 
-function main() returns Integer
+function main() returns ExitCode
   var d = Direction.west
   var n = getName(d)
   if n == "west" 'check'
@@ -1438,7 +1438,7 @@ enum Status
   done
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Status.pending
   s = Status.done
   if s.name == "done" 'check'
@@ -1459,7 +1459,7 @@ enum Weights
   heavy = 3.5
 end 'Weights'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = Weights.heavy
   if w.name == "heavy" 'check'
     return 1
@@ -1479,7 +1479,7 @@ enum CardSuit
   Spades = 'S'
 end 'CardSuit'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = CardSuit.Diamonds
   if s.name == "Diamonds" 'check'
     return 1
@@ -1500,7 +1500,7 @@ enum Direction
   west
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   var dir = try Direction.fromName("south") otherwise Direction.north
   if dir == Direction.south 'check'
     return 1
@@ -1523,7 +1523,7 @@ function getInvalidName() returns String
   return "invalid"
 end 'getInvalidName'
 
-function main() returns Integer
+function main() returns ExitCode
   var name = getInvalidName()
   var dir = try Direction.fromName(name) otherwise Direction.north
   if dir == Direction.north 'check'
@@ -1543,7 +1543,7 @@ enum HttpStatus
   notFound = 404
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok
   if status.rawValue == 404 'check'
     return 1
@@ -1567,7 +1567,7 @@ function getName() returns String
   return "green"
 end 'getName'
 
-function main() returns Integer
+function main() returns ExitCode
   var name = getName()
   var color = try Color.fromName(name) otherwise Color.red
   if color == Color.green 'check'
@@ -1587,7 +1587,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = try Container.fromName("value", 42) otherwise Container.empty
   match c 'check'
     value(n) then return n
@@ -1606,7 +1606,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = try Container.fromName("empty") otherwise Container.value(99)
   match c 'check'
     empty then return 1
@@ -1625,7 +1625,7 @@ enum Direction
   south
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   let _d = try Direction.fromName("invalid_case_name_that_does_not_exist") otherwise Direction.north
   return 0
 end 'main'
@@ -1640,7 +1640,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   let _c = try Container.fromName("value") otherwise Container.value(0)
   return 0
 end 'main'
@@ -1660,7 +1660,7 @@ function getName() returns String
   return "empty"
 end 'getName'
 
-function main() returns Integer
+function main() returns ExitCode
   var name = getName()
   var c = try Container.fromName(name) otherwise Container.value(99)
   match c 'check'
@@ -1681,7 +1681,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = try Color.fromRawValue(1) otherwise Color.red
   if c == Color.green 'check'
     return 1
@@ -1701,7 +1701,7 @@ enum HttpStatus
   serverError = 500
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
   if status == HttpStatus.notFound 'check'
     return 1
@@ -1721,7 +1721,7 @@ enum Weights
   heavy = 3.5
 end 'Weights'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = try Weights.fromRawValue(2.5) otherwise Weights.light
   if w == Weights.medium 'check'
     return 1
@@ -1740,7 +1740,7 @@ enum Planet
   mars = "Mars"
 end 'Planet'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
   if p == Planet.mars 'check'
     return 1
@@ -1760,7 +1760,7 @@ enum Grade
   average = 'C'
 end 'Grade'
 
-function main() returns Integer
+function main() returns ExitCode
   var g = try Grade.fromRawValue('B') otherwise Grade.average
   if g == Grade.good 'check'
     return 1
@@ -1783,7 +1783,7 @@ function getCode() returns Integer
   return 404
 end 'getCode'
 
-function main() returns Integer
+function main() returns ExitCode
   var code = getCode()
   var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
   if status == HttpStatus.notFound 'check'
@@ -1807,7 +1807,7 @@ function getCode() returns Integer
   return 999
 end 'getCode'
 
-function main() returns Integer
+function main() returns ExitCode
   var code = getCode()
   var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
   if status == HttpStatus.ok 'check'
@@ -1827,7 +1827,7 @@ enum HttpStatus
   notFound = 404
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   let _s = try HttpStatus.fromRawValue(999) otherwise HttpStatus.ok
   return 0
 end 'main'
@@ -1843,7 +1843,7 @@ enum HttpStatus
   notFound = 404
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   let _s = try HttpStatus.fromRawValue("404") otherwise HttpStatus.ok
   return 0
 end 'main'
@@ -1859,7 +1859,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   let _c = try Container.fromRawValue(0) otherwise Container.empty
   return 0
 end 'main'
@@ -1878,7 +1878,7 @@ end 'Color'
 
 let DEFAULT_COLOR = Color.Green
 
-function main() returns Integer
+function main() returns ExitCode
   match DEFAULT_COLOR 'check'
     Color.Red then return 1
     Color.Green then return 2
@@ -1898,7 +1898,7 @@ enum StringResult
   err(message String)
 end 'StringResult'
 
-function main() returns Integer
+function main() returns ExitCode
   var r = StringResult.err("bad")
   match r 'handle'
     ok(v) then return v
@@ -1922,7 +1922,7 @@ enum Shape
   rect(origin EnumPoint)
 end 'Shape'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Shape.rect(EnumPoint{x: 10, y: 20})
   match s 'handle'
     circle(r) then return r

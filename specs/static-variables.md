@@ -72,7 +72,7 @@ c.value = 20                        // Access instance field
 ```maxon
 var counter = 0
 
-function main() returns Integer
+function main() returns ExitCode
   counter = 42
   return counter
 end 'main'
@@ -89,7 +89,7 @@ function add(n Integer)
   total = total + n
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   add(5)
   add(27)
   return total
@@ -105,7 +105,7 @@ var a = 1
 var b = 2
 var c = 3
 
-function main() returns Integer
+function main() returns ExitCode
   a = a * 10
   b = b * 10
   c = c * 10
@@ -121,7 +121,7 @@ end 'main'
 let BASE = 40
 var offset = 0
 
-function main() returns Integer
+function main() returns ExitCode
   offset = 2
   return BASE + offset
 end 'main'
@@ -136,7 +136,7 @@ type Counter
   static var count = 0
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   Counter.count = 42
   return Counter.count
 end 'main'
@@ -155,7 +155,7 @@ type Counter
   end 'increment'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   Counter.increment()
   Counter.increment()
   Counter.increment()
@@ -172,7 +172,7 @@ type Config
   static let MAX_SIZE = 42
 end 'Config'
 
-function main() returns Integer
+function main() returns ExitCode
   return Config.MAX_SIZE
 end 'main'
 ```
@@ -190,7 +190,7 @@ type TypeB
   static var value = 20
 end 'TypeB'
 
-function main() returns Integer
+function main() returns ExitCode
   TypeA.value = TypeA.value + 2
   TypeB.value = TypeB.value + 10
   return TypeA.value + TypeB.value
@@ -212,7 +212,7 @@ type Thing
   end 'make'
 end 'Thing'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Thing.make(10)
   var b = Thing.make(20)
   return Thing.created + a.id + b.id
@@ -230,7 +230,7 @@ function init()
   initialized = true
 end 'init'
 
-function main() returns Integer
+function main() returns ExitCode
   if initialized 'check1'
     return 1
   end 'check1'
@@ -255,7 +255,7 @@ end 'Color'
 
 var current = Color.Green
 
-function main() returns Integer
+function main() returns ExitCode
   if current == Color.Green 'check'
     current = Color.Blue
     if current == Color.Blue 'check2'
@@ -274,7 +274,7 @@ end 'main'
 let BASE = 20
 var offset = BASE + 1
 
-function main() returns Integer
+function main() returns ExitCode
   offset = offset * 2
   return offset
 end 'main'
@@ -287,7 +287,7 @@ end 'main'
 ```maxon
 var items = [10, 20, 30]
 
-function main() returns Integer
+function main() returns ExitCode
   items.set(1, value: 12)
   let a = try items.get(0) otherwise 0
   let b = try items.get(1) otherwise 0
@@ -314,7 +314,7 @@ function setScore(index Integer, value Integer)
   scores.set(index, value: value)
 end 'setScore'
 
-function main() returns Integer
+function main() returns ExitCode
   setScore(1, value: 12)
   return getTotal()
 end 'main'
@@ -339,7 +339,7 @@ function total() returns Integer
   return a + b + c
 end 'total'
 
-function main() returns Integer
+function main() returns ExitCode
   increment(0)
   increment(0)
   increment(1)

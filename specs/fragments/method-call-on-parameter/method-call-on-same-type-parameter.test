@@ -11,7 +11,7 @@ type Foo
   end 'callBarOn'
 end 'Foo'
 
-function main() returns Integer
+function main() returns ExitCode
   var f1 = Foo{x: 10}
   var f2 = Foo{x: 42}
   return f1.callBarOn(f2)
@@ -38,9 +38,9 @@ module {
     x86.epilogue
     x86.jmp Foo.bar
   }
-  func @method-call-on-parameter.main() -> i64 {
+  func @method-call-on-parameter.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 10
     x86.mov ecx, 8
     x86.call maxon_alloc
@@ -57,10 +57,30 @@ module {
     x86.mov r9, 42
     x86.mov [r8+0], r9
     x86.mov eax, [rbp-8]
-    x86.mov rdx, [rbp-16]
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rcx
     x86.mov rcx, rax
+    x86.call Foo.callBarOn
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je method-call-on-parameter.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_19]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
     x86.epilogue
-    x86.jmp Foo.callBarOn
+    x86.ret
   }
 }
 ---

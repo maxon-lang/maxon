@@ -59,7 +59,7 @@ type Point implements Equatable
   end 'equals'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Point{x: 1, y: 2}
   var b = Point{x: 1, y: 2}
   if a.equals(b) 'check'
@@ -83,7 +83,7 @@ type Point implements Equatable
   end 'equals'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Point{x: 1, y: 2}
   var b = Point{x: 3, y: 4}
   if a.equals(b) 'check'
@@ -106,7 +106,7 @@ type Wrapper implements Equatable
   end 'equals'
 end 'Wrapper'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Wrapper{value: 42}
   var b = Wrapper{value: 42}
   var c = Wrapper{value: 99}
@@ -134,7 +134,7 @@ type Point implements Equatable
   end 'equals'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Point{x: 1, y: 2}
   var b = Point{x: 1, y: 99}
   if a.equals(b) 'check'
@@ -157,7 +157,7 @@ type Box implements Equatable
   end 'equals'
 end 'Box'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Box{value: 7}
   if a.equals(a) 'check'
     return 0
@@ -183,7 +183,7 @@ function areEqual(a Id, b Id) returns bool
   return a.equals(b)
 end 'areEqual'
 
-function main() returns Integer
+function main() returns ExitCode
   var x = Id{n: 5}
   var y = Id{n: 5}
   var z = Id{n: 6}
@@ -210,7 +210,7 @@ type Token implements Equatable
   end 'equals'
 end 'Token'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Token{id: 10}
   var b = Token{id: 10}
   var c = Token{id: 20}

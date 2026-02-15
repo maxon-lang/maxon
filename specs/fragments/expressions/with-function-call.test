@@ -1,5 +1,5 @@
 // Test: with-function-call
-function main() returns Integer
+function main() returns ExitCode
   var x = 3
   return 5 + add(x, b: 4)
 end 'main'
@@ -11,15 +11,35 @@ end 'add'
 ExitCode: 12
 ---
 module {
-  func @expressions.main() -> i64 {
+  func @expressions.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 3
     x86.mov ecx, 5
     x86.mov edx, 4
     x86.mov rcx, rax
     x86.call expressions.add
     x86.mov ebx, 5
-    x86.lea eax, [ebx + eax]
+    x86.add ebx, eax
+    x86.mov [rbp-8], ebx
+    x86.xor esi, esi
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rbx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je expressions.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
   func @expressions.add(a: i64, b: i64) -> i64 {

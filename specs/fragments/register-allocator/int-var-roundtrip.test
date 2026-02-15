@@ -1,5 +1,5 @@
 // Test: int-var-roundtrip
-function main() returns Integer
+function main() returns ExitCode
   var x = 99
   return x
 end 'main'
@@ -12,22 +12,66 @@ module {
   entry:
     %0 = maxon.literal {value = 99 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.return %0
+    maxon.assign %0 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    %2 = maxon.binop %0, %1 {op = lt}
+    %3 = maxon.literal {value = 4294967295 : i64}
+    %4 = maxon.binop %0, %3 {op = gt}
+    %5 = maxon.binop %2, %4 {op = or}
+    maxon.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %7 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %7
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 99 : i64}
-    func.return %0
+    memref.store %0, __range_val_0
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.cmpi lt %0, %1
+    %3 = arith.constant {value = 4294967295 : i64}
+    %4 = arith.cmpi gt %0, %3
+    %5 = arith.ori1 %2, %4
+    cf.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %6 = memref.lea_rdata __panic_msg_6
+    %7 = std.ptr_to_i64 %6
+    std.call_runtime @maxon_panic %7
+  __range_ok_0:
+    %8 = memref.load __range_val_0 : i64
+    func.return %8
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 99
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_6]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

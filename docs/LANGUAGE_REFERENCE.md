@@ -33,10 +33,10 @@ This reference provides complete syntax and semantics for the Maxon programming 
 ## Program Structure
 
 ### Entry Point
-Every Maxon program must have a `main()` function that returns `int`:
+Every Maxon program must have a `main()` function that returns `ExitCode`:
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
     return 0
 end 'main'
 ```
@@ -843,7 +843,7 @@ Variables can be declared at the top level of a module (outside any function):
 var globalCounter = 0
 let MAX_SIZE = 1024
 
-function main() returns int
+function main() returns ExitCode
     globalCounter = globalCounter + 1
     return globalCounter
 end 'main'
@@ -1749,7 +1749,7 @@ function parseNumber(s String) returns int throws ParseError
     return result
 end 'parseNumber'
 
-function main() returns int
+function main() returns ExitCode
     // Use default value on error
     let num1 = try parseNumber("42") otherwise 0
     
@@ -1976,7 +1976,7 @@ After a move, the original variable cannot be used or reassigned - this is a com
 
 **Example:**
 ```maxon
-function main() returns int
+function main() returns ExitCode
     var a = 42              // a owns the value 42
 
     var b = foo(a)          // borrow - foo only reads z
@@ -2084,7 +2084,7 @@ return a            // ERROR
 
 ### Main Function Template
 ```maxon
-function main() returns int
+function main() returns ExitCode
     // program logic
     return 0
 end 'main'
@@ -2121,7 +2121,7 @@ function factorial(n int) returns int
     return n * factorial(n: n - 1)
 end 'factorial'
 
-function main() returns int
+function main() returns ExitCode
     var result = factorial(n: 5)
     print("{result}")  // 120
     return 0

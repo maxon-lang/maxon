@@ -1,5 +1,5 @@
 // Test: append-preserves-originals
-function main() returns Integer
+function main() returns ExitCode
   var a = [1, 2]
   var b = [3, 4]
   a.append(b)
@@ -12,7 +12,7 @@ end 'main'
 ExitCode: 7
 ---
 module {
-  func @arrays.main() -> i64 {
+  func @arrays.main() -> u32 {
   entry:
     x86.prologue stack_size=80
     x86.xor eax, eax
@@ -124,7 +124,25 @@ module {
   otherwise_default_continue_9:
     x86.mov eax, [rbp-72]
     x86.mov ecx, [rbp-56]
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-80], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je arrays.main.__range_ok_10
+  __range_panic_10:
+    x86.lea_rdata rax, [__panic_msg_46]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_10:
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

@@ -7,7 +7,7 @@ function getTwo() returns Integer
   return 2
 end 'getTwo'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = 5
   var b = getTen()
   var c = 7
@@ -42,7 +42,18 @@ module {
     %6 = maxon.binop %2, %3 {op = add}
     %7 = maxon.binop %6, %4 {op = add}
     %8 = maxon.binop %7, %5 {op = add}
-    maxon.return %8
+    maxon.assign %8 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %9 = maxon.literal {value = 0 : i64}
+    %10 = maxon.binop %8, %9 {op = lt}
+    %11 = maxon.literal {value = 4294967295 : i64}
+    %12 = maxon.binop %8, %11 {op = gt}
+    %13 = maxon.binop %10, %12 {op = or}
+    maxon.cond_br %13 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %15 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %15
   }
 }
 === standard
@@ -57,7 +68,7 @@ module {
     %1 = arith.constant {value = 2 : i64}
     func.return %1
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %2 = arith.constant {value = 5 : i64}
     %3 = func.call @register-allocator.getTen
@@ -66,7 +77,20 @@ module {
     %6 = arith.addi %2, %3
     %7 = arith.addi %6, %4
     %8 = arith.addi %7, %5
-    func.return %8
+    memref.store %8, __range_val_0
+    %9 = arith.constant {value = 0 : i64}
+    %10 = arith.cmpi lt %8, %9
+    %11 = arith.constant {value = 4294967295 : i64}
+    %12 = arith.cmpi gt %8, %11
+    %13 = arith.ori1 %10, %12
+    cf.cond_br %13 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %14 = memref.lea_rdata __panic_msg_14
+    %15 = std.ptr_to_i64 %14
+    std.call_runtime @maxon_panic %15
+  __range_ok_0:
+    %16 = memref.load __range_val_0 : i64
+    func.return %16
   }
 }
 === x86
@@ -81,20 +105,38 @@ module {
     x86.mov eax, 2
     x86.ret
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 5
     x86.call register-allocator.getTen
     x86.mov ecx, 7
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.call register-allocator.getTwo
-    x86.mov edx, [rbp-8]
+    x86.mov edx, [rbp-16]
     x86.mov ebx, 5
     x86.add ebx, edx
     x86.mov esi, 7
     x86.add ebx, esi
-    x86.lea eax, [ebx + eax]
+    x86.add ebx, eax
+    x86.mov [rbp-8], ebx
+    x86.xor edi, edi
+    x86.cmp ebx, edi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.cmp rbx, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_14]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

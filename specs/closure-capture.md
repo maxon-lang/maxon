@@ -38,7 +38,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   var offset = 7
   var result = apply(f: (n Integer) gives n + offset, x: 10)
   return result
@@ -54,7 +54,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   var value = 42
   var result = apply(f: (_ Integer) gives value, x: 99)
   return result
@@ -74,7 +74,7 @@ type Level
   export var rawValue Integer
 end 'Level'
 
-function main() returns Integer
+function main() returns ExitCode
   var level = Level{rawValue: 5}
   var result = apply(f: (_ Integer) gives level.rawValue, x: 0)
   return result
@@ -90,7 +90,7 @@ type Level
   export var rawValue Integer
 end 'Level'
 
-function main() returns Integer
+function main() returns ExitCode
   var level = Level{rawValue: 5}
   var arr = [1, 2, 3]
   var result = arr.map((_ Integer) gives level.rawValue)
@@ -107,7 +107,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = 10
   var b = 20
   var result = apply(f: (x Integer) gives x + a + b, x: 5)
@@ -124,7 +124,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = apply(f: (n Integer) gives n * 3, x: 10)
   return result
 end 'main'
@@ -139,7 +139,7 @@ function apply(f (Integer) returns String, x Integer) returns String
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   var prefix = "hello"
   var result = apply(f: (_ Integer) gives prefix, x: 0)
   print(result)

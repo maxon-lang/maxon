@@ -1,5 +1,5 @@
 // Test: three-element-tuple
-function main() returns Integer
+function main() returns ExitCode
   var t = (1, 2, 39)
   return t.0 + t.1 + t.2
 end 'main'
@@ -7,7 +7,7 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @tuples.main() -> i64 {
+  func @tuples.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 1
@@ -33,7 +33,25 @@ module {
     x86.add ecx, edx
     x86.mov eax, [rbp-8]
     x86.mov edx, [eax+16]
-    x86.lea eax, [ecx + edx]
+    x86.add ecx, edx
+    x86.mov [rbp-16], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je tuples.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_17]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

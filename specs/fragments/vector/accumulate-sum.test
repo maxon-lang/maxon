@@ -1,7 +1,7 @@
 // Test: accumulate-sum
 typealias Vec5 = Vector with 5 int
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vec5{}
   v.set(0, value: 10)
   v.set(1, value: 20)
@@ -20,9 +20,9 @@ end 'main'
 ExitCode: 150
 ---
 module {
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.mov edx, 5
@@ -133,6 +133,24 @@ module {
     x86.jmp vector.main.loop_1.header
   loop_1.exit:
     x86.mov eax, [rbp-24]
+    x86.mov [rbp-56], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je vector.main.__range_ok_6
+  __range_panic_6:
+    x86.lea_rdata rax, [__panic_msg_49]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_6:
+    x86.mov eax, [rbp-56]
     x86.epilogue
     x86.ret
   }

@@ -11,7 +11,7 @@ type Factory
   end 'zero'
 end 'Factory'
 
-function main() returns Integer
+function main() returns ExitCode
   var f1 = Factory.create(100)
   var f2 = Factory.zero()
   return f1.id + f2.id
@@ -46,9 +46,9 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @static-methods.main() -> i64 {
+  func @static-methods.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 100
     x86.mov rcx, rax
     x86.call Factory.create
@@ -59,7 +59,25 @@ module {
     x86.mov edx, [ecx+0]
     x86.mov ebx, [rbp-16]
     x86.mov esi, [ebx+0]
-    x86.lea eax, [edx + esi]
+    x86.add edx, esi
+    x86.mov [rbp-24], edx
+    x86.xor edi, edi
+    x86.cmp edx, edi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.cmp rdx, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je static-methods.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_17]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

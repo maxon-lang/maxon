@@ -271,6 +271,7 @@ public static class DeadStoreEliminationPass {
   private static bool TryGetLoadVarName(StandardOp op, out string varName) {
     switch (op) {
       case StdLoadI64Op load: varName = load.VarName; return true;
+      case StdLoadI32Op load: varName = load.VarName; return true;
       case StdLoadF64Op load: varName = load.VarName; return true;
       case StdLoadI1Op load: varName = load.VarName; return true;
       case StdLoadPtrOp load: varName = load.VarName; return true;

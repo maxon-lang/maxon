@@ -12,7 +12,7 @@ type Value implements Parsable
   end 'fromString'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = try Value.fromString("hello") otherwise 'err'
     return 0
   end 'err'
@@ -41,19 +41,19 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @parsable-interface.main() -> i64 {
+  func @parsable-interface.main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.lea_rdata rax, [__str_12]
     x86.mov rcx, rax
     x86.mov edx, 5
     x86.mov ebx, 32
-    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], ecx
     x86.mov rcx, rbx
     x86.call maxon_alloc
     x86.mov [rbp-8], eax
     x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-40]
+    x86.mov edi, [rbp-48]
     x86.mov [esi+0], edi
     x86.mov r8, [rbp-8]
     x86.mov r9, 5
@@ -89,7 +89,25 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov [rbp-32], eax
     x86.mov ecx, [rbp-32]
-    x86.mov eax, [ecx+0]
+    x86.mov edx, [ecx+0]
+    x86.mov [rbp-40], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je parsable-interface.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_rdata rax, [__panic_msg_27]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_4:
+    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   }

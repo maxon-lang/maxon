@@ -7,7 +7,7 @@ type TypeB
   static var value = 20
 end 'TypeB'
 
-function main() returns Integer
+function main() returns ExitCode
   TypeA.value = TypeA.value + 2
   TypeB.value = TypeB.value + 10
   return TypeA.value + TypeB.value
@@ -16,8 +16,9 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @static-variables.main() -> i64 {
+  func @static-variables.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, [rip+TypeA.value]
     x86.mov ecx, 2
     x86.add eax, ecx
@@ -28,7 +29,26 @@ module {
     x86.mov [rip+TypeB.value], edx
     x86.mov esi, [rip+TypeA.value]
     x86.mov edi, [rip+TypeB.value]
-    x86.lea eax, [esi + edi]
+    x86.add esi, edi
+    x86.mov [rbp-8], esi
+    x86.xor r8, r8
+    x86.cmp esi, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rax, 4294967295
+    x86.cmp rsi, rax
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je static-variables.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_14]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

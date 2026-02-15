@@ -65,7 +65,7 @@ let PRIMES = [2, 3, 5, 7, 11]
 ```maxon
 let ANSWER = 42
 
-function main() returns Integer
+function main() returns ExitCode
   return ANSWER
 end 'main'
 ```
@@ -78,7 +78,7 @@ end 'main'
 let PI = 3.14
 let PI_INT = 3
 
-function main() returns Integer
+function main() returns ExitCode
   return PI_INT
 end 'main'
 ```
@@ -91,7 +91,7 @@ end 'main'
 let BASE = 10
 let DOUBLED = BASE * 2
 
-function main() returns Integer
+function main() returns ExitCode
   return DOUBLED
 end 'main'
 ```
@@ -105,7 +105,7 @@ let TOTAL = FIRST + SECOND
 let FIRST = 30
 let SECOND = 12
 
-function main() returns Integer
+function main() returns ExitCode
   return TOTAL
 end 'main'
 ```
@@ -117,7 +117,7 @@ end 'main'
 ```maxon
 let DEBUG = true
 
-function main() returns Integer
+function main() returns ExitCode
   if DEBUG 'check'
     return 1
   end 'check'
@@ -132,7 +132,7 @@ end 'main'
 ```maxon
 let OFFSET = 10
 
-function main() returns Integer
+function main() returns ExitCode
   let x = 5
   return x + OFFSET
 end 'main'
@@ -147,7 +147,7 @@ let A = 1
 let B = 2
 let C = 3
 
-function main() returns Integer
+function main() returns ExitCode
   return A + B + C
 end 'main'
 ```
@@ -159,7 +159,7 @@ end 'main'
 ```maxon
 let NEGATIVE = -42
 
-function main() returns Integer
+function main() returns ExitCode
   return 0 - NEGATIVE
 end 'main'
 ```
@@ -171,7 +171,7 @@ end 'main'
 ```maxon
 let IS_LARGE = 100 > 50
 
-function main() returns Integer
+function main() returns ExitCode
   if IS_LARGE 'check'
     return 1
   end 'check'
@@ -188,7 +188,7 @@ let BOTH = true and true
 let EITHER = false or true
 let NEITHER = not false
 
-function main() returns Integer
+function main() returns ExitCode
   if BOTH and EITHER and NEITHER 'check'
     return 1
   end 'check'
@@ -204,7 +204,7 @@ end 'main'
 let OFFSET = 10
 let SCALED = OFFSET * 3
 
-function main() returns Integer
+function main() returns ExitCode
   return SCALED
 end 'main'
 ```
@@ -219,7 +219,7 @@ let B = A * 3
 let C = B + 4
 let D = C * 2
 
-function main() returns Integer
+function main() returns ExitCode
   return D
 end 'main'
 ```
@@ -232,7 +232,7 @@ end 'main'
 let A = B + 1
 let B = A + 1
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```

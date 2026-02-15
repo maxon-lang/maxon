@@ -112,6 +112,7 @@ public static class PeepholePass {
       // Shift reads dest + implicit ECX
       case X86ShlRegClOp shl: yield return shl.Dest; yield return X86Register.Ecx; break;
       case X86SarRegClOp sar: yield return sar.Dest; yield return X86Register.Ecx; break;
+      case X86ShrRegClOp shr: yield return shr.Dest; yield return X86Register.Ecx; break;
       // IDIV reads RAX, RDX, and divisor
       case X86CqoOp: yield return X86Register.Rax; break;
       case X86IdivRegOp idiv: yield return X86Register.Rax; yield return X86Register.Rdx; yield return idiv.Divisor; break;

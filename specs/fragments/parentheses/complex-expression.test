@@ -1,5 +1,5 @@
 // Test: complex-expression
-function main() returns Integer
+function main() returns ExitCode
   var result = trunc((10 + (2 * 3)) / (4 - 2))
   return result
 end 'main'
@@ -7,7 +7,7 @@ end 'main'
 ExitCode: 8
 ---
 module {
-  func @parentheses.main() -> i64 {
+  func @parentheses.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 10
@@ -18,9 +18,27 @@ module {
     x86.mov ebx, 4
     x86.mov esi, 2
     x86.sub ebx, esi
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.cqo
     x86.idiv ebx
+    x86.mov [rbp-8], eax
+    x86.xor edi, edi
+    x86.cmp eax, edi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.cmp rax, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je parentheses.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_15]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

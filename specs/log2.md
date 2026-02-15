@@ -42,7 +42,7 @@ var b = Math.log2(a)     // 10.0 (2^10 = 1024)
 
 <!-- test: log2.powers-of-two -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Test various powers of 2 - should all be exact
   var r1 = Math.log2(1.0)      // 2^0 = 1
   var r2 = Math.log2(2.0)      // 2^1 = 2
@@ -84,7 +84,7 @@ end 'main'
 
 <!-- test: log2.non-powers-and-precision -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Non-powers of 2 require high precision
   var r3 = Math.log2(3.0)
   var r5 = Math.log2(5.0)
@@ -112,7 +112,7 @@ end 'main'
 
 <!-- test: log2.integer-promotion-and-relationships -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Test integer promotion
   var int_val = 32
   var r_int = Math.log2(int_val)  // Should promote 32 to 32.0
@@ -158,7 +158,7 @@ end 'main'
 
 <!-- test: log2.special-values -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   // Test with e (natural log base)
   // log2(e) should equal 1/ln(2) ≈ 1.442695
   var e = 2.71828182845904523536

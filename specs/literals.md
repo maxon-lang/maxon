@@ -85,7 +85,7 @@ false
 
 <!-- test: integer -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 5
 end 'main'
 ```
@@ -95,7 +95,7 @@ end 'main'
 
 <!-- test: hex-integer -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0xff
 end 'main'
 ```
@@ -105,7 +105,7 @@ end 'main'
 
 <!-- test: hex-integer-uppercase -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0xaB
 end 'main'
 ```
@@ -115,7 +115,7 @@ end 'main'
 
 <!-- test: binary-integer -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0b1010
 end 'main'
 ```
@@ -125,7 +125,7 @@ end 'main'
 
 <!-- test: octal-integer -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0o77
 end 'main'
 ```
@@ -135,7 +135,7 @@ end 'main'
 
 <!-- test: underscore-separator -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 1_000
   return x - 990
 end 'main'
@@ -146,7 +146,7 @@ end 'main'
 
 <!-- test: hex-underscore -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0xff_ff - 65525
 end 'main'
 ```
@@ -156,7 +156,7 @@ end 'main'
 
 <!-- test: binary-underscore -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0b1111_0000
 end 'main'
 ```
@@ -167,7 +167,7 @@ end 'main'
 <!-- test: large-hex-literal -->
 ```maxon
 // Test hex literal above 32-bit range (0x140000000 = 5368709120)
-function main() returns Integer
+function main() returns ExitCode
   var x = 0x0000000140000000
   // Verify the value wasn't truncated to 32-bit (which would give 0x40000000 = 1073741824)
   if x == 5368709120 'check'
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: large-hex-literal-underscore -->
 ```maxon
 // Test large hex literal with underscore separators
-function main() returns Integer
+function main() returns ExitCode
   var x = 0x0000_0001_4000_0000
   if x == 5368709120 'check'
     return 0
@@ -198,7 +198,7 @@ end 'main'
 <!-- test: int64-max -->
 ```maxon
 // Test INT64_MAX (9223372036854775807)
-function main() returns Integer
+function main() returns ExitCode
   var x = 9223372036854775807
   if x > 0 'check'
     return 0
@@ -213,7 +213,7 @@ end 'main'
 <!-- test: large-decimal-literal -->
 ```maxon
 // Test decimal literal above 32-bit range
-function main() returns Integer
+function main() returns ExitCode
   var x = 5368709120
   if x == 0x140000000 'check'
     return 0
@@ -228,7 +228,7 @@ end 'main'
 
 <!-- test: float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 3.14
   return trunc(x)
 end 'main'
@@ -240,7 +240,7 @@ end 'main'
 
 <!-- test: boolean -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var flag = true
   if flag 'check'
     return 1
@@ -254,7 +254,7 @@ end 'main'
 
 <!-- test: scientific-notation-positive-exponent -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 1.5e2
   return trunc(x) - 140
 end 'main'
@@ -265,7 +265,7 @@ end 'main'
 
 <!-- test: scientific-notation-negative-exponent -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5.0e-1
   return trunc(x * 20.0)
 end 'main'
@@ -276,7 +276,7 @@ end 'main'
 
 <!-- test: scientific-notation-explicit-positive -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 2.5e+02
   return trunc(x) - 240
 end 'main'
@@ -287,7 +287,7 @@ end 'main'
 
 <!-- test: scientific-notation-uppercase -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 1.0E3
   return trunc(x) - 990
 end 'main'
@@ -300,7 +300,7 @@ end 'main'
 
 <!-- test: error.int-overflow -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 99999999999999999999
   return 0
 end 'main'
@@ -311,7 +311,7 @@ error E2011: specs/fragments/literals/error.int-overflow.test:3:11: Integer lite
 
 <!-- test: error.hex-overflow -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0x1ffffffffffffffff
   return 0
 end 'main'
@@ -322,7 +322,7 @@ error E2011: specs/fragments/literals/error.hex-overflow.test:3:11: Integer lite
 
 <!-- test: error.float-overflow -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 1.0e999
   return 0
 end 'main'

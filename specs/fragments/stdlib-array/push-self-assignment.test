@@ -1,7 +1,7 @@
 // Test: push-self-assignment
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = IntArray{}
   arr = arr.push(1)
   arr = arr.push(2)
@@ -19,9 +19,9 @@ end 'main'
 ExitCode: 6
 ---
 module {
-  func @stdlib-array.main() -> i64 {
+  func @stdlib-array.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -69,17 +69,17 @@ module {
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-16]
     x86.mov ecx, 16
-    x86.mov [rbp-48], eax
+    x86.mov [rbp-56], eax
     x86.call maxon_alloc
-    x86.mov ecx, [rbp-48]
+    x86.mov ecx, [rbp-56]
     x86.mov edx, [ecx+0]
     x86.mov [eax+0], edx
     x86.mov edx, [ecx+8]
     x86.mov ecx, 32
-    x86.mov [rbp-56], eax
-    x86.mov [rbp-64], edx
+    x86.mov [rbp-64], eax
+    x86.mov [rbp-72], edx
     x86.call maxon_alloc
-    x86.mov ecx, [rbp-64]
+    x86.mov ecx, [rbp-72]
     x86.mov edx, [ecx+0]
     x86.mov [eax+0], edx
     x86.mov edx, [ecx+8]
@@ -88,7 +88,7 @@ module {
     x86.mov [eax+16], edx
     x86.mov edx, [ecx+24]
     x86.mov [eax+24], edx
-    x86.mov ecx, [rbp-56]
+    x86.mov ecx, [rbp-64]
     x86.mov [ecx+8], eax
     x86.mov [rbp-32], ecx
     x86.jmp stdlib-array.main.loop_0.header
@@ -108,6 +108,24 @@ module {
     x86.jmp stdlib-array.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-24]
+    x86.mov [rbp-48], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je stdlib-array.main.__range_ok_3
+  __range_panic_3:
+    x86.lea_rdata rax, [__panic_msg_29]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_3:
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }

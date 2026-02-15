@@ -8,7 +8,7 @@ function sum(v Vec3) returns Integer
   return a + b + c
 end 'sum'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [10, 20, 12]
   return sum(v)
 end 'main'
@@ -78,7 +78,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.mov eax, 10
@@ -115,8 +115,27 @@ module {
     x86.mov rcx, rax
     x86.call __Vector_3_i64.init
     x86.mov [rbp-40], eax
-    x86.mov rcx, [rbp-40]
+    x86.mov eax, [rbp-40]
+    x86.mov rcx, rax
     x86.call vector.sum
+    x86.mov [rbp-48], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je vector.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_51]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }

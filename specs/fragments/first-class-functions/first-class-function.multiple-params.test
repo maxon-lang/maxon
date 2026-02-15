@@ -7,7 +7,7 @@ function add(x Integer, y Integer) returns Integer
   return x + y
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return calculate(add, a: 15, b: 27)
 end 'main'
 ---
@@ -31,8 +31,9 @@ module {
     x86.lea eax, [ecx + edx]
     x86.ret
   }
-  func @first-class-functions.main() -> i64 {
+  func @first-class-functions.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.lea_func eax, [first-class-functions.add]
     x86.mov ecx, 15
     x86.mov edx, 27
@@ -41,7 +42,27 @@ module {
     x86.mov r9, rdx
     x86.mov rcx, rax
     x86.mov rdx, rbx
-    x86.jmp first-class-functions.calculate
+    x86.call first-class-functions.calculate
+    x86.mov [rbp-8], eax
+    x86.xor esi, esi
+    x86.cmp eax, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rax, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je first-class-functions.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_16]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ---

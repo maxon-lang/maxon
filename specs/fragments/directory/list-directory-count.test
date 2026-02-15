@@ -1,5 +1,5 @@
 // Test: list-directory-count
-function main() returns Integer
+function main() returns ExitCode
   let files = try Directory.list("../bin") otherwise 'err'
     return 99
   end 'err'
@@ -13,19 +13,19 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @directory.main() -> i64 {
+  func @directory.main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.mov edx, 6
     x86.mov ebx, 32
-    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], ecx
     x86.mov rcx, rbx
     x86.call maxon_alloc
     x86.mov [rbp-8], eax
     x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-40]
+    x86.mov edi, [rbp-48]
     x86.mov [esi+0], edi
     x86.mov r8, [rbp-8]
     x86.mov r9, 6
@@ -70,9 +70,29 @@ module {
     x86.epilogue
     x86.ret
   ok_4.after:
-    x86.mov rcx, [rbp-32]
+    x86.mov eax, [rbp-32]
+    x86.mov rcx, rax
+    x86.call StringArray.count
+    x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je directory.main.__range_ok_5
+  __range_panic_5:
+    x86.lea_rdata rax, [__panic_msg_20]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_5:
+    x86.mov eax, [rbp-40]
     x86.epilogue
-    x86.jmp StringArray.count
+    x86.ret
   }
 }
 ---

@@ -3,7 +3,7 @@ var a = 1
 var b = 2
 var c = 3
 
-function main() returns Integer
+function main() returns ExitCode
   a = a * 10
   b = b * 10
   c = c * 10
@@ -13,8 +13,9 @@ end 'main'
 ExitCode: 60
 ---
 module {
-  func @static-variables.main() -> i64 {
+  func @static-variables.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, [rip+a]
     x86.mov ecx, 10
     x86.imul eax, ecx
@@ -31,7 +32,26 @@ module {
     x86.mov r9, [rip+b]
     x86.add r8, r9
     x86.mov eax, [rip+c]
-    x86.lea eax, [r8 + eax]
+    x86.add r8, eax
+    x86.mov [rbp-8], r8
+    x86.xor eax, eax
+    x86.cmp r8, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp r8, rcx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je static-variables.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_19]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

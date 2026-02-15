@@ -60,7 +60,7 @@ function makePoint() returns Point
   return Point{x: 1, y: 2}
 end 'makePoint'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -79,7 +79,7 @@ function transform(f (Integer) returns Point, n Integer) returns Point
   return f(n)
 end 'transform'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = transform((x Integer) gives Point{x: x, y: x * 2}, n: 5)
   return p.x
 end 'main'
@@ -95,7 +95,7 @@ type Point
   export var y Integer
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 1, y: 2}
   return p.x
 end 'main'
@@ -115,7 +115,7 @@ function makePoint() returns Point
   return {x: 1, y: 2}
 end 'makePoint'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = makePoint()
   return p.x + p.y
 end 'main'
@@ -135,7 +135,7 @@ function transform(f (Point) returns Integer) returns Integer
   return f(Point{x: 5, y: 10})
 end 'transform'
 
-function main() returns Integer
+function main() returns ExitCode
   return transform((p Point) gives p.x + p.y)
 end 'main'
 ```
@@ -150,7 +150,7 @@ type Point
   export var y Integer
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = (p Point) gives p.x + p.y
   return f(Point{x: 3, y: 4})
 end 'main'
@@ -170,7 +170,7 @@ function transform(f (Point) returns Integer) returns Integer
   return f(Point{x: 5, y: 10})
 end 'transform'
 
-function main() returns Integer
+function main() returns ExitCode
   return transform((p) gives p.x + p.y)
 end 'main'
 ```

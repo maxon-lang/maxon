@@ -23,7 +23,7 @@ type TypeB implements Valued
   end 'val'
 end 'TypeB'
 
-function main() returns Integer
+function main() returns ExitCode
   var ta = TypeA{a: 5}
   var tb = TypeB{b: 10}
   return ta.valPlusTen() + tb.valPlusTen()
@@ -78,7 +78,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @interface-extensions.main() -> i64 {
+  func @interface-extensions.main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.mov eax, 5
@@ -100,10 +100,28 @@ module {
     x86.mov rcx, rax
     x86.call TypeA.valPlusTen
     x86.mov ecx, [rbp-16]
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-32], eax
     x86.call TypeB.valPlusTen
-    x86.mov ecx, [rbp-24]
-    x86.lea eax, [ecx + eax]
+    x86.mov ecx, [rbp-32]
+    x86.add ecx, eax
+    x86.mov [rbp-24], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je interface-extensions.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_32]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

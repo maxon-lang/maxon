@@ -16,7 +16,7 @@ type Counter implements Describable
   end 'value'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 42}
   return c.describe() + c.value()
 end 'main'
@@ -45,9 +45,9 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @interfaces.main() -> i64 {
+  func @interfaces.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 42
     x86.mov ecx, 8
     x86.call maxon_alloc
@@ -58,11 +58,29 @@ module {
     x86.mov rcx, [rbp-8]
     x86.call Counter.describe
     x86.mov edi, [rbp-8]
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], eax
     x86.mov rcx, rdi
     x86.call Counter.value
-    x86.mov r8, [rbp-16]
-    x86.lea eax, [r8 + eax]
+    x86.mov r8, [rbp-24]
+    x86.add r8, eax
+    x86.mov [rbp-16], r8
+    x86.xor r9, r9
+    x86.cmp r8, r9
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp r8, rcx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je interfaces.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_18]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

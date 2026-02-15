@@ -26,7 +26,7 @@ type Outer
   export var z Integer
 end 'Outer'
 
-function main() returns Integer
+function main() returns ExitCode
   var inner = Inner{x: 10, y: 20}
   var outer = Outer{inner: inner, z: 30}
   return outer.inner.x + outer.inner.y + outer.z
@@ -51,7 +51,7 @@ function makeOuter() returns Outer
   return {inner: i}
 end 'makeOuter'
 
-function main() returns Integer
+function main() returns ExitCode
   var o = makeOuter()
   return o.inner.value
 end 'main'
@@ -74,7 +74,7 @@ type Level3
   export var inner Level2
 end 'Level3'
 
-function main() returns Integer
+function main() returns ExitCode
   var l1 = Level1{value: 42}
   var l2 = Level2{inner: l1}
   var l3 = Level3{inner: l2}
@@ -97,7 +97,7 @@ type Line
   export var finish Point
 end 'Line'
 
-function main() returns Integer
+function main() returns ExitCode
   var p1 = Point{x: 1, y: 2}
   var p2 = Point{x: 10, y: 20}
   var line = Line{start: p1, finish: p2}

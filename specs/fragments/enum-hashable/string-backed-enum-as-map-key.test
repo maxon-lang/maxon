@@ -7,7 +7,7 @@ end 'Planet'
 
 typealias PlanetMap = Map with (Planet, int)
 
-function main() returns Integer
+function main() returns ExitCode
   var m = PlanetMap{}
   m.insert(Planet.earth, value: 1)
   m.insert(Planet.mars, value: 2)
@@ -96,7 +96,7 @@ module {
     x86.epilogue
     x86.jmp stdlib.String.hash
   }
-  func @enum-hashable.main() -> i64 {
+  func @enum-hashable.main() -> u32 {
   entry:
     x86.prologue stack_size=80
     x86.xor eax, eax
@@ -254,6 +254,24 @@ module {
     x86.jmp enum-hashable.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-72]
+    x86.mov [rbp-80], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je enum-hashable.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_rdata rax, [__panic_msg_54]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_4:
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

@@ -3,7 +3,7 @@ function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns Integer
+function main() returns ExitCode
   var sum = 0
   var i = 0
   while i < 5 'loop'
@@ -49,7 +49,18 @@ module {
     maxon.br loop_0.header
   loop_0.exit:
     %15 = maxon.var_ref {var = sum} {type = i64}
-    maxon.return %15
+    maxon.assign %15 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %16 = maxon.literal {value = 0 : i64}
+    %17 = maxon.binop %15, %16 {op = lt}
+    %18 = maxon.literal {value = 4294967295 : i64}
+    %19 = maxon.binop %15, %18 {op = gt}
+    %20 = maxon.binop %17, %19 {op = or}
+    maxon.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_1:
+    %22 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.return %22
   }
 }
 === standard
@@ -61,7 +72,7 @@ module {
     %2 = arith.muli %0, %1
     func.return %2
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, sum
@@ -86,7 +97,20 @@ module {
     cf.br loop_0.header
   loop_0.exit:
     %15 = memref.load sum : i64
-    func.return %15
+    memref.store %15, __range_val_1
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.cmpi lt %15, %16
+    %18 = arith.constant {value = 4294967295 : i64}
+    %19 = arith.cmpi gt %15, %18
+    %20 = arith.ori1 %17, %19
+    cf.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %21 = memref.lea_rdata __panic_msg_21
+    %22 = std.ptr_to_i64 %21
+    std.call_runtime @maxon_panic %22
+  __range_ok_1:
+    %23 = memref.load __range_val_1 : i64
+    func.return %23
   }
 }
 === x86
@@ -98,9 +122,9 @@ module {
     x86.mov eax, ecx
     x86.ret
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
@@ -125,6 +149,24 @@ module {
     x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je register-allocator.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_21]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

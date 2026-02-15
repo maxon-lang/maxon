@@ -1,5 +1,5 @@
 // Test: parsable.int-fromstring-negative
-function main() returns Integer
+function main() returns ExitCode
   var n = try int.fromString("-7") otherwise 0
   return n + 10
 end 'main'
@@ -7,19 +7,19 @@ end 'main'
 ExitCode: 3
 ---
 module {
-  func @parsable-interface.main() -> i64 {
+  func @parsable-interface.main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.mov edx, 2
     x86.mov ebx, 32
-    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], ecx
     x86.mov rcx, rbx
     x86.call maxon_alloc
     x86.mov [rbp-8], eax
     x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-40]
+    x86.mov edi, [rbp-48]
     x86.mov [esi+0], edi
     x86.mov r8, [rbp-8]
     x86.mov r9, 2
@@ -57,6 +57,24 @@ module {
     x86.mov eax, [rbp-32]
     x86.mov ecx, 10
     x86.add eax, ecx
+    x86.mov [rbp-40], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je parsable-interface.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_rdata rax, [__panic_msg_16]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_4:
+    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   }

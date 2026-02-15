@@ -16,11 +16,18 @@ public class MlirType {
   public static MlirType I8 { get; } = new("i8", 1);
   public static MlirType I32 { get; } = new("i32", 4);
   public static MlirType I64 { get; } = new("i64", 8);
+  public static MlirType U8 { get; } = new("u8", 1);
+  public static MlirType U32 { get; } = new("u32", 4);
+  public static MlirType U64 { get; } = new("u64", 8);
   public static MlirType F64 { get; } = new("f64", 8);
   public static MlirType I1 { get; } = new("i1", 1);
   public static MlirType Void { get; } = new("void", 0);
   // Sentinel type for function-typed parameters (higher-order functions)
   public static MlirType Fn { get; } = new("fn", 8);
+
+  public bool IsUnsigned => this == U8 || this == U32 || this == U64;
+  public MlirType ToSigned() => this == U8 ? I8 : this == U32 ? I32 : this == U64 ? I64 : this;
+  public MlirType ToUnsigned() => this == I8 ? U8 : this == I32 ? U32 : this == I64 ? U64 : this;
 
   /// <summary>
   /// Returns the element size in bytes for the type.
@@ -38,10 +45,11 @@ public class MlirType {
   /// </summary>
   public static string FormatAsSourceName(MlirType type) {
     if (type is MlirRangedPrimitiveType ranged) return ranged.Name;
-    if (type == I64) return "int";
+    if (type == I64 || type == U64) return "int";
     if (type == F64) return "float";
     if (type == I1) return "bool";
-    if (type == I8) return "byte";
+    if (type == I8 || type == U8) return "byte";
+    if (type == I32 || type == U32) return "int";
     if (type == Void) return "void";
     if (type is MlirStructType st && st.IsTuple) {
       var elems = st.Fields.Select(f => FormatAsSourceName(f.Type));
@@ -196,17 +204,21 @@ public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double
   public bool UpperInclusive { get; } = upperInclusive;
   public MlirType OptimalType { get; } = ComputeOptimalType(baseType, lowerBound, upperBound);
 
+  /// True when the range is entirely non-negative — derived from OptimalType.
+  public new bool IsUnsigned => OptimalType.IsUnsigned;
+
   public override int ElementSize => OptimalType.SizeInBytes;
 
   /// Pick the smallest x86-64-optimal type that can represent the range.
-  /// Skips i16 (operand size prefix overhead).
+  /// Skips i16 (operand size prefix overhead). Returns unsigned types (U8/U32/U64) when range is non-negative.
   private static MlirType ComputeOptimalType(MlirType baseType, double lower, double upper) {
     if (baseType == F64) return F64;
-    if (lower >= -128 && upper <= 127) return I8;
-    if (lower >= 0 && upper <= 255) return I8;
-    if (lower >= -2147483648 && upper <= 2147483647) return I32;
-    if (lower >= 0 && upper <= 4294967295) return I32;
-    return I64;
+    bool unsigned = lower >= 0;
+    if (lower >= -128 && upper <= 127) return unsigned ? U8 : I8;
+    if (lower >= 0 && upper <= 255) return U8;
+    if (lower >= -2147483648 && upper <= 2147483647) return unsigned ? U32 : I32;
+    if (lower >= 0 && upper <= 4294967295) return U32;
+    return unsigned ? U64 : I64;
   }
 
   private static int ComputeOptimalSize(MlirType baseType, double lower, double upper) {
@@ -227,6 +239,20 @@ public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double
     if (a.IsSubsetOf(b)) return b;
     if (b.IsSubsetOf(a)) return a;
     return null;
+  }
+
+  /// True when the range covers the full representable range of the base type,
+  /// making runtime range checks unnecessary. Checks against the base type
+  /// (not the optimal type) because values arrive as full-width base type
+  /// values that could be outside a narrower optimal type's range.
+  public bool IsFullBaseRange {
+    get {
+      var effectiveUpper = UpperInclusive ? UpperBound : UpperBound - 1;
+      if (BaseType == I64) return LowerBound <= (double)long.MinValue && effectiveUpper >= (double)long.MaxValue;
+      if (BaseType == F64) return LowerBound <= double.MinValue && effectiveUpper >= double.MaxValue;
+      if (BaseType == I8) return LowerBound <= 0 && effectiveUpper >= 255;
+      return false;
+    }
   }
 
   public string FormatRange() {

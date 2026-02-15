@@ -12,7 +12,7 @@ type Point implements Movable
   end 'move'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 10, y: 20}
   var p2 = p.move(5, dy: 10)
   return p2.x + p2.y
@@ -47,9 +47,9 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @interfaces.main() -> i64 {
+  func @interfaces.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 10
     x86.mov ecx, 20
     x86.mov edx, 16
@@ -73,7 +73,25 @@ module {
     x86.mov ecx, [eax+0]
     x86.mov eax, [rbp-16]
     x86.mov edx, [eax+8]
-    x86.lea eax, [ecx + edx]
+    x86.add ecx, edx
+    x86.mov [rbp-24], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je interfaces.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_25]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

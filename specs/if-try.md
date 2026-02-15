@@ -78,7 +78,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   if try mayFail(true) 'check'
     result = 1
@@ -103,7 +103,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   if try mayFail(false) 'check'
     result = 1
@@ -128,7 +128,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   if let value = try mayFail(true) 'check'
     return value
   end 'check'
@@ -152,7 +152,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   if let value = try mayFail(false) 'check'
     return value
   end 'check'
@@ -176,7 +176,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   if try mayFail(false) 'check'
     result = 1
@@ -203,7 +203,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   if try mayFail(true) 'check'
     result = 1
@@ -230,7 +230,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   if let value = try mayFail(false) 'check'
     return value
   end 'check' else 'err'
@@ -256,7 +256,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   if let value = try mayFail(true) 'check'
     return value
   end 'check' else 'err'
@@ -286,7 +286,7 @@ function mayFail(which Integer) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   if try mayFail(1) 'check'
     result = 100
@@ -313,7 +313,7 @@ function mayFail(succeed bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   if try mayFail(true) 'outer'
     if try mayFail(true) 'inner'
@@ -340,7 +340,7 @@ function mayFail(n Integer) returns Integer throws MyError
   return n
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var sum = 0
   var i = 0
   while i < 5 'loop'
@@ -364,7 +364,7 @@ function noThrow() returns Integer
   return 42
 end 'noThrow'
 
-function main() returns Integer
+function main() returns ExitCode
   if try noThrow() 'check'
     return 1
   end 'check'
@@ -403,7 +403,7 @@ function mayFail(succeed bool) returns MultiManaged throws MyError
   return {numbers: nums, text: "hello", tag: "world"}
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   var i = 0
   while i < 3 'loop'
@@ -500,7 +500,7 @@ function createOuter() returns Outer
   return outer
 end 'createOuter'
 
-function main() returns Integer
+function main() returns ExitCode
   var outer = createOuter()
   return try outer.inner.values.get(0) otherwise 0
 end 'main'

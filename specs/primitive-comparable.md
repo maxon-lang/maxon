@@ -41,19 +41,20 @@ var c = a.compare(b)   // returns -1
 
 <!-- test: int.compare.less -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 10
   var b = 20
-  return a.compare(b)
+  print("{a.compare(b)}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -1
 ```
 
 <!-- test: int.compare.equal -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 42
   var b = 42
   return a.compare(b)
@@ -65,7 +66,7 @@ end 'main'
 
 <!-- test: int.compare.greater -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 20
   var b = 10
   return a.compare(b)
@@ -77,19 +78,20 @@ end 'main'
 
 <!-- test: bool.compare.false-true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = false
   var b = true
-  return a.compare(b)
+  print("{a.compare(b)}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -1
 ```
 
 <!-- test: bool.compare.equal -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = true
   var b = true
   return a.compare(b)
@@ -101,19 +103,20 @@ end 'main'
 
 <!-- test: float.compare.less -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 1.5
   var b = 2.5
-  return a.compare(b)
+  print("{a.compare(b)}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -1
 ```
 
 <!-- test: float.compare.greater -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 3.14
   var b = 2.71
   return a.compare(b)
@@ -125,12 +128,13 @@ end 'main'
 
 <!-- test: byte.compare.less -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 10 as Byte
   var b = 20 as Byte
-  return a.compare(b)
+  print("{a.compare(b)}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -1
 ```

@@ -20,7 +20,7 @@ function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(a: 3, b: 4)
 end 'main'
 ```
@@ -38,7 +38,7 @@ function subtract(a Integer, b Integer) returns Integer
   return a - b
 end 'subtract'
 
-function main() returns Integer
+function main() returns ExitCode
   return subtract(b: 3, a: 10)
 end 'main'
 ```
@@ -56,7 +56,7 @@ function repeat(value Integer, times Integer = 1) returns Integer
   return value * times
 end 'repeat'
 
-function main() returns Integer
+function main() returns ExitCode
   return repeat(value: 7, times: 6)
 end 'main'
 ```
@@ -73,7 +73,7 @@ function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(a: 3, b: 4)
 end 'main'
 ```
@@ -87,7 +87,7 @@ function multiply(x Integer, y Integer) returns Integer
   return x * y
 end 'multiply'
 
-function main() returns Integer
+function main() returns ExitCode
   return multiply(x: 6, y: 7)
 end 'main'
 ```
@@ -101,7 +101,7 @@ function subtract(a Integer, b Integer) returns Integer
   return a - b
 end 'subtract'
 
-function main() returns Integer
+function main() returns ExitCode
   return subtract(b: 3, a: 10)
 end 'main'
 ```
@@ -115,7 +115,7 @@ function repeat(value Integer, times Integer = 1) returns Integer
   return value * times
 end 'repeat'
 
-function main() returns Integer
+function main() returns ExitCode
   return repeat(value: 7, times: 6)
 end 'main'
 ```
@@ -129,7 +129,7 @@ function repeat(value Integer, times Integer = 2) returns Integer
   return value * times
 end 'repeat'
 
-function main() returns Integer
+function main() returns ExitCode
   return repeat(value: 21)
 end 'main'
 ```
@@ -143,7 +143,7 @@ function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(3, 4)
 end 'main'
 ```
@@ -157,7 +157,7 @@ function greet(name Integer) returns Integer
   return name
 end 'greet'
 
-function main() returns Integer
+function main() returns ExitCode
   return greet(person: 42)
 end 'main'
 ```

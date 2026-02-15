@@ -14,7 +14,7 @@ Using an undefined keyword or bare identifier as a statement causes a parse erro
 ### Error Example
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   foo
     x = 5
@@ -38,7 +38,7 @@ When you see this error, consider:
 
 <!-- test: bare-identifier -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   foo
     x = 5
@@ -52,7 +52,7 @@ error E3010: specs/fragments/unknown-keyword-error/bare-identifier.test:4:3: une
 
 <!-- test: typo-keyword -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   retur x
 end 'main'
@@ -67,7 +67,7 @@ function test() returns Integer
   return 42
 end 'test'
 
-function main() returns Integer
+function main() returns ExitCode
   test
   return 0
 end 'main'

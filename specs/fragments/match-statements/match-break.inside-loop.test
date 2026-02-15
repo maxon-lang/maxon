@@ -1,5 +1,5 @@
 // Test: match-break.inside-loop
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   var i = 0
   while i < 5 'loop'
@@ -15,7 +15,7 @@ end 'main'
 ExitCode: 3
 ---
 module {
-  func @match-statements.main() -> i64 {
+  func @match-statements.main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor eax, eax
@@ -53,6 +53,24 @@ module {
     x86.jmp match-statements.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je match-statements.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_rdata rax, [__panic_msg_21]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

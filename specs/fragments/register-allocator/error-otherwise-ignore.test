@@ -7,7 +7,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   try mayFail() otherwise ignore
   return 42
 end 'main'
@@ -37,7 +37,7 @@ module {
     %2 = arith.addi %0, %1
     func.error_return %2
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %3, %4 = func.try_call @register-allocator.mayFail
     %5 = arith.constant {value = 42 : i64}
@@ -55,7 +55,7 @@ module {
     x86.xor eax, eax
     x86.ret
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     x86.call register-allocator.mayFail
     x86.mov ecx, 42

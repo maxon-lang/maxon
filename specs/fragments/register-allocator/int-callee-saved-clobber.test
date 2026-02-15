@@ -6,7 +6,7 @@ function useRegs(a Integer, b Integer, c Integer, d Integer) returns Integer
   return z
 end 'useRegs'
 
-function main() returns Integer
+function main() returns ExitCode
   var sentinel = 42
   var result = useRegs(1, b: 2, c: 3, d: 4)
   return sentinel + result
@@ -41,7 +41,18 @@ module {
     %12 = maxon.call @register-allocator.useRegs %8, %9, %10, %11
     maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %13 = maxon.binop %7, %12 {op = add}
-    maxon.return %13
+    maxon.assign %13 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %14 = maxon.literal {value = 0 : i64}
+    %15 = maxon.binop %13, %14 {op = lt}
+    %16 = maxon.literal {value = 4294967295 : i64}
+    %17 = maxon.binop %13, %16 {op = gt}
+    %18 = maxon.binop %15, %17 {op = or}
+    maxon.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %20 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %20
   }
 }
 === standard
@@ -57,7 +68,7 @@ module {
     %6 = arith.addi %4, %5
     func.return %6
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %7 = arith.constant {value = 42 : i64}
     %8 = arith.constant {value = 1 : i64}
@@ -66,7 +77,20 @@ module {
     %11 = arith.constant {value = 4 : i64}
     %12 = func.call @register-allocator.useRegs %8, %9, %10, %11
     %13 = arith.addi %7, %12
-    func.return %13
+    memref.store %13, __range_val_0
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi lt %13, %14
+    %16 = arith.constant {value = 4294967295 : i64}
+    %17 = arith.cmpi gt %13, %16
+    %18 = arith.ori1 %15, %17
+    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %19 = memref.lea_rdata __panic_msg_19
+    %20 = std.ptr_to_i64 %19
+    std.call_runtime @maxon_panic %20
+  __range_ok_0:
+    %21 = memref.load __range_val_0 : i64
+    func.return %21
   }
 }
 === x86
@@ -78,8 +102,9 @@ module {
     x86.lea eax, [ecx + r8]
     x86.ret
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 42
     x86.mov ecx, 1
     x86.mov edx, 2
@@ -89,7 +114,26 @@ module {
     x86.mov r9, rsi
     x86.call register-allocator.useRegs
     x86.mov edi, 42
-    x86.lea eax, [edi + eax]
+    x86.add edi, eax
+    x86.mov [rbp-8], edi
+    x86.xor r8, r8
+    x86.cmp edi, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rax, 4294967295
+    x86.cmp rdi, rax
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_19]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

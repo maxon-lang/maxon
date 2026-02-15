@@ -12,7 +12,7 @@ type IntPair implements Summable with Integer
   end 'sum'
 end 'IntPair'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = IntPair{a: 10, b: 32}
   return p.sum()
 end 'main'
@@ -33,7 +33,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @associated-types.main() -> i64 {
+  func @associated-types.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 10
@@ -48,9 +48,29 @@ module {
     x86.mov edi, [rbp-8]
     x86.mov r8, 32
     x86.mov [edi+8], r8
-    x86.mov rcx, [rbp-8]
+    x86.mov r9, [rbp-8]
+    x86.mov rcx, r9
+    x86.call IntPair.sum
+    x86.mov [rbp-16], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je associated-types.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_14]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp IntPair.sum
+    x86.ret
   }
 }
 ---

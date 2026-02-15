@@ -11,7 +11,7 @@ type Value
   end 'get'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value{n: 21}
   v.double()
   return v.get()
@@ -43,7 +43,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @self-keyword.main() -> i64 {
+  func @self-keyword.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 21
@@ -56,8 +56,27 @@ module {
     x86.mov rcx, [rbp-8]
     x86.call Value.double
     x86.mov rcx, [rbp-8]
+    x86.call Value.get
+    x86.mov [rbp-16], eax
+    x86.xor r8, r8
+    x86.cmp eax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
+    x86.cmp rax, rcx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je self-keyword.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_20]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp Value.get
+    x86.ret
   }
 }
 ---

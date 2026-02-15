@@ -1,5 +1,5 @@
 // Test: rdata-bool-array-uses-i8
-function main() returns Integer
+function main() returns ExitCode
   let arr = [true, false, true, false]
   var v0 = try arr.get(0) otherwise false
   var v1 = try arr.get(1) otherwise true
@@ -24,12 +24,13 @@ end 'main'
 ExitCode: 2
 RequiredRdata: ```
 i8[] 1, 0, 1, 0
+utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 ---
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.mov ecx, 4
     x86.xor edx, edx
@@ -176,6 +177,24 @@ module {
     x86.jmp codegen-internals.main.c3_20.merge
   c3_20.merge:
     x86.mov eax, [rbp-64]
+    x86.mov [rbp-72], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je codegen-internals.main.__range_ok_21
+  __range_panic_21:
+    x86.lea_rdata rax, [__panic_msg_74]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_21:
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }

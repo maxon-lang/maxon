@@ -96,7 +96,7 @@ The map automatically grows when the load factor (count/capacity) exceeds 75%. W
 
 <!-- test: literal.basic -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
   return m.count()
 end 'main'
@@ -107,7 +107,7 @@ end 'main'
 
 <!-- test: literal.int-keys -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 100, 2: 200, 3: 300]
   var result = try m.get(2) otherwise 0
   return result
@@ -119,7 +119,7 @@ end 'main'
 
 <!-- test: contains.true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [10: 100, 20: 200, 30: 300]
   if m.contains(20) 'check'
     return 1
@@ -133,7 +133,7 @@ end 'main'
 
 <!-- test: contains.false -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [10: 100, 20: 200, 30: 300]
   if m.contains(40) 'check'
     return 1
@@ -147,7 +147,7 @@ end 'main'
 
 <!-- test: get.existing -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
   var result = try m.get(2) otherwise 0
   return result
@@ -159,7 +159,7 @@ end 'main'
 
 <!-- test: get.missing -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20]
   var result = try m.get(0) otherwise 0
   return result
@@ -171,7 +171,7 @@ end 'main'
 
 <!-- test: insert.new -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20]
   m.insert(3, value: 30)
   return m.count()
@@ -183,7 +183,7 @@ end 'main'
 
 <!-- test: insert.update -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20]
   m.insert(1, value: 100)
   var result = try m.get(1) otherwise 0
@@ -196,7 +196,7 @@ end 'main'
 
 <!-- test: insert.then-contains -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [10: 1]
   m.insert(20, value: 2)
   if m.contains(20) 'check'
@@ -211,7 +211,7 @@ end 'main'
 
 <!-- test: remove.existing -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
   var removed = m.remove(2)
   if removed 'check'
@@ -226,7 +226,7 @@ end 'main'
 
 <!-- test: remove.nonexistent -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20]
   var removed = m.remove(99)
   if removed 'check'
@@ -241,7 +241,7 @@ end 'main'
 
 <!-- test: remove.then-contains -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
   m.remove(2)
   if m.contains(2) 'check'
@@ -258,7 +258,7 @@ end 'main'
 ```maxon
 typealias IntIntMap = Map with (int, int)
 
-function main() returns Integer
+function main() returns ExitCode
   var m = IntIntMap{}
   m.insert(1, value: 100)
   var result = try m.get(1) otherwise 0
@@ -271,7 +271,7 @@ end 'main'
 
 <!-- test: single-entry -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [42: 99]
   var result = try m.get(42) otherwise 0
   return result
@@ -283,7 +283,7 @@ end 'main'
 
 <!-- test: negative-keys -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [0 - 5: 50, 0 - 3: 30, 0 - 1: 10]
   var result = try m.get(0 - 3) otherwise 0
   return result
@@ -295,7 +295,7 @@ end 'main'
 
 <!-- test: remove-reinsert -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
   m.remove(2)
   m.insert(2, value: 200)
@@ -315,7 +315,7 @@ type Container
   export var data IntIntMap
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var m = IntIntMap{}
   m.insert(1, value: 42)
   var c = Container{data: m}
@@ -329,7 +329,7 @@ end 'main'
 <!-- test: string-keys-basic -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["a": 1, "b": 2]
   var result = try m.get("a") otherwise 0
   return result
@@ -394,7 +394,7 @@ Cleanups:  21
 <!-- test: string-keys-get-multiple -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["hello": 10, "world": 20, "foo": 30]
   var a = try m.get("hello") otherwise 0
   var b = try m.get("world") otherwise 0
@@ -463,7 +463,7 @@ Cleanups:  22
 <!-- test: string-keys-contains -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["key1": 100, "key2": 200]
   if m.contains("key1") 'check'
     return 1
@@ -530,7 +530,7 @@ Cleanups:  21
 <!-- test: string-keys-insert-update -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["x": 10]
   m.insert("x", value: 99)
   var result = try m.get("x") otherwise 0
@@ -593,7 +593,7 @@ Cleanups:  20
 <!-- test: string-keys-remove -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["alpha": 1, "beta": 2, "gamma": 3]
   m.remove("beta")
   if m.contains("beta") 'check'
@@ -664,7 +664,7 @@ Cleanups:  22
 <!-- test: string-keys-early-return -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = ["test": 42]
   var v = try m.get("test") otherwise 0
   return v
@@ -676,7 +676,7 @@ end 'main'
 
 <!-- test: multiline-map-literal -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var m = [
     1: 100,
     2: 200,
@@ -696,7 +696,7 @@ enum TokenKind
   Var
 end 'TokenKind'
 
-function main() returns Integer
+function main() returns ExitCode
   var keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
   var kind = try keywords.get("function") otherwise TokenKind.Var
   match kind 'match'

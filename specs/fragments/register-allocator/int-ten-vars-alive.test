@@ -1,5 +1,5 @@
 // Test: int-ten-vars-alive
-function main() returns Integer
+function main() returns ExitCode
   var a = 1
   var b = 2
   var c = 3
@@ -48,12 +48,23 @@ module {
     %16 = maxon.binop %15, %7 {op = add}
     %17 = maxon.binop %16, %8 {op = add}
     %18 = maxon.binop %17, %9 {op = add}
-    maxon.return %18
+    maxon.assign %18 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %19 = maxon.literal {value = 0 : i64}
+    %20 = maxon.binop %18, %19 {op = lt}
+    %21 = maxon.literal {value = 4294967295 : i64}
+    %22 = maxon.binop %18, %21 {op = gt}
+    %23 = maxon.binop %20, %22 {op = or}
+    maxon.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %25 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %25
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 2 : i64}
@@ -74,13 +85,27 @@ module {
     %16 = arith.addi %15, %7
     %17 = arith.addi %16, %8
     %18 = arith.addi %17, %9
-    func.return %18
+    memref.store %18, __range_val_0
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.cmpi lt %18, %19
+    %21 = arith.constant {value = 4294967295 : i64}
+    %22 = arith.cmpi gt %18, %21
+    %23 = arith.ori1 %20, %22
+    cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %24 = memref.lea_rdata __panic_msg_24
+    %25 = std.ptr_to_i64 %24
+    std.call_runtime @maxon_panic %25
+  __range_ok_0:
+    %26 = memref.load __range_val_0 : i64
+    func.return %26
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -103,7 +128,26 @@ module {
     x86.add ebx, r8
     x86.add ebx, r9
     x86.add ebx, eax
-    x86.lea eax, [ebx + ecx]
+    x86.add ebx, ecx
+    x86.mov [rbp-8], ebx
+    x86.xor eax, eax
+    x86.cmp ebx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp rbx, rcx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

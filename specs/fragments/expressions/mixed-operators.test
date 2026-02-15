@@ -1,5 +1,5 @@
 // Test: mixed-operators
-function main() returns Integer
+function main() returns ExitCode
   var a = 10
   var b = 3
   return a * 2 + b - 1
@@ -8,8 +8,9 @@ end 'main'
 ExitCode: 22
 ---
 module {
-  func @expressions.main() -> i64 {
+  func @expressions.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 3
     x86.mov edx, 2
@@ -17,6 +18,25 @@ module {
     x86.add eax, ecx
     x86.mov ebx, 1
     x86.sub eax, ebx
+    x86.mov [rbp-8], eax
+    x86.xor esi, esi
+    x86.cmp eax, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rax, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je expressions.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_12]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

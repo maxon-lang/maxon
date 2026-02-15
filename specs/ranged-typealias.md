@@ -59,6 +59,26 @@ function makeAge(n Integer) returns Integer
 end 'makeAge'
 ```
 
+### Return value range checks
+
+Functions with a ranged return type have their return values checked:
+
+- **Compile time**: returning a literal outside the range is a compile error
+- **Runtime**: returning a computed expression emits a range check that panics on violation
+- Types whose range covers the full optimal representation (e.g., `Integer`, `ExitCode`) are exempt
+
+```maxon
+typealias Score = int(0 to 100)
+
+function half(s Score) returns Score
+  return s / 2    // runtime range check on return value
+end 'half'
+
+function bad() returns Score
+  return 200       // compile error: outside range
+end 'bad'
+```
+
 ## Tests
 
 ### Basic ranged typealias declaration and construction
@@ -67,7 +87,7 @@ end 'makeAge'
 ```maxon
 typealias Score = int(0 to 100)
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Score{42}
   return s
 end 'main'
@@ -82,7 +102,7 @@ ExitCode: 42
 ```maxon
 typealias SmallInt = int(0 to 10)
 
-function main() returns Integer
+function main() returns ExitCode
   var x = SmallInt{7}
   return x
 end 'main'
@@ -97,7 +117,7 @@ ExitCode: 7
 ```maxon
 typealias Temp = int(-50 to 50)
 
-function main() returns Integer
+function main() returns ExitCode
   var t = Temp{-10}
   return t + 60
 end 'main'
@@ -112,7 +132,7 @@ ExitCode: 50
 ```maxon
 typealias FullInt = int(min to max)
 
-function main() returns Integer
+function main() returns ExitCode
   var x = FullInt{42}
   return x
 end 'main'
@@ -127,7 +147,7 @@ ExitCode: 42
 ```maxon
 typealias Pct = float(0.0 to 100.0)
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Pct{75.5}
   return trunc(p)
 end 'main'
@@ -142,7 +162,7 @@ ExitCode: 75
 ```maxon
 typealias Idx = int(0 upto 10)
 
-function main() returns Integer
+function main() returns ExitCode
   var i = Idx{9}
   return i
 end 'main'
@@ -157,7 +177,7 @@ ExitCode: 9
 ```maxon
 typealias Score = int(0 to 100)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Score{30}
   var b = Score{12}
   return a + b
@@ -177,7 +197,7 @@ function double(s Score) returns Score
   return s * 2
 end 'double'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Score{21}
   return double(s)
 end 'main'
@@ -197,7 +217,7 @@ function makeAge(n Integer) returns Integer
   return a
 end 'makeAge'
 
-function main() returns Integer
+function main() returns ExitCode
   return makeAge(50)
 end 'main'
 ```
@@ -216,7 +236,7 @@ function makeAge(n Integer) returns Integer
   return a
 end 'makeAge'
 
-function main() returns Integer
+function main() returns ExitCode
   return makeAge(200)
 end 'main'
 ```
@@ -231,7 +251,7 @@ Stderr: Range check failed
 ```maxon
 typealias AsciiCode = byte(0 to 127)
 
-function main() returns Integer
+function main() returns ExitCode
   var c = AsciiCode{65}
   return c as Integer
 end 'main'
@@ -244,7 +264,7 @@ ExitCode: 65
 
 <!-- test: int-division-truncates -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = 7
   var b = 2
   return a / b
@@ -265,7 +285,7 @@ type Player
   export var score Score
 end 'Player'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Player{name: "Alice", score: Score{42}}
   return p.score
 end 'main'
@@ -274,13 +294,106 @@ end 'main'
 ExitCode: 42
 ```
 
+### Return value range check: literal in range
+
+<!-- test: return-literal-in-range -->
+```maxon
+typealias Score = int(0 to 100)
+
+function getScore() returns Score
+  return 42
+end 'getScore'
+
+function main() returns ExitCode
+  return getScore()
+end 'main'
+```
+```output
+ExitCode: 42
+```
+
+### Return value range check: runtime pass
+
+<!-- test: return-runtime-check-pass -->
+```maxon
+typealias Score = int(0 to 100)
+
+function half(s Score) returns Score
+  return s / 2
+end 'half'
+
+function main() returns ExitCode
+  var s = Score{84}
+  return half(s)
+end 'main'
+```
+```output
+ExitCode: 42
+```
+
+### Return value range check: runtime panic
+
+<!-- test: return-runtime-check-fail -->
+```maxon
+typealias Score = int(0 to 100)
+
+function doubleScore(s Score) returns Score
+  return s * 2
+end 'doubleScore'
+
+function main() returns ExitCode
+  var s = Score{60}
+  return doubleScore(s)
+end 'main'
+```
+```output
+ExitCode: 1
+Stderr: Range check failed
+```
+
+### Return value range check: float return
+
+<!-- test: return-float-range-check -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+
+function clampedPct(x Float) returns Pct
+  return x
+end 'clampedPct'
+
+function main() returns ExitCode
+  return trunc(clampedPct(42.5))
+end 'main'
+```
+```output
+ExitCode: 42
+```
+
+### Error: return literal out of range
+
+<!-- test: error.return-literal-out-of-range -->
+```maxon
+typealias SmallInt = int(0 to 10)
+
+function getVal() returns SmallInt
+  return 15
+end 'getVal'
+
+function main() returns ExitCode
+  return getVal()
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.test:5:3: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
+```
+
 ### Error: literal out of range
 
 <!-- test: error.literal-out-of-range -->
 ```maxon
 typealias SmallInt = int(0 to 10)
 
-function main() returns Integer
+function main() returns ExitCode
   var x = SmallInt{15}
   return x
 end 'main'
@@ -295,7 +408,7 @@ error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:
 ```maxon
 typealias Positive = int(1 to 100)
 
-function main() returns Integer
+function main() returns ExitCode
   var x = Positive{-5}
   return x
 end 'main'

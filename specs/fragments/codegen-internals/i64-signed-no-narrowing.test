@@ -1,7 +1,7 @@
 // Test: i64-signed-no-narrowing
 typealias BigInt = int(-1000000000000 to 1000000000000)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = BigInt{20}
   var b = BigInt{3}
   return a / b
@@ -18,27 +18,71 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = i64}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.divsi %0, %1
-    func.return %2
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %8 = memref.lea_rdata __panic_msg_8
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
+  __range_ok_0:
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
     x86.cqo
     x86.idiv ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

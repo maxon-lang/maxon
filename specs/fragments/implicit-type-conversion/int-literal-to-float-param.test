@@ -3,7 +3,7 @@ function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns Integer
+function main() returns ExitCode
   return takeFloat(42)
 end 'main'
 ---
@@ -15,11 +15,32 @@ module {
     x86.cvttsd2si eax, xmm0
     x86.ret
   }
-  func @implicit-type-conversion.main() -> i64 {
+  func @implicit-type-conversion.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 42
     x86.cvtsi2sd xmm0, eax
-    x86.jmp implicit-type-conversion.takeFloat
+    x86.call implicit-type-conversion.takeFloat
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je implicit-type-conversion.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ---

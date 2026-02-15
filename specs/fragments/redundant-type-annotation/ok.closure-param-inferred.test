@@ -8,7 +8,7 @@ function transform(f (Point) returns Integer) returns Integer
   return f(Point{x: 5, y: 10})
 end 'transform'
 
-function main() returns Integer
+function main() returns ExitCode
   return transform((p) gives p.x + p.y)
 end 'main'
 ---
@@ -40,13 +40,34 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @redundant-type-annotation.main() -> i64 {
+  func @redundant-type-annotation.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.lea_func eax, [__closure_0]
     x86.xor ecx, ecx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.jmp redundant-type-annotation.transform
+    x86.call redundant-type-annotation.transform
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je redundant-type-annotation.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_18]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
   func @__closure_0(p: i64) -> i64 {
   entry:

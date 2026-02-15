@@ -46,7 +46,7 @@ type Foo
   end 'callBarOn'
 end 'Foo'
 
-function main() returns Integer
+function main() returns ExitCode
   var f1 = Foo{x: 10}
   var f2 = Foo{x: 42}
   return f1.callBarOn(f2)
@@ -74,7 +74,7 @@ type Value
   end 'multiply'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Value{n: 5}
   var b = Value{n: 3}
   var c = Value{n: 2}
@@ -103,7 +103,7 @@ type Calculator
   end 'quadruple'
 end 'Calculator'
 
-function main() returns Integer
+function main() returns ExitCode
   var calc = Calculator{base: 5}
   return calc.quadruple()
 end 'main'
@@ -126,7 +126,7 @@ type Adder
   end 'delegateAdd'
 end 'Adder'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Adder{value: 100}
   var b = Adder{value: 50}
   return a.delegateAdd(b, n: 7)

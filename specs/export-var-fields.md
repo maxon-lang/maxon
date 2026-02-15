@@ -48,7 +48,7 @@ type Counter
   end 'getCount'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 0, name: 5}
   c.increment()
   return c.getCount()
@@ -76,7 +76,7 @@ type Value
   end 'create'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value.create()
   return v.n
 end 'main'
@@ -95,7 +95,7 @@ type Value
   end 'create'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value.create()
   v.n = 42
   return v.n
@@ -115,7 +115,7 @@ type Config
   end 'create'
 end 'Config'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Config.create()
   return c.version
 end 'main'
@@ -138,7 +138,7 @@ type Counter
   end 'getCount'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 40}
   c.increment()
   c.increment()
@@ -164,7 +164,7 @@ type Box
   end 'getSecret'
 end 'Box'
 
-function main() returns Integer
+function main() returns ExitCode
   var b = Box.create(20, s: 22)
   return b.value + b.getSecret()
 end 'main'
@@ -183,7 +183,7 @@ type Value
   end 'create'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value.create()
   return v.private
 end 'main'
@@ -202,7 +202,7 @@ type Value
   end 'create'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value.create()
   v.private = 42
   return 0
@@ -227,7 +227,7 @@ type Simple
   end 'sum'
 end 'Simple'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Simple.make(20, b: 22)
   return s.sum()
 end 'main'

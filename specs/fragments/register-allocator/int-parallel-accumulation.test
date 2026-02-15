@@ -1,5 +1,5 @@
 // Test: int-parallel-accumulation
-function main() returns Integer
+function main() returns ExitCode
   var sum1 = 0
   var sum2 = 0
   var sum3 = 0
@@ -44,12 +44,23 @@ module {
     maxon.assign %14 {var = sum3} {kind = i64} {mut = 1 : i1}
     %15 = maxon.binop %10, %12 {op = add}
     %16 = maxon.binop %15, %14 {op = add}
-    maxon.return %16
+    maxon.assign %16 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.literal {value = 0 : i64}
+    %18 = maxon.binop %16, %17 {op = lt}
+    %19 = maxon.literal {value = 4294967295 : i64}
+    %20 = maxon.binop %16, %19 {op = gt}
+    %21 = maxon.binop %18, %20 {op = or}
+    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %23 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %23
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %3 = arith.constant {value = 10 : i64}
     %4 = arith.constant {value = 20 : i64}
@@ -62,13 +73,27 @@ module {
     %11 = arith.addi %5, %10
     %12 = arith.addi %7, %9
     %13 = arith.addi %12, %11
-    func.return %13
+    memref.store %13, __range_val_0
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi lt %13, %14
+    %16 = arith.constant {value = 4294967295 : i64}
+    %17 = arith.cmpi gt %13, %16
+    %18 = arith.ori1 %15, %17
+    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %19 = memref.lea_rdata __panic_msg_22
+    %20 = std.ptr_to_i64 %19
+    std.call_runtime @maxon_panic %20
+  __range_ok_0:
+    %21 = memref.load __range_val_0 : i64
+    func.return %21
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 20
     x86.mov edx, 30
@@ -80,6 +105,25 @@ module {
     x86.add edx, edi
     x86.add eax, ecx
     x86.add eax, edx
+    x86.mov [rbp-8], eax
+    x86.xor r8, r8
+    x86.cmp eax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
+    x86.cmp rax, rcx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_22]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

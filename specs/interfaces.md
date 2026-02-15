@@ -175,7 +175,7 @@ type Point implements Hashable
   end 'hash'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 10, y: 20}
   var h = p.hash()
   print("{h}\n")
@@ -203,7 +203,7 @@ type Point implements Hashable
   end 'hash'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 10, y: 20}
   print("{p.hash()}\n")
   return 0
@@ -236,7 +236,7 @@ type Counter implements Describable
   end 'value'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 42}
   return c.describe() + c.value()
 end 'main'
@@ -260,7 +260,7 @@ type Accumulator implements Calculator
   end 'add'
 end 'Accumulator'
 
-function main() returns Integer
+function main() returns ExitCode
   var acc = Accumulator{total: 10}
   return acc.add(5)
 end 'main'
@@ -288,7 +288,7 @@ type Point implements Hashable, Equatable
   end 'equals'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p1 = Point{x: 3, y: 4}
   var p2 = Point{x: 3, y: 4}
   print("{p1.hash()} {p1.equals(p2)}\n")
@@ -317,7 +317,7 @@ type Point implements Movable
   end 'move'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 10, y: 20}
   var p2 = p.move(5, dy: 10)
   return p2.x + p2.y
@@ -342,7 +342,7 @@ type Value implements Incrementable
   end 'inc'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value{n: 41}
   return v.inc()
 end 'main'
@@ -368,7 +368,7 @@ type Incomplete implements ThreeMethods
   end 'one'
 end 'Incomplete'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -393,7 +393,7 @@ type Calculator
   end 'triple'
 end 'Calculator'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Calculator{value: 7}
   return c.double() + c.triple()
 end 'main'
@@ -422,7 +422,7 @@ type IncompleteType implements DerivedInterface
   end 'derivedMethod'
 end 'IncompleteType'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -455,7 +455,7 @@ type CompleteType implements DerivedInterface
   end 'derivedMethod'
 end 'CompleteType'
 
-function main() returns Integer
+function main() returns ExitCode
   var t = CompleteType{value: 21}
   return t.baseMethod() + t.derivedMethod()
 end 'main'

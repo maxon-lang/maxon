@@ -71,7 +71,7 @@ type Point
   export var y Integer
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 10, y: 20}
   p.x = 30
   return p.x
@@ -88,7 +88,7 @@ type Config
   export var count Integer
 end 'Config'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Config{version: 1, count: 0}
   c.count = 5
   return c.count
@@ -105,7 +105,7 @@ type Point
   export var y Integer
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   let p = Point{x: 10, y: 20}
   p.x = 30
   return p.x
@@ -122,7 +122,7 @@ type Config
   export var count Integer
 end 'Config'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Config{version: 1, count: 0}
   c.version = 2
   return c.version
@@ -139,7 +139,7 @@ type Point
   export var y Integer
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point { x: 3, y: 4 }
   return p.x + p.y
 end 'main'
@@ -155,7 +155,7 @@ type Rect
   export var height Integer
 end 'Rect'
 
-function main() returns Integer
+function main() returns ExitCode
   var r = Rect { width: 5, height: 10 }
   return r.width * r.height
 end 'main'
@@ -175,7 +175,7 @@ function dot(a Vec2, b Vec2) returns Integer
   return a.x * b.x + a.y * b.y
 end 'dot'
 
-function main() returns Integer
+function main() returns ExitCode
   var v1 = Vec2 { x: 3, y: 4 }
   var v2 = Vec2 { x: 2, y: 1 }
   return dot(v1, b: v2)
@@ -196,7 +196,7 @@ function makePair(a Integer, b Integer) returns Pair
   return { first: a, second: b }
 end 'makePair'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = makePair(5, b: 7)
   return p.first + p.second
 end 'main'
@@ -216,7 +216,7 @@ function acceptPoint(p Point) returns Integer
   return p.x + p.y
 end 'acceptPoint'
 
-function main() returns Integer
+function main() returns ExitCode
   return acceptPoint({x: 3, y: 4})
 end 'main'
 ```
@@ -231,7 +231,7 @@ type Counter
   export var step = 1
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c1 = Counter{}
   var c2 = Counter{value: 40}
   var c3 = Counter{value: 10, step: 2}
@@ -249,7 +249,7 @@ type Settings
   export var timeout = 50.0
 end 'Settings'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Settings{}
   return s.maxRetries + trunc(s.timeout)
 end 'main'

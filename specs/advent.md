@@ -15,7 +15,7 @@ https://www.youtube.com/playlist?list=PL2HVqYf7If8cY4wLk7JUQ2f0JXY_xMQm2
 
 <!-- test: day1 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -33,7 +33,7 @@ module {
 }
 === standard
 module {
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     func.return %0
@@ -41,7 +41,7 @@ module {
 }
 === x86
 module {
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     x86.xor eax, eax
     x86.ret
@@ -55,7 +55,7 @@ function add(x Integer, y Integer) returns Integer
     return x + y
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(3, y: 4)
 end 'main'
 ```
@@ -77,7 +77,18 @@ module {
     %3 = maxon.literal {value = 3 : i64}
     %4 = maxon.literal {value = 4 : i64}
     %5 = maxon.call @advent.add %3, %4
-    maxon.return %5
+    maxon.assign %5 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 0 : i64}
+    %7 = maxon.binop %5, %6 {op = lt}
+    %8 = maxon.literal {value = 4294967295 : i64}
+    %9 = maxon.binop %5, %8 {op = gt}
+    %10 = maxon.binop %7, %9 {op = or}
+    maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %12 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %12
   }
 }
 === standard
@@ -89,12 +100,25 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     %3 = arith.constant {value = 3 : i64}
     %4 = arith.constant {value = 4 : i64}
     %5 = func.call @advent.add %3, %4
-    func.return %5
+    memref.store %5, __range_val_0
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.cmpi lt %5, %6
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.cmpi gt %5, %8
+    %10 = arith.ori1 %7, %9
+    cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %11 = memref.lea_rdata __panic_msg_11
+    %12 = std.ptr_to_i64 %11
+    std.call_runtime @maxon_panic %12
+  __range_ok_0:
+    %13 = memref.load __range_val_0 : i64
+    func.return %13
   }
 }
 === x86
@@ -104,13 +128,34 @@ module {
     x86.lea eax, [ecx + edx]
     x86.ret
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 3
     x86.mov ecx, 4
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.jmp advent.add
+    x86.call advent.add
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je advent.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ```
@@ -122,7 +167,7 @@ function multiply(x Integer) returns Integer
     return x * 1
 end 'multiply'
 
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   let a = try int.fromString(try args.get(0) otherwise "") otherwise 0
   return multiply(3)
@@ -176,7 +221,18 @@ module {
     maxon.assign %21 {var = a} {kind = i64} {decl = 1 : i1}
     %22 = maxon.literal {value = 3 : i64}
     %23 = maxon.call @advent.multiply %22
-    maxon.return %23
+    maxon.assign %23 {var = __range_val_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %24 = maxon.literal {value = 0 : i64}
+    %25 = maxon.binop %23, %24 {op = lt}
+    %26 = maxon.literal {value = 4294967295 : i64}
+    %27 = maxon.binop %23, %26 {op = gt}
+    %28 = maxon.binop %25, %27 {op = or}
+    maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_8:
+    %30 = maxon.var_ref {var = __range_val_8} {type = i64}
+    maxon.return %30
   }
 }
 === standard
@@ -186,7 +242,7 @@ module {
     %0 = func.param x : StdI64
     func.return %0
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     %2 = func.call @stdlib.CommandLine.args
     memref.store %2, args
@@ -243,7 +299,20 @@ module {
   otherwise_default_continue_7:
     %38 = arith.constant {value = 3 : i64}
     %39 = func.call @advent.multiply %38
-    func.return %39
+    memref.store %39, __range_val_8
+    %40 = arith.constant {value = 0 : i64}
+    %41 = arith.cmpi lt %39, %40
+    %42 = arith.constant {value = 4294967295 : i64}
+    %43 = arith.cmpi gt %39, %42
+    %44 = arith.ori1 %41, %43
+    cf.cond_br %44 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
+    %45 = memref.lea_rdata __panic_msg_29
+    %46 = std.ptr_to_i64 %45
+    std.call_runtime @maxon_panic %46
+  __range_ok_8:
+    %47 = memref.load __range_val_8 : i64
+    func.return %47
   }
 }
 === x86
@@ -253,7 +322,7 @@ module {
     x86.mov eax, ecx
     x86.ret
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     x86.prologue stack_size=80
     x86.call stdlib.CommandLine.args
@@ -266,14 +335,14 @@ module {
     x86.mov rbx, rcx
     x86.xor ecx, ecx
     x86.mov esi, 32
-    x86.mov [rbp-56], eax
-    x86.mov [rbp-64], edx
-    x86.mov [rbp-72], ebx
+    x86.mov [rbp-64], eax
+    x86.mov [rbp-72], edx
+    x86.mov [rbp-80], ebx
     x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-16], eax
     x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-72]
+    x86.mov ebx, [rbp-80]
     x86.mov [edx+0], ebx
     x86.mov esi, [rbp-16]
     x86.xor edi, edi
@@ -295,10 +364,10 @@ module {
     x86.mov edx, [rbp-24]
     x86.mov [edx+8], ecx
     x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-56]
+    x86.mov eax, [rbp-64]
     x86.mov [rbp-40], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-64]
+    x86.mov ecx, [rbp-72]
     x86.cmp ecx, eax
     x86.je advent.main.otherwise_default_continue_3
   otherwise_default_error_2:
@@ -320,8 +389,27 @@ module {
   otherwise_default_continue_7:
     x86.mov eax, 3
     x86.mov rcx, rax
+    x86.call advent.multiply
+    x86.mov [rbp-56], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je advent.main.__range_ok_8
+  __range_panic_8:
+    x86.lea_rdata rax, [__panic_msg_29]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_8:
+    x86.mov eax, [rbp-56]
     x86.epilogue
-    x86.jmp advent.multiply
+    x86.ret
   }
 }
 ```
@@ -333,7 +421,7 @@ function multiply(x Integer) returns Integer
     return x * 2
 end 'multiply'
 
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   let a = try int.fromString(try args.get(0) otherwise "") otherwise 0
   return multiply(3)
@@ -387,7 +475,18 @@ module {
     maxon.assign %21 {var = a} {kind = i64} {decl = 1 : i1}
     %22 = maxon.literal {value = 3 : i64}
     %23 = maxon.call @advent.multiply %22
-    maxon.return %23
+    maxon.assign %23 {var = __range_val_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %24 = maxon.literal {value = 0 : i64}
+    %25 = maxon.binop %23, %24 {op = lt}
+    %26 = maxon.literal {value = 4294967295 : i64}
+    %27 = maxon.binop %23, %26 {op = gt}
+    %28 = maxon.binop %25, %27 {op = or}
+    maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_8:
+    %30 = maxon.var_ref {var = __range_val_8} {type = i64}
+    maxon.return %30
   }
 }
 === standard
@@ -399,7 +498,7 @@ module {
     %2 = arith.muli %0, %1
     func.return %2
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     %3 = func.call @stdlib.CommandLine.args
     memref.store %3, args
@@ -456,7 +555,20 @@ module {
   otherwise_default_continue_7:
     %39 = arith.constant {value = 3 : i64}
     %40 = func.call @advent.multiply %39
-    func.return %40
+    memref.store %40, __range_val_8
+    %41 = arith.constant {value = 0 : i64}
+    %42 = arith.cmpi lt %40, %41
+    %43 = arith.constant {value = 4294967295 : i64}
+    %44 = arith.cmpi gt %40, %43
+    %45 = arith.ori1 %42, %44
+    cf.cond_br %45 [then: __range_panic_8, else: __range_ok_8]
+  __range_panic_8:
+    %46 = memref.lea_rdata __panic_msg_29
+    %47 = std.ptr_to_i64 %46
+    std.call_runtime @maxon_panic %47
+  __range_ok_8:
+    %48 = memref.load __range_val_8 : i64
+    func.return %48
   }
 }
 === x86
@@ -468,7 +580,7 @@ module {
     x86.mov eax, ecx
     x86.ret
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     x86.prologue stack_size=80
     x86.call stdlib.CommandLine.args
@@ -481,14 +593,14 @@ module {
     x86.mov rbx, rcx
     x86.xor ecx, ecx
     x86.mov esi, 32
-    x86.mov [rbp-56], eax
-    x86.mov [rbp-64], edx
-    x86.mov [rbp-72], ebx
+    x86.mov [rbp-64], eax
+    x86.mov [rbp-72], edx
+    x86.mov [rbp-80], ebx
     x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-16], eax
     x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-72]
+    x86.mov ebx, [rbp-80]
     x86.mov [edx+0], ebx
     x86.mov esi, [rbp-16]
     x86.xor edi, edi
@@ -510,10 +622,10 @@ module {
     x86.mov edx, [rbp-24]
     x86.mov [edx+8], ecx
     x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-56]
+    x86.mov eax, [rbp-64]
     x86.mov [rbp-40], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-64]
+    x86.mov ecx, [rbp-72]
     x86.cmp ecx, eax
     x86.je advent.main.otherwise_default_continue_3
   otherwise_default_error_2:
@@ -535,8 +647,27 @@ module {
   otherwise_default_continue_7:
     x86.mov eax, 3
     x86.mov rcx, rax
+    x86.call advent.multiply
+    x86.mov [rbp-56], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je advent.main.__range_ok_8
+  __range_panic_8:
+    x86.lea_rdata rax, [__panic_msg_29]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_8:
+    x86.mov eax, [rbp-56]
     x86.epilogue
-    x86.jmp advent.multiply
+    x86.ret
   }
 }
 ```

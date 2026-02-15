@@ -1,17 +1,37 @@
 // Test: division-truncating-int
-function main() returns Integer
+function main() returns ExitCode
   return 20 / 3
 end 'main'
 ---
 ExitCode: 6
 ---
 module {
-  func @arithmetic-operators.main() -> i64 {
+  func @arithmetic-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
     x86.cqo
     x86.idiv ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je arithmetic-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

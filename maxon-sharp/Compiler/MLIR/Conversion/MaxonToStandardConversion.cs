@@ -25,7 +25,7 @@ public static class MaxonToStandardConversion {
     }
     foreach (var func in module.Functions) {
       if (func.ReturnType is MlirRangedPrimitiveType rptRet)
-        func.ReturnType = rptRet.BaseType;
+        func.ReturnType = rptRet.OptimalType;
       for (int i = 0; i < func.ParamTypes.Count; i++)
         if (func.ParamTypes[i] is MlirRangedPrimitiveType rptParam)
           func.ParamTypes[i] = rptParam.BaseType;
@@ -911,14 +911,43 @@ public static class MaxonToStandardConversion {
                 break;
               }
 
-              var key = (binOp.Operator, binOp.OperandKind);
-              if (!BinOpFactories.TryGetValue(key, out var factory))
-                throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind} in func {func.Name} block {block.Name}");
-
               if (!valueMap.TryGetValue(binOp.Lhs, out StdValue? lhs))
                 throw new InvalidOperationException($"BinOp LHS %{binOp.Lhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
               if (!valueMap.TryGetValue(binOp.Rhs, out StdValue? rhs))
                 throw new InvalidOperationException($"BinOp RHS %{binOp.Rhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
+
+              // Use OptimalType to select narrower/unsigned ops
+              if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType is MlirType ot) {
+                var signedOt = ot.ToSigned();
+                if (signedOt == MlirType.I32 || signedOt == MlirType.I8) {
+                  var i32Lhs = EnsureI32(lhs, newBlock);
+                  var i32Rhs = EnsureI32(rhs, newBlock);
+                  var (i32Op, i32Result) = ot.IsUnsigned
+                    ? CreateUnsignedI32BinOp(binOp.Operator, i32Lhs, i32Rhs)
+                    : CreateSignedI32BinOp(binOp.Operator, i32Lhs, i32Rhs);
+                  newBlock.AddOp(i32Op);
+                  valueMap[binOp.Result] = ot.IsUnsigned && i32Result is StdI32 ? new StdU32(i32Result.Id) : i32Result;
+                  break;
+                }
+                if (ot.IsUnsigned) {
+                  var (unsignedOp, unsignedResult) = CreateUnsignedIntBinOp(binOp.Operator, (StdI64)lhs, (StdI64)rhs);
+                  newBlock.AddOp(unsignedOp);
+                  valueMap[binOp.Result] = unsignedResult;
+                  break;
+                }
+              }
+
+              // Widen narrowed operands back to i64 for full-width integer ops
+              // (e.g., range check comparisons on values that were narrowed by OptimalType)
+              if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType == null) {
+                if (lhs is StdI32 or StdU32) lhs = EnsureI64(lhs is StdU32 u ? new StdI32(u.Id) : lhs, newBlock, signExtend: lhs is not StdU32);
+                if (rhs is StdI32 or StdU32) rhs = EnsureI64(rhs is StdU32 u2 ? new StdI32(u2.Id) : rhs, newBlock, signExtend: rhs is not StdU32);
+              }
+
+              var key = (binOp.Operator, binOp.OperandKind);
+              if (!BinOpFactories.TryGetValue(key, out var factory))
+                throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind} in func {func.Name} block {block.Name}");
+
               var (newOp, factoryResult) = factory(lhs, rhs);
               newBlock.AddOp(newOp);
               valueMap[binOp.Result] = factoryResult;
@@ -980,9 +1009,11 @@ public static class MaxonToStandardConversion {
                 var stdOp = new StdFpToSiOp(f64Input);
                 newBlock.AddOp(stdOp);
                 valueMap[truncOp.Result] = stdOp.Result;
-              } else {
-                // Input is already an integer — trunc is a no-op
+              } else if (mappedInput is StdI64 or StdI32) {
+                // Ranged int types resolve to integer standard values; truncation only applies to float-to-int
                 valueMap[truncOp.Result] = mappedInput;
+              } else {
+                throw new InvalidOperationException($"MaxonTruncOp: unexpected input type {mappedInput.GetType().Name}");
               }
               break;
             }
@@ -1083,9 +1114,16 @@ public static class MaxonToStandardConversion {
                 }
                 case MaxonValueKind.Float: {
                   if (input is StdI64 i64) {
-                    var siToFp = new StdSiToFpOp(i64);
-                    newBlock.AddOp(siToFp);
-                    valueMap[castOp.Result] = siToFp.Result;
+                    var sourceIsUnsigned = castOp.SourceIsUnsigned;
+                    if (sourceIsUnsigned) {
+                      var uiToFp = new StdUiToFpOp(i64);
+                      newBlock.AddOp(uiToFp);
+                      valueMap[castOp.Result] = uiToFp.Result;
+                    } else {
+                      var siToFp = new StdSiToFpOp(i64);
+                      newBlock.AddOp(siToFp);
+                      valueMap[castOp.Result] = siToFp.Result;
+                    }
                   } else if (input is StdI32 i32) {
                     // i32 to float: need to convert i32 to i64 first, then to float
                     throw new InvalidOperationException("i32 to float conversion not yet implemented");
@@ -2174,6 +2212,9 @@ public static class MaxonToStandardConversion {
       if (backingType == MlirType.F64) return new StdF64(MlirContext.Current.NextId());
       return new StdI64(MlirContext.Current.NextId());
     }
+    // Match the callee's actual return width so narrow returns skip the I64 round-trip
+    if (resultKind == MaxonValueKind.Integer && calleeReturnType != null)
+      return StdValueFactory.CreateStdValueForType(calleeReturnType);
     return resultKind?.CreateStdValue();
   }
 
@@ -2218,8 +2259,10 @@ public static class MaxonToStandardConversion {
         block.AddOp(new StdStoreI64Op(i64, varName));
         varTypes[varName] = "i64";
         break;
-      case StdI32:
-        throw new InvalidOperationException("StdI32 store not yet implemented (no StdStoreI32Op)");
+      case StdI32 i32:
+        block.AddOp(new StdStoreI32Op(i32, varName));
+        varTypes[varName] = "i32";
+        break;
       case StdF64 f64:
         block.AddOp(new StdStoreF64Op(f64, varName));
         varTypes[varName] = "f64";
@@ -2314,6 +2357,11 @@ public static class MaxonToStandardConversion {
       }
       case "i1": {
         var loadOp = new StdLoadI1Op(varName);
+        block.AddOp(loadOp);
+        return loadOp.Result;
+      }
+      case "i32": {
+        var loadOp = new StdLoadI32Op(varName);
         block.AddOp(loadOp);
         return loadOp.Result;
       }
@@ -2942,7 +2990,7 @@ public static class MaxonToStandardConversion {
 
     var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
 
-    foreach (var (IsLiteral, LiteralValue, ExprValue, FormatSpec) in op.Parts) {
+    foreach (var (IsLiteral, LiteralValue, ExprValue, FormatSpec, OptimalType) in op.Parts) {
       if (IsLiteral) {
         if (string.IsNullOrEmpty(LiteralValue)) continue;
 
@@ -2955,7 +3003,11 @@ public static class MaxonToStandardConversion {
         if (structVarNames.TryGetValue(exprValue.Id, out var managedVarName)) {
           partInfos.Add(EmitStructInterpolation(managedVarName, block, varTypes));
         } else if (exprValue is MaxonInteger or MaxonByte) {
-          partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
+          if (OptimalType?.IsUnsigned ?? false) {
+            partInfos.Add(EmitU64ToString((StdI64)valueMap[exprValue], block, varTypes));
+          } else {
+            partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
+          }
         } else if (exprValue is MaxonFloat) {
           partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
         } else if (exprValue is MaxonBool) {
@@ -3104,6 +3156,10 @@ public static class MaxonToStandardConversion {
   private static (StdI64 Buffer, StdI64 Length) EmitI64ToString(
     StdI64 intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
     EmitRuntimeToString(intValue, "maxon_i64_to_string", 21, block, varTypes);
+
+  private static (StdI64 Buffer, StdI64 Length) EmitU64ToString(
+    StdI64 intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+    EmitRuntimeToString(intValue, "maxon_u64_to_string", 21, block, varTypes);
 
   private static (StdI64 Buffer, StdI64 Length) EmitF64ToString(
     StdF64 floatValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
@@ -3500,6 +3556,104 @@ public static class MaxonToStandardConversion {
     structVarNames[op.Result.Id] = charVarName;
   }
 
+  /// Truncates an StdI64 to StdI32, or passes through if already StdI32.
+  private static StdI32 EnsureI32(StdValue value, MlirBlock<StandardOp> block) {
+    if (value is StdI32 i32) return i32;
+    var truncOp = new StdTruncI64ToI32Op((StdI64)value);
+    block.AddOp(truncOp);
+    return truncOp.Result;
+  }
+
+  /// Extends an StdI32 to StdI64, or passes through if already StdI64.
+  private static StdI64 EnsureI64(StdValue value, MlirBlock<StandardOp> block, bool signExtend = true) {
+    if (value is StdI64 i64) return i64;
+    var extOp = new StdExtI32ToI64Op((StdI32)value, signExtend);
+    block.AddOp(extOp);
+    return extOp.Result;
+  }
+
+  private static (StandardOp Op, StdValue Result) CreateSignedI32BinOp(
+      MaxonBinOperator op, StdI32 lhs, StdI32 rhs) {
+    StandardOp stdOp;
+    StdValue result;
+    switch (op) {
+      case MaxonBinOperator.Add: { var o = new StdAddI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Sub: { var o = new StdSubI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Mul: { var o = new StdMulI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Div: { var o = new StdDivI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Mod: { var o = new StdRemI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Eq: { var o = new StdCmpI32Op("eq", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Ne: { var o = new StdCmpI32Op("ne", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Lt: { var o = new StdCmpI32Op("lt", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Gt: { var o = new StdCmpI32Op("gt", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Le: { var o = new StdCmpI32Op("le", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Ge: { var o = new StdCmpI32Op("ge", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitAnd: { var o = new StdAndI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitOr: { var o = new StdOrI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitXor: { var o = new StdXorI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Shl: { var o = new StdShlI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Shr: { var o = new StdShrI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      default: throw new InvalidOperationException($"Unsupported signed i32 binop: {op}");
+    }
+    return (stdOp, result);
+  }
+
+  private static (StandardOp Op, StdValue Result) CreateUnsignedI32BinOp(
+      MaxonBinOperator op, StdI32 lhs, StdI32 rhs) {
+    StandardOp stdOp;
+    StdValue result;
+    switch (op) {
+      case MaxonBinOperator.Add: { var o = new StdAddI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Sub: { var o = new StdSubI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Mul: { var o = new StdMulI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Div: { var o = new StdDivU32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Mod: { var o = new StdRemU32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Eq: { var o = new StdCmpU32Op("eq", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Ne: { var o = new StdCmpU32Op("ne", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Lt: { var o = new StdCmpU32Op("ult", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Gt: { var o = new StdCmpU32Op("ugt", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Le: { var o = new StdCmpU32Op("ule", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Ge: { var o = new StdCmpU32Op("uge", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitAnd: { var o = new StdAndI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitOr: { var o = new StdOrI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitXor: { var o = new StdXorI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Shl: { var o = new StdShlI32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Shr: { var o = new StdShrU32Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      default: throw new InvalidOperationException($"Unsupported unsigned i32 binop: {op}");
+    }
+    return (stdOp, result);
+  }
+
+  /// <summary>
+  /// Creates an unsigned integer binary op. Add/Sub/Mul/Bitwise are identical to signed;
+  /// only Div/Mod/Cmp use unsigned variants.
+  /// </summary>
+  private static (StandardOp Op, StdValue Result) CreateUnsignedIntBinOp(
+      MaxonBinOperator op, StdI64 lhs, StdI64 rhs) {
+    StandardOp stdOp;
+    StdValue result;
+    switch (op) {
+      case MaxonBinOperator.Add: { var o = new StdAddI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Sub: { var o = new StdSubI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Mul: { var o = new StdMulI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Div: { var o = new StdDivU64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Mod: { var o = new StdRemU64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Eq: { var o = new StdCmpU64Op("eq", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Ne: { var o = new StdCmpU64Op("ne", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Lt: { var o = new StdCmpU64Op("ult", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Gt: { var o = new StdCmpU64Op("ugt", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Le: { var o = new StdCmpU64Op("ule", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Ge: { var o = new StdCmpU64Op("uge", lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitAnd: { var o = new StdAndI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitOr: { var o = new StdOrI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.BitXor: { var o = new StdXorI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Shl: { var o = new StdShlI64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      case MaxonBinOperator.Shr: { var o = new StdShrU64Op(lhs, rhs); stdOp = o; result = o.Result; break; }
+      default: throw new InvalidOperationException($"Unsupported unsigned int binop: {op}");
+    }
+    return (stdOp, result);
+  }
+
   private static readonly Dictionary<(MaxonBinOperator, MaxonValueKind), Func<StdValue, StdValue, (StandardOp Op, StdValue Result)>> BinOpFactories = new() {
     { (MaxonBinOperator.Add, MaxonValueKind.Integer), (l, r) => { var op = new StdAddI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Sub, MaxonValueKind.Integer), (l, r) => { var op = new StdSubI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
@@ -3831,6 +3985,7 @@ public static class MaxonToStandardConversion {
     } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
         MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
+
         MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
         MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
         MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
@@ -3860,6 +4015,7 @@ public static class MaxonToStandardConversion {
   private static MlirType GetManagedMemElementType(MaxonValueKind kind, string context) {
     return kind switch {
       MaxonValueKind.Integer => MlirType.I64,
+
       MaxonValueKind.Float => MlirType.F64,
       MaxonValueKind.Byte => MlirType.I8,
       MaxonValueKind.Bool => MlirType.I8,

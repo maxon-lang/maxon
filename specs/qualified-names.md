@@ -25,7 +25,7 @@ export function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(10, b: 20)  // Unqualified call within same namespace
 end 'main'
 ```

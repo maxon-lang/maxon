@@ -45,7 +45,7 @@ end 'default'
 **Example (simple if):**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 10
   if x > 5 'check'
     return 1
@@ -61,7 +61,7 @@ end 'main'
 **Example (if-else):**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 3
   if x > 5 'gt5'
     return 1
@@ -78,7 +78,7 @@ end 'main'
 **Example (else-if chain):**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 2
   if x == 1 'case1'
     return 1
@@ -106,7 +106,7 @@ end 'main'
 
 <!-- test: if-statements.simple -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 10
   if x > 5 'check'
     return 1
@@ -120,7 +120,7 @@ end 'main'
 
 <!-- test: if-statements.else -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   if x == 5 'is5'
     return 1
@@ -135,7 +135,7 @@ end 'main'
 
 <!-- test: if-statements.else-false -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 3
   if x > 5 'gt5'
     return 1
@@ -150,7 +150,7 @@ end 'main'
 
 <!-- test: if-statements.else-if-chain -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 2
   if x == 1 'case1'
     return 1
@@ -180,7 +180,7 @@ function classify(x Integer) returns Integer
   end 'large'
 end 'classify'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = classify(0)
   var b = classify(5)
   var c = classify(50)
@@ -194,7 +194,7 @@ end 'main'
 
 <!-- test: if-statements.nested -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 3
   if x == 1 'outer'
     return 1
@@ -225,7 +225,7 @@ function test(x Integer) returns Integer
   return 42
 end 'test'
 
-function main() returns Integer
+function main() returns ExitCode
   return test(5)
 end 'main'
 ```
@@ -249,7 +249,7 @@ function test(c Integer, next Integer) returns Integer
   return 42
 end 'test'
 
-function main() returns Integer
+function main() returns ExitCode
   return test(5, next: 0)
 end 'main'
 ```
@@ -263,7 +263,7 @@ Block bodies must start on a new line after the label.
 
 <!-- test: if-statements.single-line-block-rejected -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   if true 'x' return 1 end 'x'
   return 0
 end 'main'

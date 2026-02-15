@@ -7,7 +7,7 @@ type Counter
   end 'increment'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   Counter.increment()
   Counter.increment()
   Counter.increment()
@@ -25,12 +25,32 @@ module {
     x86.mov [rip+Counter.count], eax
     x86.ret
   }
-  func @static-variables.main() -> i64 {
+  func @static-variables.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.call Counter.increment
     x86.call Counter.increment
     x86.call Counter.increment
     x86.mov eax, [rip+Counter.count]
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je static-variables.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_9]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

@@ -1,5 +1,5 @@
 // Test: int-fibonacci
-function main() returns Integer
+function main() returns ExitCode
   var a = 0
   var b = 1
   var i = 0
@@ -45,12 +45,23 @@ module {
     maxon.br loop_0.header
   loop_0.exit:
     %13 = maxon.var_ref {var = a} {type = i64}
-    maxon.return %13
+    maxon.assign %13 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %14 = maxon.literal {value = 0 : i64}
+    %15 = maxon.binop %13, %14 {op = lt}
+    %16 = maxon.literal {value = 4294967295 : i64}
+    %17 = maxon.binop %13, %16 {op = gt}
+    %18 = maxon.binop %15, %17 {op = or}
+    maxon.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_1:
+    %20 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.return %20
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, a
@@ -78,12 +89,25 @@ module {
     cf.br loop_0.header
   loop_0.exit:
     %13 = memref.load a : i64
-    func.return %13
+    memref.store %13, __range_val_1
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi lt %13, %14
+    %16 = arith.constant {value = 4294967295 : i64}
+    %17 = arith.cmpi gt %13, %16
+    %18 = arith.ori1 %15, %17
+    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %19 = memref.lea_rdata __panic_msg_19
+    %20 = std.ptr_to_i64 %19
+    std.call_runtime @maxon_panic %20
+  __range_ok_1:
+    %21 = memref.load __range_val_1 : i64
+    func.return %21
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor eax, eax
@@ -112,6 +136,24 @@ module {
     x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je register-allocator.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_19]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

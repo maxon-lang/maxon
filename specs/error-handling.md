@@ -136,7 +136,7 @@ enum MyError implements Error
   notFound
 end 'MyError'
 
-function main() returns Integer
+function main() returns ExitCode
   return 42
 end 'main'
 ```
@@ -152,7 +152,7 @@ enum MyError implements Error
   notFound = 404
 end 'MyError'
 
-function main() returns Integer
+function main() returns ExitCode
   return 42
 end 'main'
 ```
@@ -172,7 +172,7 @@ function mayFail() returns Integer throws MyError
   return 10
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   return 42
 end 'main'
 ```
@@ -194,7 +194,7 @@ function mayFail(shouldFail bool) returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   return 42
 end 'main'
 ```
@@ -218,7 +218,7 @@ function middle() returns Integer throws MyError
   return x
 end 'middle'
 
-function main() returns Integer
+function main() returns ExitCode
   let x = try middle() otherwise 99
   return x
 end 'main'
@@ -238,7 +238,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   let val = try mayFail() otherwise 42
   return val
 end 'main'
@@ -261,7 +261,7 @@ function mayFail(shouldFail bool) returns Integer throws MyError
   return 100
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   let val = try mayFail(false) otherwise 42
   return val
 end 'main'
@@ -281,7 +281,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   try mayFail() otherwise ignore
   return 42
 end 'main'
@@ -301,7 +301,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   try mayFail() otherwise 'err'
     result = 42
@@ -327,7 +327,7 @@ function mayFail(shouldFail bool) returns Integer throws MyError
   return 100
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   try mayFail(false) otherwise 'err'
     result = 42
@@ -350,7 +350,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var caught = 0
   try mayFail() otherwise (e) 'handler'
     caught = 42
@@ -369,7 +369,7 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function main() returns Integer throws MyError
+function main() returns ExitCode throws MyError
   return 42
 end 'main'
 ```
@@ -388,7 +388,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   let val = try mayFail() otherwise "wrong type"
   return val
 end 'main'
@@ -408,7 +408,7 @@ function mayFail() returns Integer throws MyError
   return 42
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   let val = mayFail()
   return val
 end 'main'
@@ -422,7 +422,7 @@ error E3057: specs/fragments/error-handling/error.throwing-function-requires-try
 typealias IntArray = Array with int
 
 // Calling a throwing method without try is an error
-function main() returns Integer
+function main() returns ExitCode
   let arr = IntArray{}
   let val = arr.get(0)
   return 0
@@ -439,7 +439,7 @@ function noFail() returns Integer
   return 42
 end 'noFail'
 
-function main() returns Integer
+function main() returns ExitCode
   let val = try noFail() otherwise 0
   return val
 end 'main'
@@ -453,7 +453,7 @@ error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.t
 typealias IntArray = Array with int
 
 // Using try on a non-throwing method is an error
-function main() returns Integer
+function main() returns ExitCode
   let arr = IntArray{}
   let val = try arr.count() otherwise 0
   return val
@@ -468,7 +468,7 @@ error E3055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.t
 typealias IntArray = Array with int
 
 // Using otherwise without try is an error
-function main() returns Integer
+function main() returns ExitCode
   let arr = IntArray{}
   let val = arr.get(0) otherwise 0
   return val
@@ -489,7 +489,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   let val = try mayFail() otherwise ignore
   return val
 end 'main'
@@ -509,7 +509,7 @@ function mayFail() throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   let val = try mayFail() otherwise 'handler'
     return 1
   end 'handler'
@@ -531,7 +531,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   try mayFail() otherwise (e) 'handler'
     match e 'check'
@@ -564,7 +564,7 @@ function mayFail(code Integer) returns Integer throws MyError
   throw MyError.notFound
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   try mayFail(2) otherwise (e) 'handler'
     match e 'check'
@@ -594,7 +594,7 @@ function mayFail(shouldFail bool) returns Integer throws MyError
   return 100
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   try mayFail(false) otherwise (e) 'handler'
     result = 99
@@ -618,7 +618,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.notFound(404)
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   try mayFail() otherwise (e) 'handler'
     match e 'check'
@@ -645,7 +645,7 @@ function mayFail() returns Integer throws MyError
   throw MyError.notFound(42)
 end 'mayFail'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = 0
   try mayFail() otherwise (e) 'handler'
     match e 'check'

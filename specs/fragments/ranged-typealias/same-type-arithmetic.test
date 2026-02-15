@@ -1,7 +1,7 @@
 // Test: same-type-arithmetic
 typealias Score = int(0 to 100)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Score{30}
   var b = Score{12}
   return a + b
@@ -9,13 +9,35 @@ end 'main'
 ---
 ---
 module {
-  func @ranged-typealias.main() -> i64 {
+  func @ranged-typealias.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 30
     x86.mov ecx, 12
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.lea eax, [edx + ebx]
+    x86.add edx, ebx
+    x86.mov [rbp-4], edx
+    x86.xor esi, esi
+    x86.mov edi, edx
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.mov eax, edx
+    x86.cmp rax, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je ranged-typealias.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-4]
+    x86.epilogue
     x86.ret
   }
 }

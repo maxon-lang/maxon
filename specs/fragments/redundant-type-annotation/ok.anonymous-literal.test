@@ -8,7 +8,7 @@ function makePoint() returns Point
   return {x: 1, y: 2}
 end 'makePoint'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = makePoint()
   return p.x + p.y
 end 'main'
@@ -35,7 +35,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @redundant-type-annotation.main() -> i64 {
+  func @redundant-type-annotation.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.call redundant-type-annotation.makePoint
@@ -44,7 +44,25 @@ module {
     x86.mov ecx, [eax+0]
     x86.mov edx, [rbp-8]
     x86.mov ebx, [edx+8]
-    x86.lea eax, [ecx + ebx]
+    x86.add ecx, ebx
+    x86.mov [rbp-16], ecx
+    x86.xor esi, esi
+    x86.cmp ecx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rcx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je redundant-type-annotation.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_14]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

@@ -3,7 +3,7 @@ type Counter
   export var value Integer
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{value: 10}
   c.value = 42
   return c.value
@@ -12,7 +12,7 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @challenge-struct-field-assign.main() -> i64 {
+  func @challenge-struct-field-assign.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 10
@@ -26,7 +26,25 @@ module {
     x86.mov edi, [rbp-8]
     x86.mov [edi+0], esi
     x86.mov r8, [rbp-8]
-    x86.mov eax, [r8+0]
+    x86.mov r9, [r8+0]
+    x86.mov [rbp-16], r9
+    x86.xor eax, eax
+    x86.cmp r9, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp r9, rcx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je challenge-struct-field-assign.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

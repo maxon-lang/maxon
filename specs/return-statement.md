@@ -30,7 +30,7 @@ end 'isPositive'
 
 <!-- test: simple-return -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 42
 end 'main'
 ```
@@ -41,7 +41,7 @@ end 'main'
 
 <!-- test: expression-return -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 2 + 3 * 4
 end 'main'
 ```
@@ -52,7 +52,7 @@ end 'main'
 
 <!-- test: conditional-return -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   if x > 3 'check'
     return 1

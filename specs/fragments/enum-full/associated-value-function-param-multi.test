@@ -11,7 +11,7 @@ function sum(p TwoParts) returns Integer
     end 'handle'
 end 'sum'
 
-function main() returns Integer
+function main() returns ExitCode
     var p = TwoParts.values(10, 20)
     return sum(p)
 end 'main'
@@ -57,7 +57,7 @@ module {
     x86.ret
   handle_0.merge:
   }
-  func @enum-full.main() -> i64 {
+  func @enum-full.main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.mov eax, 10
@@ -76,8 +76,27 @@ module {
     x86.mov r8, [rbp-24]
     x86.mov [eax+16], r8
     x86.mov rcx, rax
+    x86.call enum-full.sum
+    x86.mov [rbp-32], eax
+    x86.xor r9, r9
+    x86.cmp eax, r9
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je enum-full.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-32]
     x86.epilogue
-    x86.jmp enum-full.sum
+    x86.ret
   }
 }
 ---

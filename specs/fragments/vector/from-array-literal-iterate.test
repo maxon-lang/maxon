@@ -1,5 +1,5 @@
 // Test: from-array-literal-iterate
-function main() returns Integer
+function main() returns ExitCode
   var v = Vector from [1, 2, 3, 4]
   var sum = 0
   for elem in v 'loop'
@@ -11,9 +11,9 @@ end 'main'
 ExitCode: 10
 ---
 module {
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
+    x86.prologue stack_size=112
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -54,17 +54,17 @@ module {
     x86.mov [rbp-56], eax
     x86.mov eax, [rbp-48]
     x86.mov ecx, 16
-    x86.mov [rbp-80], eax
+    x86.mov [rbp-88], eax
     x86.call maxon_alloc
-    x86.mov ecx, [rbp-80]
+    x86.mov ecx, [rbp-88]
     x86.mov edx, [ecx+0]
     x86.mov [eax+0], edx
     x86.mov edx, [ecx+8]
     x86.mov ecx, 32
-    x86.mov [rbp-88], eax
-    x86.mov [rbp-96], edx
+    x86.mov [rbp-96], eax
+    x86.mov [rbp-104], edx
     x86.call maxon_alloc
-    x86.mov ecx, [rbp-96]
+    x86.mov ecx, [rbp-104]
     x86.mov edx, [ecx+0]
     x86.mov [eax+0], edx
     x86.mov edx, [ecx+8]
@@ -73,7 +73,7 @@ module {
     x86.mov [eax+16], edx
     x86.mov edx, [ecx+24]
     x86.mov [eax+24], edx
-    x86.mov ecx, [rbp-88]
+    x86.mov ecx, [rbp-96]
     x86.mov [ecx+8], eax
     x86.mov [rbp-64], ecx
     x86.jmp vector.main.loop_1.header
@@ -93,6 +93,24 @@ module {
     x86.jmp vector.main.loop_1.header
   loop_1.exit:
     x86.mov eax, [rbp-56]
+    x86.mov [rbp-80], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je vector.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_rdata rax, [__panic_msg_26]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_4:
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

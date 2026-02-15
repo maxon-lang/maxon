@@ -58,7 +58,7 @@ Map requires `Key is Hashable`. String implements Hashable, so this should work:
 
 <!-- test: where-clauses.map-basic -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
     var m = ["hello": 42]
     return try m.get("hello") otherwise 0
 end 'main'
@@ -87,7 +87,7 @@ end 'MyKey'
 
 typealias MyKeyMap = Map with (MyKey, int)
 
-function main() returns Integer
+function main() returns ExitCode
     return 1
 end 'main'
 ```
@@ -107,7 +107,7 @@ end 'NotHashable'
 
 typealias BadMap = Map with (NotHashable, int)
 
-function main() returns Integer
+function main() returns ExitCode
     return 0
 end 'main'
 ```
@@ -139,7 +139,7 @@ end 'Holder'
 
 typealias WrapperHolder = Holder with Wrapper
 
-function main() returns Integer
+function main() returns ExitCode
     var w = Wrapper{n: 10}
     var h = WrapperHolder{item: w}
     return h.item.value()
@@ -181,7 +181,7 @@ end 'Registry'
 
 typealias PersonRegistry = Registry with Person
 
-function main() returns Integer
+function main() returns ExitCode
     var p = Person{_age: 30}
     var r = PersonRegistry{item: p}
     return r.item.age()
@@ -215,7 +215,7 @@ end 'NeedsBoth'
 
 typealias Bad = NeedsBoth with OnlyFoo
 
-function main() returns Integer
+function main() returns ExitCode
     return 0
 end 'main'
 ```
@@ -237,7 +237,7 @@ type Box uses T
     end 'eq'
 end 'Box'
 
-function main() returns Integer
+function main() returns ExitCode
     return 0
 end 'main'
 ```
@@ -261,7 +261,7 @@ end 'Box'
 
 typealias IntBox = Box with int
 
-function main() returns Integer
+function main() returns ExitCode
     var b = IntBox{item: 42}
     if b.eq(other: 42) 'yes'
         return 1

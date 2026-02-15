@@ -1,5 +1,5 @@
 // Test: sqrt.rt-basic
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(sqrt(x))
@@ -9,9 +9,9 @@ Args: 16.0
 ExitCode: 4
 ---
 module {
-  func @sqrt.main() -> i64 {
+  func @sqrt.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=96
     x86.call stdlib.CommandLine.args
     x86.mov [rbp-8], eax
     x86.xor eax, eax
@@ -22,14 +22,14 @@ module {
     x86.mov rbx, rcx
     x86.xor ecx, ecx
     x86.mov esi, 32
-    x86.mov [rbp-64], eax
-    x86.mov [rbp-72], edx
-    x86.mov [rbp-80], ebx
+    x86.mov [rbp-72], eax
+    x86.mov [rbp-80], edx
+    x86.mov [rbp-88], ebx
     x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-16], eax
     x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-80]
+    x86.mov ebx, [rbp-88]
     x86.mov [edx+0], ebx
     x86.mov esi, [rbp-16]
     x86.xor edi, edi
@@ -51,10 +51,10 @@ module {
     x86.mov edx, [rbp-24]
     x86.mov [edx+8], ecx
     x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-64]
+    x86.mov eax, [rbp-72]
     x86.mov [rbp-40], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-72]
+    x86.mov ecx, [rbp-80]
     x86.cmp ecx, eax
     x86.je sqrt.main.otherwise_default_continue_3
   otherwise_default_error_2:
@@ -79,6 +79,24 @@ module {
     x86.movsd xmm0, [rbp-56]
     x86.sqrtsd xmm1, xmm0
     x86.cvttsd2si eax, xmm1
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je sqrt.main.__range_ok_8
+  __range_panic_8:
+    x86.lea_rdata rax, [__panic_msg_26]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_8:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

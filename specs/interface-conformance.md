@@ -74,7 +74,7 @@ type SimpleCounter implements Counter
   end 'increment'
 end 'SimpleCounter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = SimpleCounter{value: 40}
   c.increment()
   c.increment()
@@ -107,7 +107,7 @@ type Buffer implements Readable, Writable
   end 'write'
 end 'Buffer'
 
-function main() returns Integer
+function main() returns ExitCode
   var buf = Buffer{data: 0}
   buf.write(42)
   return buf.read()
@@ -132,7 +132,7 @@ type BadCounter implements Counter
   end 'get'
 end 'BadCounter'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -153,7 +153,7 @@ type BadProcessor implements Processor
   end 'process'
 end 'BadProcessor'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -174,7 +174,7 @@ type BadProvider implements Provider
   end 'provide'
 end 'BadProvider'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -201,7 +201,7 @@ type Extended implements Simple
   end 'extraMethod'
 end 'Extended'
 
-function main() returns Integer
+function main() returns ExitCode
   var e = Extended{value: 42}
   return e.getValue()
 end 'main'
@@ -220,7 +220,7 @@ type Standalone
   end 'get'
 end 'Standalone'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Standalone{value: 42}
   return s.get()
 end 'main'
@@ -239,7 +239,7 @@ type MyCollection uses Element implements BuiltinArrayLiteral
   end 'init'
 end 'MyCollection'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```

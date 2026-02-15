@@ -17,7 +17,7 @@ type Amount implements Scalable
   end 'base'
 end 'Amount'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Amount{amount: 7}
   return a.scale(6)
 end 'main'
@@ -48,7 +48,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @interface-extensions.main() -> i64 {
+  func @interface-extensions.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 7
@@ -61,8 +61,27 @@ module {
     x86.mov esi, 6
     x86.mov rcx, [rbp-8]
     x86.mov rdx, rsi
+    x86.call Amount.scale
+    x86.mov [rbp-16], eax
+    x86.xor r8, r8
+    x86.cmp eax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
+    x86.cmp rax, rcx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je interface-extensions.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_18]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp Amount.scale
+    x86.ret
   }
 }
 ---

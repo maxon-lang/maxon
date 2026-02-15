@@ -13,7 +13,7 @@ function sumItems(items ItemArray) returns Integer
   return total
 end 'sumItems'
 
-function main() returns Integer
+function main() returns ExitCode
   return sumItems([{ value: 10 }, { value: 20 }, { value: 12 }])
 end 'main'
 ---
@@ -75,7 +75,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @anonymous-struct-in-array-literal.main() -> i64 {
+  func @anonymous-struct-in-array-literal.main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.mov eax, 10
@@ -140,8 +140,27 @@ module {
     x86.mov eax, [rbp-56]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov rcx, [rbp-56]
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, rax
     x86.call anonymous-struct-in-array-literal.sumItems
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je anonymous-struct-in-array-literal.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_33]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

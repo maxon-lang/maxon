@@ -226,8 +226,8 @@ public static partial class FragmentGenerator {
 
     sb.AppendLine("---");
 
-    // Compile to executable and capture IR (for success expectations only)
-    if (test.Expectation is SuccessExpectation) {
+    // Compile to executable and capture IR (for success expectations only, skip if RequiredMLIR covers it)
+    if (test.Expectation is SuccessExpectation s2 && s2.RequiredMLIR == null) {
       Compiler.SourceFile[] sources;
       if (test.SourceFiles != null) {
         var tempDir = Path.Combine(Path.GetTempPath(), $"maxon-frag-{Guid.NewGuid():N}");

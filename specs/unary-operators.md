@@ -19,7 +19,7 @@ Unary operators operate on a single value.
 ### Example
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 42
   var y = -x      // y is -42
   var z = -y      // z is 42
@@ -35,7 +35,7 @@ end 'main'
 
 <!-- test: negate-int -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = -42
   var y = -x
   if y == 42 'check'
@@ -52,7 +52,7 @@ end 'main'
 <!-- test: negate-float 
 NOTE: Float negation is not yet implemented in codegen
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = -3.5
   var y = -x
   var result = trunc(y)
@@ -67,7 +67,7 @@ end 'main'
 
 <!-- test: double-negation -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 10
   var y = - -x
   return y

@@ -1,18 +1,38 @@
 // Test: precedence
-function main() returns Integer
+function main() returns ExitCode
   return 2 + 3 * 4
 end 'main'
 ---
 ExitCode: 14
 ---
 module {
-  func @arithmetic-operators.main() -> i64 {
+  func @arithmetic-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 2
     x86.mov ecx, 3
     x86.mov edx, 4
     x86.imul ecx, edx
     x86.add eax, ecx
+    x86.mov [rbp-8], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je arithmetic-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

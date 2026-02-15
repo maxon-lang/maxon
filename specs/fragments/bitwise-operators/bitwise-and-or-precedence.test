@@ -1,5 +1,5 @@
 // Test: bitwise-and-or-precedence
-function main() returns Integer
+function main() returns ExitCode
   // and has higher precedence than or
   // 12 and 10 = 8, then 8 or 1 = 9
   return 12 and 10 or 1
@@ -8,13 +8,33 @@ end 'main'
 ExitCode: 9
 ---
 module {
-  func @bitwise-operators.main() -> i64 {
+  func @bitwise-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 12
     x86.mov ecx, 10
     x86.and eax, ecx
     x86.mov edx, 1
     x86.or eax, edx
+    x86.mov [rbp-8], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je bitwise-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

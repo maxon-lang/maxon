@@ -93,7 +93,7 @@ type Counter
   end 'get'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 0}
   c.increment()
   return c.get()
@@ -117,7 +117,7 @@ type Adder
   end 'getTotal'
 end 'Adder'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Adder{total: 0}
   a.add(10)
   a.add(32)
@@ -138,7 +138,7 @@ type Calculator
   end 'double'
 end 'Calculator'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Calculator{value: 21}
   return c.double()
 end 'main'
@@ -169,7 +169,7 @@ type Counter
   end 'get'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 10}
   c.increment()
   c.increment()
@@ -195,7 +195,7 @@ type Value
   end 'get'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value{n: 0}
   v.add(10)
   v.add(20)

@@ -1,7 +1,7 @@
 // Test: rdata-byte-array-uses-i8
 typealias ByteArray = Array with byte
 
-function main() returns Integer
+function main() returns ExitCode
   let arr = [10 as Byte, 20 as Byte, 30 as Byte]
   var v0 = try arr.get(0) otherwise 0 as Byte
   var v1 = try arr.get(1) otherwise 0 as Byte
@@ -12,12 +12,13 @@ end 'main'
 ExitCode: 60
 RequiredRdata: ```
 i8[] 10, 20, 30
+utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 ---
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=96
     x86.xor eax, eax
     x86.mov ecx, 3
     x86.xor edx, edx
@@ -112,7 +113,25 @@ module {
     x86.mov ecx, [rbp-40]
     x86.mov edx, [rbp-64]
     x86.add ecx, edx
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-88], ecx
+    x86.xor ebx, ebx
+    x86.cmp ecx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rcx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je codegen-internals.main.__range_ok_13
+  __range_panic_13:
+    x86.lea_rdata rax, [__panic_msg_58]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_13:
+    x86.mov eax, [rbp-88]
     x86.epilogue
     x86.ret
   }

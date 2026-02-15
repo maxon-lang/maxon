@@ -4,7 +4,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.value(10)
   var result = match c 'get'
     empty gives 0
@@ -16,9 +16,9 @@ end 'main'
 ExitCode: 20
 ---
 module {
-  func @enum-full.main() -> i64 {
+  func @enum-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.mov eax, 10
     x86.mov ecx, 1
     x86.mov [rbp-8], ecx
@@ -50,6 +50,24 @@ module {
     x86.jmp enum-full.main.get_0.merge
   get_0.merge:
     x86.mov eax, [rbp-24]
+    x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je enum-full.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_22]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   }

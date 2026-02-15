@@ -1,5 +1,5 @@
 // Test: let-array-multiple-access
-function main() returns Integer
+function main() returns ExitCode
   let arr = [5, 10, 15, 20]
   var a = try arr.get(0) otherwise 0
   var b = try arr.get(3) otherwise 0
@@ -9,7 +9,7 @@ end 'main'
 ExitCode: 25
 ---
 module {
-  func @arrays.main() -> i64 {
+  func @arrays.main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.xor eax, eax
@@ -81,7 +81,25 @@ module {
   otherwise_default_continue_8:
     x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-40]
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-64], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je arrays.main.__range_ok_9
+  __range_panic_9:
+    x86.lea_rdata rax, [__panic_msg_38]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_9:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

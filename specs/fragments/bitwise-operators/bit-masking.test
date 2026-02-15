@@ -1,5 +1,5 @@
 // Test: bit-masking
-function main() returns Integer
+function main() returns ExitCode
   var flags = 5         // binary 101 (bit 0 and bit 2 set)
   return flags and 4    // returns 4 (bit 2 is set)
 end 'main'
@@ -7,11 +7,31 @@ end 'main'
 ExitCode: 4
 ---
 module {
-  func @bitwise-operators.main() -> i64 {
+  func @bitwise-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 5
     x86.mov ecx, 4
     x86.and eax, ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je bitwise-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

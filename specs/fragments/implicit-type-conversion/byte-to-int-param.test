@@ -3,7 +3,7 @@ function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns Integer
+function main() returns ExitCode
   var b = 42 as Byte
   return takeInt(b)
 end 'main'
@@ -16,13 +16,34 @@ module {
     x86.mov eax, ecx
     x86.ret
   }
-  func @implicit-type-conversion.main() -> i64 {
+  func @implicit-type-conversion.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 42
     x86.mov ecx, 255
     x86.and eax, ecx
     x86.mov rcx, rax
-    x86.jmp implicit-type-conversion.takeInt
+    x86.call implicit-type-conversion.takeInt
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je implicit-type-conversion.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_9]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ---

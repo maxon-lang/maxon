@@ -96,7 +96,7 @@ Different iterators define different element types:
 When iterating with `for`, the loop variable's type is inferred from the iterator's `Element` type:
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "Hi"
   for ch in s 'chars'
     // ch has type 'character' (inferred from string's Element type - grapheme cluster)
@@ -135,7 +135,7 @@ type IntPair implements Summable with Integer
   end 'sum'
 end 'IntPair'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = IntPair{a: 10, b: 32}
   return p.sum()
 end 'main'
@@ -170,7 +170,7 @@ type Broken implements HasElement
   end 'get'
 end 'Broken'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -196,7 +196,7 @@ type Partial implements TwoMethods with Integer
   end 'first'
 end 'Partial'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -222,7 +222,7 @@ type WrongReturn implements Producer with Float
   end 'produce'
 end 'WrongReturn'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -248,7 +248,7 @@ type IntBox implements Wrapper with Integer
   end 'unwrap'
 end 'IntBox'
 
-function main() returns Integer
+function main() returns ExitCode
   var box = IntBox{value: 42}
   return box.unwrap()
 end 'main'
@@ -277,7 +277,7 @@ type IntSum implements Accumulator with Integer
   end 'total'
 end 'IntSum'
 
-function main() returns Integer
+function main() returns ExitCode
   var acc = IntSum{sum: 0}
   acc = acc.add(10)
   acc = acc.add(32)
@@ -309,7 +309,7 @@ type IntFloat implements Pair with Integer, Float
   end 'getSecond'
 end 'IntFloat'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = IntFloat{a: 40, b: 2.5}
   var x = p.getFirst()
   var y = trunc(p.getSecond())
@@ -336,7 +336,7 @@ type SingleChar implements CharSource with Character
   end 'getChar'
 end 'SingleChar'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = SingleChar{ch: 'A'}
   var c = s.getChar()
   for cp in c.codepoints() 'loop'
@@ -364,7 +364,7 @@ type SingleByte implements ByteSource with Byte
   end 'getByte'
 end 'SingleByte'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = SingleByte{b: 42 as Byte}
   var b = s.getByte()
   return b as Integer
@@ -389,7 +389,7 @@ type Missing implements NeedsElement
   end 'get'
 end 'Missing'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -413,7 +413,7 @@ type Partial implements TwoMethods with Integer
   end 'first'
 end 'Partial'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -437,7 +437,7 @@ type WrongType implements Typed with Float
   end 'make'
 end 'WrongType'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -461,7 +461,7 @@ type WrongParam implements Acceptor with Float
   end 'accept'
 end 'WrongParam'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -485,7 +485,7 @@ type Counter implements Countable
   end 'getCount'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 42}
   return c.getCount()
 end 'main'
@@ -509,7 +509,7 @@ type Number implements Addable
   end 'addOne'
 end 'Number'
 
-function main() returns Integer
+function main() returns ExitCode
   var n = Number{value: 41}
   return n.addOne()
 end 'main'

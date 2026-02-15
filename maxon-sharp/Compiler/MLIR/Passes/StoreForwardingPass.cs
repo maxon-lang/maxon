@@ -75,6 +75,7 @@ public static class StoreForwardingPass {
   private static bool TryGetLoadInfo(StandardOp op, out string varName, out StdValue result) {
     switch (op) {
       case StdLoadI64Op load: varName = load.VarName; result = load.Result; return true;
+      case StdLoadI32Op load: varName = load.VarName; result = load.Result; return true;
       case StdLoadF64Op load: varName = load.VarName; result = load.Result; return true;
       case StdLoadI1Op load: varName = load.VarName; result = load.Result; return true;
       case StdLoadPtrOp load: varName = load.VarName; result = load.Result; return true;
@@ -85,6 +86,7 @@ public static class StoreForwardingPass {
   private static StdValue GetStoredValue(IStoreOp store) {
     return store switch {
       StdStoreI64Op s => s.Value,
+      StdStoreI32Op s => s.Value,
       StdStoreF64Op s => s.Value,
       StdStoreI1Op s => s.Value,
       StdStorePtrOp s => s.Value,
@@ -95,6 +97,7 @@ public static class StoreForwardingPass {
   private static StandardOp CreateStore(StdValue value, string varName) {
     return value switch {
       StdI64 v => new StdStoreI64Op(v, varName),
+      StdI32 v => new StdStoreI32Op(v, varName),
       StdF64 v => new StdStoreF64Op(v, varName),
       StdBool v => new StdStoreI1Op(v, varName),
       StdPtr v => new StdStorePtrOp(v, varName),

@@ -3,7 +3,7 @@ function identity(x Integer) returns Integer
   return x
 end 'identity'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = 1
   var b = 2
   var c = 3
@@ -84,7 +84,18 @@ module {
     %34 = maxon.binop %32, %33 {op = add}
     %35 = maxon.literal {value = 256 : i64}
     %36 = maxon.binop %34, %35 {op = mod}
-    maxon.return %36
+    maxon.assign %36 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %37 = maxon.literal {value = 0 : i64}
+    %38 = maxon.binop %36, %37 {op = lt}
+    %39 = maxon.literal {value = 4294967295 : i64}
+    %40 = maxon.binop %36, %39 {op = gt}
+    %41 = maxon.binop %38, %40 {op = or}
+    maxon.cond_br %41 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_1:
+    %43 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.return %43
   }
 }
 === standard
@@ -94,7 +105,7 @@ module {
     %0 = func.param x : StdI64
     func.return %0
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %1 = arith.constant {value = 1 : i64}
     memref.store %1, a
@@ -149,7 +160,20 @@ module {
     %34 = arith.addi %32, %33
     %35 = arith.constant {value = 256 : i64}
     %36 = arith.remsi %34, %35
-    func.return %36
+    memref.store %36, __range_val_1
+    %37 = arith.constant {value = 0 : i64}
+    %38 = arith.cmpi lt %36, %37
+    %39 = arith.constant {value = 4294967295 : i64}
+    %40 = arith.cmpi gt %36, %39
+    %41 = arith.ori1 %38, %40
+    cf.cond_br %41 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %42 = memref.lea_rdata __panic_msg_42
+    %43 = std.ptr_to_i64 %42
+    std.call_runtime @maxon_panic %43
+  __range_ok_1:
+    %44 = memref.load __range_val_1 : i64
+    func.return %44
   }
 }
 === x86
@@ -159,9 +183,9 @@ module {
     x86.mov eax, ecx
     x86.ret
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.mov eax, 1
     x86.mov [rbp-8], eax
     x86.mov ecx, 2
@@ -216,10 +240,27 @@ module {
     x86.mov esi, [rbp-48]
     x86.add eax, esi
     x86.mov edi, 256
-    x86.mov [rbp-64], eax
+    x86.mov [rbp-72], eax
     x86.cqo
     x86.idiv edi
-    x86.mov eax, edx
+    x86.mov [rbp-64], edx
+    x86.xor r8, r8
+    x86.cmp edx, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rax, 4294967295
+    x86.cmp rdx, rax
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je register-allocator.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_42]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

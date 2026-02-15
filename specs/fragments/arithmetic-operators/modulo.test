@@ -1,18 +1,37 @@
 // Test: modulo
-function main() returns Integer
+function main() returns ExitCode
   return 17 mod 5
 end 'main'
 ---
 ExitCode: 2
 ---
 module {
-  func @arithmetic-operators.main() -> i64 {
+  func @arithmetic-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 17
     x86.mov ecx, 5
     x86.cqo
     x86.idiv ecx
-    x86.mov eax, edx
+    x86.mov [rbp-8], edx
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp rdx, rcx
+    x86.setg edx
+    x86.movzx edx, edxb
+    x86.or eax, edx
+    x86.test eax, eax
+    x86.je arithmetic-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

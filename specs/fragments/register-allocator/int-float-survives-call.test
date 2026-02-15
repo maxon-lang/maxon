@@ -3,7 +3,7 @@ function getInt() returns Integer
   return 40
 end 'getInt'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = 3.14
   var x = getInt()
   return trunc(f) + x
@@ -26,7 +26,18 @@ module {
     maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.trunc %1
     %4 = maxon.binop %3, %2 {op = add}
-    maxon.return %4
+    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = lt}
+    %7 = maxon.literal {value = 4294967295 : i64}
+    %8 = maxon.binop %4, %7 {op = gt}
+    %9 = maxon.binop %6, %8 {op = or}
+    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %11
   }
 }
 === standard
@@ -36,13 +47,26 @@ module {
     %0 = arith.constant {value = 40 : i64}
     func.return %0
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %1 = arith.float_constant {value = 3.14 : f64}
     %2 = func.call @register-allocator.getInt
     %3 = arith.fptosi %1
     %4 = arith.addi %3, %2
-    func.return %4
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.cmpi lt %4, %5
+    %7 = arith.constant {value = 4294967295 : i64}
+    %8 = arith.cmpi gt %4, %7
+    %9 = arith.ori1 %6, %8
+    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %10 = memref.lea_rdata __panic_msg_10
+    %11 = std.ptr_to_i64 %10
+    std.call_runtime @maxon_panic %11
+  __range_ok_0:
+    %12 = memref.load __range_val_0 : i64
+    func.return %12
   }
 }
 === x86
@@ -52,15 +76,33 @@ module {
     x86.mov eax, 40
     x86.ret
   }
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd [rbp-8], xmm0
+    x86.movsd [rbp-16], xmm0
     x86.call register-allocator.getInt
-    x86.movsd xmm0, [rbp-8]
+    x86.movsd xmm0, [rbp-16]
     x86.cvttsd2si ecx, xmm0
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

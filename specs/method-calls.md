@@ -82,7 +82,7 @@ type Counter
   end 'get'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 0}
   c.increment()
   c.increment()
@@ -108,7 +108,7 @@ type Adder
   end 'get'
 end 'Adder'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Adder{total: 0}
   a.add(10)
   a.add(20)
@@ -130,7 +130,7 @@ type Box
   end 'getValue'
 end 'Box'
 
-function main() returns Integer
+function main() returns ExitCode
   var b = Box{value: 40}
   return b.getValue() + 2
 end 'main'
@@ -153,7 +153,7 @@ type Calculator
   end 'get'
 end 'Calculator'
 
-function main() returns Integer
+function main() returns ExitCode
   var calc = Calculator{result: 0}
   calc.addTwo(20, b: 22)
   return calc.get()
@@ -181,7 +181,7 @@ type Outer
   end 'getInnerValue'
 end 'Outer'
 
-function main() returns Integer
+function main() returns ExitCode
   var o = Outer{inner: Inner{value: 42}}
   return o.getInnerValue()
 end 'main'
@@ -206,7 +206,7 @@ type Point
   end 'sum'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 10, y: 10}
   p.moveBy(10, dy: 12)
   return p.sum()
@@ -229,7 +229,7 @@ type Value
   end 'isPositive'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value{n: 42}
   return v.isPositive()
 end 'main'
@@ -248,7 +248,7 @@ type Adder
   end 'addTwo'
 end 'Adder'
 
-function main() returns Integer
+function main() returns ExitCode
   var x = Adder{total: 0}
   x.addTwo(10, 20)
   return 0
@@ -270,7 +270,7 @@ type Calculator
   end 'get'
 end 'Calculator'
 
-function main() returns Integer
+function main() returns ExitCode
   var calc = Calculator{result: 0}
   calc.compute(10, c: 4, b: 8)
   return calc.get()
@@ -288,7 +288,7 @@ type Factory
   end 'create'
 end 'Factory'
 
-function main() returns Integer
+function main() returns ExitCode
   return Factory.create(4, y: 2)
 end 'main'
 ```
@@ -304,7 +304,7 @@ type Factory
   end 'create'
 end 'Factory'
 
-function main() returns Integer
+function main() returns ExitCode
   return Factory.create(4, 2)
 end 'main'
 ```

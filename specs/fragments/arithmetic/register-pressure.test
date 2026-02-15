@@ -15,7 +15,7 @@ function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integ
   return v12
 end 'manyVars'
 
-function main() returns Integer
+function main() returns ExitCode
   return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
 end 'main'
 ---
@@ -53,8 +53,9 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @arithmetic.main() -> i64 {
+  func @arithmetic.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -65,7 +66,27 @@ module {
     x86.mov r9, rbx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.jmp arithmetic.manyVars
+    x86.call arithmetic.manyVars
+    x86.mov [rbp-8], eax
+    x86.xor r8, r8
+    x86.cmp eax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
+    x86.cmp rax, rcx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je arithmetic.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_41]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ---

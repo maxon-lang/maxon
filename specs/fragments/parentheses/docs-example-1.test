@@ -1,5 +1,5 @@
 // Test: docs-example-1
-function main() returns Integer
+function main() returns ExitCode
   var a = 2 + 3 * 4      // 14 (multiply first)
   var b = (2 + 3) * 4    // 20 (add first)
   return a+b
@@ -9,8 +9,9 @@ end 'main'
 ExitCode: 34
 ---
 module {
-  func @parentheses.main() -> i64 {
+  func @parentheses.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 2
     x86.mov ecx, 3
     x86.mov edx, 4
@@ -22,6 +23,25 @@ module {
     x86.mov edi, 4
     x86.imul ebx, edi
     x86.add eax, ebx
+    x86.mov [rbp-8], eax
+    x86.xor r8, r8
+    x86.cmp eax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
+    x86.cmp rax, rcx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je parentheses.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_16]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

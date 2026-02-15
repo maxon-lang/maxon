@@ -35,7 +35,7 @@ var z = min(-1.0, 1.0)   // -1.0
 
 <!-- test: min.basic -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = min(3.0, 5.0)
   return trunc(x)
 end 'main'
@@ -46,7 +46,7 @@ end 'main'
 
 <!-- test: min.second-smaller -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = min(10.0, 2.0)
   return trunc(x)
 end 'main'
@@ -57,29 +57,31 @@ end 'main'
 
 <!-- test: min.negative -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = min(-5.0, 3.0)
-  return trunc(x)
+  print("{trunc(x)}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -5
 ```
 
 <!-- test: min.both-negative -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = min(-2.0, -8.0)
-  return trunc(x)
+  print("{trunc(x)}\n")
+  return 0
 end 'main'
 ```
-```exitcode
+```stdout
 -8
 ```
 
 <!-- test: min.equal-values -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = min(7.0, 7.0)
   return trunc(x)
 end 'main'
@@ -90,7 +92,7 @@ end 'main'
 
 <!-- test: min.fractional -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = min(3.5, 5.2)
   // min of 3.5 and 5.2 is 3.5, trunc gives 3
   return trunc(x)
@@ -102,7 +104,7 @@ end 'main'
 
 <!-- test: min.zero -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = min(0.0, 5.0)
   if x == 0.0 'check'
     return 0
@@ -117,7 +119,7 @@ end 'main'
 <!-- test: min.rt-basic -->
 <!-- Args: 3.0 5.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
@@ -131,7 +133,7 @@ end 'main'
 <!-- test: min.rt-second-smaller -->
 <!-- Args: 10.0 2.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
@@ -145,7 +147,7 @@ end 'main'
 <!-- test: min.rt-negative -->
 <!-- Args: -5.0 3.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
@@ -159,7 +161,7 @@ end 'main'
 <!-- test: min.rt-both-negative -->
 <!-- Args: -2.0 -8.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
@@ -173,7 +175,7 @@ end 'main'
 <!-- test: min.rt-equal -->
 <!-- Args: 7.0 7.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
@@ -187,7 +189,7 @@ end 'main'
 <!-- test: min.rt-fractional -->
 <!-- Args: 3.5 5.2 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0
@@ -201,7 +203,7 @@ end 'main'
 <!-- test: min.rt-zero -->
 <!-- Args: 0.0 5.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var a = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var b = try float.fromString(try args.get(1) otherwise "") otherwise 0.0

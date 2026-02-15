@@ -3,7 +3,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   var result = apply(f: (n Integer) gives n * 3, x: 10)
   return result
 end 'main'
@@ -21,14 +21,35 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @closure-capture.main() -> i64 {
+  func @closure-capture.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.lea_func eax, [__closure_0]
     x86.mov ecx, 10
     x86.xor edx, edx
     x86.mov r8, rcx
     x86.mov rcx, rax
-    x86.jmp closure-capture.apply
+    x86.call closure-capture.apply
+    x86.mov [rbp-8], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je closure-capture.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_14]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
   func @__closure_0(n: i64) -> i64 {
   entry:

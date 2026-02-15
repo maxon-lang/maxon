@@ -1,5 +1,5 @@
 // Test: docs-example-4
-function main() returns Integer
+function main() returns ExitCode
   var role = 1
   var permissions = 0
   match role 'auth'
@@ -15,9 +15,9 @@ end 'main'
 ExitCode: 111
 ---
 module {
-  func @match-statements.main() -> i64 {
+  func @match-statements.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 1
     x86.xor ecx, ecx
     x86.mov [rbp-8], ecx
@@ -62,6 +62,24 @@ module {
     x86.jmp match-statements.main.auth_0.merge
   auth_0.merge:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je match-statements.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_27]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

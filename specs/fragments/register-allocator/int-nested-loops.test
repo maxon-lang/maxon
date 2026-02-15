@@ -1,5 +1,5 @@
 // Test: int-nested-loops
-function main() returns Integer
+function main() returns ExitCode
   var total = 0
   var i = 0
   while i < 5 'outer'
@@ -56,12 +56,23 @@ module {
     maxon.br outer_0.header
   outer_0.exit:
     %18 = maxon.var_ref {var = total} {type = i64}
-    maxon.return %18
+    maxon.assign %18 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %19 = maxon.literal {value = 0 : i64}
+    %20 = maxon.binop %18, %19 {op = lt}
+    %21 = maxon.literal {value = 4294967295 : i64}
+    %22 = maxon.binop %18, %21 {op = gt}
+    %23 = maxon.binop %20, %22 {op = or}
+    maxon.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
+  __range_panic_2:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_2:
+    %25 = maxon.var_ref {var = __range_val_2} {type = i64}
+    maxon.return %25
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, total
@@ -100,12 +111,25 @@ module {
     cf.br outer_0.header
   outer_0.exit:
     %18 = memref.load total : i64
-    func.return %18
+    memref.store %18, __range_val_2
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.cmpi lt %18, %19
+    %21 = arith.constant {value = 4294967295 : i64}
+    %22 = arith.cmpi gt %18, %21
+    %23 = arith.ori1 %20, %22
+    cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
+  __range_panic_2:
+    %24 = memref.lea_rdata __panic_msg_24
+    %25 = std.ptr_to_i64 %24
+    std.call_runtime @maxon_panic %25
+  __range_ok_2:
+    %26 = memref.load __range_val_2 : i64
+    func.return %26
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor eax, eax
@@ -145,6 +169,24 @@ module {
     x86.jmp register-allocator.main.outer_0.header
   outer_0.exit:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je register-allocator.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_rdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

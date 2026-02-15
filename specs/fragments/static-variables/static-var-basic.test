@@ -3,7 +3,7 @@ type Counter
   static var count = 0
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   Counter.count = 42
   return Counter.count
 end 'main'
@@ -11,11 +11,31 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @static-variables.main() -> i64 {
+  func @static-variables.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 42
     x86.mov [rip+Counter.count], eax
-    x86.mov eax, [rip+Counter.count]
+    x86.mov ecx, [rip+Counter.count]
+    x86.mov [rbp-8], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je static-variables.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_7]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

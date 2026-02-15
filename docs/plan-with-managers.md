@@ -241,7 +241,7 @@ function wrap(s String) returns Wrapper
     return {data: s}   // s → var field = MOVE
 end 'wrap'
 
-function main() returns int
+function main() returns ExitCode
     var text = "hello"
     var t1 = tokenize(text)  // borrows - text still usable
     var t2 = tokenize(text)  // can borrow again

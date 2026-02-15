@@ -47,7 +47,7 @@ type Box
   end 'make'
 end 'Box'
 
-function main() returns Integer
+function main() returns ExitCode
   var b = Box.make(42)
   return b.value
 end 'main'
@@ -66,7 +66,7 @@ type Math
   end 'add'
 end 'Math'
 
-function main() returns Integer
+function main() returns ExitCode
   return Math.add(20, b: 22)
 end 'main'
 ```
@@ -88,7 +88,7 @@ type Factory
   end 'zero'
 end 'Factory'
 
-function main() returns Integer
+function main() returns ExitCode
   var f1 = Factory.create(100)
   var f2 = Factory.zero()
   return f1.id + f2.id

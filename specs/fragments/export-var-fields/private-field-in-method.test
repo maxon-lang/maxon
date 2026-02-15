@@ -11,7 +11,7 @@ type Counter
   end 'getCount'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 40}
   c.increment()
   c.increment()
@@ -44,7 +44,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @export-var-fields.main() -> i64 {
+  func @export-var-fields.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 40
@@ -58,9 +58,29 @@ module {
     x86.call Counter.increment
     x86.mov rcx, [rbp-8]
     x86.call Counter.increment
-    x86.mov rcx, [rbp-8]
+    x86.mov r8, [rbp-8]
+    x86.mov rcx, r8
+    x86.call Counter.getCount
+    x86.mov [rbp-16], eax
+    x86.xor r9, r9
+    x86.cmp eax, r9
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je export-var-fields.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_15]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp Counter.getCount
+    x86.ret
   }
 }
 ---

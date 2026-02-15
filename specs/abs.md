@@ -40,7 +40,7 @@ var k = trunc(abs(-3.7))   // 3
 
 <!-- test: abs.float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var neg = 0.0 - 5.5
   var x = abs(neg)
   var y = trunc(x)
@@ -53,7 +53,7 @@ end 'main'
 
 <!-- test: abs.negative-int-as-float -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var neg = 0.0 - 42.0
   var x = abs(neg)
   return trunc(x)
@@ -65,7 +65,7 @@ end 'main'
 
 <!-- test: abs.zero -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = abs(0.0)
   if x == 0.0 'check'
     return 0
@@ -80,7 +80,7 @@ end 'main'
 <!-- test: abs.rt-float -->
 <!-- Args: -5.5 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(abs(x))
@@ -93,7 +93,7 @@ end 'main'
 <!-- test: abs.rt-negative-int -->
 <!-- Args: -42.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(abs(x))
@@ -106,7 +106,7 @@ end 'main'
 <!-- test: abs.rt-zero -->
 <!-- Args: 0.0 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var result = abs(x)

@@ -11,7 +11,7 @@ type Calculator
   end 'get'
 end 'Calculator'
 
-function main() returns Integer
+function main() returns ExitCode
   var calc = Calculator{result: 0}
   calc.addTwo(20, b: 22)
   return calc.get()
@@ -43,7 +43,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @method-calls.main() -> i64 {
+  func @method-calls.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor eax, eax
@@ -60,9 +60,29 @@ module {
     x86.mov rdx, rsi
     x86.mov r8, rdi
     x86.call Calculator.addTwo
-    x86.mov rcx, [rbp-8]
+    x86.mov r9, [rbp-8]
+    x86.mov rcx, r9
+    x86.call Calculator.get
+    x86.mov [rbp-16], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je method-calls.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_19]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp Calculator.get
+    x86.ret
   }
 }
 ---

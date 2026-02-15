@@ -39,7 +39,7 @@ The `parent_off` for a nested slice is computed as `source.parent_off + start`, 
 ### Slice Cleanup Decrements Parent Refcount
 When a slice goes out of scope, its parent's reference count must be decremented.
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world that is long enough to require heap allocation and more text to be sure"
   var start = s.startIndex()
   var idx = try s.findFirst(" ") otherwise s.endIndex()
@@ -59,7 +59,7 @@ hello
 ### Static String Slice Does Not Attempt Refcounting
 Slicing a static string literal (mode=3) should create a static slice without attempting to incref/decref a non-existent refcount header.
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world"
   var start = s.startIndex()
   var idx = try s.findFirst(" ") otherwise s.endIndex()
@@ -79,7 +79,7 @@ hello
 ### Slice Copy Increments Parent Refcount
 When a slice is copied, the parent's reference count must be incremented.
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world that is long enough to require heap allocation and more text to be sure"
   var start = s.startIndex()
   var idx = try s.findFirst(" ") otherwise s.endIndex()
@@ -102,7 +102,7 @@ hello
 ### Nested Slice References Original Parent
 A slice of a slice should reference the original parent buffer, not the intermediate slice.
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world that is long enough to require heap allocation and more text to be sure"
   var start = s.startIndex()
   var idx = try s.findFirst(" ") otherwise s.endIndex()
@@ -133,7 +133,7 @@ function getSlice() returns String
   return s.slice(start, endIndex: idx)
 end 'getSlice'
 
-function main() returns Integer
+function main() returns ExitCode
   var sub = getSlice()
   print("{sub}\n")
   return 0

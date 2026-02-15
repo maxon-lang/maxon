@@ -5,7 +5,7 @@ function add(n Integer)
   total = total + n
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   add(5)
   add(27)
   return total
@@ -21,14 +21,34 @@ module {
     x86.mov [rip+total], eax
     x86.ret
   }
-  func @static-variables.main() -> i64 {
+  func @static-variables.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 5
     x86.mov rcx, rax
     x86.call static-variables.add
     x86.mov ecx, 27
     x86.call static-variables.add
-    x86.mov eax, [rip+total]
+    x86.mov edx, [rip+total]
+    x86.mov [rbp-8], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je static-variables.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

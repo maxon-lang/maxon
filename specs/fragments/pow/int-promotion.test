@@ -1,5 +1,5 @@
 // Test: int-promotion
-function main() returns Integer
+function main() returns ExitCode
   var result = Math.pow(3, exponent: 2)  // Ints promoted to float
   return trunc(result)
 end 'main'
@@ -7,14 +7,34 @@ end 'main'
 ExitCode: 9
 ---
 module {
-  func @pow.main() -> i64 {
+  func @pow.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 3
     x86.mov ecx, 2
     x86.cvtsi2sd xmm0, eax
     x86.cvtsi2sd xmm1, ecx
     x86.call stdlib.Math.pow
-    x86.cvttsd2si eax, xmm0
+    x86.cvttsd2si edx, xmm0
+    x86.mov [rbp-8], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je pow.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

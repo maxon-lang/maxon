@@ -20,7 +20,7 @@ Maxon supports basic arithmetic operators for integers:
 
 <!-- test: addition -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 10 + 5
 end 'main'
 ```
@@ -30,7 +30,7 @@ end 'main'
 
 <!-- test: subtraction -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 20-8
 end 'main'
 ```
@@ -40,7 +40,7 @@ end 'main'
 
 <!-- test: multiplication -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 6 * 7
 end 'main'
 ```
@@ -50,7 +50,7 @@ end 'main'
 
 <!-- test: division -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return trunc(100 / 4)
 end 'main'
 ```
@@ -60,7 +60,7 @@ end 'main'
 
 <!-- test: modulo -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 17 mod 5
 end 'main'
 ```
@@ -70,7 +70,7 @@ end 'main'
 
 <!-- test: complex-expression -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 10 + 5 * 2
 end 'main'
 ```
@@ -86,7 +86,7 @@ function divLive(a Integer, b Integer, x Integer) returns Integer
   return trunc(result + preserved)
 end 'divLive'
 
-function main() returns Integer
+function main() returns ExitCode
   return divLive(10, b: 2, x: 5)
 end 'main'
 ```
@@ -102,7 +102,7 @@ function modLive(a Integer, b Integer, x Integer) returns Integer
   return result + preserved
 end 'modLive'
 
-function main() returns Integer
+function main() returns ExitCode
   return modLive(10, b: 3, x: 5)
 end 'main'
 ```
@@ -122,7 +122,7 @@ function divLoop(n Integer) returns Integer
   return sum
 end 'divLoop'
 
-function main() returns Integer
+function main() returns ExitCode
   return divLoop(5)
 end 'main'
 ```
@@ -142,7 +142,7 @@ function divCall(a Integer, b Integer) returns Integer
   return result + temp
 end 'divCall'
 
-function main() returns Integer
+function main() returns ExitCode
   return divCall(10, b: 2)
 end 'main'
 ```
@@ -158,7 +158,7 @@ function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
   return trunc(r1 + r2)
 end 'multiDiv'
 
-function main() returns Integer
+function main() returns ExitCode
   return multiDiv(10, b: 2, c: 20, d: 4)
 end 'main'
 ```
@@ -184,7 +184,7 @@ function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integ
   return v12
 end 'manyVars'
 
-function main() returns Integer
+function main() returns ExitCode
   return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
 end 'main'
 ```

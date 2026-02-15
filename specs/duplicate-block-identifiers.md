@@ -13,7 +13,7 @@ The compiler prevents using the same block identifier for multiple blocks within
 **Valid Code - Different Identifiers:**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   if true 'outer'
     x = 1
@@ -34,7 +34,7 @@ end 'main'
 **Valid Code - Shadowing at Different Nesting Levels:**
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   if true 'check'
     x = 1
@@ -78,7 +78,7 @@ end 'main'
 
 <!-- test: duplicate-block-identifiers.different-blocks -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   if true 'outer'
     x = 1
@@ -97,7 +97,7 @@ end 'main'
 
 <!-- test: duplicate-block-identifiers.nested-same-id -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   if true 'check'
     x = 1
@@ -114,7 +114,7 @@ end 'main'
 
 <!-- test: duplicate-block-identifiers.multiple-nested -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   if true 'outer'
     x = 1
@@ -132,7 +132,7 @@ end 'main'
 
 <!-- test: duplicate-block-identifiers.else-nested -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 0
   if false 'check'
     x = 1

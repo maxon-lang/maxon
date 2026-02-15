@@ -40,7 +40,7 @@ function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = double      // f is a function reference
   return f(21)        // calls double(21), returns 42
 end 'main'
@@ -62,7 +62,7 @@ function triple(n Integer) returns Integer
   return n * 3
 end 'triple'
 
-function main() returns Integer
+function main() returns ExitCode
   return apply(triple, x: 10)  // returns 30
 end 'main'
 ```
@@ -75,7 +75,7 @@ end 'main'
 Closures are inline anonymous functions:
 
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var f = (x Integer) gives x * 2
   return f(21)  // returns 42
 end 'main'
@@ -91,7 +91,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   return apply((n Integer) gives n + 5, x: 10)  // returns 15
 end 'main'
 ```
@@ -107,7 +107,7 @@ function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = double
   return f(21)
 end 'main'
@@ -126,7 +126,7 @@ function triple(n Integer) returns Integer
   return n * 3
 end 'triple'
 
-function main() returns Integer
+function main() returns ExitCode
   return apply(triple, x: 10)
 end 'main'
 ```
@@ -136,7 +136,7 @@ end 'main'
 
 <!-- test: first-class-function.closure-in-variable -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var f = (x Integer) gives x * 5
   return f(8)
 end 'main'
@@ -151,7 +151,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns Integer
+function main() returns ExitCode
   return apply((n Integer) gives n + 7, x: 10)
 end 'main'
 ```
@@ -169,7 +169,7 @@ function add(x Integer, y Integer) returns Integer
   return x + y
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return calculate(add, a: 15, b: 27)
 end 'main'
 ```
@@ -187,7 +187,7 @@ function triple(x Integer) returns Integer
   return x * 3
 end 'triple'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = double
   var a = f(10)
   f = triple

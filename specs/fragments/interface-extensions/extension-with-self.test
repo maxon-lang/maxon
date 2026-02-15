@@ -17,7 +17,7 @@ type Number implements Summable
   end 'value'
 end 'Number'
 
-function main() returns Integer
+function main() returns ExitCode
   var num = Number{n: 21}
   return num.doubled()
 end 'main'
@@ -47,7 +47,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @interface-extensions.main() -> i64 {
+  func @interface-extensions.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 21
@@ -58,8 +58,27 @@ module {
     x86.mov ebx, 21
     x86.mov [edx+0], ebx
     x86.mov rcx, [rbp-8]
+    x86.call Number.doubled
+    x86.mov [rbp-16], eax
+    x86.xor edi, edi
+    x86.cmp eax, edi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.cmp rax, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je interface-extensions.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_17]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp Number.doubled
+    x86.ret
   }
 }
 ---

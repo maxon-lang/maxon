@@ -30,7 +30,7 @@ type Vec2
   export var y Integer
 end 'Vec2'
 
-function main() returns Integer
+function main() returns ExitCode
   var vecs = [Vec2{x: 1, y: 2}, { x: 3, y: 4 }]
   var v0 = try vecs.get(0) otherwise Vec2{x: 0, y: 0}
   var v1 = try vecs.get(1) otherwise Vec2{x: 0, y: 0}
@@ -48,7 +48,7 @@ type Pair
   export var b Integer
 end 'Pair'
 
-function main() returns Integer
+function main() returns ExitCode
   var pairs = [Pair{a: 10, b: 20}, { a: 30, b: 40 }, { a: 50, b: 60 }]
   var p0 = try pairs.get(0) otherwise Pair{a: 0, b: 0}
   var p1 = try pairs.get(1) otherwise Pair{a: 0, b: 0}
@@ -73,7 +73,7 @@ function makePairs() returns PairArray
   return [{ first: 10, second: 20 }, { first: 30, second: 40 }]
 end 'makePairs'
 
-function main() returns Integer
+function main() returns ExitCode
   var pairs = makePairs()
   var p0 = try pairs.get(0) otherwise Pair{first: 0, second: 0}
   var p1 = try pairs.get(1) otherwise Pair{first: 0, second: 0}
@@ -100,7 +100,7 @@ function sumItems(items ItemArray) returns Integer
   return total
 end 'sumItems'
 
-function main() returns Integer
+function main() returns ExitCode
   return sumItems([{ value: 10 }, { value: 20 }, { value: 12 }])
 end 'main'
 ```

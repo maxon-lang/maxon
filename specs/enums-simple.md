@@ -162,7 +162,7 @@ enum Direction
   west
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   var dir = Direction.north
   if dir == Direction.north 'check'
     return 1
@@ -182,7 +182,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Color.red
   c = Color.blue
   if c == Color.blue 'check'
@@ -203,7 +203,7 @@ enum Status
   done
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Status.pending
   if s != Status.active 'check'
     return 1
@@ -223,7 +223,7 @@ enum Status
   done
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   var s1 = Status.pending
   var s2 = Status.pending
   var s3 = Status.active
@@ -253,7 +253,7 @@ function isOn(s Status) returns bool
   return false
 end 'isOn'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = Status.on
   if isOn(status) 'test'
     return 1
@@ -279,7 +279,7 @@ function getResult(succeed bool) returns Result
   return Result.failure
 end 'getResult'
 
-function main() returns Integer
+function main() returns ExitCode
   var r = getResult(true)
   if r == Result.success 'handle'
     return 1
@@ -299,7 +299,7 @@ enum HttpStatus
   serverError = 500
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = HttpStatus.ok
   if status.rawValue == 200 'check'
     return 1
@@ -319,7 +319,7 @@ enum Priority
   high = 10
 end 'Priority'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Priority.high
   if p.rawValue > 5 'check'
     return 1
@@ -345,7 +345,7 @@ enum Direction
   end 'isNorth'
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   let d = Direction.north
   if d.isNorth() 'test'
     return 1
@@ -371,7 +371,7 @@ enum Toggle
   end 'flip'
 end 'Toggle'
 
-function main() returns Integer
+function main() returns ExitCode
   let t = Toggle.on
   let flipped = t.flip()
   if flipped == Toggle.off 'check'
@@ -391,7 +391,7 @@ enum Color
   red
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -406,7 +406,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns Integer
+function main() returns ExitCode
   let _c = Color.green
   return 0
 end 'main'
@@ -422,7 +422,7 @@ enum Status
   success = 200
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -437,7 +437,7 @@ enum Status
   fail = 5.0
 end 'Status'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -454,7 +454,7 @@ enum Direction
   east
 end 'Direction'
 
-function main() returns Integer
+function main() returns ExitCode
   var d = Direction.south
   return d.rawValue
 end 'main'
@@ -471,7 +471,7 @@ enum FloatBacked
   East = 3.3
 end 'FloatBacked'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = FloatBacked.North
   if f == FloatBacked.South 'check'
     return 0
@@ -491,7 +491,7 @@ enum Weights
   heavy = 3.5
 end 'Weights'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = Weights.medium
   var rawVal = w.rawValue
   if rawVal > 2.0 'check'
@@ -512,7 +512,7 @@ enum HttpStatus
   serverError = 500
 end 'HttpStatus'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = HttpStatus.notFound
   var code = status.rawValue
   if code == 404 'check'
@@ -536,7 +536,7 @@ function getRaw(w Weights) returns Float
   return w.rawValue
 end 'getRaw'
 
-function main() returns Integer
+function main() returns ExitCode
   var w = Weights.medium
   var raw = getRaw(w)
   if raw > 2.0 'check'
@@ -560,7 +560,7 @@ function getCode(s HttpStatus) returns Integer
   return s.rawValue
 end 'getCode'
 
-function main() returns Integer
+function main() returns ExitCode
   var status = HttpStatus.notFound
   var code = getCode(status)
   if code == 404 'check'
@@ -587,7 +587,7 @@ enum TokenType
   identifier
 end 'TokenType'
 
-function main() returns Integer
+function main() returns ExitCode
   var t = TokenType.function
   if t == TokenType.function 'check'
     return 1
@@ -609,7 +609,7 @@ enum TokenType
   if
 end 'TokenType'
 
-function main() returns Integer
+function main() returns ExitCode
   var t = TokenType.end
   return t.rawValue
 end 'main'
@@ -632,7 +632,7 @@ enum TokenType
   end 'isKeyword'
 end 'TokenType'
 
-function main() returns Integer
+function main() returns ExitCode
   var t = TokenType.function
   if t.isKeyword() 'check'
     return t.rawValue

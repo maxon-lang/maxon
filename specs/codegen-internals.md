@@ -43,7 +43,7 @@ String literals are stored in `.rdata` with null termination. The compiler handl
      The source is generated programmatically and cannot be expressed inline.
      See docs/SPECS.md documentation section on stack probing. -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -55,7 +55,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = IntArray{}
   arr.push(1)
   arr.push(2)
@@ -70,7 +70,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   if true 'outer'
     var outer_arr = IntArray{}
     outer_arr.push(100)
@@ -90,7 +90,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = IntArray{}
   var i = 0
   while i < 10 'loop'
@@ -106,7 +106,7 @@ end 'main'
 
 <!-- disabled-test: managed-memory-fixed-size-array-literal-cleanup -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var arr = [10, 20, 30]
   return try arr.get(1) otherwise 0
 end 'main'
@@ -117,7 +117,7 @@ end 'main'
 
 <!-- test: rdata-constant-array-uses-rdata -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let arr = [10, 20, 30]
   return try arr.get(1) otherwise 0
 end 'main'
@@ -127,11 +127,12 @@ end 'main'
 ```
 ```RequiredRdata
 i64[] 10, 20, 30
+utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 
 <!-- test: rdata-bool-array-uses-i8 -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   let arr = [true, false, true, false]
   var v0 = try arr.get(0) otherwise false
   var v1 = try arr.get(1) otherwise true
@@ -158,13 +159,14 @@ end 'main'
 ```
 ```RequiredRdata
 i8[] 1, 0, 1, 0
+utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 
 <!-- test: rdata-byte-array-uses-i8 -->
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns Integer
+function main() returns ExitCode
   let arr = [10 as Byte, 20 as Byte, 30 as Byte]
   var v0 = try arr.get(0) otherwise 0 as Byte
   var v1 = try arr.get(1) otherwise 0 as Byte
@@ -177,11 +179,12 @@ end 'main'
 ```
 ```RequiredRdata
 i8[] 10, 20, 30
+utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 
 <!-- test: rdata-cow-mutation-copies-to-heap -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var arr = [42]
   arr.set(0, value: 77)
   return try arr.get(0) otherwise 0
@@ -192,6 +195,7 @@ end 'main'
 ```
 ```RequiredRdata
 i64 42
+utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 ```RequiredMLIR
 === maxon
@@ -226,12 +230,23 @@ module {
     maxon.br otherwise_default_continue_4
   otherwise_default_continue_4:
     %19 = maxon.var_ref {var = __try_result_1} {type = i64}
-    maxon.return %19
+    maxon.assign %19 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.literal {value = 0 : i64}
+    %21 = maxon.binop %19, %20 {op = lt}
+    %22 = maxon.literal {value = 4294967295 : i64}
+    %23 = maxon.binop %19, %22 {op = gt}
+    %24 = maxon.binop %21, %23 {op = or}
+    maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
+  __range_panic_5:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_5:
+    %26 = maxon.var_ref {var = __range_val_5} {type = i64}
+    maxon.return %26
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %1 = arith.constant {value = 0 : i64}
     %2 = arith.constant {value = 1 : i64}
@@ -281,14 +296,27 @@ module {
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
     %32 = memref.load __try_result_1 : i64
-    func.return %32
+    memref.store %32, __range_val_5
+    %33 = arith.constant {value = 0 : i64}
+    %34 = arith.cmpi lt %32, %33
+    %35 = arith.constant {value = 4294967295 : i64}
+    %36 = arith.cmpi gt %32, %35
+    %37 = arith.ori1 %34, %36
+    cf.cond_br %37 [then: __range_panic_5, else: __range_ok_5]
+  __range_panic_5:
+    %38 = memref.lea_rdata __panic_msg_25
+    %39 = std.ptr_to_i64 %38
+    std.call_runtime @maxon_panic %39
+  __range_ok_5:
+    %40 = memref.load __range_val_5 : i64
+    func.return %40
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.xor eax, eax
     x86.mov ecx, 1
     x86.xor edx, edx
@@ -347,6 +375,24 @@ module {
     x86.jmp codegen-internals.main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je codegen-internals.main.__range_ok_5
+  __range_panic_5:
+    x86.lea_rdata rax, [__panic_msg_25]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_5:
+    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   }
@@ -355,7 +401,7 @@ module {
 
 <!-- disabled-test: rdata-cow-multiple-mutations -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var arr = [1, 2, 3]
   arr.set(0, value: 10)
   arr.set(1, value: 20)
@@ -376,7 +422,7 @@ i64[] 1, 2, 3
 
 <!-- disabled-test: rdata-non-constant-array-uses-heap -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var x = 5
   var arr = [1, x, 3]
   return try arr.get(1) otherwise 0
@@ -388,7 +434,7 @@ end 'main'
 
 <!-- disabled-test: managed-string-heap-string-generates-cleanup -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "this is a heap allocated string!"
   return s.byteLength()
 end 'main'
@@ -402,7 +448,7 @@ utf8 "this is a heap allocated string!\0"
 
 <!-- disabled-test: managed-string-reassignment-handles-old-value -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "first heap allocated value!!"
   s = "second heap allocated here!!"
   return s.byteLength()
@@ -418,7 +464,7 @@ utf8 "second heap allocated here!!\0"
 
 <!-- disabled-test: managed-string-substring-retains-parent -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello world from heap!!"
   var subManaged = __managed_memory_slice(s._managed, 0, 5)
   return __managed_memory_len(subManaged)
@@ -430,7 +476,7 @@ end 'main'
 
 <!-- disabled-test: managed-string-print-heap-string -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "heap allocated string here!!"
   return s.byteLength()
 end 'main'
@@ -444,7 +490,7 @@ utf8 "heap allocated string here!!\0"
 
 <!-- disabled-test: managed-string-short-string-sso -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = "short"
   return s.byteLength()
 end 'main'
@@ -458,7 +504,7 @@ utf8 "short\0"
 
 <!-- disabled-test: managed-string-loop-concatenation-cleanup -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var s = ""
   var a = "a"
   var i = 0
@@ -475,7 +521,7 @@ end 'main'
 
 <!-- disabled-test: managed-string-literal-deduplication -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var a = "hello world"
   var b = "hello world"
   var c = "hello world"
@@ -493,7 +539,7 @@ utf8 "hello world\0"
 ```maxon
 typealias SmallInt = int(0 to 1000)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = SmallInt{10}
   var b = SmallInt{3}
   return a + b
@@ -512,31 +558,78 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = add} {optimalType = u32}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.trunci %0
     %3 = arith.trunci %1
     %4 = arith.addi %2, %3
-    %5 = arith.extui %4
-    func.return %5
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extui %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extui %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_rdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.lea eax, [edx + ebx]
+    x86.add edx, ebx
+    x86.mov [rbp-4], edx
+    x86.xor esi, esi
+    x86.mov edi, edx
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.mov eax, edx
+    x86.cmp rax, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-4]
+    x86.epilogue
     x86.ret
   }
 }
@@ -546,7 +639,7 @@ module {
 ```maxon
 typealias SmallInt = int(0 to 1000)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = SmallInt{20}
   var b = SmallInt{3}
   return a / b
@@ -565,37 +658,80 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = u32}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.trunci %0
     %3 = arith.trunci %1
     %4 = arith.divui %2, %3
-    %5 = arith.extui %4
-    func.return %5
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extui %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extui %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_rdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov [rbp-8], edx
+    x86.mov [rbp-12], edx
     x86.mov eax, edx
     x86.xor edx, edx
     x86.div32 ebx
-    x86.mov esi, eax
-    x86.mov eax, esi
+    x86.mov [rbp-4], eax
+    x86.xor esi, esi
+    x86.mov edi, eax
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.mov ecx, eax
+    x86.cmp rcx, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-4]
     x86.epilogue
     x86.ret
   }
@@ -606,7 +742,7 @@ module {
 ```maxon
 typealias Temp = int(-100000 to 100000)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Temp{20}
   var b = Temp{3}
   return a / b
@@ -625,37 +761,80 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = i32}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.trunci %0
     %3 = arith.trunci %1
     %4 = arith.divsi %2, %3
-    %5 = arith.extsi %4
-    func.return %5
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extsi %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extsi %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_rdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov [rbp-8], edx
+    x86.mov [rbp-12], edx
     x86.mov eax, edx
     x86.cdq
     x86.idiv32 ebx
-    x86.movsxd rsi, eax
-    x86.mov eax, esi
+    x86.mov [rbp-4], eax
+    x86.xor esi, esi
+    x86.movsxd rdi, eax
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.movsxd rcx, eax
+    x86.cmp rcx, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-4]
     x86.epilogue
     x86.ret
   }
@@ -666,7 +845,7 @@ module {
 ```maxon
 typealias SmallInt = int(0 to 1000)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = SmallInt{10}
   var b = SmallInt{3}
   if a > b 'check'
@@ -699,7 +878,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -717,7 +896,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     x86.mov eax, 10
     x86.mov ecx, 3
@@ -739,7 +918,7 @@ module {
 ```maxon
 typealias SmallInt = int(0 to 1000)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = SmallInt{20}
   var b = SmallInt{3}
   return a mod b
@@ -758,36 +937,80 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = mod} {optimalType = u32}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.trunci %0
     %3 = arith.trunci %1
     %4 = arith.remui %2, %3
-    %5 = arith.extui %4
-    func.return %5
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extui %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extui %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_rdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov [rbp-8], edx
+    x86.mov [rbp-12], edx
     x86.mov eax, edx
     x86.xor edx, edx
     x86.div32 ebx
+    x86.mov [rbp-4], edx
+    x86.xor esi, esi
+    x86.mov edi, edx
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
     x86.mov eax, edx
+    x86.cmp rax, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-4]
     x86.epilogue
     x86.ret
   }
@@ -798,7 +1021,7 @@ module {
 ```maxon
 typealias BigInt = int(-1000000000000 to 1000000000000)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = BigInt{20}
   var b = BigInt{3}
   return a / b
@@ -817,27 +1040,71 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = i64}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.divsi %0, %1
-    func.return %2
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %8 = memref.lea_rdata __panic_msg_8
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
+  __range_ok_0:
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
     x86.cqo
     x86.idiv ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }
@@ -847,7 +1114,7 @@ module {
 ```maxon
 typealias Tiny = int(0 to 100)
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Tiny{21}
   var b = Tiny{3}
   return a / b
@@ -866,37 +1133,80 @@ module {
     %1 = maxon.literal {value = 3 : i64}
     maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.binop %0, %1 {op = div} {optimalType = u8}
-    maxon.return %2
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %9
   }
 }
 === standard
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     %0 = arith.constant {value = 21 : i64}
     %1 = arith.constant {value = 3 : i64}
     %2 = arith.trunci %0
     %3 = arith.trunci %1
     %4 = arith.divui %2, %3
-    %5 = arith.extui %4
-    func.return %5
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extui %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extui %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_rdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
   }
 }
 === x86
 module {
-  func @codegen-internals.main() -> i64 {
+  func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 21
     x86.mov ecx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov [rbp-8], edx
+    x86.mov [rbp-12], edx
     x86.mov eax, edx
     x86.xor edx, edx
     x86.div32 ebx
-    x86.mov esi, eax
-    x86.mov eax, esi
+    x86.mov [rbp-4], eax
+    x86.xor esi, esi
+    x86.mov edi, eax
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.mov ecx, eax
+    x86.cmp rcx, r9
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r8, eax
+    x86.test r8, r8
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-4]
     x86.epilogue
     x86.ret
   }

@@ -3,20 +3,40 @@ let A = 1
 let B = 2
 let C = 3
 
-function main() returns Integer
+function main() returns ExitCode
   return A + B + C
 end 'main'
 ---
 ExitCode: 6
 ---
 module {
-  func @top-level-let.main() -> i64 {
+  func @top-level-let.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.add eax, ecx
     x86.mov edx, 3
     x86.add eax, edx
+    x86.mov [rbp-8], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je top-level-let.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

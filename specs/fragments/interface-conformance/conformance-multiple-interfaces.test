@@ -19,7 +19,7 @@ type Buffer implements Readable, Writable
   end 'write'
 end 'Buffer'
 
-function main() returns Integer
+function main() returns ExitCode
   var buf = Buffer{data: 0}
   buf.write(42)
   return buf.read()
@@ -47,7 +47,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @interface-conformance.main() -> i64 {
+  func @interface-conformance.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor eax, eax
@@ -61,9 +61,29 @@ module {
     x86.mov rcx, [rbp-8]
     x86.mov rdx, rsi
     x86.call Buffer.write
-    x86.mov rcx, [rbp-8]
+    x86.mov r8, [rbp-8]
+    x86.mov rcx, r8
+    x86.call Buffer.read
+    x86.mov [rbp-16], eax
+    x86.xor r9, r9
+    x86.cmp eax, r9
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je interface-conformance.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_15]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
-    x86.jmp Buffer.read
+    x86.ret
   }
 }
 ---

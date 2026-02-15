@@ -1,5 +1,5 @@
 // Test: bitwise-not-masking
-function main() returns Integer
+function main() returns ExitCode
   var value = 255    // 0xFF
   // Clear lower 4 bits: 255 and not 15 = 240
   return value and not 15
@@ -8,13 +8,33 @@ end 'main'
 ExitCode: 240
 ---
 module {
-  func @bitwise-operators.main() -> i64 {
+  func @bitwise-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 255
     x86.mov ecx, 15
     x86.mov edx, -1
     x86.xor ecx, edx
     x86.and eax, ecx
+    x86.mov [rbp-8], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je bitwise-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

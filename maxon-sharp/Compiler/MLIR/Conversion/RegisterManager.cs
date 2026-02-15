@@ -266,14 +266,29 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit unsigned DIV and capture the quotient in EAX.
+  /// </summary>
+  public void EmitUnsignedDivision(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+    EmitDivOperation(lhs, rhs, result, X86Register.Eax, block);
+  }
+
+  /// <summary>
+  /// Emit unsigned DIV and capture the remainder in EDX.
+  /// </summary>
+  public void EmitUnsignedRemainder(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+    EmitDivOperation(lhs, rhs, result, X86Register.Edx, block);
+  }
+
+  /// <summary>
   /// Emit IDIV instruction with proper register allocation.
   /// IDIV clobbers both EAX (quotient) and EDX (remainder), so caller specifies which to capture.
   /// </summary>
-  private void EmitIdivOperation(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
+  /// Shared preamble for all DIV/IDIV variants: ensure operands in registers,
+  /// relocate divisor out of EAX/EDX, spill EAX/EDX, move dividend into EAX.
+  private X86Register PrepareDivisionRegisters(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
 
-    // Divisor must not be in RAX or RDX (IDIV clobbers both).
     if (rhsReg == X86Register.Eax || rhsReg == X86Register.Edx) {
       var safeReg = FindSafeRegisterForIdiv(lhsReg, rhsReg);
       SpillRegisterIfOccupied(safeReg, block);
@@ -281,8 +296,6 @@ public class RegisterManager {
       rhsReg = safeReg;
     }
 
-    // IDIV clobbers both EAX and EDX. Spill any live values in those registers
-    // before we overwrite them.
     SpillRegisterIfOccupied(X86Register.Eax, block);
     SpillRegisterIfOccupied(X86Register.Edx, block);
 
@@ -290,10 +303,75 @@ public class RegisterManager {
       block.AddOp(new X86MovRegRegOp(X86Register.Eax, lhsReg));
     }
 
-    // Sign-extend RAX into RDX:RAX
+    return rhsReg;
+  }
+
+  private void EmitIdivOperation(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
+    var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
     block.AddOp(new X86CqoOp());
     block.AddOp(new X86IdivRegOp(rhsReg));
+    Assign(resultRegister, result);
+  }
 
+  // --- I32 ↔ I64 width conversion ---
+
+  public void EmitSignExtendI32ToI64(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcReg = EnsureInRegister(input, block);
+    var destReg = AllocateRegister(result, block);
+    block.AddOp(new X86MovsxdOp(To64Bit(destReg), srcReg));
+  }
+
+  public void EmitZeroExtendI32ToI64(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcReg = EnsureInRegister(input, block);
+    var destReg = AllocateRegister(result, block);
+    // x86-64 clears bits 63:32 on any 32-bit register write, so a 32-bit mov suffices
+    block.AddOp(new X86MovRegRegOp(To32Bit(destReg), srcReg));
+  }
+
+  public void EmitTruncI64ToI32(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcReg = EnsureInRegister(input, block);
+    var destReg = AllocateRegister(result, block);
+    block.AddOp(new X86MovRegRegOp(To32Bit(destReg), To32Bit(srcReg)));
+  }
+
+  // --- 32-bit division variants ---
+
+  public void EmitDivision32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+    EmitIdivOperation32(lhs, rhs, result, X86Register.Eax, block);
+  }
+
+  public void EmitRemainder32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+    EmitIdivOperation32(lhs, rhs, result, X86Register.Edx, block);
+  }
+
+  public void EmitUnsignedDivision32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+    EmitDivOperation32(lhs, rhs, result, X86Register.Eax, block);
+  }
+
+  public void EmitUnsignedRemainder32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
+    EmitDivOperation32(lhs, rhs, result, X86Register.Edx, block);
+  }
+
+  private void EmitIdivOperation32(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
+    var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
+    // 32-bit IDIV requires EDX:EAX dividend; CDQ sets up the sign extension
+    block.AddOp(new X86CdqOp());
+    block.AddOp(new X86IdivReg32Op(rhsReg));
+    Assign(resultRegister, result);
+  }
+
+  private void EmitDivOperation32(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
+    var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
+    block.AddOp(new X86XorRegRegOp(X86Register.Edx, X86Register.Edx));
+    block.AddOp(new X86DivReg32Op(rhsReg));
+    Assign(resultRegister, result);
+  }
+
+  private void EmitDivOperation(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
+    var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
+    // Zero RDX for unsigned division (vs CQO for signed)
+    block.AddOp(new X86XorRegRegOp(X86Register.Edx, X86Register.Edx));
+    block.AddOp(new X86DivRegOp(rhsReg));
     Assign(resultRegister, result);
   }
 
@@ -381,6 +459,13 @@ public class RegisterManager {
   public void EmitIntegerCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
+    // Use 64-bit registers when either constant exceeds signed 32-bit range
+    bool needsWide = (_constantValues.TryGetValue(rhs, out var rhsImm) && (rhsImm < int.MinValue || rhsImm > int.MaxValue))
+                  || (_constantValues.TryGetValue(lhs, out var lhsImm) && (lhsImm < int.MinValue || lhsImm > int.MaxValue));
+    if (needsWide) {
+      lhsReg = To64Bit(lhsReg);
+      rhsReg = To64Bit(rhsReg);
+    }
     block.AddOp(new X86CmpRegRegOp(lhsReg, rhsReg));
   }
 

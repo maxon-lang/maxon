@@ -66,7 +66,7 @@ type Counter
   end 'get'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 0}
   c.increment()
   c.increment()
@@ -91,7 +91,7 @@ type Counter
   end 'get'
 end 'Counter'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Counter{count: 0}
   c.increment()
   c.increment()
@@ -117,7 +117,7 @@ type Accumulator
   end 'getTotal'
 end 'Accumulator'
 
-function main() returns Integer
+function main() returns ExitCode
   var acc = Accumulator{total: 0}
   acc.add(10)
   acc.add(20)
@@ -144,7 +144,7 @@ type Point
   end 'setX'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 10, y: 32}
   return p.sum()
 end 'main'
@@ -167,7 +167,7 @@ type Value
   end 'get'
 end 'Value'
 
-function main() returns Integer
+function main() returns ExitCode
   var v = Value{n: 21}
   v.double()
   return v.get()
@@ -188,7 +188,7 @@ type Rectangle
   end 'area'
 end 'Rectangle'
 
-function main() returns Integer
+function main() returns ExitCode
   var r = Rectangle{width: 6, height: 7}
   return r.area()
 end 'main'

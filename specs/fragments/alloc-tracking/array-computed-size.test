@@ -1,7 +1,7 @@
 // Test: array-computed-size
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   let a = 2
   let b = 5
   var arr = IntArray{}
@@ -31,9 +31,9 @@ Cleanups:  1
 ```
 ---
 module {
-  func @alloc-tracking.main() -> i64 {
+  func @alloc-tracking.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.mov eax, 2
     x86.mov ecx, 5
     x86.xor edx, edx
@@ -98,12 +98,30 @@ module {
   otherwise_default_continue_3:
     x86.mov eax, [rbp-32]
     x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je alloc-tracking.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_rdata rax, [__panic_msg_27]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_4:
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-48], edx
-    x86.mov ebx, [rbp-48]
+    x86.mov [rbp-56], edx
+    x86.mov ebx, [rbp-56]
     x86.mov esi, [ebx+16]
-    x86.mov edi, [rbp-48]
+    x86.mov edi, [rbp-56]
     x86.mov r8, [edi+0]
     x86.lea_rdata r9, [__track_tag_0]
     x86.mov rax, r9
@@ -113,7 +131,7 @@ module {
     x86.mov r9, rcx
     x86.mov rcx, rsi
     x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }

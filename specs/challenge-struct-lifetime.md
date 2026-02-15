@@ -25,7 +25,7 @@ function compute(a Integer, b Integer) returns Result
   return {sum: a + b, product: a * b}
 end 'compute'
 
-function main() returns Integer
+function main() returns ExitCode
   var r = compute(3, b: 4)
   return r.sum + r.product
 end 'main'
@@ -44,7 +44,7 @@ function increment(c Counter) returns Counter
   return {value: c.value + 1}
 end 'increment'
 
-function main() returns Integer
+function main() returns ExitCode
   var c1 = Counter{value: 10}
   var c2 = increment(c1)
   return c2.value
@@ -72,7 +72,7 @@ function step3(v Value) returns Value
   return {n: v.n + 100}
 end 'step3'
 
-function main() returns Integer
+function main() returns ExitCode
   var v1 = step1()
   var v2 = step2(v1)
   var v3 = step3(v2)

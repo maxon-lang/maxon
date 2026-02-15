@@ -283,22 +283,32 @@ public class MaxonStructVarRefOp(string varName, string structTypeName) : MaxonO
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
-public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind) : MaxonOp {
+public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind,
+    MlirType? optimalType = null) : MaxonOp {
   public override string Mnemonic => "maxon.binop";
   public MaxonBinOperator Operator { get; } = op;
   public MaxonValue Lhs { get; } = lhs;
   public MaxonValue Rhs { get; } = rhs;
   public MaxonValueKind OperandKind { get; } = operandKind;
+  public MlirType? OptimalType { get; } = optimalType;
+  public bool IsUnsigned => OptimalType?.IsUnsigned ?? false;
   public MaxonValue Result { get; } = IsComparison(op)
       ? new MaxonBool(MlirContext.Current.NextId())
       : operandKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
-    new Dictionary<string, MlirAttribute> {
-      ["op"] = new StringAttr(Operator.ToString().ToLowerInvariant()),
-      ["kind"] = new TypeAttr(OperandKind.ToMlirType())
-    };
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes {
+    get {
+      var attrs = new Dictionary<string, MlirAttribute> {
+        ["op"] = new StringAttr(Operator.ToString().ToLowerInvariant()),
+      };
+      if (OperandKind == MaxonValueKind.Float)
+        attrs["kind"] = new TypeAttr(MlirType.F64);
+      if (OptimalType != null)
+        attrs["optimalType"] = new TypeAttr(OptimalType);
+      return attrs;
+    }
+  }
 
   private static bool IsComparison(MaxonBinOperator op) =>
     op is MaxonBinOperator.Eq or MaxonBinOperator.Ne or MaxonBinOperator.Lt
@@ -381,10 +391,13 @@ public class MaxonIntToFloatOp(MaxonValue input) : MaxonOp {
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
 }
 
-public class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind) : MaxonOp {
+public class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind,
+    MlirType? sourceOptimalType = null) : MaxonOp {
   public override string Mnemonic => $"maxon.cast";
   public MaxonValue Input { get; } = input;
   public MaxonValueKind TargetKind { get; } = targetKind;
+  public MlirType? SourceOptimalType { get; } = sourceOptimalType;
+  public bool SourceIsUnsigned => SourceOptimalType?.IsUnsigned ?? false;
   public MaxonValue Result { get; } = targetKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
@@ -819,9 +832,9 @@ public class MaxonManagedMemConcatOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
 }
 
 // String interpolation: concatenates literal parts and expression values into a new String
-public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec)> parts, string stringTypeName) : MaxonOp {
+public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> parts, string stringTypeName) : MaxonOp {
   public override string Mnemonic => "maxon.string_interp";
-  public List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec)> Parts { get; } = parts;
+  public List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> Parts { get; } = parts;
   public string StringTypeName { get; } = stringTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), stringTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];

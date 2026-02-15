@@ -1,5 +1,5 @@
 // Test: int-sixteen-vars-spill
-function main() returns Integer
+function main() returns ExitCode
   var a = 1
   var b = 2
   var c = 3
@@ -74,12 +74,23 @@ module {
     %30 = maxon.binop %29, %15 {op = add}
     %31 = maxon.literal {value = 256 : i64}
     %32 = maxon.binop %30, %31 {op = mod}
-    maxon.return %32
+    maxon.assign %32 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %33 = maxon.literal {value = 0 : i64}
+    %34 = maxon.binop %32, %33 {op = lt}
+    %35 = maxon.literal {value = 4294967295 : i64}
+    %36 = maxon.binop %32, %35 {op = gt}
+    %37 = maxon.binop %34, %36 {op = or}
+    maxon.cond_br %37 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %39 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %39
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 2 : i64}
@@ -114,13 +125,27 @@ module {
     %30 = arith.addi %29, %15
     %31 = arith.constant {value = 256 : i64}
     %32 = arith.remsi %30, %31
-    func.return %32
+    memref.store %32, __range_val_0
+    %33 = arith.constant {value = 0 : i64}
+    %34 = arith.cmpi lt %32, %33
+    %35 = arith.constant {value = 4294967295 : i64}
+    %36 = arith.cmpi gt %32, %35
+    %37 = arith.ori1 %34, %36
+    cf.cond_br %37 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %38 = memref.lea_rdata __panic_msg_38
+    %39 = std.ptr_to_i64 %38
+    std.call_runtime @maxon_panic %39
+  __range_ok_0:
+    %40 = memref.load __range_val_0 : i64
+    func.return %40
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -167,7 +192,25 @@ module {
     x86.mov eax, ecx
     x86.cqo
     x86.idiv ebx
-    x86.mov eax, edx
+    x86.mov [rbp-8], edx
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp rdx, rcx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_38]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

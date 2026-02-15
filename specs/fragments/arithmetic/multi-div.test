@@ -5,7 +5,7 @@ function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
   return trunc(r1 + r2)
 end 'multiDiv'
 
-function main() returns Integer
+function main() returns ExitCode
   return multiDiv(10, b: 2, c: 20, d: 4)
 end 'main'
 ---
@@ -29,8 +29,9 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @arithmetic.main() -> i64 {
+  func @arithmetic.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 2
     x86.mov edx, 20
@@ -39,7 +40,27 @@ module {
     x86.mov r9, rbx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.jmp arithmetic.multiDiv
+    x86.call arithmetic.multiDiv
+    x86.mov [rbp-8], eax
+    x86.xor esi, esi
+    x86.cmp eax, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rax, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je arithmetic.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_18]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ---

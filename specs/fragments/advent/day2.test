@@ -3,7 +3,7 @@ function add(x Integer, y Integer) returns Integer
     return x + y
 end 'add'
 
-function main() returns Integer
+function main() returns ExitCode
   return add(3, y: 4)
 end 'main'
 ---
@@ -23,7 +23,18 @@ module {
     %3 = maxon.literal {value = 3 : i64}
     %4 = maxon.literal {value = 4 : i64}
     %5 = maxon.call @advent.add %3, %4
-    maxon.return %5
+    maxon.assign %5 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 0 : i64}
+    %7 = maxon.binop %5, %6 {op = lt}
+    %8 = maxon.literal {value = 4294967295 : i64}
+    %9 = maxon.binop %5, %8 {op = gt}
+    %10 = maxon.binop %7, %9 {op = or}
+    maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %12 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %12
   }
 }
 === standard
@@ -35,12 +46,25 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
     %3 = arith.constant {value = 3 : i64}
     %4 = arith.constant {value = 4 : i64}
     %5 = func.call @advent.add %3, %4
-    func.return %5
+    memref.store %5, __range_val_0
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.cmpi lt %5, %6
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.cmpi gt %5, %8
+    %10 = arith.ori1 %7, %9
+    cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %11 = memref.lea_rdata __panic_msg_11
+    %12 = std.ptr_to_i64 %11
+    std.call_runtime @maxon_panic %12
+  __range_ok_0:
+    %13 = memref.load __range_val_0 : i64
+    func.return %13
   }
 }
 === x86
@@ -50,13 +74,34 @@ module {
     x86.lea eax, [ecx + edx]
     x86.ret
   }
-  func @advent.main() -> i64 {
+  func @advent.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 3
     x86.mov ecx, 4
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.jmp advent.add
+    x86.call advent.add
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je advent.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
   }
 }
 ```

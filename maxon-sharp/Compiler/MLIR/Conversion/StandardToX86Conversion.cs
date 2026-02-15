@@ -4,7 +4,7 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
-enum ComparisonKind { Integer, Float }
+enum ComparisonKind { Integer, UnsignedInteger, Float }
 
 public static class StandardToX86Conversion {
   public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
@@ -37,6 +37,7 @@ public static class StandardToX86Conversion {
       foreach (var op in block.Operations) {
         switch (op) {
           case StdLoadI64Op load: loadedVariables.Add(load.VarName); break;
+          case StdLoadI32Op load: loadedVariables.Add(load.VarName); break;
           case StdLoadI1Op load: loadedVariables.Add(load.VarName); break;
           case StdLoadF64Op load: loadedVariables.Add(load.VarName); break;
           case StdLoadPtrOp load: loadedVariables.Add(load.VarName); break;
@@ -179,6 +180,12 @@ public static class StandardToX86Conversion {
             regManager.EmitStoreToStack(paramOp.Result, value3, 1, x86Block);
             preHandledOps.Add(storeI1);
           }
+          var storeI32 = srcBlock.Operations.OfType<StdStoreI32Op>()
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result) && s.VarName == paramOp.Name);
+          if (storeI32 != null && varOffsets.TryGetValue(storeI32.VarName, out int value4)) {
+            regManager.EmitStoreToStack(paramOp.Result, value4, 4, x86Block);
+            preHandledOps.Add(storeI32);
+          }
         }
       }
 
@@ -201,6 +208,7 @@ public static class StandardToX86Conversion {
         if (lastCmpResult != null && !(op is StdCondBrOp cb && cb.Condition == lastCmpResult)) {
           var setccCond = lastCmpKind!.Value switch {
             ComparisonKind.Integer => IntegerPredicateToSetcc(lastCmpPredicate!),
+            ComparisonKind.UnsignedInteger => UnsignedPredicateToSetcc(lastCmpPredicate!),
             ComparisonKind.Float => FloatPredicateToSetcc(lastCmpPredicate!),
             _ => throw new InvalidOperationException($"Unsupported comparison kind for setcc: {lastCmpKind}")
           };
@@ -247,6 +255,135 @@ public static class StandardToX86Conversion {
 
           case StdRemI64Op remOp:
             regManager.EmitRemainder(remOp.Lhs, remOp.Rhs, remOp.Result, x86Block);
+            break;
+
+          case StdDivU64Op divUOp:
+            regManager.EmitUnsignedDivision(divUOp.Lhs, divUOp.Rhs, divUOp.Result, x86Block);
+            break;
+
+          case StdRemU64Op remUOp:
+            regManager.EmitUnsignedRemainder(remUOp.Lhs, remUOp.Rhs, remUOp.Result, x86Block);
+            break;
+
+          // === I32 Arithmetic ===
+
+          case StdConstI32Op constI32Op:
+            regManager.EmitLoadImmediate(constI32Op.Result, constI32Op.Value, x86Block);
+            break;
+
+          case StdAddI32Op addI32Op:
+            regManager.EmitBinaryRegReg(addI32Op.Lhs, addI32Op.Rhs, addI32Op.Result, x86Block,
+              (l, r) => new X86AddRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, addI32Op.Lhs, currentOpIndex),
+              useLeaForAdd: true);
+            break;
+
+          case StdSubI32Op subI32Op:
+            regManager.EmitBinaryRegReg(subI32Op.Lhs, subI32Op.Rhs, subI32Op.Result, x86Block,
+              (l, r) => new X86SubRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, subI32Op.Lhs, currentOpIndex));
+            break;
+
+          case StdMulI32Op mulI32Op:
+            regManager.EmitMultiply(mulI32Op.Lhs, mulI32Op.Rhs, mulI32Op.Result, x86Block,
+              lhsConsumed: IsLastUse(lastUseOfValue, mulI32Op.Lhs, currentOpIndex));
+            break;
+
+          case StdDivI32Op divI32Op:
+            regManager.EmitDivision32(divI32Op.Lhs, divI32Op.Rhs, divI32Op.Result, x86Block);
+            break;
+
+          case StdRemI32Op remI32Op:
+            regManager.EmitRemainder32(remI32Op.Lhs, remI32Op.Rhs, remI32Op.Result, x86Block);
+            break;
+
+          case StdDivU32Op divU32Op:
+            regManager.EmitUnsignedDivision32(divU32Op.Lhs, divU32Op.Rhs, divU32Op.Result, x86Block);
+            break;
+
+          case StdRemU32Op remU32Op:
+            regManager.EmitUnsignedRemainder32(remU32Op.Lhs, remU32Op.Rhs, remU32Op.Result, x86Block);
+            break;
+
+          case StdAndI32Op andI32Op:
+            regManager.EmitBinaryRegReg(andI32Op.Lhs, andI32Op.Rhs, andI32Op.Result, x86Block,
+              (l, r) => new X86AndRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, andI32Op.Lhs, currentOpIndex));
+            break;
+
+          case StdOrI32Op orI32Op:
+            regManager.EmitBinaryRegReg(orI32Op.Lhs, orI32Op.Rhs, orI32Op.Result, x86Block,
+              (l, r) => new X86OrRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, orI32Op.Lhs, currentOpIndex));
+            break;
+
+          case StdXorI32Op xorI32Op:
+            regManager.EmitBinaryRegReg(xorI32Op.Lhs, xorI32Op.Rhs, xorI32Op.Result, x86Block,
+              (l, r) => new X86XorRegRegOp(l, r),
+              lhsConsumed: IsLastUse(lastUseOfValue, xorI32Op.Lhs, currentOpIndex));
+            break;
+
+          case StdShlI32Op shlI32Op:
+            regManager.EmitShift(shlI32Op.Lhs, shlI32Op.Rhs, shlI32Op.Result, x86Block,
+              dest => new X86ShlRegClOp(dest));
+            break;
+
+          case StdShrI32Op shrI32Op:
+            regManager.EmitShift(shrI32Op.Lhs, shrI32Op.Rhs, shrI32Op.Result, x86Block,
+              dest => new X86SarRegClOp(dest));
+            break;
+
+          case StdShrU32Op shrU32Op:
+            regManager.EmitShift(shrU32Op.Lhs, shrU32Op.Rhs, shrU32Op.Result, x86Block,
+              dest => new X86ShrRegClOp(dest));
+            break;
+
+          case StdCmpI32Op cmpI32Op:
+            regManager.EmitIntegerCompare(cmpI32Op.Lhs, cmpI32Op.Rhs, x86Block);
+            lastCmpResult = cmpI32Op.Result;
+            lastCmpKind = ComparisonKind.Integer;
+            lastCmpPredicate = cmpI32Op.Predicate;
+            break;
+
+          case StdCmpU32Op cmpU32Op:
+            regManager.EmitIntegerCompare(cmpU32Op.Lhs, cmpU32Op.Rhs, x86Block);
+            lastCmpResult = cmpU32Op.Result;
+            lastCmpKind = ComparisonKind.UnsignedInteger;
+            lastCmpPredicate = cmpU32Op.Predicate;
+            break;
+
+          // === I32 Store/Load ===
+
+          case StdStoreI32Op storeI32Op:
+            if (!deadStoreOps.Contains(op))
+              regManager.EmitStoreToStack(storeI32Op.Value, varOffsets[storeI32Op.VarName], 4, x86Block);
+            break;
+
+          case StdLoadI32Op loadI32Op:
+            regManager.EmitLoadFromStack(loadI32Op.Result, varOffsets[loadI32Op.VarName], 4, x86Block);
+            break;
+
+          // === I32 Width Conversion ===
+
+          case StdExtI32ToI64Op extOp:
+            if (extOp.SignExtend)
+              regManager.EmitSignExtendI32ToI64(extOp.Input, extOp.Result, x86Block);
+            else
+              regManager.EmitZeroExtendI32ToI64(extOp.Input, extOp.Result, x86Block);
+            break;
+
+          case StdTruncI64ToI32Op truncOp:
+            regManager.EmitTruncI64ToI32(truncOp.Input, truncOp.Result, x86Block);
+            break;
+
+          // === I32 Float Conversion ===
+
+          case StdSiToFpI32Op siToFpI32Op:
+            regManager.EmitCvtSi2Sd(siToFpI32Op.Input, siToFpI32Op.Result, x86Block);
+            break;
+
+          case StdUiToFpI32Op uiToFpI32Op:
+            regManager.EmitCvtSi2Sd(uiToFpI32Op.Input, uiToFpI32Op.Result, x86Block);
             break;
 
           case StdAddF64Op addF64Op:
@@ -315,6 +452,11 @@ public static class StandardToX86Conversion {
               dest => new X86SarRegClOp(dest));
             break;
 
+          case StdShrU64Op shrUOp:
+            regManager.EmitShift(shrUOp.Lhs, shrUOp.Rhs, shrUOp.Result, x86Block,
+              dest => new X86ShrRegClOp(dest));
+            break;
+
           case StdFpToSiOp fpToSiOp:
             regManager.EmitCvttSd2Si(fpToSiOp.Input, fpToSiOp.Result, x86Block);
             break;
@@ -325,6 +467,16 @@ public static class StandardToX86Conversion {
 
           case StdSiToFpOp siToFpOp:
             regManager.EmitCvtSi2Sd(siToFpOp.Input, siToFpOp.Result, x86Block);
+            break;
+
+          case StdUiToFpOp uiToFpOp:
+            // For values < 2^63, CVTSI2SD works correctly for unsigned
+            regManager.EmitCvtSi2Sd(uiToFpOp.Input, uiToFpOp.Result, x86Block);
+            break;
+
+          case StdFpToUiOp fpToUiOp:
+            // For values < 2^63, CVTTSD2SI works correctly for unsigned
+            regManager.EmitCvttSd2Si(fpToUiOp.Input, fpToUiOp.Result, x86Block);
             break;
 
           case StdAbsF64Op absOp: {
@@ -416,6 +568,13 @@ public static class StandardToX86Conversion {
             lastCmpPredicate = cmpI64Op.Predicate;
             break;
 
+          case StdCmpU64Op cmpU64Op:
+            regManager.EmitIntegerCompare(cmpU64Op.Lhs, cmpU64Op.Rhs, x86Block);
+            lastCmpResult = cmpU64Op.Result;
+            lastCmpKind = ComparisonKind.UnsignedInteger;
+            lastCmpPredicate = cmpU64Op.Predicate;
+            break;
+
           case StdCmpI1Op cmpI1Op:
             regManager.EmitIntegerCompare(cmpI1Op.Lhs, cmpI1Op.Rhs, x86Block);
             lastCmpResult = cmpI1Op.Result;
@@ -437,11 +596,13 @@ public static class StandardToX86Conversion {
                 case ComparisonKind.Integer:
                   x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
                   break;
+                case ComparisonKind.UnsignedInteger:
+                  x86Block.AddOp(new X86JccOp(InvertUnsignedPredicate(lastCmpPredicate!), scopedElse));
+                  break;
                 case ComparisonKind.Float:
                   EmitFloatCondBranch(lastCmpPredicate!, scopedElse, x86Block);
                   break;
                 default:
-                  // this is a defensive check in case more ComparisonKind values are added later
                   throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {lastCmpKind}");
               }
             } else {
@@ -657,6 +818,26 @@ public static class StandardToX86Conversion {
     "le" => "le",
     "ge" => "ge",
     _ => throw new InvalidOperationException($"Unknown integer comparison predicate: {predicate}")
+  };
+
+  private static string InvertUnsignedPredicate(string predicate) => predicate switch {
+    "eq" => "ne",
+    "ne" => "e",
+    "ult" => "ae",
+    "uge" => "b",
+    "ule" => "a",
+    "ugt" => "be",
+    _ => throw new InvalidOperationException($"Unknown unsigned comparison predicate: {predicate}")
+  };
+
+  private static string UnsignedPredicateToSetcc(string predicate) => predicate switch {
+    "eq" => "e",
+    "ne" => "ne",
+    "ult" => "b",
+    "ugt" => "a",
+    "ule" => "be",
+    "uge" => "ae",
+    _ => throw new InvalidOperationException($"Unknown unsigned comparison predicate: {predicate}")
   };
 
   private static string FloatPredicateToSetcc(string predicate) => predicate switch {

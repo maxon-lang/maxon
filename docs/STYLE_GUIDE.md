@@ -22,7 +22,7 @@ A comprehensive guide to writing idiomatic and consistent Maxon code.
 Always use **tabs for indentation**. One tab per indentation level.
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
 	var x = 5
 	if x > 0 'check'
 		print(x)
@@ -388,7 +388,7 @@ function isPrime(num int) returns int
 	return 1
 end 'isPrime'
 
-function main() returns int
+function main() returns ExitCode
 	var total = sum(10)
 	print(total)
 	

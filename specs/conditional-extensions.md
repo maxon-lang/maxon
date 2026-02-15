@@ -85,7 +85,7 @@ type IntList implements HasItems with Integer
   end 'next'
 end 'IntList'
 
-function main() returns Integer
+function main() returns ExitCode
   var list = IntList{data: [10, 20, 30], idx: 0}
   if list.has(20) 'yes'
     return 1
@@ -125,7 +125,7 @@ type MyHolder implements Holder with NotComparable
   end 'get'
 end 'MyHolder'
 
-function main() returns Integer
+function main() returns ExitCode
   var h = MyHolder{item: NotComparable{x: 5}}
   // isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
   var r = h.isGreater(NotComparable{x: 3})
@@ -154,7 +154,7 @@ end 'Box'
 
 typealias IntBox = Box with int
 
-function main() returns Integer
+function main() returns ExitCode
   var b = IntBox{item: 42}
   if b.matches(42) 'yes'
     return 1
@@ -172,7 +172,7 @@ The real motivation: Array.contains requiring Element is Equatable.
 
 <!-- test: conditional-extensions.array-contains -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var nums = [10, 20, 30, 40]
   if nums.contains([20]) 'found'
     return 1
@@ -233,7 +233,7 @@ type HashBucket implements Bucket with HashItem
   end 'next'
 end 'HashBucket'
 
-function main() returns Integer
+function main() returns ExitCode
   var b = HashBucket{items: [HashItem{v: 1}, HashItem{v: 2}, HashItem{v: 3}], idx: 0}
   if b.lookup(HashItem{v: 2}) 'found'
     return 1
@@ -296,7 +296,7 @@ type NotEqSeq implements Seq with NotEq
   end 'next'
 end 'NotEqSeq'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = NotEqSeq{items: [NotEq{n: 1}, NotEq{n: 2}], idx: 0}
   return s.countItems()
 end 'main'

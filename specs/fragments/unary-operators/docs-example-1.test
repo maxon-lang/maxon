@@ -1,5 +1,5 @@
 // Test: docs-example-1
-function main() returns Integer
+function main() returns ExitCode
   var x = 42
   var y = -x      // y is -42
   var z = -y      // z is 42
@@ -10,14 +10,33 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @unary-operators.main() -> i64 {
+  func @unary-operators.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 42
     x86.xor ecx, ecx
     x86.sub ecx, eax
     x86.xor edx, edx
     x86.sub edx, ecx
-    x86.mov eax, edx
+    x86.mov [rbp-8], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je unary-operators.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

@@ -79,7 +79,7 @@ export function helper() returns Integer
   return 21
 end 'helper'
 
-function main() returns Integer
+function main() returns ExitCode
   return helper() + helper()
 end 'main'
 ```
@@ -98,7 +98,7 @@ export type Point
   end 'sum'
 end 'Point'
 
-function main() returns Integer
+function main() returns ExitCode
   var p = Point{x: 20, y: 22}
   return p.sum()
 end 'main'
@@ -113,7 +113,7 @@ function helper() returns Integer
   return 42
 end 'helper'
 
-function main() returns Integer
+function main() returns ExitCode
   return helper()
 end 'main'
 ```
@@ -131,7 +131,7 @@ function privateFunc() returns Integer
   return 22
 end 'privateFunc'
 
-function main() returns Integer
+function main() returns ExitCode
   return publicFunc()
 end 'main'
 ```
@@ -143,7 +143,7 @@ end 'main'
 ```maxon
 export typealias IntArray = Array with Integer
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = IntArray{}
   arr.push(42)
   return try arr.get(0) otherwise 0
@@ -177,7 +177,7 @@ type Container
   end 'sum'
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container.create()
   c.add(20)
   c.add(22)
@@ -198,7 +198,7 @@ function makeArray() returns IntArray
   return arr
 end 'makeArray'
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = makeArray()
   return try arr.get(0) otherwise 0
 end 'main'
@@ -211,7 +211,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = IntArray{}
   arr.push(42)
   return try arr.get(0) otherwise 0
@@ -229,7 +229,7 @@ export function helper() returns Integer
 end 'helper'
 
 // --- file: main.maxon
-function main() returns Integer
+function main() returns ExitCode
   return helper()
 end 'main'
 ```
@@ -243,7 +243,7 @@ function privateHelper() returns Integer
   return 99
 end 'privateHelper'
 
-function main() returns Integer
+function main() returns ExitCode
   return privateHelper()
 end 'main'
 ```
@@ -259,7 +259,7 @@ function privateHelper() returns Integer
 end 'privateHelper'
 
 // --- file: main.maxon
-function main() returns Integer
+function main() returns ExitCode
   return privateHelper()
 end 'main'
 ```
@@ -275,7 +275,7 @@ type Container
   var items BadArray
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```

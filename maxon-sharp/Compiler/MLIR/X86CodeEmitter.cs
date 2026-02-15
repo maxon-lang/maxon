@@ -108,6 +108,9 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86MovRegRegOp mov:
         EmitMovRegReg(mov.Dest, mov.Src);
         break;
+      case X86MovsxdOp movsxd:
+        EmitMovsxd(movsxd.Dest, movsxd.Src);
+        break;
       case X86XchgRegRegOp xchg:
         EmitXchgRegReg(xchg.A, xchg.B);
         break;
@@ -143,6 +146,9 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
         break;
       case X86SarRegClOp sar:
         EmitSarRegCl(sar.Dest);
+        break;
+      case X86ShrRegClOp shr:
+        EmitShrRegCl(shr.Dest);
         break;
       case X86ImulRegRegOp imul:
         EmitImulRegReg(imul.Dest, imul.Src);
@@ -236,8 +242,20 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86CqoOp:
         EmitBytes(0x48, 0x99); // CQO: REX.W + 99
         break;
+      case X86CdqOp:
+        EmitByte(0x99); // CDQ: 32-bit IDIV needs EDX:EAX; no REX.W keeps it 32-bit (vs CQO)
+        break;
       case X86IdivRegOp idiv:
         EmitIdivReg(idiv.Divisor);
+        break;
+      case X86IdivReg32Op idiv32:
+        EmitIdivReg32(idiv32.Divisor);
+        break;
+      case X86DivRegOp div:
+        EmitDivReg(div.Divisor);
+        break;
+      case X86DivReg32Op div32:
+        EmitDivReg32(div32.Divisor);
         break;
       case X86LeaRegMemOp lea:
         EmitLeaRegMem(lea.Dest, lea.Displacement);
@@ -636,6 +654,13 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     }
   }
 
+  private void EmitMovsxd(X86Register dest, X86Register src) {
+    // MOVSXD r64, r/m32: REX.W + 63 /r (sign-extend i32 to i64)
+    Rex.W().Reg(dest).Rm(src).Emit(this);
+    EmitByte(0x63);
+    EmitByte((byte)(0xC0 | (RegCode(dest) << 3) | RegCode(src)));
+  }
+
   private void EmitMovRegImm(X86Register dest, long immediate) {
     if (!Is64BitReg(dest) && !Is32BitReg(dest))
       throw new ArgumentException($"EmitMovRegImm: unsupported register size: {dest}");
@@ -762,6 +787,14 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitByte((byte)(0xC0 | (7 << 3) | RegCode(dest)));
   }
 
+  private void EmitShrRegCl(X86Register dest) {
+    RequireGpr(dest, nameof(EmitShrRegCl));
+    // SHR r/m64, CL: REX.W + D3 /5 (logical right shift, fills with zeros)
+    Rex.W().Rm(dest).Emit(this);
+    EmitByte(0xD3);
+    EmitByte((byte)(0xC0 | (5 << 3) | RegCode(dest)));
+  }
+
   private void EmitCmpRegReg(X86Register lhs, X86Register rhs) {
     RequireGpr(lhs, nameof(EmitCmpRegReg));
     RequireGpr(rhs, nameof(EmitCmpRegReg));
@@ -852,6 +885,30 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     Rex.W().Rm(divisor).Emit(this);
     EmitByte(0xF7);
     EmitByte((byte)(0xF8 | RegCode(divisor))); // /7 = 111 in reg field
+  }
+
+  private void EmitIdivReg32(X86Register divisor) {
+    RequireGpr(divisor, nameof(EmitIdivReg32));
+    // IDIV r/m32: F7 /7 (no REX.W = 32-bit)
+    Rex.NoW().Rm(divisor).EmitIf(this);
+    EmitByte(0xF7);
+    EmitByte((byte)(0xF8 | RegCode(divisor)));
+  }
+
+  private void EmitDivReg32(X86Register divisor) {
+    RequireGpr(divisor, nameof(EmitDivReg32));
+    // DIV r/m32: F7 /6 (no REX.W = 32-bit)
+    Rex.NoW().Rm(divisor).EmitIf(this);
+    EmitByte(0xF7);
+    EmitByte((byte)(0xF0 | RegCode(divisor)));
+  }
+
+  private void EmitDivReg(X86Register divisor) {
+    RequireGpr(divisor, nameof(EmitDivReg));
+    // DIV r/m64: REX.W + F7 /6
+    Rex.W().Rm(divisor).Emit(this);
+    EmitByte(0xF7);
+    EmitByte((byte)(0xF0 | RegCode(divisor))); // /6 = 110 in reg field
   }
 
   private void EmitMovMemReg(int displacement, X86Register src, int sizeInBytes) {

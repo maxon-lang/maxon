@@ -1,5 +1,5 @@
 // Test: int-division-truncates
-function main() returns Integer
+function main() returns ExitCode
   var a = 7
   var b = 2
   return a / b
@@ -7,12 +7,32 @@ end 'main'
 ---
 ---
 module {
-  func @ranged-typealias.main() -> i64 {
+  func @ranged-typealias.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 7
     x86.mov ecx, 2
     x86.cqo
     x86.idiv ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je ranged-typealias.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

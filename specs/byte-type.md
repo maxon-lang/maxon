@@ -37,7 +37,7 @@ Note: The `character` type is NOT the same as `byte`. See the character-type spe
 
 <!-- test: byte-cast -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 42 as Byte
   return b as Integer
 end 'main'
@@ -50,7 +50,7 @@ end 'main'
 
 <!-- test: byte-max -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 255 as Byte
   return b as Integer
 end 'main'
@@ -63,7 +63,7 @@ end 'main'
 
 <!-- test: byte-zero -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 0 as Byte
   return b as Integer
 end 'main'
@@ -76,7 +76,7 @@ end 'main'
 
 <!-- test: byte-from-hex -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var b = 0xff as Byte
   return b as Integer
 end 'main'

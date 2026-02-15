@@ -1,5 +1,5 @@
 // Test: match-statement-assignment
-function main() returns Integer
+function main() returns ExitCode
   var x = 2
   var result = 0
   match x 'process'
@@ -46,12 +46,23 @@ module {
     maxon.br process_0.merge
   process_0.merge:
     %11 = maxon.var_ref {var = result} {type = i64}
-    maxon.return %11
+    maxon.assign %11 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %11, %12 {op = lt}
+    %14 = maxon.literal {value = 4294967295 : i64}
+    %15 = maxon.binop %11, %14 {op = gt}
+    %16 = maxon.binop %13, %15 {op = or}
+    maxon.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_1:
+    %18 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.return %18
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 2 : i64}
     memref.store %0, __match_process_0
@@ -80,14 +91,27 @@ module {
     cf.br process_0.merge
   process_0.merge:
     %11 = memref.load result : i64
-    func.return %11
+    memref.store %11, __range_val_1
+    %12 = arith.constant {value = 0 : i64}
+    %13 = arith.cmpi lt %11, %12
+    %14 = arith.constant {value = 4294967295 : i64}
+    %15 = arith.cmpi gt %11, %14
+    %16 = arith.ori1 %13, %15
+    cf.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %17 = memref.lea_rdata __panic_msg_17
+    %18 = std.ptr_to_i64 %17
+    std.call_runtime @maxon_panic %18
+  __range_ok_1:
+    %19 = memref.load __range_val_1 : i64
+    func.return %19
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 2
     x86.mov [rbp-8], eax
     x86.jmp register-allocator.main.process_0.cmp0
@@ -115,6 +139,24 @@ module {
     x86.jmp register-allocator.main.process_0.merge
   process_0.merge:
     x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je register-allocator.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_rdata rax, [__panic_msg_17]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

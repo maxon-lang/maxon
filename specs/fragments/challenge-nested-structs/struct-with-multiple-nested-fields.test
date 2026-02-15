@@ -9,7 +9,7 @@ type Line
   export var finish Point
 end 'Line'
 
-function main() returns Integer
+function main() returns ExitCode
   var p1 = Point{x: 1, y: 2}
   var p2 = Point{x: 10, y: 20}
   var line = Line{start: p1, finish: p2}
@@ -19,7 +19,7 @@ end 'main'
 ExitCode: 33
 ---
 module {
-  func @challenge-nested-structs.main() -> i64 {
+  func @challenge-nested-structs.main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.mov eax, 1
@@ -77,7 +77,25 @@ module {
     x86.mov [rbp-56], edx
     x86.mov eax, [rbp-56]
     x86.mov edx, [eax+8]
-    x86.lea eax, [ecx + edx]
+    x86.add ecx, edx
+    x86.mov [rbp-64], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je challenge-nested-structs.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_29]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

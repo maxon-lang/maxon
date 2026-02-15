@@ -30,7 +30,7 @@ function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns Integer
+function main() returns ExitCode
   return takeFloat(42)
 end 'main'
 ```
@@ -46,7 +46,7 @@ function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns Integer
+function main() returns ExitCode
   return takeFloat(42)
 end 'main'
 ```
@@ -60,7 +60,7 @@ function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns Integer
+function main() returns ExitCode
   var i = 42
   return takeFloat(i)
 end 'main'
@@ -75,7 +75,7 @@ function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns Integer
+function main() returns ExitCode
   var b = 42 as Byte
   return takeInt(b)
 end 'main'
@@ -90,7 +90,7 @@ function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
 
-function main() returns Integer
+function main() returns ExitCode
   return takeByte(300)
 end 'main'
 ```
@@ -104,7 +104,7 @@ function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
 
-function main() returns Integer
+function main() returns ExitCode
   var i = 300
   return takeByte(i)
 end 'main'
@@ -119,7 +119,7 @@ function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = 3.7
   return takeInt(f)
 end 'main'
@@ -134,7 +134,7 @@ function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
 
-function main() returns Integer
+function main() returns ExitCode
   var f = 300.9
   return takeByte(f)
 end 'main'
@@ -153,7 +153,7 @@ function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
 
-function main() returns Integer
+function main() returns ExitCode
   return takeByte(getInt())
 end 'main'
 ```
@@ -167,7 +167,7 @@ function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = 20
   var b = 22
   return takeFloat(a + b)
@@ -179,7 +179,7 @@ end 'main'
 
 <!-- test: math-intrinsic-int-promotion -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   var result = sqrt(16)
   return trunc(result)
 end 'main'
@@ -194,7 +194,7 @@ function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = "hello"
   return takeInt(s)
 end 'main'
@@ -209,7 +209,7 @@ function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns Integer
+function main() returns ExitCode
   var b = true
   return takeInt(b)
 end 'main'
@@ -227,7 +227,7 @@ function takeBool(x bool) returns Integer
   return 0
 end 'takeBool'
 
-function main() returns Integer
+function main() returns ExitCode
   var i = 1
   return takeBool(i)
 end 'main'

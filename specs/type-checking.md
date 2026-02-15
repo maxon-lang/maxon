@@ -16,7 +16,7 @@ The compiler validates that function and method arguments match the expected par
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = StringArray{}
   arr.append("hello")
   return 0
@@ -30,7 +30,7 @@ error E3005: specs/fragments/type-checking/method-call-wrong-self-type.test:6:7:
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = IntArray{}
   arr.push("hello")
   return 0
@@ -46,7 +46,7 @@ function takeInt(n Integer) returns Integer
   return n
 end 'takeInt'
 
-function main() returns Integer
+function main() returns ExitCode
   takeInt("hello")
   return 0
 end 'main'
@@ -63,7 +63,7 @@ function takeArray(arr IntArray) returns Integer
   return arr.count()
 end 'takeArray'
 
-function main() returns Integer
+function main() returns ExitCode
   takeArray(42)
   return 0
 end 'main'
@@ -88,7 +88,7 @@ function takePoint(p Point) returns Integer
   return p.x
 end 'takePoint'
 
-function main() returns Integer
+function main() returns ExitCode
   var s = Size{}
   takePoint(s)
   return 0
@@ -100,7 +100,7 @@ error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:
 
 <!-- test: stdlib-function-call-wrong-type -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
   print(42)
   return 0
 end 'main'
@@ -121,7 +121,7 @@ type Container
   end 'addWrong'
 end 'Container'
 
-function main() returns Integer
+function main() returns ExitCode
   return 0
 end 'main'
 ```
@@ -134,7 +134,7 @@ error E3005: specs/fragments/type-checking/implicit-method-call-wrong-type.test:
 typealias IntArray = Array with int
 typealias StringArray = Array with String
 
-function main() returns Integer
+function main() returns ExitCode
   var ints = IntArray{}
   var strings = StringArray{}
   ints.append(strings)
@@ -153,7 +153,7 @@ type Foo
   let value Integer
 end 'Foo'
 
-function main() returns Integer
+function main() returns ExitCode
   var arr = FooArray{}
   arr.push({value: 42})
   return arr.count() - 1
@@ -176,7 +176,7 @@ type Item
   export let value Integer
 end 'Item'
 
-function main() returns Integer
+function main() returns ExitCode
   var c = Container{items: ItemArray{}}
   c.items.push({value: 7})
   return c.items.count()

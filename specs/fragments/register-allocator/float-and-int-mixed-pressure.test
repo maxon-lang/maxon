@@ -1,5 +1,5 @@
 // Test: float-and-int-mixed-pressure
-function main() returns Integer
+function main() returns ExitCode
   var x = 3.14
   var y = 2.86
   var sum_f = x + y
@@ -29,12 +29,23 @@ module {
     maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.trunc %2
     %7 = maxon.binop %6, %5 {op = add}
-    maxon.return %7
+    maxon.assign %7 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %8 = maxon.literal {value = 0 : i64}
+    %9 = maxon.binop %7, %8 {op = lt}
+    %10 = maxon.literal {value = 4294967295 : i64}
+    %11 = maxon.binop %7, %10 {op = gt}
+    %12 = maxon.binop %9, %11 {op = or}
+    maxon.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %14 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %14
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.float_constant {value = 3.14 : f64}
     %1 = arith.float_constant {value = 2.86 : f64}
@@ -44,13 +55,27 @@ module {
     %5 = arith.addi %3, %4
     %6 = arith.fptosi %2
     %7 = arith.addi %6, %5
-    func.return %7
+    memref.store %7, __range_val_0
+    %8 = arith.constant {value = 0 : i64}
+    %9 = arith.cmpi lt %7, %8
+    %10 = arith.constant {value = 4294967295 : i64}
+    %11 = arith.cmpi gt %7, %10
+    %12 = arith.ori1 %9, %11
+    cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %13 = memref.lea_rdata __panic_msg_13
+    %14 = std.ptr_to_i64 %13
+    std.call_runtime @maxon_panic %14
+  __range_ok_0:
+    %15 = memref.load __range_val_0 : i64
+    func.return %15
   }
 }
 === x86
 module {
-  func @register-allocator.main() -> i64 {
+  func @register-allocator.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
     x86.movsd xmm1, [rip+__float_2.86]
     x86.movsd xmm2, xmm0
@@ -59,7 +84,26 @@ module {
     x86.mov ecx, 20
     x86.add eax, ecx
     x86.cvttsd2si edx, xmm2
-    x86.lea eax, [edx + eax]
+    x86.add edx, eax
+    x86.mov [rbp-8], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je register-allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_13]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

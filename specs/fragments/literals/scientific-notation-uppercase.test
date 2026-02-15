@@ -1,5 +1,5 @@
 // Test: scientific-notation-uppercase
-function main() returns Integer
+function main() returns ExitCode
   var x = 1.0E3
   return trunc(x) - 990
 end 'main'
@@ -7,12 +7,32 @@ end 'main'
 ExitCode: 10
 ---
 module {
-  func @literals.main() -> i64 {
+  func @literals.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_1000]
     x86.cvttsd2si eax, xmm0
     x86.mov ecx, 990
     x86.sub eax, ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je literals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_9]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
     x86.ret
   }
 }

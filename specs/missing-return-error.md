@@ -40,7 +40,7 @@ end 'test'
 
 <!-- test: no-return -->
 ```maxon
-function main() returns Integer
+function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -56,7 +56,7 @@ function test(x Integer) returns Integer
   // Missing return for else path
 end 'test'
 
-function main() returns Integer
+function main() returns ExitCode
   return test(5)
 end 'main'
 ```
@@ -73,7 +73,7 @@ function test(x Integer) returns Integer
   return 0
 end 'test'
 
-function main() returns Integer
+function main() returns ExitCode
   return test(5)
 end 'main'
 ```

@@ -1,7 +1,7 @@
 // Test: byte-vector
 typealias ByteVec4 = Vector with 4 byte
 
-function main() returns Integer
+function main() returns ExitCode
   var v = ByteVec4{}
   v.set(0, value: 10)
   v.set(1, value: 20)
@@ -15,7 +15,7 @@ end 'main'
 ExitCode: 50
 ---
 module {
-  func @vector.main() -> i64 {
+  func @vector.main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.xor eax, eax
@@ -124,7 +124,25 @@ module {
   otherwise_default_continue_8:
     x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-40]
-    x86.lea eax, [ecx + eax]
+    x86.add ecx, eax
+    x86.mov [rbp-64], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je vector.main.__range_ok_9
+  __range_panic_9:
+    x86.lea_rdata rax, [__panic_msg_52]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_9:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

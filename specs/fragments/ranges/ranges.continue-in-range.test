@@ -1,5 +1,5 @@
 // Test: ranges.continue-in-range
-function main() returns Integer
+function main() returns ExitCode
     var sum = 0
     for i in 1 to 10 'loop'
         if i mod 2 == 0 'skip'
@@ -13,9 +13,9 @@ end 'main'
 ExitCode: 25
 ---
 module {
-  func @ranges.main() -> i64 {
+  func @ranges.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.mov ecx, 1
@@ -51,6 +51,24 @@ module {
     x86.jmp ranges.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
+    x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je ranges.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_rdata rax, [__panic_msg_23]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   }

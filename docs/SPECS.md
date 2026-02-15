@@ -48,7 +48,7 @@ Use `` `text `` blocks for examples that don't need to compile or run.
 For code that should compile and run successfully:
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
     var x = 10
     return x
 end 'main'
@@ -60,7 +60,7 @@ end 'main'
 Optionally include stdout output:
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
     print("42")
     return 0
 end 'main'
@@ -79,7 +79,7 @@ To verify the compiler's MLIR at all pipeline stages, include a `RequiredMLIR` b
 Current pipeline stages: `maxon`, `standard`, `x86`.
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
     return 42
 end 'main'
 ```
@@ -132,7 +132,7 @@ Each line is a typed value:
 Example:
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
     var x = 3.14
     if x == 3.14 'check'
         return 1
@@ -155,7 +155,7 @@ The `RequiredRdata` block is optional. When present, the test compiles the sourc
 For code that demonstrates compile/parse errors:
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
     var x = "not a number"
     return x + 5
 end 'main'
@@ -177,7 +177,7 @@ export function helper() returns int
 end 'helper'
 
 // --- file: main.maxon
-function main() returns int
+function main() returns ExitCode
     return helper()
 end 'main'
 ```
@@ -194,7 +194,7 @@ function privateHelper() returns int
 end 'privateHelper'
 
 // --- file: main.maxon
-function main() returns int
+function main() returns ExitCode
     return privateHelper()
 end 'main'
 ```
@@ -243,7 +243,7 @@ Code examples in the **Documentation** section can be:
 2. **Executable examples** - With `output` block, extracted as tests
    ```markdown
    ```maxon
-   function main() returns int
+   function main() returns ExitCode
        return 42
    end 'main'
    ```
@@ -265,7 +265,7 @@ Tests in the **Tests** section are always extracted. Each test needs:
 ```markdown
 <!-- test: basic-example -->
 ```maxon
-function main() returns int
+function main() returns ExitCode
     return 0
 end 'main'
 ```
@@ -302,7 +302,7 @@ var y = abs(x)  // Returns 5.5
 **Example (executable):**
 
 ```maxon
-function main() returns int
+function main() returns ExitCode
     var x = abs(-5.0)
     return trunc(x)
 end 'main'
@@ -315,7 +315,7 @@ end 'main'
 
 <!-- test: abs.float -->
 ```maxon
-function main() returns int
+function main() returns ExitCode
     var x = abs(-5.5)
     return trunc(x)
 end 'main'
@@ -326,7 +326,7 @@ end 'main'
 
 <!-- test: abs.zero -->
 ```maxon
-function main() returns int
+function main() returns ExitCode
     return abs(0.0) as int
 end 'main'
 ```

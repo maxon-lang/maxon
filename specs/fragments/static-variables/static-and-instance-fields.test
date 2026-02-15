@@ -9,7 +9,7 @@ type Thing
   end 'make'
 end 'Thing'
 
-function main() returns Integer
+function main() returns ExitCode
   var a = Thing.make(10)
   var b = Thing.make(20)
   return Thing.created + a.id + b.id
@@ -37,9 +37,9 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @static-variables.main() -> i64 {
+  func @static-variables.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 10
     x86.mov rcx, rax
     x86.call Thing.make
@@ -53,7 +53,25 @@ module {
     x86.add edx, esi
     x86.mov edi, [rbp-16]
     x86.mov r8, [edi+0]
-    x86.lea eax, [edx + r8]
+    x86.add edx, r8
+    x86.mov [rbp-24], edx
+    x86.xor r9, r9
+    x86.cmp edx, r9
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp rdx, rcx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je static-variables.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_21]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

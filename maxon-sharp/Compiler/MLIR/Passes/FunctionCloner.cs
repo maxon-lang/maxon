@@ -233,11 +233,12 @@ internal class FunctionCloner {
       case MaxonBrOp br: return new MaxonBrOp(br.Target);
       case MaxonReturnOp ret: return new MaxonReturnOp(ret.Value != null ? MapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName);
+      case MaxonPanicOp p: return new MaxonPanicOp(p.Message);
 
       // Unary math
       case MaxonTruncOp t: { var c = new MaxonTruncOp(MapValue(t.Input)); RegisterResult(t.Result, c.Result); return c; }
       case MaxonIntToFloatOp i: { var c = new MaxonIntToFloatOp(MapValue(i.Input)); RegisterResult(i.Result, c.Result); return c; }
-      case MaxonCastOp ca: { var c = new MaxonCastOp(MapValue(ca.Input), ca.TargetKind); RegisterResult(ca.Result, c.Result); return c; }
+      case MaxonCastOp ca: { var c = new MaxonCastOp(MapValue(ca.Input), ca.TargetKind, ca.SourceOptimalType); RegisterResult(ca.Result, c.Result); return c; }
       case MaxonBitcastF64ToI64Op bc: { var c = new MaxonBitcastF64ToI64Op(MapValue(bc.Input)); RegisterResult(bc.Result, c.Result); return c; }
       case MaxonAbsOp a: { var c = new MaxonAbsOp(MapValue(a.Input)); RegisterResult(a.Result, c.Result); return c; }
       case MaxonSqrtOp s: { var c = new MaxonSqrtOp(MapValue(s.Input)); RegisterResult(s.Result, c.Result); return c; }
@@ -364,7 +365,7 @@ internal class FunctionCloner {
     if (_substituteToFloat && (mappedLhs is MaxonFloat || mappedRhs is MaxonFloat)) {
       operandKind = MaxonValueKind.Float;
     }
-    var cloned = new MaxonBinOp(binOp.Operator, mappedLhs, mappedRhs, operandKind);
+    var cloned = new MaxonBinOp(binOp.Operator, mappedLhs, mappedRhs, operandKind, binOp.OptimalType);
     RegisterResult(binOp.Result, cloned.Result);
     return cloned;
   }
