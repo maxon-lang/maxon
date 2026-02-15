@@ -69,11 +69,11 @@ end 'HasItems'
 
 typealias IntArray = Array with int
 
-type IntList implements HasItems with int
+type IntList implements HasItems with Integer
   var data IntArray
-  var idx int
+  var idx Integer
 
-  function next() returns int throws IterationError
+  function next() returns Integer throws IterationError
     if idx >= data.count() 'done'
       throw IterationError.exhausted
     end 'done'
@@ -85,7 +85,7 @@ type IntList implements HasItems with int
   end 'next'
 end 'IntList'
 
-function main() returns int
+function main() returns Integer
   var list = IntList{data: [10, 20, 30], idx: 0}
   if list.has(20) 'yes'
     return 1
@@ -114,7 +114,7 @@ extension Holder where Item is Comparable
 end 'Holder'
 
 type NotComparable
-  var x int
+  var x Integer
 end 'NotComparable'
 
 type MyHolder implements Holder with NotComparable
@@ -125,7 +125,7 @@ type MyHolder implements Holder with NotComparable
   end 'get'
 end 'MyHolder'
 
-function main() returns int
+function main() returns Integer
   var h = MyHolder{item: NotComparable{x: 5}}
   // isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
   var r = h.isGreater(NotComparable{x: 3})
@@ -154,7 +154,7 @@ end 'Box'
 
 typealias IntBox = Box with int
 
-function main() returns int
+function main() returns Integer
   var b = IntBox{item: 42}
   if b.matches(42) 'yes'
     return 1
@@ -172,7 +172,7 @@ The real motivation: Array.contains requiring Element is Equatable.
 
 <!-- test: conditional-extensions.array-contains -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var nums = [10, 20, 30, 40]
   if nums.contains([20]) 'found'
     return 1
@@ -204,13 +204,13 @@ extension Bucket where Element is Equatable and Hashable
 end 'Bucket'
 
 type HashItem implements Equatable, Hashable
-  export var v int
+  export var v Integer
 
   function equals(other HashItem) returns bool
     return v == other.v
   end 'equals'
 
-  function hash() returns int
+  function hash() returns Integer
     return v
   end 'hash'
 end 'HashItem'
@@ -219,7 +219,7 @@ typealias HashItemArray = Array with HashItem
 
 type HashBucket implements Bucket with HashItem
   var items HashItemArray
-  var idx int
+  var idx Integer
 
   function next() returns HashItem throws IterationError
     if idx >= items.count() 'done'
@@ -233,7 +233,7 @@ type HashBucket implements Bucket with HashItem
   end 'next'
 end 'HashBucket'
 
-function main() returns int
+function main() returns Integer
   var b = HashBucket{items: [HashItem{v: 1}, HashItem{v: 2}, HashItem{v: 3}], idx: 0}
   if b.lookup(HashItem{v: 2}) 'found'
     return 1
@@ -254,7 +254,7 @@ interface Seq uses Element
 end 'Seq'
 
 extension Seq
-  function countItems() returns int
+  function countItems() returns Integer
     var n = 0
     for _ in self 'loop'
       n = n + 1
@@ -275,14 +275,14 @@ extension Seq where Element is Equatable
 end 'Seq'
 
 type NotEq
-  export var n int
+  export var n Integer
 end 'NotEq'
 
 typealias NotEqArray = Array with NotEq
 
 type NotEqSeq implements Seq with NotEq
   var items NotEqArray
-  var idx int
+  var idx Integer
 
   function next() returns NotEq throws IterationError
     if idx >= items.count() 'done'
@@ -296,7 +296,7 @@ type NotEqSeq implements Seq with NotEq
   end 'next'
 end 'NotEqSeq'
 
-function main() returns int
+function main() returns Integer
   var s = NotEqSeq{items: [NotEq{n: 1}, NotEq{n: 2}], idx: 0}
   return s.countItems()
 end 'main'

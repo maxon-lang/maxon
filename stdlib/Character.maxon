@@ -2,6 +2,8 @@
 /// @category Text
 
 // Character receives __ManagedMemory directly for literal initialization via BuiltinCharLiteral.
+typealias Integer = int(min to max)
+
 export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Strideable
   var _managed __ManagedMemory
 
@@ -11,7 +13,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
   end 'init'
 
   // Basic properties
-  export function byteLength() returns int
+  export function byteLength() returns Integer
     return __managed_memory_len(_managed)
   end 'byteLength'
 
@@ -44,7 +46,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
   // Comparable conformance
   // Compares characters byte-by-byte (lexicographic comparison)
-  function compare(other Character) returns int
+  function compare(other Character) returns Integer
     var len1 = __managed_memory_len(_managed)
     var len2 = __managed_memory_len(other._managed)
     var minLen = len1
@@ -73,7 +75,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
   end 'compare'
 
   // Hashable conformance (djb2 hash algorithm)
-  function hash() returns int
+  function hash() returns Integer
     var h = 5381
     var len = __managed_memory_len(_managed)
     var i = 0
@@ -91,7 +93,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
   end 'toString'
 
   // Decode the first Unicode codepoint from the UTF-8 bytes
-  function _codepoint() returns int
+  function _codepoint() returns Integer
     var i0 = __managed_memory_byte_at(_managed, 0) as int
     if i0 < 128 'ascii'
       return i0
@@ -109,12 +111,12 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
   end '_codepoint'
 
   // Strideable conformance - advance by n Unicode codepoints
-  function advancedBy(n int) returns Character
+  function advancedBy(n Integer) returns Character
     return Character._fromCodepoint(_codepoint() + n)
   end 'advancedBy'
 
   // Returns ASCII value (0-127) for single-byte ASCII characters, throws otherwise
-  export function asciiValue() returns int throws CharacterError
+  export function asciiValue() returns Integer throws CharacterError
     var len = __managed_memory_len(_managed)
     if len != 1 'check_len'
       throw CharacterError.notAscii
@@ -128,7 +130,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
   // Create a Character from a Unicode codepoint value
   // Uses bit shifts instead of division (int / int produces float in Maxon)
-  static function _fromCodepoint(cp int) returns Character
+  static function _fromCodepoint(cp Integer) returns Character
     if cp < 128 'enc_ascii'
       var m = __managed_memory_create(1, 1)
       __managed_memory_set_byte(m, 0, cp)

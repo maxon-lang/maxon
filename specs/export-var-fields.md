@@ -15,8 +15,8 @@ Type fields can be marked with `export` to make them accessible from outside the
 
 ```maxon
 type Value
-  export var n int      // accessible from outside
-  var private int       // only accessible within methods
+  export var n Integer      // accessible from outside
+  var private Integer       // only accessible within methods
 end 'Value'
 ```
 
@@ -36,19 +36,19 @@ Non-exported fields are only accessible within methods of the same type:
 
 ```maxon
 type Counter
-  var count int              // private
-  export var name int     // public
+  var count Integer              // private
+  export var name Integer     // public
 
   function increment()
     count = count + 1      // OK - accessing within method
   end 'increment'
 
-  export function getCount() returns int
+  export function getCount() returns Integer
     return count           // OK - accessing within method
   end 'getCount'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 0, name: 5}
   c.increment()
   return c.getCount()
@@ -68,15 +68,15 @@ All fields (exported or not) can be initialized in struct literals, since the ty
 <!-- test: export-var-basic -->
 ```maxon
 type Value
-  export var n int
-  var private int
+  export var n Integer
+  var private Integer
 
   static function create() returns Self
     return {n: 42, private: 100}
   end 'create'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value.create()
   return v.n
 end 'main'
@@ -88,14 +88,14 @@ end 'main'
 <!-- test: export-var-write -->
 ```maxon
 type Value
-  export var n int
+  export var n Integer
 
   static function create() returns Self
     return {n: 10}
   end 'create'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value.create()
   v.n = 42
   return v.n
@@ -108,14 +108,14 @@ end 'main'
 <!-- test: export-let-readonly -->
 ```maxon
 type Config
-  export let version int
+  export let version Integer
 
   static function create() returns Self
     return {version: 42}
   end 'create'
 end 'Config'
 
-function main() returns int
+function main() returns Integer
   var c = Config.create()
   return c.version
 end 'main'
@@ -127,18 +127,18 @@ end 'main'
 <!-- test: private-field-in-method -->
 ```maxon
 type Counter
-  var count int
+  var count Integer
 
   function increment()
     count = count + 1
   end 'increment'
 
-  function getCount() returns int
+  function getCount() returns Integer
     return count
   end 'getCount'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 40}
   c.increment()
   c.increment()
@@ -152,19 +152,19 @@ end 'main'
 <!-- test: mixed-export-fields -->
 ```maxon
 type Box
-  export var value int
-  var secret int
+  export var value Integer
+  var secret Integer
 
-  static function create(v int, s int) returns Self
+  static function create(v Integer, s Integer) returns Self
     return {value: v, secret: s}
   end 'create'
 
-  function getSecret() returns int
+  function getSecret() returns Integer
     return secret
   end 'getSecret'
 end 'Box'
 
-function main() returns int
+function main() returns Integer
   var b = Box.create(20, s: 22)
   return b.value + b.getSecret()
 end 'main'
@@ -176,14 +176,14 @@ end 'main'
 <!-- test: error.unexported-field-read -->
 ```maxon
 type Value
-  var private int
+  var private Integer
 
   static function create() returns Self
     return {private: 42}
   end 'create'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value.create()
   return v.private
 end 'main'
@@ -195,14 +195,14 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:
 <!-- test: error.unexported-field-write -->
 ```maxon
 type Value
-  var private int
+  var private Integer
 
   static function create() returns Self
     return {private: 0}
   end 'create'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value.create()
   v.private = 42
   return 0
@@ -215,19 +215,19 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test
 <!-- test: all-fields-private-by-default -->
 ```maxon
 type Simple
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  static function make(a int, b int) returns Self
+  static function make(a Integer, b Integer) returns Self
     return {x: a, y: b}
   end 'make'
 
-  function sum() returns int
+  function sum() returns Integer
     return x + y
   end 'sum'
 end 'Simple'
 
-function main() returns int
+function main() returns Integer
   var s = Simple.make(20, b: 22)
   return s.sum()
 end 'main'

@@ -17,11 +17,11 @@ Arrays can contain struct values. Each element is a complete copy of the struct.
 <!-- test: array-of-structs-literal -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p1 = Point{x: 1, y: 2}
   var p2 = Point{x: 3, y: 4}
   var points = [p1, p2]
@@ -37,11 +37,11 @@ end 'main'
 <!-- test: array-of-structs-indexed-access -->
 ```maxon
 type Pair
-  export var first int
-  export var second int
+  export var first Integer
+  export var second Integer
 end 'Pair'
 
-function main() returns int
+function main() returns Integer
   var p = Pair{first: 10, second: 20}
   var arr = [p]
   var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
@@ -68,7 +68,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-function main() returns int
+function main() returns Integer
   var items = ItemArray{}
   items.push({color: Color.red})
   items.push({color: Color.green})
@@ -102,7 +102,7 @@ end 'Task'
 
 typealias TaskArray = Array with Task
 
-function main() returns int
+function main() returns Integer
   var tasks = TaskArray{}
   tasks.push({status: Status.pending})
   tasks.push({status: Status.active})

@@ -45,7 +45,7 @@ end 'Color'
 
 typealias ColorMap = Map with (Color, int)
 
-function main() returns int
+function main() returns Integer
   var m = ColorMap{}
   m.insert(Color.red, value: 10)
   m.insert(Color.green, value: 20)
@@ -68,7 +68,7 @@ end 'HttpStatus'
 
 typealias StatusMap = Map with (HttpStatus, String)
 
-function main() returns int
+function main() returns Integer
   var m = StatusMap{}
   m.insert(HttpStatus.ok, value: "OK")
   m.insert(HttpStatus.notFound, value: "Not Found")
@@ -92,7 +92,7 @@ end 'Planet'
 
 typealias PlanetMap = Map with (Planet, int)
 
-function main() returns int
+function main() returns Integer
   var m = PlanetMap{}
   m.insert(Planet.earth, value: 1)
   m.insert(Planet.mars, value: 2)
@@ -114,7 +114,7 @@ enum Direction
   west
 end 'Direction'
 
-function main() returns int
+function main() returns Integer
   var d = Direction.south
   var h = d.hash()
   return h
@@ -132,7 +132,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns int
+function main() returns Integer
   var a = Color.green
   var b = Color.green
   var c = Color.red
@@ -153,12 +153,12 @@ end 'main'
 ```maxon
 enum Container
   empty
-  value(n int)
+  value(n Integer)
 end 'Container'
 
 typealias ContainerMap = Map with (Container, int)
 
-function main() returns int
+function main() returns Integer
   var m = ContainerMap{}
   return 0
 end 'main'
@@ -177,7 +177,7 @@ end 'Grade'
 
 typealias GradeMap = Map with (Grade, int)
 
-function main() returns int
+function main() returns Integer
   var m = GradeMap{}
   m.insert(Grade.excellent, value: 100)
   m.insert(Grade.good, value: 85)
@@ -199,7 +199,7 @@ end 'Color'
 
 typealias ColorMap = Map with (Color, int)
 
-function main() returns int
+function main() returns Integer
   var m = ColorMap{}
   m.insert(Color.red, value: 10)
   m.insert(Color.green, value: 20)
@@ -240,7 +240,7 @@ function getCategoryLevel(category LogCategory) returns LogLevel
   return try categoryLevels.get(category) otherwise LogLevel.NONE
 end 'getCategoryLevel'
 
-function main() returns int
+function main() returns Integer
   setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
   setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
   var compilerLevel = getCategoryLevel(LogCategory.compiler)
@@ -265,7 +265,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns int
+function main() returns Integer
   var m = [Color.red: 10, Color.green: 20, Color.blue: 30]
   for (color, score) in m 'loop'
     m.insert(color, value: score + 1)

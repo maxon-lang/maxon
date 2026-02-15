@@ -2,12 +2,14 @@
 //
 // Purpose: Centralize hash and equality algorithms for string types.
 
+typealias Integer = int(min to max)
+
 // ============================================
 // Hash helpers (djb2 algorithm)
 // ============================================
 
 // hashManagedStringRange - Hash a range in __ManagedMemory using djb2
-function hashManagedStringRange(managed __ManagedMemory, offset int, len int) returns int
+function hashManagedStringRange(managed __ManagedMemory, offset Integer, len Integer) returns Integer
   var h = 5381
   var i = 0
   while i < len 'hash_loop'
@@ -20,7 +22,7 @@ end 'hashManagedStringRange'
 
 /// Hash a __ManagedMemory using the djb2 algorithm
 /// Returns a 32-bit hash value
-export function hashManagedString(managed __ManagedMemory) returns int
+export function hashManagedString(managed __ManagedMemory) returns Integer
   return hashManagedStringRange(managed, offset: 0, len: __managed_memory_len(managed))
 end 'hashManagedString'
 
@@ -29,7 +31,7 @@ end 'hashManagedString'
 // ============================================
 
 // equalsManagedStringRange - Compare two ranges in __ManagedMemorys
-function equalsManagedStringRange(a __ManagedMemory, aOffset int, b __ManagedMemory, bOffset int, len int) returns bool
+function equalsManagedStringRange(a __ManagedMemory, aOffset Integer, b __ManagedMemory, bOffset Integer, len Integer) returns bool
   var i = 0
   while i < len 'compare_loop'
     if __managed_memory_byte_at(a, aOffset + i) != __managed_memory_byte_at(b, bOffset + i) 'byte_check'

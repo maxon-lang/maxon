@@ -47,7 +47,7 @@ Use `_` as a parameter name to indicate an unused parameter. This is useful when
 Multiple discard parameters can be declared using names that start with `_`:
 
 ```maxon
-function callback(_a int, _b String, value float) returns float
+function callback(_a Integer, _b String, value Float) returns Float
   return value * 2.0
 end 'callback'
 ```
@@ -60,11 +60,11 @@ Discard parameters:
 ### Example
 
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(3, b: 4)
 end 'main'
 ```
@@ -77,11 +77,11 @@ end 'main'
 
 <!-- test: simple-function -->
 ```maxon
-function add() returns int
+function add() returns Integer
   return 3 + 4
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add()
 end 'main'
 ```
@@ -92,11 +92,11 @@ end 'main'
 
 <!-- test: with-parameters -->
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(10, b: 20)
 end 'main'
 ```
@@ -107,15 +107,15 @@ end 'main'
 
 <!-- test: nested-calls -->
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function quadruple(x int) returns int
+function quadruple(x Integer) returns Integer
   return double(double(x))
 end 'quadruple'
 
-function main() returns int
+function main() returns Integer
   return quadruple(3)
 end 'main'
 ```
@@ -130,7 +130,7 @@ function doNothing()
   var x = 1
 end 'doNothing'
 
-function main() returns int
+function main() returns Integer
   doNothing()
   return 0
 end 'main'
@@ -146,7 +146,7 @@ function foo() int
   return 0
 end 'foo'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -157,11 +157,11 @@ error E3010: specs/fragments/function-declaration/missing-returns-keyword-error.
 
 <!-- test: discard-single-parameter -->
 ```maxon
-function useSecond(_ int, b int) returns int
+function useSecond(_ Integer, b Integer) returns Integer
   return b
 end 'useSecond'
 
-function main() returns int
+function main() returns Integer
   return useSecond(10, b: 42)
 end 'main'
 ```

@@ -40,7 +40,7 @@ var i = trunc(round(x))   // 4
 
 <!-- test: round.basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.7
   var y = trunc(round(x))
   return y
@@ -52,7 +52,7 @@ end 'main'
 
 <!-- test: round.negative -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var neg = 0.0 - 2.3
   var y = trunc(round(neg))
   return y + 10
@@ -64,7 +64,7 @@ end 'main'
 
 <!-- test: round.halfway -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2.5
   var y = trunc(round(x))
   return y
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: round.rt-basic -->
 <!-- Args: 3.7 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(round(x))
@@ -90,7 +90,7 @@ end 'main'
 <!-- test: round.rt-negative -->
 <!-- Args: -2.3 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(round(x)) + 10
@@ -103,7 +103,7 @@ end 'main'
 <!-- test: round.rt-halfway -->
 <!-- Args: 2.5 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(round(x))

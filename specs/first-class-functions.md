@@ -16,10 +16,10 @@ Function types describe the signature of a function:
 
 ```maxon
 // A function that takes an int and returns an int
-var transform (int) returns int
+var transform (Integer) returns Integer
 
 // A function that takes two ints and returns a bool
-var compare (int, int) returns bool
+var compare (Integer, Integer) returns bool
 
 // A function with no parameters that returns void
 var callback ()
@@ -28,7 +28,7 @@ var callback ()
 Named parameters can be used for documentation:
 
 ```maxon
-var operation (x int, y int) returns int
+var operation (x Integer, y Integer) returns Integer
 ```
 
 ## Function References
@@ -36,11 +36,11 @@ var operation (x int, y int) returns int
 To get a reference to a function, use the function name without parentheses:
 
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns int
+function main() returns Integer
   var f = double      // f is a function reference
   return f(21)        // calls double(21), returns 42
 end 'main'
@@ -54,15 +54,15 @@ end 'main'
 Functions can be passed to other functions:
 
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function triple(n int) returns int
+function triple(n Integer) returns Integer
   return n * 3
 end 'triple'
 
-function main() returns int
+function main() returns Integer
   return apply(triple, x: 10)  // returns 30
 end 'main'
 ```
@@ -75,8 +75,8 @@ end 'main'
 Closures are inline anonymous functions:
 
 ```maxon
-function main() returns int
-  var f = (x int) gives x * 2
+function main() returns Integer
+  var f = (x Integer) gives x * 2
   return f(21)  // returns 42
 end 'main'
 ```
@@ -87,12 +87,12 @@ end 'main'
 Closures can be passed directly to higher-order functions:
 
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns int
-  return apply((n int) gives n + 5, x: 10)  // returns 15
+function main() returns Integer
+  return apply((n Integer) gives n + 5, x: 10)  // returns 15
 end 'main'
 ```
 ```exitcode
@@ -103,11 +103,11 @@ end 'main'
 
 <!-- test: first-class-function.basic-reference -->
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns int
+function main() returns Integer
   var f = double
   return f(21)
 end 'main'
@@ -118,15 +118,15 @@ end 'main'
 
 <!-- test: first-class-function.pass-as-argument -->
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function triple(n int) returns int
+function triple(n Integer) returns Integer
   return n * 3
 end 'triple'
 
-function main() returns int
+function main() returns Integer
   return apply(triple, x: 10)
 end 'main'
 ```
@@ -136,8 +136,8 @@ end 'main'
 
 <!-- test: first-class-function.closure-in-variable -->
 ```maxon
-function main() returns int
-  var f = (x int) gives x * 5
+function main() returns Integer
+  var f = (x Integer) gives x * 5
   return f(8)
 end 'main'
 ```
@@ -147,12 +147,12 @@ end 'main'
 
 <!-- test: first-class-function.closure-as-argument -->
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns int
-  return apply((n int) gives n + 7, x: 10)
+function main() returns Integer
+  return apply((n Integer) gives n + 7, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -161,15 +161,15 @@ end 'main'
 
 <!-- test: first-class-function.multiple-params -->
 ```maxon
-function calculate(f (int, int) returns int, a int, b int) returns int
+function calculate(f (Integer, Integer) returns Integer, a Integer, b Integer) returns Integer
   return f(a, b)
 end 'calculate'
 
-function add(x int, y int) returns int
+function add(x Integer, y Integer) returns Integer
   return x + y
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return calculate(add, a: 15, b: 27)
 end 'main'
 ```
@@ -179,15 +179,15 @@ end 'main'
 
 <!-- test: first-class-function.reassign -->
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function triple(x int) returns int
+function triple(x Integer) returns Integer
   return x * 3
 end 'triple'
 
-function main() returns int
+function main() returns Integer
   var f = double
   var a = f(10)
   f = triple

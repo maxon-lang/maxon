@@ -23,7 +23,7 @@ Comparison operators compare two values and return `true` or `false`.
 ### Example
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   var y = 20
   
@@ -43,7 +43,7 @@ end 'main'
 
 <!-- test: equality -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   if x == 42 'check'
     return 1
@@ -58,7 +58,7 @@ end 'main'
 
 <!-- test: not-equal -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   if x != 20 'check'
     return 1
@@ -73,7 +73,7 @@ end 'main'
 
 <!-- test: greater-than -->
 ```maxon
-function main() returns int
+function main() returns Integer
   if 5 > 3 'check'
     return 42
   end 'check'
@@ -87,7 +87,7 @@ end 'main'
 
 <!-- test: less-than-or-equal -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 5
   var b = 10
   if a <= b 'check'
@@ -103,7 +103,7 @@ end 'main'
 
 <!-- test: float-comparison -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.5
   var y = 2.1
   if x > y 'check'

@@ -20,7 +20,7 @@ Maxon supports basic arithmetic operators for integers:
 
 <!-- test: addition -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 10 + 5
 end 'main'
 ```
@@ -30,7 +30,7 @@ end 'main'
 
 <!-- test: subtraction -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 20-8
 end 'main'
 ```
@@ -40,7 +40,7 @@ end 'main'
 
 <!-- test: multiplication -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 6 * 7
 end 'main'
 ```
@@ -50,7 +50,7 @@ end 'main'
 
 <!-- test: division -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return trunc(100 / 4)
 end 'main'
 ```
@@ -60,7 +60,7 @@ end 'main'
 
 <!-- test: modulo -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 17 mod 5
 end 'main'
 ```
@@ -70,7 +70,7 @@ end 'main'
 
 <!-- test: complex-expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 10 + 5 * 2
 end 'main'
 ```
@@ -80,13 +80,13 @@ end 'main'
 
 <!-- test: div-live-values -->
 ```maxon
-function divLive(a int, b int, x int) returns int
+function divLive(a Integer, b Integer, x Integer) returns Integer
   var preserved = x + 1
   var result = a / b
   return trunc(result + preserved)
 end 'divLive'
 
-function main() returns int
+function main() returns Integer
   return divLive(10, b: 2, x: 5)
 end 'main'
 ```
@@ -96,13 +96,13 @@ end 'main'
 
 <!-- test: mod-live-values -->
 ```maxon
-function modLive(a int, b int, x int) returns int
+function modLive(a Integer, b Integer, x Integer) returns Integer
   var preserved = x + 1
   var result = a mod b
   return result + preserved
 end 'modLive'
 
-function main() returns int
+function main() returns Integer
   return modLive(10, b: 3, x: 5)
 end 'main'
 ```
@@ -112,7 +112,7 @@ end 'main'
 
 <!-- test: div-loop -->
 ```maxon
-function divLoop(n int) returns int
+function divLoop(n Integer) returns Integer
   var sum = 0
   var i = 1
   while i <= n 'loop'
@@ -122,7 +122,7 @@ function divLoop(n int) returns int
   return sum
 end 'divLoop'
 
-function main() returns int
+function main() returns Integer
   return divLoop(5)
 end 'main'
 ```
@@ -132,17 +132,17 @@ end 'main'
 
 <!-- test: div-with-call -->
 ```maxon
-function helper(x int) returns int
+function helper(x Integer) returns Integer
   return x * 2
 end 'helper'
 
-function divCall(a int, b int) returns int
+function divCall(a Integer, b Integer) returns Integer
   var temp = trunc(a / b)
   var result = helper(temp)
   return result + temp
 end 'divCall'
 
-function main() returns int
+function main() returns Integer
   return divCall(10, b: 2)
 end 'main'
 ```
@@ -152,13 +152,13 @@ end 'main'
 
 <!-- test: multi-div -->
 ```maxon
-function multiDiv(a int, b int, c int, d int) returns int
+function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
   var r1 = a / b
   var r2 = c / d
   return trunc(r1 + r2)
 end 'multiDiv'
 
-function main() returns int
+function main() returns Integer
   return multiDiv(10, b: 2, c: 20, d: 4)
 end 'main'
 ```
@@ -168,7 +168,7 @@ end 'main'
 
 <!-- test: register-pressure -->
 ```maxon
-function manyVars(a int, b int, c int, d int, e int, f int) returns int
+function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
   var v1 = a + 1
   var v2 = b + 2
   var v3 = c + 3
@@ -184,7 +184,7 @@ function manyVars(a int, b int, c int, d int, e int, f int) returns int
   return v12
 end 'manyVars'
 
-function main() returns int
+function main() returns Integer
   return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
 end 'main'
 ```

@@ -29,7 +29,7 @@ error E3002: Function 'main' must return int
 
 <!-- test: no-main -->
 ```maxon
-function notmain() returns int
+function notmain() returns Integer
   return 42
 end 'notmain'
 ```
@@ -49,7 +49,7 @@ error E3002: Function 'main' must return int
 
 <!-- test: valid-main -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 42
 end 'main'
 ```
@@ -59,11 +59,11 @@ end 'main'
 
 <!-- test: return-function-call -->
 ```maxon
-function getValue() returns int
+function getValue() returns Integer
   return 42
 end 'getValue'
 
-function main() returns int
+function main() returns Integer
   return getValue()
 end 'main'
 ```
@@ -113,7 +113,7 @@ module {
 
 <!-- test: float-var-if-else -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.14
   if x == 3.14 'check'
     return 1

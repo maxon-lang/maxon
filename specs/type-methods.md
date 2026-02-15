@@ -82,18 +82,18 @@ end 'Point'
 <!-- test: type-method-basic -->
 ```maxon
 type Counter
-  var count int
+  var count Integer
 
   function increment()
     count = count + 1
   end 'increment'
 
-  function get() returns int
+  function get() returns Integer
     return count
   end 'get'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 0}
   c.increment()
   return c.get()
@@ -106,18 +106,18 @@ end 'main'
 <!-- test: type-method-with-params -->
 ```maxon
 type Adder
-  var total int
+  var total Integer
 
-  function add(value int)
+  function add(value Integer)
     total = total + value
   end 'add'
 
-  function getTotal() returns int
+  function getTotal() returns Integer
     return total
   end 'getTotal'
 end 'Adder'
 
-function main() returns int
+function main() returns Integer
   var a = Adder{total: 0}
   a.add(10)
   a.add(32)
@@ -131,14 +131,14 @@ end 'main'
 <!-- test: type-method-returning-value -->
 ```maxon
 type Calculator
-  var value int
+  var value Integer
 
-  function double() returns int
+  function double() returns Integer
     return value * 2
   end 'double'
 end 'Calculator'
 
-function main() returns int
+function main() returns Integer
   var c = Calculator{value: 21}
   return c.double()
 end 'main'
@@ -150,7 +150,7 @@ end 'main'
 <!-- test: type-multiple-methods -->
 ```maxon
 type Counter
-  var count int
+  var count Integer
 
   function increment()
     count = count + 1
@@ -164,12 +164,12 @@ type Counter
     count = 0
   end 'reset'
 
-  function get() returns int
+  function get() returns Integer
     return count
   end 'get'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 10}
   c.increment()
   c.increment()
@@ -184,18 +184,18 @@ end 'main'
 <!-- test: type-method-chain -->
 ```maxon
 type Value
-  var n int
+  var n Integer
 
-  function add(x int)
+  function add(x Integer)
     n = n + x
   end 'add'
 
-  function get() returns int
+  function get() returns Integer
     return n
   end 'get'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value{n: 0}
   v.add(10)
   v.add(20)

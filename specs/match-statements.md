@@ -23,7 +23,7 @@ end 'identifier'
 **Example (simple match):**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   match x 'check'
     1 then return 10
@@ -41,7 +41,7 @@ end 'main'
 You can match multiple patterns in a single case using the `or` keyword:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var input = 3
   match input 'eval'
     1 or 2 then return 10
@@ -59,7 +59,7 @@ end 'main'
 Match expressions return a value and can be used in variable assignments. Use `gives` instead of `then`:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   let result = match x 'convert'
     1 gives 10
@@ -79,7 +79,7 @@ end 'main'
 By default, only the matching case executes. Use `and fallthrough` to continue to the next case's statement:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var role = 1
   var permissions = 0
   match role 'auth'
@@ -111,7 +111,7 @@ enum Direction
   west
 end 'Direction'
 
-function main() returns int
+function main() returns Integer
   var dir = Direction.north
   match dir 'navigate'
     Direction.north then return 1
@@ -132,7 +132,7 @@ If any enum case is missing, the compiler will report an error listing the missi
 You can match on string values using string literals as patterns:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var name = "alice"
   match name 'greet'
     "alice" then return 1
@@ -163,7 +163,7 @@ min/max are only valid for numeric ranges
 **Integer ranges:**
 
 ```maxon
-function grade(score int) returns int
+function grade(score Integer) returns Integer
   match score 'grade'
     90 to 100 then return 65  // 'A'
     80 upto 90 then return 66   // 'B'
@@ -174,7 +174,7 @@ function grade(score int) returns int
   end 'grade'
 end 'grade'
 
-function main() returns int
+function main() returns Integer
   return grade(85)
 end 'main'
 ```
@@ -188,7 +188,7 @@ Characters implement the `Comparable` interface, so they can be used in range pa
 The comparison is lexicographic (byte-by-byte).
 
 ```maxon
-function charType(c Character) returns int
+function charType(c Character) returns Integer
   match c 'classify'
     'a' to 'z' then return 1  // lowercase
     'A' to 'Z' then return 2  // uppercase
@@ -197,7 +197,7 @@ function charType(c Character) returns int
   end 'classify'
 end 'charType'
 
-function main() returns int
+function main() returns Integer
   return charType('G')
 end 'main'
 ```
@@ -208,7 +208,7 @@ end 'main'
 **Open-ended ranges:**
 
 ```maxon
-function classify(age int) returns int
+function classify(age Integer) returns Integer
   match age 'category'
     min upto 0 then return 0       // invalid (negative)
     0 upto 18 then return 1     // minor
@@ -216,7 +216,7 @@ function classify(age int) returns int
   end 'category'
 end 'classify'
 
-function main() returns int
+function main() returns Integer
   return classify(25)
 end 'main'
 ```
@@ -227,7 +227,7 @@ end 'main'
 **Range patterns in match expressions:**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var temp = 25
   let category = match temp 'weather'
     min upto 0 gives 1      // freezing
@@ -245,7 +245,7 @@ end 'main'
 **Combining ranges with `or`:**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 50
   match x 'check'
     1 to 10 or 90 to 100 then return 1   // extreme values
@@ -300,7 +300,7 @@ end 'loop'
 
 <!-- test: match-statements.simple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   match x 'check'
     1 then return 10
@@ -315,7 +315,7 @@ end 'main'
 
 <!-- test: match-statements.default -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 99
   match x 'check'
     1 then return 10
@@ -330,7 +330,7 @@ end 'main'
 
 <!-- test: match-statements.first-case -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     1 then return 10
@@ -345,7 +345,7 @@ end 'main'
 
 <!-- test: match-statements.or-patterns -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   match x 'check'
     1 or 2 then return 10
@@ -360,7 +360,7 @@ end 'main'
 
 <!-- test: match-statements.or-patterns-first -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     1 or 2 then return 10
@@ -375,7 +375,7 @@ end 'main'
 
 <!-- test: match-statements.or-patterns-second -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   match x 'check'
     1 or 2 then return 10
@@ -391,7 +391,7 @@ end 'main'
 
 <!-- test: match-expression.basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   let result = match x 'eval'
     1 gives 10
@@ -407,7 +407,7 @@ end 'main'
 
 <!-- test: match-expression.or-patterns -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 4
   let result = match x 'eval'
     1 or 2 gives 10
@@ -423,7 +423,7 @@ end 'main'
 
 <!-- test: match-expression.default -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 99
   let result = match x 'eval'
     1 gives 10
@@ -440,7 +440,7 @@ end 'main'
 
 <!-- test: match-statements.fallthrough -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   var result = 0
   match x 'check'
@@ -457,7 +457,7 @@ end 'main'
 
 <!-- test: match-statements.fallthrough-chain -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   var result = 0
   match x 'cascade'
@@ -475,7 +475,7 @@ end 'main'
 
 <!-- test: match-statements.fallthrough-to-default -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   var result = 0
   match x 'check'
@@ -493,7 +493,7 @@ end 'main'
 
 <!-- test: match-statements.nested-in-function -->
 ```maxon
-function categorize(n int) returns int
+function categorize(n Integer) returns Integer
   match n 'cat'
     1 or 2 or 3 then return 1
     4 or 5 or 6 then return 2
@@ -501,7 +501,7 @@ function categorize(n int) returns int
   end 'cat'
 end 'categorize'
 
-function main() returns int
+function main() returns Integer
   return categorize(5)
 end 'main'
 ```
@@ -511,7 +511,7 @@ end 'main'
 
 <!-- test: match-statements.assignment -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   var result = 0
   match x 'process'
@@ -528,11 +528,11 @@ end 'main'
 
 <!-- test: match-statements.function-call -->
 ```maxon
-function double(n int) returns int
+function double(n Integer) returns Integer
   return n * 2
 end 'double'
 
-function main() returns int
+function main() returns Integer
   var x = 2
   var result = 0
   match x 'process'
@@ -555,7 +555,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns int
+function main() returns Integer
   var c = Color.green
   match c 'check'
     Color.red then return 1
@@ -576,7 +576,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns int
+function main() returns Integer
   var c = Color.blue
   match c 'check'
     Color.red then return 1
@@ -596,7 +596,7 @@ enum Status
   rejected
 end 'Status'
 
-function main() returns int
+function main() returns Integer
   var s = Status.approved
   let code = match s 'eval'
     Status.pending gives 0
@@ -612,7 +612,7 @@ end 'main'
 
 <!-- test: match-expression.used-in-expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   let doubled = match x 'eval'
     1 gives 10
@@ -628,7 +628,7 @@ end 'main'
 
 <!-- test: error.match-expression-fallthrough -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   let result = match x 'eval'
     1 gives 10 and fallthrough
@@ -643,7 +643,7 @@ error E2001: specs/fragments/match-statements/error.match-expression-fallthrough
 
 <!-- test: error.match-fallthrough-with-return -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     1 then return 10 and fallthrough
@@ -663,7 +663,7 @@ enum Color
   blue
 end 'Color'
 
-function main() returns int
+function main() returns Integer
   var c = Color.green
   match c 'check'
     Color.red then return 1
@@ -677,7 +677,7 @@ error E2026: specs/fragments/match-statements/error.match-enum-not-exhaustive.te
 
 <!-- test: error.match-duplicate-pattern -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     1 then return 10
@@ -692,7 +692,7 @@ error E2027: specs/fragments/match-statements/error.match-duplicate-pattern.test
 
 <!-- test: error.match-type-mismatch -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     "one" then return 10
@@ -706,7 +706,7 @@ error E2028: specs/fragments/match-statements/error.match-type-mismatch.test:5:5
 
 <!-- test: error.match-missing-block-id -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x
     1 then return 10
@@ -720,7 +720,7 @@ error E2042: specs/fragments/match-statements/error.match-missing-block-id.test:
 
 <!-- test: error.match-mismatched-block-id -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     1 then return 10
@@ -734,7 +734,7 @@ error E2043: specs/fragments/match-statements/error.match-mismatched-block-id.te
 
 <!-- test: error.match-default-not-last -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     default then return 0
@@ -749,7 +749,7 @@ error E2029: specs/fragments/match-statements/error.match-default-not-last.test:
 
 <!-- test: match-string.simple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var name = "alice"
   match name 'greet'
     "alice" then return 1
@@ -764,7 +764,7 @@ end 'main'
 
 <!-- test: match-string.second-case -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var name = "bob"
   match name 'greet'
     "alice" then return 1
@@ -779,7 +779,7 @@ end 'main'
 
 <!-- test: match-string.default -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var name = "charlie"
   match name 'greet'
     "alice" then return 1
@@ -794,7 +794,7 @@ end 'main'
 
 <!-- test: match-string.or-patterns -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var name = "carol"
   match name 'greet'
     "alice" or "bob" then return 1
@@ -809,7 +809,7 @@ end 'main'
 
 <!-- test: match-string.expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var name = "bob"
   let code = match name 'lookup'
     "alice" gives 100
@@ -825,7 +825,7 @@ end 'main'
 
 <!-- test: match-range.inclusive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   match x 'check'
     1 to 5 then return 1
@@ -839,7 +839,7 @@ end 'main'
 
 <!-- test: match-range.inclusive-boundary -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   match x 'check'
     1 to 5 then return 1
@@ -853,7 +853,7 @@ end 'main'
 
 <!-- test: match-range.exclusive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 4
   match x 'check'
     1 upto 5 then return 1
@@ -867,7 +867,7 @@ end 'main'
 
 <!-- test: match-range.exclusive-boundary -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   match x 'check'
     1 upto 5 then return 1
@@ -881,7 +881,7 @@ end 'main'
 
 <!-- test: match-range.open-upper -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 100
   match x 'check'
     10 to max then return 1
@@ -895,7 +895,7 @@ end 'main'
 
 <!-- test: match-range.open-lower-inclusive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   match x 'check'
     min to 5 then return 1
@@ -909,7 +909,7 @@ end 'main'
 
 <!-- test: match-range.open-lower-exclusive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   match x 'check'
     min upto 5 then return 1
@@ -923,7 +923,7 @@ end 'main'
 
 <!-- test: match-range.multiple-ranges -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var score = 85
   match score 'grade'
     90 to 100 then return 65
@@ -939,7 +939,7 @@ end 'main'
 
 <!-- test: match-range.negative -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = -5
   match x 'check'
     -10 to -1 then return 1
@@ -953,7 +953,7 @@ end 'main'
 
 <!-- test: match-range.expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var temp = 22
   let category = match temp 'weather'
     min upto 0 gives 1
@@ -970,7 +970,7 @@ end 'main'
 
 <!-- test: match-range.character -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = 'G'
   match c 'classify'
     'a' to 'z' then return 1
@@ -986,7 +986,7 @@ end 'main'
 
 <!-- test: match-range.character-lowercase -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = 'm'
   match c 'classify'
     'a' to 'z' then return 1
@@ -1001,7 +1001,7 @@ end 'main'
 
 <!-- test: match-range.character-digit -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = '7'
   match c 'classify'
     'a' to 'z' then return 1
@@ -1017,7 +1017,7 @@ end 'main'
 
 <!-- test: match-range.with-or -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 95
   match x 'check'
     1 to 10 or 90 to 100 then return 1
@@ -1031,7 +1031,7 @@ end 'main'
 
 <!-- test: match-range.with-or-second -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   match x 'check'
     1 to 10 or 90 to 100 then return 1
@@ -1045,7 +1045,7 @@ end 'main'
 
 <!-- test: match-range.float -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2.5
   match x 'check'
     0.0 to 5.0 then return 1
@@ -1059,7 +1059,7 @@ end 'main'
 
 <!-- test: match-break.basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var result = 0
   match 2 'check'
     1 then result = 10
@@ -1075,7 +1075,7 @@ end 'main'
 
 <!-- test: match-break.labeled -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var result = 0
   match 3 'outer'
     1 then result = 10
@@ -1092,7 +1092,7 @@ end 'main'
 
 <!-- test: match-break.inside-loop -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var result = 0
   var i = 0
   while i < 5 'loop'
@@ -1111,7 +1111,7 @@ end 'main'
 
 <!-- test: match-break.exits-match-not-loop -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var result = 0
   var i = 0
   while i < 3 'loop'

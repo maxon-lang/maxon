@@ -1,98 +1,32 @@
 // Test: int-sequential-divisions
-function main() returns int
+function main() returns Integer
   var a = 100
   var b = 5
   var c = 84
   var d = 4
-  return trunc(a / b + c / d)
+  return a / b + c / d
 end 'main'
 ---
 ExitCode: 41
-RequiredMLIR: ```
-=== maxon
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 5 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 84 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 4 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.int_to_float %0
-    %5 = maxon.int_to_float %1
-    %6 = maxon.binop %4, %5 {op = div} {kind = f64}
-    %7 = maxon.int_to_float %2
-    %8 = maxon.int_to_float %3
-    %9 = maxon.binop %7, %8 {op = div} {kind = f64}
-    %10 = maxon.binop %6, %9 {op = add} {kind = f64}
-    %11 = maxon.trunc %10
-    maxon.return %11
-  }
-}
-=== standard
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 100 : i64}
-    %1 = arith.constant {value = 5 : i64}
-    %2 = arith.constant {value = 84 : i64}
-    %3 = arith.constant {value = 4 : i64}
-    %4 = arith.sitofp %0
-    %5 = arith.sitofp %1
-    %6 = arith.divf %4, %5
-    %7 = arith.sitofp %2
-    %8 = arith.sitofp %3
-    %9 = arith.divf %7, %8
-    %10 = arith.addf %6, %9
-    %11 = arith.fptosi %10
-    func.return %11
-  }
-}
-=== x86
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    x86.mov eax, 100
-    x86.mov ecx, 5
-    x86.mov edx, 84
-    x86.mov ebx, 4
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvtsi2sd xmm3, edx
-    x86.cvtsi2sd xmm4, ebx
-    x86.movsd xmm5, xmm3
-    x86.divsd xmm5, xmm4
-    x86.movsd xmm6, xmm2
-    x86.addsd xmm6, xmm5
-    x86.cvttsd2si eax, xmm6
-    x86.ret
-  }
-}
-```
 ---
 module {
   func @register-allocator.main() -> i64 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 100
     x86.mov ecx, 5
     x86.mov edx, 84
     x86.mov ebx, 4
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvtsi2sd xmm3, edx
-    x86.cvtsi2sd xmm4, ebx
-    x86.movsd xmm5, xmm3
-    x86.divsd xmm5, xmm4
-    x86.movsd xmm6, xmm2
-    x86.addsd xmm6, xmm5
-    x86.cvttsd2si eax, xmm6
+    x86.cqo
+    x86.idiv ecx
+    x86.mov esi, 84
+    x86.mov [rbp-8], eax
+    x86.mov eax, esi
+    x86.cqo
+    x86.idiv ebx
+    x86.mov edi, [rbp-8]
+    x86.lea eax, [edi + eax]
+    x86.epilogue
     x86.ret
   }
 }

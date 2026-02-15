@@ -25,7 +25,7 @@ This test creates a byte buffer, writes sequential byte values at specific
 positions, then reads them back. If element_size is incorrectly hardcoded to 8,
 the byte positions would be calculated wrong (multiplied by 8 instead of 1).
 ```maxon
-function main() returns int
+function main() returns Integer
   // Create a managed memory for 10 bytes (element_size=1)
   var managed = __managed_memory_create(10, 1)
 
@@ -61,7 +61,7 @@ end 'main'
 Test that __managed_memory_grow uses the correct element_size.
 This tests a scenario where we need to grow a byte buffer.
 ```maxon
-function main() returns int
+function main() returns Integer
   // Create a small byte buffer
   var managed = __managed_memory_create(4, 1)
 

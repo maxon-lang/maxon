@@ -40,14 +40,14 @@ Static methods are commonly used for:
 <!-- test: static-method-basic -->
 ```maxon
 type Box
-  export var value int
+  export var value Integer
 
-  static function make(v int) returns Box
+  static function make(v Integer) returns Box
     return {value: v}
   end 'make'
 end 'Box'
 
-function main() returns int
+function main() returns Integer
   var b = Box.make(42)
   return b.value
 end 'main'
@@ -59,14 +59,14 @@ end 'main'
 <!-- test: static-method-no-self -->
 ```maxon
 type Math
-  var unused int
+  var unused Integer
 
-  static function add(a int, b int) returns int
+  static function add(a Integer, b Integer) returns Integer
     return a + b
   end 'add'
 end 'Math'
 
-function main() returns int
+function main() returns Integer
   return Math.add(20, b: 22)
 end 'main'
 ```
@@ -77,9 +77,9 @@ end 'main'
 <!-- test: export-static-method -->
 ```maxon
 type Factory
-  export var id int
+  export var id Integer
 
-  export static function create(val int) returns Factory
+  export static function create(val Integer) returns Factory
     return {id: val}
   end 'create'
 
@@ -88,7 +88,7 @@ type Factory
   end 'zero'
 end 'Factory'
 
-function main() returns int
+function main() returns Integer
   var f1 = Factory.create(100)
   var f2 = Factory.zero()
   return f1.id + f2.id

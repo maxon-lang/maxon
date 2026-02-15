@@ -1,8 +1,8 @@
 // Test: variable-division-optimizes
-function main() returns int
+function main() returns Integer
   var a = 7
   var b = 2
-  return trunc(a / b)      // Should optimize to sdiv after Mem2Reg
+  return a / b              // int/int = truncating int, returns 3
 end 'main'
 ---
 ExitCode: 3
@@ -12,11 +12,8 @@ module {
   entry:
     x86.mov eax, 7
     x86.mov ecx, 2
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si eax, xmm2
+    x86.cqo
+    x86.idiv ecx
     x86.ret
   }
 }

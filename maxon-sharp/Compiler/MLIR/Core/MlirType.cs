@@ -29,10 +29,15 @@ public class MlirType {
 
   public override string ToString() => Name;
 
+  /// Unwrap MlirRangedPrimitiveType to its BaseType for lowering.
+  public static MlirType Resolve(MlirType type) =>
+    type is MlirRangedPrimitiveType rpt ? rpt.BaseType : type;
+
   /// <summary>
   /// Maps an MlirType back to its source-level name for error messages.
   /// </summary>
   public static string FormatAsSourceName(MlirType type) {
+    if (type is MlirRangedPrimitiveType ranged) return ranged.Name;
     if (type == I64) return "int";
     if (type == F64) return "float";
     if (type == I1) return "bool";
@@ -48,7 +53,7 @@ public class MlirType {
 
 public class MlirStructField(string name, MlirType type, bool isExported, bool isMutable, MlirAttribute? defaultValue = null) {
   public string Name { get; } = name;
-  public MlirType Type { get; } = type;
+  public MlirType Type { get; set; } = type;
   public bool IsExported { get; } = isExported;
   public bool IsMutable { get; } = isMutable;
   public MlirAttribute? DefaultValue { get; } = defaultValue;
@@ -94,14 +99,18 @@ public class MlirStructType : MlirType {
   public MlirStructField? GetField(string name) => Fields.FirstOrDefault(f => f.Name == name);
 
   public static MlirStructType CreateTupleType(List<MlirType> elementTypes) {
-    var fields = elementTypes.Select((t, i) =>
+    // Resolve ranged primitive types to base types for consistent tuple struct layout.
+    var resolved = elementTypes.Select(t => MlirType.Resolve(t)).ToList();
+    var fields = resolved.Select((t, i) =>
       new MlirStructField($"_{i}", t, isExported: true, isMutable: true)).ToList();
     var name = TupleMangledName(elementTypes);
     return new MlirStructType(name, fields, isTuple: true);
   }
 
   public static string TupleMangledName(List<MlirType> elementTypes) {
-    return "__Tuple_" + string.Join("_", elementTypes.Select(t => t.Name));
+    // Resolve ranged primitive types to their base types so that e.g.
+    // (Integer, Integer) and (i64, i64) produce the same mangled name.
+    return "__Tuple_" + string.Join("_", elementTypes.Select(t => MlirType.Resolve(t).Name));
   }
 }
 
@@ -175,6 +184,55 @@ public class MlirCharBackingType() : MlirType("char_enum", 8);
 public class MlirTypeParameterType(string parameterName) : MlirType(parameterName) {
   public string ParameterName { get; } = parameterName;
   public override int SizeInBytes => throw new InvalidOperationException($"Type parameter '{ParameterName}' has no size");
+}
+
+/// Represents a primitive type (int, float, byte) with mandatory range constraints.
+/// At the source level this is the alias name (e.g., "Age"); at codegen it lowers to OptimalType.
+public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double lowerBound, double upperBound, bool upperInclusive)
+    : MlirType(aliasName, ComputeOptimalSize(baseType, lowerBound, upperBound)) {
+  public MlirType BaseType { get; } = baseType;
+  public double LowerBound { get; } = lowerBound;
+  public double UpperBound { get; } = upperBound;
+  public bool UpperInclusive { get; } = upperInclusive;
+  public MlirType OptimalType { get; } = ComputeOptimalType(baseType, lowerBound, upperBound);
+
+  public override int ElementSize => OptimalType.SizeInBytes;
+
+  /// Pick the smallest x86-64-optimal type that can represent the range.
+  /// Skips i16 (operand size prefix overhead).
+  private static MlirType ComputeOptimalType(MlirType baseType, double lower, double upper) {
+    if (baseType == F64) return F64;
+    if (lower >= -128 && upper <= 127) return I8;
+    if (lower >= 0 && upper <= 255) return I8;
+    if (lower >= -2147483648 && upper <= 2147483647) return I32;
+    if (lower >= 0 && upper <= 4294967295) return I32;
+    return I64;
+  }
+
+  private static int ComputeOptimalSize(MlirType baseType, double lower, double upper) {
+    return ComputeOptimalType(baseType, lower, upper).SizeInBytes;
+  }
+
+  /// Returns true if this type's range is entirely contained within other's range.
+  public bool IsSubsetOf(MlirRangedPrimitiveType other) {
+    if (BaseType != other.BaseType) return false;
+    var thisUpper = UpperInclusive ? UpperBound : UpperBound - 1;
+    var otherUpper = other.UpperInclusive ? other.UpperBound : other.UpperBound - 1;
+    return LowerBound >= other.LowerBound && thisUpper <= otherUpper;
+  }
+
+  /// Returns the type with the wider range, or null if ranges are incompatible (different base types).
+  public static MlirRangedPrimitiveType? Wider(MlirRangedPrimitiveType a, MlirRangedPrimitiveType b) {
+    if (a.BaseType != b.BaseType) return null;
+    if (a.IsSubsetOf(b)) return b;
+    if (b.IsSubsetOf(a)) return a;
+    return null;
+  }
+
+  public string FormatRange() {
+    var upperOp = UpperInclusive ? "to" : "upto";
+    return $"{FormatAsSourceName(BaseType)}({LowerBound} {upperOp} {UpperBound})";
+  }
 }
 
 public class MlirFunctionType(List<MlirType> parameterTypes, MlirType? returnType) : MlirType(FormatName(parameterTypes, returnType), 8) {

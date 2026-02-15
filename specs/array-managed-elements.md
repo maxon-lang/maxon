@@ -29,12 +29,12 @@ Structs with String fields stored in arrays must have proper refcount management
 ```maxon
 type Item
   export var name String
-  export var value int
+  export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
-function main() returns int
+function main() returns Integer
   var items = ItemArray{}
   items.push({name: "hello world that needs heap allocation", value: 1})
   items.push({name: "another long string for heap allocation", value: 2})
@@ -87,7 +87,7 @@ end 'Pair'
 
 typealias PairArray = Array with Pair
 
-function main() returns int
+function main() returns Integer
   var pairs = PairArray{}
   pairs.push({first: "alpha string that is long for heap", second: "beta string that is long for heap"})
   return 0
@@ -127,15 +127,15 @@ Each managed field in a struct needs its own refcount tracking.
 ```maxon
 type MultiField
   export var a String
-  export var b int
+  export var b Integer
   export var c String
-  export var d int
+  export var d Integer
   export var e String
 end 'MultiField'
 
 typealias MultiArray = Array with MultiField
 
-function main() returns int
+function main() returns Integer
   var items = MultiArray{}
   items.push({a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
   return 0

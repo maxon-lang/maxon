@@ -17,7 +17,7 @@ Maxon supports two kinds of variable declarations:
 
 <!-- test: let-declaration -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let x = 42
   return x
 end 'main'
@@ -28,7 +28,7 @@ end 'main'
 
 <!-- test: var-declaration -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   return x
 end 'main'
@@ -39,7 +39,7 @@ end 'main'
 
 <!-- test: multiple-variables -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let a = 10
   let b = 20
   return a + b
@@ -54,7 +54,7 @@ Top-level `let` with a string literal value.
 ```maxon
 let GREETING = "hello"
 
-function main() returns int
+function main() returns Integer
   if GREETING == "hello" 'check'
     return 1
   end 'check'
@@ -68,7 +68,7 @@ end 'main'
 <!-- test: var-explicit-type-error -->
 Explicit type annotations are not allowed on var declarations.
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0
   return x
 end 'main'
@@ -80,7 +80,7 @@ E002
 <!-- test: let-explicit-type-error -->
 Explicit type annotations are not allowed on let declarations.
 ```maxon
-function main() returns int
+function main() returns Integer
   let x = 0
   return x
 end 'main'

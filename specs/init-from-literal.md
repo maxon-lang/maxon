@@ -21,12 +21,12 @@ type MyString implements InitableFromStringLiteral
     return {_value: value}
   end 'init'
 
-  export function len() returns int
+  export function len() returns Integer
     return _value.byteLength()
   end 'len'
 end 'MyString'
 
-function main() returns int
+function main() returns Integer
   var ms = MyString from "hello"
   print("{ms.len()}\n")
   return 0
@@ -51,12 +51,12 @@ type MyChar implements InitableFromCharLiteral
     return {_value: value}
   end 'init'
 
-  export function len() returns int
+  export function len() returns Integer
     return _value.byteLength()
   end 'len'
 end 'MyChar'
 
-function main() returns int
+function main() returns Integer
   var mc = MyChar from 'A'
   print("{mc.len()}\n")
   return 0
@@ -81,12 +81,12 @@ type Wrapper implements InitableFromStringLiteral
     return {_value: value}
   end 'init'
 
-  export function len() returns int
+  export function len() returns Integer
     return _value.byteLength()
   end 'len'
 end 'Wrapper'
 
-function main() returns int
+function main() returns Integer
   var w = Wrapper from "hello"
   print("{w.len()}\n")
   return 0
@@ -105,12 +105,12 @@ type Wrapper implements InitableFromStringLiteral
     return {_value: value}
   end 'init'
 
-  export function len() returns int
+  export function len() returns Integer
     return _value.byteLength()
   end 'len'
 end 'Wrapper'
 
-function main() returns int
+function main() returns Integer
   var w = Wrapper from ""
   print("len: {w.len()}\n")
   return 0
@@ -129,12 +129,12 @@ type CharWrapper implements InitableFromCharLiteral
     return {_value: value}
   end 'init'
 
-  export function len() returns int
+  export function len() returns Integer
     return _value.byteLength()
   end 'len'
 end 'CharWrapper'
 
-function main() returns int
+function main() returns Integer
   var cw = CharWrapper from 'X'
   print("{cw.len()}\n")
   return 0

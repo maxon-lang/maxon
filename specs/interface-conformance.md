@@ -58,14 +58,14 @@ end 'BadCounter'
 <!-- test: conformance-basic -->
 ```maxon
 interface Counter
-  function get() returns int
+  function get() returns Integer
   function increment()
 end 'Counter'
 
 type SimpleCounter implements Counter
-  var value int
+  var value Integer
 
-  function get() returns int
+  function get() returns Integer
     return value
   end 'get'
 
@@ -74,7 +74,7 @@ type SimpleCounter implements Counter
   end 'increment'
 end 'SimpleCounter'
 
-function main() returns int
+function main() returns Integer
   var c = SimpleCounter{value: 40}
   c.increment()
   c.increment()
@@ -88,26 +88,26 @@ end 'main'
 <!-- test: conformance-multiple-interfaces -->
 ```maxon
 interface Readable
-  function read() returns int
+  function read() returns Integer
 end 'Readable'
 
 interface Writable
-  function write(value int)
+  function write(value Integer)
 end 'Writable'
 
 type Buffer implements Readable, Writable
-  var data int
+  var data Integer
 
-  function read() returns int
+  function read() returns Integer
     return data
   end 'read'
 
-  function write(value int)
+  function write(value Integer)
     data = value
   end 'write'
 end 'Buffer'
 
-function main() returns int
+function main() returns Integer
   var buf = Buffer{data: 0}
   buf.write(42)
   return buf.read()
@@ -120,19 +120,19 @@ end 'main'
 <!-- test: conformance-missing-method -->
 ```maxon
 interface Counter
-  function get() returns int
+  function get() returns Integer
   function increment()
 end 'Counter'
 
 type BadCounter implements Counter
-  var value int
+  var value Integer
 
-  function get() returns int
+  function get() returns Integer
     return value
   end 'get'
 end 'BadCounter'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -144,64 +144,64 @@ error E3016: specs/fragments/interface-conformance/conformance-missing-method.te
 <!-- test: conformance-wrong-param-type -->
 ```maxon
 interface Processor
-  function process(value int) returns int
+  function process(value Integer) returns Integer
 end 'Processor'
 
 type BadProcessor implements Processor
-  function process(value float) returns int
+  function process(value Float) returns Integer
     return 0
   end 'process'
 end 'BadProcessor'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/interface-conformance/conformance-wrong-param-type.test:6:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
-  - process(value float) returns int (expected process(value int) returns int)
+  - process(value Float) returns Integer (expected process(value Integer) returns Integer)
 ```
 
 <!-- test: conformance-wrong-return-type -->
 ```maxon
 interface Provider
-  function provide() returns int
+  function provide() returns Integer
 end 'Provider'
 
 type BadProvider implements Provider
-  function provide() returns float
+  function provide() returns Float
     return 0.0
   end 'provide'
 end 'BadProvider'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type.test:6:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
-  - provide() returns float (expected provide() returns int)
+  - provide() returns Float (expected provide() returns Integer)
 ```
 
 <!-- test: conformance-extra-methods-ok -->
 ```maxon
 interface Simple
-  function getValue() returns int
+  function getValue() returns Integer
 end 'Simple'
 
 type Extended implements Simple
-  var value int
+  var value Integer
 
-  function getValue() returns int
+  function getValue() returns Integer
     return value
   end 'getValue'
 
-  function extraMethod() returns int
+  function extraMethod() returns Integer
     return 100
   end 'extraMethod'
 end 'Extended'
 
-function main() returns int
+function main() returns Integer
   var e = Extended{value: 42}
   return e.getValue()
 end 'main'
@@ -213,14 +213,14 @@ end 'main'
 <!-- test: conformance-no-interface -->
 ```maxon
 type Standalone
-  var value int
+  var value Integer
 
-  function get() returns int
+  function get() returns Integer
     return value
   end 'get'
 end 'Standalone'
 
-function main() returns int
+function main() returns Integer
   var s = Standalone{value: 42}
   return s.get()
 end 'main'
@@ -239,7 +239,7 @@ type MyCollection uses Element implements BuiltinArrayLiteral
   end 'init'
 end 'MyCollection'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```

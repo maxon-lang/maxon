@@ -110,7 +110,7 @@ Create an empty array and verify it starts empty.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   if arr.count() != 0 'check'
     return 1
@@ -131,7 +131,7 @@ Push a single element and retrieve it.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(42)
   var val = try arr.get(0) otherwise -1
@@ -151,7 +151,7 @@ Push multiple elements and verify count.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -172,7 +172,7 @@ Push multiple elements and get each one.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -206,7 +206,7 @@ Set an element and verify the change.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -231,7 +231,7 @@ Test first() and last() methods.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -260,7 +260,7 @@ Pop elements and verify they are removed.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -286,7 +286,7 @@ end 'main'
 Initialize from array literal.
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3]
   
   if arr.count() != 3 'cnt'
@@ -310,7 +310,7 @@ Iterate over array using for-in loop.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -338,7 +338,7 @@ Verify isEmpty changes with push/pop.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
 
   if arr.isEmpty() == false 'e1'
@@ -370,7 +370,7 @@ Clear an array and verify it's empty.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -399,7 +399,7 @@ Get throws error for out of bounds index.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
 
@@ -420,7 +420,7 @@ Reserve capacity for efficiency.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.reserve(100)
 
@@ -445,7 +445,7 @@ Push string literals into an array and retrieve them.
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.push("hello")
   arr.push("world")
@@ -474,7 +474,7 @@ Push longer string literals (heap-allocated) into an array.
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.push("hello this is a longer string")
   arr.push("world this is also a longer string")
@@ -503,7 +503,7 @@ Push string variables into an array.
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   var s1 = "first"
   var s2 = "second"
@@ -530,7 +530,7 @@ Iterate over an array of strings.
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.push("a")
   arr.push("b")
@@ -555,7 +555,7 @@ Get strings from array using get method.
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.push("one")
   arr.push("two")
@@ -580,7 +580,7 @@ Verify string array memory is properly managed (no leaks).
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.push("test string one")
   arr.push("test string two")
@@ -620,7 +620,7 @@ same variable appears on both sides of an assignment with a mutating method call
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr = arr.push(1)
   arr = arr.push(2)

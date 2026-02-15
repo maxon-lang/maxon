@@ -66,7 +66,7 @@ end 'outer'
 
 <!-- test: break.in-loop -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0
   while true 'loop'
     x = x + 1
@@ -83,7 +83,7 @@ end 'main'
 
 <!-- test: break.with-if -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0
   while true 'loop'
     x = x + 1
@@ -100,7 +100,7 @@ end 'main'
 
 <!-- test: break.multiple-conditions -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   var count = 0
   while x < 100 'loop'
@@ -119,7 +119,7 @@ end 'main'
 
 <!-- test: break.labeled-break-outer -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0
   while x < 10 'outer'
     x = x + 1
@@ -139,7 +139,7 @@ end 'main'
 
 <!-- test: break.labeled-break-inner -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0
   var y = 0
   while x < 5 'outer'
@@ -160,7 +160,7 @@ end 'main'
 
 <!-- test: break.labeled-break-triple-nested -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var result = 0
   while true 'outer'
     while true 'middle'
@@ -181,7 +181,7 @@ end 'main'
 
 <!-- test: break.labeled-continue-outer -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0
   var count = 0
   while x < 3 'outer'
@@ -204,7 +204,7 @@ end 'main'
 
 <!-- test: break.labeled-continue-inner -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var sum = 0
   var x = 0
   while x < 3 'outer'
@@ -227,7 +227,7 @@ end 'main'
 
 <!-- test: break.labeled-continue-triple-nested -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var count = 0
   var a = 0
   while a < 2 'outer'

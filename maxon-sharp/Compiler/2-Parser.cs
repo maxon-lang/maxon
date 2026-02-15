@@ -14,6 +14,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MlirFunction<MaxonOp>? _currentFunction;
   private MlirBlock<MaxonOp>? _currentBlock;
   private string? _anonymousStructTypeHint;
+  // Tracks the ranged primitive type name from the most recent construction expression (e.g., Age{42})
+  private string? _lastRangedTypeName;
+  private MlirRangedPrimitiveType? _lastCastRangedType;
   private readonly Dictionary<string, VarInfo> _variables = [];
   private readonly Stack<HashSet<string>> _scopeStack = new();
   private readonly HashSet<string> _referencedVars = [];
@@ -22,6 +25,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Stack<MatchContext> _matchStack = new();
   private bool _inTryContext;
+  private bool _parsingTypeAliasRhs;
+  private bool _parsingExtension;
   private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
     ? new(seedModule.TypeDefs) : [];
   private string? _currentTypeName;
@@ -1073,6 +1078,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return true;
       if (typeEntry is MlirEnumType et && et.ConformingInterfaces.Contains(requiredInterface))
         return true;
+      // Ranged primitive types inherit conformance from their base type
+      if (typeEntry is MlirRangedPrimitiveType rpt)
+        return TypeConformsToInterface(MlirType.FormatAsSourceName(rpt.BaseType), requiredInterface);
     }
     if (_primitiveConformances.TryGetValue(concreteTypeName, out var extInterfaces)
         && extInterfaces.Contains(requiredInterface))
@@ -1264,17 +1272,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     for (int i = 0; i < method.ParamTypeNames.Count; i++) {
       var expectedTypeName = ResolveInterfaceTypeName(method.ParamTypeNames[i], ifaceName, typeName, typeParams);
-      if (expectedTypeName == null || ResolveTypeName(expectedTypeName) != funcParamTypes[i].Name)
+      var expectedResolved = expectedTypeName != null ? ResolveTypeName(expectedTypeName) : null;
+      if (expectedResolved == null || (expectedResolved != funcParamTypes[i].Name
+          && !IsRangedTypeCompatibleWithBase(funcParamTypes[i], expectedResolved)))
         return false;
     }
 
     var expectedReturnName = ResolveInterfaceTypeName(method.ReturnTypeName, ifaceName, typeName, typeParams);
     var expectedReturn = expectedReturnName != null ? ResolveTypeName(expectedReturnName) : MlirType.Void.Name;
     var actualReturn = func.ReturnType?.Name ?? MlirType.Void.Name;
-    if (expectedReturn != actualReturn)
+    if (expectedReturn != actualReturn && !IsRangedTypeCompatibleWithBase(func.ReturnType, expectedReturn))
       return false;
 
     return true;
+  }
+
+  // Ranged types are compatible with their base types in either direction for interface matching
+  private bool IsRangedTypeCompatibleWithBase(MlirType? actualType, string expectedBaseName) {
+    // Actual is ranged, expected is base (e.g., function returns Age, interface expects i64)
+    if (actualType is MlirRangedPrimitiveType rpt)
+      return rpt.BaseType.Name == expectedBaseName;
+    // Expected is ranged, actual is base (e.g., interface expects Integer, function returns i64)
+    if (actualType != null && _typeRegistry.TryGetValue(expectedBaseName, out var expType) && expType is MlirRangedPrimitiveType expRpt)
+      return expRpt.BaseType.Name == actualType.Name;
+    return false;
   }
 
   /// <summary>
@@ -1738,12 +1759,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       Action<MlirModule<MaxonOp>, List<int>, string> processFunction,
       Action<MlirModule<MaxonOp>, string, List<string>, Token>? validateConformance = null) {
     Advance(); // consume 'extension'
+    _parsingExtension = true;
     Token interfaceNameToken;
     if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Bool) || Check(TokenType.Byte)) {
       interfaceNameToken = Advance();
     } else {
       interfaceNameToken = Expect(TokenType.Identifier);
     }
+    _parsingExtension = false;
     var interfaceName = interfaceNameToken.Value;
 
     // Parse optional conformance clause for primitive type extensions
@@ -1960,107 +1983,134 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var aliasNameToken = Expect(TokenType.Identifier);
     var aliasName = aliasNameToken.Value;
     Expect(TokenType.Equals);
+    _parsingTypeAliasRhs = true;
+    try {
 
-    // Tuple type alias: typealias Entry = (Key, Value)
-    if (Check(TokenType.LeftParen)) {
-      var tupleType = (MlirStructType)ParseTypeRef();
-      // Build typeParams from any type parameter fields (e.g., Key, Value)
-      var typeParams = new Dictionary<string, MlirType>();
-      foreach (var field in tupleType.Fields) {
-        if (field.Type is MlirTypeParameterType tp)
-          typeParams[tp.ParameterName] = tp;
+      // Tuple type alias: typealias Entry = (Key, Value)
+      if (Check(TokenType.LeftParen)) {
+        var tupleType = (MlirStructType)ParseTypeRef();
+        // Build typeParams from any type parameter fields (e.g., Key, Value)
+        var typeParams = new Dictionary<string, MlirType>();
+        foreach (var field in tupleType.Fields) {
+          if (field.Type is MlirTypeParameterType tp)
+            typeParams[tp.ParameterName] = tp;
+        }
+        // Create an alias type with the alias name but tuple fields and behavior
+        var aliasType = new MlirStructType(aliasName, [.. tupleType.Fields], isTuple: true,
+          typeParams: typeParams.Count > 0 ? typeParams : null);
+        _typeRegistry[aliasName] = aliasType;
+        _typeAliasSources[aliasName] = tupleType.Name;
+        return;
       }
-      // Create an alias type with the alias name but tuple fields and behavior
-      var aliasType = new MlirStructType(aliasName, [.. tupleType.Fields], isTuple: true,
-        typeParams: typeParams.Count > 0 ? typeParams : null);
-      _typeRegistry[aliasName] = aliasType;
-      _typeAliasSources[aliasName] = tupleType.Name;
-      return;
-    }
 
-    var sourceNameToken = Expect(TokenType.Identifier);
-    var sourceName = sourceNameToken.Value;
+      // Ranged primitive alias: typealias Age = int(0 to 150)
+      if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Byte)) {
+        var primitiveToken = Advance();
+        var baseType = primitiveToken.Type switch {
+          TokenType.Int => MlirType.I64,
+          TokenType.Float => MlirType.F64,
+          TokenType.Byte => MlirType.I8,
+          _ => throw new InvalidOperationException()
+        };
+        Expect(TokenType.LeftParen);
+        var lower = ParseRangeBound(primitiveToken.Value);
+        bool upperInclusive;
+        if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
+        var upper = ParseRangeBound(primitiveToken.Value);
+        Expect(TokenType.RightParen);
+        if (lower > upper || (lower == upper && !upperInclusive))
+          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
+        var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
+        _typeRegistry[aliasName] = rangedType;
+        _typeAliasSources[aliasName] = primitiveToken.Value;
+        return;
+      }
 
-    if (!_typeRegistry.TryGetValue(sourceName, out var sourceType))
-      throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {sourceName}", sourceNameToken.Line, sourceNameToken.Column);
+      var sourceNameToken = Expect(TokenType.Identifier);
+      var sourceName = sourceNameToken.Value;
 
-    // Interface alias: typealias ElementIterable = Iterable with Element
-    if (sourceType is MlirInterfaceType) {
-      var assocTypeNames = _interfaceAssociatedTypes.TryGetValue(sourceName, out var names) ? names : [];
-      if (assocTypeNames.Count == 0)
-        throw new CompileError(ErrorCode.ParserExpectedType, $"Interface '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
+      if (!_typeRegistry.TryGetValue(sourceName, out var sourceType))
+        throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {sourceName}", sourceNameToken.Line, sourceNameToken.Column);
+
+      // Interface alias: typealias ElementIterable = Iterable with Element
+      if (sourceType is MlirInterfaceType) {
+        var assocTypeNames = _interfaceAssociatedTypes.TryGetValue(sourceName, out var names) ? names : [];
+        if (assocTypeNames.Count == 0)
+          throw new CompileError(ErrorCode.ParserExpectedType, $"Interface '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
+
+        Expect(TokenType.With);
+        var ifaceConcreteTypes = new List<MlirType>();
+        if (Check(TokenType.LeftParen)) {
+          Advance();
+          ifaceConcreteTypes.Add(ParseTypeRef());
+          while (Check(TokenType.Comma)) { Advance(); ifaceConcreteTypes.Add(ParseTypeRef()); }
+          Expect(TokenType.RightParen);
+        } else {
+          ifaceConcreteTypes.Add(ParseTypeRef());
+        }
+
+        if (ifaceConcreteTypes.Count != assocTypeNames.Count)
+          throw new CompileError(ErrorCode.ParserExpectedType,
+            $"Interface '{sourceName}' expects {assocTypeNames.Count} type argument(s), got {ifaceConcreteTypes.Count}",
+            aliasNameToken.Line, aliasNameToken.Column);
+
+        var ifaceSubstitution = new Dictionary<string, MlirType>();
+        for (int i = 0; i < assocTypeNames.Count; i++)
+          ifaceSubstitution[assocTypeNames[i]] = ifaceConcreteTypes[i];
+
+        _typeRegistry[aliasName] = new MlirStructType(aliasName, [],
+          conformingInterfaces: [sourceName],
+          typeParams: ifaceSubstitution,
+          isInterfaceAlias: true);
+        _typeAliasSources[aliasName] = sourceName;
+        return;
+      }
+
+      if (sourceType is not MlirStructType sourceStruct)
+        throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' is not a struct type", sourceNameToken.Line, sourceNameToken.Column);
+
+      if (sourceStruct.AssociatedTypeNames.Count == 0)
+        throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
       Expect(TokenType.With);
-      var ifaceConcreteTypes = new List<MlirType>();
+
+      var concreteTypes = new List<MlirType>();
+      var constParams = new Dictionary<string, long>();
+
       if (Check(TokenType.LeftParen)) {
-        Advance();
-        ifaceConcreteTypes.Add(ParseTypeRef());
-        while (Check(TokenType.Comma)) { Advance(); ifaceConcreteTypes.Add(ParseTypeRef()); }
+        Advance(); // consume '('
+        concreteTypes.Add(ParseTypeRef());
+        while (Check(TokenType.Comma)) {
+          Advance();
+          concreteTypes.Add(ParseTypeRef());
+        }
         Expect(TokenType.RightParen);
       } else {
-        ifaceConcreteTypes.Add(ParseTypeRef());
-      }
-
-      if (ifaceConcreteTypes.Count != assocTypeNames.Count)
-        throw new CompileError(ErrorCode.ParserExpectedType,
-          $"Interface '{sourceName}' expects {assocTypeNames.Count} type argument(s), got {ifaceConcreteTypes.Count}",
-          aliasNameToken.Line, aliasNameToken.Column);
-
-      var ifaceSubstitution = new Dictionary<string, MlirType>();
-      for (int i = 0; i < assocTypeNames.Count; i++)
-        ifaceSubstitution[assocTypeNames[i]] = ifaceConcreteTypes[i];
-
-      _typeRegistry[aliasName] = new MlirStructType(aliasName, [],
-        conformingInterfaces: [sourceName],
-        typeParams: ifaceSubstitution,
-        isInterfaceAlias: true);
-      _typeAliasSources[aliasName] = sourceName;
-      return;
-    }
-
-    if (sourceType is not MlirStructType sourceStruct)
-      throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' is not a struct type", sourceNameToken.Line, sourceNameToken.Column);
-
-    if (sourceStruct.AssociatedTypeNames.Count == 0)
-      throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
-
-    Expect(TokenType.With);
-
-    var concreteTypes = new List<MlirType>();
-    var constParams = new Dictionary<string, long>();
-
-    if (Check(TokenType.LeftParen)) {
-      Advance(); // consume '('
-      concreteTypes.Add(ParseTypeRef());
-      while (Check(TokenType.Comma)) {
-        Advance();
+        // Check for "with N Type" form: integer followed by type
+        if (Check(TokenType.IntegerLiteral)) {
+          var intToken = Advance();
+          constParams["__capacity"] = ParseIntegerLiteral(intToken);
+        }
         concreteTypes.Add(ParseTypeRef());
       }
-      Expect(TokenType.RightParen);
-    } else {
-      // Check for "with N Type" form: integer followed by type
-      if (Check(TokenType.IntegerLiteral)) {
-        var intToken = Advance();
-        constParams["__capacity"] = ParseIntegerLiteral(intToken);
+
+      if (concreteTypes.Count != sourceStruct.AssociatedTypeNames.Count)
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          $"Type '{sourceName}' expects {sourceStruct.AssociatedTypeNames.Count} type argument(s), got {concreteTypes.Count}",
+          aliasNameToken.Line, aliasNameToken.Column);
+
+      // Build substitution map: associated type name -> concrete type
+      var substitution = new Dictionary<string, MlirType>();
+      for (int i = 0; i < sourceStruct.AssociatedTypeNames.Count; i++) {
+        substitution[sourceStruct.AssociatedTypeNames[i]] = concreteTypes[i];
       }
-      concreteTypes.Add(ParseTypeRef());
-    }
 
-    if (concreteTypes.Count != sourceStruct.AssociatedTypeNames.Count)
-      throw new CompileError(ErrorCode.ParserExpectedType,
-        $"Type '{sourceName}' expects {sourceStruct.AssociatedTypeNames.Count} type argument(s), got {concreteTypes.Count}",
-        aliasNameToken.Line, aliasNameToken.Column);
+      ValidateWhereConstraints(sourceStruct, substitution, sourceName, aliasNameToken);
 
-    // Build substitution map: associated type name -> concrete type
-    var substitution = new Dictionary<string, MlirType>();
-    for (int i = 0; i < sourceStruct.AssociatedTypeNames.Count; i++) {
-      substitution[sourceStruct.AssociatedTypeNames[i]] = concreteTypes[i];
-    }
+      RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution,
+        constParams.Count > 0 ? constParams : null);
 
-    ValidateWhereConstraints(sourceStruct, substitution, sourceName, aliasNameToken);
-
-    RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution,
-      constParams.Count > 0 ? constParams : null);
+    } finally { _parsingTypeAliasRhs = false; }
   }
 
   private void RegisterConcreteTypeAlias(
@@ -2082,6 +2132,38 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       typeParams: substitution.Count > 0 ? substitution : null);
     Logger.Debug(LogCategory.Parser, $"Registering type alias: {aliasName} -> {sourceName}");
     _typeAliasSources[aliasName] = sourceName;
+  }
+
+  /// Parses a range bound in a ranged typealias: a numeric literal, negative literal, or min/max keyword.
+  private double ParseRangeBound(string baseTypeName) {
+    // min/max keywords
+    if (Check(TokenType.Identifier) && (Current().Value == "min" || Current().Value == "max")) {
+      var keyword = Advance().Value;
+      return (baseTypeName, keyword) switch {
+        ("int", "min") => (double)long.MinValue,
+        ("int", "max") => (double)long.MaxValue,
+        ("float", "min") => double.MinValue,
+        ("float", "max") => double.MaxValue,
+        ("byte", "min") => 0,
+        ("byte", "max") => 255,
+        _ => throw new InvalidOperationException()
+      };
+    }
+    // Negative literal
+    bool negative = false;
+    if (Check(TokenType.Minus)) {
+      Advance();
+      negative = true;
+    }
+    if (Check(TokenType.IntegerLiteral)) {
+      var val = (double)ParseIntegerLiteral(Advance());
+      return negative ? -val : val;
+    }
+    if (Check(TokenType.FloatLiteral)) {
+      var val = ParseFloatLiteral(Advance());
+      return negative ? -val : val;
+    }
+    throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', or 'max' in range bound", Current().Line, Current().Column);
   }
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName, bool isExported = false) {
@@ -3125,6 +3207,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var fnParamOp = new MaxonFunctionParamOp(i + paramOffset, paramNames[i], fnType);
         _currentBlock!.AddOp(fnParamOp);
         _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, false, fnParamOp.Result, _currentBlock!, FnTypeName: fnType);
+      } else if (paramType is MlirRangedPrimitiveType rangedParam) {
+        var kind = rangedParam.BaseType.ToValueKind();
+        var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
+        _currentBlock!.AddOp(paramOp);
+        _variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock!, rangedParam.Name);
       } else if (paramType is MlirTypeParameterType tp) {
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
@@ -3289,12 +3376,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return GetOrCreateTupleType(paramTypes);
     }
 
+    var typeNamePos = _pos;
     var typeName = ExpectTypeName();
     return typeName switch {
-      "int" => MlirType.I64,
-      "float" => MlirType.F64,
+      "int" => _parsingTypeAliasRhs || _parsingExtension || _isStdlib
+        ? MlirType.I64
+        : throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
+            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
+      "float" => _parsingTypeAliasRhs || _parsingExtension || _isStdlib
+        ? MlirType.F64
+        : throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            "Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)",
+            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
+      "byte" => _parsingTypeAliasRhs || _parsingExtension || _isStdlib
+        ? MlirType.I8
+        : throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to 255)",
+            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
       "bool" => MlirType.I1,
-      "byte" => MlirType.I8,
       "cstring" => MlirType.I64, // raw pointer type for FFI
       _ => _typeRegistry.TryGetValue(typeName, out var structType)
         ? structType
@@ -3326,10 +3426,37 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private MaxonValueKind ParseTypeKeyword() {
-    if (Check(TokenType.Int)) { Advance(); return MaxonValueKind.Integer; }
-    if (Check(TokenType.Float)) { Advance(); return MaxonValueKind.Float; }
+    if (Check(TokenType.Int)) {
+      if (!_isStdlib)
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
+          Current().Line, Current().Column);
+      Advance(); return MaxonValueKind.Integer;
+    }
+    if (Check(TokenType.Float)) {
+      if (!_isStdlib)
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          "Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)",
+          Current().Line, Current().Column);
+      Advance(); return MaxonValueKind.Float;
+    }
     if (Check(TokenType.Bool)) { Advance(); return MaxonValueKind.Bool; }
-    if (Check(TokenType.Byte)) { Advance(); return MaxonValueKind.Byte; }
+    if (Check(TokenType.Byte)) {
+      if (!_isStdlib)
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to 255)",
+          Current().Line, Current().Column);
+      Advance(); return MaxonValueKind.Byte;
+    }
+    // Accept ranged typealias names (e.g., "value as Age")
+    if (Check(TokenType.Identifier)) {
+      var name = Current().Value;
+      if (_typeRegistry.TryGetValue(name, out var type) && type is MlirRangedPrimitiveType rpt) {
+        Advance();
+        _lastCastRangedType = rpt;
+        return rpt.BaseType.ToValueKind();
+      }
+    }
     throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name after 'as'", Current().Line, Current().Column);
   }
 
@@ -3961,6 +4088,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseVarOrLetDecl(bool isMutable) {
     Advance(); // consume 'var' or 'let'
+    _lastRangedTypeName = null;
 
     // Tuple destructuring: var (x, y) = expr
     if (Check(TokenType.LeftParen)) {
@@ -3990,7 +4118,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     } else {
       var kind = DetermineValueKind(initValue);
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!);
+      var rangedTypeName = _lastRangedTypeName;
+      _lastRangedTypeName = null;
+      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName);
     }
   }
 
@@ -6377,12 +6507,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Handle 'as' cast expressions (postfix, binds tighter than binary ops)
     while (Check(TokenType.As)) {
       var asToken = Advance(); // consume 'as'
+      _lastCastRangedType = null;
       var targetKind = ParseTypeKeyword();
       var inputVal = ResolveExprValue(lhs);
       var sourceKind = DetermineValueKind(inputVal);
       ValidateCast(sourceKind, targetKind, asToken);
       var castOp = new MaxonCastOp(inputVal, targetKind);
       _currentBlock!.AddOp(castOp);
+      // When casting to a ranged type, propagate the type name
+      if (_lastCastRangedType != null) {
+        _lastRangedTypeName = _lastCastRangedType.Name;
+        _lastCastRangedType = null;
+      }
       lhs = new ExprResult.Direct(castOp.Result);
     }
 
@@ -6486,12 +6622,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           }
         }
 
-        // Division always produces a float result
-        if (entry.Op == MaxonBinOperator.Div && kind == MaxonValueKind.Integer) {
-          promotedLhs = PromoteIntToFloat(promotedLhs);
-          promotedRhs = PromoteIntToFloat(promotedRhs);
-          kind = MaxonValueKind.Float;
-        }
+        // int / int now produces int (truncating division)
+        // int / float or float / int still produces float
       }
 
       var binOp = new MaxonBinOp(resolvedOp, promotedLhs, promotedRhs, kind);
@@ -6672,6 +6804,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (Check(TokenType.Identifier)) {
       var token = Advance();
+
+      // Check for ranged primitive construction: TypeName{value}
+      if (_typeRegistry.TryGetValue(token.Value, out var regType) && regType is MlirRangedPrimitiveType rangedType && Check(TokenType.LeftBrace)) {
+        return ParseRangedPrimitiveConstruction(token, rangedType);
+      }
 
       // Check for struct literal: TypeName{...} or TypeName { ... }
       if (_typeRegistry.ContainsKey(token.Value) && Check(TokenType.LeftBrace)) {
@@ -7141,6 +7278,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               "byte" => MaxonValueKind.Byte,
               null => (MaxonValueKind?)null,
               { } name when IsAssociatedTypeName(name) => MaxonValueKind.TypeParameter,
+              { } name when _typeRegistry.TryGetValue(name, out var rType) && rType is MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
               { } name => throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Unsupported return type '{name}' in interface method '{fieldName}'", fieldToken.Line, fieldToken.Column)
             };
             var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, null);
@@ -7150,6 +7288,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           }
         }
         throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type parameter '{userTypeName}' has no method '{fieldName}'; add a where clause to constrain '{userTypeName}' to an interface that provides '{fieldName}'", fieldToken.Line, fieldToken.Column);
+      }
+
+      // Ranged primitive type: delegate method calls to the base primitive type
+      if (registeredType is MlirRangedPrimitiveType rangedPrimType) {
+        var basePrimName = MlirType.FormatAsSourceName(rangedPrimType.BaseType);
+        if (Check(TokenType.LeftParen)) {
+          var qualifiedMethodName = $"{basePrimName}.{fieldName}";
+          var resolvedMethodName = ResolveMethodName(qualifiedMethodName);
+          if (resolvedMethodName != null) {
+            Advance(); // consume '('
+            var primVal = ResolveExprValue(result);
+            var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedMethodName, fieldToken.Line, fieldToken.Column);
+            var (allArgs, primCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, primVal);
+            var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, primCallee);
+            result = new ExprResult.Direct(callOp.Result ?? primVal);
+            continue;
+          }
+        }
+        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{userTypeName}' has no method '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
       var structType = (MlirStructType)registeredType;
@@ -7723,6 +7880,108 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.AddOp(managedStruct);
 
     return (managedStruct, arrayTag, count, elementKind, elementStructTypeName);
+  }
+
+  /// Parses ranged primitive construction: Age{42}, Count{someExpr}
+  private ExprResult.Direct ParseRangedPrimitiveConstruction(Token typeToken, MlirRangedPrimitiveType rangedType) {
+    Advance(); // consume '{'
+    var innerExpr = ParseExpression();
+    var innerValue = ResolveExprValue(innerExpr);
+    Expect(TokenType.RightBrace);
+
+    var innerKind = DetermineValueKind(innerValue);
+    var expectedKind = rangedType.BaseType == MlirType.I64 ? MaxonValueKind.Integer
+      : rangedType.BaseType == MlirType.F64 ? MaxonValueKind.Float
+      : rangedType.BaseType == MlirType.I8 ? MaxonValueKind.Byte
+      : throw new InvalidOperationException();
+
+    if (innerKind != expectedKind) {
+      // Allow int literal → byte conversion if in range
+      if (expectedKind == MaxonValueKind.Byte && innerKind == MaxonValueKind.Integer) {
+        // Will be validated by range check below
+      } else {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Cannot construct '{rangedType.Name}' from {KindToTypeName(innerKind)}, expected {MlirType.FormatAsSourceName(rangedType.BaseType)}",
+          typeToken.Line, typeToken.Column);
+      }
+    }
+
+    // Compile-time range check for literal constants
+    bool isLiteral = false;
+    if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == innerValue) {
+      double numericValue = litOp.ValueKind switch {
+        MaxonValueKind.Integer => (double)litOp.IntValue,
+        MaxonValueKind.Float => litOp.FloatValue,
+        MaxonValueKind.Byte => (double)litOp.IntValue,
+        _ => double.NaN
+      };
+      if (!double.IsNaN(numericValue)) {
+        isLiteral = true;
+        var upperLimit = rangedType.UpperInclusive ? rangedType.UpperBound : rangedType.UpperBound - 1;
+        if (numericValue < rangedType.LowerBound || numericValue > upperLimit) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Value {litOp.IntValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
+            typeToken.Line, typeToken.Column);
+        }
+      }
+    }
+
+    // Runtime range check for non-constant values
+    if (!isLiteral) {
+      innerValue = EmitRuntimeRangeCheck(innerValue, rangedType, expectedKind);
+    }
+
+    _lastRangedTypeName = rangedType.Name;
+    return new ExprResult.Direct(innerValue);
+  }
+
+  private MaxonValue EmitRuntimeRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind kind) {
+    var checkId = _blockCounter++;
+    var panicLabel = $"__range_panic_{checkId}";
+    var continueLabel = $"__range_ok_{checkId}";
+    var tempVarName = $"__range_val_{checkId}";
+
+    // Store value into temp variable for cross-block access
+    _currentBlock!.AddOp(new MaxonAssignOp(tempVarName, value, true, true, kind));
+    _variables[tempVarName] = new VarInfo(kind, true, value, _currentBlock!, null);
+
+    // For comparisons, use Integer kind for both int and byte base types
+    var cmpKind = kind == MaxonValueKind.Float ? MaxonValueKind.Float : MaxonValueKind.Integer;
+
+    // Emit lower bound check: value < lowerBound
+    MaxonLiteralOp lowerLit = rangedType.BaseType == MlirType.F64
+      ? new MaxonLiteralOp(rangedType.LowerBound)
+      : new MaxonLiteralOp((long)rangedType.LowerBound);
+    _currentBlock!.AddOp(lowerLit);
+    var cmpLower = new MaxonBinOp(MaxonBinOperator.Lt, value, lowerLit.Result, cmpKind);
+    _currentBlock!.AddOp(cmpLower);
+
+    // Emit upper bound check: value > upperBound (or value >= for upto)
+    var upperOp = rangedType.UpperInclusive ? MaxonBinOperator.Gt : MaxonBinOperator.Ge;
+    MaxonLiteralOp upperLit = rangedType.BaseType == MlirType.F64
+      ? new MaxonLiteralOp(rangedType.UpperBound)
+      : new MaxonLiteralOp((long)rangedType.UpperBound);
+    _currentBlock!.AddOp(upperLit);
+    var cmpUpper = new MaxonBinOp(upperOp, value, upperLit.Result, cmpKind);
+    _currentBlock!.AddOp(cmpUpper);
+
+    // Combine: outOfRange = cmpLower || cmpUpper
+    var orOp = new MaxonBinOp(MaxonBinOperator.Or, cmpLower.Result, cmpUpper.Result, MaxonValueKind.Bool);
+    _currentBlock!.AddOp(orOp);
+
+    // Branch: if outOfRange → panic, else → continue
+    _currentBlock!.AddOp(new MaxonCondBrOp(orOp.Result, panicLabel, continueLabel));
+
+    // Panic block
+    var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
+    panicBlock.AddOp(new MaxonPanicOp(
+      $"Range check failed for type '{rangedType.Name}': value outside {rangedType.FormatRange()}"));
+
+    // Continue block — reload value from temp variable
+    _currentBlock = _currentFunction!.Body.AddBlock(continueLabel);
+    var reloadOp = new MaxonVarRefOp(tempVarName, kind);
+    _currentBlock.AddOp(reloadOp);
+    return reloadOp.Result;
   }
 
   private ExprResult.Direct ParseStructLiteral(string typeName) {

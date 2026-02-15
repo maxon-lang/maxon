@@ -40,7 +40,7 @@ var i = trunc(floor(x))   // 3
 
 <!-- test: floor.positive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.9
   var y = trunc(floor(x))
   return y
@@ -52,7 +52,7 @@ end 'main'
 
 <!-- test: floor.negative -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var neg = 0.0 - 3.2
   var y = trunc(floor(neg))
   return y + 10
@@ -64,7 +64,7 @@ end 'main'
 
 <!-- test: floor.with-ceil -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.7
   var a = trunc(floor(x))
   var b = trunc(ceil(x))
@@ -78,7 +78,7 @@ end 'main'
 <!-- test: floor.rt-positive -->
 <!-- Args: 3.9 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(floor(x))
@@ -91,7 +91,7 @@ end 'main'
 <!-- test: floor.rt-negative -->
 <!-- Args: -3.2 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(floor(x)) + 10
@@ -104,7 +104,7 @@ end 'main'
 <!-- test: floor.rt-with-ceil -->
 <!-- Args: 3.7 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   var a = trunc(floor(x))

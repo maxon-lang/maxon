@@ -1,0 +1,29 @@
+// Test: function-param-return
+typealias Score = int(0 to 100)
+
+function double(s Score) returns Score
+  return s * 2
+end 'double'
+
+function main() returns Integer
+  var s = Score{21}
+  return double(s)
+end 'main'
+---
+---
+module {
+  func @ranged-typealias.double(s: i64) -> i64 {
+  entry:
+    x86.mov eax, 2
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.ret
+  }
+  func @ranged-typealias.main() -> i64 {
+  entry:
+    x86.mov eax, 21
+    x86.mov rcx, rax
+    x86.jmp ranged-typealias.double
+  }
+}
+---

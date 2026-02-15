@@ -20,11 +20,11 @@ public static class MlirPrinter {
       if (i > 0) sb.Append(", ");
       if (i < func.ParamNames.Count)
         sb.Append($"{func.ParamNames[i]}: ");
-      sb.Append(func.ParamTypes[i]);
+      sb.Append(MlirType.Resolve(func.ParamTypes[i]));
     }
     sb.Append(')');
     if (func.ReturnType != null && func.ReturnType != MlirType.Void) {
-      sb.Append($" -> {func.ReturnType}");
+      sb.Append($" -> {MlirType.Resolve(func.ReturnType)}");
     }
     sb.AppendLine(" {");
 

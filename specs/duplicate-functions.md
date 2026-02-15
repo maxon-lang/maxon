@@ -35,15 +35,15 @@ Every program must have a `main` function. This is tested in the `basics` spec.
 
 <!-- test: error.same-file-duplicate -->
 ```maxon
-function helper() returns int
+function helper() returns Integer
   return 1
 end 'helper'
 
-function helper() returns int
+function helper() returns Integer
   return 2
 end 'helper'
 
-function main() returns int
+function main() returns Integer
   return helper()
 end 'main'
 ```
@@ -53,11 +53,11 @@ error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate.test:
 
 <!-- test: error.same-file-duplicate-main -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 
-function main() returns int
+function main() returns Integer
   return 1
 end 'main'
 ```
@@ -68,12 +68,12 @@ error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate-main.
 <!-- test: error.multi-file-duplicate-main -->
 ```maxon
 // --- file: a.maxon
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 
 // --- file: b.maxon
-function main() returns int
+function main() returns Integer
   return 1
 end 'main'
 ```

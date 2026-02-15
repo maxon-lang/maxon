@@ -21,7 +21,7 @@ Where `value` is an `int` expression.
 ### Example
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   print("{x}\n")        // Prints: 42
   print("{10 + 5}\n")   // Prints: 15
@@ -45,7 +45,7 @@ Each call to `print("{}\n")` outputs the value followed by a newline.
 
 <!-- test: basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   print("{x}\n")
   return 0
@@ -61,7 +61,7 @@ end 'main'
 
 <!-- test: expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   print("{10 + 5}\n")
   return 0
 end 'main'
@@ -76,7 +76,7 @@ end 'main'
 
 <!-- test: multiple-calls -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   print("{x}\n")
   print("{10 + 5}\n")

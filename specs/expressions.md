@@ -44,7 +44,7 @@ Operands must have compatible types:
 
 <!-- test: compound -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return (2 + 3) * 5
 end 'main'
 ```
@@ -55,12 +55,12 @@ end 'main'
 
 <!-- test: with-function-call -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   return 5 + add(x, b: 4)
 end 'main'
 
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 ```
@@ -71,7 +71,7 @@ end 'add'
 
 <!-- test: multiple-variables -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   var y = 10
   var result = x + y
@@ -85,7 +85,7 @@ end 'main'
 
 <!-- test: mixed-operators -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 3
   return a * 2 + b - 1
@@ -98,7 +98,7 @@ end 'main'
 
 <!-- test: comparison-in-expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var isGreater = 10 > 5
   if isGreater 'check'
     return 1

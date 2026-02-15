@@ -35,7 +35,7 @@ The internal `__ManagedMemory` type is used internally by the `Array` implementa
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(10)
   arr.push(20)
@@ -49,7 +49,7 @@ end 'main'
 
 <!-- test: array-literal-works -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3, 4, 5]
   return arr.count()
 end 'main'

@@ -51,15 +51,15 @@ var same = a.equals(b)  // true
 <!-- test: basic-equal -->
 ```maxon
 type Point implements Equatable
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 
   function equals(other Point) returns bool
     return x == other.x and y == other.y
   end 'equals'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var a = Point{x: 1, y: 2}
   var b = Point{x: 1, y: 2}
   if a.equals(b) 'check'
@@ -75,15 +75,15 @@ end 'main'
 <!-- test: basic-not-equal -->
 ```maxon
 type Point implements Equatable
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 
   function equals(other Point) returns bool
     return x == other.x and y == other.y
   end 'equals'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var a = Point{x: 1, y: 2}
   var b = Point{x: 3, y: 4}
   if a.equals(b) 'check'
@@ -99,14 +99,14 @@ end 'main'
 <!-- test: single-field -->
 ```maxon
 type Wrapper implements Equatable
-  export var value int
+  export var value Integer
 
   function equals(other Wrapper) returns bool
     return value == other.value
   end 'equals'
 end 'Wrapper'
 
-function main() returns int
+function main() returns Integer
   var a = Wrapper{value: 42}
   var b = Wrapper{value: 42}
   var c = Wrapper{value: 99}
@@ -126,15 +126,15 @@ end 'main'
 <!-- test: partial-field-match -->
 ```maxon
 type Point implements Equatable
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 
   function equals(other Point) returns bool
     return x == other.x and y == other.y
   end 'equals'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var a = Point{x: 1, y: 2}
   var b = Point{x: 1, y: 99}
   if a.equals(b) 'check'
@@ -150,14 +150,14 @@ end 'main'
 <!-- test: self-equality -->
 ```maxon
 type Box implements Equatable
-  export var value int
+  export var value Integer
 
   function equals(other Box) returns bool
     return value == other.value
   end 'equals'
 end 'Box'
 
-function main() returns int
+function main() returns Integer
   var a = Box{value: 7}
   if a.equals(a) 'check'
     return 0
@@ -172,7 +172,7 @@ end 'main'
 <!-- test: equals-in-function -->
 ```maxon
 type Id implements Equatable
-  export var n int
+  export var n Integer
 
   function equals(other Id) returns bool
     return n == other.n
@@ -183,7 +183,7 @@ function areEqual(a Id, b Id) returns bool
   return a.equals(b)
 end 'areEqual'
 
-function main() returns int
+function main() returns Integer
   var x = Id{n: 5}
   var y = Id{n: 5}
   var z = Id{n: 6}
@@ -203,14 +203,14 @@ end 'main'
 <!-- test: equals-branching -->
 ```maxon
 type Token implements Equatable
-  export var id int
+  export var id Integer
 
   function equals(other Token) returns bool
     return id == other.id
   end 'equals'
 end 'Token'
 
-function main() returns int
+function main() returns Integer
   var a = Token{id: 10}
   var b = Token{id: 10}
   var c = Token{id: 20}

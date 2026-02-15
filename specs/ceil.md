@@ -40,7 +40,7 @@ var i = trunc(ceil(x))   // 4
 
 <!-- test: ceil.positive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.1
   var y = trunc(ceil(x))
   return y
@@ -52,7 +52,7 @@ end 'main'
 
 <!-- test: ceil.negative -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var neg = 0.0 - 3.9
   var y = trunc(ceil(neg))
   return y + 10
@@ -64,7 +64,7 @@ end 'main'
 
 <!-- test: ceil.exact -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5.0
   var y = trunc(ceil(x))
   return y
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: ceil.rt-positive -->
 <!-- Args: 3.1 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(ceil(x))
@@ -90,7 +90,7 @@ end 'main'
 <!-- test: ceil.rt-negative -->
 <!-- Args: -3.9 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(ceil(x)) + 10
@@ -103,7 +103,7 @@ end 'main'
 <!-- test: ceil.rt-exact -->
 <!-- Args: 5.0 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
   return trunc(ceil(x))

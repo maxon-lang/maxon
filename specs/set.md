@@ -74,7 +74,7 @@ The set automatically grows when the load factor (count/capacity) exceeds 75%. W
 
 <!-- test: basic.creation -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   return s.count()
 end 'main'
@@ -85,7 +85,7 @@ end 'main'
 
 <!-- test: basic.contains-true -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [10, 20, 30]
   if s.contains(20) 'check'
     return 1
@@ -99,7 +99,7 @@ end 'main'
 
 <!-- test: basic.contains-false -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [10, 20, 30]
   if s.contains(99) 'check'
     return 1
@@ -113,7 +113,7 @@ end 'main'
 
 <!-- test: insert.new-element -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   s.insert(4)
   return s.count()
@@ -125,7 +125,7 @@ end 'main'
 
 <!-- test: insert.duplicate -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   s.insert(2)
   return s.count()
@@ -137,7 +137,7 @@ end 'main'
 
 <!-- test: insert.then-contains -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   s.insert(5)
   if s.contains(5) 'check'
@@ -152,7 +152,7 @@ end 'main'
 
 <!-- test: remove.existing -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   var removed = s.remove(2)
   if removed 'check'
@@ -167,7 +167,7 @@ end 'main'
 
 <!-- test: remove.nonexistent -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   var removed = s.remove(99)
   if removed 'check'
@@ -182,7 +182,7 @@ end 'main'
 
 <!-- test: remove.then-contains -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   s.remove(2)
   if s.contains(2) 'check'
@@ -197,7 +197,7 @@ end 'main'
 
 <!-- test: grow.preserves-elements -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
   var allPresent = 1
   var i = 1
@@ -216,7 +216,7 @@ end 'main'
 
 <!-- test: empty.single-element -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [42]
   return s.count()
 end 'main'
@@ -227,7 +227,7 @@ end 'main'
 
 <!-- test: remove-reinsert -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [1, 2, 3]
   s.remove(2)
   s.insert(2)
@@ -243,7 +243,7 @@ end 'main'
 
 <!-- test: negative-values -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = Set from [0 - 5, 0 - 3, 0 - 1, 0, 1, 3, 5]
   if s.contains(0 - 3) 'check'
     return s.count()
@@ -261,7 +261,7 @@ Create an empty set and verify it starts empty.
 ```maxon
 typealias IntSet = Set with int
 
-function main() returns int
+function main() returns Integer
   var s = IntSet{}
   if s.count() != 0 'check'
     return 1

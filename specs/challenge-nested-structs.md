@@ -17,16 +17,16 @@ Structs can contain other structs as fields. The compiler must correctly compute
 <!-- test: nested-struct-simple -->
 ```maxon
 type Inner
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Inner'
 
 type Outer
   export var inner Inner
-  export var z int
+  export var z Integer
 end 'Outer'
 
-function main() returns int
+function main() returns Integer
   var inner = Inner{x: 10, y: 20}
   var outer = Outer{inner: inner, z: 30}
   return outer.inner.x + outer.inner.y + outer.z
@@ -39,7 +39,7 @@ end 'main'
 <!-- test: nested-struct-returned -->
 ```maxon
 type Inner
-  export var value int
+  export var value Integer
 end 'Inner'
 
 type Outer
@@ -51,7 +51,7 @@ function makeOuter() returns Outer
   return {inner: i}
 end 'makeOuter'
 
-function main() returns int
+function main() returns Integer
   var o = makeOuter()
   return o.inner.value
 end 'main'
@@ -63,7 +63,7 @@ end 'main'
 <!-- test: deeply-nested-struct -->
 ```maxon
 type Level1
-  export var value int
+  export var value Integer
 end 'Level1'
 
 type Level2
@@ -74,7 +74,7 @@ type Level3
   export var inner Level2
 end 'Level3'
 
-function main() returns int
+function main() returns Integer
   var l1 = Level1{value: 42}
   var l2 = Level2{inner: l1}
   var l3 = Level3{inner: l2}
@@ -88,8 +88,8 @@ end 'main'
 <!-- test: struct-with-multiple-nested-fields -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
 type Line
@@ -97,7 +97,7 @@ type Line
   export var finish Point
 end 'Line'
 
-function main() returns int
+function main() returns Integer
   var p1 = Point{x: 1, y: 2}
   var p2 = Point{x: 10, y: 20}
   var line = Line{start: p1, finish: p2}

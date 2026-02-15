@@ -43,7 +43,7 @@ String literals are stored in `.rdata` with null termination. The compiler handl
      The source is generated programmatically and cannot be expressed inline.
      See docs/SPECS.md documentation section on stack probing. -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -55,7 +55,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(1)
   arr.push(2)
@@ -70,7 +70,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   if true 'outer'
     var outer_arr = IntArray{}
     outer_arr.push(100)
@@ -90,7 +90,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   var i = 0
   while i < 10 'loop'
@@ -106,7 +106,7 @@ end 'main'
 
 <!-- disabled-test: managed-memory-fixed-size-array-literal-cleanup -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   return try arr.get(1) otherwise 0
 end 'main'
@@ -117,7 +117,7 @@ end 'main'
 
 <!-- test: rdata-constant-array-uses-rdata -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let arr = [10, 20, 30]
   return try arr.get(1) otherwise 0
 end 'main'
@@ -131,7 +131,7 @@ i64[] 10, 20, 30
 
 <!-- test: rdata-bool-array-uses-i8 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let arr = [true, false, true, false]
   var v0 = try arr.get(0) otherwise false
   var v1 = try arr.get(1) otherwise true
@@ -164,12 +164,12 @@ i8[] 1, 0, 1, 0
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns int
-  let arr = [10 as byte, 20 as byte, 30 as byte]
-  var v0 = try arr.get(0) otherwise 0 as byte
-  var v1 = try arr.get(1) otherwise 0 as byte
-  var v2 = try arr.get(2) otherwise 0 as byte
-  return (v0 as int) + (v1 as int) + (v2 as int)
+function main() returns Integer
+  let arr = [10 as Byte, 20 as Byte, 30 as Byte]
+  var v0 = try arr.get(0) otherwise 0 as Byte
+  var v1 = try arr.get(1) otherwise 0 as Byte
+  var v2 = try arr.get(2) otherwise 0 as Byte
+  return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
 end 'main'
 ```
 ```exitcode
@@ -181,7 +181,7 @@ i8[] 10, 20, 30
 
 <!-- test: rdata-cow-mutation-copies-to-heap -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [42]
   arr.set(0, value: 77)
   return try arr.get(0) otherwise 0
@@ -355,7 +355,7 @@ module {
 
 <!-- disabled-test: rdata-cow-multiple-mutations -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3]
   arr.set(0, value: 10)
   arr.set(1, value: 20)
@@ -376,7 +376,7 @@ i64[] 1, 2, 3
 
 <!-- disabled-test: rdata-non-constant-array-uses-heap -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   var arr = [1, x, 3]
   return try arr.get(1) otherwise 0
@@ -388,7 +388,7 @@ end 'main'
 
 <!-- disabled-test: managed-string-heap-string-generates-cleanup -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "this is a heap allocated string!"
   return s.byteLength()
 end 'main'
@@ -402,7 +402,7 @@ utf8 "this is a heap allocated string!\0"
 
 <!-- disabled-test: managed-string-reassignment-handles-old-value -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "first heap allocated value!!"
   s = "second heap allocated here!!"
   return s.byteLength()
@@ -418,7 +418,7 @@ utf8 "second heap allocated here!!\0"
 
 <!-- disabled-test: managed-string-substring-retains-parent -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "hello world from heap!!"
   var subManaged = __managed_memory_slice(s._managed, 0, 5)
   return __managed_memory_len(subManaged)
@@ -430,7 +430,7 @@ end 'main'
 
 <!-- disabled-test: managed-string-print-heap-string -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "heap allocated string here!!"
   return s.byteLength()
 end 'main'
@@ -444,7 +444,7 @@ utf8 "heap allocated string here!!\0"
 
 <!-- disabled-test: managed-string-short-string-sso -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "short"
   return s.byteLength()
 end 'main'
@@ -458,7 +458,7 @@ utf8 "short\0"
 
 <!-- disabled-test: managed-string-loop-concatenation-cleanup -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = ""
   var a = "a"
   var i = 0
@@ -475,7 +475,7 @@ end 'main'
 
 <!-- disabled-test: managed-string-literal-deduplication -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = "hello world"
   var b = "hello world"
   var c = "hello world"

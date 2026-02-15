@@ -1,8 +1,8 @@
 // Test: complex-expression
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 3
-  var result = (a + b) * 2 - trunc(a / b)
+  var result = (a + b) * 2 - a / b
   return result
 end 'main'
 ---
@@ -11,18 +11,19 @@ ExitCode: 23
 module {
   func @arithmetic-operators.main() -> i64 {
   entry:
+    x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 3
     x86.lea edx, [eax + ecx]
     x86.mov ebx, 2
     x86.imul edx, ebx
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si esi, xmm2
-    x86.sub edx, esi
-    x86.mov eax, edx
+    x86.mov [rbp-8], edx
+    x86.cqo
+    x86.idiv ecx
+    x86.mov esi, [rbp-8]
+    x86.sub esi, eax
+    x86.mov eax, esi
+    x86.epilogue
     x86.ret
   }
 }

@@ -75,11 +75,11 @@ Note: When there's no collision, unqualified names continue to work normally.
 
 <!-- test: export-function-basic -->
 ```maxon
-export function helper() returns int
+export function helper() returns Integer
   return 21
 end 'helper'
 
-function main() returns int
+function main() returns Integer
   return helper() + helper()
 end 'main'
 ```
@@ -90,15 +90,15 @@ end 'main'
 <!-- test: export-type-basic -->
 ```maxon
 export type Point
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  export function sum() returns int
+  export function sum() returns Integer
     return x + y
   end 'sum'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 20, y: 22}
   return p.sum()
 end 'main'
@@ -109,11 +109,11 @@ end 'main'
 
 <!-- test: non-export-function-works -->
 ```maxon
-function helper() returns int
+function helper() returns Integer
   return 42
 end 'helper'
 
-function main() returns int
+function main() returns Integer
   return helper()
 end 'main'
 ```
@@ -123,15 +123,15 @@ end 'main'
 
 <!-- test: mixed-export-and-non-export -->
 ```maxon
-export function publicFunc() returns int
+export function publicFunc() returns Integer
   return privateFunc() + 20
 end 'publicFunc'
 
-function privateFunc() returns int
+function privateFunc() returns Integer
   return 22
 end 'privateFunc'
 
-function main() returns int
+function main() returns Integer
   return publicFunc()
 end 'main'
 ```
@@ -141,9 +141,9 @@ end 'main'
 
 <!-- test: export-typealias-basic -->
 ```maxon
-export typealias IntArray = Array with int
+export typealias IntArray = Array with Integer
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(42)
   return try arr.get(0) otherwise 0
@@ -155,7 +155,7 @@ end 'main'
 
 <!-- test: export-typealias-in-type-field -->
 ```maxon
-export typealias IntArray = Array with int
+export typealias IntArray = Array with Integer
 
 type Container
   export var items IntArray
@@ -164,11 +164,11 @@ type Container
     return {items: IntArray{}}
   end 'create'
 
-  function add(n int)
+  function add(n Integer)
     items.push(n)
   end 'add'
 
-  function sum() returns int
+  function sum() returns Integer
     var total = 0
     for item in items 'loop'
       total = total + item
@@ -177,7 +177,7 @@ type Container
   end 'sum'
 end 'Container'
 
-function main() returns int
+function main() returns Integer
   var c = Container.create()
   c.add(20)
   c.add(22)
@@ -190,7 +190,7 @@ end 'main'
 
 <!-- test: export-typealias-as-return-type -->
 ```maxon
-export typealias IntArray = Array with int
+export typealias IntArray = Array with Integer
 
 function makeArray() returns IntArray
   var arr = IntArray{}
@@ -198,7 +198,7 @@ function makeArray() returns IntArray
   return arr
 end 'makeArray'
 
-function main() returns int
+function main() returns Integer
   var arr = makeArray()
   return try arr.get(0) otherwise 0
 end 'main'
@@ -211,7 +211,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push(42)
   return try arr.get(0) otherwise 0
@@ -224,12 +224,12 @@ end 'main'
 <!-- test: exported-function-cross-file -->
 ```maxon
 // --- file: helper.maxon
-export function helper() returns int
+export function helper() returns Integer
   return 42
 end 'helper'
 
 // --- file: main.maxon
-function main() returns int
+function main() returns Integer
   return helper()
 end 'main'
 ```
@@ -239,11 +239,11 @@ end 'main'
 
 <!-- test: non-exported-function-same-file -->
 ```maxon
-function privateHelper() returns int
+function privateHelper() returns Integer
   return 99
 end 'privateHelper'
 
-function main() returns int
+function main() returns Integer
   return privateHelper()
 end 'main'
 ```
@@ -254,12 +254,12 @@ end 'main'
 <!-- test: error.non-exported-function-cross-file -->
 ```maxon
 // --- file: helper.maxon
-function privateHelper() returns int
+function privateHelper() returns Integer
   return 99
 end 'privateHelper'
 
 // --- file: main.maxon
-function main() returns int
+function main() returns Integer
   return privateHelper()
 end 'main'
 ```
@@ -275,7 +275,7 @@ type Container
   var items BadArray
 end 'Container'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```

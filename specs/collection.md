@@ -27,7 +27,7 @@ Arrays automatically implement the Collection interface.
 Returns the number of elements in the collection.
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3, 4, 5]
   print("{arr.count()}\n")
   return 0
@@ -45,7 +45,7 @@ end 'main'
 Returns the element at the specified index, or throws ArrayError if out of bounds.
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   var val = try arr.get(1) otherwise 0
   return val
@@ -60,7 +60,7 @@ end 'main'
 Sets the element at the specified index. Returns self for method chaining.
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3]
   arr.set(1, value: 99)
   var val = try arr.get(1) otherwise 0
@@ -95,11 +95,11 @@ A new array containing the transformed elements.
 Transform an array using a named function:
 
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns int
+function main() returns Integer
   var numbers = [1, 2, 3, 4, 5]
   var doubled = numbers.map(double)
   var val = try doubled.get(2) otherwise 0
@@ -119,9 +119,9 @@ end 'main'
 Transform using an inline closure with `gives`:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var numbers = [1, 2, 3]
-  var squared = numbers.map((x int) gives x * x)
+  var squared = numbers.map((x Integer) gives x * x)
   var val0 = try squared.get(0) otherwise 0
   var val1 = try squared.get(1) otherwise 0
   var val2 = try squared.get(2) otherwise 0
@@ -144,7 +144,7 @@ end 'main'
 
 <!-- test: count-basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3, 4, 5]
   print("{arr.count()}\n")
   return 0
@@ -161,7 +161,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   print("{arr.count()}\n")
   return 0
@@ -176,7 +176,7 @@ end 'main'
 
 <!-- test: get-valid -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   var val0 = try arr.get(0) otherwise 0
   var val2 = try arr.get(2) otherwise 0
@@ -189,7 +189,7 @@ end 'main'
 
 <!-- test: get-out-of-bounds -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3]
   var val = try arr.get(10) otherwise 6
   return val
@@ -201,7 +201,7 @@ end 'main'
 
 <!-- test: set-basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3]
   arr.set(0, value: 100)
   arr.set(2, value: 300)
@@ -225,11 +225,11 @@ end 'main'
 
 <!-- test: map-basic-transform -->
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3, 4, 5]
   var result = arr.map(double)
   var val0 = try result.get(0) otherwise 0
@@ -258,9 +258,9 @@ end 'main'
 
 <!-- test: map-closure-multiply -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [2, 3, 4]
-  var result = arr.map((x int) gives x * 3)
+  var result = arr.map((x Integer) gives x * 3)
   var val0 = try result.get(0) otherwise 0
   var val1 = try result.get(1) otherwise 0
   var val2 = try result.get(2) otherwise 0
@@ -281,9 +281,9 @@ end 'main'
 
 <!-- test: map-closure-square -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3, 4]
-  var squared = arr.map((n int) gives n * n)
+  var squared = arr.map((n Integer) gives n * n)
   var val0 = try squared.get(0) otherwise 0
   var val1 = try squared.get(1) otherwise 0
   var val2 = try squared.get(2) otherwise 0
@@ -307,11 +307,11 @@ end 'main'
 
 <!-- test: map-identity-function -->
 ```maxon
-function identity(x int) returns int
+function identity(x Integer) returns Integer
   return x
 end 'identity'
 
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   var result = arr.map(identity)
   var val0 = try result.get(0) otherwise 0
@@ -334,11 +334,11 @@ end 'main'
 
 <!-- test: map-negate -->
 ```maxon
-function negate(x int) returns int
+function negate(x Integer) returns Integer
   return 0 - x
 end 'negate'
 
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3]
   var result = arr.map(negate)
   var val0 = try result.get(0) otherwise 0
@@ -361,9 +361,9 @@ end 'main'
 
 <!-- test: map-single-element -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [42]
-  var result = arr.map((x int) gives x + 8)
+  var result = arr.map((x Integer) gives x + 8)
   var val = try result.get(0) otherwise 0
   print("{val}\n")
   return 0

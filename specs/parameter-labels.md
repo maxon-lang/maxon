@@ -16,11 +16,11 @@ All function and method calls require named arguments using colon syntax. This i
 All arguments must be named using `name: value` syntax:
 
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(a: 3, b: 4)
 end 'main'
 ```
@@ -34,11 +34,11 @@ end 'main'
 Named arguments can appear in any order:
 
 ```maxon
-function subtract(a int, b int) returns int
+function subtract(a Integer, b Integer) returns Integer
   return a - b
 end 'subtract'
 
-function main() returns int
+function main() returns Integer
   return subtract(b: 3, a: 10)
 end 'main'
 ```
@@ -52,11 +52,11 @@ end 'main'
 Parameters with default values can be omitted:
 
 ```maxon
-function repeat(value int, times int = 1) returns int
+function repeat(value Integer, times Integer = 1) returns Integer
   return value * times
 end 'repeat'
 
-function main() returns int
+function main() returns Integer
   return repeat(value: 7, times: 6)
 end 'main'
 ```
@@ -69,11 +69,11 @@ end 'main'
 
 <!-- test: named-args -->
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(a: 3, b: 4)
 end 'main'
 ```
@@ -83,11 +83,11 @@ end 'main'
 
 <!-- test: named-args-multiply -->
 ```maxon
-function multiply(x int, y int) returns int
+function multiply(x Integer, y Integer) returns Integer
   return x * y
 end 'multiply'
 
-function main() returns int
+function main() returns Integer
   return multiply(x: 6, y: 7)
 end 'main'
 ```
@@ -97,11 +97,11 @@ end 'main'
 
 <!-- test: named-args-any-order -->
 ```maxon
-function subtract(a int, b int) returns int
+function subtract(a Integer, b Integer) returns Integer
   return a - b
 end 'subtract'
 
-function main() returns int
+function main() returns Integer
   return subtract(b: 3, a: 10)
 end 'main'
 ```
@@ -111,11 +111,11 @@ end 'main'
 
 <!-- test: default-param-named -->
 ```maxon
-function repeat(value int, times int = 1) returns int
+function repeat(value Integer, times Integer = 1) returns Integer
   return value * times
 end 'repeat'
 
-function main() returns int
+function main() returns Integer
   return repeat(value: 7, times: 6)
 end 'main'
 ```
@@ -125,11 +125,11 @@ end 'main'
 
 <!-- test: default-param-omitted -->
 ```maxon
-function repeat(value int, times int = 2) returns int
+function repeat(value Integer, times Integer = 2) returns Integer
   return value * times
 end 'repeat'
 
-function main() returns int
+function main() returns Integer
   return repeat(value: 21)
 end 'main'
 ```
@@ -139,11 +139,11 @@ end 'main'
 
 <!-- test: error-missing-param-name -->
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(3, 4)
 end 'main'
 ```
@@ -153,11 +153,11 @@ error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:7:10
 
 <!-- test: error-unknown-param-name -->
 ```maxon
-function greet(name int) returns int
+function greet(name Integer) returns Integer
   return name
 end 'greet'
 
-function main() returns int
+function main() returns Integer
   return greet(person: 42)
 end 'main'
 ```

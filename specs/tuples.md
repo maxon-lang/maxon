@@ -51,7 +51,7 @@ end 'loop'
 Tuples can be used as function parameters and return types:
 
 ```text
-function swap(t (int, int)) returns (int, int)
+function swap(t (Integer, Integer)) returns (Integer, Integer)
   return (t.1, t.0)
 end 'swap'
 ```
@@ -60,7 +60,7 @@ end 'swap'
 
 <!-- test: basic-tuple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var t = (10, 32)
   return t.0 + t.1
 end 'main'
@@ -71,7 +71,7 @@ end 'main'
 
 <!-- test: mixed-type-tuple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var t = (40, 2.5)
   return t.0 + trunc(t.1)
 end 'main'
@@ -82,11 +82,11 @@ end 'main'
 
 <!-- test: tuple-as-param -->
 ```maxon
-function sum(t (int, int)) returns int
+function sum(t (Integer, Integer)) returns Integer
   return t.0 + t.1
 end 'sum'
 
-function main() returns int
+function main() returns Integer
   var t = (10, 32)
   return sum(t)
 end 'main'
@@ -97,11 +97,11 @@ end 'main'
 
 <!-- test: tuple-as-return -->
 ```maxon
-function makePair(a int, b int) returns (int, int)
+function makePair(a Integer, b Integer) returns (Integer, Integer)
   return (a, b)
 end 'makePair'
 
-function main() returns int
+function main() returns Integer
   var t = makePair(10, b: 32)
   return t.0 + t.1
 end 'main'
@@ -112,11 +112,11 @@ end 'main'
 
 <!-- test: tuple-destructuring -->
 ```maxon
-function makePair(a int, b int) returns (int, int)
+function makePair(a Integer, b Integer) returns (Integer, Integer)
   return (a, b)
 end 'makePair'
 
-function main() returns int
+function main() returns Integer
   var (x, y) = makePair(10, b: 32)
   return x + y
 end 'main'
@@ -127,7 +127,7 @@ end 'main'
 
 <!-- test: three-element-tuple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var t = (1, 2, 39)
   return t.0 + t.1 + t.2
 end 'main'
@@ -138,7 +138,7 @@ end 'main'
 
 <!-- test: tuple-field-write -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var t = (0, 0)
   t.0 = 20
   t.1 = 22
@@ -151,7 +151,7 @@ end 'main'
 
 <!-- test: tuple-with-string -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var t = (42, "hello")
   return t.0
 end 'main'
@@ -162,7 +162,7 @@ end 'main'
 
 <!-- test: let-destructuring -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let (x, y) = (10, 32)
   return x + y
 end 'main'
@@ -173,7 +173,7 @@ end 'main'
 
 <!-- test: for-destructuring-map -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var m = ["a": 10, "b": 32]
   var sum = 0
   for (key, value) in m 'loop'

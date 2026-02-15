@@ -71,14 +71,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   if try mayFail(true) 'check'
     result = 1
@@ -96,14 +96,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   if try mayFail(false) 'check'
     result = 1
@@ -121,14 +121,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   if let value = try mayFail(true) 'check'
     return value
   end 'check'
@@ -145,14 +145,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   if let value = try mayFail(false) 'check'
     return value
   end 'check'
@@ -169,14 +169,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   if try mayFail(false) 'check'
     result = 1
@@ -196,14 +196,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   if try mayFail(true) 'check'
     result = 1
@@ -223,14 +223,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   if let value = try mayFail(false) 'check'
     return value
   end 'check' else 'err'
@@ -249,14 +249,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   if let value = try mayFail(true) 'check'
     return value
   end 'check' else 'err'
@@ -276,7 +276,7 @@ enum MyError implements Error
   second
 end 'MyError'
 
-function mayFail(which int) returns int throws MyError
+function mayFail(which Integer) returns Integer throws MyError
   if which == 1 'check1'
     throw MyError.first
   end 'check1'
@@ -286,7 +286,7 @@ function mayFail(which int) returns int throws MyError
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   if try mayFail(1) 'check'
     result = 100
@@ -306,14 +306,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(succeed bool) returns int throws MyError
+function mayFail(succeed bool) returns Integer throws MyError
   if not succeed 'check'
     throw MyError.failed
   end 'check'
   return 42
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   if try mayFail(true) 'outer'
     if try mayFail(true) 'inner'
@@ -333,14 +333,14 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail(n int) returns int throws MyError
+function mayFail(n Integer) returns Integer throws MyError
   if n < 3 'check'
     throw MyError.failed
   end 'check'
   return n
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var sum = 0
   var i = 0
   while i < 5 'loop'
@@ -360,11 +360,11 @@ end 'main'
 Using `if try` with a non-throwing function is a compile-time error.
 
 ```maxon
-function noThrow() returns int
+function noThrow() returns Integer
   return 42
 end 'noThrow'
 
-function main() returns int
+function main() returns Integer
   if try noThrow() 'check'
     return 1
   end 'check'
@@ -403,7 +403,7 @@ function mayFail(succeed bool) returns MultiManaged throws MyError
   return {numbers: nums, text: "hello", tag: "world"}
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   var i = 0
   while i < 3 'loop'
@@ -500,7 +500,7 @@ function createOuter() returns Outer
   return outer
 end 'createOuter'
 
-function main() returns int
+function main() returns Integer
   var outer = createOuter()
   return try outer.inner.values.get(0) otherwise 0
 end 'main'

@@ -16,7 +16,7 @@ The compiler validates that function and method arguments match the expected par
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.append("hello")
   return 0
@@ -30,7 +30,7 @@ error E3005: specs/fragments/type-checking/method-call-wrong-self-type.test:6:7:
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.push("hello")
   return 0
@@ -42,28 +42,28 @@ error E3005: specs/fragments/type-checking/method-call-wrong-element-type.test:6
 
 <!-- test: function-call-string-where-int-expected -->
 ```maxon
-function takeInt(n int) returns int
+function takeInt(n Integer) returns Integer
   return n
 end 'takeInt'
 
-function main() returns int
+function main() returns Integer
   takeInt("hello")
   return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-string-where-int-expected.test:7:3: argument type mismatch for 'n': expected 'int', got 'String'
+error E3005: specs/fragments/type-checking/function-call-string-where-int-expected.test:7:3: argument type mismatch for 'n': expected 'Integer', got 'String'
 ```
 
 <!-- test: function-call-primitive-where-struct-expected -->
 ```maxon
 typealias IntArray = Array with int
 
-function takeArray(arr IntArray) returns int
+function takeArray(arr IntArray) returns Integer
   return arr.count()
 end 'takeArray'
 
-function main() returns int
+function main() returns Integer
   takeArray(42)
   return 0
 end 'main'
@@ -75,20 +75,20 @@ error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-
 <!-- test: function-call-wrong-struct-type -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
 type Size
-  export var w int
-  export var h int
+  export var w Integer
+  export var h Integer
 end 'Size'
 
-function takePoint(p Point) returns int
+function takePoint(p Point) returns Integer
   return p.x
 end 'takePoint'
 
-function main() returns int
+function main() returns Integer
   var s = Size{}
   takePoint(s)
   return 0
@@ -100,7 +100,7 @@ error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:
 
 <!-- test: stdlib-function-call-wrong-type -->
 ```maxon
-function main() returns int
+function main() returns Integer
   print(42)
   return 0
 end 'main'
@@ -121,7 +121,7 @@ type Container
   end 'addWrong'
 end 'Container'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -134,7 +134,7 @@ error E3005: specs/fragments/type-checking/implicit-method-call-wrong-type.test:
 typealias IntArray = Array with int
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var ints = IntArray{}
   var strings = StringArray{}
   ints.append(strings)
@@ -150,10 +150,10 @@ error E3005: specs/fragments/type-checking/array-of-different-element-types.test
 typealias FooArray = Array with Foo
 
 type Foo
-  let value int
+  let value Integer
 end 'Foo'
 
-function main() returns int
+function main() returns Integer
   var arr = FooArray{}
   arr.push({value: 42})
   return arr.count() - 1
@@ -173,10 +173,10 @@ end 'Container'
 typealias ItemArray = Array with Item
 
 type Item
-  export let value int
+  export let value Integer
 end 'Item'
 
-function main() returns int
+function main() returns Integer
   var c = Container{items: ItemArray{}}
   c.items.push({value: 7})
   return c.items.count()

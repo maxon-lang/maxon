@@ -76,7 +76,7 @@ arr.set(1, value: 200)
 
 <!-- test: literal-first -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return try [10, 20, 30].get(0) otherwise 0
 end 'main'
 ```
@@ -86,7 +86,7 @@ end 'main'
 
 <!-- test: literal-middle -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   return try arr.get(1) otherwise 0
 end 'main'
@@ -97,7 +97,7 @@ end 'main'
 
 <!-- test: literal-last -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   return try arr.get(2) otherwise 0
 end 'main'
@@ -108,7 +108,7 @@ end 'main'
 
 <!-- test: five-elements -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [5, 10, 15, 20, 25]
   return try arr.get(4) otherwise 0
 end 'main'
@@ -119,7 +119,7 @@ end 'main'
 
 <!-- test: index-assignment -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   arr.set(0, value: 100)
   return try arr.get(0) otherwise 0
@@ -131,7 +131,7 @@ end 'main'
 
 <!-- test: assignment-middle -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3]
   arr.set(1, value: 42)
   return try arr.get(1) otherwise 0
@@ -143,7 +143,7 @@ end 'main'
 
 <!-- test: assignment-last -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [1, 2, 3, 4, 5]
   arr.set(4, value: 99)
   return try arr.get(4) otherwise 0
@@ -155,7 +155,7 @@ end 'main'
 
 <!-- test: multiple-access -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [5, 10, 15, 20, 25]
   var a = try arr.get(2) otherwise 0
   var b = try arr.get(4) otherwise 0
@@ -168,7 +168,7 @@ end 'main'
 
 <!-- test: assignment-preserves-others -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   arr.set(0, value: 100)
   return try arr.get(1) otherwise 0
@@ -180,7 +180,7 @@ end 'main'
 
 <!-- test: multiple-assignments -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [0, 0, 0]
   arr.set(0, value: 1)
   arr.set(1, value: 2)
@@ -197,7 +197,7 @@ end 'main'
 
 <!-- test: let-array-first -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let arr = [10, 20, 30]
   return try arr.get(0) otherwise 0
 end 'main'
@@ -208,7 +208,7 @@ end 'main'
 
 <!-- test: let-array-middle -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let arr = [10, 20, 30]
   return try arr.get(1) otherwise 0
 end 'main'
@@ -219,7 +219,7 @@ end 'main'
 
 <!-- test: let-array-last -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let arr = [10, 20, 30]
   return try arr.get(2) otherwise 0
 end 'main'
@@ -230,7 +230,7 @@ end 'main'
 
 <!-- test: let-array-multiple-access -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let arr = [5, 10, 15, 20]
   var a = try arr.get(0) otherwise 0
   var b = try arr.get(3) otherwise 0
@@ -246,7 +246,7 @@ Test that arrays can be created with `.reserve()` for preallocated capacity.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var arr = IntArray{}
   arr.reserve(5)
   arr.push(42)
@@ -261,7 +261,7 @@ Test that arrays can be created with `.resize()` for preallocated length.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
     var arr = IntArray{}
     arr.resize(5)
     arr.set(0, value: 99)
@@ -277,7 +277,7 @@ Test that arrays grow correctly when pushing many elements (triggers multiple re
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
     var arr = IntArray{}
     var i = 0
     while i < 100 'loop'
@@ -297,17 +297,17 @@ end 'main'
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns int
+function main() returns Integer
   var arr = ByteArray{}
-  arr.push(10 as byte)
-  arr.push(20 as byte)
-  arr.push(30 as byte)
+  arr.push(10 as Byte)
+  arr.push(20 as Byte)
+  arr.push(30 as Byte)
 
-  var v0 = try arr.get(0) otherwise 0 as byte
-  var v1 = try arr.get(1) otherwise 0 as byte
-  var v2 = try arr.get(2) otherwise 0 as byte
+  var v0 = try arr.get(0) otherwise 0 as Byte
+  var v1 = try arr.get(1) otherwise 0 as Byte
+  var v2 = try arr.get(2) otherwise 0 as Byte
 
-  return (v0 as int) + (v1 as int) + (v2 as int)
+  return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
 end 'main'
 ```
 ```exitcode
@@ -320,17 +320,17 @@ end 'main'
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns int
+function main() returns Integer
   var arr = ByteArray{}
-  arr.push(1 as byte)
-  arr.push(2 as byte)
-  arr.push(3 as byte)
+  arr.push(1 as Byte)
+  arr.push(2 as Byte)
+  arr.push(3 as Byte)
 
-  var v0 = try arr.get(0) otherwise 0 as byte
-  var v1 = try arr.get(1) otherwise 0 as byte
-  var v2 = try arr.get(2) otherwise 0 as byte
+  var v0 = try arr.get(0) otherwise 0 as Byte
+  var v1 = try arr.get(1) otherwise 0 as Byte
+  var v2 = try arr.get(2) otherwise 0 as Byte
 
-  return (v0 as int) + (v1 as int) + (v2 as int)
+  return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
 end 'main'
 ```
 ```exitcode
@@ -343,16 +343,16 @@ end 'main'
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns int
+function main() returns Integer
   var arr = ByteArray{}
-  arr.push(10 as byte)
-  arr.push(20 as byte)
-  arr.push(30 as byte)
+  arr.push(10 as Byte)
+  arr.push(20 as Byte)
+  arr.push(30 as Byte)
 
-  arr.set(1, value: 99 as byte)
+  arr.set(1, value: 99 as Byte)
 
-  var val = try arr.get(1) otherwise 0 as byte
-  return val as int
+  var val = try arr.get(1) otherwise 0 as Byte
+  return val as Integer
 end 'main'
 ```
 ```exitcode
@@ -365,23 +365,23 @@ end 'main'
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns int
+function main() returns Integer
   var arr = ByteArray{}
-  arr.push(255 as byte)
-  arr.push(0 as byte)
-  arr.push(128 as byte)
+  arr.push(255 as Byte)
+  arr.push(0 as Byte)
+  arr.push(128 as Byte)
 
-  var v0 = try arr.get(0) otherwise 0 as byte
-  var v1 = try arr.get(1) otherwise 99 as byte
-  var v2 = try arr.get(2) otherwise 0 as byte
+  var v0 = try arr.get(0) otherwise 0 as Byte
+  var v1 = try arr.get(1) otherwise 99 as Byte
+  var v2 = try arr.get(2) otherwise 0 as Byte
 
-  if (v0 as int) != 255 'c0'
+  if (v0 as Integer) != 255 'c0'
     return 1
   end 'c0'
-  if (v1 as int) != 0 'c1'
+  if (v1 as Integer) != 0 'c1'
     return 2
   end 'c1'
-  if (v2 as int) != 128 'c2'
+  if (v2 as Integer) != 128 'c2'
     return 3
   end 'c2'
 
@@ -398,13 +398,13 @@ end 'main'
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns int
+function main() returns Integer
   var arr = ByteArray{}
-  arr.push(1 as byte)
-  arr.push(2 as byte)
-  arr.push(3 as byte)
-  arr.push(4 as byte)
-  arr.push(5 as byte)
+  arr.push(1 as Byte)
+  arr.push(2 as Byte)
+  arr.push(3 as Byte)
+  arr.push(4 as Byte)
+  arr.push(5 as Byte)
 
   return arr.count()
 end 'main'
@@ -417,7 +417,7 @@ end 'main'
 ```maxon
 let numbers = [1, 2, 3, 4, 5]
 
-function main() returns int
+function main() returns Integer
   var sum = 0
   for n in numbers 'loop'
     sum = sum + n
@@ -435,7 +435,7 @@ let FIRST = 10
 let SECOND = 20
 let values = [FIRST, SECOND, 30]
 
-function main() returns int
+function main() returns Integer
   var v0 = try values.get(0) otherwise 0
   var v1 = try values.get(1) otherwise 0
   var v2 = try values.get(2) otherwise 0
@@ -450,7 +450,7 @@ end 'main'
 
 <!-- test: slice-basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30, 40, 50]
   var sub = arr.slice(1, endIndex: 4)
   var a = try sub.get(0) otherwise 0
@@ -465,7 +465,7 @@ end 'main'
 
 <!-- test: slice-from-start -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30, 40, 50]
   var sub = arr.slice(0, endIndex: 3)
   return sub.count()
@@ -477,7 +477,7 @@ end 'main'
 
 <!-- test: slice-to-end -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30, 40, 50]
   var sub = arr.slice(3, endIndex: 5)
   var a = try sub.get(0) otherwise 0
@@ -491,7 +491,7 @@ end 'main'
 
 <!-- test: slice-empty -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   var sub = arr.slice(1, endIndex: 1)
   return sub.count()
@@ -503,7 +503,7 @@ end 'main'
 
 <!-- test: slice-full -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   var sub = arr.slice(0, endIndex: 3)
   var a = try sub.get(0) otherwise 0
@@ -520,7 +520,7 @@ end 'main'
 
 <!-- test: append-basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = [1, 2, 3]
   var b = [4, 5, 6]
   a.append(b)
@@ -541,7 +541,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var a = [1, 2, 3]
   var b = IntArray{}
   a.append(b)
@@ -556,7 +556,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var a = IntArray{}
   var b = [10, 20]
   a.append(b)
@@ -571,7 +571,7 @@ end 'main'
 
 <!-- test: append-preserves-originals -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = [1, 2]
   var b = [3, 4]
   a.append(b)
@@ -590,7 +590,7 @@ end 'main'
 <!-- test: slice-cow-modify-slice -->
 Modifying a slice must not affect the original array.
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30, 40, 50]
   var sub = arr.slice(1, endIndex: 4)
   sub.set(0, value: 99)
@@ -612,7 +612,7 @@ end 'main'
 <!-- test: slice-cow-modify-original -->
 Modifying the original array must not affect an existing slice.
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30, 40, 50]
   var sub = arr.slice(1, endIndex: 4)
   arr.set(1, value: 99)
@@ -637,7 +637,7 @@ function makeNumbers() returns IntArray
   return [10, 20, 30]
 end 'makeNumbers'
 
-function main() returns int
+function main() returns Integer
   var nums = makeNumbers()
   var a = try nums.get(0) otherwise 0
   var b = try nums.get(1) otherwise 0
@@ -652,13 +652,13 @@ end 'main'
 <!-- test: array-literal-return-push-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-function makeNumbers(a int, b int) returns IntArray
+function makeNumbers(a Integer, b Integer) returns IntArray
   var arr = [a, b]
   arr.push(a + b)
   return arr
 end 'makeNumbers'
 
-function main() returns int
+function main() returns Integer
   var nums = makeNumbers(10, b: 20)
   var c = try nums.get(2) otherwise 0
   return c
@@ -692,8 +692,8 @@ Cleanups:  1
 <!-- test: array-literal-struct-return-from-function -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
 typealias PointArray = Array with Point
@@ -704,7 +704,7 @@ function makePoints() returns PointArray
   return [p1, p2]
 end 'makePoints'
 
-function main() returns int
+function main() returns Integer
   var pts = makePoints()
   var p0 = try pts.get(0) otherwise Point{x: 0, y: 0}
   var p1 = try pts.get(1) otherwise Point{x: 0, y: 0}

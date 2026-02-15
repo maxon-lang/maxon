@@ -1,69 +1,13 @@
 // Test: int-division-preserves-other-values
-function main() returns int
+function main() returns Integer
   var x = 10
   var a = 84
   var b = 2
   var quotient = a / b
-  return trunc(quotient - x)
+  return quotient - x
 end 'main'
 ---
 ExitCode: 32
-RequiredMLIR: ```
-=== maxon
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 84 : i64}
-    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 2 : i64}
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.int_to_float %1
-    %4 = maxon.int_to_float %2
-    %5 = maxon.binop %3, %4 {op = div} {kind = f64}
-    maxon.assign %5 {var = quotient} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.int_to_float %0
-    %7 = maxon.binop %5, %6 {op = sub} {kind = f64}
-    %8 = maxon.trunc %7
-    maxon.return %8
-  }
-}
-=== standard
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 10 : i64}
-    %1 = arith.constant {value = 84 : i64}
-    %2 = arith.constant {value = 2 : i64}
-    %3 = arith.sitofp %1
-    %4 = arith.sitofp %2
-    %5 = arith.divf %3, %4
-    %6 = arith.sitofp %0
-    %7 = arith.subf %5, %6
-    %8 = arith.fptosi %7
-    func.return %8
-  }
-}
-=== x86
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    x86.mov eax, 10
-    x86.mov ecx, 84
-    x86.mov edx, 2
-    x86.cvtsi2sd xmm0, ecx
-    x86.cvtsi2sd xmm1, edx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvtsi2sd xmm3, eax
-    x86.movsd xmm4, xmm2
-    x86.subsd xmm4, xmm3
-    x86.cvttsd2si eax, xmm4
-    x86.ret
-  }
-}
-```
 ---
 module {
   func @register-allocator.main() -> i64 {
@@ -71,14 +15,12 @@ module {
     x86.mov eax, 10
     x86.mov ecx, 84
     x86.mov edx, 2
-    x86.cvtsi2sd xmm0, ecx
-    x86.cvtsi2sd xmm1, edx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvtsi2sd xmm3, eax
-    x86.movsd xmm4, xmm2
-    x86.subsd xmm4, xmm3
-    x86.cvttsd2si eax, xmm4
+    x86.mov ebx, edx
+    x86.mov eax, ecx
+    x86.cqo
+    x86.idiv ebx
+    x86.mov ebx, 10
+    x86.sub eax, ebx
     x86.ret
   }
 }

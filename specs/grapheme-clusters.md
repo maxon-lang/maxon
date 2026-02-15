@@ -51,7 +51,7 @@ end 'loop'
 Each ASCII character is its own grapheme:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "abc"
   print("{s.count()}\n")
   return 0
@@ -70,7 +70,7 @@ end 'main'
 Multi-byte characters are single graphemes:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "中文"  // 2 CJK characters
   print("{s.count()}\n")
   return 0
@@ -89,7 +89,7 @@ end 'main'
 Basic emoji are single graphemes:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "🎉🎊🎁"  // 3 emoji
   print("{s.count()}\n")
   return 0
@@ -108,7 +108,7 @@ end 'main'
 Flag emoji (pairs of regional indicators) are single graphemes:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "🇺🇸"  // US flag (2 regional indicators = 1 grapheme)
   print("{s.count()}\n")
   print("{s.bytes().count()}\n")
@@ -129,7 +129,7 @@ end 'main'
 Multiple flags are separate graphemes:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "🇺🇸🇬🇧🇫🇷"  // 3 flags
   print("{s.count()}\n")
   return 0
@@ -148,7 +148,7 @@ end 'main'
 Emoji with skin tone modifiers are single graphemes:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "👋🏽"  // Wave + medium skin tone
   print("{s.count()}\n")
   print("{s.bytes().count()}\n")
@@ -169,7 +169,7 @@ end 'main'
 Family emoji (ZWJ sequences) are single graphemes:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "👨‍👩‍👧"  // Man + ZWJ + Woman + ZWJ + Girl
   print("{s.count()}\n")
   return 0
@@ -188,7 +188,7 @@ end 'main'
 Professional emoji (ZWJ sequences) are single graphemes:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "👨‍💻"  // Man + ZWJ + Computer = Man Technologist
   print("{s.count()}\n")
   return 0
@@ -207,7 +207,7 @@ end 'main'
 CR+LF is a single grapheme (GB3):
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "\r\n"
   print("{s.count()}\n")
   return 0
@@ -226,7 +226,7 @@ end 'main'
 Mixed ASCII, emoji, and CJK:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "Hi🎉中"  // H, i, party, 中 = 4 graphemes
   print("{s.count()}\n")
   return 0
@@ -243,7 +243,7 @@ end 'main'
 ### Grapheme Break Property - ASCII
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var prop = graphemeBreakProperty(65)  // 'A'
   print("{prop}\n")  // GBP_Other = 0
   return 0
@@ -260,7 +260,7 @@ end 'main'
 ### Grapheme Break Property - CR
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var prop = graphemeBreakProperty(13)  // CR
   print("{prop}\n")  // GBP_CR = 1
   return 0
@@ -277,7 +277,7 @@ end 'main'
 ### Grapheme Break Property - LF
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var prop = graphemeBreakProperty(10)  // LF
   print("{prop}\n")  // GBP_LF = 2
   return 0
@@ -294,7 +294,7 @@ end 'main'
 ### Grapheme Break Property - ZWJ
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var prop = graphemeBreakProperty(8205)  // ZWJ U+200D
   print("{prop}\n")  // GBP_ZWJ = 5
   return 0
@@ -311,7 +311,7 @@ end 'main'
 ### Grapheme Break Property - Regional Indicator
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var prop = graphemeBreakProperty(127482)  // Regional Indicator U
   print("{prop}\n")  // GBP_Regional_Indicator = 6
   return 0
@@ -328,7 +328,7 @@ end 'main'
 ### Extended Pictographic Check
 
 ```maxon
-function main() returns int
+function main() returns Integer
   if isExtendedPictographic(128512) 'c1'
     print("{1}\n")  // 😀
   end 'c1'

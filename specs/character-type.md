@@ -74,7 +74,7 @@ For non-ASCII characters (multi-byte UTF-8 or values >= 128), `asciiValue()` ret
 ### Basic Character
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 'A'
   if x == 'A' 'check'
     return 0
@@ -90,7 +90,7 @@ end 'main'
 ### Character Comparison
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 'A'
   var b = 'B'
   if a < b 'check'
@@ -107,7 +107,7 @@ end 'main'
 ### Character in Variable
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var letter = 'Z'
   if letter == 'Z' 'check'
     return 0
@@ -123,7 +123,7 @@ end 'main'
 ### Multi-byte Character (2-byte UTF-8)
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = 'é'
   print("{c.bytes().count()}\n")
   return 0
@@ -140,7 +140,7 @@ end 'main'
 ### Multi-byte Character (3-byte UTF-8)
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = '中'
   print("{c.bytes().count()}\n")
   return 0
@@ -157,7 +157,7 @@ end 'main'
 ### Multi-byte Character (4-byte Emoji)
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = '🎉'
   print("{c.bytes().count()}\n")
   return 0
@@ -174,7 +174,7 @@ end 'main'
 ### Character to String Conversion
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = 'A'
   var s = "{c}"
   print(s)
@@ -192,7 +192,7 @@ A
 ### Multi-byte Character to String
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = '中'
   var s = "{c}"
   print(s)
@@ -210,7 +210,7 @@ end 'main'
 ### Multi-byte Character Equality
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 'é'
   var b = 'é'
   if a == b 'check'
@@ -227,7 +227,7 @@ end 'main'
 ### Multi-byte Character Inequality
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 'é'
   var b = 'è'
   if a != b 'check'
@@ -244,7 +244,7 @@ end 'main'
 ### Emoji Character
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var emoji = '🎉'
   print("{emoji}\n")
   return 0
@@ -261,7 +261,7 @@ end 'main'
 ### Flag Emoji (Regional Indicator Pair)
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var flag = '🇺🇸'
   print("{flag.bytes().count()}\n")
   print("{flag}\n")
@@ -280,7 +280,7 @@ end 'main'
 ### Family Emoji (ZWJ Sequence)
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var family = '👨‍👩‍👧'
   print("{family.bytes().count()}\n")
   return 0
@@ -297,7 +297,7 @@ end 'main'
 ### Skin Tone Modifier Emoji
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var wave = '👋🏽'
   print("{wave.bytes().count()}\n")
   return 0
@@ -314,7 +314,7 @@ end 'main'
 ### Escape Sequences in Character
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var newline = '\n'
   var tab = '\t'
   var backslash = '\\'
@@ -340,7 +340,7 @@ end 'main'
 ### ASCII Value for Letter
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = 'A'
   var val = try c.asciiValue() otherwise -1
   print("{val}\n")
@@ -358,7 +358,7 @@ end 'main'
 ### ASCII Value for Digit
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = '0'
   var val = try c.asciiValue() otherwise -1
   print("{val}\n")
@@ -376,7 +376,7 @@ end 'main'
 ### ASCII Value for Lowercase
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = 'a'
   var val = try c.asciiValue() otherwise -1
   print("{val}\n")
@@ -394,7 +394,7 @@ end 'main'
 ### ASCII Value for Space
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = ' '
   var val = try c.asciiValue() otherwise -1
   print("{val}\n")
@@ -412,7 +412,7 @@ end 'main'
 ### ASCII Value for Newline Escape
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = '\n'
   var val = try c.asciiValue() otherwise -1
   print("{val}\n")
@@ -430,7 +430,7 @@ end 'main'
 ### ASCII Value for Non-ASCII Returns Error
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = 'é'
   var val = try c.asciiValue() otherwise -1
   print("{val}")
@@ -448,7 +448,7 @@ end 'main'
 ### ASCII Value for Emoji Returns Error
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var c = '🎉'
   var val = try c.asciiValue() otherwise -1
   print("{val}")

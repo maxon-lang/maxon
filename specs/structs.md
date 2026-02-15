@@ -15,17 +15,17 @@ Types define custom data types with named fields.
 
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 ```
 
 Fields must use `let` (immutable) or `var` (mutable), and can be `export` for external access:
 ```maxon
 type Config
-  export let version int    // Cannot be changed after initialization, accessible externally
-  export var count int      // Can be modified, accessible externally
-  var internal int          // Private - only accessible in methods
+  export let version Integer    // Cannot be changed after initialization, accessible externally
+  export var count Integer      // Can be modified, accessible externally
+  var internal Integer          // Private - only accessible in methods
 end 'Config'
 ```
 
@@ -67,11 +67,11 @@ c.count = 5     // OK: field is var
 <!-- test: var-struct-field-assign -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 10, y: 20}
   p.x = 30
   return p.x
@@ -84,11 +84,11 @@ end 'main'
 <!-- test: var-field-assign -->
 ```maxon
 type Config
-  export let version int
-  export var count int
+  export let version Integer
+  export var count Integer
 end 'Config'
 
-function main() returns int
+function main() returns Integer
   var c = Config{version: 1, count: 0}
   c.count = 5
   return c.count
@@ -101,11 +101,11 @@ end 'main'
 <!-- test: error.let-struct-field-assign -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   let p = Point{x: 10, y: 20}
   p.x = 30
   return p.x
@@ -118,11 +118,11 @@ error E2013: specs/fragments/structs/error.let-struct-field-assign.test:9:3: can
 <!-- test: error.let-field-assign -->
 ```maxon
 type Config
-  export let version int
-  export var count int
+  export let version Integer
+  export var count Integer
 end 'Config'
 
-function main() returns int
+function main() returns Integer
   var c = Config{version: 1, count: 0}
   c.version = 2
   return c.version
@@ -135,11 +135,11 @@ error E2013: specs/fragments/structs/error.let-field-assign.test:9:3: cannot ass
 <!-- test: simple-type -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point { x: 3, y: 4 }
   return p.x + p.y
 end 'main'
@@ -151,11 +151,11 @@ end 'main'
 <!-- test: struct-field-access -->
 ```maxon
 type Rect
-  export var width int
-  export var height int
+  export var width Integer
+  export var height Integer
 end 'Rect'
 
-function main() returns int
+function main() returns Integer
   var r = Rect { width: 5, height: 10 }
   return r.width * r.height
 end 'main'
@@ -167,15 +167,15 @@ end 'main'
 <!-- test: struct-param -->
 ```maxon
 type Vec2
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Vec2'
 
-function dot(a Vec2, b Vec2) returns int
+function dot(a Vec2, b Vec2) returns Integer
   return a.x * b.x + a.y * b.y
 end 'dot'
 
-function main() returns int
+function main() returns Integer
   var v1 = Vec2 { x: 3, y: 4 }
   var v2 = Vec2 { x: 2, y: 1 }
   return dot(v1, b: v2)
@@ -188,15 +188,15 @@ end 'main'
 <!-- test: struct-return -->
 ```maxon
 type Pair
-  export var first int
-  export var second int
+  export var first Integer
+  export var second Integer
 end 'Pair'
 
-function makePair(a int, b int) returns Pair
+function makePair(a Integer, b Integer) returns Pair
   return { first: a, second: b }
 end 'makePair'
 
-function main() returns int
+function main() returns Integer
   var p = makePair(5, b: 7)
   return p.first + p.second
 end 'main'
@@ -208,15 +208,15 @@ end 'main'
 <!-- test: struct-literal-as-arg -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function acceptPoint(p Point) returns int
+function acceptPoint(p Point) returns Integer
   return p.x + p.y
 end 'acceptPoint'
 
-function main() returns int
+function main() returns Integer
   return acceptPoint({x: 3, y: 4})
 end 'main'
 ```
@@ -231,7 +231,7 @@ type Counter
   export var step = 1
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c1 = Counter{}
   var c2 = Counter{value: 40}
   var c3 = Counter{value: 10, step: 2}
@@ -249,7 +249,7 @@ type Settings
   export var timeout = 50.0
 end 'Settings'
 
-function main() returns int
+function main() returns Integer
   var s = Settings{}
   return s.maxRetries + trunc(s.timeout)
 end 'main'

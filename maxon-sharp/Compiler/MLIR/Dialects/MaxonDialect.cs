@@ -50,6 +50,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.F64) return MaxonValueKind.Float;
     if (type == MlirType.I1) return MaxonValueKind.Bool;
     if (type == MlirType.I8) return MaxonValueKind.Byte;
+    if (type is MlirRangedPrimitiveType rpt) return rpt.BaseType.ToValueKind();
     if (type is MlirEnumType) return MaxonValueKind.Enum;
     if (type is MlirTypeParameterType) return MaxonValueKind.TypeParameter;
     if (type is MlirStructType) return MaxonValueKind.Struct;
@@ -871,6 +872,13 @@ public class MaxonCStringWriteStderrOp(MaxonValue cstrPtr) : MaxonOp {
   public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+// Write error message to stderr and terminate with exit code 1
+public class MaxonPanicOp(string message) : MaxonOp {
+  public override string Mnemonic => $"maxon.panic \"{Message}\"";
+  public string Message { get; } = message;
+  public string RdataLabel { get; } = $"__panic_msg_{MlirContext.Current.NextId()}";
 }
 
 /// Generic runtime function call op for intrinsics that delegate to a runtime function.

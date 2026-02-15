@@ -34,13 +34,13 @@ var values = items.map((_) gives defaultValue)
 
 <!-- test: closure-capture.basic -->
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns int
+function main() returns Integer
   var offset = 7
-  var result = apply(f: (n int) gives n + offset, x: 10)
+  var result = apply(f: (n Integer) gives n + offset, x: 10)
   return result
 end 'main'
 ```
@@ -50,13 +50,13 @@ end 'main'
 
 <!-- test: closure-capture.ignore-param -->
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns int
+function main() returns Integer
   var value = 42
-  var result = apply(f: (_ int) gives value, x: 99)
+  var result = apply(f: (_ Integer) gives value, x: 99)
   return result
 end 'main'
 ```
@@ -66,17 +66,17 @@ end 'main'
 
 <!-- test: closure-capture.struct-field -->
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
 type Level
-  export var rawValue int
+  export var rawValue Integer
 end 'Level'
 
-function main() returns int
+function main() returns Integer
   var level = Level{rawValue: 5}
-  var result = apply(f: (_ int) gives level.rawValue, x: 0)
+  var result = apply(f: (_ Integer) gives level.rawValue, x: 0)
   return result
 end 'main'
 ```
@@ -87,13 +87,13 @@ end 'main'
 <!-- test: closure-capture.map-with-capture -->
 ```maxon
 type Level
-  export var rawValue int
+  export var rawValue Integer
 end 'Level'
 
-function main() returns int
+function main() returns Integer
   var level = Level{rawValue: 5}
   var arr = [1, 2, 3]
-  var result = arr.map((_ int) gives level.rawValue)
+  var result = arr.map((_ Integer) gives level.rawValue)
   return result.count()
 end 'main'
 ```
@@ -103,14 +103,14 @@ end 'main'
 
 <!-- test: closure-capture.multiple-captures -->
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 20
-  var result = apply(f: (x int) gives x + a + b, x: 5)
+  var result = apply(f: (x Integer) gives x + a + b, x: 5)
   return result
 end 'main'
 ```
@@ -120,12 +120,12 @@ end 'main'
 
 <!-- test: closure-capture.no-capture-regression -->
 ```maxon
-function apply(f (int) returns int, x int) returns int
+function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
 
-function main() returns int
-  var result = apply(f: (n int) gives n * 3, x: 10)
+function main() returns Integer
+  var result = apply(f: (n Integer) gives n * 3, x: 10)
   return result
 end 'main'
 ```
@@ -135,13 +135,13 @@ end 'main'
 
 <!-- test: closure-capture.capture-string -->
 ```maxon
-function apply(f (int) returns String, x int) returns String
+function apply(f (Integer) returns String, x Integer) returns String
   return f(x)
 end 'apply'
 
-function main() returns int
+function main() returns Integer
   var prefix = "hello"
-  var result = apply(f: (_ int) gives prefix, x: 0)
+  var result = apply(f: (_ Integer) gives prefix, x: 0)
   print(result)
   return 0
 end 'main'

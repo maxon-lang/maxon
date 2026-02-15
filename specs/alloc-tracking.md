@@ -25,7 +25,7 @@ maxon compile --track-allocs myprogram.maxon
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   let size = 10
   var arr = IntArray{}
   arr.resize(size)
@@ -57,7 +57,7 @@ Cleanups:  1
 <!-- test: no-alloc-empty-program -->
 <!-- TrackMemory: true -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 42
 end 'main'
 ```
@@ -82,7 +82,7 @@ Cleanups:  0
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   let size1 = 5
   let size2 = 10
   var arr1 = IntArray{}
@@ -127,7 +127,7 @@ Cleanups:  2
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -164,7 +164,7 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -201,11 +201,11 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function sum_first(arr IntArray) returns int
+function sum_first(arr IntArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'sum_first'
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -239,7 +239,7 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   let a = 2
   let b = 5
   var arr = IntArray{}
@@ -274,11 +274,11 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function readFirst(arr IntArray) returns int
+function readFirst(arr IntArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'readFirst'
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -314,11 +314,11 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function getElement(arr IntArray, idx int) returns int
+function getElement(arr IntArray, idx Integer) returns Integer
   return try arr.get(idx) otherwise 0
 end 'getElement'
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -357,7 +357,7 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var i = 0
   var sum = 0
   while i < 3 'loop'
@@ -410,7 +410,7 @@ Array of strings should be properly cleaned up in a main function that doesn't u
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.push("hi")
   var s = try arr.get(0) otherwise "oops"
@@ -448,12 +448,12 @@ Cleanups:  4
 ```maxon
 typealias IntArray = Array with int
 
-function mutateFirst(arr IntArray) returns int
+function mutateFirst(arr IntArray) returns Integer
   arr.set(0, value: 100)
   return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -488,19 +488,19 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function addTen(arr IntArray) returns int
+function addTen(arr IntArray) returns Integer
   var val = try arr.get(0) otherwise 0
   arr.set(0, value: val + 10)
   return try arr.get(0) otherwise 0
 end 'addTen'
 
-function doubleAddTen(arr IntArray) returns int
+function doubleAddTen(arr IntArray) returns Integer
   var val = try arr.get(0) otherwise 0
   arr.set(0, value: val * 2)
   return addTen(arr)
 end 'doubleAddTen'
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -535,16 +535,16 @@ Cleanups:  1
 ```maxon
 typealias IntArray = Array with int
 
-function readIt(arr IntArray) returns int
+function readIt(arr IntArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'readIt'
 
-function writeIt(arr IntArray) returns int
+function writeIt(arr IntArray) returns Integer
   arr.set(0, value: 99)
   return try arr.get(0) otherwise 0
 end 'writeIt'
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr1 = IntArray{}
   arr1.resize(size)
@@ -591,7 +591,7 @@ Zero-size arrays don't allocate memory.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   let size = 0
   var arr = IntArray{}
   arr.resize(size)
@@ -625,7 +625,7 @@ Reassigning a heap array frees the old memory and allocates new memory.
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   let size = 5
   var arr = IntArray{}
   arr.resize(size)
@@ -669,7 +669,7 @@ Array of strings should be properly cleaned up when going out of scope.
 ```maxon
 typealias StringArray = Array with String
 
-function main() returns int
+function main() returns Integer
   var arr = StringArray{}
   arr.push("hi")
   var s = try arr.get(0) otherwise "oops"

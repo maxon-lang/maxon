@@ -17,7 +17,7 @@ Interfaces are declared with the `interface` keyword and contain method signatur
 
 ```maxon
 interface Hashable
-  function hash() returns int
+  function hash() returns Integer
 end 'Hashable'
 ```
 
@@ -29,8 +29,8 @@ Types declare conformance to interfaces using the `implements` keyword:
 
 ```maxon
 type Point implements Hashable
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 end 'Point'
 ```
 
@@ -38,8 +38,8 @@ A type can conform to multiple interfaces:
 
 ```maxon
 type Point implements Hashable, Equatable
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 end 'Point'
 ```
 
@@ -49,10 +49,10 @@ Methods implementing interface requirements are defined **inside the type body**
 
 ```maxon
 type Point implements Hashable
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  function hash() returns int
+  function hash() returns Integer
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -68,10 +68,10 @@ Non-interface methods (methods that don't implement any interface) use simple `f
 
 ```maxon
 type Point
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  export function getX() returns int
+  export function getX() returns Integer
     return x
   end 'getX'
 end 'Point'
@@ -98,8 +98,8 @@ interface Cloneable
 end 'Cloneable'
 
 type Point implements Cloneable
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
   function clone() returns Point
     return {x: x, y: y}
@@ -113,15 +113,15 @@ Interfaces can declare associated types with `uses`. Structs bind concrete types
 
 ```maxon
 interface Container uses Element
-  function get(index int) returns Element
+  function get(index Integer) returns Element
 end 'Container'
 
 typealias InternalIntArray = Array with int
 
-type IntArray implements Container with int
+type IntArray implements Container with Integer
   var data InternalIntArray
 
-  function get(index int) returns int
+  function get(index Integer) returns Integer
     return try data.get(index) otherwise 0
   end 'get'
 end 'IntArray'
@@ -135,12 +135,12 @@ A type must implement **all** methods from interfaces it conforms to. Partial im
 
 ```maxon
 interface TwoMethods
-  function first() returns int
-  function second() returns int
+  function first() returns Integer
+  function second() returns Integer
 end 'TwoMethods'
 
 type Incomplete implements TwoMethods
-  function first() returns int
+  function first() returns Integer
     return 1
   end 'first'
   // Missing: TwoMethods.second()
@@ -167,15 +167,15 @@ The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and i
 
 ```maxon
 type Point implements Hashable
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  function hash() returns int
+  function hash() returns Integer
     return x + y * 31
   end 'hash'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 10, y: 20}
   var h = p.hash()
   print("{h}\n")
@@ -195,15 +195,15 @@ end 'main'
 <!-- test: basic-interface -->
 ```maxon
 type Point implements Hashable
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  function hash() returns int
+  function hash() returns Integer
     return x + y * 31
   end 'hash'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 10, y: 20}
   print("{p.hash()}\n")
   return 0
@@ -220,23 +220,23 @@ end 'main'
 <!-- test: multiple-methods -->
 ```maxon
 interface Describable
-  function describe() returns int
-  function value() returns int
+  function describe() returns Integer
+  function value() returns Integer
 end 'Describable'
 
 type Counter implements Describable
-  var count int
+  var count Integer
 
-  function describe() returns int
+  function describe() returns Integer
     return 100 + count
   end 'describe'
 
-  function value() returns int
+  function value() returns Integer
     return count
   end 'value'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 42}
   return c.describe() + c.value()
 end 'main'
@@ -249,18 +249,18 @@ end 'main'
 <!-- test: method-with-params -->
 ```maxon
 interface Calculator
-  function add(n int) returns int
+  function add(n Integer) returns Integer
 end 'Calculator'
 
 type Accumulator implements Calculator
-  var total int
+  var total Integer
 
-  function add(n int) returns int
+  function add(n Integer) returns Integer
     return total + n
   end 'add'
 end 'Accumulator'
 
-function main() returns int
+function main() returns Integer
   var acc = Accumulator{total: 10}
   return acc.add(5)
 end 'main'
@@ -273,10 +273,10 @@ end 'main'
 <!-- test: multiple-interfaces -->
 ```maxon
 type Point implements Hashable, Equatable
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  function hash() returns int
+  function hash() returns Integer
     return x + y
   end 'hash'
 
@@ -288,7 +288,7 @@ type Point implements Hashable, Equatable
   end 'equals'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p1 = Point{x: 3, y: 4}
   var p2 = Point{x: 3, y: 4}
   print("{p1.hash()} {p1.equals(p2)}\n")
@@ -305,19 +305,19 @@ end 'main'
 <!-- test: self-return-type -->
 ```maxon
 interface Movable
-  function move(dx int, dy int) returns Self
+  function move(dx Integer, dy Integer) returns Self
 end 'Movable'
 
 type Point implements Movable
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 
-  function move(dx int, dy int) returns Point
+  function move(dx Integer, dy Integer) returns Point
     return {x: x + dx, y: y + dy}
   end 'move'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 10, y: 20}
   var p2 = p.move(5, dy: 10)
   return p2.x + p2.y
@@ -331,18 +331,18 @@ end 'main'
 <!-- test: method-call-syntax -->
 ```maxon
 interface Incrementable
-  function inc() returns int
+  function inc() returns Integer
 end 'Incrementable'
 
 type Value implements Incrementable
-  var n int
+  var n Integer
 
-  function inc() returns int
+  function inc() returns Integer
     return n + 1
   end 'inc'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value{n: 41}
   return v.inc()
 end 'main'
@@ -355,45 +355,45 @@ end 'main'
 <!-- test: partial-implementation-error -->
 ```maxon
 interface ThreeMethods
-  function one() returns int
-  function two() returns int
-  function three() returns int
+  function one() returns Integer
+  function two() returns Integer
+  function three() returns Integer
 end 'ThreeMethods'
 
 type Incomplete implements ThreeMethods
-  var value int
+  var value Integer
 
-  function one() returns int
+  function one() returns Integer
     return 1
   end 'one'
 end 'Incomplete'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/interfaces/partial-implementation-error.test:8:6: Partial interface implementation: type 'Incomplete' is missing 2 method(s):
-  - two() returns int
-  - three() returns int
+  - two() returns Integer
+  - three() returns Integer
 ```
 
 
 <!-- test: non-interface-method -->
 ```maxon
 type Calculator
-  var value int
+  var value Integer
 
-  function double() returns int
+  function double() returns Integer
     return value * 2
   end 'double'
 
-  function triple() returns int
+  function triple() returns Integer
     return value * 3
   end 'triple'
 end 'Calculator'
 
-function main() returns int
+function main() returns Integer
   var c = Calculator{value: 7}
   return c.double() + c.triple()
 end 'main'
@@ -406,56 +406,56 @@ end 'main'
 <!-- test: transitive-interface-validation -->
 ```maxon
 interface BaseInterface
-  function baseMethod() returns int
+  function baseMethod() returns Integer
 end 'BaseInterface'
 
 interface DerivedInterface extends BaseInterface
-  function derivedMethod() returns int
+  function derivedMethod() returns Integer
 end 'DerivedInterface'
 
 // IncompleteType is missing baseMethod from BaseInterface
 type IncompleteType implements DerivedInterface
-  var value int
+  var value Integer
 
-  function derivedMethod() returns int
+  function derivedMethod() returns Integer
     return value
   end 'derivedMethod'
 end 'IncompleteType'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/interfaces/transitive-interface-validation.test:11:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
-  - baseMethod() returns int (from BaseInterface)
+  - baseMethod() returns Integer (from BaseInterface)
 ```
 
 
 <!-- test: transitive-interface-complete -->
 ```maxon
 interface BaseInterface
-  function baseMethod() returns int
+  function baseMethod() returns Integer
 end 'BaseInterface'
 
 interface DerivedInterface extends BaseInterface
-  function derivedMethod() returns int
+  function derivedMethod() returns Integer
 end 'DerivedInterface'
 
 // CompleteType implements all methods from both interfaces
 type CompleteType implements DerivedInterface
-  var value int
+  var value Integer
 
-  function baseMethod() returns int
+  function baseMethod() returns Integer
     return value
   end 'baseMethod'
 
-  function derivedMethod() returns int
+  function derivedMethod() returns Integer
     return value * 2
   end 'derivedMethod'
 end 'CompleteType'
 
-function main() returns int
+function main() returns Integer
   var t = CompleteType{value: 21}
   return t.baseMethod() + t.derivedMethod()
 end 'main'

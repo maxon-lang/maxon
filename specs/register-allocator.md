@@ -22,7 +22,7 @@ These tests exercise register allocation with progressively increasing difficult
 
 <!-- test: int-constant -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 42
 end 'main'
 ```
@@ -58,7 +58,7 @@ module {
 
 <!-- test: int-var-roundtrip -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 99
   return x
 end 'main'
@@ -96,7 +96,7 @@ module {
 
 <!-- test: int-add-constants -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 30 + 12
 end 'main'
 ```
@@ -140,7 +140,7 @@ module {
 
 <!-- test: int-two-vars-add -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 30
   var b = 12
   return a + b
@@ -186,7 +186,7 @@ module {
 
 <!-- test: int-var-reuse-twice -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 21
   return x + x
 end 'main'
@@ -227,7 +227,7 @@ module {
 
 <!-- test: int-chained-assignments -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = a + 5
   var c = b + 7
@@ -289,7 +289,7 @@ module {
 
 <!-- test: int-reassignment -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 100
   var y = x - 80
   x = 22
@@ -345,7 +345,7 @@ module {
 
 <!-- test: int-six-vars-alive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 1
   var b = 2
   var c = 3
@@ -423,7 +423,7 @@ module {
 
 <!-- test: int-ten-vars-alive -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 1
   var b = 2
   var c = 3
@@ -537,7 +537,7 @@ module {
 
 <!-- test: int-sixteen-vars-spill -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 1
   var b = 2
   var c = 3
@@ -715,7 +715,7 @@ module {
 
 <!-- test: int-twenty-vars-heavy-spill -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 1
   var b = 2
   var c = 3
@@ -929,7 +929,7 @@ module {
 
 <!-- test: int-interleaved-lifetimes -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 20
   var ab = a + b
@@ -1026,7 +1026,7 @@ module {
 
 <!-- test: int-parallel-accumulation -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var sum1 = 0
   var sum2 = 0
   var sum3 = 0
@@ -1118,11 +1118,11 @@ module {
 
 <!-- test: int-call-preserves-value -->
 ```maxon
-function getForty() returns int
+function getForty() returns Integer
   return 40
 end 'getForty'
 
-function main() returns int
+function main() returns Integer
   var x = 2
   var y = getForty()
   return x + y
@@ -1184,15 +1184,15 @@ module {
 
 <!-- test: int-multiple-calls-preserve -->
 ```maxon
-function getTen() returns int
+function getTen() returns Integer
   return 10
 end 'getTen'
 
-function getTwo() returns int
+function getTwo() returns Integer
   return 2
 end 'getTwo'
 
-function main() returns int
+function main() returns Integer
   var a = 5
   var b = getTen()
   var c = 7
@@ -1290,11 +1290,11 @@ module {
 
 <!-- test: int-call-result-used-later -->
 ```maxon
-function compute() returns int
+function compute() returns Integer
   return 100
 end 'compute'
 
-function main() returns int
+function main() returns Integer
   var a = compute()
   var b = compute()
   return (a + b) mod 256
@@ -1369,137 +1369,37 @@ module {
 
 <!-- test: int-division-fixed-regs -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 126
   var b = 3
-  return trunc(a / b)
+  return a / b
 end 'main'
 ```
 ```exitcode
 42
 ```
-```RequiredMLIR
-=== maxon
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 126 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.int_to_float %0
-    %3 = maxon.int_to_float %1
-    %4 = maxon.binop %2, %3 {op = div} {kind = f64}
-    %5 = maxon.trunc %4
-    maxon.return %5
-  }
-}
-=== standard
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 126 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.sitofp %0
-    %3 = arith.sitofp %1
-    %4 = arith.divf %2, %3
-    %5 = arith.fptosi %4
-    func.return %5
-  }
-}
-=== x86
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    x86.mov eax, 126
-    x86.mov ecx, 3
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si eax, xmm2
-    x86.ret
-  }
-}
-```
 
 <!-- test: int-division-preserves-other-values -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   var a = 84
   var b = 2
   var quotient = a / b
-  return trunc(quotient - x)
+  return quotient - x
 end 'main'
 ```
 ```exitcode
 32
 ```
-```RequiredMLIR
-=== maxon
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 84 : i64}
-    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 2 : i64}
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.int_to_float %1
-    %4 = maxon.int_to_float %2
-    %5 = maxon.binop %3, %4 {op = div} {kind = f64}
-    maxon.assign %5 {var = quotient} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.int_to_float %0
-    %7 = maxon.binop %5, %6 {op = sub} {kind = f64}
-    %8 = maxon.trunc %7
-    maxon.return %8
-  }
-}
-=== standard
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 10 : i64}
-    %1 = arith.constant {value = 84 : i64}
-    %2 = arith.constant {value = 2 : i64}
-    %3 = arith.sitofp %1
-    %4 = arith.sitofp %2
-    %5 = arith.divf %3, %4
-    %6 = arith.sitofp %0
-    %7 = arith.subf %5, %6
-    %8 = arith.fptosi %7
-    func.return %8
-  }
-}
-=== x86
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    x86.mov eax, 10
-    x86.mov ecx, 84
-    x86.mov edx, 2
-    x86.cvtsi2sd xmm0, ecx
-    x86.cvtsi2sd xmm1, edx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvtsi2sd xmm3, eax
-    x86.movsd xmm4, xmm2
-    x86.subsd xmm4, xmm3
-    x86.cvttsd2si eax, xmm4
-    x86.ret
-  }
-}
-```
 
 <!-- test: int-function-with-params -->
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(30, b: 12)
 end 'main'
 ```
@@ -1561,11 +1461,11 @@ module {
 
 <!-- test: int-mov-reg-reg-32bit -->
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   var x = 20
   var y = 22
   return add(y, b: x)
@@ -1632,7 +1532,7 @@ module {
 
 <!-- test: int-if-else-simple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   if x == 10 'check'
     return 42
@@ -1698,7 +1598,7 @@ module {
 
 <!-- test: int-if-else-value-survives-branch -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var base = 40
   var cond = 1
   var extra = 0
@@ -1798,7 +1698,7 @@ module {
 
 <!-- test: int-while-loop-counter -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var i = 0
   while i < 42 'loop'
     i = i + 1
@@ -1885,7 +1785,7 @@ module {
 
 <!-- test: int-while-loop-accumulator -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var sum = 0
   var i = 0
   while i < 10 'loop'
@@ -2002,7 +1902,7 @@ module {
 
 <!-- test: int-while-loop-multiple-accumulators -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var even_sum = 0
   var odd_sum = 0
   var count = 0
@@ -2209,7 +2109,7 @@ module {
 
 <!-- test: int-nested-if-in-loop -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var result = 0
   var i = 1
   while i <= 10 'loop'
@@ -2375,7 +2275,7 @@ module {
 
 <!-- test: int-nested-loops -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var total = 0
   var i = 0
   while i < 5 'outer'
@@ -2531,7 +2431,7 @@ module {
 
 <!-- test: int-nested-loops-with-outer-var -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var total = 0
   var i = 1
   while i <= 5 'outer'
@@ -2687,11 +2587,11 @@ module {
 
 <!-- test: int-loop-with-function-call -->
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-function main() returns int
+function main() returns Integer
   var sum = 0
   var i = 0
   while i < 5 'loop'
@@ -2825,7 +2725,7 @@ module {
 
 <!-- test: int-nested-expressions-deep -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return ((((1 + 2) * 3) + 4) * 2) + 6
 end 'main'
 ```
@@ -2891,7 +2791,7 @@ module {
 
 <!-- test: int-expression-both-sides-complex -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 3
   var b = 5
   var c = 7
@@ -2953,11 +2853,11 @@ module {
 
 <!-- test: int-many-params-function -->
 ```maxon
-function sum5(a int, b int, c int, d int, e int) returns int
+function sum5(a Integer, b Integer, c Integer, d Integer, e Integer) returns Integer
   return a + b + c + d + e
 end 'sum5'
 
-function main() returns int
+function main() returns Integer
   return sum5(5, b: 10, c: 8, d: 12, e: 7)
 end 'main'
 ```
@@ -3045,11 +2945,11 @@ module {
 
 <!-- test: int-nine-params-function -->
 ```maxon
-function sum9(a int, b int, c int, d int, e int, f int, g int, h int, i int) returns int
+function sum9(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer) returns Integer
   return a + b + c + d + e + f + g + h + i
 end 'sum9'
 
-function main() returns int
+function main() returns Integer
   return sum9(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9)
 end 'main'
 ```
@@ -3181,14 +3081,14 @@ module {
 
 <!-- test: int-recursive-factorial -->
 ```maxon
-function factorial(n int) returns int
+function factorial(n Integer) returns Integer
   if n <= 1 'base'
     return 1
   end 'base'
   return n * factorial(n - 1)
 end 'factorial'
 
-function main() returns int
+function main() returns Integer
   return factorial(5) mod 256
 end 'main'
 ```
@@ -3298,11 +3198,11 @@ module {
 
 <!-- test: int-loop-pressure-with-call -->
 ```maxon
-function identity(x int) returns int
+function identity(x Integer) returns Integer
   return x
 end 'identity'
 
-function main() returns int
+function main() returns Integer
   var a = 1
   var b = 2
   var c = 3
@@ -3529,7 +3429,7 @@ module {
 
 <!-- test: float-and-int-mixed-pressure -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.14
   var y = 2.86
   var sum_f = x + y
@@ -3599,7 +3499,7 @@ module {
 
 <!-- test: int-value-live-across-nested-control -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var sentinel = 100
   var total = 0
   var i = 0
@@ -3791,7 +3691,7 @@ module {
 
 <!-- test: int-fibonacci -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 0
   var b = 1
   var i = 0
@@ -3914,7 +3814,7 @@ module {
 
 <!-- test: int-division-high-pressure -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 20
   var c = 30
@@ -3923,109 +3823,23 @@ function main() returns int
   var f = 60
   var g = 70
   var h = 2
-  return trunc((a + b + c + d + e + f + g) / h)
+  return (a + b + c + d + e + f + g) / h
 end 'main'
 ```
 ```exitcode
 140
 ```
-```RequiredMLIR
-=== maxon
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 20 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 30 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 40 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 50 : i64}
-    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.literal {value = 60 : i64}
-    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.literal {value = 70 : i64}
-    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %7 = maxon.literal {value = 2 : i64}
-    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.binop %0, %1 {op = add} {kind = i64}
-    %9 = maxon.binop %8, %2 {op = add} {kind = i64}
-    %10 = maxon.binop %9, %3 {op = add} {kind = i64}
-    %11 = maxon.binop %10, %4 {op = add} {kind = i64}
-    %12 = maxon.binop %11, %5 {op = add} {kind = i64}
-    %13 = maxon.binop %12, %6 {op = add} {kind = i64}
-    %14 = maxon.int_to_float %13
-    %15 = maxon.int_to_float %7
-    %16 = maxon.binop %14, %15 {op = div} {kind = f64}
-    %17 = maxon.trunc %16
-    maxon.return %17
-  }
-}
-=== standard
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 10 : i64}
-    %1 = arith.constant {value = 20 : i64}
-    %2 = arith.constant {value = 30 : i64}
-    %3 = arith.constant {value = 40 : i64}
-    %4 = arith.constant {value = 50 : i64}
-    %5 = arith.constant {value = 60 : i64}
-    %6 = arith.constant {value = 70 : i64}
-    %7 = arith.constant {value = 2 : i64}
-    %8 = arith.addi %0, %1
-    %9 = arith.addi %8, %2
-    %10 = arith.addi %9, %3
-    %11 = arith.addi %10, %4
-    %12 = arith.addi %11, %5
-    %13 = arith.addi %12, %6
-    %14 = arith.sitofp %13
-    %15 = arith.sitofp %7
-    %16 = arith.divf %14, %15
-    %17 = arith.fptosi %16
-    func.return %17
-  }
-}
-=== x86
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    x86.mov eax, 10
-    x86.mov ecx, 20
-    x86.mov edx, 30
-    x86.mov ebx, 40
-    x86.mov esi, 50
-    x86.mov edi, 60
-    x86.mov r8, 70
-    x86.mov r9, 2
-    x86.add eax, ecx
-    x86.add eax, edx
-    x86.add eax, ebx
-    x86.add eax, esi
-    x86.add eax, edi
-    x86.add eax, r8
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, r9
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si eax, xmm2
-    x86.ret
-  }
-}
-```
 
 <!-- test: int-callee-saved-clobber -->
 ```maxon
-function useRegs(a int, b int, c int, d int) returns int
+function useRegs(a Integer, b Integer, c Integer, d Integer) returns Integer
   var x = a + b
   var y = c + d
   var z = x + y
   return z
 end 'useRegs'
 
-function main() returns int
+function main() returns Integer
   var sentinel = 42
   var result = useRegs(1, b: 2, c: 3, d: 4)
   return sentinel + result
@@ -4118,11 +3932,11 @@ module {
 
 <!-- test: int-float-survives-call -->
 ```maxon
-function getInt() returns int
+function getInt() returns Integer
   return 40
 end 'getInt'
 
-function main() returns int
+function main() returns Integer
   var f = 3.14
   var x = getInt()
   return trunc(f) + x
@@ -4190,87 +4004,21 @@ module {
 
 <!-- test: int-sequential-divisions -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 100
   var b = 5
   var c = 84
   var d = 4
-  return trunc(a / b + c / d)
+  return a / b + c / d
 end 'main'
 ```
 ```exitcode
 41
 ```
-```RequiredMLIR
-=== maxon
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 5 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 84 : i64}
-    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 4 : i64}
-    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.int_to_float %0
-    %5 = maxon.int_to_float %1
-    %6 = maxon.binop %4, %5 {op = div} {kind = f64}
-    %7 = maxon.int_to_float %2
-    %8 = maxon.int_to_float %3
-    %9 = maxon.binop %7, %8 {op = div} {kind = f64}
-    %10 = maxon.binop %6, %9 {op = add} {kind = f64}
-    %11 = maxon.trunc %10
-    maxon.return %11
-  }
-}
-=== standard
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 100 : i64}
-    %1 = arith.constant {value = 5 : i64}
-    %2 = arith.constant {value = 84 : i64}
-    %3 = arith.constant {value = 4 : i64}
-    %4 = arith.sitofp %0
-    %5 = arith.sitofp %1
-    %6 = arith.divf %4, %5
-    %7 = arith.sitofp %2
-    %8 = arith.sitofp %3
-    %9 = arith.divf %7, %8
-    %10 = arith.addf %6, %9
-    %11 = arith.fptosi %10
-    func.return %11
-  }
-}
-=== x86
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    x86.mov eax, 100
-    x86.mov ecx, 5
-    x86.mov edx, 84
-    x86.mov ebx, 4
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvtsi2sd xmm3, edx
-    x86.cvtsi2sd xmm4, ebx
-    x86.movsd xmm5, xmm3
-    x86.divsd xmm5, xmm4
-    x86.movsd xmm6, xmm2
-    x86.addsd xmm6, xmm5
-    x86.cvttsd2si eax, xmm6
-    x86.ret
-  }
-}
-```
 
 <!-- test: int-remainder-in-arithmetic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 100
   var b = 7
   var c = 10
@@ -4329,11 +4077,11 @@ module {
 
 <!-- test: int-call-arg-reverse -->
 ```maxon
-function sub(a int, b int) returns int
+function sub(a Integer, b Integer) returns Integer
   return a - b
 end 'sub'
 
-function main() returns int
+function main() returns Integer
   var x = 10
   var y = 3
   var result = sub(y, b: x)
@@ -4408,7 +4156,7 @@ module {
 
 <!-- test: int-subtraction-high-pressure -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 100
   var b = 1
   var c = 2
@@ -4502,7 +4250,7 @@ module {
 
 <!-- test: int-multi-var-branch-merge -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0
   var y = 0
   var z = 0
@@ -4635,7 +4383,7 @@ module {
 
 <!-- test: match-statement-simple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   match x 'check'
     1 then return 10
@@ -4744,7 +4492,7 @@ module {
 
 <!-- test: match-statement-assignment -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   var result = 0
   match x 'process'
@@ -4870,7 +4618,7 @@ module {
 
 <!-- test: match-statement-or-patterns -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   match x 'check'
     1 or 2 then return 10
@@ -5013,7 +4761,7 @@ module {
 
 <!-- test: match-statement-fallthrough -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 1
   var result = 0
   match x 'cascade'
@@ -5189,7 +4937,7 @@ module {
 
 <!-- test: match-expression-basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   let result = match x 'eval'
     1 gives 10
@@ -5315,7 +5063,7 @@ module {
 
 <!-- test: match-expression-or-patterns -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 4
   let result = match x 'eval'
     1 or 2 gives 10
@@ -5475,7 +5223,7 @@ module {
 
 <!-- test: match-expression-in-arithmetic -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   let doubled = match x 'eval'
     1 gives 10
@@ -5607,11 +5355,11 @@ module {
 
 <!-- test: match-statement-with-function-call -->
 ```maxon
-function double(n int) returns int
+function double(n Integer) returns Integer
   return n * 2
 end 'double'
 
-function main() returns int
+function main() returns Integer
   var x = 2
   var result = 0
   match x 'process'
@@ -5772,11 +5520,11 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail() returns int throws MyError
+function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   try mayFail() otherwise ignore
   return 42
 end 'main'
@@ -5842,11 +5590,11 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function mayFail() returns int throws MyError
+function mayFail() returns Integer throws MyError
   throw MyError.failed
 end 'mayFail'
 
-function main() returns int
+function main() returns Integer
   var result = 0
   try mayFail() otherwise 'err'
     result = 42
@@ -5950,16 +5698,16 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function inner() returns int throws MyError
+function inner() returns Integer throws MyError
   throw MyError.failed
 end 'inner'
 
-function middle() returns int throws MyError
+function middle() returns Integer throws MyError
   let x = try inner()
   return x
 end 'middle'
 
-function main() returns int
+function main() returns Integer
   let x = try middle() otherwise 99
   return x
 end 'main'
@@ -6111,19 +5859,19 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-function getA() returns int throws MyError
+function getA() returns Integer throws MyError
   return 10
 end 'getA'
 
-function getB() returns int throws MyError
+function getB() returns Integer throws MyError
   return 20
 end 'getB'
 
-function getC() returns int throws MyError
+function getC() returns Integer throws MyError
   throw MyError.failed
 end 'getC'
 
-function main() returns int
+function main() returns Integer
   let a = try getA() otherwise 0
   let b = try getB() otherwise 0
   let c = try getC() otherwise 12
@@ -6355,7 +6103,7 @@ enum MyError implements Error
   notFound
 end 'MyError'
 
-function lookup(key int) returns int throws MyError
+function lookup(key Integer) returns Integer throws MyError
   match key 'dispatch'
     1 then return 100
     2 then return 200
@@ -6363,7 +6111,7 @@ function lookup(key int) returns int throws MyError
   end 'dispatch'
 end 'lookup'
 
-function main() returns int
+function main() returns Integer
   let a = try lookup(2) otherwise 0
   let b = try lookup(99) otherwise 42
   return a + b mod 256

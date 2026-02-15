@@ -17,8 +17,8 @@ Use the `uses` keyword after the interface name to declare associated types:
 
 ```maxon
 interface Container uses Element
-  function get(index int) returns Element
-  function set(index int, value Element) returns Self
+  function get(index Integer) returns Element
+  function set(index Integer, value Element) returns Self
 end 'Container'
 ```
 
@@ -32,15 +32,15 @@ Associated types can be used in:
 Types bind concrete types to associated types using `with` after the interface name. Interface methods use `function methodName(params)` syntax:
 
 ```maxon
-type IntArray implements Container with int
-  var data array of 100 int
-  var len int
+type IntArray implements Container with Integer
+  var data array of 100 Integer
+  var len Integer
 
-  function get(index int) returns int
+  function get(index Integer) returns Integer
     return data[index]
   end 'get'
 
-  function set(index int, value int) returns IntArray
+  function set(index Integer, value Integer) returns IntArray
     data[index] = value
     return {data: data, len: len}
   end 'set'
@@ -59,15 +59,15 @@ interface Pair uses First, Second
   function getSecond() returns Second
 end 'Pair'
 
-type IntFloat implements Pair with int, float
-  var a int
-  var b float
+type IntFloat implements Pair with Integer, Float
+  var a Integer
+  var b Float
 
-  function getFirst() returns int
+  function getFirst() returns Integer
     return a
   end 'getFirst'
   
-  function getSecond() returns float
+  function getSecond() returns Float
     return b
   end 'getSecond'
 end 'IntFloat'
@@ -96,7 +96,7 @@ Different iterators define different element types:
 When iterating with `for`, the loop variable's type is inferred from the iterator's `Element` type:
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var s = "Hi"
   for ch in s 'chars'
     // ch has type 'character' (inferred from string's Element type - grapheme cluster)
@@ -126,16 +126,16 @@ interface Summable uses Element
   function sum() returns Element
 end 'Summable'
 
-type IntPair implements Summable with int
-  var a int
-  var b int
+type IntPair implements Summable with Integer
+  var a Integer
+  var b Integer
 
-  function sum() returns int
+  function sum() returns Integer
     return a + b
   end 'sum'
 end 'IntPair'
 
-function main() returns int
+function main() returns Integer
   var p = IntPair{a: 10, b: 32}
   return p.sum()
 end 'main'
@@ -163,14 +163,14 @@ interface HasElement uses Element
 end 'HasElement'
 
 type Broken implements HasElement
-  var value int
+  var value Integer
 
-  function get() returns int
+  function get() returns Integer
     return value
   end 'get'
 end 'Broken'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -188,21 +188,21 @@ interface TwoMethods uses Element
   function second() returns Element
 end 'TwoMethods'
 
-type Partial implements TwoMethods with int
-  var value int
+type Partial implements TwoMethods with Integer
+  var value Integer
 
-  function first() returns int
+  function first() returns Integer
     return value
   end 'first'
 end 'Partial'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/associated-types/docs-example-4.test:7:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
-  - second() returns int
+  - second() returns Integer
 ```
 
 ### Error: Type Mismatch in Method
@@ -214,21 +214,21 @@ interface Producer uses Output
   function produce() returns Output
 end 'Producer'
 
-type WrongReturn implements Producer with float
-  var value int
+type WrongReturn implements Producer with Float
+  var value Integer
 
-  function produce() returns int
+  function produce() returns Integer
     return value
   end 'produce'
 end 'WrongReturn'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/associated-types/docs-example-5.test:6:6: Partial interface implementation: type 'WrongReturn' has 1 method(s) with wrong signature:
-  - produce() returns int (expected produce() returns float)
+  - produce() returns Integer (expected produce() returns Float)
 ```
 
 
@@ -240,15 +240,15 @@ interface Wrapper uses Inner
   function unwrap() returns Inner
 end 'Wrapper'
 
-type IntBox implements Wrapper with int
-  var value int
+type IntBox implements Wrapper with Integer
+  var value Integer
 
-  function unwrap() returns int
+  function unwrap() returns Integer
     return value
   end 'unwrap'
 end 'IntBox'
 
-function main() returns int
+function main() returns Integer
   var box = IntBox{value: 42}
   return box.unwrap()
 end 'main'
@@ -262,22 +262,22 @@ end 'main'
 ```maxon
 interface Accumulator uses Item
   function add(item Item) returns Self
-  function total() returns int
+  function total() returns Integer
 end 'Accumulator'
 
-type IntSum implements Accumulator with int
-  var sum int
+type IntSum implements Accumulator with Integer
+  var sum Integer
 
-  function add(item int) returns IntSum
+  function add(item Integer) returns IntSum
     return {sum: sum + item}
   end 'add'
 
-  function total() returns int
+  function total() returns Integer
     return sum
   end 'total'
 end 'IntSum'
 
-function main() returns int
+function main() returns Integer
   var acc = IntSum{sum: 0}
   acc = acc.add(10)
   acc = acc.add(32)
@@ -296,20 +296,20 @@ interface Pair uses First, Second
   function getSecond() returns Second
 end 'Pair'
 
-type IntFloat implements Pair with int, float
-  var a int
-  var b float
+type IntFloat implements Pair with Integer, Float
+  var a Integer
+  var b Float
 
-  function getFirst() returns int
+  function getFirst() returns Integer
     return a
   end 'getFirst'
 
-  function getSecond() returns float
+  function getSecond() returns Float
     return b
   end 'getSecond'
 end 'IntFloat'
 
-function main() returns int
+function main() returns Integer
   var p = IntFloat{a: 40, b: 2.5}
   var x = p.getFirst()
   var y = trunc(p.getSecond())
@@ -336,7 +336,7 @@ type SingleChar implements CharSource with Character
   end 'getChar'
 end 'SingleChar'
 
-function main() returns int
+function main() returns Integer
   var s = SingleChar{ch: 'A'}
   var c = s.getChar()
   for cp in c.codepoints() 'loop'
@@ -356,18 +356,18 @@ interface ByteSource uses Element
   function getByte() returns Element
 end 'ByteSource'
 
-type SingleByte implements ByteSource with byte
-  var b byte
+type SingleByte implements ByteSource with Byte
+  var b Byte
 
-  function getByte() returns byte
+  function getByte() returns Byte
     return b
   end 'getByte'
 end 'SingleByte'
 
-function main() returns int
-  var s = SingleByte{b: 42 as byte}
+function main() returns Integer
+  var s = SingleByte{b: 42 as Byte}
   var b = s.getByte()
-  return b as int
+  return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -382,14 +382,14 @@ interface NeedsElement uses Element
 end 'NeedsElement'
 
 type Missing implements NeedsElement
-  var value int
+  var value Integer
 
-  function get() returns int
+  function get() returns Integer
     return value
   end 'get'
 end 'Missing'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -405,21 +405,21 @@ interface TwoMethods uses Element
   function second() returns Element
 end 'TwoMethods'
 
-type Partial implements TwoMethods with int
-  var value int
+type Partial implements TwoMethods with Integer
+  var value Integer
 
-  function first() returns int
+  function first() returns Integer
     return value
   end 'first'
 end 'Partial'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/associated-types/partial-implementation-error.test:7:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
-  - second() returns int
+  - second() returns Integer
 ```
 
 
@@ -429,63 +429,63 @@ interface Typed uses Output
   function make() returns Output
 end 'Typed'
 
-type WrongType implements Typed with float
-  var value int
+type WrongType implements Typed with Float
+  var value Integer
 
-  function make() returns int
+  function make() returns Integer
     return value
   end 'make'
 end 'WrongType'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/associated-types/wrong-return-type-error.test:6:6: Partial interface implementation: type 'WrongType' has 1 method(s) with wrong signature:
-  - make() returns int (expected make() returns float)
+  - make() returns Integer (expected make() returns Float)
 ```
 
 
 <!-- test: wrong-param-type-error -->
 ```maxon
 interface Acceptor uses Input
-  function accept(val Input) returns int
+  function accept(val Input) returns Integer
 end 'Acceptor'
 
-type WrongParam implements Acceptor with float
-  var value int
+type WrongParam implements Acceptor with Float
+  var value Integer
 
-  function accept(val int) returns int
+  function accept(val Integer) returns Integer
     return value + val
   end 'accept'
 end 'WrongParam'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
 ```maxoncstderr
 error E3016: specs/fragments/associated-types/wrong-param-type-error.test:6:6: Partial interface implementation: type 'WrongParam' has 1 method(s) with wrong signature:
-  - accept(val int) returns int (expected accept(val float) returns int)
+  - accept(val Integer) returns Integer (expected accept(val Float) returns Integer)
 ```
 
 
 <!-- test: implicit-self-field-access -->
 ```maxon
 interface Countable
-  function getCount() returns int
+  function getCount() returns Integer
 end 'Countable'
 
 type Counter implements Countable
-  var count int
+  var count Integer
 
-  function getCount() returns int
+  function getCount() returns Integer
     return count
   end 'getCount'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 42}
   return c.getCount()
 end 'main'
@@ -498,18 +498,18 @@ end 'main'
 <!-- test: method-call-syntax -->
 ```maxon
 interface Addable
-  function addOne() returns int
+  function addOne() returns Integer
 end 'Addable'
 
 type Number implements Addable
-  var value int
+  var value Integer
 
-  function addOne() returns int
+  function addOne() returns Integer
     return value + 1
   end 'addOne'
 end 'Number'
 
-function main() returns int
+function main() returns Integer
   var n = Number{value: 41}
   return n.addOne()
 end 'main'

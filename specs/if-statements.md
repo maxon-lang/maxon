@@ -45,7 +45,7 @@ end 'default'
 **Example (simple if):**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   if x > 5 'check'
     return 1
@@ -61,7 +61,7 @@ end 'main'
 **Example (if-else):**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   if x > 5 'gt5'
     return 1
@@ -78,7 +78,7 @@ end 'main'
 **Example (else-if chain):**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   if x == 1 'case1'
     return 1
@@ -106,7 +106,7 @@ end 'main'
 
 <!-- test: if-statements.simple -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   if x > 5 'check'
     return 1
@@ -120,7 +120,7 @@ end 'main'
 
 <!-- test: if-statements.else -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   if x == 5 'is5'
     return 1
@@ -135,7 +135,7 @@ end 'main'
 
 <!-- test: if-statements.else-false -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   if x > 5 'gt5'
     return 1
@@ -150,7 +150,7 @@ end 'main'
 
 <!-- test: if-statements.else-if-chain -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 2
   if x == 1 'case1'
     return 1
@@ -168,7 +168,7 @@ end 'main'
 <!-- test: if-statements.else-if-in-helper -->
 else-if chains in helper functions must be correctly skipped during pre-scan.
 ```maxon
-function classify(x int) returns int
+function classify(x Integer) returns Integer
   if x == 0 'zero'
     return 0
   end 'zero' else if x < 10 'small'
@@ -180,7 +180,7 @@ function classify(x int) returns int
   end 'large'
 end 'classify'
 
-function main() returns int
+function main() returns Integer
   var a = classify(0)
   var b = classify(5)
   var c = classify(50)
@@ -194,7 +194,7 @@ end 'main'
 
 <!-- test: if-statements.nested -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   if x == 1 'outer'
     return 1
@@ -215,7 +215,7 @@ end 'main'
 Variables declared inside if blocks go out of scope at the end of the block.
 Return after the if should not attempt to clean up those variables.
 ```maxon
-function test(x int) returns int
+function test(x Integer) returns Integer
   if x == 0 'outer'
     let inner = "hello"
     if inner == "hello" 'checkInner'
@@ -225,7 +225,7 @@ function test(x int) returns int
   return 42
 end 'test'
 
-function main() returns int
+function main() returns Integer
   return test(5)
 end 'main'
 ```
@@ -237,7 +237,7 @@ end 'main'
 Nested if statements with returns inside should work correctly.
 The outer if creates a variable that shouldn't be accessed after the if.
 ```maxon
-function test(c int, next int) returns int
+function test(c Integer, next Integer) returns Integer
   if c == 0 'maybePrefix'
     if next == 1 'isHex'
       return 1
@@ -249,7 +249,7 @@ function test(c int, next int) returns int
   return 42
 end 'test'
 
-function main() returns int
+function main() returns Integer
   return test(5, next: 0)
 end 'main'
 ```
@@ -263,7 +263,7 @@ Block bodies must start on a new line after the label.
 
 <!-- test: if-statements.single-line-block-rejected -->
 ```maxon
-function main() returns int
+function main() returns Integer
   if true 'x' return 1 end 'x'
   return 0
 end 'main'

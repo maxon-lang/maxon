@@ -45,7 +45,7 @@ Read the entire contents of a text file as a UTF-8 encoded string.
 **Example:**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   let content = try File.readText("example.txt") otherwise 'err'
     print("Could not read file\n")
     return 0
@@ -91,7 +91,7 @@ where `type ByteArray implements Array with byte`
 **Example:**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   let bytes = try File.readBinary("data.bin") otherwise 'err'
     print("Could not read file\n")
     return 0
@@ -129,7 +129,7 @@ Check if a file exists at the given path.
 **Example:**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   if File.exists("temp/output.txt") 'check'
     print("File exists")
   end 'check' else 'nofile'
@@ -153,7 +153,7 @@ Delete a file at the given path.
 **Example:**
 
 ```maxon
-function main() returns int
+function main() returns Integer
   try File.delete("temp/old_file.txt") otherwise 'err'
     print("Could not delete file")
     return 1
@@ -173,7 +173,7 @@ Could not delete file
 
 <!-- test: read-text-file -->
 ```maxon
-function main() returns int
+function main() returns Integer
   // Try to read a nonexistent file - this tests the error path
   let content = try File.readText("nonexistent_file_xyz.txt") otherwise 'err'
     print("File not found")
@@ -192,7 +192,7 @@ File not found
 
 <!-- test: read-nonexistent-file -->
 ```maxon
-function main() returns int
+function main() returns Integer
   let content = try File.readText("nonexistent.txt") otherwise 'err'
     print("File not found")
     return 0
@@ -210,7 +210,7 @@ File not found
 
 <!-- test: file-exists -->
 ```maxon
-function main() returns int
+function main() returns Integer
   // Test File.exists on a nonexistent file (returns false)
   if File.exists("nonexistent_xyz_12345.txt") 'check'
     return 1
@@ -224,7 +224,7 @@ end 'main'
 
 <!-- test: read-binary-nonexistent -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var bytes = try File.readBinary("nonexistent_binary_file.bin") otherwise 'err'
     print("File not found")
     return 42
@@ -244,12 +244,12 @@ File not found
 ```maxon
 typealias ByteArray = Array with byte
 
-function main() returns int
+function main() returns Integer
   // Create a byte array with known values
   var data = ByteArray{}
-  data.push(65 as byte)
-  data.push(66 as byte)
-  data.push(67 as byte)
+  data.push(65 as Byte)
+  data.push(66 as Byte)
+  data.push(67 as Byte)
 
   // Write binary file
   try File.writeBinary("test_binary.bin", content: data) otherwise 'write_err'
@@ -279,7 +279,7 @@ function main() returns int
     return 10
   end 'e0'
 
-  if b0 != 65 as byte 'check0'
+  if b0 != 65 as Byte 'check0'
     print("Wrong value")
     return 20
   end 'check0'

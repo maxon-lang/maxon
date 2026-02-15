@@ -19,7 +19,7 @@ return expression
 ### Example
 
 ```maxon
-function isPositive(x int) returns bool
+function isPositive(x Integer) returns bool
   if x > 0 'check'
     return true
   end 'check'
@@ -30,7 +30,7 @@ end 'isPositive'
 
 <!-- test: simple-return -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 42
 end 'main'
 ```
@@ -41,7 +41,7 @@ end 'main'
 
 <!-- test: expression-return -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 2 + 3 * 4
 end 'main'
 ```
@@ -52,7 +52,7 @@ end 'main'
 
 <!-- test: conditional-return -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
   if x > 3 'check'
     return 1

@@ -17,6 +17,20 @@ public static class MaxonToStandardConversion {
     result.Globals.AddRange(module.Globals);
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
+    // Resolve ranged primitive types so lowering sees base types (i64/f64/i8)
+    foreach (var (_, typeDef) in module.TypeDefs) {
+      if (typeDef is MlirStructType st)
+        foreach (var field in st.Fields)
+          field.Type = MlirType.Resolve(field.Type);
+    }
+    foreach (var func in module.Functions) {
+      if (func.ReturnType is MlirRangedPrimitiveType rptRet)
+        func.ReturnType = rptRet.BaseType;
+      for (int i = 0; i < func.ParamTypes.Count; i++)
+        if (func.ParamTypes[i] is MlirRangedPrimitiveType rptParam)
+          func.ParamTypes[i] = rptParam.BaseType;
+    }
+
     // Build a lookup of functions by name for struct-aware call lowering
     var funcLookup = module.Functions.ToDictionary(f => f.Name);
 
@@ -961,10 +975,15 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonTruncOp truncOp: {
-              var input = (StdF64)valueMap[truncOp.Input];
-              var stdOp = new StdFpToSiOp(input);
-              newBlock.AddOp(stdOp);
-              valueMap[truncOp.Result] = stdOp.Result;
+              var mappedInput = valueMap[truncOp.Input];
+              if (mappedInput is StdF64 f64Input) {
+                var stdOp = new StdFpToSiOp(f64Input);
+                newBlock.AddOp(stdOp);
+                valueMap[truncOp.Result] = stdOp.Result;
+              } else {
+                // Input is already an integer — trunc is a no-op
+                valueMap[truncOp.Result] = mappedInput;
+              }
               break;
             }
             case MaxonBitcastF64ToI64Op bitcastOp: {
@@ -1230,6 +1249,9 @@ public static class MaxonToStandardConversion {
               break;
             case MaxonCStringWriteStderrOp writeStderrOp:
               LowerCStringWriteStderr(writeStderrOp, newBlock, valueMap);
+              break;
+            case MaxonPanicOp panicOp:
+              LowerPanic(panicOp, newBlock, result);
               break;
             case MaxonStringLiteralOp stringLitOp:
               LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result);
@@ -2800,6 +2822,23 @@ public static class MaxonToStandardConversion {
     var result = new StdI64(MlirContext.Current.NextId());
     block.AddOp(new StdCallRuntimeOp("maxon_write_stderr", [cstrPtr], result));
     valueMap[op.Result] = result;
+  }
+
+  private static void LowerPanic(
+    MaxonPanicOp op,
+    MlirBlock<StandardOp> block,
+    MlirModule<StandardOp> result) {
+    // Store panic message as null-terminated C string in rdata
+    var bytes = System.Text.Encoding.UTF8.GetBytes(op.Message + "\n");
+    var cstrBytes = new byte[bytes.Length + 1]; // null-terminated
+    bytes.CopyTo(cstrBytes, 0);
+    result.RdataEntries.Add((op.RdataLabel, cstrBytes, 1));
+    // LEA to get pointer to the message
+    var leaOp = new StdLeaRdataOp(op.RdataLabel);
+    block.AddOp(leaOp);
+    var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
+    block.AddOp(ptrToI64);
+    block.AddOp(new StdCallRuntimeOp("maxon_panic", [ptrToI64.Result], null));
   }
 
   /// <summary>

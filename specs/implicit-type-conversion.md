@@ -26,11 +26,11 @@ Maxon supports implicit type conversions between compatible numeric types. These
 Function arguments are implicitly converted to match parameter types:
 
 ```maxon
-function takeFloat(x float) returns int
+function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns int
+function main() returns Integer
   return takeFloat(42)
 end 'main'
 ```
@@ -42,11 +42,11 @@ end 'main'
 
 <!-- test: int-literal-to-float-param -->
 ```maxon
-function takeFloat(x float) returns int
+function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns int
+function main() returns Integer
   return takeFloat(42)
 end 'main'
 ```
@@ -56,11 +56,11 @@ end 'main'
 
 <!-- test: int-var-to-float-param -->
 ```maxon
-function takeFloat(x float) returns int
+function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns int
+function main() returns Integer
   var i = 42
   return takeFloat(i)
 end 'main'
@@ -71,12 +71,12 @@ end 'main'
 
 <!-- test: byte-to-int-param -->
 ```maxon
-function takeInt(x int) returns int
+function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns int
-  var b = 42 as byte
+function main() returns Integer
+  var b = 42 as Byte
   return takeInt(b)
 end 'main'
 ```
@@ -86,11 +86,11 @@ end 'main'
 
 <!-- test: int-to-byte-param-truncates -->
 ```maxon
-function takeByte(x byte) returns int
-  return x as int
+function takeByte(x Byte) returns Integer
+  return x as Integer
 end 'takeByte'
 
-function main() returns int
+function main() returns Integer
   return takeByte(300)
 end 'main'
 ```
@@ -100,11 +100,11 @@ end 'main'
 
 <!-- test: int-var-to-byte-param -->
 ```maxon
-function takeByte(x byte) returns int
-  return x as int
+function takeByte(x Byte) returns Integer
+  return x as Integer
 end 'takeByte'
 
-function main() returns int
+function main() returns Integer
   var i = 300
   return takeByte(i)
 end 'main'
@@ -115,11 +115,11 @@ end 'main'
 
 <!-- test: float-to-int-param-truncates -->
 ```maxon
-function takeInt(x int) returns int
+function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns int
+function main() returns Integer
   var f = 3.7
   return takeInt(f)
 end 'main'
@@ -130,11 +130,11 @@ end 'main'
 
 <!-- test: float-to-byte-param -->
 ```maxon
-function takeByte(x byte) returns int
-  return x as int
+function takeByte(x Byte) returns Integer
+  return x as Integer
 end 'takeByte'
 
-function main() returns int
+function main() returns Integer
   var f = 300.9
   return takeByte(f)
 end 'main'
@@ -145,15 +145,15 @@ end 'main'
 
 <!-- test: function-return-to-byte-param -->
 ```maxon
-function getInt() returns int
+function getInt() returns Integer
   return 300
 end 'getInt'
 
-function takeByte(x byte) returns int
-  return x as int
+function takeByte(x Byte) returns Integer
+  return x as Integer
 end 'takeByte'
 
-function main() returns int
+function main() returns Integer
   return takeByte(getInt())
 end 'main'
 ```
@@ -163,11 +163,11 @@ end 'main'
 
 <!-- test: expression-to-float-param -->
 ```maxon
-function takeFloat(x float) returns int
+function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
 
-function main() returns int
+function main() returns Integer
   var a = 20
   var b = 22
   return takeFloat(a + b)
@@ -179,7 +179,7 @@ end 'main'
 
 <!-- test: math-intrinsic-int-promotion -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var result = sqrt(16)
   return trunc(result)
 end 'main'
@@ -190,11 +190,11 @@ end 'main'
 
 <!-- disabled-test: no-string-to-int -->
 ```maxon
-function takeInt(x int) returns int
+function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns int
+function main() returns Integer
   var s = "hello"
   return takeInt(s)
 end 'main'
@@ -205,11 +205,11 @@ error E022: specs/fragments/implicit-type-conversion.no-string-to-int.1.test:8:5
 
 <!-- test: no-bool-to-int -->
 ```maxon
-function takeInt(x int) returns int
+function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
 
-function main() returns int
+function main() returns Integer
   var b = true
   return takeInt(b)
 end 'main'
@@ -220,14 +220,14 @@ error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:8:10: 
 
 <!-- test: no-int-to-bool -->
 ```maxon
-function takeBool(x bool) returns int
+function takeBool(x bool) returns Integer
   if x 'check'
     return 1
   end 'check'
   return 0
 end 'takeBool'
 
-function main() returns int
+function main() returns Integer
   var i = 1
   return takeBool(i)
 end 'main'

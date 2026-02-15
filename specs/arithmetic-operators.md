@@ -16,7 +16,7 @@ Maxon supports standard arithmetic operations on numeric types.
 - `+` - Addition
 - `-` - Subtraction
 - `*` - Multiplication
-- `/` - Division (always returns float; use `trunc(a/b)` for integer division)
+- `/` - Division (int/int produces truncating int; float/float produces float)
 - `mod` - Modulo (remainder after division, integers only)
 
 ### Precedence
@@ -28,14 +28,13 @@ Multiplication, division, and modulo have higher precedence than addition and su
 ### Example
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 3
   var sum = a + b          // 13
   var diff = a - b         // 7
   var prod = a * b         // 30
-  var div = a / b          // 3.333... (float)
-  var quot = trunc(a / b)  // 3 (integer division)
+  var div = a / b          // 3 (truncating integer division)
   var rem = a mod b        // 1
 
   // Use the values
@@ -43,7 +42,6 @@ function main() returns int
   print("{diff}\n")
   print("{prod}\n")
   print("{div}\n")
-  print("{quot}\n")
   print("{rem}\n")
 
   return 0
@@ -56,7 +54,6 @@ end 'main'
 13
 7
 30
-3.333333
 3
 1
 ```
@@ -66,7 +63,7 @@ end 'main'
 
 <!-- test: addition -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 5 + 3
 end 'main'
 ```
@@ -77,7 +74,7 @@ end 'main'
 
 <!-- test: multiplication -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 6 * 7
 end 'main'
 ```
@@ -88,7 +85,7 @@ end 'main'
 
 <!-- test: precedence -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 2 + 3 * 4
 end 'main'
 ```
@@ -97,22 +94,21 @@ end 'main'
 ```
 
 
-<!-- test: division-returns-float -->
+<!-- test: division-truncating-int -->
 ```maxon
-function main() returns int
-  var result = 20 / 3      // 6.666...
-  return trunc(result * 10.0)  // 66.666... * 10 = 66.666..., trunc = 66
+function main() returns Integer
+  return 20 / 3
 end 'main'
 ```
 ```exitcode
-66
+6
 ```
 
 
 <!-- test: trunc-division-optimizes -->
 ```maxon
-function main() returns int
-  return trunc(20 / 3)     // Optimized to sdiv, returns 6
+function main() returns Integer
+  return 20 / 3             // int/int = truncating int, returns 6
 end 'main'
 ```
 ```exitcode
@@ -122,10 +118,10 @@ end 'main'
 
 <!-- test: variable-division-optimizes -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 7
   var b = 2
-  return trunc(a / b)      // Should optimize to sdiv after Mem2Reg
+  return a / b              // int/int = truncating int, returns 3
 end 'main'
 ```
 ```exitcode
@@ -135,9 +131,9 @@ end 'main'
 
 <!-- test: negative-division -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var neg = -7
-  let a = trunc(neg / 2)    // -7/2 = -3.5, trunc = -3 (toward zero)
+  let a = neg / 2           // -7/2 = -3 (truncating toward zero)
   if a == -3 'pass'
       return 0
   end 'pass'
@@ -151,7 +147,7 @@ end 'main'
 
 <!-- test: modulo -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 17 mod 5
 end 'main'
 ```
@@ -162,10 +158,10 @@ end 'main'
 
 <!-- test: complex-expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 3
-  var result = (a + b) * 2 - trunc(a / b)
+  var result = (a + b) * 2 - a / b
   return result
 end 'main'
 ```

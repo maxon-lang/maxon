@@ -19,7 +19,7 @@ variable = expression
 ### Example
 
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   x = 20          // Update x
   x = x + 5       // x is now 25
@@ -41,7 +41,7 @@ end 'main'
 
 <!-- test: basic-assignment -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3
   x = x + 2
   return x
@@ -54,7 +54,7 @@ end 'main'
 
 <!-- test: multiple-assignments -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   var y = 20
   x = y
@@ -69,7 +69,7 @@ end 'main'
 
 <!-- test: assignment-in-loop -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var sum = 0
   var i = 1
   while i <= 5 'loop'

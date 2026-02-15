@@ -17,6 +17,7 @@ public partial class X86CodeEmitter {
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
     EmitMaxonWriteStderr();
+    EmitMaxonPanic();
     EmitMaxonI64ToString();
     EmitMaxonF64ToString();
     EmitMaxonBoolToString();
@@ -220,6 +221,22 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
     EmitCallImport("kernel32.dll", "WriteFile");
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_panic(cstr_ptr_in_rcx): write message to stderr, then ExitProcess(1)</summary>
+  private void EmitMaxonPanic() {
+    EmitRuntimeFunctionStart("maxon_panic", 1, 0x40);
+    // Call maxon_write_stderr with the message (rcx already has cstr_ptr)
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
+    EmitDword(0);
+    // Call ExitProcess(1)
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitCallImport("kernel32.dll", "ExitProcess");
+    // Should never reach here
+    EmitByte(0xCC); // int3
     EmitRuntimeFunctionEnd();
   }
 

@@ -30,7 +30,7 @@ var g = -f       // g is -3.14
 
 <!-- test: unary-negate-variable -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 47
   var y = -x
   return 42 + y
@@ -42,7 +42,7 @@ end 'main'
 
 <!-- test: unary-negate-literal -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = -5
   return 47 + x
 end 'main'
@@ -53,7 +53,7 @@ end 'main'
 
 <!-- test: unary-double-negate -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   var y = --x
   return y
@@ -65,7 +65,7 @@ end 'main'
 
 <!-- test: unary-negate-expression -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 10
   var y = 5
   var z = -(x + y)
@@ -78,7 +78,7 @@ end 'main'
 
 <!-- test: unary-negate-float -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var f = 3.5
   var g = -f
   return trunc(g + 45.5)
@@ -90,7 +90,7 @@ end 'main'
 
 <!-- test: unary-double-negate-float -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var f = 42.0
   var g = --f
   return trunc(g)

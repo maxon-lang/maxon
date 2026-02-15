@@ -58,7 +58,7 @@ Map requires `Key is Hashable`. String implements Hashable, so this should work:
 
 <!-- test: where-clauses.map-basic -->
 ```maxon
-function main() returns int
+function main() returns Integer
     var m = ["hello": 42]
     return try m.get("hello") otherwise 0
 end 'main'
@@ -74,9 +74,9 @@ A user-defined type that implements Hashable can be used as a Map key:
 <!-- test: where-clauses.custom-hashable-key -->
 ```maxon
 type MyKey implements Hashable, Equatable
-    var value int
+    var value Integer
 
-    function hash() returns int
+    function hash() returns Integer
         return self.value * 31
     end 'hash'
 
@@ -87,7 +87,7 @@ end 'MyKey'
 
 typealias MyKeyMap = Map with (MyKey, int)
 
-function main() returns int
+function main() returns Integer
     return 1
 end 'main'
 ```
@@ -102,12 +102,12 @@ Using a type that doesn't implement Hashable as a Map key should produce a compi
 <!-- test: where-clauses.constraint-violation -->
 ```maxon
 type NotHashable
-    var x int
+    var x Integer
 end 'NotHashable'
 
 typealias BadMap = Map with (NotHashable, int)
 
-function main() returns int
+function main() returns Integer
     return 0
 end 'main'
 ```
@@ -122,13 +122,13 @@ A user-defined generic type can use where clauses:
 <!-- test: where-clauses.user-defined -->
 ```maxon
 interface Valuable
-    function value() returns int
+    function value() returns Integer
 end 'Valuable'
 
 type Wrapper implements Valuable
-    var n int
+    var n Integer
 
-    function value() returns int
+    function value() returns Integer
         return self.n
     end 'value'
 end 'Wrapper'
@@ -139,7 +139,7 @@ end 'Holder'
 
 typealias WrapperHolder = Holder with Wrapper
 
-function main() returns int
+function main() returns Integer
     var w = Wrapper{n: 10}
     var h = WrapperHolder{item: w}
     return h.item.value()
@@ -156,21 +156,21 @@ A type parameter can require multiple interface conformance:
 <!-- test: where-clauses.multiple-interfaces -->
 ```maxon
 interface HasName
-    function name() returns int
+    function name() returns Integer
 end 'HasName'
 
 interface HasAge
-    function age() returns int
+    function age() returns Integer
 end 'HasAge'
 
 type Person implements HasName, HasAge
-    var _age int
+    var _age Integer
 
-    function name() returns int
+    function name() returns Integer
         return 1
     end 'name'
 
-    function age() returns int
+    function age() returns Integer
         return self._age
     end 'age'
 end 'Person'
@@ -181,7 +181,7 @@ end 'Registry'
 
 typealias PersonRegistry = Registry with Person
 
-function main() returns int
+function main() returns Integer
     var p = Person{_age: 30}
     var r = PersonRegistry{item: p}
     return r.item.age()
@@ -196,15 +196,15 @@ end 'main'
 <!-- test: where-clauses.and-violation -->
 ```maxon
 interface Foo
-    function foo() returns int
+    function foo() returns Integer
 end 'Foo'
 
 interface Bar
-    function bar() returns int
+    function bar() returns Integer
 end 'Bar'
 
 type OnlyFoo implements Foo
-    function foo() returns int
+    function foo() returns Integer
         return 1
     end 'foo'
 end 'OnlyFoo'
@@ -215,7 +215,7 @@ end 'NeedsBoth'
 
 typealias Bad = NeedsBoth with OnlyFoo
 
-function main() returns int
+function main() returns Integer
     return 0
 end 'main'
 ```
@@ -237,7 +237,7 @@ type Box uses T
     end 'eq'
 end 'Box'
 
-function main() returns int
+function main() returns Integer
     return 0
 end 'main'
 ```
@@ -261,7 +261,7 @@ end 'Box'
 
 typealias IntBox = Box with int
 
-function main() returns int
+function main() returns Integer
     var b = IntBox{item: 42}
     if b.eq(other: 42) 'yes'
         return 1

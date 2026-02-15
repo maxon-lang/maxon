@@ -41,7 +41,7 @@ var c = a.compare(b)   // returns -1
 
 <!-- test: int.compare.less -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 10
   var b = 20
   return a.compare(b)
@@ -53,7 +53,7 @@ end 'main'
 
 <!-- test: int.compare.equal -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 42
   var b = 42
   return a.compare(b)
@@ -65,7 +65,7 @@ end 'main'
 
 <!-- test: int.compare.greater -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 20
   var b = 10
   return a.compare(b)
@@ -77,7 +77,7 @@ end 'main'
 
 <!-- test: bool.compare.false-true -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = false
   var b = true
   return a.compare(b)
@@ -89,7 +89,7 @@ end 'main'
 
 <!-- test: bool.compare.equal -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = true
   var b = true
   return a.compare(b)
@@ -101,7 +101,7 @@ end 'main'
 
 <!-- test: float.compare.less -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 1.5
   var b = 2.5
   return a.compare(b)
@@ -113,7 +113,7 @@ end 'main'
 
 <!-- test: float.compare.greater -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 3.14
   var b = 2.71
   return a.compare(b)
@@ -125,9 +125,9 @@ end 'main'
 
 <!-- test: byte.compare.less -->
 ```maxon
-function main() returns int
-  var a = 10 as byte
-  var b = 20 as byte
+function main() returns Integer
+  var a = 10 as Byte
+  var b = 20 as Byte
   return a.compare(b)
 end 'main'
 ```

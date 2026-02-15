@@ -1,7 +1,7 @@
 // Test: negative-division
-function main() returns int
+function main() returns Integer
   var neg = -7
-  let a = trunc(neg / 2)    // -7/2 = -3.5, trunc = -3 (toward zero)
+  let a = neg / 2           // -7/2 = -3 (truncating toward zero)
   if a == -3 'pass'
       return 0
   end 'pass'
@@ -15,13 +15,10 @@ module {
   entry:
     x86.mov eax, -7
     x86.mov ecx, 2
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si edx, xmm2
-    x86.mov ebx, -3
-    x86.cmp edx, ebx
+    x86.cqo
+    x86.idiv ecx
+    x86.mov edx, -3
+    x86.cmp eax, edx
     x86.jne arithmetic-operators.main.pass_0.after
   pass_0:
     x86.xor eax, eax

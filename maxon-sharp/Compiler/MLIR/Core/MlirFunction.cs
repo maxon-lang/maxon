@@ -4,7 +4,7 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   public string Name { get; internal set; } = name;
   public List<string> ParamNames { get; } = paramNames;
   public List<MlirType> ParamTypes { get; } = paramTypes;
-  public MlirType? ReturnType { get; } = returnType;
+  public MlirType? ReturnType { get; set; } = returnType;
   public MlirType? ThrowsType { get; } = throwsType;
   public MlirRegion<TOp> Body { get; } = new();
   public bool IsStdlib { get; set; }

@@ -31,7 +31,7 @@ var y = x.clone()   // y is 42
 
 <!-- test: int.clone -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   return x.clone()
 end 'main'
@@ -42,7 +42,7 @@ end 'main'
 
 <!-- test: float.clone -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.14
   var y = x.clone()
   if y == 3.14 'ok'
@@ -57,7 +57,7 @@ end 'main'
 
 <!-- test: bool.clone -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = true
   if x.clone() 'ok'
     return 1
@@ -71,9 +71,9 @@ end 'main'
 
 <!-- test: byte.clone -->
 ```maxon
-function main() returns int
-  var x = 65 as byte
-  var y = x.clone() as int
+function main() returns Integer
+  var x = 65 as Byte
+  var y = x.clone() as Integer
   return y
 end 'main'
 ```

@@ -52,15 +52,15 @@ end 'makePoint'
 <!-- test: error.exact-match-return -->
 ```maxon
 type Point
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 end 'Point'
 
 function makePoint() returns Point
   return Point{x: 1, y: 2}
 end 'makePoint'
 
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -71,31 +71,31 @@ error E3015: specs/fragments/redundant-type-annotation/error.exact-match-return.
 <!-- test: error.closure-return -->
 ```maxon
 type Point
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 end 'Point'
 
-function transform(f (int) returns Point, n int) returns Point
+function transform(f (Integer) returns Point, n Integer) returns Point
   return f(n)
 end 'transform'
 
-function main() returns int
-  var p = transform((x int) gives Point{x: x, y: x * 2}, n: 5)
+function main() returns Integer
+  var p = transform((x Integer) gives Point{x: x, y: x * 2}, n: 5)
   return p.x
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/redundant-type-annotation/error.closure-return.test:12:35: redundant type annotation: 'Point'
+error E3015: specs/fragments/redundant-type-annotation/error.closure-return.test:12:39: redundant type annotation: 'Point'
 ```
 
 <!-- test: ok.no-context -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 1, y: 2}
   return p.x
 end 'main'
@@ -107,15 +107,15 @@ end 'main'
 <!-- test: ok.anonymous-literal -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
 function makePoint() returns Point
   return {x: 1, y: 2}
 end 'makePoint'
 
-function main() returns int
+function main() returns Integer
   var p = makePoint()
   return p.x + p.y
 end 'main'
@@ -127,15 +127,15 @@ end 'main'
 <!-- test: error.closure-param -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function transform(f (Point) returns int) returns int
+function transform(f (Point) returns Integer) returns Integer
   return f(Point{x: 5, y: 10})
 end 'transform'
 
-function main() returns int
+function main() returns Integer
   return transform((p Point) gives p.x + p.y)
 end 'main'
 ```
@@ -146,11 +146,11 @@ error E3015: specs/fragments/redundant-type-annotation/error.closure-param.test:
 <!-- test: ok.closure-param-no-context -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var f = (p Point) gives p.x + p.y
   return f(Point{x: 3, y: 4})
 end 'main'
@@ -162,15 +162,15 @@ end 'main'
 <!-- test: ok.closure-param-inferred -->
 ```maxon
 type Point
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 
-function transform(f (Point) returns int) returns int
+function transform(f (Point) returns Integer) returns Integer
   return f(Point{x: 5, y: 10})
 end 'transform'
 
-function main() returns int
+function main() returns Integer
   return transform((p) gives p.x + p.y)
 end 'main'
 ```

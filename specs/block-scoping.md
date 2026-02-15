@@ -48,7 +48,7 @@ end 'loop'
 
 <!-- test: for-iterator-immutable -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   for item in arr 'loop'
     item = 99
@@ -62,7 +62,7 @@ error E2001: specs/fragments/block-scoping/for-iterator-immutable.test:5:5: Vari
 
 <!-- test: for-iterator-not-accessible-after -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   for x in arr 'loop'
     var y = x
@@ -76,7 +76,7 @@ error E2004: specs/fragments/block-scoping/for-iterator-not-accessible-after.tes
 
 <!-- test: for-body-var-not-accessible-after -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var arr = [10, 20, 30]
   for item in arr 'loop'
     var inside = item
@@ -90,7 +90,7 @@ error E2004: specs/fragments/block-scoping/for-body-var-not-accessible-after.tes
 
 <!-- test: for-destructured-immutable -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var m = [1: 10, 2: 32]
   for (key, value) in m 'loop'
     value = 99
@@ -104,7 +104,7 @@ error E2001: specs/fragments/block-scoping/for-destructured-immutable.test:5:5: 
 
 <!-- test: for-destructured-not-accessible-after -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var m = [1: 10, 2: 32]
   for (key, value) in m 'loop'
     var sum = key + value
@@ -118,7 +118,7 @@ error E2004: specs/fragments/block-scoping/for-destructured-not-accessible-after
 
 <!-- test: if-body-var-not-accessible-after -->
 ```maxon
-function main() returns int
+function main() returns Integer
   if true 'check'
     var x = 42
   end 'check'
@@ -131,7 +131,7 @@ error E2004: specs/fragments/block-scoping/if-body-var-not-accessible-after.test
 
 <!-- test: if-else-body-var-not-accessible-after -->
 ```maxon
-function main() returns int
+function main() returns Integer
   if false 'check'
     var x = 10
   end 'check' else 'other'
@@ -146,7 +146,7 @@ error E2004: specs/fragments/block-scoping/if-else-body-var-not-accessible-after
 
 <!-- test: while-body-var-not-accessible-after -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var i = 0
   while i < 3 'loop'
     var x = i
@@ -161,7 +161,7 @@ error E2004: specs/fragments/block-scoping/while-body-var-not-accessible-after.t
 
 <!-- test: outer-var-accessible-in-block -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var sum = 0
   var arr = [10, 20, 12]
   for item in arr 'loop'
@@ -179,7 +179,7 @@ end 'main'
 ```maxon
 typealias IntArray = Array with int
 
-function main() returns int
+function main() returns Integer
   var outer = IntArray{}
   outer.resize(3)
   outer.set(0, value: 10)
@@ -219,7 +219,7 @@ Cleanups:  2
 
 <!-- test: var-redeclare-after-scope -->
 ```maxon
-function main() returns int
+function main() returns Integer
   if true 'check'
     var x = 10
   end 'check'

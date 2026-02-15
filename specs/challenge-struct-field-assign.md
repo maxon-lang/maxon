@@ -17,10 +17,10 @@ Struct fields can be modified after the struct is created.
 <!-- test: struct-field-reassignment -->
 ```maxon
 type Counter
-  export var value int
+  export var value Integer
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{value: 10}
   c.value = 42
   return c.value
@@ -35,11 +35,11 @@ Assigning to an immutable (`let`) field should be a compile-time error.
 
 ```maxon
 type Config
-  export let id int
-  export var count int
+  export let id Integer
+  export var count Integer
 end 'Config'
 
-function main() returns int
+function main() returns Integer
   var c = Config{id: 1, count: 0}
   c.id = 2
   return c.id
@@ -52,14 +52,14 @@ error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assig
 <!-- test: nested-struct-field-reassignment -->
 ```maxon
 type Inner
-  export var x int
+  export var x Integer
 end 'Inner'
 
 type Outer
   export var inner Inner
 end 'Outer'
 
-function main() returns int
+function main() returns Integer
   var i = Inner{x: 10}
   var o = Outer{inner: i}
   o.inner.x = 42

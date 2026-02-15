@@ -20,8 +20,9 @@ public static class SemanticCheckPass {
       };
     }
 
-    // E3002: main must return int
-    if (mainFunc.ReturnType == null || mainFunc.ReturnType != MlirType.I64) {
+    // E3002: main must return int (or int-based ranged type like Integer)
+    var mainRetBase = mainFunc.ReturnType is MlirRangedPrimitiveType rpt ? rpt.BaseType : mainFunc.ReturnType;
+    if (mainRetBase == null || mainRetBase != MlirType.I64) {
       throw new CompileError(ErrorCode.SemanticMainWrongReturnType, "Function 'main' must return int");
     }
 

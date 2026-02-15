@@ -26,11 +26,11 @@ The struct type is inferred from context: when the first element is a named stru
 <!-- test: anon-struct-array-mixed -->
 ```maxon
 type Vec2
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'Vec2'
 
-function main() returns int
+function main() returns Integer
   var vecs = [Vec2{x: 1, y: 2}, { x: 3, y: 4 }]
   var v0 = try vecs.get(0) otherwise Vec2{x: 0, y: 0}
   var v1 = try vecs.get(1) otherwise Vec2{x: 0, y: 0}
@@ -44,11 +44,11 @@ end 'main'
 <!-- test: anon-struct-array-mixed-three -->
 ```maxon
 type Pair
-  export var a int
-  export var b int
+  export var a Integer
+  export var b Integer
 end 'Pair'
 
-function main() returns int
+function main() returns Integer
   var pairs = [Pair{a: 10, b: 20}, { a: 30, b: 40 }, { a: 50, b: 60 }]
   var p0 = try pairs.get(0) otherwise Pair{a: 0, b: 0}
   var p1 = try pairs.get(1) otherwise Pair{a: 0, b: 0}
@@ -63,8 +63,8 @@ end 'main'
 <!-- test: anon-struct-array-return -->
 ```maxon
 type Pair
-  export var first int
-  export var second int
+  export var first Integer
+  export var second Integer
 end 'Pair'
 
 typealias PairArray = Array with Pair
@@ -73,7 +73,7 @@ function makePairs() returns PairArray
   return [{ first: 10, second: 20 }, { first: 30, second: 40 }]
 end 'makePairs'
 
-function main() returns int
+function main() returns Integer
   var pairs = makePairs()
   var p0 = try pairs.get(0) otherwise Pair{first: 0, second: 0}
   var p1 = try pairs.get(1) otherwise Pair{first: 0, second: 0}
@@ -87,12 +87,12 @@ end 'main'
 <!-- test: anon-struct-array-func-arg -->
 ```maxon
 type Item
-  export var value int
+  export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
-function sumItems(items ItemArray) returns int
+function sumItems(items ItemArray) returns Integer
   var total = 0
   for item in items 'loop'
     total = total + item.value
@@ -100,7 +100,7 @@ function sumItems(items ItemArray) returns int
   return total
 end 'sumItems'
 
-function main() returns int
+function main() returns Integer
   return sumItems([{ value: 10 }, { value: 20 }, { value: 12 }])
 end 'main'
 ```

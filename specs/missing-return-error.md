@@ -14,7 +14,7 @@ Functions that declare a return type must return a value on all code paths.
 ### Error Example
 
 ```maxon
-function test() returns int
+function test() returns Integer
   // Error: No return statement
 end 'test'
 ```
@@ -29,7 +29,7 @@ Note: All execution paths through the function must end with a return statement
 Ensure every path returns:
 
 ```maxon
-function test(x int) returns int
+function test(x Integer) returns Integer
   if x > 0 'check'
     return 1
   end 'check'
@@ -40,7 +40,7 @@ end 'test'
 
 <!-- test: no-return -->
 ```maxon
-function main() returns int
+function main() returns Integer
 end 'main'
 ```
 ```maxoncstderr
@@ -49,14 +49,14 @@ error E3013: specs/fragments/missing-return-error/no-return.test:2:10: missing r
 
 <!-- test: missing-else-return -->
 ```maxon
-function test(x int) returns int
+function test(x Integer) returns Integer
   if x > 0 'check'
     return 1
   end 'check'
   // Missing return for else path
 end 'test'
 
-function main() returns int
+function main() returns Integer
   return test(5)
 end 'main'
 ```
@@ -66,14 +66,14 @@ error E3013: specs/fragments/missing-return-error/missing-else-return.test:2:10:
 
 <!-- test: valid-all-paths -->
 ```maxon
-function test(x int) returns int
+function test(x Integer) returns Integer
   if x > 0 'check'
     return 1
   end 'check'
   return 0
 end 'test'
 
-function main() returns int
+function main() returns Integer
   return test(5)
 end 'main'
 ```

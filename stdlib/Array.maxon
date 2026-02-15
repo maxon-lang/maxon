@@ -2,8 +2,12 @@
 /// @category Collections
 
 // Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
+typealias Integer = int(min to max)
+typealias Count = int(0 to max)
+typealias Index = int(0 to max)
+
 export type Array uses Element implements BuiltinArrayLiteral, Iterable with Element
-  var iterIndex int          // Current iteration position (now at offset 0)
+  var iterIndex Integer          // Current iteration position (now at offset 0)
   var managed __ManagedMemory  // Compiler-managed opaque array storage (now at offset 8)
 
   // =========================================================================
@@ -35,12 +39,12 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   // =========================================================================
 
   /// Get the number of elements in the array
-  export function count() returns int
+  export function count() returns Integer
     return __managed_memory_len(managed)
   end 'count'
 
   /// Get the current capacity (allocated space)
-  export function capacity() returns int
+  export function capacity() returns Integer
     return __managed_memory_capacity(managed)
   end 'capacity'
 
@@ -71,7 +75,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   // =========================================================================
 
   /// Get element at index, throws if out of bounds
-  export function get(index int) returns Element throws ArrayError
+  export function get(index Integer) returns Element throws ArrayError
     var len = __managed_memory_len(managed)
     if index < 0 'lower'
       throw ArrayError.indexOutOfBounds
@@ -83,7 +87,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   end 'get'
 
   /// Set element at index (no-op if index out of bounds)
-  export function set(index int, value Element)
+  export function set(index Integer, value Element)
     var len = __managed_memory_len(managed)
     if index >= 0 'lower'
       if index < len 'upper'
@@ -97,7 +101,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   // =========================================================================
 
   /// Create a new array from elements [start, endIndex)
-  export function slice(start int, endIndex int) returns Self
+  export function slice(start Integer, endIndex Integer) returns Self
     var len = __managed_memory_len(managed)
     var s = start
     var e = endIndex
@@ -119,7 +123,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   // =========================================================================
 
   /// Ensure capacity for at least requiredLen elements, growing if needed
-  function ensureCapacity(requiredLen int)
+  function ensureCapacity(requiredLen Integer)
     var cap = __managed_memory_capacity(managed)
     if requiredLen > cap 'grow'
       // Double capacity until sufficient, minimum 4
@@ -160,7 +164,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   end 'pop'
 
   /// Insert element at index, shifting elements to the right (clamps index to [0, count])
-  export function insert(at int, value Element)
+  export function insert(at Integer, value Element)
     var len = __managed_memory_len(managed)
     var index = at
 
@@ -186,7 +190,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   end 'insert'
 
   /// Remove and return element at index, shifting elements to the left (throws if out of bounds)
-  export function remove(at int) returns Element throws ArrayError
+  export function remove(at Integer) returns Element throws ArrayError
     var len = __managed_memory_len(managed)
 
     // Check bounds
@@ -219,7 +223,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   // =========================================================================
 
   /// Reserve space by ensuring array has at least minCapacity slots
-  export function reserve(minCapacity int)
+  export function reserve(minCapacity Integer)
     var cap = __managed_memory_capacity(managed)
     if minCapacity > cap 'grow'
       __managed_memory_grow(managed, minCapacity)
@@ -228,7 +232,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Resize array to newLength elements, allocating if needed
   /// New elements are zero-initialized
-  export function resize(newLength int)
+  export function resize(newLength Integer)
     reserve(newLength)
     __managed_memory_set_length(managed, newLength)
   end 'resize'

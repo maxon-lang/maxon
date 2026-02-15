@@ -35,7 +35,7 @@ print(s)   // prints "42"
 
 <!-- test: int.toString -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
   var s = x.toString()
   if s == "42" 'ok'
@@ -50,7 +50,7 @@ end 'main'
 
 <!-- test: float.toString -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 3.14
   var s = x.toString()
   if s == "3.14" 'ok'
@@ -65,7 +65,7 @@ end 'main'
 
 <!-- test: bool.toString.true -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = true
   var s = x.toString()
   if s == "true" 'ok'
@@ -80,7 +80,7 @@ end 'main'
 
 <!-- test: bool.toString.false -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = false
   var s = x.toString()
   if s == "false" 'ok'
@@ -95,8 +95,8 @@ end 'main'
 
 <!-- test: byte.toString -->
 ```maxon
-function main() returns int
-  var x = 65 as byte
+function main() returns Integer
+  var x = 65 as Byte
   var s = x.toString()
   if s == "65" 'ok'
     return 1

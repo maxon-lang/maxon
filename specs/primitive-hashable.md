@@ -63,7 +63,7 @@ end 'check'
 
 <!-- test: int.hash -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var i = 42
   var h = i.hash()
   return h
@@ -75,7 +75,7 @@ end 'main'
 
 <!-- test: bool.hash.true -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var t = true
   return t.hash()
 end 'main'
@@ -86,7 +86,7 @@ end 'main'
 
 <!-- test: bool.hash.false -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var f = false
   return f.hash()
 end 'main'
@@ -97,7 +97,7 @@ end 'main'
 
 <!-- test: float.hash.nonzero -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var f = 3.14
   var h = f.hash()
   if h != 0 'check'
@@ -112,7 +112,7 @@ end 'main'
 
 <!-- test: float.hash.zero-normalization -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var pos = 0.0
   var neg = -0.0
   var h1 = pos.hash()
@@ -129,7 +129,7 @@ end 'main'
 
 <!-- test: int.equals.same -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 42
   var b = 42
   if a.equals(b) 'eq'
@@ -144,7 +144,7 @@ end 'main'
 
 <!-- test: int.equals.different -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 42
   var b = 17
   if a.equals(b) 'eq'
@@ -159,7 +159,7 @@ end 'main'
 
 <!-- test: bool.equals -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = true
   var b = true
   if a.equals(b) 'eq'
@@ -174,7 +174,7 @@ end 'main'
 
 <!-- test: float.equals -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var a = 3.14
   var b = 3.14
   if a.equals(b) 'eq'

@@ -21,11 +21,11 @@ functionName(arguments)  // if unambiguous
 ### Example
 
 ```maxon
-export function add(a int, b int) returns int
+export function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(10, b: 20)  // Unqualified call within same namespace
 end 'main'
 ```

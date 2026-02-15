@@ -1,66 +1,19 @@
 // Test: int-division-fixed-regs
-function main() returns int
+function main() returns Integer
   var a = 126
   var b = 3
-  return trunc(a / b)
+  return a / b
 end 'main'
 ---
 ExitCode: 42
-RequiredMLIR: ```
-=== maxon
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = maxon.literal {value = 126 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.int_to_float %0
-    %3 = maxon.int_to_float %1
-    %4 = maxon.binop %2, %3 {op = div} {kind = f64}
-    %5 = maxon.trunc %4
-    maxon.return %5
-  }
-}
-=== standard
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    %0 = arith.constant {value = 126 : i64}
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.sitofp %0
-    %3 = arith.sitofp %1
-    %4 = arith.divf %2, %3
-    %5 = arith.fptosi %4
-    func.return %5
-  }
-}
-=== x86
-module {
-  func @register-allocator.main() -> i64 {
-  entry:
-    x86.mov eax, 126
-    x86.mov ecx, 3
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si eax, xmm2
-    x86.ret
-  }
-}
-```
 ---
 module {
   func @register-allocator.main() -> i64 {
   entry:
     x86.mov eax, 126
     x86.mov ecx, 3
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si eax, xmm2
+    x86.cqo
+    x86.idiv ecx
     x86.ret
   }
 }

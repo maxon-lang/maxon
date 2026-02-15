@@ -55,18 +55,18 @@ end 'Point'
 <!-- test: self-explicit-access -->
 ```maxon
 type Counter
-  var count int
+  var count Integer
 
   function increment()
     self.count = self.count + 1
   end 'increment'
 
-  function get() returns int
+  function get() returns Integer
     return self.count
   end 'get'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 0}
   c.increment()
   c.increment()
@@ -80,18 +80,18 @@ end 'main'
 <!-- test: self-implicit-access -->
 ```maxon
 type Counter
-  var count int
+  var count Integer
 
   function increment()
     count = count + 1
   end 'increment'
 
-  function get() returns int
+  function get() returns Integer
     return count
   end 'get'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 0}
   c.increment()
   c.increment()
@@ -106,18 +106,18 @@ end 'main'
 <!-- test: self-with-params -->
 ```maxon
 type Accumulator
-  var total int
+  var total Integer
 
-  function add(value int)
+  function add(value Integer)
     self.total = self.total + value
   end 'add'
 
-  function getTotal() returns int
+  function getTotal() returns Integer
     return self.total
   end 'getTotal'
 end 'Accumulator'
 
-function main() returns int
+function main() returns Integer
   var acc = Accumulator{total: 0}
   acc.add(10)
   acc.add(20)
@@ -132,19 +132,19 @@ end 'main'
 <!-- test: self-multiple-fields -->
 ```maxon
 type Point
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  function sum() returns int
+  function sum() returns Integer
     return self.x + self.y
   end 'sum'
 
-  function setX(newX int)
+  function setX(newX Integer)
     self.x = newX
   end 'setX'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 10, y: 32}
   return p.sum()
 end 'main'
@@ -156,18 +156,18 @@ end 'main'
 <!-- test: self-modify-and-return -->
 ```maxon
 type Value
-  var n int
+  var n Integer
 
   function double()
     self.n = self.n * 2
   end 'double'
 
-  function get() returns int
+  function get() returns Integer
     return self.n
   end 'get'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value{n: 21}
   v.double()
   return v.get()
@@ -180,15 +180,15 @@ end 'main'
 <!-- test: self-implicit-multiple-fields -->
 ```maxon
 type Rectangle
-  var width int
-  var height int
+  var width Integer
+  var height Integer
 
-  function area() returns int
+  function area() returns Integer
     return width * height
   end 'area'
 end 'Rectangle'
 
-function main() returns int
+function main() returns Integer
   var r = Rectangle{width: 6, height: 7}
   return r.area()
 end 'main'

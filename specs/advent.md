@@ -15,7 +15,7 @@ https://www.youtube.com/playlist?list=PL2HVqYf7If8cY4wLk7JUQ2f0JXY_xMQm2
 
 <!-- test: day1 -->
 ```maxon
-function main() returns int
+function main() returns Integer
   return 0
 end 'main'
 ```
@@ -51,11 +51,11 @@ module {
 
 <!-- test: day2 -->
 ```maxon
-function add(x int, y int) returns int
+function add(x Integer, y Integer) returns Integer
     return x + y
 end 'add'
 
-function main() returns int
+function main() returns Integer
   return add(3, y: 4)
 end 'main'
 ```
@@ -118,11 +118,11 @@ module {
 <!-- test: day4a -->
 <!-- Args: 1 -->
 ```maxon
-function multiply(x int) returns int
+function multiply(x Integer) returns Integer
     return x * 1
 end 'multiply'
 
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   let a = try int.fromString(try args.get(0) otherwise "") otherwise 0
   return multiply(3)
@@ -329,11 +329,11 @@ module {
 <!-- test: day4b -->
 <!-- Args: 3 -->
 ```maxon
-function multiply(x int) returns int
+function multiply(x Integer) returns Integer
     return x * 2
 end 'multiply'
 
-function main() returns int
+function main() returns Integer
   let args = CommandLine.args()
   let a = try int.fromString(try args.get(0) otherwise "") otherwise 0
   return multiply(3)

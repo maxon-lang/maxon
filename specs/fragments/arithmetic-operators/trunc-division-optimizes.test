@@ -1,6 +1,6 @@
 // Test: trunc-division-optimizes
-function main() returns int
-  return trunc(20 / 3)     // Optimized to sdiv, returns 6
+function main() returns Integer
+  return 20 / 3             // int/int = truncating int, returns 6
 end 'main'
 ---
 ExitCode: 6
@@ -10,11 +10,8 @@ module {
   entry:
     x86.mov eax, 20
     x86.mov ecx, 3
-    x86.cvtsi2sd xmm0, eax
-    x86.cvtsi2sd xmm1, ecx
-    x86.movsd xmm2, xmm0
-    x86.divsd xmm2, xmm1
-    x86.cvttsd2si eax, xmm2
+    x86.cqo
+    x86.idiv ecx
     x86.ret
   }
 }

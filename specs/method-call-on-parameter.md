@@ -14,13 +14,13 @@ When writing a method, you can call other methods on parameters that have the sa
 
 ```maxon
 type Counter
-  var value int
+  var value Integer
   
-  function getValue() returns int
+  function getValue() returns Integer
     return value
   end 'getValue'
   
-  function addFrom(other Counter) returns int
+  function addFrom(other Counter) returns Integer
     // Call getValue() on 'other', not on 'self'
     return value + other.getValue()
   end 'addFrom'
@@ -35,18 +35,18 @@ not on `self`.
 <!-- test: method-call-on-same-type-parameter -->
 ```maxon
 type Foo
-  var x int
+  var x Integer
   
-  function bar() returns int
+  function bar() returns Integer
     return x
   end 'bar'
   
-  function callBarOn(other Foo) returns int
+  function callBarOn(other Foo) returns Integer
     return other.bar()
   end 'callBarOn'
 end 'Foo'
 
-function main() returns int
+function main() returns Integer
   var f1 = Foo{x: 10}
   var f2 = Foo{x: 42}
   return f1.callBarOn(f2)
@@ -59,22 +59,22 @@ end 'main'
 <!-- test: method-call-chain-same-type -->
 ```maxon
 type Value
-  var n int
+  var n Integer
   
-  function get() returns int
+  function get() returns Integer
     return n
   end 'get'
   
-  function add(other Value) returns int
+  function add(other Value) returns Integer
     return n + other.get()
   end 'add'
   
-  function multiply(other Value) returns int
+  function multiply(other Value) returns Integer
     return n * other.get()
   end 'multiply'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var a = Value{n: 5}
   var b = Value{n: 3}
   var c = Value{n: 2}
@@ -91,19 +91,19 @@ end 'main'
 <!-- test: sibling-method-call-still-works -->
 ```maxon
 type Calculator
-  var base int
+  var base Integer
   
-  function double() returns int
+  function double() returns Integer
     return base * 2
   end 'double'
   
-  function quadruple() returns int
+  function quadruple() returns Integer
     // Sibling call - calls self.double()
     return double() * 2
   end 'quadruple'
 end 'Calculator'
 
-function main() returns int
+function main() returns Integer
   var calc = Calculator{base: 5}
   return calc.quadruple()
 end 'main'
@@ -115,18 +115,18 @@ end 'main'
 <!-- test: method-with-args-on-same-type-parameter -->
 ```maxon
 type Adder
-  var value int
+  var value Integer
   
-  function addTo(n int) returns int
+  function addTo(n Integer) returns Integer
     return value + n
   end 'addTo'
   
-  function delegateAdd(other Adder, n int) returns int
+  function delegateAdd(other Adder, n Integer) returns Integer
     return other.addTo(n)
   end 'delegateAdd'
 end 'Adder'
 
-function main() returns int
+function main() returns Integer
   var a = Adder{value: 100}
   var b = Adder{value: 50}
   return a.delegateAdd(b, n: 7)

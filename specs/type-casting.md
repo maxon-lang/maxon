@@ -67,9 +67,9 @@ For float-to-integer conversion, use the explicit conversion functions:
 
 <!-- test: int-literal-to-byte -->
 ```maxon
-function main() returns int
-  var b = 42 as byte
-  return b as int
+function main() returns Integer
+  var b = 42 as Byte
+  return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -78,9 +78,9 @@ end 'main'
 
 <!-- test: int-literal-zero-to-byte -->
 ```maxon
-function main() returns int
-  var b = 0 as byte
-  return b as int
+function main() returns Integer
+  var b = 0 as Byte
+  return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -89,9 +89,9 @@ end 'main'
 
 <!-- test: int-literal-max-to-byte -->
 ```maxon
-function main() returns int
-  var b = 255 as byte
-  return b as int
+function main() returns Integer
+  var b = 255 as Byte
+  return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -100,9 +100,9 @@ end 'main'
 
 <!-- test: byte-to-int -->
 ```maxon
-function main() returns int
-  var b = 100 as byte
-  return b as int
+function main() returns Integer
+  var b = 100 as Byte
+  return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -111,9 +111,9 @@ end 'main'
 
 <!-- test: byte-to-float -->
 ```maxon
-function main() returns int
-  var b = 50 as byte
-  var f = b as float
+function main() returns Integer
+  var b = 50 as Byte
+  var f = b as Float
   return trunc(f)
 end 'main'
 ```
@@ -123,9 +123,9 @@ end 'main'
 
 <!-- test: int-to-float -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
-  var f = x as float
+  var f = x as Float
   return trunc(f)
 end 'main'
 ```
@@ -135,8 +135,8 @@ end 'main'
 
 <!-- test: int-literal-to-float -->
 ```maxon
-function main() returns int
-  var f = 99 as float
+function main() returns Integer
+  var f = 99 as Float
   return trunc(f)
 end 'main'
 ```
@@ -146,9 +146,9 @@ end 'main'
 
 <!-- test: same-type-int -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 42
-  return x as int
+  return x as Integer
 end 'main'
 ```
 ```exitcode
@@ -157,9 +157,9 @@ end 'main'
 
 <!-- test: same-type-float -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var f = 42.0
-  var g = f as float
+  var g = f as Float
   return trunc(g)
 end 'main'
 ```
@@ -169,10 +169,10 @@ end 'main'
 
 <!-- test: same-type-byte -->
 ```maxon
-function main() returns int
-  var b = 42 as byte
-  var c = b as byte
-  return c as int
+function main() returns Integer
+  var b = 42 as Byte
+  var c = b as Byte
+  return c as Integer
 end 'main'
 ```
 ```exitcode
@@ -181,9 +181,9 @@ end 'main'
 
 <!-- test: cast-in-expression -->
 ```maxon
-function main() returns int
-  var b = 10 as byte
-  var result = b as int + 32
+function main() returns Integer
+  var b = 10 as Byte
+  var result = b as Integer + 32
   return result
 end 'main'
 ```
@@ -193,10 +193,10 @@ end 'main'
 
 <!-- test: chained-byte-int-float -->
 ```maxon
-function main() returns int
-  var b = 25 as byte
-  var i = b as int
-  var f = i as float
+function main() returns Integer
+  var b = 25 as Byte
+  var i = b as Integer
+  var f = i as Float
   return trunc(f)
 end 'main'
 ```
@@ -208,9 +208,9 @@ end 'main'
 
 <!-- test: error.int-var-to-byte -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 5
-  var b = x as byte
+  var b = x as Byte
   return 0
 end 'main'
 ```
@@ -220,8 +220,8 @@ error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:4:13: Canno
 
 <!-- test: error.int-literal-out-of-range -->
 ```maxon
-function main() returns int
-  var x = 256 as byte
+function main() returns Integer
+  var x = 256 as Byte
   return 0
 end 'main'
 ```
@@ -231,8 +231,8 @@ error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:3:
 
 <!-- test: error.negative-literal-to-byte -->
 ```maxon
-function main() returns int
-  var x = -1 as byte
+function main() returns Integer
+  var x = -1 as Byte
   return 0
 end 'main'
 ```
@@ -242,8 +242,8 @@ error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:3:
 
 <!-- test: error.float-to-int -->
 ```maxon
-function main() returns int
-  var x = 5.0 as int
+function main() returns Integer
+  var x = 5.0 as Integer
   return 0
 end 'main'
 ```
@@ -253,8 +253,8 @@ error E3009: specs/fragments/type-casting/error.float-to-int.test:3:15: Cannot c
 
 <!-- test: error.float-to-byte -->
 ```maxon
-function main() returns int
-  var x = 5.0 as byte
+function main() returns Integer
+  var x = 5.0 as Byte
   return 0
 end 'main'
 ```
@@ -264,9 +264,9 @@ error E3009: specs/fragments/type-casting/error.float-to-byte.test:3:15: Cannot 
 
 <!-- test: error.bool-to-int -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var b = true
-  var x = b as int
+  var x = b as Integer
   return 0
 end 'main'
 ```
@@ -276,9 +276,9 @@ error E3009: specs/fragments/type-casting/error.bool-to-int.test:4:13: Cannot ca
 
 <!-- test: error.bool-to-float -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var b = true
-  var x = b as float
+  var x = b as Float
   return 0
 end 'main'
 ```
@@ -288,9 +288,9 @@ error E3009: specs/fragments/type-casting/error.bool-to-float.test:4:13: Cannot 
 
 <!-- test: error.bool-to-byte -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var b = true
-  var x = b as byte
+  var x = b as Byte
   return 0
 end 'main'
 ```
@@ -300,7 +300,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-byte.test:4:13: Cannot c
 
 <!-- test: error.int-to-bool -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0 as bool
   return 0
 end 'main'
@@ -311,7 +311,7 @@ error E3009: specs/fragments/type-casting/error.int-to-bool.test:3:13: Cannot ca
 
 <!-- test: error.float-to-bool -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var x = 0.0 as bool
   return 0
 end 'main'
@@ -322,8 +322,8 @@ error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:15: Cannot 
 
 <!-- test: error.byte-to-bool -->
 ```maxon
-function main() returns int
-  var b = 42 as byte
+function main() returns Integer
+  var b = 42 as Byte
   var x = b as bool
   return 0
 end 'main'

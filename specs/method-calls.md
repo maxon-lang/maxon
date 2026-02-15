@@ -71,18 +71,18 @@ end 'main'
 <!-- test: method-call-void -->
 ```maxon
 type Counter
-  var count int
+  var count Integer
 
   function increment()
     count = count + 1
   end 'increment'
 
-  function get() returns int
+  function get() returns Integer
     return count
   end 'get'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   var c = Counter{count: 0}
   c.increment()
   c.increment()
@@ -97,18 +97,18 @@ end 'main'
 <!-- test: method-call-with-args -->
 ```maxon
 type Adder
-  var total int
+  var total Integer
 
-  function add(n int)
+  function add(n Integer)
     total = total + n
   end 'add'
 
-  function get() returns int
+  function get() returns Integer
     return total
   end 'get'
 end 'Adder'
 
-function main() returns int
+function main() returns Integer
   var a = Adder{total: 0}
   a.add(10)
   a.add(20)
@@ -123,14 +123,14 @@ end 'main'
 <!-- test: method-return-in-expr -->
 ```maxon
 type Box
-  var value int
+  var value Integer
 
-  function getValue() returns int
+  function getValue() returns Integer
     return value
   end 'getValue'
 end 'Box'
 
-function main() returns int
+function main() returns Integer
   var b = Box{value: 40}
   return b.getValue() + 2
 end 'main'
@@ -142,18 +142,18 @@ end 'main'
 <!-- test: method-multiple-args -->
 ```maxon
 type Calculator
-  var result int
+  var result Integer
 
-  function addTwo(a int, b int)
+  function addTwo(a Integer, b Integer)
     result = result + a + b
   end 'addTwo'
 
-  function get() returns int
+  function get() returns Integer
     return result
   end 'get'
 end 'Calculator'
 
-function main() returns int
+function main() returns Integer
   var calc = Calculator{result: 0}
   calc.addTwo(20, b: 22)
   return calc.get()
@@ -166,9 +166,9 @@ end 'main'
 <!-- test: method-call-on-field-access -->
 ```maxon
 type Inner
-  var value int
+  var value Integer
 
-  function get() returns int
+  function get() returns Integer
     return value
   end 'get'
 end 'Inner'
@@ -176,12 +176,12 @@ end 'Inner'
 type Outer
   var inner Inner
 
-  function getInnerValue() returns int
+  function getInnerValue() returns Integer
     return inner.get()
   end 'getInnerValue'
 end 'Outer'
 
-function main() returns int
+function main() returns Integer
   var o = Outer{inner: Inner{value: 42}}
   return o.getInnerValue()
 end 'main'
@@ -193,20 +193,20 @@ end 'main'
 <!-- test: method-modify-multiple-fields -->
 ```maxon
 type Point
-  var x int
-  var y int
+  var x Integer
+  var y Integer
 
-  function moveBy(dx int, dy int)
+  function moveBy(dx Integer, dy Integer)
     x = x + dx
     y = y + dy
   end 'moveBy'
 
-  function sum() returns int
+  function sum() returns Integer
     return x + y
   end 'sum'
 end 'Point'
 
-function main() returns int
+function main() returns Integer
   var p = Point{x: 10, y: 10}
   p.moveBy(10, dy: 12)
   return p.sum()
@@ -219,9 +219,9 @@ end 'main'
 <!-- test: method-return-comparison -->
 ```maxon
 type Value
-  var n int
+  var n Integer
 
-  function isPositive() returns int
+  function isPositive() returns Integer
     if n > 0 'positive'
       return 1
     end 'positive'
@@ -229,7 +229,7 @@ type Value
   end 'isPositive'
 end 'Value'
 
-function main() returns int
+function main() returns Integer
   var v = Value{n: 42}
   return v.isPositive()
 end 'main'
@@ -241,14 +241,14 @@ end 'main'
 <!-- test: error-method-unnamed-args -->
 ```maxon
 type Adder
-  var total int
+  var total Integer
 
-  function addTwo(a int, b int)
+  function addTwo(a Integer, b Integer)
     total = total + a + b
   end 'addTwo'
 end 'Adder'
 
-function main() returns int
+function main() returns Integer
   var x = Adder{total: 0}
   x.addTwo(10, 20)
   return 0
@@ -259,18 +259,18 @@ error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:12:5: S
 ```
 ```maxon
 type Calculator
-  var result int
+  var result Integer
 
-  function compute(a int, b int, c int)
+  function compute(a Integer, b Integer, c Integer)
     result = a + b * c
   end 'compute'
 
-  function get() returns int
+  function get() returns Integer
     return result
   end 'get'
 end 'Calculator'
 
-function main() returns int
+function main() returns Integer
   var calc = Calculator{result: 0}
   calc.compute(10, c: 4, b: 8)
   return calc.get()
@@ -283,12 +283,12 @@ end 'main'
 <!-- test: static-method-named-args -->
 ```maxon
 type Factory
-  static function create(x int, y int) returns int
+  static function create(x Integer, y Integer) returns Integer
     return x * 10 + y
   end 'create'
 end 'Factory'
 
-function main() returns int
+function main() returns Integer
   return Factory.create(4, y: 2)
 end 'main'
 ```
@@ -299,12 +299,12 @@ end 'main'
 <!-- test: error-static-method-unnamed-args -->
 ```maxon
 type Factory
-  static function create(x int, y int) returns int
+  static function create(x Integer, y Integer) returns Integer
     return x * 10 + y
   end 'create'
 end 'Factory'
 
-function main() returns int
+function main() returns Integer
   return Factory.create(4, 2)
 end 'main'
 ```

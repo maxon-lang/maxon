@@ -1,0 +1,46 @@
+// Test: runtime-check-fail
+typealias Age = int(0 to 150)
+
+function makeAge(n Integer) returns Integer
+  var a = Age{n}
+  return a
+end 'makeAge'
+
+function main() returns Integer
+  return makeAge(200)
+end 'main'
+---
+---
+module {
+  func @ranged-typealias.makeAge(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov edx, 150
+    x86.cmp ecx, edx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je ranged-typealias.makeAge.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_6]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @ranged-typealias.main() -> i64 {
+  entry:
+    x86.mov eax, 200
+    x86.mov rcx, rax
+    x86.jmp ranged-typealias.makeAge
+  }
+}
+---

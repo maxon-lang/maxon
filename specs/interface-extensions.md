@@ -17,7 +17,7 @@ Extensions are declared with the `extension` keyword followed by an interface na
 
 ```maxon
 extension Iterable
-  function count() returns int
+  function count() returns Integer
     var n = 0
     for _ in self 'loop'
       n = n + 1
@@ -41,7 +41,7 @@ Extensions can use the interface's associated types. These are automatically sub
 
 ```maxon
 interface Container uses Element
-  function get(index int) returns Element
+  function get(index Integer) returns Element
 end 'Container'
 
 extension Container
@@ -84,24 +84,24 @@ This `map` extension works on any `Iterable` type (Array, Set, Map, etc.) and re
 <!-- test: basic-extension-on-array -->
 ```maxon
 interface Countable
-  function value() returns int
+  function value() returns Integer
 end 'Countable'
 
 extension Countable
-  function count() returns int
+  function count() returns Integer
     return 42
   end 'count'
 end 'Countable'
 
 type IntList implements Countable
-  var data int
+  var data Integer
 
-  function value() returns int
+  function value() returns Integer
     return data
   end 'value'
 end 'IntList'
 
-function main() returns int
+function main() returns Integer
   var list = IntList{data: 5}
   return list.count()
 end 'main'
@@ -114,24 +114,24 @@ end 'main'
 <!-- test: extension-with-self -->
 ```maxon
 interface Summable
-  function value() returns int
+  function value() returns Integer
 end 'Summable'
 
 extension Summable
-  function doubled() returns int
+  function doubled() returns Integer
     return self.value() * 2
   end 'doubled'
 end 'Summable'
 
 type Number implements Summable
-  var n int
+  var n Integer
 
-  function value() returns int
+  function value() returns Integer
     return n
   end 'value'
 end 'Number'
 
-function main() returns int
+function main() returns Integer
   var num = Number{n: 21}
   return num.doubled()
 end 'main'
@@ -144,30 +144,30 @@ end 'main'
 <!-- test: extension-multiple-types -->
 ```maxon
 interface Valued
-  function val() returns int
+  function val() returns Integer
 end 'Valued'
 
 extension Valued
-  function valPlusTen() returns int
+  function valPlusTen() returns Integer
     return self.val() + 10
   end 'valPlusTen'
 end 'Valued'
 
 type TypeA implements Valued
-  var a int
-  function val() returns int
+  var a Integer
+  function val() returns Integer
     return a
   end 'val'
 end 'TypeA'
 
 type TypeB implements Valued
-  var b int
-  function val() returns int
+  var b Integer
+  function val() returns Integer
     return b * 2
   end 'val'
 end 'TypeB'
 
-function main() returns int
+function main() returns Integer
   var ta = TypeA{a: 5}
   var tb = TypeB{b: 10}
   return ta.valPlusTen() + tb.valPlusTen()
@@ -181,24 +181,24 @@ end 'main'
 <!-- test: extension-with-params -->
 ```maxon
 interface Scalable
-  function base() returns int
+  function base() returns Integer
 end 'Scalable'
 
 extension Scalable
-  function scale(factor int) returns int
+  function scale(factor Integer) returns Integer
     return self.base() * factor
   end 'scale'
 end 'Scalable'
 
 type Amount implements Scalable
-  var amount int
+  var amount Integer
 
-  function base() returns int
+  function base() returns Integer
     return amount
   end 'base'
 end 'Amount'
 
-function main() returns int
+function main() returns Integer
   var a = Amount{amount: 7}
   return a.scale(6)
 end 'main'
@@ -211,13 +211,13 @@ end 'main'
 <!-- test: extension-returns-struct -->
 ```maxon
 interface Pointlike
-  function getX() returns int
-  function getY() returns int
+  function getX() returns Integer
+  function getY() returns Integer
 end 'Pointlike'
 
 type SimplePoint
-  export var x int
-  export var y int
+  export var x Integer
+  export var y Integer
 end 'SimplePoint'
 
 extension Pointlike
@@ -227,19 +227,19 @@ extension Pointlike
 end 'Pointlike'
 
 type Coord implements Pointlike
-  var cx int
-  var cy int
+  var cx Integer
+  var cy Integer
 
-  function getX() returns int
+  function getX() returns Integer
     return cx
   end 'getX'
 
-  function getY() returns int
+  function getY() returns Integer
     return cy
   end 'getY'
 end 'Coord'
 
-function main() returns int
+function main() returns Integer
   var c = Coord{cx: 10, cy: 32}
   var p = c.asSimple()
   return p.x + p.y
@@ -252,9 +252,9 @@ end 'main'
 
 <!-- test: stdlib-map-on-array -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var nums = [1, 2, 3, 4, 5]
-  var doubled = nums.map((x int) gives x * 2)
+  var doubled = nums.map((x Integer) gives x * 2)
   
   var sum = 0
   for n in doubled 'loop'
@@ -274,12 +274,12 @@ end 'main'
 ```maxon
 typealias IntSet = Set with int
 
-function main() returns int
+function main() returns Integer
   var s = IntSet{}
   s.insert(10)
   s.insert(20)
   s.insert(30)
-  var mapped = s.map((x int) gives x + 1)
+  var mapped = s.map((x Integer) gives x + 1)
 
   var sum = 0
   for n in mapped 'loop'
@@ -296,7 +296,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-map -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var m = ["a": 1, "b": 2, "c": 3]
 
   var sum = 0
@@ -314,7 +314,7 @@ end 'main'
 
 <!-- test: stdlib-map-on-map-with-function -->
 ```maxon
-function main() returns int
+function main() returns Integer
   var m = ["a": 1, "b": 2, "c": 3]
   var mapped = m.map((p) gives p)
 

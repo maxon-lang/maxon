@@ -47,7 +47,7 @@ type Counter
   static var count = 0       // Mutable static field
   static let MAX = 100       // Compile-time static constant
 
-  export var value int       // Instance field
+  export var value Integer       // Instance field
 end 'Counter'
 ```
 
@@ -72,7 +72,7 @@ c.value = 20                        // Access instance field
 ```maxon
 var counter = 0
 
-function main() returns int
+function main() returns Integer
   counter = 42
   return counter
 end 'main'
@@ -85,11 +85,11 @@ end 'main'
 ```maxon
 var total = 10
 
-function add(n int)
+function add(n Integer)
   total = total + n
 end 'add'
 
-function main() returns int
+function main() returns Integer
   add(5)
   add(27)
   return total
@@ -105,7 +105,7 @@ var a = 1
 var b = 2
 var c = 3
 
-function main() returns int
+function main() returns Integer
   a = a * 10
   b = b * 10
   c = c * 10
@@ -121,7 +121,7 @@ end 'main'
 let BASE = 40
 var offset = 0
 
-function main() returns int
+function main() returns Integer
   offset = 2
   return BASE + offset
 end 'main'
@@ -136,7 +136,7 @@ type Counter
   static var count = 0
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   Counter.count = 42
   return Counter.count
 end 'main'
@@ -155,7 +155,7 @@ type Counter
   end 'increment'
 end 'Counter'
 
-function main() returns int
+function main() returns Integer
   Counter.increment()
   Counter.increment()
   Counter.increment()
@@ -172,7 +172,7 @@ type Config
   static let MAX_SIZE = 42
 end 'Config'
 
-function main() returns int
+function main() returns Integer
   return Config.MAX_SIZE
 end 'main'
 ```
@@ -190,7 +190,7 @@ type TypeB
   static var value = 20
 end 'TypeB'
 
-function main() returns int
+function main() returns Integer
   TypeA.value = TypeA.value + 2
   TypeB.value = TypeB.value + 10
   return TypeA.value + TypeB.value
@@ -204,15 +204,15 @@ end 'main'
 ```maxon
 type Thing
   static var created = 0
-  export var id int
+  export var id Integer
 
-  static function make(n int) returns Thing
+  static function make(n Integer) returns Thing
     Thing.created = Thing.created + 1
     return {id: n}
   end 'make'
 end 'Thing'
 
-function main() returns int
+function main() returns Integer
   var a = Thing.make(10)
   var b = Thing.make(20)
   return Thing.created + a.id + b.id
@@ -230,7 +230,7 @@ function init()
   initialized = true
 end 'init'
 
-function main() returns int
+function main() returns Integer
   if initialized 'check1'
     return 1
   end 'check1'
@@ -255,7 +255,7 @@ end 'Color'
 
 var current = Color.Green
 
-function main() returns int
+function main() returns Integer
   if current == Color.Green 'check'
     current = Color.Blue
     if current == Color.Blue 'check2'
@@ -274,7 +274,7 @@ end 'main'
 let BASE = 20
 var offset = BASE + 1
 
-function main() returns int
+function main() returns Integer
   offset = offset * 2
   return offset
 end 'main'
@@ -287,7 +287,7 @@ end 'main'
 ```maxon
 var items = [10, 20, 30]
 
-function main() returns int
+function main() returns Integer
   items.set(1, value: 12)
   let a = try items.get(0) otherwise 0
   let b = try items.get(1) otherwise 0
@@ -303,18 +303,18 @@ end 'main'
 ```maxon
 var scores = [10, 20, 30]
 
-function getTotal() returns int
+function getTotal() returns Integer
   let a = try scores.get(0) otherwise 0
   let b = try scores.get(1) otherwise 0
   let c = try scores.get(2) otherwise 0
   return a + b + c
 end 'getTotal'
 
-function setScore(index int, value int)
+function setScore(index Integer, value Integer)
   scores.set(index, value: value)
 end 'setScore'
 
-function main() returns int
+function main() returns Integer
   setScore(1, value: 12)
   return getTotal()
 end 'main'
@@ -327,19 +327,19 @@ end 'main'
 ```maxon
 var counters = [0, 0, 0]
 
-function increment(index int)
+function increment(index Integer)
   let current = try counters.get(index) otherwise 0
   counters.set(index, value: current + 1)
 end 'increment'
 
-function total() returns int
+function total() returns Integer
   let a = try counters.get(0) otherwise 0
   let b = try counters.get(1) otherwise 0
   let c = try counters.get(2) otherwise 0
   return a + b + c
 end 'total'
 
-function main() returns int
+function main() returns Integer
   increment(0)
   increment(0)
   increment(1)
