@@ -2,8 +2,42 @@
 // Consumes tokens and emits Maxon dialect ops (no separate AST).
 // Returns a flat array of ops for the main function body.
 
-typealias TokenArray = Array with Token
-typealias MaxonOpArray = Array with MaxonOp
+export typealias TokenArray = Array with Token
+export typealias MaxonOpArray = Array with MaxonOp
+export typealias ParsePosition = u64
+export typealias StringArray = Array with String
+export typealias IntArray = Array with int
+
+// Symbol table: parallel arrays for variable names and slot indices
+var _varNames = StringArray{}
+var _varSlots = IntArray{}
+var _nextSlot = 0
+
+function resetSymbolTable()
+    _varNames = StringArray{}
+    _varSlots = IntArray{}
+    _nextSlot = 0
+end 'resetSymbolTable'
+
+function defineVariable(name String) returns I64
+    let slot = _nextSlot
+    _varNames.push(name)
+    _varSlots.push(slot)
+    _nextSlot = _nextSlot + 1
+    return slot
+end 'defineVariable'
+
+function lookupVariable(name String) returns I64
+    var i = _varNames.count() - 1
+    while i >= 0 'lookup'
+        let vn = try _varNames.get(i) otherwise ""
+        if vn == name 'found'
+            return try _varSlots.get(i) otherwise 0
+        end 'found'
+        i = i - 1
+    end 'lookup'
+    return 0 - 1
+end 'lookupVariable'
 
 export function parse(tokens TokenArray) returns MaxonOpArray
     logDebug(LogCategory.parser, message: "Starting parser")
@@ -32,9 +66,8 @@ export function parse(tokens TokenArray) returns MaxonOpArray
 end 'parse'
 
 // --- Function parsing ---
-// Returns the ops array directly (flat, no Module/Function/Block wrapper)
 
-function parseFunction(tokens TokenArray, startPos int) returns MaxonOpArray
+function parseFunction(tokens TokenArray, startPos ParsePosition) returns MaxonOpArray
     var pos = startPos
     pos = pos + 1  // skip 'function'
 
@@ -59,6 +92,7 @@ function parseFunction(tokens TokenArray, startPos int) returns MaxonOpArray
     // Parse body statements into ops
     var ops = MaxonOpArray{}
     resetValueIds()
+    resetSymbolTable()
 
     while pos < tokens.count() 'body'
         let stmtToken = tokenAt(tokens, pos: pos)
@@ -66,20 +100,17 @@ function parseFunction(tokens TokenArray, startPos int) returns MaxonOpArray
             break
         end 'isEnd'
         if stmtToken.kind == TokenKind.kwReturn 'isReturn'
-            // Inline return statement parsing
-            pos = pos + 1  // skip 'return'
-            let exprToken = tokenAt(tokens, pos: pos)
-            if exprToken.kind == TokenKind.intLiteral 'isIntLiteral'
-                let value = parseInt(exprToken.value)
-                let id = nextValueId()
-                ops.push(MaxonOp.literal(id, value))
-                ops.push(MaxonOp.returnOp(id))
-                pos = pos + 1
-            end 'isIntLiteral' else 'notIntLiteral'
-                pos = pos + 1
-            end 'notIntLiteral'
+            pos = parseReturnStatement(tokens, startPos: pos, ops: ops)
         end 'isReturn' else 'notReturn'
-            pos = pos + 1
+            if stmtToken.kind == TokenKind.kwVar or stmtToken.kind == TokenKind.kwLet 'isVarDecl'
+                pos = parseVarDecl(tokens, startPos: pos, ops: ops)
+            end 'isVarDecl' else 'notVarDecl'
+                if stmtToken.kind == TokenKind.kwPrint 'isPrint'
+                    pos = parsePrintStatement(tokens, startPos: pos, ops: ops)
+                end 'isPrint' else 'notPrint'
+                    pos = pos + 1
+                end 'notPrint'
+            end 'notVarDecl'
         end 'notReturn'
         pos = skipNewlines(tokens, startPos: pos)
     end 'body'
@@ -87,9 +118,283 @@ function parseFunction(tokens TokenArray, startPos int) returns MaxonOpArray
     return ops
 end 'parseFunction'
 
+// --- Statement parsing ---
+
+function parseReturnStatement(tokens TokenArray, startPos I64, ops MaxonOpArray) returns I64
+    var pos = startPos + 1  // skip 'return'
+    let resultId = parseExpression(tokens, startPos: pos, ops: ops)
+    pos = resultId.nextPos
+    ops.push(MaxonOp.returnOp(resultId.valueId))
+    return pos
+end 'parseReturnStatement'
+
+function parseVarDecl(tokens TokenArray, startPos I64, ops MaxonOpArray) returns I64
+    var pos = startPos + 1  // skip 'var'/'let'
+    let nameToken = tokenAt(tokens, pos: pos)
+    pos = pos + 1  // skip name
+    pos = pos + 1  // skip '='
+    let exprResult = parseExpression(tokens, startPos: pos, ops: ops)
+    pos = exprResult.nextPos
+    let slot = defineVariable(nameToken.value)
+    ops.push(MaxonOp.varDecl(slot, exprResult.valueId))
+    return pos
+end 'parseVarDecl'
+
+function parsePrintStatement(tokens TokenArray, startPos I64, ops MaxonOpArray) returns I64
+    var pos = startPos + 1  // skip 'print'
+    pos = pos + 1  // skip '('
+    let strToken = tokenAt(tokens, pos: pos)
+    pos = pos + 1  // skip string
+    pos = pos + 1  // skip ')'
+
+    // Parse the double-quoted string for interpolation segments
+    parseStringInterpolation(strToken.value, ops: ops)
+
+    return pos
+end 'parsePrintStatement'
+
+// --- String Interpolation ---
+
+function parseStringInterpolation(str String, ops MaxonOpArray)
+    var buf = ByteBuffer.create(64)
+    var i = 0
+    let len = stringLength(str)
+
+    while i < len 'scan'
+        let ch = stringCharAt(str, pos: i)
+
+        // Escape sequences
+        if ch == 92 'backslash'
+            if i + 1 < len 'hasNext'
+                let next = stringCharAt(str, pos: i + 1)
+                if next == 110 'escN'
+                    buf.push(10)
+                    i = i + 2
+                    continue
+                end 'escN'
+                if next == 116 'escT'
+                    buf.push(9)
+                    i = i + 2
+                    continue
+                end 'escT'
+                if next == 92 'escBS'
+                    buf.push(92)
+                    i = i + 2
+                    continue
+                end 'escBS'
+                if next == 34 'escDQ'
+                    buf.push(34)
+                    i = i + 2
+                    continue
+                end 'escDQ'
+            end 'hasNext'
+            buf.push(ch)
+            i = i + 1
+            continue
+        end 'backslash'
+
+        // Interpolation: { ... }
+        if ch == 123 'openBrace'
+            // Flush literal buffer
+            if buf.count() > 0 'flushBuf'
+                ops.push(MaxonOp.printLiteral(buf))
+                buf = ByteBuffer.create(64)
+            end 'flushBuf'
+
+            // Extract expression between braces
+            i = i + 1
+            let exprStart = i
+            var braceDepth = 1
+            while i < len and braceDepth > 0 'findClose'
+                let bc = stringCharAt(str, pos: i)
+                if bc == 123 'nested'
+                    braceDepth = braceDepth + 1
+                end 'nested'
+                if bc == 125 'close'
+                    braceDepth = braceDepth - 1
+                end 'close'
+                if braceDepth > 0 'notDone'
+                    i = i + 1
+                end 'notDone'
+            end 'findClose'
+
+            // Tokenize and parse the expression between braces
+            let exprStr = stringSlice(str, startPos: exprStart, endPos: i)
+            let exprTokens = tokenize(stringToByteArray(exprStr))
+            let exprResult = parseExpression(exprTokens, startPos: 0, ops: ops)
+            ops.push(MaxonOp.printInt(exprResult.valueId))
+
+            i = i + 1  // skip closing brace
+            continue
+        end 'openBrace'
+
+        buf.push(ch)
+        i = i + 1
+    end 'scan'
+
+    // Flush remaining literal buffer
+    if buf.count() > 0 'flushRemaining'
+        ops.push(MaxonOp.printLiteral(buf))
+    end 'flushRemaining'
+end 'parseStringInterpolation'
+
+// --- Expression Parsing ---
+
+// Result of parsing an expression: the value ID and next token position
+export type ExprResult
+    export var valueId I64
+    export var nextPos I64
+end 'ExprResult'
+
+function parseExpression(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+    return parseAddSub(tokens, startPos: startPos, ops: ops)
+end 'parseExpression'
+
+function parseAddSub(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+    var result = parseMulDiv(tokens, startPos: startPos, ops: ops)
+    var pos = result.nextPos
+    var leftId = result.valueId
+
+    while pos < tokens.count() 'addSubLoop'
+        let opToken = tokenAt(tokens, pos: pos)
+        if opToken.kind == TokenKind.plus 'isAdd'
+            pos = pos + 1
+            ops.push(MaxonOp.pushValue)
+            let right = parseMulDiv(tokens, startPos: pos, ops: ops)
+            pos = right.nextPos
+            ops.push(MaxonOp.popToRcx)
+            let resultId = nextValueId()
+            ops.push(MaxonOp.add(resultId, leftId, right.valueId))
+            leftId = resultId
+        end 'isAdd' else 'notAdd'
+            if opToken.kind == TokenKind.minus 'isSub'
+                pos = pos + 1
+                ops.push(MaxonOp.pushValue)
+                let right = parseMulDiv(tokens, startPos: pos, ops: ops)
+                pos = right.nextPos
+                ops.push(MaxonOp.popToRcx)
+                let resultId = nextValueId()
+                ops.push(MaxonOp.sub(resultId, leftId, right.valueId))
+                leftId = resultId
+            end 'isSub' else 'notSub'
+                break 'addSubLoop'
+            end 'notSub'
+        end 'notAdd'
+    end 'addSubLoop'
+
+    return {valueId: leftId, nextPos: pos}
+end 'parseAddSub'
+
+function parseMulDiv(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+    var result = parsePrimary(tokens, startPos: startPos, ops: ops)
+    var pos = result.nextPos
+    var leftId = result.valueId
+
+    while pos < tokens.count() 'mulLoop'
+        let opToken = tokenAt(tokens, pos: pos)
+        if opToken.kind == TokenKind.star 'isMul'
+            pos = pos + 1
+            ops.push(MaxonOp.pushValue)
+            let right = parsePrimary(tokens, startPos: pos, ops: ops)
+            pos = right.nextPos
+            ops.push(MaxonOp.popToRcx)
+            let resultId = nextValueId()
+            ops.push(MaxonOp.mul(resultId, leftId, right.valueId))
+            leftId = resultId
+        end 'isMul' else 'notMul'
+            break 'mulLoop'
+        end 'notMul'
+    end 'mulLoop'
+
+    return {valueId: leftId, nextPos: pos}
+end 'parseMulDiv'
+
+function parsePrimary(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+    let token = tokenAt(tokens, pos: startPos)
+
+    if token.kind == TokenKind.intLiteral 'isInt'
+        let value = parseInt(token.value)
+        let id = nextValueId()
+        ops.push(MaxonOp.literal(id, value))
+        return {valueId: id, nextPos: startPos + 1}
+    end 'isInt'
+
+    if token.kind == TokenKind.identifier 'isIdent'
+        let slot = lookupVariable(token.value)
+        let id = nextValueId()
+        ops.push(MaxonOp.varLoad(id, slot))
+        return {valueId: id, nextPos: startPos + 1}
+    end 'isIdent'
+
+    if token.kind == TokenKind.leftParen 'isParen'
+        let inner = parseExpression(tokens, startPos: startPos + 1, ops: ops)
+        // skip closing paren
+        return {valueId: inner.valueId, nextPos: inner.nextPos + 1}
+    end 'isParen'
+
+    // Fallback: return 0
+    let id = nextValueId()
+    ops.push(MaxonOp.literal(id, 0))
+    return {valueId: id, nextPos: startPos + 1}
+end 'parsePrimary'
+
+// --- String Helpers ---
+
+function stringLength(s String) returns I64
+    var len = 0
+    for ch in s 'count'
+        len = len + 1
+    end 'count'
+    return len
+end 'stringLength'
+
+function stringCharAt(s String, pos I64) returns I64
+    var i = 0
+    for ch in s 'find'
+        if i == pos 'found'
+            return try ch.asciiValue() otherwise 0
+        end 'found'
+        i = i + 1
+    end 'find'
+    return 0
+end 'stringCharAt'
+
+function stringSlice(s String, startPos I64, endPos I64) returns String
+    var result = ByteBuffer.create(endPos - startPos)
+    var i = 0
+    for ch in s 'slice'
+        if i >= startPos and i < endPos 'inRange'
+            result.push(try ch.asciiValue() otherwise 0)
+        end 'inRange'
+        i = i + 1
+    end 'slice'
+    return bufferToString(result)
+end 'stringSlice'
+
+function stringToByteArray(s String) returns ByteArray
+    var arr = ByteArray{}
+    for ch in s 'convert'
+        arr.push(try ch.asciiValue() otherwise 0 as U8)
+    end 'convert'
+    return arr
+end 'stringToByteArray'
+
+function bufferToString(buf ByteBuffer) returns String
+    let len = buf.count()
+    var mem = __managed_memory_create(len, 1)
+    var i = 0
+    while i < len 'copy'
+        let b = buf.getByte(i)
+        __managed_memory_set_byte(mem, i, b)
+        i = i + 1
+    end 'copy'
+    __managed_memory_set_length(mem, len)
+    return {_managed: mem, _iterPos: 0}
+end 'bufferToString'
+
 // --- Helpers ---
 
-function skipNewlines(tokens TokenArray, startPos int) returns int
+function skipNewlines(tokens TokenArray, startPos I64) returns I64
     var pos = startPos
     while pos < tokens.count() 'skip'
         let token = tokenAt(tokens, pos: pos)
@@ -102,11 +407,11 @@ function skipNewlines(tokens TokenArray, startPos int) returns int
     return pos
 end 'skipNewlines'
 
-function tokenAt(tokens TokenArray, pos int) returns Token
+function tokenAt(tokens TokenArray, pos I64) returns Token
     return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: "", line: 0, column: 0}
 end 'tokenAt'
 
-function parseInt(s String) returns int
+function parseInt(s String) returns I64
     var result = 0
     for ch in s 'digits'
         let b = try ch.asciiValue() otherwise 0

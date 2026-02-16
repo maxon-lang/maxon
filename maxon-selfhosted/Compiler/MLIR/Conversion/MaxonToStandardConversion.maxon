@@ -1,7 +1,7 @@
 // Maxon dialect -> Standard dialect conversion.
 
-typealias MaxonOpArray = Array with MaxonOp
-typealias StdOpArray = Array with StdOp
+export typealias MaxonOpArray = Array with MaxonOp
+export typealias StdOpArray = Array with StdOp
 
 export function lowerMaxonOpsToStd(maxonOps MaxonOpArray) returns StdOpArray
     var ops = StdOpArray{}
@@ -10,6 +10,15 @@ export function lowerMaxonOpsToStd(maxonOps MaxonOpArray) returns StdOpArray
         match mOp 'lower'
             literal(resultId, value) then ops.push(StdOp.constI64(resultId, value))
             returnOp(retValId) then ops.push(StdOp.returnOp(retValId))
+            varDecl(slotId, valueId) then ops.push(StdOp.storeSlot(slotId, valueId))
+            varLoad(resultId, slotId) then ops.push(StdOp.loadSlot(resultId, slotId))
+            add(resultId, leftId, rightId) then ops.push(StdOp.addI64(resultId, leftId, rightId))
+            sub(resultId, leftId, rightId) then ops.push(StdOp.subI64(resultId, leftId, rightId))
+            mul(resultId, leftId, rightId) then ops.push(StdOp.mulI64(resultId, leftId, rightId))
+            pushValue then ops.push(StdOp.pushValue)
+            popToRcx then ops.push(StdOp.popToRcx)
+            printLiteral(data) then ops.push(StdOp.printLiteral(data))
+            printInt(valueId) then ops.push(StdOp.printInt(valueId))
         end 'lower'
     end 'opLoop'
 

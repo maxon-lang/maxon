@@ -1,9 +1,14 @@
 // X86 dialect ops to machine code bytes.
-// Also emits the _start wrapper for the PE entry point.
+// Also emits the _start wrapper and runtime stubs for the PE entry point.
 
-typealias X86OpArray = Array with X86Op
+export typealias X86OpArray = Array with X86Op
+export typealias IatFixupArray = Array with IatFixup
 
-function emitPrologue(code ByteBuffer, stackSize int)
+// Runtime stub offsets (filled in during emit)
+var _writeStdoutOffset = 0
+var _i64ToStringOffset = 0
+
+function emitPrologue(code ByteBuffer, stackSize I64)
     // push rbp
     code.push(0x55)
     // mov rbp, rsp
@@ -20,13 +25,17 @@ function emitPrologue(code ByteBuffer, stackSize int)
 end 'emitPrologue'
 
 function emitEpilogue(code ByteBuffer)
+    // mov rsp, rbp
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xEC)
     // pop rbp
     code.push(0x5D)
     // ret
     code.push(0xC3)
 end 'emitEpilogue'
 
-function emitMovRegImm(code ByteBuffer, value int)
+function emitMovRegImm(code ByteBuffer, value I64)
     // mov rax, imm32 (sign-extended)
     code.push(0x48)
     code.push(0xC7)
@@ -38,11 +47,528 @@ function emitMovRegImm(code ByteBuffer, value int)
     code.push((value shr 24) and 0xFF)
 end 'emitMovRegImm'
 
+// Store RAX to stack slot: mov [rbp - (slotIndex+1)*8], rax
+function emitMovSlot(code ByteBuffer, slotIndex I64)
+    let offset = (slotIndex + 1) * 8
+    // mov [rbp - offset], rax  =>  48 89 45 <disp8>
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x45)
+    code.push((0 - offset) and 0xFF)
+end 'emitMovSlot'
+
+// Load stack slot to RAX: mov rax, [rbp - (slotIndex+1)*8]
+function emitLoadSlot(code ByteBuffer, slotIndex I64)
+    let offset = (slotIndex + 1) * 8
+    // mov rax, [rbp - offset]  =>  48 8B 45 <disp8>
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x45)
+    code.push((0 - offset) and 0xFF)
+end 'emitLoadSlot'
+
+// Save RAX to RCX before loading second operand
+function emitMovRcxRax(code ByteBuffer)
+    // mov rcx, rax  =>  48 89 C1
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xC1)
+end 'emitMovRcxRax'
+
+function emitPushRax(code ByteBuffer)
+    // push rax  =>  50
+    code.push(0x50)
+end 'emitPushRax'
+
+function emitPopRcx(code ByteBuffer)
+    // pop rcx  =>  59
+    code.push(0x59)
+end 'emitPopRcx'
+
+function emitAddRegReg(code ByteBuffer)
+    // add rax, rcx  =>  48 01 C8
+    code.push(0x48)
+    code.push(0x01)
+    code.push(0xC8)
+end 'emitAddRegReg'
+
+function emitSubRegReg(code ByteBuffer)
+    // After push/pop: rcx=left, rax=right. We want left-right.
+    // xchg rax, rcx  =>  48 91
+    code.push(0x48)
+    code.push(0x91)
+    // sub rax, rcx  =>  48 29 C8  (now rax=left - right)
+    code.push(0x48)
+    code.push(0x29)
+    code.push(0xC8)
+end 'emitSubRegReg'
+
+function emitImulRegReg(code ByteBuffer)
+    // imul rax, rcx  =>  48 0F AF C1
+    code.push(0x48)
+    code.push(0x0F)
+    code.push(0xAF)
+    code.push(0xC1)
+end 'emitImulRegReg'
+
+// Emit a relative call: call <rel32>
+function emitRelativeCall(code ByteBuffer, targetOffset I64)
+    code.push(0xE8)
+    let callEnd = code.count() + 4
+    let rel = targetOffset - callEnd
+    code.push(rel and 0xFF)
+    code.push((rel shr 8) and 0xFF)
+    code.push((rel shr 16) and 0xFF)
+    code.push((rel shr 24) and 0xFF)
+end 'emitRelativeCall'
+
+// Emit dword placeholder (4 zero bytes)
+function emitDword(code ByteBuffer, value I64)
+    code.push(value and 0xFF)
+    code.push((value shr 8) and 0xFF)
+    code.push((value shr 16) and 0xFF)
+    code.push((value shr 24) and 0xFF)
+end 'emitDword'
+
+// --- Runtime Stubs ---
+
+// write_stdout(ptr_in_rcx, len_in_rdx)
+// Stack: [rbp-8]=ptr, [rbp-16]=len, [rbp-24]=handle, [rbp-32]=bytesWritten
+function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray)
+    _writeStdoutOffset = code.count()
+
+    // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x40
+    code.push(0x55)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xE5)
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0xEC)
+    code.push(0x40)
+
+    // Save args: [rbp-8] = rcx (ptr), [rbp-16] = rdx (len)
+    // mov [rbp-8], rcx
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x4D)
+    code.push(0xF8)
+    // mov [rbp-16], rdx
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x55)
+    code.push(0xF0)
+
+    // Zero bytesWritten: mov qword [rbp-32], 0
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0x45)
+    code.push(0xE0)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // GetStdHandle(-11): mov ecx, -11
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0xC1)
+    code.push(0xF5)
+    code.push(0xFF)
+    code.push(0xFF)
+    code.push(0xFF)
+
+    // call [rip+disp32] GetStdHandle (IAT slot 1)
+    code.push(0xFF)
+    code.push(0x15)
+    iatFixups.push({codeOffset: code.count(), iatSlotIndex: 1})
+    emitDword(code, value: 0)
+
+    // Save handle: mov [rbp-24], rax
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x45)
+    code.push(0xE8)
+
+    // WriteFile(handle, buffer, length, &bytesWritten, NULL)
+    // arg1: mov rcx, [rbp-24] (handle)
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x4D)
+    code.push(0xE8)
+    // arg2: mov rdx, [rbp-8] (buffer ptr)
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x55)
+    code.push(0xF8)
+    // arg3: mov r8, [rbp-16] (length)
+    code.push(0x4C)
+    code.push(0x8B)
+    code.push(0x45)
+    code.push(0xF0)
+    // arg4: lea r9, [rbp-32] (&bytesWritten)
+    code.push(0x4C)
+    code.push(0x8D)
+    code.push(0x4D)
+    code.push(0xE0)
+    // arg5: mov qword [rsp+0x20], 0 (lpOverlapped = NULL)
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0x44)
+    code.push(0x24)
+    code.push(0x20)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // call [rip+disp32] WriteFile (IAT slot 2)
+    code.push(0xFF)
+    code.push(0x15)
+    iatFixups.push({codeOffset: code.count(), iatSlotIndex: 2})
+    emitDword(code, value: 0)
+
+    // Epilogue: mov rsp, rbp; pop rbp; ret
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xEC)
+    code.push(0x5D)
+    code.push(0xC3)
+end 'emitWriteStdout'
+
+// i64_to_string(value_in_rcx, buffer_in_rdx) -> length in RAX
+// Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=is_negative/length
+function emitI64ToString(code ByteBuffer)
+    _i64ToStringOffset = code.count()
+
+    // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x30
+    code.push(0x55)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xE5)
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0xEC)
+    code.push(0x30)
+
+    // Save args: [rbp-8] = rcx (value), [rbp-16] = rdx (buffer)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x4D)
+    code.push(0xF8)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x55)
+    code.push(0xF0)
+
+    // Special case: value == 0
+    // test rcx, rcx
+    code.push(0x48)
+    code.push(0x85)
+    code.push(0xC9)
+    // jnz not_zero (skip 19 bytes: mov byte[rdx]='0'(3) + mov byte[rdx+1]=0(4) + mov rax,1(7) + jmp epilogue(5))
+    code.push(0x75)
+    code.push(0x13)
+    // mov byte [rdx], '0'
+    code.push(0xC6)
+    code.push(0x02)
+    code.push(0x30)
+    // mov byte [rdx+1], 0
+    code.push(0xC6)
+    code.push(0x42)
+    code.push(0x01)
+    code.push(0x00)
+    // mov rax, 1
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0xC0)
+    code.push(0x01)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    // jmp epilogue (will be patched)
+    code.push(0xE9)
+    let jmpToEpilogueFixup1 = code.count()
+    emitDword(code, value: 0)
+
+    // not_zero:
+    let notZeroOffset = code.count()
+
+    // Zero is_negative: mov qword [rbp-24], 0
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0x45)
+    code.push(0xE8)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // test rcx, rcx
+    code.push(0x48)
+    code.push(0x85)
+    code.push(0xC9)
+    // jns positive (skip 18 bytes: neg + save + mov_rax_1 + save_flag)
+    code.push(0x79)
+    code.push(0x12)
+
+    // neg rcx
+    code.push(0x48)
+    code.push(0xF7)
+    code.push(0xD9)
+    // mov [rbp-8], rcx (update saved value)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x4D)
+    code.push(0xF8)
+    // mov rax, 1 (is_negative = 1)
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0xC0)
+    code.push(0x01)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    // mov [rbp-24], rax
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x45)
+    code.push(0xE8)
+
+    // positive: r9 = buffer + 20
+    // mov r9, rdx
+    code.push(0x49)
+    code.push(0x89)
+    code.push(0xD1)
+    // add r9, 20
+    code.push(0x49)
+    code.push(0x83)
+    code.push(0xC1)
+    code.push(0x14)
+    // mov byte [r9], 0 (null terminator)
+    code.push(0x41)
+    code.push(0xC6)
+    code.push(0x01)
+    code.push(0x00)
+
+    // digit_loop:
+    let digitLoopOffset = code.count()
+
+    // dec r9
+    code.push(0x49)
+    code.push(0xFF)
+    code.push(0xC9)
+    // mov rax, [rbp-8] (value/quotient)
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x45)
+    code.push(0xF8)
+    // mov rcx, 10
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0xC1)
+    code.push(0x0A)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    // xor rdx, rdx
+    code.push(0x48)
+    code.push(0x31)
+    code.push(0xD2)
+    // div rcx (unsigned: rax=quotient, rdx=remainder)
+    code.push(0x48)
+    code.push(0xF7)
+    code.push(0xF1)
+    // mov [rbp-8], rax (store quotient)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x45)
+    code.push(0xF8)
+    // add rdx, 0x30 ('0')
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0xC2)
+    code.push(0x30)
+    // mov byte [r9], dl
+    code.push(0x41)
+    code.push(0x88)
+    code.push(0x11)
+    // cmp qword [rbp-8], 0
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0x7D)
+    code.push(0xF8)
+    code.push(0x00)
+    // jnz digit_loop
+    code.push(0x75)
+    let jnzTarget = digitLoopOffset - (code.count() + 1)
+    code.push(jnzTarget and 0xFF)
+
+    // Check is_negative: mov rax, [rbp-24]; test rax, rax; jz no_sign
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x45)
+    code.push(0xE8)
+    code.push(0x48)
+    code.push(0x85)
+    code.push(0xC0)
+    // jz no_sign (skip 7 bytes: dec r9 + mov byte [r9], '-')
+    code.push(0x74)
+    code.push(0x07)
+    // dec r9
+    code.push(0x49)
+    code.push(0xFF)
+    code.push(0xC9)
+    // mov byte [r9], '-'
+    code.push(0x41)
+    code.push(0xC6)
+    code.push(0x01)
+    code.push(0x2D)
+
+    // no_sign: compute length = (buffer + 20) - r9
+    // mov rax, [rbp-16] (buffer)
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x45)
+    code.push(0xF0)
+    // add rax, 20
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0xC0)
+    code.push(0x14)
+    // sub rax, r9 => length
+    code.push(0x4C)
+    code.push(0x29)
+    code.push(0xC8)
+
+    // Save length: mov [rbp-24], rax
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x45)
+    code.push(0xE8)
+
+    // Copy digits from r9 to buffer: rsi=r9, rdi=buffer, rcx=length
+    // mov rsi, r9
+    code.push(0x4C)
+    code.push(0x89)
+    code.push(0xCE)
+    // mov rdi, [rbp-16]
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x7D)
+    code.push(0xF0)
+    // mov rcx, [rbp-24] (length)
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x4D)
+    code.push(0xE8)
+    // rep movsb
+    code.push(0xF3)
+    code.push(0xA4)
+
+    // Return length in rax
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x45)
+    code.push(0xE8)
+
+    // epilogue label (patch jump from zero case)
+    let epilogueOffset = code.count()
+    let jmpRel = epilogueOffset - (jmpToEpilogueFixup1 + 4)
+    code.patchDword(jmpToEpilogueFixup1, value: jmpRel)
+
+    // Epilogue: mov rsp, rbp; pop rbp; ret
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xEC)
+    code.push(0x5D)
+    code.push(0xC3)
+end 'emitI64ToString'
+
+// --- Print Operations ---
+
+// Emit printLiteral: jump over data island, then call write_stdout
+function emitPrintLiteral(code ByteBuffer, data ByteBuffer)
+    let dataLen = data.count()
+    if dataLen == 0 'empty'
+        return
+    end 'empty'
+
+    // jmp over data island: jmp rel32
+    code.push(0xE9)
+    let jmpFixup = code.count()
+    emitDword(code, value: 0)
+
+    // Data island
+    let dataOffset = code.count()
+    var i = 0
+    while i < dataLen 'copyData'
+        code.push(data.getByte(i))
+        i = i + 1
+    end 'copyData'
+
+    // Patch jump
+    let afterData = code.count()
+    code.patchDword(jmpFixup, value: afterData - (jmpFixup + 4))
+
+    // lea rcx, [rip + offset_to_data]
+    code.push(0x48)
+    code.push(0x8D)
+    code.push(0x0D)
+    let leaEnd = code.count() + 4
+    let leaRel = dataOffset - leaEnd
+    emitDword(code, value: leaRel)
+
+    // mov rdx, dataLen
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0xC2)
+    emitDword(code, value: dataLen)
+
+    // call write_stdout
+    emitRelativeCall(code, targetOffset: _writeStdoutOffset)
+end 'emitPrintLiteral'
+
+// Emit printInt: value assumed in RAX, convert to string then print
+// Uses stack buffer at [rbp-<high offset>] for the conversion buffer
+function emitPrintInt(code ByteBuffer)
+    // Save rax (the value) to rcx for i64_to_string arg1
+    // mov rcx, rax
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xC1)
+
+    // lea rdx, [rsp] (use current stack top as buffer - we have space from prologue)
+    code.push(0x48)
+    code.push(0x8D)
+    code.push(0x14)
+    code.push(0x24)
+
+    // call i64_to_string (returns length in rax)
+    emitRelativeCall(code, targetOffset: _i64ToStringOffset)
+
+    // Now rax = length, buffer at rsp
+    // mov rdx, rax (length)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xC2)
+
+    // lea rcx, [rsp] (buffer ptr)
+    code.push(0x48)
+    code.push(0x8D)
+    code.push(0x0C)
+    code.push(0x24)
+
+    // call write_stdout
+    emitRelativeCall(code, targetOffset: _writeStdoutOffset)
+end 'emitPrintInt'
+
 // Emit X86 ops to machine code.
 // Returns a CodeResult with the code bytes and fixup offsets.
 export function emit(x86Ops X86OpArray) returns CodeResult
     logDebug(LogCategory.codegen, message: "Emitting machine code")
-    var code = ByteBuffer.create(256)
+    var code = ByteBuffer.create(1024)
+    var iatFixups = IatFixupArray{}
 
     // Emit _start wrapper first (entry point at offset 0)
     // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
@@ -66,7 +592,7 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     // call [rip+disp32] ExitProcess (indirect through IAT)
     code.push(0xFF)
     code.push(0x15)
-    let exitProcessFixupOffset = code.count()
+    iatFixups.push({codeOffset: code.count(), iatSlotIndex: 0})
     code.push(0x00)
     code.push(0x00)
     code.push(0x00)
@@ -75,14 +601,27 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     // int3 (unreachable)
     code.push(0xCC)
 
+    // Emit runtime stubs (before main, so offsets are known)
+    emitWriteStdout(code, iatFixups: iatFixups)
+    emitI64ToString(code)
+
     // Emit main function body
     let mainOffset = code.count()
 
     for op in x86Ops 'opLoop'
         match op 'emit'
             prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
-            movRegImm(dest, value) then emitMovRegImm(code, value: value)
             epilogue then emitEpilogue(code)
+            movRegImm(dest, value) then emitMovRegImm(code, value: value)
+            movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex)
+            loadSlot(destReg, slotIndex) then emitLoadSlot(code, slotIndex: slotIndex)
+            addRegReg(destReg, srcReg) then emitAddRegReg(code)
+            subRegReg(destReg, srcReg) then emitSubRegReg(code)
+            imulRegReg(destReg, srcReg) then emitImulRegReg(code)
+            pushRax then emitPushRax(code)
+            popRcx then emitPopRcx(code)
+            printLiteral(data) then emitPrintLiteral(code, data: data)
+            printInt then emitPrintInt(code)
         end 'emit'
     end 'opLoop'
 
@@ -92,5 +631,5 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     code.patchDword(mainCallFixupOffset, value: relOffset)
 
     logDebug(LogCategory.codegen, message: "Emitted {code.count()} bytes of machine code")
-    return {code: code, mainCallFixupOffset: mainCallFixupOffset, exitProcessFixupOffset: exitProcessFixupOffset}
+    return {code: code, mainCallFixupOffset: mainCallFixupOffset, iatFixups: iatFixups}
 end 'emit'

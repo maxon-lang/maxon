@@ -1,18 +1,77 @@
 // Standard dialect -> X86 dialect conversion.
 
-typealias StdOpArray = Array with StdOp
-typealias X86OpArray = Array with X86Op
+export typealias StdOpArray = Array with StdOp
+export typealias X86OpArray = Array with X86Op
 
 export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     var ops = X86OpArray{}
 
-    // Prologue
-    ops.push(X86Op.prologue(0))
+    // First pass: count max slot index to compute stack size
+    var maxSlot = 0 - 1
+    for sOp in stdOps 'countSlots'
+        match sOp 'countSlot'
+            storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
+            loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
+            constI64(resultId, value) then maxSlot = maxSlot
+            returnOp(retValId) then maxSlot = maxSlot
+            addI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            subI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            mulI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            pushValue then maxSlot = maxSlot
+            popToRcx then maxSlot = maxSlot
+            printLiteral(data) then maxSlot = maxSlot
+            printInt(valueId) then maxSlot = maxSlot
+        end 'countSlot'
+    end 'countSlots'
 
+    // Stack layout: each slot is 8 bytes, plus 32 bytes for i64_to_string buffer
+    // Align to 16 bytes
+    var stackSize = 0
+    if maxSlot >= 0 'hasSlots'
+        stackSize = (maxSlot + 1) * 8 + 32
+    end 'hasSlots'
+    // Check for print ops that need buffer space
+    var hasPrint = false
+    for sOp in stdOps 'checkPrint'
+        match sOp 'checkP'
+            printInt(valueId) then hasPrint = true
+            printLiteral(data) then hasPrint = true
+            constI64(resultId, value) then hasPrint = hasPrint
+            returnOp(retValId) then hasPrint = hasPrint
+            storeSlot(slotId, valueId) then hasPrint = hasPrint
+            loadSlot(resultId, slotId) then hasPrint = hasPrint
+            addI64(resultId, leftId, rightId) then hasPrint = hasPrint
+            subI64(resultId, leftId, rightId) then hasPrint = hasPrint
+            mulI64(resultId, leftId, rightId) then hasPrint = hasPrint
+            pushValue then hasPrint = hasPrint
+            popToRcx then hasPrint = hasPrint
+        end 'checkP'
+    end 'checkPrint'
+    if hasPrint and stackSize == 0 'needPrintBuf'
+        stackSize = 32
+    end 'needPrintBuf'
+    // Align to 16
+    if stackSize mod 16 != 0 'align'
+        stackSize = stackSize + (16 - (stackSize mod 16))
+    end 'align'
+
+    // Prologue with computed stack size
+    ops.push(X86Op.prologue(stackSize))
+
+    // Second pass: lower ops
     for sOp in stdOps 'opLoop'
         match sOp 'lower'
             constI64(resultId, value) then ops.push(X86Op.movRegImm(X86Register.rax, value))
             returnOp(retValId) then break 'opLoop'
+            storeSlot(slotId, valueId) then ops.push(X86Op.movSlot(slotId, X86Register.rax))
+            loadSlot(resultId, slotId) then ops.push(X86Op.loadSlot(X86Register.rax, slotId))
+            addI64(resultId, leftId, rightId) then ops.push(X86Op.addRegReg(X86Register.rax, X86Register.rcx))
+            subI64(resultId, leftId, rightId) then ops.push(X86Op.subRegReg(X86Register.rax, X86Register.rcx))
+            mulI64(resultId, leftId, rightId) then ops.push(X86Op.imulRegReg(X86Register.rax, X86Register.rcx))
+            pushValue then ops.push(X86Op.pushRax)
+            popToRcx then ops.push(X86Op.popRcx)
+            printLiteral(data) then ops.push(X86Op.printLiteral(data))
+            printInt(valueId) then ops.push(X86Op.printInt)
         end 'lower'
     end 'opLoop'
 
@@ -21,3 +80,10 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
 
     return ops
 end 'lowerStdOpsToX86'
+
+function maxOf(a I64, b I64) returns I64
+    if a > b 'aGreater'
+        return a
+    end 'aGreater'
+    return b
+end 'maxOf'

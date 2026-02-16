@@ -4,17 +4,17 @@
 // ByteBuffer wraps __ManagedMemory for efficient byte-level building.
 // All write operations are methods to ensure self-mutation propagates.
 
-typealias ByteArray = Array with byte
+export typealias ByteArray = Array with byte
 
 export type ByteBuffer
     var managed __ManagedMemory
-    var len int
+    var len I64
 
-    export static function create(capacity int) returns Self
+    export static function create(capacity I64) returns Self
         return {managed: __managed_memory_create(capacity, 1), len: 0}
     end 'create'
 
-    export function push(value int)
+    export function push(value I64)
         if len >= __managed_memory_capacity(managed) 'grow'
             var newCap = __managed_memory_capacity(managed) * 2
             if newCap < 16 'min'
@@ -27,19 +27,19 @@ export type ByteBuffer
         __managed_memory_set_length(managed, len)
     end 'push'
 
-    export function getByte(index int) returns int
+    export function getByte(index I64) returns I64
         return __managed_memory_byte_at(managed, index)
     end 'getByte'
 
-    export function setByte(index int, value int)
+    export function setByte(index I64, value I64)
         __managed_memory_set_byte(managed, index, value)
     end 'setByte'
 
-    export function count() returns int
+    export function count() returns I64
         return len
     end 'count'
 
-    export function reserve(capacity int)
+    export function reserve(capacity I64)
         if capacity > __managed_memory_capacity(managed) 'grow'
             __managed_memory_grow(managed, capacity)
         end 'grow'
@@ -50,19 +50,19 @@ export type ByteBuffer
         return {managed: sliced, iterIndex: 0}
     end 'toByteArray'
 
-    export function writeWord(value int)
+    export function writeWord(value I64)
         push(value and 0xFF)
         push((value shr 8) and 0xFF)
     end 'writeWord'
 
-    export function writeDword(value int)
+    export function writeDword(value I64)
         push(value and 0xFF)
         push((value shr 8) and 0xFF)
         push((value shr 16) and 0xFF)
         push((value shr 24) and 0xFF)
     end 'writeDword'
 
-    export function writeQword(value int)
+    export function writeQword(value I64)
         push(value and 0xFF)
         push((value shr 8) and 0xFF)
         push((value shr 16) and 0xFF)
@@ -73,7 +73,7 @@ export type ByteBuffer
         push((value shr 56) and 0xFF)
     end 'writeQword'
 
-    export function writeZeros(n int)
+    export function writeZeros(n I64)
         var i = 0
         while i < n 'zeros'
             push(0)
@@ -89,7 +89,7 @@ export type ByteBuffer
         push(0)
     end 'writeAscii'
 
-    export function padTo(size int)
+    export function padTo(size I64)
         while len < size 'pad'
             push(0)
         end 'pad'
@@ -103,7 +103,7 @@ export type ByteBuffer
         end 'copy'
     end 'appendFrom'
 
-    export function patchDword(offset int, value int)
+    export function patchDword(offset I64, value I64)
         setByte(offset, value: value and 0xFF)
         setByte(offset + 1, value: (value shr 8) and 0xFF)
         setByte(offset + 2, value: (value shr 16) and 0xFF)
@@ -114,36 +114,61 @@ end 'ByteBuffer'
 let FILE_ALIGNMENT = 512
 let SECTION_ALIGNMENT = 4096
 
-export function alignUp(value int, alignment int) returns int
+export function alignUp(value I64, alignment I64) returns I64
     return (value + alignment - 1) and not (alignment - 1)
 end 'alignUp'
 
 // --- Import section builder ---
+// IAT slot indices for kernel32.dll imports
+let IAT_SLOT_EXIT_PROCESS = 0
+let IAT_SLOT_GET_STD_HANDLE = 1
+let IAT_SLOT_WRITE_FILE = 2
 
 type ImportSection
     export var data ByteBuffer
-    export var iatRva int
-    export var importDirRva int
-    export var importDirSize int
+    export var iatRva I64
+    export var importDirRva I64
+    export var importDirSize I64
 end 'ImportSection'
 
-function buildImportSection(idataRva int) returns ImportSection
-    var data = ByteBuffer.create(128)
+export type IatFixup
+    export var codeOffset I64
+    export var iatSlotIndex I64
+end 'IatFixup'
 
+export typealias IatFixupArray = Array with IatFixup
+
+function buildImportSection(idataRva I64) returns ImportSection
+    var data = ByteBuffer.create(256)
+
+    // Layout for 3 imports from kernel32.dll:
+    // IAT: 3 entries + null = 32 bytes (offset 0)
+    // ILT: 3 entries + null = 32 bytes (offset 32)
+    // Import Dir: 1 entry + null = 40 bytes (offset 64)
+    // Hint/Name table (offset 104): entries must be on even boundaries
+    //   ExitProcess:  2 hint + "ExitProcess\0"  (12) = 14 bytes
+    //   GetStdHandle: 2 hint + "GetStdHandle\0" (13) = 15 bytes + 1 pad = 16
+    //   WriteFile:    2 hint + "WriteFile\0"    (10) = 12 bytes
+    // DLL name (offset 146): "kernel32.dll\0"
     let iatOffset = 0
-    let iltOffset = 16
-    let importDirOffset = 32
-    let hintNameOffset = 72
-    let dllNameOffset = 86
+    let iltOffset = 32
+    let importDirOffset = 64
+    let hintNameOffset = 104
+    let hintExitProcess = hintNameOffset
+    let hintGetStdHandle = hintExitProcess + 14
+    let hintWriteFile = hintGetStdHandle + 16
+    let dllNameOffset = hintWriteFile + 12
 
-    // IAT entry: points to hint/name table
-    data.writeQword(idataRva + hintNameOffset)
-    // IAT null terminator
-    data.writeQword(0)
+    // IAT entries: point to hint/name table entries
+    data.writeQword(idataRva + hintExitProcess)    // slot 0: ExitProcess
+    data.writeQword(idataRva + hintGetStdHandle)   // slot 1: GetStdHandle
+    data.writeQword(idataRva + hintWriteFile)      // slot 2: WriteFile
+    data.writeQword(0)                              // null terminator
 
-    // ILT entry: same as IAT
-    data.writeQword(idataRva + hintNameOffset)
-    // ILT null terminator
+    // ILT entries: same as IAT
+    data.writeQword(idataRva + hintExitProcess)
+    data.writeQword(idataRva + hintGetStdHandle)
+    data.writeQword(idataRva + hintWriteFile)
     data.writeQword(0)
 
     // Import Directory entry
@@ -156,11 +181,20 @@ function buildImportSection(idataRva int) returns ImportSection
     // Import Directory null terminator
     data.writeZeros(20)
 
-    // Hint/Name table: hint (2 bytes) + "ExitProcess\0"
+    // Hint/Name table (entries must start on even boundaries)
     data.writeWord(0)
     data.writeAscii("ExitProcess")
+    // 14 bytes total, ends on even boundary
 
-    // DLL name: "kernel32.dll\0"
+    data.writeWord(0)
+    data.writeAscii("GetStdHandle")
+    data.push(0) // pad to even boundary (15 -> 16 bytes)
+
+    data.writeWord(0)
+    data.writeAscii("WriteFile")
+    // 12 bytes total, ends on even boundary
+
+    // DLL name
     data.writeAscii("kernel32.dll")
 
     return {
@@ -186,7 +220,7 @@ function writeSectionName(buf ByteBuffer, name String)
     end 'pad'
 end 'writeSectionName'
 
-function writeSectionHeader(buf ByteBuffer, name String, virtualSize int, virtualAddress int, rawDataSize int, rawDataPointer int, characteristics int)
+function writeSectionHeader(buf ByteBuffer, name String, virtualSize I64, virtualAddress I64, rawDataSize I64, rawDataPointer I64, characteristics I64)
     writeSectionName(buf, name: name)
     buf.writeDword(virtualSize)
     buf.writeDword(virtualAddress)
@@ -203,8 +237,8 @@ end 'writeSectionHeader'
 
 export type CodeResult
     export var code ByteBuffer
-    export var mainCallFixupOffset int
-    export var exitProcessFixupOffset int
+    export var mainCallFixupOffset I64
+    export var iatFixups IatFixupArray
 end 'CodeResult'
 
 export function writePe(outputPath String, codeResult CodeResult)
@@ -236,13 +270,16 @@ export function writePe(outputPath String, codeResult CodeResult)
     logDebug(LogCategory.pe, message: "Code section: {codeSize} bytes")
     logDebug(LogCategory.pe, message: "Import section: {idataSize} bytes")
 
-    // Patch ExitProcess IAT RIP-relative reference in code
-    let ripAtFixup = textRva + codeResult.exitProcessFixupOffset + 4
-    let iatRel = idataRva - ripAtFixup
-    code.patchDword(codeResult.exitProcessFixupOffset, value: iatRel)
+    // Patch all IAT RIP-relative references in code
+    for fixup in codeResult.iatFixups 'patchIat'
+        let ripAtFixup = textRva + fixup.codeOffset + 4
+        let iatEntryRva = idataRva + (fixup.iatSlotIndex * 8)
+        let iatRel = iatEntryRva - ripAtFixup
+        code.patchDword(fixup.codeOffset, value: iatRel)
+    end 'patchIat'
 
-    // IAT directory size: 1 entry + null terminator = 16 bytes
-    let iatDirSize = 16
+    // IAT directory size: 3 entries + null terminator = 32 bytes
+    let iatDirSize = 32
 
     // === DOS Header (64 bytes) ===
     pe.writeWord(0x5A4D)      // MZ magic

@@ -1,56 +1,5 @@
 // Logging system for the compiler.
 
-export function logError(category LogCategory, message String)
-    log(category, level: LogLevel.ERROR, message: message)
-end 'logError'
-
-export function logInfo(category LogCategory, message String)
-    log(category, level: LogLevel.INFO, message: message)
-end 'logInfo'
-
-export function logDebug(category LogCategory, message String)
-    log(category, level: LogLevel.DEBUG, message: message)
-end 'logDebug'
-
-export function logTrace(category LogCategory, message String)
-    log(category, level: LogLevel.TRACE, message: message)
-end 'logTrace'
-
-export function setLogLevel(level LogLevel)
-    for (category, _) in categoryLevels 'each'
-        categoryLevels.insert(category, value: level)
-    end 'each'
-end 'setLogLevel'
-
-// Parses a log option string like "debug" or "lexer:trace".
-export function parseLogOption(option String) returns bool
-    let colonIdx = try option.findFirst(":") otherwise 'globalLevel'
-        let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
-            return false
-        end 'badLevel'
-        setLogLevel(level)
-        return true
-    end 'globalLevel'
-
-    let categoryStr = option.slice(option.startIndex(), endIndex: colonIdx)
-    let afterColon = try option.indexAfter(colonIdx) otherwise 'noLevel'
-        return false
-    end 'noLevel'
-    let levelStr = option.slice(afterColon, endIndex: option.endIndex())
-
-    let category = try LogCategory.fromName(categoryStr) otherwise 'badCat'
-        return false
-    end 'badCat'
-
-    let level = try LogLevel.fromName(levelStr.toUpper()) otherwise 'badLevel2'
-        return false
-    end 'badLevel2'
-
-    categoryLevels.insert(category, value: level)
-
-    return true
-end 'parseLogOption'
-
 export enum LogLevel
     NONE
     ERROR
@@ -70,20 +19,39 @@ export enum LogCategory
     testing = "TST"
 end 'LogCategory'
 
-var categoryLevels = [
-    LogCategory.compiler: LogLevel.INFO,
-    LogCategory.lexer: LogLevel.INFO,
-    LogCategory.parser: LogLevel.INFO,
-    LogCategory.semantic: LogLevel.INFO,
-    LogCategory.mlir: LogLevel.INFO,
-    LogCategory.codegen: LogLevel.INFO,
-    LogCategory.pe: LogLevel.INFO,
-    LogCategory.testing: LogLevel.INFO
-]
+var globalLogLevel = 2
+
+export function logError(category LogCategory, message String)
+    log(category, level: LogLevel.ERROR, message: message)
+end 'logError'
+
+export function logInfo(category LogCategory, message String)
+    log(category, level: LogLevel.INFO, message: message)
+end 'logInfo'
+
+export function logDebug(category LogCategory, message String)
+    log(category, level: LogLevel.DEBUG, message: message)
+end 'logDebug'
+
+export function logTrace(category LogCategory, message String)
+    log(category, level: LogLevel.TRACE, message: message)
+end 'logTrace'
+
+export function setLogLevel(level LogLevel)
+    globalLogLevel = level.rawValue
+end 'setLogLevel'
+
+// Parses a log option string like "debug" or "lexer:trace".
+export function parseLogOption(option String) returns bool
+    let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
+        return false
+    end 'badLevel'
+    setLogLevel(level)
+    return true
+end 'parseLogOption'
 
 function log(category LogCategory, level LogLevel, message String)
-    let categoryLevel = try categoryLevels.get(category) otherwise LogLevel.INFO
-    if level.rawValue <= categoryLevel.rawValue 'check'
+    if level.rawValue <= globalLogLevel 'check'
         printError("[{category.rawValue}] {level.name}: {message}\n")
     end 'check'
 end 'log'

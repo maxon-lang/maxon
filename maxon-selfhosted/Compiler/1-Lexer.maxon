@@ -1,6 +1,8 @@
 // Tokenizer for Maxon source code.
 // Operates on a byte array (UTF-8 source) for efficient byte-level scanning.
 
+export typealias ByteArray = Array with byte
+
 export function tokenize(source ByteArray) returns TokenArray
     logDebug(LogCategory.lexer, message: "Starting lexer")
     var tokens = TokenArray{}
@@ -10,8 +12,8 @@ export function tokenize(source ByteArray) returns TokenArray
     let len = source.count()
 
     while pos < len 'scan'
-        let ch = try source.get(pos) otherwise 0 as byte
-        let b = ch as int
+        let ch = try source.get(pos) otherwise 0 as U8
+        let b = ch as I64
 
         // Skip spaces and tabs
         if b == SPACE or b == TAB 'ws'
@@ -51,6 +53,54 @@ export function tokenize(source ByteArray) returns TokenArray
             continue
         end 'rp'
 
+        // Left brace
+        if b == LBRACE 'lb'
+            tokens.push({kind: TokenKind.leftBrace, value: "lbrace", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'lb'
+
+        // Right brace
+        if b == RBRACE 'rb'
+            tokens.push({kind: TokenKind.rightBrace, value: "rbrace", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'rb'
+
+        // Equals
+        if b == EQUALS 'eq'
+            tokens.push({kind: TokenKind.equals, value: "=", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'eq'
+
+        // Plus
+        if b == PLUS 'pl'
+            tokens.push({kind: TokenKind.plus, value: "+", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'pl'
+
+        // Minus
+        if b == MINUS 'mi'
+            tokens.push({kind: TokenKind.minus, value: "-", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'mi'
+
+        // Star
+        if b == STAR 'st'
+            tokens.push({kind: TokenKind.star, value: "*", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'st'
+
         // String literal (single-quoted for end labels): 'xxx'
         if b == QUOTE 'str'
             let startCol = column
@@ -58,8 +108,8 @@ export function tokenize(source ByteArray) returns TokenArray
             column = column + 1
             let strStart = pos
             while pos < len 'strBody'
-                let sc = try source.get(pos) otherwise 0 as byte
-                let sb = sc as int
+                let sc = try source.get(pos) otherwise 0 as U8
+                let sb = sc as I64
                 if sb == QUOTE 'endStr'
                     break
                 end 'endStr'
@@ -73,13 +123,39 @@ export function tokenize(source ByteArray) returns TokenArray
             continue
         end 'str'
 
+        // Double-quoted string literal: "xxx" (with escape sequences)
+        if b == DQUOTE 'dstr'
+            let startCol = column
+            pos = pos + 1
+            column = column + 1
+            let dstrStart = pos
+            while pos < len 'dstrBody'
+                let dc = try source.get(pos) otherwise 0 as U8
+                let db = dc as I64
+                if db == DQUOTE 'endDstr'
+                    break
+                end 'endDstr'
+                if db == BACKSLASH 'esc'
+                    pos = pos + 1
+                    column = column + 1
+                end 'esc'
+                pos = pos + 1
+                column = column + 1
+            end 'dstrBody'
+            let dstrVal = sliceToString(source, startPos: dstrStart, endPos: pos)
+            pos = pos + 1
+            column = column + 1
+            tokens.push({kind: TokenKind.doubleStringLiteral, value: dstrVal, line: line, column: startCol})
+            continue
+        end 'dstr'
+
         // Integer literal: digit sequence
         if isDigit(b) 'num'
             let startCol = column
             let numStart = pos
             while pos < len 'digits'
-                let dc = try source.get(pos) otherwise 0 as byte
-                let db = dc as int
+                let dc = try source.get(pos) otherwise 0 as U8
+                let db = dc as I64
                 if not isDigit(db) 'endNum'
                     break
                 end 'endNum'
@@ -96,8 +172,8 @@ export function tokenize(source ByteArray) returns TokenArray
             let startCol = column
             let startPos = pos
             while pos < len 'identBody'
-                let ic = try source.get(pos) otherwise 0 as byte
-                let ib = ic as int
+                let ic = try source.get(pos) otherwise 0 as U8
+                let ib = ic as I64
                 if not isAlphaNum(ib) 'endIdent'
                     break
                 end 'endIdent'
@@ -112,11 +188,11 @@ export function tokenize(source ByteArray) returns TokenArray
 
         // Skip comment lines (// ...)
         if b == SLASH and pos + 1 < len 'comment'
-            let nextByte = try source.get(pos + 1) otherwise 0 as byte
-            if nextByte as int == SLASH 'lineComment'
+            let nextByte = try source.get(pos + 1) otherwise 0 as U8
+            if nextByte as I64 == SLASH 'lineComment'
                 while pos < len 'skipComment'
-                    let cc = try source.get(pos) otherwise 0 as byte
-                    if cc as int == LF 'endComment'
+                    let cc = try source.get(pos) otherwise 0 as U8
+                    if cc as I64 == LF 'endComment'
                         break
                     end 'endComment'
                     pos = pos + 1
@@ -137,27 +213,27 @@ end 'tokenize'
 
 // --- Helpers ---
 
-function isDigit(b int) returns bool
+function isDigit(b I64) returns bool
     return b >= 48 and b <= 57
 end 'isDigit'
 
 // Valid identifier start: letter (A-Z, a-z) or underscore
-function isAlpha(b int) returns bool
+function isAlpha(b I64) returns bool
     return (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
 end 'isAlpha'
 
 // Valid identifier continuation: letter, digit, or underscore
-function isAlphaNum(b int) returns bool
+function isAlphaNum(b I64) returns bool
     return isAlpha(b) or isDigit(b)
 end 'isAlphaNum'
 
-function sliceToString(source ByteArray, startPos int, endPos int) returns String
+function sliceToString(source ByteArray, startPos I64, endPos I64) returns String
     let sliceLen = endPos - startPos
     var mem = __managed_memory_create(sliceLen, 1)
     var i = 0
     while i < sliceLen 'copy'
-        let ch = try source.get(startPos + i) otherwise 0 as byte
-        __managed_memory_set_byte(mem, i, ch as int)
+        let ch = try source.get(startPos + i) otherwise 0 as U8
+        __managed_memory_set_byte(mem, i, ch as I64)
         i = i + 1
     end 'copy'
     __managed_memory_set_length(mem, sliceLen)
@@ -171,12 +247,14 @@ function classifyIdentifier(name String) returns TokenKind
         "return" then return TokenKind.kwReturn
         "end" then return TokenKind.kwEnd
         "int" then return TokenKind.kwInt
+        "var" then return TokenKind.kwVar
+        "let" then return TokenKind.kwLet
+        "print" then return TokenKind.kwPrint
         default then return TokenKind.identifier
     end 'kw'
 end 'classifyIdentifier'
 
-typealias ByteArray = Array with byte
-typealias TokenArray = Array with Token
+export typealias TokenArray = Array with Token
 
 export enum TokenKind
     kwFunction
@@ -184,11 +262,21 @@ export enum TokenKind
     kwReturn
     kwEnd
     kwInt
+    kwVar
+    kwLet
+    kwPrint
     intLiteral
     stringLiteral
+    doubleStringLiteral
     identifier
     leftParen
     rightParen
+    leftBrace
+    rightBrace
+    equals
+    plus
+    minus
+    star
     newline
     eof
 end 'TokenKind'
@@ -196,8 +284,8 @@ end 'TokenKind'
 export type Token
     export var kind TokenKind
     export var value String
-    export var line int
-    export var column int
+    export var line I64
+    export var column I64
 end 'Token'
 
 // ASCII byte constants
@@ -208,4 +296,12 @@ let LF = 10
 let LPAREN = 40
 let RPAREN = 41
 let QUOTE = 39
+let DQUOTE = 34
+let BACKSLASH = 92
+let LBRACE = 123
+let RBRACE = 125
+let EQUALS = 61
+let PLUS = 43
+let MINUS = 45
+let STAR = 42
 let SLASH = 47
