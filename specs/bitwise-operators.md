@@ -322,6 +322,9 @@ end 'main'
 
 <!-- test: shr-in-method-call-arg -->
 ```maxon
+
+typealias Integer = i64
+
 type ShrBuf
   var managed __ManagedMemory
   var len Integer
@@ -355,6 +358,9 @@ end 'main'
 
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
+
+typealias Integer = i64
+
 type ShrBuf2
   var managed __ManagedMemory
   var len Integer

@@ -47,7 +47,11 @@ Use `_` as a parameter name to indicate an unused parameter. This is useful when
 Multiple discard parameters can be declared using names that start with `_`:
 
 ```maxon
-function callback(_a Integer, _b String, value Float) returns Float
+
+typealias ID = i64
+typealias Weight = f64
+
+function callback(_a ID, _b String, value Weight) returns Weight
   return value * 2.0
 end 'callback'
 ```
@@ -60,7 +64,10 @@ Discard parameters:
 ### Example
 
 ```maxon
-function add(a Integer, b Integer) returns Integer
+
+typealias Score = i64
+
+function add(a Score, b Score) returns Score
   return a + b
 end 'add'
 
@@ -77,6 +84,9 @@ end 'main'
 
 <!-- test: simple-function -->
 ```maxon
+
+typealias Integer = i64
+
 function add() returns Integer
   return 3 + 4
 end 'add'
@@ -92,6 +102,9 @@ end 'main'
 
 <!-- test: with-parameters -->
 ```maxon
+
+typealias Integer = i64
+
 function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
@@ -107,6 +120,9 @@ end 'main'
 
 <!-- test: nested-calls -->
 ```maxon
+
+typealias Integer = i64
+
 function double(x Integer) returns Integer
   return x * 2
 end 'double'
@@ -157,6 +173,9 @@ error E3010: specs/fragments/function-declaration/missing-returns-keyword-error.
 
 <!-- test: discard-single-parameter -->
 ```maxon
+
+typealias Integer = i64
+
 function useSecond(_ Integer, b Integer) returns Integer
   return b
 end 'useSecond'

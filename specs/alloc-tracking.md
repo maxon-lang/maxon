@@ -199,6 +199,9 @@ Cleanups:  1
 <!-- test: array-passed-to-function -->
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntArray = Array with int
 
 function sum_first(arr IntArray) returns Integer
@@ -272,6 +275,9 @@ Cleanups:  1
 <!-- test: array-borrow-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntArray = Array with int
 
 function readFirst(arr IntArray) returns Integer
@@ -312,6 +318,9 @@ Cleanups:  1
 <!-- test: array-borrow-multiple-times -->
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntArray = Array with int
 
 function getElement(arr IntArray, idx Integer) returns Integer
@@ -446,6 +455,9 @@ Cleanups:  4
 <!-- test: array-move-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntArray = Array with int
 
 function mutateFirst(arr IntArray) returns Integer
@@ -486,6 +498,9 @@ Cleanups:  1
 <!-- test: array-move-chain -->
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntArray = Array with int
 
 function addTen(arr IntArray) returns Integer
@@ -533,6 +548,9 @@ Cleanups:  1
 <!-- test: two-arrays-one-moved-one-borrowed -->
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntArray = Array with int
 
 function readIt(arr IntArray) returns Integer

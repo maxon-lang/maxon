@@ -42,6 +42,9 @@ error E3005: specs/fragments/type-checking/method-call-wrong-element-type.test:6
 
 <!-- test: function-call-string-where-int-expected -->
 ```maxon
+
+typealias Integer = i64
+
 function takeInt(n Integer) returns Integer
   return n
 end 'takeInt'
@@ -52,11 +55,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-string-where-int-expected.test:7:3: argument type mismatch for 'n': expected 'Integer', got 'String'
+error E3005: specs/fragments/type-checking/function-call-string-where-int-expected.test:10:3: argument type mismatch for 'n': expected 'Integer', got 'String'
 ```
 
 <!-- test: function-call-primitive-where-struct-expected -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntArray = Array with int
 
 function takeArray(arr IntArray) returns Integer
@@ -69,11 +75,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-expected.test:9:3: argument type mismatch for 'arr': expected 'IntArray', got 'int'
+error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-expected.test:12:3: argument type mismatch for 'arr': expected 'IntArray', got 'int'
 ```
 
 <!-- test: function-call-wrong-struct-type -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -95,7 +104,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:18:3: argument type mismatch for 'p': expected 'Point', got 'Size'
+error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:21:3: argument type mismatch for 'p': expected 'Point', got 'Size'
 ```
 
 <!-- test: stdlib-function-call-wrong-type -->
@@ -147,6 +156,9 @@ error E3005: specs/fragments/type-checking/array-of-different-element-types.test
 
 <!-- test: typealias-forward-reference -->
 ```maxon
+
+typealias Integer = i64
+
 typealias FooArray = Array with Foo
 
 type Foo
@@ -166,6 +178,9 @@ end 'main'
 <!-- test: typealias-after-usage -->
 A typealias defined after the type that uses it as a field should resolve correctly.
 ```maxon
+
+typealias Integer = i64
+
 type Container
   export var items ItemArray
 end 'Container'

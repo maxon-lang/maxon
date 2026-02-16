@@ -25,6 +25,9 @@ The struct type is inferred from context: when the first element is a named stru
 
 <!-- test: anon-struct-array-mixed -->
 ```maxon
+
+typealias Integer = i64
+
 type Vec2
   export var x Integer
   export var y Integer
@@ -43,6 +46,9 @@ end 'main'
 
 <!-- test: anon-struct-array-mixed-three -->
 ```maxon
+
+typealias Integer = i64
+
 type Pair
   export var a Integer
   export var b Integer
@@ -62,6 +68,9 @@ end 'main'
 
 <!-- test: anon-struct-array-return -->
 ```maxon
+
+typealias Integer = i64
+
 type Pair
   export var first Integer
   export var second Integer
@@ -86,6 +95,9 @@ end 'main'
 
 <!-- test: anon-struct-array-func-arg -->
 ```maxon
+
+typealias Integer = i64
+
 type Item
   export var value Integer
 end 'Item'

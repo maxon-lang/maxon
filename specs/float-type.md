@@ -24,7 +24,10 @@ Float literals must include a decimal point:
 ### Example
 
 ```maxon
-function circleArea(radius Float) returns Float
+
+typealias Radius = f64
+
+function circleArea(radius Radius) returns Radius
   return 3.14159 * radius * radius
 end 'circleArea'
 

@@ -50,6 +50,9 @@ var same = a.equals(b)  // true
 
 <!-- test: basic-equal -->
 ```maxon
+
+typealias Integer = i64
+
 type Point implements Equatable
   export var x Integer
   export var y Integer
@@ -74,6 +77,9 @@ end 'main'
 
 <!-- test: basic-not-equal -->
 ```maxon
+
+typealias Integer = i64
+
 type Point implements Equatable
   export var x Integer
   export var y Integer
@@ -98,6 +104,9 @@ end 'main'
 
 <!-- test: single-field -->
 ```maxon
+
+typealias Integer = i64
+
 type Wrapper implements Equatable
   export var value Integer
 
@@ -125,6 +134,9 @@ end 'main'
 
 <!-- test: partial-field-match -->
 ```maxon
+
+typealias Integer = i64
+
 type Point implements Equatable
   export var x Integer
   export var y Integer
@@ -149,6 +161,9 @@ end 'main'
 
 <!-- test: self-equality -->
 ```maxon
+
+typealias Integer = i64
+
 type Box implements Equatable
   export var value Integer
 
@@ -171,6 +186,9 @@ end 'main'
 
 <!-- test: equals-in-function -->
 ```maxon
+
+typealias Integer = i64
+
 type Id implements Equatable
   export var n Integer
 
@@ -202,6 +220,9 @@ end 'main'
 
 <!-- test: equals-branching -->
 ```maxon
+
+typealias Integer = i64
+
 type Token implements Equatable
   export var id Integer
 

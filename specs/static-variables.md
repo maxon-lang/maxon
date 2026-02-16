@@ -43,11 +43,13 @@ Types can have static fields that are shared across all instances. Static fields
 #### Syntax
 
 ```maxon
+typealias Score = i64
+
 type Counter
   static var count = 0       // Mutable static field
   static let MAX = 100       // Compile-time static constant
 
-  export var value Integer       // Instance field
+  export var value Score       // Instance field
 end 'Counter'
 ```
 
@@ -83,6 +85,9 @@ end 'main'
 
 <!-- test: top-level-var-increment -->
 ```maxon
+
+typealias Integer = i64
+
 var total = 10
 
 function add(n Integer)
@@ -202,6 +207,9 @@ end 'main'
 
 <!-- test: static-and-instance-fields -->
 ```maxon
+
+typealias Integer = i64
+
 type Thing
   static var created = 0
   export var id Integer
@@ -301,6 +309,9 @@ end 'main'
 
 <!-- test: top-level-var-array-cross-function -->
 ```maxon
+
+typealias Integer = i64
+
 var scores = [10, 20, 30]
 
 function getTotal() returns Integer
@@ -325,6 +336,9 @@ end 'main'
 
 <!-- test: top-level-var-array-mutate-cross-function -->
 ```maxon
+
+typealias Integer = i64
+
 var counters = [0, 0, 0]
 
 function increment(index Integer)

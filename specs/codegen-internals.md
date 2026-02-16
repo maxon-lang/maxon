@@ -164,7 +164,9 @@ utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)
 
 <!-- test: rdata-byte-array-uses-i8 -->
 ```maxon
-typealias ByteArray = Array with byte
+
+typealias Integer = i64
+typealias Byte = u8
 
 function main() returns ExitCode
   let arr = [10 as Byte, 20 as Byte, 30 as Byte]

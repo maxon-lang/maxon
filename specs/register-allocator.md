@@ -1641,6 +1641,9 @@ module {
 
 <!-- test: int-call-preserves-value -->
 ```maxon
+
+typealias Integer = i64
+
 function getForty() returns Integer
   return 40
 end 'getForty'
@@ -1751,6 +1754,9 @@ module {
 
 <!-- test: int-multiple-calls-preserve -->
 ```maxon
+
+typealias Integer = i64
+
 function getTen() returns Integer
   return 10
 end 'getTen'
@@ -1899,6 +1905,9 @@ module {
 
 <!-- test: int-call-result-used-later -->
 ```maxon
+
+typealias Integer = i64
+
 function compute() returns Integer
   return 100
 end 'compute'
@@ -2045,6 +2054,9 @@ end 'main'
 
 <!-- test: int-function-with-params -->
 ```maxon
+
+typealias Integer = i64
+
 function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
@@ -2156,6 +2168,9 @@ module {
 
 <!-- test: int-mov-reg-reg-32bit -->
 ```maxon
+
+typealias Integer = i64
+
 function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
@@ -3618,6 +3633,9 @@ module {
 
 <!-- test: int-loop-with-function-call -->
 ```maxon
+
+typealias Integer = i64
+
 function double(x Integer) returns Integer
   return x * 2
 end 'double'
@@ -4014,6 +4032,9 @@ module {
 
 <!-- test: int-many-params-function -->
 ```maxon
+
+typealias Integer = i64
+
 function sum5(a Integer, b Integer, c Integer, d Integer, e Integer) returns Integer
   return a + b + c + d + e
 end 'sum5'
@@ -4151,6 +4172,9 @@ module {
 
 <!-- test: int-nine-params-function -->
 ```maxon
+
+typealias Integer = i64
+
 function sum9(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer) returns Integer
   return a + b + c + d + e + f + g + h + i
 end 'sum9'
@@ -4331,6 +4355,9 @@ module {
 
 <!-- test: int-recursive-factorial -->
 ```maxon
+
+typealias Integer = i64
+
 function factorial(n Integer) returns Integer
   if n <= 1 'base'
     return 1
@@ -4489,6 +4516,9 @@ module {
 
 <!-- test: int-loop-pressure-with-call -->
 ```maxon
+
+typealias Integer = i64
+
 function identity(x Integer) returns Integer
   return x
 end 'identity'
@@ -5292,6 +5322,9 @@ end 'main'
 
 <!-- test: int-callee-saved-clobber -->
 ```maxon
+
+typealias Integer = i64
+
 function useRegs(a Integer, b Integer, c Integer, d Integer) returns Integer
   var x = a + b
   var y = c + d
@@ -5436,6 +5469,9 @@ module {
 
 <!-- test: int-float-survives-call -->
 ```maxon
+
+typealias Integer = i64
+
 function getInt() returns Integer
   return 40
 end 'getInt'
@@ -5666,6 +5702,9 @@ module {
 
 <!-- test: int-call-arg-reverse -->
 ```maxon
+
+typealias Integer = i64
+
 function sub(a Integer, b Integer) returns Integer
   return a - b
 end 'sub'
@@ -7284,6 +7323,9 @@ module {
 
 <!-- test: match-statement-with-function-call -->
 ```maxon
+
+typealias Integer = i64
+
 function double(n Integer) returns Integer
   return n * 2
 end 'double'
@@ -7487,6 +7529,9 @@ module {
 
 <!-- test: error-otherwise-ignore -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -7557,6 +7602,9 @@ module {
 
 <!-- test: error-otherwise-block -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -7707,6 +7755,9 @@ module {
 
 <!-- test: error-propagate-through-caller -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -7910,6 +7961,9 @@ module {
 
 <!-- test: error-multiple-try-calls -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -8195,6 +8249,9 @@ module {
 
 <!-- test: error-throw-in-match -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   invalidInput
   notFound

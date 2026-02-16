@@ -16,6 +16,9 @@ Structs returned from functions must have their data survive beyond the function
 
 <!-- test: return-struct-with-computed-fields -->
 ```maxon
+
+typealias Integer = i64
+
 type Result
   export var sum Integer
   export var product Integer
@@ -36,6 +39,9 @@ end 'main'
 
 <!-- test: pass-struct-to-function-and-return -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   export var value Integer
 end 'Counter'
@@ -56,6 +62,9 @@ end 'main'
 
 <!-- test: multiple-struct-returns -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   export var n Integer
 end 'Value'

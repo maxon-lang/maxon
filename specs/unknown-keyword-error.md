@@ -63,6 +63,9 @@ error E3010: specs/fragments/unknown-keyword-error/typo-keyword.test:4:3: unexpe
 
 <!-- test: missing-call-parens -->
 ```maxon
+
+typealias Integer = i64
+
 function test() returns Integer
   return 42
 end 'test'
@@ -73,5 +76,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/missing-call-parens.test:7:3: unexpected token: 'test'
+error E3010: specs/fragments/unknown-keyword-error/missing-call-parens.test:10:3: unexpected token: 'test'
 ```

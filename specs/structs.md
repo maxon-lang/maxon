@@ -14,18 +14,22 @@ Types define custom data types with named fields.
 ### Declaration
 
 ```maxon
+typealias Score = i64
+
 type Point
-  export var x Integer
-  export var y Integer
+  export var x Score
+  export var y Score
 end 'Point'
 ```
 
 Fields must use `let` (immutable) or `var` (mutable), and can be `export` for external access:
 ```maxon
+typealias Score = i64
+
 type Config
-  export let version Integer    // Cannot be changed after initialization, accessible externally
-  export var count Integer      // Can be modified, accessible externally
-  var internal Integer          // Private - only accessible in methods
+  export let version Score    // Cannot be changed after initialization, accessible externally
+  export var count Score      // Can be modified, accessible externally
+  var internal Score          // Private - only accessible in methods
 end 'Config'
 ```
 
@@ -66,6 +70,9 @@ c.count = 5     // OK: field is var
 
 <!-- test: var-struct-field-assign -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -83,6 +90,9 @@ end 'main'
 
 <!-- test: var-field-assign -->
 ```maxon
+
+typealias Integer = i64
+
 type Config
   export let version Integer
   export var count Integer
@@ -100,6 +110,9 @@ end 'main'
 
 <!-- test: error.let-struct-field-assign -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -112,11 +125,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/structs/error.let-struct-field-assign.test:9:3: cannot assign to immutable variable: 'p'
+error E2013: specs/fragments/structs/error.let-struct-field-assign.test:12:3: cannot assign to immutable variable: 'p'
 ```
 
 <!-- test: error.let-field-assign -->
 ```maxon
+
+typealias Integer = i64
+
 type Config
   export let version Integer
   export var count Integer
@@ -129,11 +145,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/structs/error.let-field-assign.test:9:3: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
+error E2013: specs/fragments/structs/error.let-field-assign.test:12:3: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: simple-type -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -150,6 +169,9 @@ end 'main'
 
 <!-- test: struct-field-access -->
 ```maxon
+
+typealias Integer = i64
+
 type Rect
   export var width Integer
   export var height Integer
@@ -166,6 +188,9 @@ end 'main'
 
 <!-- test: struct-param -->
 ```maxon
+
+typealias Integer = i64
+
 type Vec2
   export var x Integer
   export var y Integer
@@ -187,6 +212,9 @@ end 'main'
 
 <!-- test: struct-return -->
 ```maxon
+
+typealias Integer = i64
+
 type Pair
   export var first Integer
   export var second Integer
@@ -207,6 +235,9 @@ end 'main'
 
 <!-- test: struct-literal-as-arg -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer

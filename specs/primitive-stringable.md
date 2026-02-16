@@ -95,6 +95,9 @@ end 'main'
 
 <!-- test: byte.toString -->
 ```maxon
+
+typealias Byte = u8
+
 function main() returns ExitCode
   var x = 65 as Byte
   var s = x.toString()

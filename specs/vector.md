@@ -298,6 +298,9 @@ end 'main'
 
 <!-- test: byte-vector -->
 ```maxon
+
+typealias Integer = i64
+
 typealias ByteVec4 = Vector with 4 byte
 
 function main() returns ExitCode
@@ -317,6 +320,9 @@ end 'main'
 
 <!-- test: pass-to-function -->
 ```maxon
+
+typealias Integer = i64
+
 typealias Vec3 = Vector with 3 int
 
 function sum(v Vec3) returns Integer
@@ -340,6 +346,9 @@ end 'main'
 
 <!-- test: return-from-function -->
 ```maxon
+
+typealias Integer = i64
+
 typealias Vec2 = Vector with 2 int
 
 function makeVec(a Integer, b Integer) returns Vec2
@@ -472,6 +481,9 @@ end 'main'
 <!-- test: from-literal-typealias-compatible -->
 The inferred type from a literal is compatible with a typealias of the same element type and size.
 ```maxon
+
+typealias Integer = i64
+
 typealias Vec3 = Vector with 3 int
 
 function sum(v Vec3) returns Integer

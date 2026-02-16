@@ -166,6 +166,9 @@ end 'main'
 
 <!-- test: ranges.expression-bounds -->
 ```maxon
+
+typealias Integer = i64
+
 function getStart() returns Integer
     return 1
 end 'getStart'

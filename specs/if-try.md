@@ -67,6 +67,9 @@ The error is bound to `e` and available within the else-block.
 
 <!-- test: if-try-boolean-success -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -92,6 +95,9 @@ end 'main'
 
 <!-- test: if-try-boolean-failure -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -117,6 +123,9 @@ end 'main'
 
 <!-- test: if-try-binding-success -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -141,6 +150,9 @@ end 'main'
 
 <!-- test: if-try-binding-failure -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -165,6 +177,9 @@ end 'main'
 
 <!-- test: if-try-else-block -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -192,6 +207,9 @@ end 'main'
 
 <!-- test: if-try-else-success -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -219,6 +237,9 @@ end 'main'
 
 <!-- test: if-try-binding-with-else -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -245,6 +266,9 @@ end 'main'
 
 <!-- test: if-try-binding-with-else-success -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -271,6 +295,9 @@ end 'main'
 
 <!-- test: if-try-else-with-error-binding -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   first
   second
@@ -302,6 +329,9 @@ end 'main'
 
 <!-- test: if-try-nested -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -329,6 +359,9 @@ end 'main'
 
 <!-- test: if-try-in-loop -->
 ```maxon
+
+typealias Integer = i64
+
 enum MyError implements Error
   failed
 end 'MyError'
@@ -360,6 +393,9 @@ end 'main'
 Using `if try` with a non-throwing function is a compile-time error.
 
 ```maxon
+
+typealias Integer = i64
+
 function noThrow() returns Integer
   return 42
 end 'noThrow'
@@ -372,7 +408,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/if-try/error.if-try-non-throwing.test:7:6: try requires a throwing function: ''if-try.noThrow' does not throw'
+error E3055: specs/fragments/if-try/error.if-try-non-throwing.test:10:6: try requires a throwing function: ''if-try.noThrow' does not throw'
 ```
 
 <!-- test: if-try-binding-struct-multiple-managed-fields -->

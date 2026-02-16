@@ -29,6 +29,9 @@ error E3002: Function 'main' must return ExitCode
 
 <!-- test: no-main -->
 ```maxon
+
+typealias Integer = i64
+
 function notmain() returns Integer
   return 42
 end 'notmain'
@@ -59,6 +62,9 @@ end 'main'
 
 <!-- test: return-function-call -->
 ```maxon
+
+typealias Integer = i64
+
 function getValue() returns Integer
   return 42
 end 'getValue'

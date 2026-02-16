@@ -59,6 +59,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly HashSet<string> _exportedTypeAliases = [];
   private readonly HashSet<string> _localTypeAliases = [];
   private readonly HashSet<string> _seededTypeAliases = [];
+  private readonly HashSet<string> _usedTypeAliases = [];
+  private readonly Dictionary<string, (int Line, int Column)> _typeAliasLocations = [];
 
   // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
   private readonly Dictionary<string, List<string>> _interfaceAssociatedTypes = [];
@@ -191,6 +193,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Try alias fallback: ByteArray.push → Array.push
       if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
+        _usedTypeAliases.Add(typePart);
         Logger.Debug(LogCategory.Parser, $"  Type alias: {typePart} -> {sourceType}");
         var aliasedName = $"{sourceType}.{methodPart}";
         Logger.Debug(LogCategory.Parser, $"  Trying aliased name: {aliasedName}");
@@ -420,6 +423,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ParseTopLevel(module);
       SkipNewlines();
     }
+
+    CheckUnusedTypeAliases();
 
     CopyStateToModule(module);
 
@@ -2073,6 +2078,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       throw new CompileError(ErrorCode.SemanticDuplicateTypeAlias,
         $"Duplicate typealias '{aliasName}'", aliasNameToken.Line, aliasNameToken.Column);
 
+    if (_currentTypeName == null)
+      _typeAliasLocations[aliasName] = (aliasNameToken.Line, aliasNameToken.Column);
+
     if (isExported) _exportedTypeAliases.Add(aliasName);
 
     Expect(TokenType.Equals);
@@ -2280,12 +2288,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ("f32", "max") => (double)float.MaxValue,
     ("u8", "min") => 0,
     ("u8", "max") => 255,
-    ("u16", "min") => 0,        ("u16", "max") => 65535,
-    ("u32", "min") => 0,        ("u32", "max") => 4294967295,
-    ("u64", "min") => 0,        ("u64", "max") => (double)ulong.MaxValue,
-    ("i8", "min") => -128,      ("i8", "max") => 127,
-    ("i16", "min") => -32768,   ("i16", "max") => 32767,
-    ("i32", "min") => -2147483648, ("i32", "max") => 2147483647,
+    ("u16", "min") => 0,
+    ("u16", "max") => 65535,
+    ("u32", "min") => 0,
+    ("u32", "max") => 4294967295,
+    ("u64", "min") => 0,
+    ("u64", "max") => (double)ulong.MaxValue,
+    ("i8", "min") => -128,
+    ("i8", "max") => 127,
+    ("i16", "min") => -32768,
+    ("i16", "max") => 32767,
+    ("i32", "min") => -2147483648,
+    ("i32", "max") => 2147483647,
     _ => throw new InvalidOperationException($"Unknown type bound: {typeName}.{keyword}")
   };
 
@@ -3379,6 +3393,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock = null;
   }
 
+  private void CheckUnusedTypeAliases() {
+    if (_isStdlib) return;
+    foreach (var aliasName in _localTypeAliases) {
+      if (_exportedTypeAliases.Contains(aliasName)) continue;
+      if (_usedTypeAliases.Contains(aliasName)) continue;
+      if (!_typeAliasLocations.TryGetValue(aliasName, out var loc)) continue;
+      throw new CompileError(ErrorCode.SemanticUnusedTypeAlias,
+        $"unused typealias: '{aliasName}'", loc.Line, loc.Column);
+    }
+  }
+
   private (MlirType type, MlirAttribute defaultValue) ParseFieldDefault() {
     if (Check(TokenType.Minus)) {
       Advance(); // consume '-'
@@ -3538,9 +3563,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         ? throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)
         : _typeRegistry.TryGetValue(typeName, out var structType)
-        ? structType
+        ? MarkTypeAliasUsed(typeName, structType)
         : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
     };
+  }
+
+  private MlirType MarkTypeAliasUsed(string name, MlirType type) {
+    _usedTypeAliases.Add(name);
+    return type;
   }
 
   private bool IsNonExportedCrossFileType(string typeName) {
@@ -3603,6 +3633,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var name = Current().Value;
       if (_typeRegistry.TryGetValue(name, out var type) && type is MlirRangedPrimitiveType rpt) {
         Advance();
+        _usedTypeAliases.Add(name);
         _lastCastRangedType = rpt;
         return rpt.BaseType.ToValueKind();
       }
@@ -6977,16 +7008,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Check for ranged primitive construction: TypeName{value}
       if (_typeRegistry.TryGetValue(token.Value, out var regType) && regType is MlirRangedPrimitiveType rangedType && Check(TokenType.LeftBrace)) {
+        _usedTypeAliases.Add(token.Value);
         return ParseRangedPrimitiveConstruction(token, rangedType);
       }
 
       // Check for struct literal: TypeName{...} or TypeName { ... }
       if (_typeRegistry.ContainsKey(token.Value) && Check(TokenType.LeftBrace)) {
+        _usedTypeAliases.Add(token.Value);
         return ParseStructLiteral(token.Value);
       }
 
       // Check for "TypeName from [...]" syntax (BuiltinArrayLiteral or InitableFromArrayLiteral)
       if (_typeRegistry.ContainsKey(token.Value) && Check(TokenType.From)) {
+        _usedTypeAliases.Add(token.Value);
         return ParseFromExpression(token);
       }
 

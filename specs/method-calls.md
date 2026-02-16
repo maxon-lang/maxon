@@ -70,6 +70,9 @@ end 'main'
 
 <!-- test: method-call-void -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   var count Integer
 
@@ -96,6 +99,9 @@ end 'main'
 
 <!-- test: method-call-with-args -->
 ```maxon
+
+typealias Integer = i64
+
 type Adder
   var total Integer
 
@@ -122,6 +128,9 @@ end 'main'
 
 <!-- test: method-return-in-expr -->
 ```maxon
+
+typealias Integer = i64
+
 type Box
   var value Integer
 
@@ -141,6 +150,9 @@ end 'main'
 
 <!-- test: method-multiple-args -->
 ```maxon
+
+typealias Integer = i64
+
 type Calculator
   var result Integer
 
@@ -165,6 +177,9 @@ end 'main'
 
 <!-- test: method-call-on-field-access -->
 ```maxon
+
+typealias Integer = i64
+
 type Inner
   var value Integer
 
@@ -192,6 +207,9 @@ end 'main'
 
 <!-- test: method-modify-multiple-fields -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   var x Integer
   var y Integer
@@ -218,6 +236,9 @@ end 'main'
 
 <!-- test: method-return-comparison -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   var n Integer
 
@@ -240,6 +261,9 @@ end 'main'
 
 <!-- test: error-method-unnamed-args -->
 ```maxon
+
+typealias Integer = i64
+
 type Adder
   var total Integer
 
@@ -255,9 +279,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:12:5: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:15:5: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 ```maxon
+
+typealias Integer = i64
+
 type Calculator
   var result Integer
 
@@ -282,6 +309,9 @@ end 'main'
 
 <!-- test: static-method-named-args -->
 ```maxon
+
+typealias Integer = i64
+
 type Factory
   static function create(x Integer, y Integer) returns Integer
     return x * 10 + y
@@ -298,6 +328,9 @@ end 'main'
 
 <!-- test: error-static-method-unnamed-args -->
 ```maxon
+
+typealias Integer = i64
+
 type Factory
   static function create(x Integer, y Integer) returns Integer
     return x * 10 + y
@@ -309,5 +342,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/method-calls/error-static-method-unnamed-args.test:9:18: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/method-calls/error-static-method-unnamed-args.test:12:18: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```

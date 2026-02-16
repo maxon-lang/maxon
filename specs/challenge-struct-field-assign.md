@@ -16,6 +16,9 @@ Struct fields can be modified after the struct is created.
 
 <!-- test: struct-field-reassignment -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   export var value Integer
 end 'Counter'
@@ -34,6 +37,9 @@ end 'main'
 Assigning to an immutable (`let`) field should be a compile-time error.
 
 ```maxon
+
+typealias Integer = i64
+
 type Config
   export let id Integer
   export var count Integer
@@ -46,11 +52,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assign-error.test:9:3: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
+error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assign-error.test:12:3: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: nested-struct-field-reassignment -->
 ```maxon
+
+typealias Integer = i64
+
 type Inner
   export var x Integer
 end 'Inner'

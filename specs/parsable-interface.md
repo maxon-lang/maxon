@@ -32,13 +32,15 @@ User-defined types implement `Parsable` by providing a static `fromString` metho
 - Throws a specific error type on parse failure
 
 ```maxon
+typealias Amount = i64
+
 enum MoneyParseError implements Error
   InvalidFormat = 1
   NegativeValue = 2
 end 'MoneyParseError'
 
 type Money implements Parsable
-  var cents Integer
+  var cents Amount
 
   static function fromString(input String) returns Self throws MoneyParseError
     if input.byteLength() == 0 'empty'
@@ -80,6 +82,9 @@ end 'main'
 
 <!-- test: parsable.type-implements-parsable -->
 ```maxon
+
+typealias Integer = i64
+
 // Type can implement Parsable with throwing static method
 enum ParseError implements Error
   Invalid = 1
@@ -103,6 +108,9 @@ end 'main'
 
 <!-- test: parsable.successful-parse -->
 ```maxon
+
+typealias Integer = i64
+
 // Parsable.fromString returns struct on success
 enum ParseError implements Error
   Invalid = 1
@@ -129,6 +137,9 @@ end 'main'
 
 <!-- test: parsable.throws-on-invalid-input -->
 ```maxon
+
+typealias Integer = i64
+
 // Parsable.fromString throws error on invalid input
 enum ParseError implements Error
   Empty = 1
@@ -158,6 +169,9 @@ end 'main'
 
 <!-- test: parsable.multiple-error-conditions -->
 ```maxon
+
+typealias Integer = i64
+
 // Parsable can throw different errors for different conditions
 enum MoneyParseError implements Error
   InvalidFormat = 1
@@ -193,6 +207,9 @@ end 'main'
 
 <!-- test: parsable.otherwise-fallthrough -->
 ```maxon
+
+typealias Integer = i64
+
 // otherwise blocks execute code when error occurs, then continue execution
 enum ParseError implements Error
   Invalid = 1
@@ -233,6 +250,9 @@ end 'main'
 
 <!-- test: error.missing-throws -->
 ```maxon
+
+typealias Integer = i64
+
 // Implementation must throw if interface requires it
 type Value implements Parsable
   var n Integer
@@ -247,11 +267,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/parsable-interface/error.missing-throws.test:3:6: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
+error E3016: specs/fragments/parsable-interface/error.missing-throws.test:6:6: Method 'Value.fromString' must throw 'Error' as required by interface 'Parsable'
 ```
 
 <!-- test: error.throws-non-error-type -->
 ```maxon
+
+typealias Integer = i64
+
 // Implementation must throw a type that conforms to Error
 enum NotAnError
   Bad = 1
@@ -270,7 +293,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test:7:6: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
+error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test:10:6: Method 'Value.fromString' throws 'NotAnError' which does not conform to Error
 ```
 
 <!-- test: parsable.int-fromstring -->

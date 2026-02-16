@@ -165,9 +165,11 @@ var caseName = p.name     // "mars" (case name)
 Cases can carry additional data called associated values:
 
 ```maxon
+typealias ID = i64
+
 enum Result
-  success(value Integer)
-  failure(code Integer, message String)
+  success(value ID)
+  failure(code ID, message String)
   pending
 end 'Result'
 ```
@@ -484,6 +486,9 @@ end 'main'
 
 <!-- test: associated-value-construction -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -505,6 +510,9 @@ end 'main'
 
 <!-- test: associated-value-function-param -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
     empty
     value(n Integer)
@@ -528,6 +536,9 @@ end 'main'
 
 <!-- test: associated-value-function-param-empty -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
     empty
     value(n Integer)
@@ -551,6 +562,9 @@ end 'main'
 
 <!-- test: associated-value-function-return -->
 ```maxon
+
+typealias Integer = i64
+
 enum Result
     success(value Integer)
     failure(code Integer)
@@ -577,6 +591,9 @@ end 'main'
 
 <!-- test: associated-value-function-param-multi -->
 ```maxon
+
+typealias Integer = i64
+
 enum TwoParts
     none
     values(a Integer, b Integer)
@@ -600,6 +617,9 @@ end 'main'
 
 <!-- test: associated-value-array-push -->
 ```maxon
+
+typealias Integer = i64
+
 enum Item
     empty
     value(n Integer)
@@ -625,6 +645,9 @@ end 'main'
 
 <!-- test: associated-value-for-iterator -->
 ```maxon
+
+typealias Integer = i64
+
 enum Item
     empty
     value(n Integer)
@@ -653,6 +676,9 @@ end 'main'
 
 <!-- test: associated-value-for-iterator-mixed -->
 ```maxon
+
+typealias Integer = i64
+
 enum Slot
     none
     val(n Integer)
@@ -681,6 +707,9 @@ end 'main'
 
 <!-- test: associated-value-for-iterator-single -->
 ```maxon
+
+typealias Integer = i64
+
 enum Box
     empty
     full(n Integer)
@@ -821,6 +850,9 @@ error E3032: specs/fragments/enum-full/error.raw-value-type-mismatch.test:4:3: r
 
 <!-- test: error.associated-value-wrong-count -->
 ```maxon
+
+typealias Integer = i64
+
 enum Result
   success(value Integer)
   failure
@@ -832,11 +864,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/enum-full/error.associated-value-wrong-count.test:8:12: wrong argument count: 'expected 1, got 2'
+error E3036: specs/fragments/enum-full/error.associated-value-wrong-count.test:11:12: wrong argument count: 'expected 1, got 2'
 ```
 
 <!-- test: error.associated-value-type-mismatch -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   value(n Integer)
 end 'Container'
@@ -847,11 +882,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/enum-full/error.associated-value-type-mismatch.test:7:35: type mismatch: 'expected Integer, got String'
+error E3005: specs/fragments/enum-full/error.associated-value-type-mismatch.test:10:35: type mismatch: 'expected Integer, got String'
 ```
 
 <!-- test: match-enum-binding-simple -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -871,6 +909,9 @@ end 'main'
 
 <!-- test: match-enum-binding-multiple -->
 ```maxon
+
+typealias Integer = i64
+
 enum Result
   success(value Integer)
   failure(code Integer)
@@ -890,6 +931,9 @@ end 'main'
 
 <!-- test: match-expr-enum-binding -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -910,6 +954,9 @@ end 'main'
 
 <!-- test: match-enum-no-binding -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -929,6 +976,9 @@ end 'main'
 
 <!-- test: error.match-enum-wrong-binding-count -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   value(n Integer)
 end 'Container'
@@ -941,11 +991,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3035: specs/fragments/enum-full/error.match-enum-wrong-binding-count.test:9:5: wrong binding count: 'value'
+error E3035: specs/fragments/enum-full/error.match-enum-wrong-binding-count.test:12:5: wrong binding count: 'value'
 ```
 
 <!-- test: error.match-enum-unknown-case -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -959,7 +1012,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:10:5: unknown enum case: 'unknown'
+error E3034: specs/fragments/enum-full/error.match-enum-unknown-case.test:13:5: unknown enum case: 'unknown'
 ```
 
 <!-- test: simple-enum-rawvalue -->
@@ -1233,6 +1286,9 @@ end 'main'
 
 <!-- test: float-rawvalue-in-function -->
 ```maxon
+
+typealias Float = f64
+
 enum Weights
   light = 1.5
   medium = 2.5
@@ -1257,6 +1313,9 @@ end 'main'
 
 <!-- test: int-rawvalue-in-function -->
 ```maxon
+
+typealias Integer = i64
+
 enum HttpStatus
   ok = 200
   notFound = 404
@@ -1582,6 +1641,9 @@ end 'main'
 
 <!-- test: fromName-associated-compile-time -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -1601,6 +1663,9 @@ end 'main'
 
 <!-- test: fromName-associated-empty-case -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -1636,6 +1701,9 @@ error E3034: specs/fragments/enum-full/error.fromName-invalid-case.test:8:26: no
 
 <!-- test: error.fromName-wrong-arg-count -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   value(n Integer)
 end 'Container'
@@ -1646,11 +1714,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/enum-full/error.fromName-wrong-arg-count.test:7:26: wrong argument count: 'case 'value' requires 1 associated value(s)'
+error E3036: specs/fragments/enum-full/error.fromName-wrong-arg-count.test:10:26: wrong argument count: 'case 'value' requires 1 associated value(s)'
 ```
 
 <!-- test: fromName-associated-runtime-empty -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -1774,6 +1845,9 @@ end 'main'
 
 <!-- test: fromRawValue-runtime -->
 ```maxon
+
+typealias Integer = i64
+
 enum HttpStatus
   ok = 200
   notFound = 404
@@ -1798,6 +1872,9 @@ end 'main'
 
 <!-- test: fromRawValue-failure -->
 ```maxon
+
+typealias Integer = i64
+
 enum HttpStatus
   ok = 200
   notFound = 404
@@ -1854,6 +1931,9 @@ error E3005: specs/fragments/enum-full/error.fromRawValue-type-mismatch.test:8:2
 
 <!-- test: error.fromRawValue-associated-values -->
 ```maxon
+
+typealias Integer = i64
+
 enum Container
   empty
   value(n Integer)
@@ -1865,7 +1945,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3003: specs/fragments/enum-full/error.fromRawValue-associated-values.test:8:26: fromRawValue is not available for enums with associated values: 'Container'
+error E3003: specs/fragments/enum-full/error.fromRawValue-associated-values.test:11:26: fromRawValue is not available for enums with associated values: 'Container'
 ```
 
 <!-- test: enum-member-constant -->
@@ -1893,6 +1973,9 @@ end 'main'
 
 <!-- test: match-enum-binding-string -->
 ```maxon
+
+typealias Integer = i64
+
 enum StringResult
   ok(value Integer)
   err(message String)
@@ -1912,6 +1995,9 @@ end 'main'
 
 <!-- test: match-enum-binding-struct -->
 ```maxon
+
+typealias Integer = i64
+
 type EnumPoint
   export var x Integer
   export var y Integer

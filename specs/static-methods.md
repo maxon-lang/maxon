@@ -39,6 +39,9 @@ Static methods are commonly used for:
 
 <!-- test: static-method-basic -->
 ```maxon
+
+typealias Integer = i64
+
 type Box
   export var value Integer
 
@@ -58,6 +61,9 @@ end 'main'
 
 <!-- test: static-method-no-self -->
 ```maxon
+
+typealias Integer = i64
+
 type Math
   var unused Integer
 
@@ -76,6 +82,9 @@ end 'main'
 
 <!-- test: export-static-method -->
 ```maxon
+
+typealias Integer = i64
+
 type Factory
   export var id Integer
 

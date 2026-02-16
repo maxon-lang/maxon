@@ -71,6 +71,10 @@ end 'main'
 
 <!-- test: byte.clone -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 function main() returns ExitCode
   var x = 65 as Byte
   var y = x.clone() as Integer

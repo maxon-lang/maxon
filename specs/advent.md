@@ -51,6 +51,9 @@ module {
 
 <!-- test: day2 -->
 ```maxon
+
+typealias Integer = i64
+
 function add(x Integer, y Integer) returns Integer
     return x + y
 end 'add'
@@ -163,6 +166,9 @@ module {
 <!-- test: day4a -->
 <!-- Args: 1 -->
 ```maxon
+
+typealias Integer = i64
+
 function multiply(x Integer) returns Integer
     return x * 1
 end 'multiply'
@@ -417,6 +423,9 @@ module {
 <!-- test: day4b -->
 <!-- Args: 3 -->
 ```maxon
+
+typealias Integer = i64
+
 function multiply(x Integer) returns Integer
     return x * 2
 end 'multiply'

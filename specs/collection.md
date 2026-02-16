@@ -95,7 +95,9 @@ A new array containing the transformed elements.
 Transform an array using a named function:
 
 ```maxon
-function double(x Integer) returns Integer
+typealias Score = i64
+
+function double(x Score) returns Score
   return x * 2
 end 'double'
 
@@ -119,9 +121,11 @@ end 'main'
 Transform using an inline closure with `gives`:
 
 ```maxon
+typealias Score = i64
+
 function main() returns ExitCode
   var numbers = [1, 2, 3]
-  var squared = numbers.map((x Integer) gives x * x)
+  var squared = numbers.map((x Score) gives x * x)
   var val0 = try squared.get(0) otherwise 0
   var val1 = try squared.get(1) otherwise 0
   var val2 = try squared.get(2) otherwise 0
@@ -225,6 +229,9 @@ end 'main'
 
 <!-- test: map-basic-transform -->
 ```maxon
+
+typealias Integer = i64
+
 function double(x Integer) returns Integer
   return x * 2
 end 'double'
@@ -258,6 +265,9 @@ end 'main'
 
 <!-- test: map-closure-multiply -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var arr = [2, 3, 4]
   var result = arr.map((x Integer) gives x * 3)
@@ -281,6 +291,9 @@ end 'main'
 
 <!-- test: map-closure-square -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var arr = [1, 2, 3, 4]
   var squared = arr.map((n Integer) gives n * n)
@@ -307,6 +320,9 @@ end 'main'
 
 <!-- test: map-identity-function -->
 ```maxon
+
+typealias Integer = i64
+
 function identity(x Integer) returns Integer
   return x
 end 'identity'
@@ -334,6 +350,9 @@ end 'main'
 
 <!-- test: map-negate -->
 ```maxon
+
+typealias Integer = i64
+
 function negate(x Integer) returns Integer
   return 0 - x
 end 'negate'
@@ -361,6 +380,9 @@ end 'main'
 
 <!-- test: map-single-element -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var arr = [42]
   var result = arr.map((x Integer) gives x + 8)

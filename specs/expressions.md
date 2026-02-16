@@ -55,6 +55,9 @@ end 'main'
 
 <!-- test: with-function-call -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var x = 3
   return 5 + add(x, b: 4)

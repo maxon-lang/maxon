@@ -242,6 +242,9 @@ File not found
 
 <!-- test: write-and-read-binary -->
 ```maxon
+
+typealias Byte = u8
+
 typealias ByteArray = Array with byte
 
 function main() returns ExitCode

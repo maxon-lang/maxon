@@ -30,7 +30,7 @@ var x = Age{200}                    // compile error: out of range
 var y = Age{someExpression}         // runtime range check (panics on violation)
 ```
 
-Standard library aliases: `Integer`, `Float`, `Byte`, `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `MathValue`
+Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `MathValue`
 
 ## Literals
 
@@ -101,8 +101,9 @@ greet("Smith", title: "Dr.")
 Functions, types, enums, and typealiases are file-scoped by default. Use `export` for cross-file visibility:
 
 ```maxon
-export function publicFunc() returns Integer    // visible to other files
-function privateFunc() returns Integer          // only this file
+typealias Score = i64
+export function publicFunc() returns Score     // visible to other files
+function privateFunc() returns Score           // only this file
 
 export type Point                               // visible to other files
 export enum Color                               // visible to other files

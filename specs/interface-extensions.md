@@ -16,8 +16,10 @@ Extensions allow you to add methods to interfaces that are automatically availab
 Extensions are declared with the `extension` keyword followed by an interface name:
 
 ```maxon
+typealias Score = i64
+
 extension Iterable
-  function count() returns Integer
+  function count() returns Score
     var n = 0
     for _ in self 'loop'
       n = n + 1
@@ -40,8 +42,10 @@ When you define an extension method:
 Extensions can use the interface's associated types. These are automatically substituted with the concrete type's associated type bindings:
 
 ```maxon
+typealias Score = i64
+
 interface Container uses Element
-  function get(index Integer) returns Element
+  function get(index Score) returns Element
 end 'Container'
 
 extension Container
@@ -83,6 +87,9 @@ This `map` extension works on any `Iterable` type (Array, Set, Map, etc.) and re
 
 <!-- test: basic-extension-on-array -->
 ```maxon
+
+typealias Integer = i64
+
 interface Countable
   function value() returns Integer
 end 'Countable'
@@ -113,6 +120,9 @@ end 'main'
 
 <!-- test: extension-with-self -->
 ```maxon
+
+typealias Integer = i64
+
 interface Summable
   function value() returns Integer
 end 'Summable'
@@ -143,6 +153,9 @@ end 'main'
 
 <!-- test: extension-multiple-types -->
 ```maxon
+
+typealias Integer = i64
+
 interface Valued
   function val() returns Integer
 end 'Valued'
@@ -180,6 +193,9 @@ end 'main'
 
 <!-- test: extension-with-params -->
 ```maxon
+
+typealias Integer = i64
+
 interface Scalable
   function base() returns Integer
 end 'Scalable'
@@ -210,6 +226,9 @@ end 'main'
 
 <!-- test: extension-returns-struct -->
 ```maxon
+
+typealias Integer = i64
+
 interface Pointlike
   function getX() returns Integer
   function getY() returns Integer
@@ -252,6 +271,9 @@ end 'main'
 
 <!-- test: stdlib-map-on-array -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var nums = [1, 2, 3, 4, 5]
   var doubled = nums.map((x Integer) gives x * 2)
@@ -272,6 +294,9 @@ end 'main'
 
 <!-- test: stdlib-map-on-set -->
 ```maxon
+
+typealias Integer = i64
+
 typealias IntSet = Set with int
 
 function main() returns ExitCode

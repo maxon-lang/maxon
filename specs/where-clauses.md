@@ -73,6 +73,9 @@ A user-defined type that implements Hashable can be used as a Map key:
 
 <!-- test: where-clauses.custom-hashable-key -->
 ```maxon
+
+typealias Integer = i64
+
 type MyKey implements Hashable, Equatable
     var value Integer
 
@@ -88,6 +91,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, int)
 
 function main() returns ExitCode
+    var m = MyKeyMap{}
     return 1
 end 'main'
 ```
@@ -101,6 +105,9 @@ Using a type that doesn't implement Hashable as a Map key should produce a compi
 
 <!-- test: where-clauses.constraint-violation -->
 ```maxon
+
+typealias Integer = i64
+
 type NotHashable
     var x Integer
 end 'NotHashable'
@@ -112,7 +119,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: specs/fragments/where-clauses/where-clauses.constraint-violation.test:6:11: Type 'NotHashable' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: specs/fragments/where-clauses/where-clauses.constraint-violation.test:9:11: Type 'NotHashable' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
 ```
 
 ### User-defined type with where clause
@@ -121,6 +128,9 @@ A user-defined generic type can use where clauses:
 
 <!-- test: where-clauses.user-defined -->
 ```maxon
+
+typealias Integer = i64
+
 interface Valuable
     function value() returns Integer
 end 'Valuable'
@@ -155,6 +165,9 @@ A type parameter can require multiple interface conformance:
 
 <!-- test: where-clauses.multiple-interfaces -->
 ```maxon
+
+typealias Integer = i64
+
 interface HasName
     function name() returns Integer
 end 'HasName'
@@ -195,6 +208,9 @@ end 'main'
 
 <!-- test: where-clauses.and-violation -->
 ```maxon
+
+typealias Integer = i64
+
 interface Foo
     function foo() returns Integer
 end 'Foo'
@@ -220,7 +236,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: specs/fragments/where-clauses/where-clauses.and-violation.test:20:11: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
+error E3017: specs/fragments/where-clauses/where-clauses.and-violation.test:23:11: Type 'OnlyFoo' does not satisfy constraint 'Bar' required by type parameter 'T' of 'NeedsBoth'
 ```
 
 ### Equality on unconstrained type parameter requires Equatable

@@ -26,7 +26,10 @@ Maxon supports implicit type conversions between compatible numeric types. These
 Function arguments are implicitly converted to match parameter types:
 
 ```maxon
-function takeFloat(x Float) returns Integer
+typealias Score = i64
+typealias Weight = f64
+
+function takeFloat(x Weight) returns Score
   return trunc(x)
 end 'takeFloat'
 
@@ -42,6 +45,10 @@ end 'main'
 
 <!-- test: int-literal-to-float-param -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
@@ -56,6 +63,10 @@ end 'main'
 
 <!-- test: int-var-to-float-param -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
@@ -71,6 +82,10 @@ end 'main'
 
 <!-- test: byte-to-int-param -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
@@ -86,6 +101,10 @@ end 'main'
 
 <!-- test: int-to-byte-param-truncates -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
@@ -100,6 +119,10 @@ end 'main'
 
 <!-- test: int-var-to-byte-param -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
@@ -115,6 +138,9 @@ end 'main'
 
 <!-- test: float-to-int-param-truncates -->
 ```maxon
+
+typealias Integer = i64
+
 function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
@@ -130,6 +156,10 @@ end 'main'
 
 <!-- test: float-to-byte-param -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 function takeByte(x Byte) returns Integer
   return x as Integer
 end 'takeByte'
@@ -145,6 +175,10 @@ end 'main'
 
 <!-- test: function-return-to-byte-param -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 function getInt() returns Integer
   return 300
 end 'getInt'
@@ -163,6 +197,10 @@ end 'main'
 
 <!-- test: expression-to-float-param -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 function takeFloat(x Float) returns Integer
   return trunc(x)
 end 'takeFloat'
@@ -190,6 +228,9 @@ end 'main'
 
 <!-- disabled-test: no-string-to-int -->
 ```maxon
+
+typealias Integer = i64
+
 function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
@@ -200,11 +241,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/implicit-type-conversion.no-string-to-int.1.test:8:5: argument type mismatch for 'x': expected 'int', got 'String'
+error E022: specs/fragments/implicit-type-conversion.no-string-to-int.1.test:11:5: argument type mismatch for 'x': expected 'int', got 'String'
 ```
 
 <!-- test: no-bool-to-int -->
 ```maxon
+
+typealias Integer = i64
+
 function takeInt(x Integer) returns Integer
   return x
 end 'takeInt'
@@ -215,11 +259,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:8:10: argument type mismatch for 'x': expected 'int', got 'bool'
+error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:11:10: argument type mismatch for 'x': expected 'int', got 'bool'
 ```
 
 <!-- test: no-int-to-bool -->
 ```maxon
+
+typealias Integer = i64
+
 function takeBool(x bool) returns Integer
   if x 'check'
     return 1
@@ -233,5 +280,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:11:10: argument type mismatch for 'x': expected 'bool', got 'int'
+error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:14:10: argument type mismatch for 'x': expected 'bool', got 'int'
 ```

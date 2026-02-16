@@ -52,6 +52,9 @@ end 'Container'
 
 <!-- test: conditional-extensions.basic-equatable -->
 ```maxon
+
+typealias Integer = i64
+
 interface HasItems uses Element
   function next() returns Element throws IterationError
 end 'HasItems'
@@ -103,6 +106,9 @@ When the associated type does not satisfy the where constraint, calling the meth
 
 <!-- test: conditional-extensions.constraint-not-met -->
 ```maxon
+
+typealias Integer = i64
+
 interface Holder uses Item
   function get() returns Item
 end 'Holder'
@@ -133,7 +139,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:27:13: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
+error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:30:13: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
 ```
 
 ### Conditional extension on a type (not an interface)
@@ -188,6 +194,9 @@ end 'main'
 
 <!-- test: conditional-extensions.multiple-constraints -->
 ```maxon
+
+typealias Integer = i64
+
 interface Bucket uses Element
   function next() returns Element throws IterationError
 end 'Bucket'
@@ -249,6 +258,9 @@ end 'main'
 
 <!-- test: conditional-extensions.partial-availability -->
 ```maxon
+
+typealias Integer = i64
+
 interface Seq uses Element
   function next() returns Element throws IterationError
 end 'Seq'

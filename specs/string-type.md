@@ -835,6 +835,9 @@ end 'main'
 
 <!-- test: heap-string-data-access -->
 ```maxon
+
+typealias Byte = u8
+
 function main() returns ExitCode
   // Verify heap-allocated string data is accessible via bytes()
   var s = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -905,6 +908,9 @@ end 'main'
 
 <!-- test: heap-string-iteration -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
   var sum = 0

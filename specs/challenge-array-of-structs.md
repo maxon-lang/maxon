@@ -16,6 +16,9 @@ Arrays can contain struct values. Each element is a complete copy of the struct.
 
 <!-- test: array-of-structs-literal -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -36,6 +39,9 @@ end 'main'
 
 <!-- test: array-of-structs-indexed-access -->
 ```maxon
+
+typealias Integer = i64
+
 type Pair
   export var first Integer
   export var second Integer

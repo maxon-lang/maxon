@@ -99,6 +99,9 @@ Note: When there's no collision, unqualified names continue to work normally.
 
 <!-- test: export-function-basic -->
 ```maxon
+
+typealias Integer = i64
+
 export function helper() returns Integer
   return 21
 end 'helper'
@@ -113,6 +116,9 @@ end 'main'
 
 <!-- test: export-type-basic -->
 ```maxon
+
+typealias Integer = i64
+
 export type Point
   var x Integer
   var y Integer
@@ -133,6 +139,9 @@ end 'main'
 
 <!-- test: non-export-function-works -->
 ```maxon
+
+typealias Integer = i64
+
 function helper() returns Integer
   return 42
 end 'helper'
@@ -147,6 +156,9 @@ end 'main'
 
 <!-- test: mixed-export-and-non-export -->
 ```maxon
+
+typealias Integer = i64
+
 export function publicFunc() returns Integer
   return privateFunc() + 20
 end 'publicFunc'
@@ -165,6 +177,9 @@ end 'main'
 
 <!-- test: export-typealias-basic -->
 ```maxon
+
+typealias Integer = i64
+
 export typealias IntArray = Array with Integer
 
 function main() returns ExitCode
@@ -179,6 +194,9 @@ end 'main'
 
 <!-- test: export-typealias-in-type-field -->
 ```maxon
+
+typealias Integer = i64
+
 export typealias IntArray = Array with Integer
 
 type Container
@@ -214,6 +232,9 @@ end 'main'
 
 <!-- test: export-typealias-as-return-type -->
 ```maxon
+
+typealias Integer = i64
+
 export typealias IntArray = Array with Integer
 
 function makeArray() returns IntArray
@@ -248,6 +269,8 @@ end 'main'
 <!-- test: exported-function-cross-file -->
 ```maxon
 // --- file: helper.maxon
+typealias Integer = i64
+
 export function helper() returns Integer
   return 42
 end 'helper'
@@ -263,6 +286,9 @@ end 'main'
 
 <!-- test: non-exported-function-same-file -->
 ```maxon
+
+typealias Integer = i64
+
 function privateHelper() returns Integer
   return 99
 end 'privateHelper'
@@ -278,6 +304,8 @@ end 'main'
 <!-- test: error.non-exported-function-cross-file -->
 ```maxon
 // --- file: helper.maxon
+typealias Integer = i64
+
 function privateHelper() returns Integer
   return 99
 end 'privateHelper'
@@ -310,6 +338,8 @@ error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element
 <!-- test: exported-type-cross-file -->
 ```maxon
 // --- file: point.maxon
+typealias Integer = i64
+
 export type Point
   export var x Integer
   export var y Integer
@@ -328,6 +358,8 @@ end 'main'
 <!-- test: error.non-exported-type-cross-file -->
 ```maxon
 // --- file: point.maxon
+typealias Integer = i64
+
 type InternalPoint
   export var x Integer
 end 'InternalPoint'
@@ -410,7 +442,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: main.maxon:2:11: Undefined variable 'InternalScore'
+error E3062: types.maxon:1:11: unused typealias: 'InternalScore'
 ```
 
 <!-- test: error.duplicate-typealias-same-file -->
@@ -428,6 +460,9 @@ error E3061: specs/fragments/export-keyword/error.duplicate-typealias-same-file.
 
 <!-- test: non-exported-type-same-file -->
 ```maxon
+
+typealias Integer = i64
+
 type InternalPoint
   export var x Integer
   export var y Integer

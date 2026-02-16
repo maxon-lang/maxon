@@ -14,9 +14,11 @@ category: type-system
 Type fields can be marked with `export` to make them accessible from outside the type. By default, fields are private and can only be accessed within the type's methods.
 
 ```maxon
+typealias Score = i64
+
 type Value
-  export var n Integer      // accessible from outside
-  var private Integer       // only accessible within methods
+  export var n Score      // accessible from outside
+  var private Score       // only accessible within methods
 end 'Value'
 ```
 
@@ -35,15 +37,17 @@ v.n = 50             // OK - n is exported and mutable
 Non-exported fields are only accessible within methods of the same type:
 
 ```maxon
+typealias Score = i64
+
 type Counter
-  var count Integer              // private
-  export var name Integer     // public
+  var count Score              // private
+  export var name Score     // public
 
   function increment()
     count = count + 1      // OK - accessing within method
   end 'increment'
 
-  export function getCount() returns Integer
+  export function getCount() returns Score
     return count           // OK - accessing within method
   end 'getCount'
 end 'Counter'
@@ -67,6 +71,9 @@ All fields (exported or not) can be initialized in struct literals, since the ty
 
 <!-- test: export-var-basic -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   export var n Integer
   var private Integer
@@ -87,6 +94,9 @@ end 'main'
 
 <!-- test: export-var-write -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   export var n Integer
 
@@ -107,6 +117,9 @@ end 'main'
 
 <!-- test: export-let-readonly -->
 ```maxon
+
+typealias Integer = i64
+
 type Config
   export let version Integer
 
@@ -126,6 +139,9 @@ end 'main'
 
 <!-- test: private-field-in-method -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   var count Integer
 
@@ -151,6 +167,9 @@ end 'main'
 
 <!-- test: mixed-export-fields -->
 ```maxon
+
+typealias Integer = i64
+
 type Box
   export var value Integer
   var secret Integer
@@ -175,6 +194,9 @@ end 'main'
 
 <!-- test: error.unexported-field-read -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   var private Integer
 
@@ -189,11 +211,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:12:12: cannot access unexported field: 'private' outside of type 'Value'
+error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:15:12: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: error.unexported-field-write -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   var private Integer
 
@@ -209,11 +234,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test:12:5: cannot access unexported field: 'private' outside of type 'Value'
+error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test:15:5: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: all-fields-private-by-default -->
 ```maxon
+
+typealias Integer = i64
+
 type Simple
   var x Integer
   var y Integer

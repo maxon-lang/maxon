@@ -163,7 +163,9 @@ min/max are only valid for numeric ranges
 **Integer ranges:**
 
 ```maxon
-function grade(score Integer) returns Integer
+typealias Score = i64
+
+function grade(score Score) returns Score
   match score 'grade'
     90 to 100 then return 65  // 'A'
     80 upto 90 then return 66   // 'B'
@@ -188,7 +190,9 @@ Characters implement the `Comparable` interface, so they can be used in range pa
 The comparison is lexicographic (byte-by-byte).
 
 ```maxon
-function charType(c Character) returns Integer
+typealias Score = i64
+
+function charType(c Character) returns Score
   match c 'classify'
     'a' to 'z' then return 1  // lowercase
     'A' to 'Z' then return 2  // uppercase
@@ -208,7 +212,9 @@ end 'main'
 **Open-ended ranges:**
 
 ```maxon
-function classify(age Integer) returns Integer
+typealias Score = i64
+
+function classify(age Score) returns Score
   match age 'category'
     min upto 0 then return 0       // invalid (negative)
     0 upto 18 then return 1     // minor
@@ -493,6 +499,9 @@ end 'main'
 
 <!-- test: match-statements.nested-in-function -->
 ```maxon
+
+typealias Integer = i64
+
 function categorize(n Integer) returns Integer
   match n 'cat'
     1 or 2 or 3 then return 1
@@ -528,6 +537,9 @@ end 'main'
 
 <!-- test: match-statements.function-call -->
 ```maxon
+
+typealias Integer = i64
+
 function double(n Integer) returns Integer
   return n * 2
 end 'double'

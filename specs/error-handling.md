@@ -102,8 +102,10 @@ end 'handler'
 The error is bound to `e` as a typed enum value within the block. You can use `match` to dispatch on specific error cases. For error enums with associated values, you can extract the payload:
 
 ```maxon
+typealias Score = i64
+
 enum MyError implements Error
-  notFound(code Integer)
+  notFound(code Score)
   failed
 end 'MyError'
 
@@ -162,6 +164,9 @@ end 'main'
 
 <!-- test: error.parse-throws-function-signature -->
 ```maxon
+
+typealias Integer = i64
+
 // Functions can declare they throw a specific error type
 enum MyError implements Error
   failed
@@ -182,6 +187,9 @@ end 'main'
 
 <!-- test: error.throw-and-return-success -->
 ```maxon
+
+typealias Integer = i64
+
 // Test that throwing function can return success value
 enum MyError implements Error
   failed
@@ -204,6 +212,9 @@ end 'main'
 
 <!-- test: error.propagate-error-to-caller -->
 ```maxon
+
+typealias Integer = i64
+
 // Test error propagation: inner function throws, middle propagates, outer handles with otherwise
 enum MyError implements Error
   failed
@@ -229,6 +240,9 @@ end 'main'
 
 <!-- test: error.otherwise-default-value -->
 ```maxon
+
+typealias Integer = i64
+
 // Test try otherwise with default value
 enum MyError implements Error
   failed
@@ -249,6 +263,9 @@ end 'main'
 
 <!-- test: error.otherwise-default-success -->
 ```maxon
+
+typealias Integer = i64
+
 // Test try otherwise when no error occurs
 enum MyError implements Error
   failed
@@ -272,6 +289,9 @@ end 'main'
 
 <!-- test: error.otherwise-ignore -->
 ```maxon
+
+typealias Integer = i64
+
 // Test try otherwise ignore
 enum MyError implements Error
   failed
@@ -292,6 +312,9 @@ end 'main'
 
 <!-- test: error.otherwise-block -->
 ```maxon
+
+typealias Integer = i64
+
 // Test try otherwise block handler
 enum MyError implements Error
   failed
@@ -315,6 +338,9 @@ end 'main'
 
 <!-- test: error.otherwise-block-success -->
 ```maxon
+
+typealias Integer = i64
+
 // Test try otherwise block when no error
 enum MyError implements Error
   failed
@@ -341,6 +367,9 @@ end 'main'
 
 <!-- test: error.otherwise-block-with-binding -->
 ```maxon
+
+typealias Integer = i64
+
 // Test try otherwise block with error binding - block is entered on error
 enum MyError implements Error
   failed
@@ -379,6 +408,9 @@ error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: m
 
 <!-- disabled-test: error.otherwise-type-mismatch -->
 ```maxon
+
+typealias Integer = i64
+
 // otherwise expression type must match the success type
 enum MyError implements Error
   failed
@@ -394,11 +426,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:12:5: type mismatch: 'otherwise type 'String' does not match expected type 'int''
+error E3059: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:15:5: type mismatch: 'otherwise type 'String' does not match expected type 'int''
 ```
 
 <!-- test: error.throwing-function-requires-try -->
 ```maxon
+
+typealias Integer = i64
+
 // Calling a throwing function without try is an error
 enum MyError implements Error
   failed
@@ -414,7 +449,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/error-handling/error.throwing-function-requires-try.test:12:13: throwing function requires try: 'mayFail'
+error E3057: specs/fragments/error-handling/error.throwing-function-requires-try.test:15:13: throwing function requires try: 'mayFail'
 ```
 
 <!-- disabled-test: error.throwing-method-requires-try -->
@@ -434,6 +469,9 @@ error E3057: specs/fragments/error-handling.error.throwing-method-requires-try.1
 
 <!-- test: error.try-on-non-throwing-function -->
 ```maxon
+
+typealias Integer = i64
+
 // Using try on a non-throwing function is an error
 function noFail() returns Integer
   return 42
@@ -445,7 +483,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:8:13: try requires a throwing function: ''error-handling.noFail' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:11:13: try requires a throwing function: ''error-handling.noFail' does not throw'
 ```
 
 <!-- disabled-test: error.try-on-non-throwing-method -->
@@ -480,6 +518,9 @@ error E3058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7
 
 <!-- test: error.otherwise-ignore-in-assignment -->
 ```maxon
+
+typealias Integer = i64
+
 // Using 'otherwise ignore' in an assignment is an error
 enum MyError implements Error
   failed
@@ -495,7 +536,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:12:13: type mismatch: ''otherwise ignore' cannot be used in assignment'
+error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:15:13: type mismatch: ''otherwise ignore' cannot be used in assignment'
 ```
 
 <!-- test: error.void-try-in-assignment -->
@@ -522,6 +563,9 @@ error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12
 
 <!-- test: error.binding-match-single-case -->
 ```maxon
+
+typealias Integer = i64
+
 // Test matching on typed error binding
 enum MyError implements Error
   failed
@@ -547,6 +591,9 @@ end 'main'
 
 <!-- test: error.binding-match-multi-case -->
 ```maxon
+
+typealias Integer = i64
+
 // Test matching on error binding with multiple cases
 enum MyError implements Error
   failed
@@ -582,6 +629,9 @@ end 'main'
 
 <!-- test: error.binding-success-no-block -->
 ```maxon
+
+typealias Integer = i64
+
 // Test that error binding block is skipped on success
 enum MyError implements Error
   failed
@@ -608,6 +658,9 @@ end 'main'
 
 <!-- test: error.assoc-value-throw-catch -->
 ```maxon
+
+typealias Integer = i64
+
 // Test error enum with associated value - throw and catch
 enum MyError implements Error
   notFound(code Integer)
@@ -635,6 +688,9 @@ end 'main'
 
 <!-- test: error.assoc-value-throw-catch-2 -->
 ```maxon
+
+typealias Integer = i64
+
 // Test error enum with associated value - second case
 enum MyError implements Error
   notFound(code Integer)

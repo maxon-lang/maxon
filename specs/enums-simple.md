@@ -527,6 +527,9 @@ end 'main'
 
 <!-- test: float-rawvalue-in-function -->
 ```maxon
+
+typealias Float = f64
+
 enum Weights
   light = 1.5
   medium = 2.5
@@ -551,6 +554,9 @@ end 'main'
 
 <!-- test: int-rawvalue-in-function -->
 ```maxon
+
+typealias Integer = i64
+
 enum HttpStatus
   ok = 200
   notFound = 404

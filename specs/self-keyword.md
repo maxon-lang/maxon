@@ -54,6 +54,9 @@ end 'Point'
 
 <!-- test: self-explicit-access -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   var count Integer
 
@@ -79,6 +82,9 @@ end 'main'
 
 <!-- test: self-implicit-access -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   var count Integer
 
@@ -105,6 +111,9 @@ end 'main'
 
 <!-- test: self-with-params -->
 ```maxon
+
+typealias Integer = i64
+
 type Accumulator
   var total Integer
 
@@ -131,6 +140,9 @@ end 'main'
 
 <!-- test: self-multiple-fields -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   var x Integer
   var y Integer
@@ -155,6 +167,9 @@ end 'main'
 
 <!-- test: self-modify-and-return -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   var n Integer
 
@@ -179,6 +194,9 @@ end 'main'
 
 <!-- test: self-implicit-multiple-fields -->
 ```maxon
+
+typealias Integer = i64
+
 type Rectangle
   var width Integer
   var height Integer

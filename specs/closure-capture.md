@@ -34,6 +34,9 @@ var values = items.map((_) gives defaultValue)
 
 <!-- test: closure-capture.basic -->
 ```maxon
+
+typealias Integer = i64
+
 function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
@@ -50,6 +53,9 @@ end 'main'
 
 <!-- test: closure-capture.ignore-param -->
 ```maxon
+
+typealias Integer = i64
+
 function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
@@ -66,6 +72,9 @@ end 'main'
 
 <!-- test: closure-capture.struct-field -->
 ```maxon
+
+typealias Integer = i64
+
 function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
@@ -86,6 +95,9 @@ end 'main'
 
 <!-- test: closure-capture.map-with-capture -->
 ```maxon
+
+typealias Integer = i64
+
 type Level
   export var rawValue Integer
 end 'Level'
@@ -103,6 +115,9 @@ end 'main'
 
 <!-- test: closure-capture.multiple-captures -->
 ```maxon
+
+typealias Integer = i64
+
 function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
@@ -120,6 +135,9 @@ end 'main'
 
 <!-- test: closure-capture.no-capture-regression -->
 ```maxon
+
+typealias Integer = i64
+
 function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
 end 'apply'
@@ -135,6 +153,9 @@ end 'main'
 
 <!-- test: closure-capture.capture-string -->
 ```maxon
+
+typealias Integer = i64
+
 function apply(f (Integer) returns String, x Integer) returns String
   return f(x)
 end 'apply'

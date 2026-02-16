@@ -168,6 +168,9 @@ end 'main'
 <!-- test: if-statements.else-if-in-helper -->
 else-if chains in helper functions must be correctly skipped during pre-scan.
 ```maxon
+
+typealias Integer = i64
+
 function classify(x Integer) returns Integer
   if x == 0 'zero'
     return 0
@@ -215,6 +218,9 @@ end 'main'
 Variables declared inside if blocks go out of scope at the end of the block.
 Return after the if should not attempt to clean up those variables.
 ```maxon
+
+typealias Integer = i64
+
 function test(x Integer) returns Integer
   if x == 0 'outer'
     let inner = "hello"
@@ -237,6 +243,9 @@ end 'main'
 Nested if statements with returns inside should work correctly.
 The outer if creates a variable that shouldn't be accessed after the if.
 ```maxon
+
+typealias Integer = i64
+
 function test(c Integer, next Integer) returns Integer
   if c == 0 'maybePrefix'
     if next == 1 'isHex'

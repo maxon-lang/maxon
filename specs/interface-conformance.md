@@ -57,6 +57,9 @@ end 'BadCounter'
 
 <!-- test: conformance-basic -->
 ```maxon
+
+typealias Integer = i64
+
 interface Counter
   function get() returns Integer
   function increment()
@@ -87,6 +90,9 @@ end 'main'
 
 <!-- test: conformance-multiple-interfaces -->
 ```maxon
+
+typealias Integer = i64
+
 interface Readable
   function read() returns Integer
 end 'Readable'
@@ -119,6 +125,9 @@ end 'main'
 
 <!-- test: conformance-missing-method -->
 ```maxon
+
+typealias Integer = i64
+
 interface Counter
   function get() returns Integer
   function increment()
@@ -137,12 +146,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interface-conformance/conformance-missing-method.test:7:6: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
+error E3016: specs/fragments/interface-conformance/conformance-missing-method.test:10:6: Partial interface implementation: type 'BadCounter' is missing 1 method(s):
   - increment() returns void
 ```
 
 <!-- test: conformance-wrong-param-type -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 interface Processor
   function process(value Integer) returns Integer
 end 'Processor'
@@ -158,12 +171,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interface-conformance/conformance-wrong-param-type.test:6:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
+error E3016: specs/fragments/interface-conformance/conformance-wrong-param-type.test:10:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
   - process(value Float) returns Integer (expected process(value Integer) returns Integer)
 ```
 
 <!-- test: conformance-wrong-return-type -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 interface Provider
   function provide() returns Integer
 end 'Provider'
@@ -179,12 +196,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type.test:6:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
+error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type.test:10:6: Partial interface implementation: type 'BadProvider' has 1 method(s) with wrong signature:
   - provide() returns Float (expected provide() returns Integer)
 ```
 
 <!-- test: conformance-extra-methods-ok -->
 ```maxon
+
+typealias Integer = i64
+
 interface Simple
   function getValue() returns Integer
 end 'Simple'
@@ -212,6 +232,9 @@ end 'main'
 
 <!-- test: conformance-no-interface -->
 ```maxon
+
+typealias Integer = i64
+
 type Standalone
   var value Integer
 

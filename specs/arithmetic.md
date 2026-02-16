@@ -80,6 +80,9 @@ end 'main'
 
 <!-- test: div-live-values -->
 ```maxon
+
+typealias Integer = i64
+
 function divLive(a Integer, b Integer, x Integer) returns Integer
   var preserved = x + 1
   var result = a / b
@@ -96,6 +99,9 @@ end 'main'
 
 <!-- test: mod-live-values -->
 ```maxon
+
+typealias Integer = i64
+
 function modLive(a Integer, b Integer, x Integer) returns Integer
   var preserved = x + 1
   var result = a mod b
@@ -112,6 +118,9 @@ end 'main'
 
 <!-- test: div-loop -->
 ```maxon
+
+typealias Integer = i64
+
 function divLoop(n Integer) returns Integer
   var sum = 0
   var i = 1
@@ -132,6 +141,9 @@ end 'main'
 
 <!-- test: div-with-call -->
 ```maxon
+
+typealias Integer = i64
+
 function helper(x Integer) returns Integer
   return x * 2
 end 'helper'
@@ -152,6 +164,9 @@ end 'main'
 
 <!-- test: multi-div -->
 ```maxon
+
+typealias Integer = i64
+
 function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
   var r1 = a / b
   var r2 = c / d
@@ -168,6 +183,9 @@ end 'main'
 
 <!-- test: register-pressure -->
 ```maxon
+
+typealias Integer = i64
+
 function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
   var v1 = a + 1
   var v2 = b + 2

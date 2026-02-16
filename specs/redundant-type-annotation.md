@@ -51,6 +51,9 @@ end 'makePoint'
 
 <!-- test: error.exact-match-return -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   var x Integer
   var y Integer
@@ -65,11 +68,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/redundant-type-annotation/error.exact-match-return.test:8:10: redundant type annotation: 'Point'
+error E3015: specs/fragments/redundant-type-annotation/error.exact-match-return.test:11:10: redundant type annotation: 'Point'
 ```
 
 <!-- test: error.closure-return -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   var x Integer
   var y Integer
@@ -85,11 +91,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/redundant-type-annotation/error.closure-return.test:12:39: redundant type annotation: 'Point'
+error E3015: specs/fragments/redundant-type-annotation/error.closure-return.test:15:39: redundant type annotation: 'Point'
 ```
 
 <!-- test: ok.no-context -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -106,6 +115,9 @@ end 'main'
 
 <!-- test: ok.anonymous-literal -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -126,6 +138,9 @@ end 'main'
 
 <!-- test: error.closure-param -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -140,11 +155,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3015: specs/fragments/redundant-type-annotation/error.closure-param.test:12:23: redundant type annotation: 'Point'
+error E3015: specs/fragments/redundant-type-annotation/error.closure-param.test:15:23: redundant type annotation: 'Point'
 ```
 
 <!-- test: ok.closure-param-no-context -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
@@ -161,6 +179,9 @@ end 'main'
 
 <!-- test: ok.closure-param-inferred -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer

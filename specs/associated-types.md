@@ -17,8 +17,8 @@ Use the `uses` keyword after the interface name to declare associated types:
 
 ```maxon
 interface Container uses Element
-  function get(index Integer) returns Element
-  function set(index Integer, value Element) returns Self
+  function get(index Index) returns Element
+  function set(index Index, value Element) returns Self
 end 'Container'
 ```
 
@@ -32,19 +32,21 @@ Associated types can be used in:
 Types bind concrete types to associated types using `with` after the interface name. Interface methods use `function methodName(params)` syntax:
 
 ```maxon
-type IntArray implements Container with Integer
-  var data array of 100 Integer
-  var len Integer
+typealias Score = i64
 
-  function get(index Integer) returns Integer
+type ScoreArray implements Container with Score
+  var data array of 100 Score
+  var len Score
+
+  function get(index Index) returns Score
     return data[index]
   end 'get'
 
-  function set(index Integer, value Integer) returns IntArray
+  function set(index Index, value Score) returns ScoreArray
     data[index] = value
     return {data: data, len: len}
   end 'set'
-end 'IntArray'
+end 'ScoreArray'
 ```
 
 The `with` types map positionally to the interface's `uses` types. Method signatures use the concrete type (`int`) that was bound.
@@ -54,23 +56,26 @@ The `with` types map positionally to the interface's `uses` types. Method signat
 For interfaces with multiple associated types, list them in order:
 
 ```maxon
+typealias ID = i64
+typealias Weight = f64
+
 interface Pair uses First, Second
   function getFirst() returns First
   function getSecond() returns Second
 end 'Pair'
 
-type IntFloat implements Pair with Integer, Float
-  var a Integer
-  var b Float
+type PersonRecord implements Pair with ID, Weight
+  var a ID
+  var b Weight
 
-  function getFirst() returns Integer
+  function getFirst() returns ID
     return a
   end 'getFirst'
-  
-  function getSecond() returns Float
+
+  function getSecond() returns Weight
     return b
   end 'getSecond'
-end 'IntFloat'
+end 'PersonRecord'
 ```
 
 ### The Iterable Interface
@@ -122,21 +127,23 @@ A type conforming to an interface with associated types must:
 3. Use exact type matches in method signatures (no implicit conversions)
 
 ```maxon
+typealias Score = i64
+
 interface Summable uses Element
   function sum() returns Element
 end 'Summable'
 
-type IntPair implements Summable with Integer
-  var a Integer
-  var b Integer
+type ScorePair implements Summable with Score
+  var a Score
+  var b Score
 
-  function sum() returns Integer
+  function sum() returns Score
     return a + b
   end 'sum'
-end 'IntPair'
+end 'ScorePair'
 
 function main() returns ExitCode
-  var p = IntPair{a: 10, b: 32}
+  var p = ScorePair{a: 10, b: 32}
   return p.sum()
 end 'main'
 ```
@@ -158,14 +165,16 @@ var result = p.sum()    // Call sum() method on instance p
 If a type doesn't bind required associated types:
 
 ```maxon
+typealias Score = i64
+
 interface HasElement uses Element
   function get() returns Element
 end 'HasElement'
 
 type Broken implements HasElement
-  var value Integer
+  var value Score
 
-  function get() returns Integer
+  function get() returns Score
     return value
   end 'get'
 end 'Broken'
@@ -175,7 +184,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/docs-example-3.test:6:6: Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
+error E3016: specs/fragments/associated-types/docs-example-3.test:8:6: Type 'Broken' does not define required associated type 'Element' from interface 'HasElement'
 ```
 
 ### Error: Partial Implementation
@@ -183,15 +192,17 @@ error E3016: specs/fragments/associated-types/docs-example-3.test:6:6: Type 'Bro
 If a type doesn't implement all interface methods:
 
 ```maxon
+typealias Score = i64
+
 interface TwoMethods uses Element
   function first() returns Element
   function second() returns Element
 end 'TwoMethods'
 
-type Partial implements TwoMethods with Integer
-  var value Integer
+type Partial implements TwoMethods with Score
+  var value Score
 
-  function first() returns Integer
+  function first() returns Score
     return value
   end 'first'
 end 'Partial'
@@ -201,8 +212,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/docs-example-4.test:7:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
-  - second() returns Integer
+error E3016: specs/fragments/associated-types/docs-example-4.test:9:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
+  - second() returns Score
 ```
 
 ### Error: Type Mismatch in Method
@@ -210,14 +221,17 @@ error E3016: specs/fragments/associated-types/docs-example-4.test:7:6: Partial i
 If a method's signature doesn't match the resolved associated type:
 
 ```maxon
+typealias ID = i64
+typealias Weight = f64
+
 interface Producer uses Output
   function produce() returns Output
 end 'Producer'
 
-type WrongReturn implements Producer with Float
-  var value Integer
+type WrongReturn implements Producer with Weight
+  var value ID
 
-  function produce() returns Integer
+  function produce() returns ID
     return value
   end 'produce'
 end 'WrongReturn'
@@ -227,8 +241,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/docs-example-5.test:6:6: Partial interface implementation: type 'WrongReturn' has 1 method(s) with wrong signature:
-  - produce() returns Integer (expected produce() returns Float)
+error E3016: specs/fragments/associated-types/docs-example-5.test:9:6: Partial interface implementation: type 'WrongReturn' has 1 method(s) with wrong signature:
+  - produce() returns ID (expected produce() returns Weight)
 ```
 
 
@@ -236,6 +250,9 @@ error E3016: specs/fragments/associated-types/docs-example-5.test:6:6: Partial i
 
 <!-- test: basic-associated-type -->
 ```maxon
+
+typealias Integer = i64
+
 interface Wrapper uses Inner
   function unwrap() returns Inner
 end 'Wrapper'
@@ -260,6 +277,9 @@ end 'main'
 
 <!-- test: associated-type-in-param -->
 ```maxon
+
+typealias Integer = i64
+
 interface Accumulator uses Item
   function add(item Item) returns Self
   function total() returns Integer
@@ -291,6 +311,10 @@ end 'main'
 
 <!-- test: multiple-associated-types -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 interface Pair uses First, Second
   function getFirst() returns First
   function getSecond() returns Second
@@ -352,6 +376,10 @@ end 'main'
 
 <!-- test: byte-element-type -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 interface ByteSource uses Element
   function getByte() returns Element
 end 'ByteSource'
@@ -377,6 +405,9 @@ end 'main'
 
 <!-- test: missing-type-binding-error -->
 ```maxon
+
+typealias Integer = i64
+
 interface NeedsElement uses Element
   function get() returns Element
 end 'NeedsElement'
@@ -394,12 +425,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/missing-type-binding-error.test:6:6: Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
+error E3016: specs/fragments/associated-types/missing-type-binding-error.test:9:6: Type 'Missing' does not define required associated type 'Element' from interface 'NeedsElement'
 ```
 
 
 <!-- test: partial-implementation-error -->
 ```maxon
+
+typealias Integer = i64
+
 interface TwoMethods uses Element
   function first() returns Element
   function second() returns Element
@@ -418,13 +452,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/partial-implementation-error.test:7:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
+error E3016: specs/fragments/associated-types/partial-implementation-error.test:10:6: Partial interface implementation: type 'Partial' is missing 1 method(s):
   - second() returns Integer
 ```
 
 
 <!-- test: wrong-return-type-error -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 interface Typed uses Output
   function make() returns Output
 end 'Typed'
@@ -442,13 +480,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/wrong-return-type-error.test:6:6: Partial interface implementation: type 'WrongType' has 1 method(s) with wrong signature:
+error E3016: specs/fragments/associated-types/wrong-return-type-error.test:10:6: Partial interface implementation: type 'WrongType' has 1 method(s) with wrong signature:
   - make() returns Integer (expected make() returns Float)
 ```
 
 
 <!-- test: wrong-param-type-error -->
 ```maxon
+
+typealias Integer = i64
+typealias Float = f64
+
 interface Acceptor uses Input
   function accept(val Input) returns Integer
 end 'Acceptor'
@@ -466,13 +508,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/associated-types/wrong-param-type-error.test:6:6: Partial interface implementation: type 'WrongParam' has 1 method(s) with wrong signature:
+error E3016: specs/fragments/associated-types/wrong-param-type-error.test:10:6: Partial interface implementation: type 'WrongParam' has 1 method(s) with wrong signature:
   - accept(val Integer) returns Integer (expected accept(val Float) returns Integer)
 ```
 
 
 <!-- test: implicit-self-field-access -->
 ```maxon
+
+typealias Integer = i64
+
 interface Countable
   function getCount() returns Integer
 end 'Countable'
@@ -497,6 +542,9 @@ end 'main'
 
 <!-- test: method-call-syntax -->
 ```maxon
+
+typealias Integer = i64
+
 interface Addable
   function addOne() returns Integer
 end 'Addable'

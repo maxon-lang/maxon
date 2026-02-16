@@ -292,7 +292,8 @@ When the value is a computed expression, a runtime range check is emitted that p
 
 ```maxon
 typealias Age = int(0 to 150)
-function makeAge(n Integer) returns Integer
+typealias Year = i64
+function makeAge(n Year) returns Year
   var a = Age{n}   // runtime check: panics if n < 0 or n > 150
   return a
 end 'makeAge'
@@ -303,7 +304,7 @@ end 'makeAge'
 Functions with a ranged return type have their return values checked:
 - Returning a literal outside the range is a compile error
 - Returning a computed expression emits a runtime range check
-- Types whose range covers the full representation (e.g., `Integer`, `ExitCode`) are exempt
+- Types whose range covers the full representation (e.g., `ExitCode`) are exempt
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -326,13 +327,10 @@ var sum = a + b    // result is int
 
 **Standard library aliases:**
 
-The standard library provides general-purpose aliases:
+The standard library provides purpose-specific aliases:
 
 | Alias | Definition | Purpose |
 |-------|-----------|---------|
-| `Integer` | `i64` | General-purpose signed integer |
-| `Float` | `f64` | General-purpose floating point |
-| `Byte` | `u8` | Full byte range |
 | `Count` | `int(0 to i64.max)` | Non-negative counts |
 | `Index` | `int(0 to i64.max)` | Array indices |
 | `ExitCode` | `u32` | Process exit codes |
@@ -1901,11 +1899,13 @@ Namespaces are derived from file paths:
 Functions, types, enums, and typealiases are file-scoped by default. Use the `export` keyword to make them visible to other files:
 
 ```maxon
-export function publicAdd(a Integer, b Integer) returns Integer
+typealias Score = i64
+
+export function publicAdd(a Score, b Score) returns Score
     return a + b
 end 'publicAdd'
 
-function privateHelper(x Integer) returns Integer
+function privateHelper(x Score) returns Score
     return x * 2
 end 'privateHelper'
 ```
@@ -1915,9 +1915,11 @@ Only `publicAdd` can be called from other files.
 **Exporting types and enums:**
 
 ```maxon
+typealias Coord = i64
+
 export type Point
-  export var x Integer
-  export var y Integer
+  export var x Coord
+  export var y Coord
 end 'Point'
 
 export enum Color
@@ -1935,17 +1937,19 @@ Without `export`, types and enums are only usable within the file where they are
 export typealias Score = int(0 to 100)
 ```
 
-Non-exported typealiases are only visible within their file. The standard library exports aliases like `Integer`, `Float`, `Count`, etc.
+Non-exported typealiases are only visible within their file. The standard library exports purpose-specific aliases like `Count`, `Index`, `ExitCode`, etc.
 
 **Exporting methods within types:**
 
 Individual methods can be exported independently of the type itself:
 
 ```maxon
-export type Calculator
-  var result Integer
+typealias Amount = i64
 
-  export function add(n Integer)
+export type Calculator
+  var result Amount
+
+  export function add(n Amount)
     result = result + n
   end 'add'
 

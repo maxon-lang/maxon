@@ -73,6 +73,7 @@ public enum ErrorCode {
   SemanticErrorTypeMismatch = 3059,
   SemanticAmbiguousTypeReference = 3060,
   SemanticDuplicateTypeAlias = 3061,
+  SemanticUnusedTypeAlias = 3062,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

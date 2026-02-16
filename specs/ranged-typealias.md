@@ -16,7 +16,7 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 - Supported shorthands: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
 - Construction: `Age{42}` (compile-time checked for literals, runtime checked for expressions)
 - `int / int` produces `int` (truncating), not `float`
-- Standard library defines general-purpose aliases (`Integer = i64`, `Float = f64`, `Byte = u8`) and purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `Offset`, `MathValue`, `ExitCode`)
+- Standard library defines purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `Offset`, `MathValue`, `ExitCode`)
 
 ## Docs
 
@@ -36,17 +36,17 @@ The `to` keyword makes the upper bound inclusive. The `upto` keyword makes it ex
 Use `type.min` and `type.max` for a type's full range:
 
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-typealias Float = float(f64.min to f64.max)
-typealias Byte = byte(u8.min to u8.max)
+typealias FullInt = int(i64.min to i64.max)
+typealias FullFloat = float(f64.min to f64.max)
+typealias FullByte = byte(u8.min to u8.max)
 ```
 
 Or use shorthand aliases for the same effect:
 
 ```maxon
-typealias Integer = i64
-typealias Float = f64
-typealias Byte = u8
+typealias FullInt = i64
+typealias FullFloat = f64
+typealias FullByte = u8
 ```
 
 ### Construction
@@ -63,8 +63,9 @@ var myAge = Age{25}
 When the value is a computed expression, a runtime check is emitted:
 
 ```maxon
+typealias Year = i64
 typealias Age = int(0 to 150)
-function makeAge(n Integer) returns Integer
+function makeAge(n Year) returns Year
   var a = Age{n}   // runtime check: panics if n < 0 or n > 150
   return a
 end 'makeAge'
@@ -76,7 +77,7 @@ Functions with a ranged return type have their return values checked:
 
 - **Compile time**: returning a literal outside the range is a compile error
 - **Runtime**: returning a computed expression emits a range check that panics on violation
-- Types whose range covers the full optimal representation (e.g., `Integer`, `ExitCode`) are exempt
+- Types whose range covers the full optimal representation (e.g., `ExitCode`) are exempt
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -246,6 +247,7 @@ ExitCode: 42
 
 <!-- test: runtime-check-pass -->
 ```maxon
+typealias Integer = i64
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
@@ -265,6 +267,7 @@ ExitCode: 50
 
 <!-- test: runtime-check-fail -->
 ```maxon
+typealias Integer = i64
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
@@ -285,6 +288,7 @@ Stderr: Range check failed
 
 <!-- test: byte-range -->
 ```maxon
+typealias Integer = i64
 typealias AsciiCode = byte(0 to 127)
 
 function main() returns ExitCode
@@ -391,6 +395,7 @@ Stderr: Range check failed
 
 <!-- test: return-float-range-check -->
 ```maxon
+typealias Float = f64
 typealias Pct = float(0.0 to 100.0)
 
 function clampedPct(x Float) returns Pct
@@ -630,4 +635,34 @@ end 'main'
 ```
 ```output
 ExitCode: 255
+```
+
+### Unused local typealias
+
+<!-- test: unused-typealias -->
+```maxon
+typealias Score = int(0 to 100)
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3062: specs/fragments/ranged-typealias/unused-typealias.test:2:11: unused typealias: 'Score'
+```
+
+### Unused typealias with used typealias
+
+<!-- test: unused-typealias-with-used -->
+```maxon
+typealias Score = int(0 to 100)
+typealias Age = int(0 to 150)
+
+function main() returns ExitCode
+  var s = Score{42}
+  return s
+end 'main'
+```
+```maxoncstderr
+error E3062: specs/fragments/ranged-typealias/unused-typealias-with-used.test:3:11: unused typealias: 'Age'
 ```

@@ -19,7 +19,9 @@ return expression
 ### Example
 
 ```maxon
-function isPositive(x Integer) returns bool
+typealias Score = i64
+
+function isPositive(x Score) returns bool
   if x > 0 'check'
     return true
   end 'check'

@@ -21,7 +21,9 @@ functionName(arguments)  // if unambiguous
 ### Example
 
 ```maxon
-export function add(a Integer, b Integer) returns Integer
+typealias Score = i64
+
+export function add(a Score, b Score) returns Score
   return a + b
 end 'add'
 

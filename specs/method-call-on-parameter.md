@@ -13,14 +13,16 @@ When writing a method, you can call other methods on parameters that have the sa
 ## Example
 
 ```maxon
+typealias Score = i64
+
 type Counter
-  var value Integer
-  
-  function getValue() returns Integer
+  var value Score
+
+  function getValue() returns Score
     return value
   end 'getValue'
-  
-  function addFrom(other Counter) returns Integer
+
+  function addFrom(other Counter) returns Score
     // Call getValue() on 'other', not on 'self'
     return value + other.getValue()
   end 'addFrom'
@@ -34,6 +36,9 @@ not on `self`.
 
 <!-- test: method-call-on-same-type-parameter -->
 ```maxon
+
+typealias Integer = i64
+
 type Foo
   var x Integer
   
@@ -58,6 +63,9 @@ end 'main'
 
 <!-- test: method-call-chain-same-type -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   var n Integer
   
@@ -90,6 +98,9 @@ end 'main'
 
 <!-- test: sibling-method-call-still-works -->
 ```maxon
+
+typealias Integer = i64
+
 type Calculator
   var base Integer
   
@@ -114,6 +125,9 @@ end 'main'
 
 <!-- test: method-with-args-on-same-type-parameter -->
 ```maxon
+
+typealias Integer = i64
+
 type Adder
   var value Integer
   

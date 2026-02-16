@@ -27,6 +27,9 @@ When cleaning up an array:
 Structs with String fields stored in arrays must have proper refcount management.
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 type Item
   export var name String
   export var value Integer
@@ -125,6 +128,9 @@ Cleanups:  3
 Each managed field in a struct needs its own refcount tracking.
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 type MultiField
   export var a String
   export var b Integer

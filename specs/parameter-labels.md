@@ -16,7 +16,9 @@ All function and method calls require named arguments using colon syntax. This i
 All arguments must be named using `name: value` syntax:
 
 ```maxon
-function add(a Integer, b Integer) returns Integer
+typealias Score = i64
+
+function add(a Score, b Score) returns Score
   return a + b
 end 'add'
 
@@ -34,7 +36,9 @@ end 'main'
 Named arguments can appear in any order:
 
 ```maxon
-function subtract(a Integer, b Integer) returns Integer
+typealias Score = i64
+
+function subtract(a Score, b Score) returns Score
   return a - b
 end 'subtract'
 
@@ -52,7 +56,9 @@ end 'main'
 Parameters with default values can be omitted:
 
 ```maxon
-function repeat(value Integer, times Integer = 1) returns Integer
+typealias Score = i64
+
+function repeat(value Score, times Score = 1) returns Score
   return value * times
 end 'repeat'
 
@@ -69,6 +75,9 @@ end 'main'
 
 <!-- test: named-args -->
 ```maxon
+
+typealias Integer = i64
+
 function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
@@ -83,6 +92,9 @@ end 'main'
 
 <!-- test: named-args-multiply -->
 ```maxon
+
+typealias Integer = i64
+
 function multiply(x Integer, y Integer) returns Integer
   return x * y
 end 'multiply'
@@ -97,6 +109,9 @@ end 'main'
 
 <!-- test: named-args-any-order -->
 ```maxon
+
+typealias Integer = i64
+
 function subtract(a Integer, b Integer) returns Integer
   return a - b
 end 'subtract'
@@ -111,6 +126,9 @@ end 'main'
 
 <!-- test: default-param-named -->
 ```maxon
+
+typealias Integer = i64
+
 function repeat(value Integer, times Integer = 1) returns Integer
   return value * times
 end 'repeat'
@@ -125,6 +143,9 @@ end 'main'
 
 <!-- test: default-param-omitted -->
 ```maxon
+
+typealias Integer = i64
+
 function repeat(value Integer, times Integer = 2) returns Integer
   return value * times
 end 'repeat'
@@ -139,6 +160,9 @@ end 'main'
 
 <!-- test: error-missing-param-name -->
 ```maxon
+
+typealias Integer = i64
+
 function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
@@ -148,11 +172,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:7:10: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:10:10: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 
 <!-- test: error-unknown-param-name -->
 ```maxon
+
+typealias Integer = i64
+
 function greet(name Integer) returns Integer
   return name
 end 'greet'
@@ -162,6 +189,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3003: specs/fragments/parameter-labels/error-unknown-param-name.test:7:16: unknown parameter name: 'person'
+error E3003: specs/fragments/parameter-labels/error-unknown-param-name.test:10:16: unknown parameter name: 'person'
 ```
 

@@ -14,7 +14,9 @@ Maxon requires all function parameters to be used. Declaring unused parameters c
 ### Example Error
 
 ```maxon
-function add(a Integer, b Integer) returns Integer
+typealias Score = i64
+
+function add(a Score, b Score) returns Score
   return a  // Error: 'b' is unused
 end 'add'
 ```
@@ -28,7 +30,9 @@ Semantic Error: The parameter 'b' is declared but its value is never used
 Only declare parameters you need:
 
 ```maxon
-function identity(a Integer) returns Integer
+typealias Score = i64
+
+function identity(a Score) returns Score
   return a  // OK: 'a' is used
 end 'identity'
 ```
@@ -36,6 +40,9 @@ end 'identity'
 
 <!-- test: single-unused -->
 ```maxon
+
+typealias Integer = i64
+
 function add(a Integer, b Integer) returns Integer
   return a
 end 'add'
@@ -45,11 +52,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-parameters/single-unused.test:2:25: unused variable: 'b'
+error E3012: specs/fragments/unused-parameters/single-unused.test:5:25: unused variable: 'b'
 ```
 
 <!-- test: multiple-unused -->
 ```maxon
+
+typealias Integer = i64
+
 function test(a Integer, b Integer, c Integer) returns Integer
   return a
 end 'test'
@@ -59,11 +69,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-parameters/multiple-unused.test:2:26: unused variable: 'b'
+error E3012: specs/fragments/unused-parameters/multiple-unused.test:5:26: unused variable: 'b'
 ```
 
 <!-- test: all-used-ok -->
 ```maxon
+
+typealias Integer = i64
+
 function add(a Integer, b Integer) returns Integer
   return a + b
 end 'add'
@@ -79,6 +92,9 @@ end 'main'
 
 <!-- test: none-unused -->
 ```maxon
+
+typealias Integer = i64
+
 function multiply(a Integer, b Integer) returns Integer
   return a * b
 end 'multiply'
@@ -94,6 +110,9 @@ end 'main'
 
 <!-- test: void-function-unused -->
 ```maxon
+
+typealias Integer = i64
+
 function doNothing(x Integer, y Integer)
   var z = 42
 end 'doNothing'
@@ -104,5 +123,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-parameters/void-function-unused.test:2:20: unused variable: 'x'
+error E3012: specs/fragments/unused-parameters/void-function-unused.test:5:20: unused variable: 'x'
 ```

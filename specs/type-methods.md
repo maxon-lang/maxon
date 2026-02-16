@@ -81,6 +81,9 @@ end 'Point'
 
 <!-- test: type-method-basic -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   var count Integer
 
@@ -105,6 +108,9 @@ end 'main'
 
 <!-- test: type-method-with-params -->
 ```maxon
+
+typealias Integer = i64
+
 type Adder
   var total Integer
 
@@ -130,6 +136,9 @@ end 'main'
 
 <!-- test: type-method-returning-value -->
 ```maxon
+
+typealias Integer = i64
+
 type Calculator
   var value Integer
 
@@ -149,6 +158,9 @@ end 'main'
 
 <!-- test: type-multiple-methods -->
 ```maxon
+
+typealias Integer = i64
+
 type Counter
   var count Integer
 
@@ -183,6 +195,9 @@ end 'main'
 
 <!-- test: type-method-chain -->
 ```maxon
+
+typealias Integer = i64
+
 type Value
   var n Integer
 

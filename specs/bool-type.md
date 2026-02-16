@@ -20,7 +20,9 @@ let condition = false
 ### Example
 
 ```maxon
-function isPositive(x Integer) returns bool
+typealias Score = i64
+
+function isPositive(x Score) returns bool
   if x > 0 'check'
     return true
   end 'check'
@@ -60,6 +62,9 @@ end 'main'
 
 <!-- test: bool-parameter -->
 ```maxon
+
+typealias Integer = i64
+
 function test_bool_param(flag bool) returns Integer
   if flag 'check'
     return 1

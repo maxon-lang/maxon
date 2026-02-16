@@ -28,18 +28,22 @@ Method signatures in interfaces have an implicit `self` parameter of type `Self`
 Types declare conformance to interfaces using the `implements` keyword:
 
 ```maxon
+typealias Score = i64
+
 type Point implements Hashable
-  var x Integer
-  var y Integer
+  var x Score
+  var y Score
 end 'Point'
 ```
 
 A type can conform to multiple interfaces:
 
 ```maxon
+typealias Score = i64
+
 type Point implements Hashable, Equatable
-  var x Integer
-  var y Integer
+  var x Score
+  var y Score
 end 'Point'
 ```
 
@@ -48,9 +52,11 @@ end 'Point'
 Methods implementing interface requirements are defined **inside the type body** using `function methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
 
 ```maxon
+typealias Score = i64
+
 type Point implements Hashable
-  var x Integer
-  var y Integer
+  var x Score
+  var y Score
 
   function hash() returns HashValue
     return x + y * 31
@@ -67,11 +73,13 @@ You can still use `self.field` explicitly if needed, especially when a parameter
 Non-interface methods (methods that don't implement any interface) use simple `function methodName(params)` syntax without a prefix:
 
 ```maxon
-type Point
-  var x Integer
-  var y Integer
+typealias Score = i64
 
-  export function getX() returns Integer
+type Point
+  var x Score
+  var y Score
+
+  export function getX() returns Score
     return x
   end 'getX'
 end 'Point'
@@ -93,13 +101,15 @@ The method receives the instance as an implicit first parameter. Fields are acce
 The `Self` type in interface signatures represents the conforming type:
 
 ```maxon
+typealias Score = i64
+
 interface Cloneable
   function clone() returns Self
 end 'Cloneable'
 
 type Point implements Cloneable
-  var x Integer
-  var y Integer
+  var x Score
+  var y Score
 
   function clone() returns Point
     return {x: x, y: y}
@@ -112,16 +122,18 @@ end 'Point'
 Interfaces can declare associated types with `uses`. Structs bind concrete types with `with`:
 
 ```maxon
+typealias Score = i64
+
 interface Container uses Element
-  function get(index Integer) returns Element
+  function get(index Score) returns Element
 end 'Container'
 
 typealias InternalIntArray = Array with int
 
-type IntArray implements Container with Integer
+type IntArray implements Container with Score
   var data InternalIntArray
 
-  function get(index Integer) returns Integer
+  function get(index Score) returns Score
     return try data.get(index) otherwise 0
   end 'get'
 end 'IntArray'
@@ -134,13 +146,15 @@ See the [Associated Types](associated-types.md) spec for full documentation.
 A type must implement **all** methods from interfaces it conforms to. Partial implementation is an error:
 
 ```maxon
+typealias Score = i64
+
 interface TwoMethods
-  function first() returns Integer
-  function second() returns Integer
+  function first() returns Score
+  function second() returns Score
 end 'TwoMethods'
 
 type Incomplete implements TwoMethods
-  function first() returns Integer
+  function first() returns Score
     return 1
   end 'first'
   // Missing: TwoMethods.second()
@@ -166,9 +180,11 @@ The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and i
 ### Example
 
 ```maxon
+typealias Score = i64
+
 type Point implements Hashable
-  var x Integer
-  var y Integer
+  var x Score
+  var y Score
 
   function hash() returns HashValue
     return x + y * 31
@@ -194,6 +210,9 @@ end 'main'
 
 <!-- test: basic-interface -->
 ```maxon
+
+typealias Integer = i64
+
 type Point implements Hashable
   var x Integer
   var y Integer
@@ -219,6 +238,9 @@ end 'main'
 
 <!-- test: multiple-methods -->
 ```maxon
+
+typealias Integer = i64
+
 interface Describable
   function describe() returns Integer
   function value() returns Integer
@@ -248,6 +270,9 @@ end 'main'
 
 <!-- test: method-with-params -->
 ```maxon
+
+typealias Integer = i64
+
 interface Calculator
   function add(n Integer) returns Integer
 end 'Calculator'
@@ -272,6 +297,9 @@ end 'main'
 
 <!-- test: multiple-interfaces -->
 ```maxon
+
+typealias Integer = i64
+
 type Point implements Hashable, Equatable
   var x Integer
   var y Integer
@@ -304,6 +332,9 @@ end 'main'
 
 <!-- test: self-return-type -->
 ```maxon
+
+typealias Integer = i64
+
 interface Movable
   function move(dx Integer, dy Integer) returns Self
 end 'Movable'
@@ -330,6 +361,9 @@ end 'main'
 
 <!-- test: method-call-syntax -->
 ```maxon
+
+typealias Integer = i64
+
 interface Incrementable
   function inc() returns Integer
 end 'Incrementable'
@@ -354,6 +388,9 @@ end 'main'
 
 <!-- test: partial-implementation-error -->
 ```maxon
+
+typealias Integer = i64
+
 interface ThreeMethods
   function one() returns Integer
   function two() returns Integer
@@ -373,7 +410,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interfaces/partial-implementation-error.test:8:6: Partial interface implementation: type 'Incomplete' is missing 2 method(s):
+error E3016: specs/fragments/interfaces/partial-implementation-error.test:11:6: Partial interface implementation: type 'Incomplete' is missing 2 method(s):
   - two() returns Integer
   - three() returns Integer
 ```
@@ -381,6 +418,9 @@ error E3016: specs/fragments/interfaces/partial-implementation-error.test:8:6: P
 
 <!-- test: non-interface-method -->
 ```maxon
+
+typealias Integer = i64
+
 type Calculator
   var value Integer
 
@@ -405,6 +445,9 @@ end 'main'
 
 <!-- test: transitive-interface-validation -->
 ```maxon
+
+typealias Integer = i64
+
 interface BaseInterface
   function baseMethod() returns Integer
 end 'BaseInterface'
@@ -427,13 +470,16 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3016: specs/fragments/interfaces/transitive-interface-validation.test:11:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
+error E3016: specs/fragments/interfaces/transitive-interface-validation.test:14:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
   - baseMethod() returns Integer (from BaseInterface)
 ```
 
 
 <!-- test: transitive-interface-complete -->
 ```maxon
+
+typealias Integer = i64
+
 interface BaseInterface
   function baseMethod() returns Integer
 end 'BaseInterface'

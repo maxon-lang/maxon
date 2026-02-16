@@ -307,6 +307,9 @@ end 'main'
 
 <!-- disabled-test: array-predicate-found -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]
   if arr.contains(predicate: (n Integer) gives n > 3) 'check'
@@ -321,6 +324,9 @@ end 'main'
 
 <!-- disabled-test: array-predicate-not-found -->
 ```maxon
+
+typealias Integer = i64
+
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]
   if arr.contains(predicate: (n Integer) gives n > 10) 'check'

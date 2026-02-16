@@ -238,6 +238,9 @@ end 'main'
 
 <!-- test: byte.compare.less -->
 ```maxon
+
+typealias Byte = u8
+
 function main() returns ExitCode
   var a = 10 as Byte
   var b = 20 as Byte

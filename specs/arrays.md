@@ -295,6 +295,10 @@ end 'main'
 
 <!-- test: byte-array-push-get -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 typealias ByteArray = Array with byte
 
 function main() returns ExitCode
@@ -318,6 +322,10 @@ end 'main'
 
 <!-- test: byte-array-initialized -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 typealias ByteArray = Array with byte
 
 function main() returns ExitCode
@@ -341,6 +349,10 @@ end 'main'
 
 <!-- test: byte-array-set -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 typealias ByteArray = Array with byte
 
 function main() returns ExitCode
@@ -363,6 +375,10 @@ end 'main'
 
 <!-- test: byte-array-max-values -->
 ```maxon
+
+typealias Integer = i64
+typealias Byte = u8
+
 typealias ByteArray = Array with byte
 
 function main() returns ExitCode
@@ -396,6 +412,9 @@ end 'main'
 
 <!-- test: byte-array-count -->
 ```maxon
+
+typealias Byte = u8
+
 typealias ByteArray = Array with byte
 
 function main() returns ExitCode
@@ -652,6 +671,9 @@ end 'main'
 <!-- test: array-literal-return-push-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
+
+typealias Integer = i64
+
 function makeNumbers(a Integer, b Integer) returns IntArray
   var arr = [a, b]
   arr.push(a + b)
@@ -691,6 +713,9 @@ Cleanups:  1
 
 <!-- test: array-literal-struct-return-from-function -->
 ```maxon
+
+typealias Integer = i64
+
 type Point
   export var x Integer
   export var y Integer
