@@ -114,6 +114,20 @@ public class Compiler {
     foreach (var source in sources)
       PreRegisterTypeNames(module, source, isStdLib);
 
+    // Pre-scan top-level typealiases from all sources so cross-file typealias
+    // references resolve regardless of file processing order
+    foreach (var source in sources) {
+      try {
+        var lexer = new Lexer(source.Content);
+        var tokens = lexer.Tokenize();
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path);
+        parser.PreScanTypeAliasesOnly(module);
+      } catch (CompileError ex) {
+        ex.FilePath ??= source.Path;
+        throw;
+      }
+    }
+
     // Pre-scan all sources to register function signatures, type details, etc.
     // so that cross-file forward references resolve regardless of parse order
     foreach (var source in sources) {

@@ -27,6 +27,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private bool _inTryContext;
   private bool _parsingTypeAliasRhs;
   private bool _parsingExtension;
+  private bool _skipWhereValidation;
   private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
     ? new(seedModule!.TypeDefs.Where(kv =>
         !seedModule!.NonExportedTypeNames.Contains(kv.Key)
@@ -439,7 +440,56 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   public void PreScan(MlirModule<MaxonOp> targetModule) {
     _currentModule = targetModule;
+    EnsureManagedMemoryType();
+    SeedFromModule(seedModule, targetModule);
 
+    CollectAndEvaluateTopLevelDecls(targetModule);
+
+    CopyStateToModule(targetModule);
+  }
+
+  /// <summary>
+  /// Pre-scan only top-level typealiases from this file. Called across all files before
+  /// the full PreScan so cross-file typealias references resolve regardless of file order.
+  /// Skips typealiases nested inside type/enum/interface/extension blocks.
+  /// </summary>
+  public void PreScanTypeAliasesOnly(MlirModule<MaxonOp> targetModule) {
+    _currentModule = targetModule;
+    _skipWhereValidation = true;
+    EnsureManagedMemoryType();
+    SeedFromModule(seedModule, targetModule);
+    PreRegisterTopLevelTypeAliasNames();
+
+    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+      SkipNewlines();
+      if (IsAtEnd() || Current().Type == TokenType.Eof) break;
+
+      bool isExported = false;
+      if (Check(TokenType.Export)) {
+        isExported = true;
+        Advance();
+      }
+
+      if (Check(TokenType.Type) || Check(TokenType.Enum) || Check(TokenType.Interface)
+          || Check(TokenType.Extension) || Check(TokenType.Function)) {
+        Advance();
+        SkipToMatchingEnd();
+        SkipNewlines();
+        continue;
+      }
+
+      if (Check(TokenType.TypeAlias)) {
+        PreScanTypeAlias(isExported);
+      } else {
+        SkipToEndOfLine();
+      }
+      SkipNewlines();
+    }
+
+    CopyTypeAliasesToModule(targetModule);
+  }
+
+  private void EnsureManagedMemoryType() {
     if (!_typeRegistry.ContainsKey("__ManagedMemory")) {
       _typeRegistry["__ManagedMemory"] = new MlirStructType("__ManagedMemory", [
         new MlirStructField("buffer", MlirType.I64, false, true),
@@ -448,12 +498,48 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
     }
+  }
 
-    SeedFromModule(seedModule, targetModule);
+  /// <summary>
+  /// Token-level pre-pass to register top-level typealias names as placeholders
+  /// so forward and mutual references resolve during the actual typealias scan.
+  /// </summary>
+  private void PreRegisterTopLevelTypeAliasNames() {
+    int prePos = _pos;
+    int depth = 0;
+    while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
+      var t = _tokens[prePos];
+      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; }
+      else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; }
+      else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; }
+      else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
+        var aliasName = _tokens[prePos + 1].Value;
+        if (!_typeRegistry.ContainsKey(aliasName))
+          _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
+        prePos += 2;
+      } else { prePos++; }
+    }
+  }
 
-    CollectAndEvaluateTopLevelDecls(targetModule);
-
-    CopyStateToModule(targetModule);
+  /// <summary>
+  /// Copies only typealias-related state to the module. Unlike CopyStateToModule,
+  /// this avoids re-evaluating export status of non-typealias types.
+  /// </summary>
+  private void CopyTypeAliasesToModule(MlirModule<MaxonOp> module) {
+    foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
+      if (_seededTypeAliases.Contains(aliasName)) continue;
+      if (_typeRegistry.TryGetValue(aliasName, out var aliasType))
+        module.TypeDefs[aliasName] = aliasType;
+      var typeParams = aliasType is MlirStructType st && st.TypeParams.Count > 0
+        ? new Dictionary<string, MlirType>(st.TypeParams) : null;
+      bool isExported = _exportedTypeAliases.Contains(aliasName);
+      module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
+          isExported, _isStdlib, _sourceFilePath);
+      if (_sourceFilePath != null)
+        module.TypeDefSourceFiles[aliasName] = _sourceFilePath;
+      if (!isExported && !_isStdlib)
+        module.NonExportedTypeNames.Add(aliasName);
+    }
   }
 
   /// <summary>
@@ -492,19 +578,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.TypeDefs[name] = type;
     foreach (var (name, defaults) in _functionDefaults)
       module.FunctionDefaults.TryAdd(name, defaults);
-    foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
-      if (_seededTypeAliases.Contains(aliasName)) continue;
-      Dictionary<string, MlirType>? typeParams = null;
-      if (_typeRegistry.TryGetValue(aliasName, out var aliasType) && aliasType is MlirStructType st)
-        typeParams = st.TypeParams.Count > 0 ? new Dictionary<string, MlirType>(st.TypeParams) : null;
-      bool isExported = _exportedTypeAliases.Contains(aliasName);
-      module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
-          isExported, _isStdlib, _sourceFilePath);
-      if (_sourceFilePath != null)
-        module.TypeDefSourceFiles[aliasName] = _sourceFilePath;
-      if (!isExported && !_isStdlib)
-        module.NonExportedTypeNames.Add(aliasName);
-    }
+    CopyTypeAliasesToModule(module);
     // Track non-exported types/enums (only for types defined in this file)
     foreach (var (name, type) in _typeRegistry) {
       if ((type is MlirStructType || type is MlirEnumType || type is MlirRangedPrimitiveType)
@@ -531,20 +605,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var constDecls = new List<ConstantDecl>();
     int savedPos = _pos;
 
-    // Pre-pass: register all top-level typealias names so forward references resolve
-    {
-      int prePos = _pos;
-      int depth = 0;
-      while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
-        var t = _tokens[prePos];
-        if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
-          var aliasName = _tokens[prePos + 1].Value;
-          if (!_typeRegistry.ContainsKey(aliasName))
-            _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
-          prePos += 2;
-        } else { prePos++; }
-      }
-    }
+    PreRegisterTopLevelTypeAliasNames();
 
     // First pass: scan for top-level declarations (constants, vars, function signatures, type declarations)
     while (!IsAtEnd() && Current().Type != TokenType.Eof) {
@@ -1198,6 +1259,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ValidateWhereConstraints(
       MlirStructType sourceStruct, Dictionary<string, MlirType> substitution,
       string sourceName, Token errorToken) {
+    if (_skipWhereValidation) return;
     foreach (var (paramName, requiredInterfaces) in sourceStruct.WhereConstraints) {
       if (!substitution.TryGetValue(paramName, out var concreteType)) continue;
       // Skip validation when the concrete type is still an unresolved type parameter

@@ -61,7 +61,7 @@ The user will describe the feature they want. You will create the spec, write th
     - Ensure comments explain "why" not "what".
     - Fix any problems reported by the IDE
     - Ensure you have not duplicated any helpers
-17. Update documentation
+17. Update documentation, including `LANGUAGE_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 18. Write a git commit message for these changes.
 
 ## Guidelines
