@@ -61,6 +61,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly HashSet<string> _seededTypeAliases = [];
   private readonly HashSet<string> _usedTypeAliases = [];
   private readonly Dictionary<string, (int Line, int Column)> _typeAliasLocations = [];
+  private readonly HashSet<string> _resolvingTypeAliases = [];
 
   // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
   private readonly Dictionary<string, List<string>> _interfaceAssociatedTypes = [];
@@ -565,7 +566,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (IsComplexInitializer(exprStart)) {
           _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
-            nameToken.Value, _tokens, exprStart, _pos, IsMutable: false, nameToken.Line, nameToken.Column));
+            nameToken.Value, _tokens, exprStart, _pos, IsMutable: false, nameToken.Line, nameToken.Column, _sourceFilePath));
         } else {
           constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -578,7 +579,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (IsComplexInitializer(exprStart)) {
           _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
-            nameToken.Value, _tokens, exprStart, _pos, IsMutable: true, nameToken.Line, nameToken.Column));
+            nameToken.Value, _tokens, exprStart, _pos, IsMutable: true, nameToken.Line, nameToken.Column, _sourceFilePath));
         } else {
           _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
         }
@@ -603,6 +604,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     _pos = savedPos;
+
+    DetectCircularTypeAliases();
 
     // Evaluate constants (handling forward references)
     var evaluated = new Dictionary<string, object>();
@@ -768,7 +771,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     foreach (var init in _currentModule!.DeferredGlobalInits) {
       if (localNames.Contains(init.Name)) continue;
+
+      // Deferred inits reference types from their original file, which may not be exported
+      var tempTypes = new List<string>();
+      if (init.SourceFilePath != null && seedModule != null) {
+        foreach (var (name, type) in seedModule.TypeDefs) {
+          if (!_typeRegistry.ContainsKey(name)
+              && seedModule.NonExportedTypeNames.Contains(name)
+              && seedModule.TypeDefSourceFiles.TryGetValue(name, out var src)
+              && src == init.SourceFilePath) {
+            _typeRegistry[name] = type;
+            tempTypes.Add(name);
+          }
+        }
+      }
+
       EmitSingleDeferredGlobalInit(init.Name, init.Tokens, init.TokenStart, init.IsMutable);
+
+      foreach (var name in tempTypes)
+        _typeRegistry.Remove(name);
     }
   }
 
@@ -2070,6 +2091,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Creates a concrete struct type by substituting associated type parameters.
   /// Also supports "with N Type" form where N is an integer capacity hint (e.g., Vector with 3 int).
   /// </summary>
+
+  private void DetectCircularTypeAliases() {
+    foreach (var aliasName in _localTypeAliases) {
+      var visited = new HashSet<string>();
+      if (HasCircularTypeAlias(aliasName, visited)) {
+        var (line, col) = _typeAliasLocations.TryGetValue(aliasName, out var loc) ? loc : (0, 0);
+        throw new CompileError(ErrorCode.ParserCircularDependency,
+          $"Circular typealias dependency: {string.Join(" -> ", visited)} -> {aliasName}",
+          line, col);
+      }
+    }
+  }
+
+  private bool HasCircularTypeAlias(string name, HashSet<string> visited) {
+    if (!visited.Add(name)) return true;
+    if (!_typeRegistry.TryGetValue(name, out var type)) return false;
+    if (type is not MlirStructType st) return false;
+    foreach (var (_, paramType) in st.TypeParams) {
+      if (IsTypeAlias(paramType.Name) && HasCircularTypeAlias(paramType.Name, visited))
+        return true;
+    }
+    visited.Remove(name);
+    return false;
+  }
+
+  private bool IsTypeAlias(string name) =>
+    _localTypeAliases.Contains(name) || _seededTypeAliases.Contains(name);
+
   private void PreScanTypeAlias(bool isExported = false) {
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
@@ -2084,6 +2133,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _typeAliasLocations[aliasName] = (aliasNameToken.Line, aliasNameToken.Column);
 
     if (isExported) _exportedTypeAliases.Add(aliasName);
+
+    _resolvingTypeAliases.Add(aliasName);
 
     Expect(TokenType.Equals);
     _parsingTypeAliasRhs = true;
@@ -2223,7 +2274,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution,
         constParams.Count > 0 ? constParams : null);
 
-    } finally { _parsingTypeAliasRhs = false; }
+    } finally { _parsingTypeAliasRhs = false; _resolvingTypeAliases.Remove(aliasName); }
   }
 
   private void RegisterConcreteTypeAlias(
@@ -3557,7 +3608,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
       "bool" => MlirType.I1,
       "cstring" => MlirType.I64, // raw pointer type for FFI
-      _ => seedModule?.AmbiguousTypeNames.Contains(typeName) == true
+      _ => _resolvingTypeAliases.Contains(typeName)
+        ? throw new CompileError(ErrorCode.ParserCircularDependency,
+            $"Circular typealias dependency: {typeName}",
+            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)
+        : seedModule?.AmbiguousTypeNames.Contains(typeName) == true
         ? throw new CompileError(ErrorCode.SemanticAmbiguousTypeReference,
             $"Ambiguous type '{typeName}': multiple definitions exist across files",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)

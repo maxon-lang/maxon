@@ -200,3 +200,30 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: error.circular-typealias-self-reference -->
+A typealias that references itself should be a compile error.
+```maxon
+typealias A = Array with A
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2012: specs/fragments/type-checking/error.circular-typealias-self-reference.test:2:26: Circular typealias dependency: A
+```
+
+<!-- test: error.circular-typealias-mutual -->
+Two typealiases that reference each other should be a compile error.
+```maxon
+typealias A = Array with B
+typealias B = Array with A
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2012: specs/fragments/type-checking/error.circular-typealias-mutual.test:2:11: Circular typealias dependency: A -> B -> A
+```

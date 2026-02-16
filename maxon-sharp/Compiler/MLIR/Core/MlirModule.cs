@@ -14,7 +14,7 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);
 
 // Deferred global variable initialization: stores tokens for expressions that must be evaluated at main() entry
-public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column);
+public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column, string? SourceFilePath = null);
 
 public class MlirModule<TOp> where TOp : IPrintableOp {
   public List<MlirFunction<TOp>> Functions { get; } = [];
