@@ -3307,9 +3307,9 @@ public static class MaxonToStandardConversion {
 
   /// <summary>
   /// Converts an enum value to its string representation for interpolation.
-  /// For int-backed and simple (ordinal) enums, converts the backing integer to a string.
-  /// For float-backed enums, converts the backing float to a string.
-  /// For string-backed enums, emits the string value from rdata.
+  /// Simple and int-backed enums emit the case name (e.g., "lessThan").
+  /// Float-backed enums emit the raw float value.
+  /// String-backed enums emit the raw string value.
   /// </summary>
   private static (StdI64 Buffer, StdI64 Length) EmitEnumToString(
     MaxonEnum enumValue,
@@ -3327,15 +3327,49 @@ public static class MaxonToStandardConversion {
     var stdValue = valueMap[enumValue];
 
     if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
-      // String/char-backed enum: the runtime value is the ordinal (i64).
-      // We need to emit a lookup that maps ordinal → string rdata label.
       return EmitStringEnumToString(enumType, (StdI64)stdValue, block, result);
     }
 
     if (backingMlirType == MlirType.F64) {
       return EmitF64ToString((StdF64)stdValue, block, varTypes);
     }
-    return EmitI64ToString((StdI64)stdValue, block, varTypes);
+    return EmitEnumCaseNameToString(enumType, (StdI64)stdValue, block, result);
+  }
+
+  /// <summary>
+  /// Emits code to convert an enum ordinal to its case name string.
+  /// Generates a chain of select operations mapping each ordinal to its case name.
+  /// </summary>
+  private static (StdI64 Buffer, StdI64 Length) EmitEnumCaseNameToString(
+    MlirEnumType enumType,
+    StdI64 ordinalValue,
+    MlirBlock<StandardOp> block,
+    MlirModule<StandardOp> result) {
+
+    var fallbackLabel = $"__enum_name_fallback_{MlirContext.Current.NextId()}";
+    var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
+
+    foreach (var enumCase in enumType.Cases) {
+      var caseLabel = $"__enum_name_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, caseLabel, block, result);
+
+      // Int-backed enums use raw values at runtime; simple enums use ordinals
+      long runtimeValue = enumCase.RawValue is long rawLong ? rawLong : enumCase.Ordinal;
+      var caseConst = new StdConstI64Op(runtimeValue);
+      block.AddOp(caseConst);
+      var cmpOp = new StdCmpI64Op("eq", ordinalValue, caseConst.Result);
+      block.AddOp(cmpOp);
+
+      var selectBuf = new StdSelectI64Op(cmpOp.Result, caseBuf, currentBuf);
+      block.AddOp(selectBuf);
+      var selectLen = new StdSelectI64Op(cmpOp.Result, caseLen, currentLen);
+      block.AddOp(selectLen);
+
+      currentBuf = selectBuf.Result;
+      currentLen = selectLen.Result;
+    }
+
+    return (currentBuf, currentLen);
   }
 
   /// <summary>

@@ -109,7 +109,7 @@ end 'Holder'
 
 extension Holder where Item is Comparable
   function isGreater(other Item) returns bool
-    return self.get().compare(other) > 0
+    return self.get().compare(other) == Ordering.greaterThan
   end 'isGreater'
 end 'Holder'
 
@@ -133,7 +133,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:27:13: Type 'MyHolder' has no field named 'isGreater'
+error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:27:13: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
 ```
 
 ### Conditional extension on a type (not an interface)

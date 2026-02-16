@@ -339,7 +339,6 @@ The standard library provides general-purpose aliases:
 | `Offset` | `i64` | Signed offsets |
 | `HashValue` | `u32` | Hash function results |
 | `Codepoint` | `int(0 to 1114111)` | Unicode codepoints |
-| `CompareResult` | `int(-1 to 1)` | Comparison results |
 | `MathValue` | `f64` | Math function results |
 
 ---

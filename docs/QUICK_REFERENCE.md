@@ -30,7 +30,7 @@ var x = Age{200}                    // compile error: out of range
 var y = Age{someExpression}         // runtime range check (panics on violation)
 ```
 
-Standard library aliases: `Integer`, `Float`, `Byte`, `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `CompareResult`, `MathValue`
+Standard library aliases: `Integer`, `Float`, `Byte`, `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `MathValue`
 
 ## Literals
 
@@ -481,7 +481,7 @@ try c.asciiValue()                   // throws CharacterError
 |-----------|---------|
 | `Hashable` | `hash() -> int` |
 | `Equatable` | `equals(other) -> bool` |
-| `Comparable` | `compare(other) -> int` |
+| `Comparable` | `compare(other) -> Ordering` |
 | `Cloneable` | `clone() -> Self` |
 | `Stringable` | `toString(format) -> String` |
 | `Iterable uses E` | `next() -> E throws IterationError` |

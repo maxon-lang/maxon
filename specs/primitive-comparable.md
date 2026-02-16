@@ -13,24 +13,24 @@ interface, allowing them to be ordered and compared.
 
 ## compare(other)
 
-Compares two values and returns an ordering indicator.
+Compares two values and returns an `Ordering` enum value.
 
 **Signatures:**
-- `int.compare(other int) -> int`
-- `float.compare(other float) -> int`
-- `bool.compare(other bool) -> int`
-- `byte.compare(other byte) -> int`
+- `int.compare(other int) -> Ordering`
+- `float.compare(other float) -> Ordering`
+- `bool.compare(other bool) -> Ordering`
+- `byte.compare(other byte) -> Ordering`
 
 **Returns:**
-- `-1` if `self < other`
-- `0` if `self == other`
-- `1` if `self > other`
+- `Ordering.lessThan` if `self < other`
+- `Ordering.equalTo` if `self == other`
+- `Ordering.greaterThan` if `self > other`
 
 **Example:**
 ```maxon
 var a = 10
 var b = 20
-var c = a.compare(b)   // returns -1
+var c = a.compare(b)   // returns Ordering.lessThan
 ```
 
 **Notes:**
@@ -44,12 +44,15 @@ var c = a.compare(b)   // returns -1
 function main() returns ExitCode
   var a = 10
   var b = 20
-  print("{a.compare(b)}\n")
-  return 0
+  var result = a.compare(b)
+  if result == Ordering.lessThan 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
-```stdout
--1
+```exitcode
+0
 ```
 
 <!-- test: int.compare.equal -->
@@ -57,7 +60,11 @@ end 'main'
 function main() returns ExitCode
   var a = 42
   var b = 42
-  return a.compare(b)
+  var result = a.compare(b)
+  if result == Ordering.equalTo 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -69,11 +76,15 @@ end 'main'
 function main() returns ExitCode
   var a = 20
   var b = 10
-  return a.compare(b)
+  var result = a.compare(b)
+  if result == Ordering.greaterThan 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
-1
+0
 ```
 
 <!-- test: bool.compare.false-true -->
@@ -81,12 +92,15 @@ end 'main'
 function main() returns ExitCode
   var a = false
   var b = true
-  print("{a.compare(b)}\n")
-  return 0
+  var result = a.compare(b)
+  if result == Ordering.lessThan 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
-```stdout
--1
+```exitcode
+0
 ```
 
 <!-- test: bool.compare.equal -->
@@ -94,7 +108,11 @@ end 'main'
 function main() returns ExitCode
   var a = true
   var b = true
-  return a.compare(b)
+  var result = a.compare(b)
+  if result == Ordering.equalTo 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -106,12 +124,15 @@ end 'main'
 function main() returns ExitCode
   var a = 1.5
   var b = 2.5
-  print("{a.compare(b)}\n")
-  return 0
+  var result = a.compare(b)
+  if result == Ordering.lessThan 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
-```stdout
--1
+```exitcode
+0
 ```
 
 <!-- test: float.compare.greater -->
@@ -119,11 +140,15 @@ end 'main'
 function main() returns ExitCode
   var a = 3.14
   var b = 2.71
-  return a.compare(b)
+  var result = a.compare(b)
+  if result == Ordering.greaterThan 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
 ```exitcode
-1
+0
 ```
 
 <!-- test: byte.compare.less -->
@@ -131,10 +156,13 @@ end 'main'
 function main() returns ExitCode
   var a = 10 as Byte
   var b = 20 as Byte
-  print("{a.compare(b)}\n")
-  return 0
+  var result = a.compare(b)
+  if result == Ordering.lessThan 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ```
-```stdout
--1
+```exitcode
+0
 ```

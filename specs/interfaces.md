@@ -155,7 +155,7 @@ The standard library (`stdlib/interfaces.maxon`) defines commonly used interface
 
 - **Hashable** - Types that can be hashed to an integer: `returns int`
 - **Equatable** - Types that can be compared for equality: `returns bool`
-- **Comparable** - Types that can be ordered: `returns int`
+- **Comparable** - Types that can be ordered: `returns Ordering`
 - **Cloneable** - Types that can be copied: `returns Self`
 - **Iterable** - Types that can be iterated over (used by for-in loops):
   - Uses `Element` associated type

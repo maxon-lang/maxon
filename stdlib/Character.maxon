@@ -45,7 +45,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
   // Comparable conformance
   // Compares characters byte-by-byte (lexicographic comparison)
-  function compare(other Character) returns CompareResult
+  function compare(other Character) returns Ordering
     var len1 = __managed_memory_len(_managed)
     var len2 = __managed_memory_len(other._managed)
     var minLen = len1
@@ -57,20 +57,20 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
       var b1 = __managed_memory_byte_at(_managed, i)
       var b2 = __managed_memory_byte_at(other._managed, i)
       if b1 < b2 'byte_lt'
-        return 0 - 1
+        return Ordering.lessThan
       end 'byte_lt'
       if b1 > b2 'byte_gt'
-        return 1
+        return Ordering.greaterThan
       end 'byte_gt'
       i = i + 1
     end 'compare_loop'
     if len1 < len2 'len_lt'
-      return 0 - 1
+      return Ordering.lessThan
     end 'len_lt'
     if len1 > len2 'len_gt'
-      return 1
+      return Ordering.greaterThan
     end 'len_gt'
-    return 0
+    return Ordering.equalTo
   end 'compare'
 
   // Hashable conformance (djb2 hash algorithm)

@@ -67,6 +67,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly Dictionary<string, List<string>> _primitiveConformances = seedModule != null
     ? new(seedModule.PrimitiveConformances.Select(kv => new KeyValuePair<string, List<string>>(kv.Key, [.. kv.Value]))) : [];
 
+  // Tracks conditional extension methods skipped due to unsatisfied where-constraints
+  // Key: "TypeName.methodName", Value: (paramName, requiredInterface, concreteTypeName)
+  private readonly Dictionary<string, (string ParamName, string RequiredInterface, string ConcreteTypeName)> _skippedConditionalExtensions = [];
+
   /// <summary>
   /// Creates a unique mangled name for an overloaded function by appending
   /// distinguishing parameter names. For instance methods, 'self' is excluded.
@@ -210,6 +214,40 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
       }
     }
+    return null;
+  }
+
+  /// Records method names from a conditional extension block that was skipped for a type
+  /// because its where-constraints weren't satisfied.
+  private void RecordSkippedConditionalExtensions(
+      string typeName, MlirStructType structType,
+      List<int> functionPositions, Dictionary<string, List<string>> whereConstraints) {
+    // Find the first unsatisfied constraint to use in the error message
+    foreach (var (paramName, requiredInterfaces) in whereConstraints) {
+      if (!structType.TypeParams.TryGetValue(paramName, out var concreteType)) continue;
+      if (concreteType is MlirTypeParameterType) continue;
+      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      foreach (var iface in requiredInterfaces) {
+        if (TypeConformsToInterface(concreteTypeName, iface)) continue;
+        // Record each method name from this extension block
+        foreach (var pos in functionPositions) {
+          if (pos + 1 < _tokens.Count) {
+            var methodName = _tokens[pos + 1].Value;
+            _skippedConditionalExtensions[$"{typeName}.{methodName}"] =
+              (paramName, iface, concreteTypeName);
+          }
+        }
+        return;
+      }
+    }
+  }
+
+  /// Checks if a method was skipped as a conditional extension whose where-constraints aren't satisfied.
+  /// Returns a descriptive error message suffix, or null if no such extension exists.
+  private string? FindUnsatisfiedConditionalExtension(string typeName, string methodName) {
+    if (_skippedConditionalExtensions.TryGetValue(
+        $"{typeName}.{methodName}", out var info))
+      return $" ('{methodName}' is available as a conditional extension where {info.ParamName} is {info.RequiredInterface}, but '{info.ConcreteTypeName}' does not implement '{info.RequiredInterface}')";
     return null;
   }
 
@@ -1921,7 +1959,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // For conditional extensions, skip concrete types whose bindings don't satisfy the constraints
       // (generic types with unresolved params are allowed through for generic synthesis)
       if (extensionWhereConstraints.Count > 0
-          && !TypeSatisfiesWhereConstraints(structType, extensionWhereConstraints)) continue;
+          && !TypeSatisfiesWhereConstraints(structType, extensionWhereConstraints)) {
+        RecordSkippedConditionalExtensions(
+          typeName, structType, functionPositions, extensionWhereConstraints);
+        continue;
+      }
       conformingTypes.Add((typeName, structType));
     }
 
@@ -5491,11 +5533,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var compareMethodName = $"{structTypeName}.compare";
       var cmpToken = new Token(TokenType.Identifier, compareMethodName, forToken.Line, forToken.Column);
       var callOp = CreateFunctionCall(cmpToken, [currentVal, endVal]);
-      var zeroLit = new MaxonLiteralOp(0L);
-      _currentBlock!.AddOp(zeroLit);
-      var cmpBinOp = new MaxonBinOp(cmpOp2, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(cmpBinOp);
-      condResult = cmpBinOp.Result;
+      condResult = EmitOrderingCheck(callOp.Result!, cmpOp2);
     } else {
       var cmpBinOp = new MaxonBinOp(cmpOp2, currentVal, endVal, elementKind);
       _currentBlock!.AddOp(cmpBinOp);
@@ -6203,11 +6241,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var compareMethodName = $"{structTypeName}.compare";
       var compareToken = new Token(TokenType.Identifier, compareMethodName, rangePat.Line, rangePat.Column);
       var callOp = CreateFunctionCall(compareToken, [refOp.Result, charLit.Result]);
-      var zeroLit = new MaxonLiteralOp(0L);
-      _currentBlock!.AddOp(zeroLit);
-      var geOp = new MaxonBinOp(MaxonBinOperator.Ge, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(geOp);
-      lowerCmp = geOp.Result;
+      lowerCmp = EmitOrderingCheck(callOp.Result!, MaxonBinOperator.Ge);
     }
 
     if (rangePat.Upper is CharRangeBound upperBound) {
@@ -6218,13 +6252,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var compareMethodName = $"{structTypeName}.compare";
       var compareToken = new Token(TokenType.Identifier, compareMethodName, rangePat.Line, rangePat.Column);
       var callOp = CreateFunctionCall(compareToken, [refOp.Result, charLit.Result]);
-      var zeroLit = new MaxonLiteralOp(0L);
-      _currentBlock!.AddOp(zeroLit);
-      var upperOp = rangePat.UpperInclusive
-        ? new MaxonBinOp(MaxonBinOperator.Le, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer)
-        : new MaxonBinOp(MaxonBinOperator.Lt, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(upperOp);
-      upperCmp = upperOp.Result;
+      upperCmp = EmitOrderingCheck(callOp.Result!, rangePat.UpperInclusive ? MaxonBinOperator.Le : MaxonBinOperator.Lt);
     }
 
     if (lowerCmp != null && upperCmp != null) {
@@ -6706,11 +6734,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var compareMethodName = $"{lhsCmpStruct.TypeName}.compare";
           var compareToken = new Token(TokenType.Identifier, compareMethodName, opToken.Line, opToken.Column);
           var callOp = CreateFunctionCall(compareToken, [lhsVal, rhsVal]);
-          var zeroLit = new MaxonLiteralOp(0L);
-          _currentBlock!.AddOp(zeroLit);
-          var cmpOp = new MaxonBinOp(entry.Op, callOp.Result!, zeroLit.Result, MaxonValueKind.Integer);
-          _currentBlock!.AddOp(cmpOp);
-          lhs = new ExprResult.Direct(cmpOp.Result);
+          lhs = new ExprResult.Direct(EmitOrderingCheck(callOp.Result!, entry.Op));
           continue;
         }
       }
@@ -7476,8 +7500,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       }
 
-      var field = structType.GetField(fieldName)
-        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Type '{userTypeName}' has no field named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+      var field = structType.GetField(fieldName);
+      if (field == null) {
+        var hint = FindUnsatisfiedConditionalExtension(userTypeName, fieldName);
+        throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+          $"Type '{userTypeName}' has no field named '{fieldName}'{hint ?? ""}", fieldToken.Line, fieldToken.Column);
+      }
 
       if (!field.IsExported && _currentTypeName != userTypeName) {
         throw new CompileError(ErrorCode.SemanticUnexportedFieldAccess, $"cannot access unexported field: '{fieldName}' outside of type '{userTypeName}'", fieldToken.Line, fieldToken.Column);
@@ -9453,6 +9481,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // ============================================================================
   // Helpers
   // ============================================================================
+
+  /// <summary>
+  /// Translates a comparison operator into an Ordering enum ordinal check.
+  /// Ordering ordinals: lessThan=0, equalTo=1, greaterThan=2.
+  /// </summary>
+  private static (MaxonBinOperator Operator, long OrdinalValue) OrderingCheckForOperator(MaxonBinOperator op) => op switch {
+    MaxonBinOperator.Lt => (MaxonBinOperator.Eq, 0L),
+    MaxonBinOperator.Gt => (MaxonBinOperator.Eq, 2L),
+    MaxonBinOperator.Le => (MaxonBinOperator.Ne, 2L),
+    MaxonBinOperator.Ge => (MaxonBinOperator.Ne, 0L),
+    _ => throw new InvalidOperationException($"Unexpected comparison operator for Ordering check: {op}")
+  };
+
+  /// <summary>
+  /// Emits a comparison of a compare() result (Ordering enum) against an ordinal value.
+  /// Returns a bool-typed MaxonValue representing the comparison result.
+  /// </summary>
+  private MaxonValue EmitOrderingCheck(MaxonValue compareResult, MaxonBinOperator op) {
+    var (cmpOperator, ordinalValue) = OrderingCheckForOperator(op);
+    var ordinalLit = new MaxonLiteralOp(ordinalValue);
+    _currentBlock!.AddOp(ordinalLit);
+    var cmpOp = new MaxonBinOp(cmpOperator, compareResult, ordinalLit.Result, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(cmpOp);
+    return cmpOp.Result;
+  }
 
   /// <summary>
   /// For generic methods returning a TypeParameter placeholder, checks if the caller's

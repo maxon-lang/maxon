@@ -801,7 +801,7 @@ end 'main'
 0
 ```
 ```stdout
-Color value: 2
+Color value: green
 ```
 
 ### Simple Enum Interpolation
@@ -825,7 +825,7 @@ end 'main'
 0
 ```
 ```stdout
-Direction: 2
+Direction: east
 ```
 
 ### String-Backed Enum Interpolation
@@ -872,5 +872,5 @@ end 'main'
 0
 ```
 ```stdout
-Priorities: 1 and 3
+Priorities: low and high
 ```

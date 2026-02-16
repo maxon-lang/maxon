@@ -16,7 +16,7 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 - Supported shorthands: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
 - Construction: `Age{42}` (compile-time checked for literals, runtime checked for expressions)
 - `int / int` produces `int` (truncating), not `float`
-- Standard library defines general-purpose aliases (`Integer = i64`, `Float = f64`, `Byte = u8`) and purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `CompareResult`, `Offset`, `MathValue`, `ExitCode`)
+- Standard library defines general-purpose aliases (`Integer = i64`, `Float = f64`, `Byte = u8`) and purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `Offset`, `MathValue`, `ExitCode`)
 
 ## Docs
 
