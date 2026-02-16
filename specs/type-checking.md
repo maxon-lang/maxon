@@ -43,7 +43,7 @@ error E3005: specs/fragments/type-checking/method-call-wrong-element-type.test:6
 <!-- test: function-call-string-where-int-expected -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function takeInt(n Integer) returns Integer
   return n
@@ -61,7 +61,7 @@ error E3005: specs/fragments/type-checking/function-call-string-where-int-expect
 <!-- test: function-call-primitive-where-struct-expected -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntArray = Array with int
 
@@ -81,7 +81,7 @@ error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-
 <!-- test: function-call-wrong-struct-type -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -157,7 +157,7 @@ error E3005: specs/fragments/type-checking/array-of-different-element-types.test
 <!-- test: typealias-forward-reference -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias FooArray = Array with Foo
 
@@ -179,7 +179,7 @@ end 'main'
 A typealias defined after the type that uses it as a field should resolve correctly.
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Container
   export var items ItemArray

@@ -163,7 +163,7 @@ min/max are only valid for numeric ranges
 **Integer ranges:**
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function grade(score Score) returns Score
   match score 'grade'
@@ -190,7 +190,7 @@ Characters implement the `Comparable` interface, so they can be used in range pa
 The comparison is lexicographic (byte-by-byte).
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function charType(c Character) returns Score
   match c 'classify'
@@ -212,7 +212,7 @@ end 'main'
 **Open-ended ranges:**
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function classify(age Score) returns Score
   match age 'category'
@@ -500,7 +500,7 @@ end 'main'
 <!-- test: match-statements.nested-in-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function categorize(n Integer) returns Integer
   match n 'cat'
@@ -538,7 +538,7 @@ end 'main'
 <!-- test: match-statements.function-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(n Integer) returns Integer
   return n * 2

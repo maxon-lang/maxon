@@ -58,7 +58,7 @@ end 'BadCounter'
 <!-- test: conformance-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Counter
   function get() returns Integer
@@ -91,7 +91,7 @@ end 'main'
 <!-- test: conformance-multiple-interfaces -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Readable
   function read() returns Integer
@@ -126,7 +126,7 @@ end 'main'
 <!-- test: conformance-missing-method -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Counter
   function get() returns Integer
@@ -153,8 +153,8 @@ error E3016: specs/fragments/interface-conformance/conformance-missing-method.te
 <!-- test: conformance-wrong-param-type -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 interface Processor
   function process(value Integer) returns Integer
@@ -178,8 +178,8 @@ error E3016: specs/fragments/interface-conformance/conformance-wrong-param-type.
 <!-- test: conformance-wrong-return-type -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 interface Provider
   function provide() returns Integer
@@ -203,7 +203,7 @@ error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type
 <!-- test: conformance-extra-methods-ok -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Simple
   function getValue() returns Integer
@@ -233,7 +233,7 @@ end 'main'
 <!-- test: conformance-no-interface -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Standalone
   var value Integer

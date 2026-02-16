@@ -308,7 +308,7 @@ end 'main'
 <!-- disabled-test: array-predicate-found -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]
@@ -325,7 +325,7 @@ end 'main'
 <!-- disabled-test: array-predicate-not-found -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]

@@ -32,7 +32,7 @@ Associated types can be used in:
 Types bind concrete types to associated types using `with` after the interface name. Interface methods use `function methodName(params)` syntax:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type ScoreArray implements Container with Score
   var data array of 100 Score
@@ -56,8 +56,8 @@ The `with` types map positionally to the interface's `uses` types. Method signat
 For interfaces with multiple associated types, list them in order:
 
 ```maxon
-typealias ID = i64
-typealias Weight = f64
+typealias ID = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
 
 interface Pair uses First, Second
   function getFirst() returns First
@@ -127,7 +127,7 @@ A type conforming to an interface with associated types must:
 3. Use exact type matches in method signatures (no implicit conversions)
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 interface Summable uses Element
   function sum() returns Element
@@ -165,7 +165,7 @@ var result = p.sum()    // Call sum() method on instance p
 If a type doesn't bind required associated types:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 interface HasElement uses Element
   function get() returns Element
@@ -192,7 +192,7 @@ error E3016: specs/fragments/associated-types/docs-example-3.test:8:6: Type 'Bro
 If a type doesn't implement all interface methods:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 interface TwoMethods uses Element
   function first() returns Element
@@ -221,8 +221,8 @@ error E3016: specs/fragments/associated-types/docs-example-4.test:9:6: Partial i
 If a method's signature doesn't match the resolved associated type:
 
 ```maxon
-typealias ID = i64
-typealias Weight = f64
+typealias ID = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
 
 interface Producer uses Output
   function produce() returns Output
@@ -251,7 +251,7 @@ error E3016: specs/fragments/associated-types/docs-example-5.test:9:6: Partial i
 <!-- test: basic-associated-type -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Wrapper uses Inner
   function unwrap() returns Inner
@@ -278,7 +278,7 @@ end 'main'
 <!-- test: associated-type-in-param -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Accumulator uses Item
   function add(item Item) returns Self
@@ -312,8 +312,8 @@ end 'main'
 <!-- test: multiple-associated-types -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 interface Pair uses First, Second
   function getFirst() returns First
@@ -377,8 +377,8 @@ end 'main'
 <!-- test: byte-element-type -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 interface ByteSource uses Element
   function getByte() returns Element
@@ -406,7 +406,7 @@ end 'main'
 <!-- test: missing-type-binding-error -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface NeedsElement uses Element
   function get() returns Element
@@ -432,7 +432,7 @@ error E3016: specs/fragments/associated-types/missing-type-binding-error.test:9:
 <!-- test: partial-implementation-error -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface TwoMethods uses Element
   function first() returns Element
@@ -460,8 +460,8 @@ error E3016: specs/fragments/associated-types/partial-implementation-error.test:
 <!-- test: wrong-return-type-error -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 interface Typed uses Output
   function make() returns Output
@@ -488,8 +488,8 @@ error E3016: specs/fragments/associated-types/wrong-return-type-error.test:10:6:
 <!-- test: wrong-param-type-error -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 interface Acceptor uses Input
   function accept(val Input) returns Integer
@@ -516,7 +516,7 @@ error E3016: specs/fragments/associated-types/wrong-param-type-error.test:10:6: 
 <!-- test: implicit-self-field-access -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Countable
   function getCount() returns Integer
@@ -543,7 +543,7 @@ end 'main'
 <!-- test: method-call-syntax -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Addable
   function addOne() returns Integer

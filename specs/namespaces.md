@@ -23,7 +23,7 @@ The namespace of a file is determined by its path:
 Use `export` to make functions visible outside the file:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 export function public_add(a Score, b Score) returns Score
   return a + b
@@ -40,7 +40,7 @@ Only `public_add` can be called from other files. `private_helper` is file-priva
 File: `math/operations.maxon`
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 export function add(a Score, b Score) returns Score
   return a + b
@@ -64,7 +64,7 @@ end 'main'
 <!-- test: basic-namespace -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export function add(a Integer, b Integer) returns Integer
   return a + b
@@ -82,7 +82,7 @@ end 'main'
 <!-- test: multiple-functions -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export function double(x Integer) returns Integer
   return x * 2
@@ -104,7 +104,7 @@ end 'main'
 <!-- test: nested-calls-in-namespace -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a + b

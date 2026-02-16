@@ -17,7 +17,7 @@ Structs can contain other structs as fields. The compiler must correctly compute
 <!-- test: nested-struct-simple -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Inner
   export var x Integer
@@ -42,7 +42,7 @@ end 'main'
 <!-- test: nested-struct-returned -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Inner
   export var value Integer
@@ -69,7 +69,7 @@ end 'main'
 <!-- test: deeply-nested-struct -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Level1
   export var value Integer
@@ -97,7 +97,7 @@ end 'main'
 <!-- test: struct-with-multiple-nested-fields -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer

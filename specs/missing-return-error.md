@@ -14,7 +14,7 @@ Functions that declare a return type must return a value on all code paths.
 ### Error Example
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function test() returns Score
   // Error: No return statement
@@ -31,7 +31,7 @@ Note: All execution paths through the function must end with a return statement
 Ensure every path returns:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function test(x Score) returns Score
   if x > 0 'check'
@@ -54,7 +54,7 @@ error E3013: specs/fragments/missing-return-error/no-return.test:2:10: missing r
 <!-- test: missing-else-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function test(x Integer) returns Integer
   if x > 0 'check'
@@ -74,7 +74,7 @@ error E3013: specs/fragments/missing-return-error/missing-else-return.test:5:10:
 <!-- test: valid-all-paths -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function test(x Integer) returns Integer
   if x > 0 'check'

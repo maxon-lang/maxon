@@ -68,8 +68,8 @@ For float-to-integer conversion, use the explicit conversion functions:
 <!-- test: int-literal-to-byte -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 42 as Byte
@@ -83,8 +83,8 @@ end 'main'
 <!-- test: int-literal-zero-to-byte -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 0 as Byte
@@ -98,8 +98,8 @@ end 'main'
 <!-- test: int-literal-max-to-byte -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 255 as Byte
@@ -113,8 +113,8 @@ end 'main'
 <!-- test: byte-to-int -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 100 as Byte
@@ -128,8 +128,8 @@ end 'main'
 <!-- test: byte-to-float -->
 ```maxon
 
-typealias Float = f64
-typealias Byte = u8
+typealias Float = float(f64.min to f64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 50 as Byte
@@ -144,7 +144,7 @@ end 'main'
 <!-- test: int-to-float -->
 ```maxon
 
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
   var x = 42
@@ -159,7 +159,7 @@ end 'main'
 <!-- test: int-literal-to-float -->
 ```maxon
 
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
   var f = 99 as Float
@@ -173,7 +173,7 @@ end 'main'
 <!-- test: same-type-int -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var x = 42
@@ -187,7 +187,7 @@ end 'main'
 <!-- test: same-type-float -->
 ```maxon
 
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
   var f = 42.0
@@ -202,8 +202,8 @@ end 'main'
 <!-- test: same-type-byte -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 42 as Byte
@@ -218,8 +218,8 @@ end 'main'
 <!-- test: cast-in-expression -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 10 as Byte
@@ -234,9 +234,9 @@ end 'main'
 <!-- test: chained-byte-int-float -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 25 as Byte
@@ -254,7 +254,7 @@ end 'main'
 <!-- test: error.int-var-to-byte -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var x = 5
@@ -269,7 +269,7 @@ error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:7:13: Canno
 <!-- test: error.int-literal-out-of-range -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var x = 256 as Byte
@@ -283,7 +283,7 @@ error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:
 <!-- test: error.negative-literal-to-byte -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var x = -1 as Byte
@@ -297,7 +297,7 @@ error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:
 <!-- test: error.float-to-int -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var x = 5.0 as Integer
@@ -311,7 +311,7 @@ error E3009: specs/fragments/type-casting/error.float-to-int.test:6:15: Cannot c
 <!-- test: error.float-to-byte -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var x = 5.0 as Byte
@@ -325,7 +325,7 @@ error E3009: specs/fragments/type-casting/error.float-to-byte.test:6:15: Cannot 
 <!-- test: error.bool-to-int -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var b = true
@@ -340,7 +340,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-int.test:7:13: Cannot ca
 <!-- test: error.bool-to-float -->
 ```maxon
 
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
   var b = true
@@ -355,7 +355,7 @@ error E3009: specs/fragments/type-casting/error.bool-to-float.test:7:13: Cannot 
 <!-- test: error.bool-to-byte -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = true
@@ -392,7 +392,7 @@ error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:15: Cannot 
 <!-- test: error.byte-to-bool -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 42 as Byte

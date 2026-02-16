@@ -20,7 +20,7 @@ typealias Age = int(0 to 150)       // inclusive upper bound
 typealias Idx = int(0 upto 100)     // exclusive upper bound (0-99)
 typealias Pct = float(0.0 to 100.0)
 typealias FullInt = int(i64.min to i64.max)  // type.min/type.max for full range
-typealias Handle = u32                       // shorthand for int(0 to u32.max)
+typealias Handle = int(0 to u32.max)         // full u32 range
 ```
 
 Construction and range checks:
@@ -101,7 +101,7 @@ greet("Smith", title: "Dr.")
 Functions, types, enums, and typealiases are file-scoped by default. Use `export` for cross-file visibility:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 export function publicFunc() returns Score     // visible to other files
 function privateFunc() returns Score           // only this file
 

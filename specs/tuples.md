@@ -83,7 +83,7 @@ end 'main'
 <!-- test: tuple-as-param -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function sum(t (Integer, Integer)) returns Integer
   return t.0 + t.1
@@ -101,7 +101,7 @@ end 'main'
 <!-- test: tuple-as-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
   return (a, b)
@@ -119,7 +119,7 @@ end 'main'
 <!-- test: tuple-destructuring -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
   return (a, b)

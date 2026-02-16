@@ -26,7 +26,7 @@ The struct type is inferred from context: when the first element is a named stru
 <!-- test: anon-struct-array-mixed -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Vec2
   export var x Integer
@@ -47,7 +47,7 @@ end 'main'
 <!-- test: anon-struct-array-mixed-three -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Pair
   export var a Integer
@@ -69,7 +69,7 @@ end 'main'
 <!-- test: anon-struct-array-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Pair
   export var first Integer
@@ -96,7 +96,7 @@ end 'main'
 <!-- test: anon-struct-array-func-arg -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Item
   export var value Integer

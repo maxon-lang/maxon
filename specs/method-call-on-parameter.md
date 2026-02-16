@@ -13,7 +13,7 @@ When writing a method, you can call other methods on parameters that have the sa
 ## Example
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Counter
   var value Score
@@ -37,7 +37,7 @@ not on `self`.
 <!-- test: method-call-on-same-type-parameter -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Foo
   var x Integer
@@ -64,7 +64,7 @@ end 'main'
 <!-- test: method-call-chain-same-type -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Value
   var n Integer
@@ -99,7 +99,7 @@ end 'main'
 <!-- test: sibling-method-call-still-works -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Calculator
   var base Integer
@@ -126,7 +126,7 @@ end 'main'
 <!-- test: method-with-args-on-same-type-parameter -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Adder
   var value Integer

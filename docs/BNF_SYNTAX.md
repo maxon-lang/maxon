@@ -240,7 +240,6 @@ typealias_decl
               = export_prefix 'typealias' IDENTIFIER '=' typealias_rhs NEWLINE
 
 typealias_rhs = ranged_type
-              | sized_shorthand
               | generic_type
               | tuple_type
 
@@ -257,9 +256,6 @@ sized_type_ref
               = 'u8' | 'u16' | 'u32' | 'u64'
               | 'i8' | 'i16' | 'i32' | 'i64'
               | 'f32' | 'f64'
-
-sized_shorthand
-              = sized_type_ref
 
 generic_type  = IDENTIFIER 'with' type_args
 

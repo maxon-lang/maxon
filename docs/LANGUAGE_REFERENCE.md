@@ -257,17 +257,6 @@ typealias SmallSigned = int(i8.min to i8.max)
 
 Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
-**Shorthand sized types:**
-
-Use sized type names directly as typealias shorthand:
-
-```maxon
-typealias FileHandle = u32    // equivalent to int(0 to 4294967295)
-typealias SmallFloat = f32    // 32-bit float
-```
-
-Supported: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
-
 **Construction:**
 
 Create values using `TypeName{value}` syntax:
@@ -292,7 +281,7 @@ When the value is a computed expression, a runtime range check is emitted that p
 
 ```maxon
 typealias Age = int(0 to 150)
-typealias Year = i64
+typealias Year = int(i64.min to i64.max)
 function makeAge(n Year) returns Year
   var a = Age{n}   // runtime check: panics if n < 0 or n > 150
   return a
@@ -1899,7 +1888,7 @@ Namespaces are derived from file paths:
 Functions, types, enums, and typealiases are file-scoped by default. Use the `export` keyword to make them visible to other files:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 export function publicAdd(a Score, b Score) returns Score
     return a + b
@@ -1915,7 +1904,7 @@ Only `publicAdd` can be called from other files.
 **Exporting types and enums:**
 
 ```maxon
-typealias Coord = i64
+typealias Coord = int(i64.min to i64.max)
 
 export type Point
   export var x Coord
@@ -1944,7 +1933,7 @@ Non-exported typealiases are only visible within their file. The standard librar
 Individual methods can be exported independently of the type itself:
 
 ```maxon
-typealias Amount = i64
+typealias Amount = int(i64.min to i64.max)
 
 export type Calculator
   var result Amount

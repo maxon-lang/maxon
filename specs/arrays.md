@@ -296,8 +296,8 @@ end 'main'
 <!-- test: byte-array-push-get -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 typealias ByteArray = Array with byte
 
@@ -323,8 +323,8 @@ end 'main'
 <!-- test: byte-array-initialized -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 typealias ByteArray = Array with byte
 
@@ -350,8 +350,8 @@ end 'main'
 <!-- test: byte-array-set -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 typealias ByteArray = Array with byte
 
@@ -376,8 +376,8 @@ end 'main'
 <!-- test: byte-array-max-values -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 typealias ByteArray = Array with byte
 
@@ -413,7 +413,7 @@ end 'main'
 <!-- test: byte-array-count -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 typealias ByteArray = Array with byte
 
@@ -672,7 +672,7 @@ end 'main'
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function makeNumbers(a Integer, b Integer) returns IntArray
   var arr = [a, b]
@@ -714,7 +714,7 @@ Cleanups:  1
 <!-- test: array-literal-struct-return-from-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer

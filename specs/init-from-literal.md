@@ -14,7 +14,7 @@ category: type-system
 Types conforming to `InitableFromStringLiteral` can be initialized from string literals using cast syntax. The `init` method receives a `String`:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type MyString implements InitableFromStringLiteral
   var _value String
@@ -46,7 +46,7 @@ end 'main'
 Types conforming to `InitableFromCharLiteral` can be initialized from character literals. The `init` method receives a `Character`:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type MyChar implements InitableFromCharLiteral
   var _value Character
@@ -78,7 +78,7 @@ end 'main'
 <!-- test: init-from-string-literal-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // User-defined type that wraps a String and can be created from string literals
 type Wrapper implements InitableFromStringLiteral
@@ -106,7 +106,7 @@ end 'main'
 <!-- test: init-from-string-literal-empty -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Wrapper implements InitableFromStringLiteral
   var _value String
@@ -133,7 +133,7 @@ len: 0
 <!-- test: init-from-char-literal-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type CharWrapper implements InitableFromCharLiteral
   var _value Character

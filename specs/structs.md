@@ -14,7 +14,7 @@ Types define custom data types with named fields.
 ### Declaration
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Point
   export var x Score
@@ -24,7 +24,7 @@ end 'Point'
 
 Fields must use `let` (immutable) or `var` (mutable), and can be `export` for external access:
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Config
   export let version Score    // Cannot be changed after initialization, accessible externally
@@ -71,7 +71,7 @@ c.count = 5     // OK: field is var
 <!-- test: var-struct-field-assign -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -91,7 +91,7 @@ end 'main'
 <!-- test: var-field-assign -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Config
   export let version Integer
@@ -111,7 +111,7 @@ end 'main'
 <!-- test: error.let-struct-field-assign -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -131,7 +131,7 @@ error E2013: specs/fragments/structs/error.let-struct-field-assign.test:12:3: ca
 <!-- test: error.let-field-assign -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Config
   export let version Integer
@@ -151,7 +151,7 @@ error E2013: specs/fragments/structs/error.let-field-assign.test:12:3: cannot as
 <!-- test: simple-type -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -170,7 +170,7 @@ end 'main'
 <!-- test: struct-field-access -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Rect
   export var width Integer
@@ -189,7 +189,7 @@ end 'main'
 <!-- test: struct-param -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Vec2
   export var x Integer
@@ -213,7 +213,7 @@ end 'main'
 <!-- test: struct-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Pair
   export var first Integer
@@ -236,7 +236,7 @@ end 'main'
 <!-- test: struct-literal-as-arg -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer

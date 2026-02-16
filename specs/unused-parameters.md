@@ -14,7 +14,7 @@ Maxon requires all function parameters to be used. Declaring unused parameters c
 ### Example Error
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function add(a Score, b Score) returns Score
   return a  // Error: 'b' is unused
@@ -30,7 +30,7 @@ Semantic Error: The parameter 'b' is declared but its value is never used
 Only declare parameters you need:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function identity(a Score) returns Score
   return a  // OK: 'a' is used
@@ -41,7 +41,7 @@ end 'identity'
 <!-- test: single-unused -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a
@@ -58,7 +58,7 @@ error E3012: specs/fragments/unused-parameters/single-unused.test:5:25: unused v
 <!-- test: multiple-unused -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function test(a Integer, b Integer, c Integer) returns Integer
   return a
@@ -75,7 +75,7 @@ error E3012: specs/fragments/unused-parameters/multiple-unused.test:5:26: unused
 <!-- test: all-used-ok -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a + b
@@ -93,7 +93,7 @@ end 'main'
 <!-- test: none-unused -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function multiply(a Integer, b Integer) returns Integer
   return a * b
@@ -111,7 +111,7 @@ end 'main'
 <!-- test: void-function-unused -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function doNothing(x Integer, y Integer)
   var z = 42

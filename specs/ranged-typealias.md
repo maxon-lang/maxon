@@ -12,8 +12,6 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 - Syntax: `typealias Age = int(0 to 150)` or `int(0 upto 150)` (exclusive upper bound)
 - Type-qualified `min`/`max` bounds: `typealias FullInt = int(i64.min to i64.max)`
 - Type-qualified bounds: `typealias Handle = int(0 to u32.max)`
-- Shorthand sized types: `typealias Handle = u32` (sugar for `int(0 to u32.max)`)
-- Supported shorthands: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
 - Construction: `Age{42}` (compile-time checked for literals, runtime checked for expressions)
 - `int / int` produces `int` (truncating), not `float`
 - Standard library defines purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `Offset`, `MathValue`, `ExitCode`)
@@ -38,15 +36,7 @@ Use `type.min` and `type.max` for a type's full range:
 ```maxon
 typealias FullInt = int(i64.min to i64.max)
 typealias FullFloat = float(f64.min to f64.max)
-typealias FullByte = byte(u8.min to u8.max)
-```
-
-Or use shorthand aliases for the same effect:
-
-```maxon
-typealias FullInt = i64
-typealias FullFloat = f64
-typealias FullByte = u8
+typealias FullByte = byte(0 to u8.max)
 ```
 
 ### Construction
@@ -63,7 +53,7 @@ var myAge = Age{25}
 When the value is a computed expression, a runtime check is emitted:
 
 ```maxon
-typealias Year = i64
+typealias Year = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 function makeAge(n Year) returns Year
   var a = Age{n}   // runtime check: panics if n < 0 or n > 150
@@ -103,17 +93,6 @@ typealias Port = int(0 to u16.max)
 
 Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
-### Shorthand sized type aliases
-
-Use sized type names directly as typealias shorthand:
-
-```maxon
-typealias FileHandle = u32    // equivalent to int(0 to 4294967295)
-typealias SmallSigned = i8    // equivalent to int(-128 to 127)
-typealias SmallFloat = f32    // equivalent to float(-3.4028235E+38 to 3.4028235E+38)
-```
-
-Supported shorthands: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
 ## Tests
 
@@ -247,7 +226,7 @@ ExitCode: 42
 
 <!-- test: runtime-check-pass -->
 ```maxon
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
@@ -267,7 +246,7 @@ ExitCode: 50
 
 <!-- test: runtime-check-fail -->
 ```maxon
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
@@ -288,7 +267,7 @@ Stderr: Range check failed
 
 <!-- test: byte-range -->
 ```maxon
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 typealias AsciiCode = byte(0 to 127)
 
 function main() returns ExitCode
@@ -395,7 +374,7 @@ Stderr: Range check failed
 
 <!-- test: return-float-range-check -->
 ```maxon
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 typealias Pct = float(0.0 to 100.0)
 
 function clampedPct(x Float) returns Pct
@@ -503,11 +482,11 @@ end 'main'
 ExitCode: 8080
 ```
 
-### Shorthand u32 alias
+### u32 range alias
 
-<!-- test: shorthand-u32 -->
+<!-- test: u32-range -->
 ```maxon
-typealias Handle = u32
+typealias Handle = int(0 to u32.max)
 
 function main() returns ExitCode
   var h = Handle{42}
@@ -518,11 +497,11 @@ end 'main'
 ExitCode: 42
 ```
 
-### Shorthand i8 alias
+### i8 range alias
 
-<!-- test: shorthand-i8 -->
+<!-- test: i8-range -->
 ```maxon
-typealias SmallInt = i8
+typealias SmallInt = int(i8.min to i8.max)
 
 function main() returns ExitCode
   var s = SmallInt{100}
@@ -533,11 +512,11 @@ end 'main'
 ExitCode: 100
 ```
 
-### Shorthand f32 alias with float operations
+### f32 range alias with float operations
 
-<!-- test: shorthand-f32 -->
+<!-- test: f32-range -->
 ```maxon
-typealias SmallFloat = f32
+typealias SmallFloat = float(f32.min to f32.max)
 
 function main() returns ExitCode
   var x = SmallFloat{3.5}
@@ -553,7 +532,7 @@ ExitCode: 5
 
 <!-- test: f32-arithmetic -->
 ```maxon
-typealias F = f32
+typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
   var a = F{10.0}
@@ -573,7 +552,7 @@ ExitCode: 56
 
 <!-- test: f32-comparison -->
 ```maxon
-typealias F = f32
+typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
   var a = F{3.0}
@@ -592,7 +571,7 @@ ExitCode: 1
 
 <!-- test: f32-function-param-return -->
 ```maxon
-typealias F = f32
+typealias F = float(f32.min to f32.max)
 
 function double(x F) returns F
   return x * 2.0
@@ -611,7 +590,7 @@ ExitCode: 42
 
 <!-- test: f32-to-int -->
 ```maxon
-typealias F = f32
+typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
   var x = F{42.9}
@@ -665,4 +644,60 @@ end 'main'
 ```
 ```maxoncstderr
 error E3062: specs/fragments/ranged-typealias/unused-typealias-with-used.test:3:11: unused typealias: 'Age'
+```
+
+### Error: unrepresentable range
+
+<!-- test: error.unrepresentable-range -->
+```maxon
+typealias Bad = int(i64.min to u64.max)
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2:17: Invalid range: range -9.223372036854776E+18 to 1.8446744073709552E+19 exceeds any representable integer type
+```
+
+### Error: byte range below zero
+
+<!-- test: error.byte-range-negative -->
+```maxon
+typealias BadByte = byte(-1 to 255)
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.byte-range-negative.test:2:21: Invalid byte range: bounds must be within 0 to 255
+```
+
+### Error: byte range above 255
+
+<!-- test: error.byte-range-overflow -->
+```maxon
+typealias BadByte = byte(0 to 256)
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.byte-range-overflow.test:2:21: Invalid byte range: bounds must be within 0 to 255
+```
+
+### Error: bare sized type shorthand not allowed
+
+<!-- test: error.bare-shorthand -->
+```maxon
+typealias Integer = i64
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2003: specs/fragments/ranged-typealias/error.bare-shorthand.test:2:21: Bare sized type 'i64' is not allowed. Use explicit range syntax, e.g. 'int(i64.min to i64.max)'
 ```

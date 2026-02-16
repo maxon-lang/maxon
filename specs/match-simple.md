@@ -338,7 +338,7 @@ end 'main'
 <!-- test: match-statements.nested-in-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function categorize(n Integer) returns Integer
   match n 'cat'
@@ -376,7 +376,7 @@ end 'main'
 <!-- test: match-statements.function-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(n Integer) returns Integer
   return n * 2

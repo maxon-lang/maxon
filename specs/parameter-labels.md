@@ -16,7 +16,7 @@ All function and method calls require named arguments using colon syntax. This i
 All arguments must be named using `name: value` syntax:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function add(a Score, b Score) returns Score
   return a + b
@@ -36,7 +36,7 @@ end 'main'
 Named arguments can appear in any order:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function subtract(a Score, b Score) returns Score
   return a - b
@@ -56,7 +56,7 @@ end 'main'
 Parameters with default values can be omitted:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function repeat(value Score, times Score = 1) returns Score
   return value * times
@@ -76,7 +76,7 @@ end 'main'
 <!-- test: named-args -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a + b
@@ -93,7 +93,7 @@ end 'main'
 <!-- test: named-args-multiply -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function multiply(x Integer, y Integer) returns Integer
   return x * y
@@ -110,7 +110,7 @@ end 'main'
 <!-- test: named-args-any-order -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function subtract(a Integer, b Integer) returns Integer
   return a - b
@@ -127,7 +127,7 @@ end 'main'
 <!-- test: default-param-named -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function repeat(value Integer, times Integer = 1) returns Integer
   return value * times
@@ -144,7 +144,7 @@ end 'main'
 <!-- test: default-param-omitted -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function repeat(value Integer, times Integer = 2) returns Integer
   return value * times
@@ -161,7 +161,7 @@ end 'main'
 <!-- test: error-missing-param-name -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a + b
@@ -178,7 +178,7 @@ error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:10:1
 <!-- test: error-unknown-param-name -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function greet(name Integer) returns Integer
   return name

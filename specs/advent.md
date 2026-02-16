@@ -52,7 +52,7 @@ module {
 <!-- test: day2 -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(x Integer, y Integer) returns Integer
     return x + y
@@ -167,7 +167,7 @@ module {
 <!-- Args: 1 -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function multiply(x Integer) returns Integer
     return x * 1
@@ -424,7 +424,7 @@ module {
 <!-- Args: 3 -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function multiply(x Integer) returns Integer
     return x * 2

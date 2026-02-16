@@ -16,7 +16,7 @@ Maxon uses contextual literal typing to allow integer and byte literals to adapt
 Integer literals in the range 0-255 can be compared directly with byte values:
 
 ```maxon
-typealias Pixel = u8
+typealias Pixel = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 100 as Pixel
@@ -33,7 +33,7 @@ end 'main'
 Byte variables can be compared directly with int literals in the 0-255 range:
 
 ```maxon
-typealias Pixel = u8
+typealias Pixel = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 200 as Pixel
@@ -62,7 +62,7 @@ end 'check'
 To compare, cast explicitly:
 
 ```maxon
-typealias Decimal = f64
+typealias Decimal = float(f64.min to f64.max)
 
 function main() returns ExitCode
   var x = 5
@@ -96,7 +96,7 @@ end 'main'
 <!-- test: int-literal-vs-byte-valid -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 42 as Byte
@@ -113,7 +113,7 @@ end 'main'
 <!-- test: int-literal-vs-byte-out-of-range -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var b = 100 as Byte
@@ -188,7 +188,7 @@ error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-erro
 <!-- test: explicit-cast-int-to-float -->
 ```maxon
 
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
   var x = 5
@@ -244,7 +244,7 @@ end 'main'
 <!-- test: byte-vs-byte -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
   var a = 50 as Byte

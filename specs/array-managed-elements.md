@@ -28,7 +28,7 @@ Structs with String fields stored in arrays must have proper refcount management
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Item
   export var name String
@@ -129,7 +129,7 @@ Each managed field in a struct needs its own refcount tracking.
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type MultiField
   export var a String

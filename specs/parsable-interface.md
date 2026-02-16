@@ -32,7 +32,7 @@ User-defined types implement `Parsable` by providing a static `fromString` metho
 - Throws a specific error type on parse failure
 
 ```maxon
-typealias Amount = i64
+typealias Amount = int(i64.min to i64.max)
 
 enum MoneyParseError implements Error
   InvalidFormat = 1
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: parsable.type-implements-parsable -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Type can implement Parsable with throwing static method
 enum ParseError implements Error
@@ -109,7 +109,7 @@ end 'main'
 <!-- test: parsable.successful-parse -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Parsable.fromString returns struct on success
 enum ParseError implements Error
@@ -138,7 +138,7 @@ end 'main'
 <!-- test: parsable.throws-on-invalid-input -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Parsable.fromString throws error on invalid input
 enum ParseError implements Error
@@ -170,7 +170,7 @@ end 'main'
 <!-- test: parsable.multiple-error-conditions -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Parsable can throw different errors for different conditions
 enum MoneyParseError implements Error
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: parsable.otherwise-fallthrough -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // otherwise blocks execute code when error occurs, then continue execution
 enum ParseError implements Error
@@ -251,7 +251,7 @@ end 'main'
 <!-- test: error.missing-throws -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Implementation must throw if interface requires it
 type Value implements Parsable
@@ -273,7 +273,7 @@ error E3016: specs/fragments/parsable-interface/error.missing-throws.test:6:6: M
 <!-- test: error.throws-non-error-type -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Implementation must throw a type that conforms to Error
 enum NotAnError

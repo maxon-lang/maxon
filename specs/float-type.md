@@ -25,7 +25,7 @@ Float literals must include a decimal point:
 
 ```maxon
 
-typealias Radius = f64
+typealias Radius = float(f64.min to f64.max)
 
 function circleArea(radius Radius) returns Radius
   return 3.14159 * radius * radius

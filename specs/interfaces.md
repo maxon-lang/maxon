@@ -28,7 +28,7 @@ Method signatures in interfaces have an implicit `self` parameter of type `Self`
 Types declare conformance to interfaces using the `implements` keyword:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable
   var x Score
@@ -39,7 +39,7 @@ end 'Point'
 A type can conform to multiple interfaces:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable, Equatable
   var x Score
@@ -52,7 +52,7 @@ end 'Point'
 Methods implementing interface requirements are defined **inside the type body** using `function methodName(params)` syntax. The interface prefix explicitly declares which interface the method implements. The `self` parameter is implicit:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable
   var x Score
@@ -73,7 +73,7 @@ You can still use `self.field` explicitly if needed, especially when a parameter
 Non-interface methods (methods that don't implement any interface) use simple `function methodName(params)` syntax without a prefix:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Point
   var x Score
@@ -101,7 +101,7 @@ The method receives the instance as an implicit first parameter. Fields are acce
 The `Self` type in interface signatures represents the conforming type:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 interface Cloneable
   function clone() returns Self
@@ -122,7 +122,7 @@ end 'Point'
 Interfaces can declare associated types with `uses`. Structs bind concrete types with `with`:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 interface Container uses Element
   function get(index Score) returns Element
@@ -146,7 +146,7 @@ See the [Associated Types](associated-types.md) spec for full documentation.
 A type must implement **all** methods from interfaces it conforms to. Partial implementation is an error:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 interface TwoMethods
   function first() returns Score
@@ -180,7 +180,7 @@ The `Iterator` type in `stdlib/iter/iterator.maxon` conforms to `Iterable` and i
 ### Example
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Point implements Hashable
   var x Score
@@ -211,7 +211,7 @@ end 'main'
 <!-- test: basic-interface -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point implements Hashable
   var x Integer
@@ -239,7 +239,7 @@ end 'main'
 <!-- test: multiple-methods -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Describable
   function describe() returns Integer
@@ -271,7 +271,7 @@ end 'main'
 <!-- test: method-with-params -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Calculator
   function add(n Integer) returns Integer
@@ -298,7 +298,7 @@ end 'main'
 <!-- test: multiple-interfaces -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point implements Hashable, Equatable
   var x Integer
@@ -333,7 +333,7 @@ end 'main'
 <!-- test: self-return-type -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Movable
   function move(dx Integer, dy Integer) returns Self
@@ -362,7 +362,7 @@ end 'main'
 <!-- test: method-call-syntax -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Incrementable
   function inc() returns Integer
@@ -389,7 +389,7 @@ end 'main'
 <!-- test: partial-implementation-error -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface ThreeMethods
   function one() returns Integer
@@ -419,7 +419,7 @@ error E3016: specs/fragments/interfaces/partial-implementation-error.test:11:6: 
 <!-- test: non-interface-method -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Calculator
   var value Integer
@@ -446,7 +446,7 @@ end 'main'
 <!-- test: transitive-interface-validation -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface BaseInterface
   function baseMethod() returns Integer
@@ -478,7 +478,7 @@ error E3016: specs/fragments/interfaces/transitive-interface-validation.test:14:
 <!-- test: transitive-interface-complete -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface BaseInterface
   function baseMethod() returns Integer

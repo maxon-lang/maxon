@@ -167,7 +167,7 @@ end 'main'
 <!-- test: ranges.expression-bounds -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function getStart() returns Integer
     return 1

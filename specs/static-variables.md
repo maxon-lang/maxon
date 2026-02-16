@@ -43,7 +43,7 @@ Types can have static fields that are shared across all instances. Static fields
 #### Syntax
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Counter
   static var count = 0       // Mutable static field
@@ -86,7 +86,7 @@ end 'main'
 <!-- test: top-level-var-increment -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 var total = 10
 
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: static-and-instance-fields -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Thing
   static var created = 0
@@ -310,7 +310,7 @@ end 'main'
 <!-- test: top-level-var-array-cross-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 var scores = [10, 20, 30]
 
@@ -337,7 +337,7 @@ end 'main'
 <!-- test: top-level-var-array-mutate-cross-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 var counters = [0, 0, 0]
 

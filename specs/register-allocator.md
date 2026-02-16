@@ -1642,7 +1642,7 @@ module {
 <!-- test: int-call-preserves-value -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function getForty() returns Integer
   return 40
@@ -1755,7 +1755,7 @@ module {
 <!-- test: int-multiple-calls-preserve -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function getTen() returns Integer
   return 10
@@ -1906,7 +1906,7 @@ module {
 <!-- test: int-call-result-used-later -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function compute() returns Integer
   return 100
@@ -2055,7 +2055,7 @@ end 'main'
 <!-- test: int-function-with-params -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a + b
@@ -2169,7 +2169,7 @@ module {
 <!-- test: int-mov-reg-reg-32bit -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a + b
@@ -3634,7 +3634,7 @@ module {
 <!-- test: int-loop-with-function-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
   return x * 2
@@ -4033,7 +4033,7 @@ module {
 <!-- test: int-many-params-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function sum5(a Integer, b Integer, c Integer, d Integer, e Integer) returns Integer
   return a + b + c + d + e
@@ -4173,7 +4173,7 @@ module {
 <!-- test: int-nine-params-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function sum9(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer) returns Integer
   return a + b + c + d + e + f + g + h + i
@@ -4356,7 +4356,7 @@ module {
 <!-- test: int-recursive-factorial -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function factorial(n Integer) returns Integer
   if n <= 1 'base'
@@ -4517,7 +4517,7 @@ module {
 <!-- test: int-loop-pressure-with-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function identity(x Integer) returns Integer
   return x
@@ -5323,7 +5323,7 @@ end 'main'
 <!-- test: int-callee-saved-clobber -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function useRegs(a Integer, b Integer, c Integer, d Integer) returns Integer
   var x = a + b
@@ -5470,7 +5470,7 @@ module {
 <!-- test: int-float-survives-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function getInt() returns Integer
   return 40
@@ -5703,7 +5703,7 @@ module {
 <!-- test: int-call-arg-reverse -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function sub(a Integer, b Integer) returns Integer
   return a - b
@@ -7324,7 +7324,7 @@ module {
 <!-- test: match-statement-with-function-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(n Integer) returns Integer
   return n * 2
@@ -7530,7 +7530,7 @@ module {
 <!-- test: error-otherwise-ignore -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -7603,7 +7603,7 @@ module {
 <!-- test: error-otherwise-block -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -7756,7 +7756,7 @@ module {
 <!-- test: error-propagate-through-caller -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -7962,7 +7962,7 @@ module {
 <!-- test: error-multiple-try-calls -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -8250,7 +8250,7 @@ module {
 <!-- test: error-throw-in-match -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   invalidInput

@@ -21,7 +21,7 @@ functionName(arguments)  // if unambiguous
 ### Example
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 export function add(a Score, b Score) returns Score
   return a + b

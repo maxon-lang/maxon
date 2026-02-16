@@ -299,7 +299,7 @@ end 'main'
 <!-- test: byte-vector -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias ByteVec4 = Vector with 4 byte
 
@@ -321,7 +321,7 @@ end 'main'
 <!-- test: pass-to-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias Vec3 = Vector with 3 int
 
@@ -347,7 +347,7 @@ end 'main'
 <!-- test: return-from-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias Vec2 = Vector with 2 int
 
@@ -482,7 +482,7 @@ end 'main'
 The inferred type from a literal is compatible with a typealias of the same element type and size.
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias Vec3 = Vector with 3 int
 

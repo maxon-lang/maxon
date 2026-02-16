@@ -97,7 +97,7 @@ print("Status: {s}\n")  // "Status: Active"
 Custom types can be interpolated by implementing the `Stringable` interface:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Point implements Stringable
   var x Score
@@ -513,7 +513,7 @@ Count: 2
 <!-- test: function-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
   return x * 2
@@ -696,7 +696,7 @@ end 'main'
 <!-- test: custom-stringable -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Pair implements Stringable
   var first Integer
@@ -725,7 +725,7 @@ end 'main'
 <!-- test: stringable-format-spec -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Counter implements Stringable, FormattedStringable
   var value Integer
@@ -762,7 +762,7 @@ Counter(value=42)
 <!-- test: multiple-stringable -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Name implements Stringable
   var first String

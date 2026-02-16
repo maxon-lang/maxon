@@ -64,7 +64,7 @@ error E3010: specs/fragments/unknown-keyword-error/typo-keyword.test:4:3: unexpe
 <!-- test: missing-call-parens -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function test() returns Integer
   return 42

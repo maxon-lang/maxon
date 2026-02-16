@@ -2219,14 +2219,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return;
       }
 
-      // Shorthand sized type alias: typealias FileHandle = u32
+      // Reject bare sized type names — require explicit range syntax
       if (Check(TokenType.Identifier) && IsSizedTypeName(Current().Value)) {
-        var shortToken = Advance();
-        var (baseType, lower, upper) = ResolveShorthandType(shortToken.Value);
-        var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive: true);
-        _typeRegistry[aliasName] = rangedType;
-        _typeAliasSources[aliasName] = baseType == MlirType.F64 || baseType == MlirType.F32 ? "float" : baseType == MlirType.I8 ? "byte" : "int";
-        return;
+        var shortToken = Current();
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          $"Bare sized type '{shortToken.Value}' is not allowed. Use explicit range syntax, e.g. 'int({shortToken.Value}.min to {shortToken.Value}.max)'",
+          shortToken.Line, shortToken.Column);
       }
 
       // Ranged primitive alias: typealias Age = int(0 to 150)
@@ -2246,6 +2244,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Expect(TokenType.RightParen);
         if (lower > upper || (lower == upper && !upperInclusive))
           throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
+        // Ranges that span negative and above i64.max are unrepresentable in any single 64-bit type
+        if (baseType != MlirType.F64 && baseType != MlirType.F32 && lower < 0 && upper > (double)long.MaxValue)
+          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: range {lower} to {upper} exceeds any representable integer type", primitiveToken.Line, primitiveToken.Column);
+        // byte ranges must fit within 0..255
+        if (baseType == MlirType.I8 && (lower < 0 || upper > 255))
+          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to 255", primitiveToken.Line, primitiveToken.Column);
         var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
         _typeRegistry[aliasName] = rangedType;
         _typeAliasSources[aliasName] = primitiveToken.Value;
@@ -2401,13 +2405,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ("f64", "max") => double.MaxValue,
     ("f32", "min") => (double)-float.MaxValue,
     ("f32", "max") => (double)float.MaxValue,
-    ("u8", "min") => 0,
     ("u8", "max") => 255,
-    ("u16", "min") => 0,
     ("u16", "max") => 65535,
-    ("u32", "min") => 0,
     ("u32", "max") => 4294967295,
-    ("u64", "min") => 0,
     ("u64", "max") => (double)ulong.MaxValue,
     ("i8", "min") => -128,
     ("i8", "max") => 127,
@@ -2417,16 +2417,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ("i32", "max") => 2147483647,
     _ => throw new InvalidOperationException($"Unknown type bound: {typeName}.{keyword}")
   };
-
-  private static (MlirType baseType, double lower, double upper) ResolveShorthandType(string name) {
-    var baseType = name switch {
-      "u8" => MlirType.I8,
-      "f32" => MlirType.F32,
-      "f64" => MlirType.F64,
-      _ => MlirType.I64,
-    };
-    return (baseType, ResolveTypeBound(name, "min"), ResolveTypeBound(name, "max"));
-  }
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName, bool isExported = false) {
     Advance(); // consume 'function'

@@ -323,7 +323,7 @@ end 'main'
 <!-- test: shr-in-method-call-arg -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type ShrBuf
   var managed __ManagedMemory
@@ -359,7 +359,7 @@ end 'main'
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type ShrBuf2
   var managed __ManagedMemory

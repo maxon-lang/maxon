@@ -17,7 +17,7 @@ Struct fields can be modified after the struct is created.
 <!-- test: struct-field-reassignment -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Counter
   export var value Integer
@@ -38,7 +38,7 @@ Assigning to an immutable (`let`) field should be a compile-time error.
 
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Config
   export let id Integer
@@ -58,7 +58,7 @@ error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assig
 <!-- test: nested-struct-field-reassignment -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Inner
   export var x Integer

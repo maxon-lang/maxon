@@ -169,7 +169,7 @@ end 'main'
 else-if chains in helper functions must be correctly skipped during pre-scan.
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function classify(x Integer) returns Integer
   if x == 0 'zero'
@@ -219,7 +219,7 @@ Variables declared inside if blocks go out of scope at the end of the block.
 Return after the if should not attempt to clean up those variables.
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function test(x Integer) returns Integer
   if x == 0 'outer'
@@ -244,7 +244,7 @@ Nested if statements with returns inside should work correctly.
 The outer if creates a variable that shouldn't be accessed after the if.
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function test(c Integer, next Integer) returns Integer
   if c == 0 'maybePrefix'

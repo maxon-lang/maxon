@@ -30,7 +30,7 @@ error E3002: Function 'main' must return ExitCode
 <!-- test: no-main -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function notmain() returns Integer
   return 42
@@ -63,7 +63,7 @@ end 'main'
 <!-- test: return-function-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function getValue() returns Integer
   return 42

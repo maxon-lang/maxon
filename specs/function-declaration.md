@@ -48,8 +48,8 @@ Multiple discard parameters can be declared using names that start with `_`:
 
 ```maxon
 
-typealias ID = i64
-typealias Weight = f64
+typealias ID = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
 
 function callback(_a ID, _b String, value Weight) returns Weight
   return value * 2.0
@@ -65,7 +65,7 @@ Discard parameters:
 
 ```maxon
 
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function add(a Score, b Score) returns Score
   return a + b
@@ -85,7 +85,7 @@ end 'main'
 <!-- test: simple-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add() returns Integer
   return 3 + 4
@@ -103,7 +103,7 @@ end 'main'
 <!-- test: with-parameters -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
   return a + b
@@ -121,7 +121,7 @@ end 'main'
 <!-- test: nested-calls -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
   return x * 2
@@ -174,7 +174,7 @@ error E3010: specs/fragments/function-declaration/missing-returns-keyword-error.
 <!-- test: discard-single-parameter -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function useSecond(_ Integer, b Integer) returns Integer
   return b

@@ -26,8 +26,8 @@ Maxon supports implicit type conversions between compatible numeric types. These
 Function arguments are implicitly converted to match parameter types:
 
 ```maxon
-typealias Score = i64
-typealias Weight = f64
+typealias Score = int(i64.min to i64.max)
+typealias Weight = float(f64.min to f64.max)
 
 function takeFloat(x Weight) returns Score
   return trunc(x)
@@ -46,8 +46,8 @@ end 'main'
 <!-- test: int-literal-to-float-param -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 function takeFloat(x Float) returns Integer
   return trunc(x)
@@ -64,8 +64,8 @@ end 'main'
 <!-- test: int-var-to-float-param -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 function takeFloat(x Float) returns Integer
   return trunc(x)
@@ -83,8 +83,8 @@ end 'main'
 <!-- test: byte-to-int-param -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function takeInt(x Integer) returns Integer
   return x
@@ -102,8 +102,8 @@ end 'main'
 <!-- test: int-to-byte-param-truncates -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function takeByte(x Byte) returns Integer
   return x as Integer
@@ -120,8 +120,8 @@ end 'main'
 <!-- test: int-var-to-byte-param -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function takeByte(x Byte) returns Integer
   return x as Integer
@@ -139,7 +139,7 @@ end 'main'
 <!-- test: float-to-int-param-truncates -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function takeInt(x Integer) returns Integer
   return x
@@ -157,8 +157,8 @@ end 'main'
 <!-- test: float-to-byte-param -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function takeByte(x Byte) returns Integer
   return x as Integer
@@ -176,8 +176,8 @@ end 'main'
 <!-- test: function-return-to-byte-param -->
 ```maxon
 
-typealias Integer = i64
-typealias Byte = u8
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
 
 function getInt() returns Integer
   return 300
@@ -198,8 +198,8 @@ end 'main'
 <!-- test: expression-to-float-param -->
 ```maxon
 
-typealias Integer = i64
-typealias Float = f64
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
 
 function takeFloat(x Float) returns Integer
   return trunc(x)
@@ -229,7 +229,7 @@ end 'main'
 <!-- disabled-test: no-string-to-int -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function takeInt(x Integer) returns Integer
   return x
@@ -247,7 +247,7 @@ error E022: specs/fragments/implicit-type-conversion.no-string-to-int.1.test:11:
 <!-- test: no-bool-to-int -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function takeInt(x Integer) returns Integer
   return x
@@ -265,7 +265,7 @@ error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:11:10:
 <!-- test: no-int-to-bool -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function takeBool(x bool) returns Integer
   if x 'check'

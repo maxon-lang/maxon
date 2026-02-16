@@ -95,7 +95,7 @@ A new array containing the transformed elements.
 Transform an array using a named function:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function double(x Score) returns Score
   return x * 2
@@ -121,7 +121,7 @@ end 'main'
 Transform using an inline closure with `gives`:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var numbers = [1, 2, 3]
@@ -230,7 +230,7 @@ end 'main'
 <!-- test: map-basic-transform -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
   return x * 2
@@ -266,7 +266,7 @@ end 'main'
 <!-- test: map-closure-multiply -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var arr = [2, 3, 4]
@@ -292,7 +292,7 @@ end 'main'
 <!-- test: map-closure-square -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var arr = [1, 2, 3, 4]
@@ -321,7 +321,7 @@ end 'main'
 <!-- test: map-identity-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function identity(x Integer) returns Integer
   return x
@@ -351,7 +351,7 @@ end 'main'
 <!-- test: map-negate -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function negate(x Integer) returns Integer
   return 0 - x
@@ -381,7 +381,7 @@ end 'main'
 <!-- test: map-single-element -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var arr = [42]

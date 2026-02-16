@@ -68,7 +68,7 @@ The error is bound to `e` and available within the else-block.
 <!-- test: if-try-boolean-success -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -96,7 +96,7 @@ end 'main'
 <!-- test: if-try-boolean-failure -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -124,7 +124,7 @@ end 'main'
 <!-- test: if-try-binding-success -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -151,7 +151,7 @@ end 'main'
 <!-- test: if-try-binding-failure -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -178,7 +178,7 @@ end 'main'
 <!-- test: if-try-else-block -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: if-try-else-success -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -238,7 +238,7 @@ end 'main'
 <!-- test: if-try-binding-with-else -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -267,7 +267,7 @@ end 'main'
 <!-- test: if-try-binding-with-else-success -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -296,7 +296,7 @@ end 'main'
 <!-- test: if-try-else-with-error-binding -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   first
@@ -330,7 +330,7 @@ end 'main'
 <!-- test: if-try-nested -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -360,7 +360,7 @@ end 'main'
 <!-- test: if-try-in-loop -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum MyError implements Error
   failed
@@ -394,7 +394,7 @@ Using `if try` with a non-throwing function is a compile-time error.
 
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function noThrow() returns Integer
   return 42

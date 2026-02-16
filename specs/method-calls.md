@@ -71,7 +71,7 @@ end 'main'
 <!-- test: method-call-void -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Counter
   var count Integer
@@ -100,7 +100,7 @@ end 'main'
 <!-- test: method-call-with-args -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Adder
   var total Integer
@@ -129,7 +129,7 @@ end 'main'
 <!-- test: method-return-in-expr -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Box
   var value Integer
@@ -151,7 +151,7 @@ end 'main'
 <!-- test: method-multiple-args -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Calculator
   var result Integer
@@ -178,7 +178,7 @@ end 'main'
 <!-- test: method-call-on-field-access -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Inner
   var value Integer
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: method-modify-multiple-fields -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   var x Integer
@@ -237,7 +237,7 @@ end 'main'
 <!-- test: method-return-comparison -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Value
   var n Integer
@@ -262,7 +262,7 @@ end 'main'
 <!-- test: error-method-unnamed-args -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Adder
   var total Integer
@@ -283,7 +283,7 @@ error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:15:5: S
 ```
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Calculator
   var result Integer
@@ -310,7 +310,7 @@ end 'main'
 <!-- test: static-method-named-args -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Factory
   static function create(x Integer, y Integer) returns Integer
@@ -329,7 +329,7 @@ end 'main'
 <!-- test: error-static-method-unnamed-args -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Factory
   static function create(x Integer, y Integer) returns Integer

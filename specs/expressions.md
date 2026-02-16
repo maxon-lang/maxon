@@ -56,7 +56,7 @@ end 'main'
 <!-- test: with-function-call -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var x = 3

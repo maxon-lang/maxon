@@ -53,7 +53,7 @@ end 'Container'
 <!-- test: conditional-extensions.basic-equatable -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface HasItems uses Element
   function next() returns Element throws IterationError
@@ -107,7 +107,7 @@ When the associated type does not satisfy the where constraint, calling the meth
 <!-- test: conditional-extensions.constraint-not-met -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Holder uses Item
   function get() returns Item
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: conditional-extensions.multiple-constraints -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Bucket uses Element
   function next() returns Element throws IterationError
@@ -259,7 +259,7 @@ end 'main'
 <!-- test: conditional-extensions.partial-availability -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
   function next() returns Element throws IterationError

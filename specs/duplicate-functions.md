@@ -36,7 +36,7 @@ Every program must have a `main` function. This is tested in the `basics` spec.
 <!-- test: error.same-file-duplicate -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function helper() returns Integer
   return 1

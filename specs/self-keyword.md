@@ -55,7 +55,7 @@ end 'Point'
 <!-- test: self-explicit-access -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Counter
   var count Integer
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: self-implicit-access -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Counter
   var count Integer
@@ -112,7 +112,7 @@ end 'main'
 <!-- test: self-with-params -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Accumulator
   var total Integer
@@ -141,7 +141,7 @@ end 'main'
 <!-- test: self-multiple-fields -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   var x Integer
@@ -168,7 +168,7 @@ end 'main'
 <!-- test: self-modify-and-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Value
   var n Integer
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: self-implicit-multiple-fields -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Rectangle
   var width Integer

@@ -528,7 +528,7 @@ end 'main'
 <!-- test: float-rawvalue-in-function -->
 ```maxon
 
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 
 enum Weights
   light = 1.5
@@ -555,7 +555,7 @@ end 'main'
 <!-- test: int-rawvalue-in-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum HttpStatus
   ok = 200

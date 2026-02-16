@@ -16,7 +16,7 @@ Extensions allow you to add methods to interfaces that are automatically availab
 Extensions are declared with the `extension` keyword followed by an interface name:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 extension Iterable
   function count() returns Score
@@ -42,7 +42,7 @@ When you define an extension method:
 Extensions can use the interface's associated types. These are automatically substituted with the concrete type's associated type bindings:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 interface Container uses Element
   function get(index Score) returns Element
@@ -88,7 +88,7 @@ This `map` extension works on any `Iterable` type (Array, Set, Map, etc.) and re
 <!-- test: basic-extension-on-array -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Countable
   function value() returns Integer
@@ -121,7 +121,7 @@ end 'main'
 <!-- test: extension-with-self -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Summable
   function value() returns Integer
@@ -154,7 +154,7 @@ end 'main'
 <!-- test: extension-multiple-types -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Valued
   function val() returns Integer
@@ -194,7 +194,7 @@ end 'main'
 <!-- test: extension-with-params -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Scalable
   function base() returns Integer
@@ -227,7 +227,7 @@ end 'main'
 <!-- test: extension-returns-struct -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Pointlike
   function getX() returns Integer
@@ -272,7 +272,7 @@ end 'main'
 <!-- test: stdlib-map-on-array -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var nums = [1, 2, 3, 4, 5]
@@ -295,7 +295,7 @@ end 'main'
 <!-- test: stdlib-map-on-set -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntSet = Set with int
 

@@ -152,7 +152,7 @@ end 'main'
 <!-- test: error.associated-value-enum-not-hashable -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty

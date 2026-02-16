@@ -40,7 +40,7 @@ Static methods are commonly used for:
 <!-- test: static-method-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Box
   export var value Integer
@@ -62,7 +62,7 @@ end 'main'
 <!-- test: static-method-no-self -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Math
   var unused Integer
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: export-static-method -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Factory
   export var id Integer

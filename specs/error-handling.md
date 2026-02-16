@@ -102,7 +102,7 @@ end 'handler'
 The error is bound to `e` as a typed enum value within the block. You can use `match` to dispatch on specific error cases. For error enums with associated values, you can extract the payload:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 enum MyError implements Error
   notFound(code Score)
@@ -165,7 +165,7 @@ end 'main'
 <!-- test: error.parse-throws-function-signature -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Functions can declare they throw a specific error type
 enum MyError implements Error
@@ -188,7 +188,7 @@ end 'main'
 <!-- test: error.throw-and-return-success -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test that throwing function can return success value
 enum MyError implements Error
@@ -213,7 +213,7 @@ end 'main'
 <!-- test: error.propagate-error-to-caller -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test error propagation: inner function throws, middle propagates, outer handles with otherwise
 enum MyError implements Error
@@ -241,7 +241,7 @@ end 'main'
 <!-- test: error.otherwise-default-value -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise with default value
 enum MyError implements Error
@@ -264,7 +264,7 @@ end 'main'
 <!-- test: error.otherwise-default-success -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise when no error occurs
 enum MyError implements Error
@@ -290,7 +290,7 @@ end 'main'
 <!-- test: error.otherwise-ignore -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise ignore
 enum MyError implements Error
@@ -313,7 +313,7 @@ end 'main'
 <!-- test: error.otherwise-block -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise block handler
 enum MyError implements Error
@@ -339,7 +339,7 @@ end 'main'
 <!-- test: error.otherwise-block-success -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise block when no error
 enum MyError implements Error
@@ -368,7 +368,7 @@ end 'main'
 <!-- test: error.otherwise-block-with-binding -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise block with error binding - block is entered on error
 enum MyError implements Error
@@ -409,7 +409,7 @@ error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: m
 <!-- disabled-test: error.otherwise-type-mismatch -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // otherwise expression type must match the success type
 enum MyError implements Error
@@ -432,7 +432,7 @@ error E3059: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test
 <!-- test: error.throwing-function-requires-try -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Calling a throwing function without try is an error
 enum MyError implements Error
@@ -470,7 +470,7 @@ error E3057: specs/fragments/error-handling.error.throwing-method-requires-try.1
 <!-- test: error.try-on-non-throwing-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Using try on a non-throwing function is an error
 function noFail() returns Integer
@@ -519,7 +519,7 @@ error E3058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7
 <!-- test: error.otherwise-ignore-in-assignment -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Using 'otherwise ignore' in an assignment is an error
 enum MyError implements Error
@@ -564,7 +564,7 @@ error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12
 <!-- test: error.binding-match-single-case -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test matching on typed error binding
 enum MyError implements Error
@@ -592,7 +592,7 @@ end 'main'
 <!-- test: error.binding-match-multi-case -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test matching on error binding with multiple cases
 enum MyError implements Error
@@ -630,7 +630,7 @@ end 'main'
 <!-- test: error.binding-success-no-block -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test that error binding block is skipped on success
 enum MyError implements Error
@@ -659,7 +659,7 @@ end 'main'
 <!-- test: error.assoc-value-throw-catch -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test error enum with associated value - throw and catch
 enum MyError implements Error
@@ -689,7 +689,7 @@ end 'main'
 <!-- test: error.assoc-value-throw-catch-2 -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 // Test error enum with associated value - second case
 enum MyError implements Error

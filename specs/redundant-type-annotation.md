@@ -52,7 +52,7 @@ end 'makePoint'
 <!-- test: error.exact-match-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   var x Integer
@@ -74,7 +74,7 @@ error E3015: specs/fragments/redundant-type-annotation/error.exact-match-return.
 <!-- test: error.closure-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   var x Integer
@@ -97,7 +97,7 @@ error E3015: specs/fragments/redundant-type-annotation/error.closure-return.test
 <!-- test: ok.no-context -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -116,7 +116,7 @@ end 'main'
 <!-- test: ok.anonymous-literal -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -139,7 +139,7 @@ end 'main'
 <!-- test: error.closure-param -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -161,7 +161,7 @@ error E3015: specs/fragments/redundant-type-annotation/error.closure-param.test:
 <!-- test: ok.closure-param-no-context -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -180,7 +180,7 @@ end 'main'
 <!-- test: ok.closure-param-inferred -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer

@@ -100,7 +100,7 @@ Note: When there's no collision, unqualified names continue to work normally.
 <!-- test: export-function-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
   return 21
@@ -117,7 +117,7 @@ end 'main'
 <!-- test: export-type-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export type Point
   var x Integer
@@ -140,7 +140,7 @@ end 'main'
 <!-- test: non-export-function-works -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function helper() returns Integer
   return 42
@@ -157,7 +157,7 @@ end 'main'
 <!-- test: mixed-export-and-non-export -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export function publicFunc() returns Integer
   return privateFunc() + 20
@@ -178,7 +178,7 @@ end 'main'
 <!-- test: export-typealias-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: export-typealias-in-type-field -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
@@ -233,7 +233,7 @@ end 'main'
 <!-- test: export-typealias-as-return-type -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export typealias IntArray = Array with Integer
 
@@ -269,7 +269,7 @@ end 'main'
 <!-- test: exported-function-cross-file -->
 ```maxon
 // --- file: helper.maxon
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
   return 42
@@ -287,7 +287,7 @@ end 'main'
 <!-- test: non-exported-function-same-file -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function privateHelper() returns Integer
   return 99
@@ -304,7 +304,7 @@ end 'main'
 <!-- test: error.non-exported-function-cross-file -->
 ```maxon
 // --- file: helper.maxon
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function privateHelper() returns Integer
   return 99
@@ -338,7 +338,7 @@ error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element
 <!-- test: exported-type-cross-file -->
 ```maxon
 // --- file: point.maxon
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 export type Point
   export var x Integer
@@ -358,7 +358,7 @@ end 'main'
 <!-- test: error.non-exported-type-cross-file -->
 ```maxon
 // --- file: point.maxon
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
   export var x Integer
@@ -461,7 +461,7 @@ error E3061: specs/fragments/export-keyword/error.duplicate-typealias-same-file.
 <!-- test: non-exported-type-same-file -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
   export var x Integer

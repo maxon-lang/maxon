@@ -200,7 +200,7 @@ Cleanups:  1
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntArray = Array with int
 
@@ -276,7 +276,7 @@ Cleanups:  1
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntArray = Array with int
 
@@ -319,7 +319,7 @@ Cleanups:  1
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntArray = Array with int
 
@@ -456,7 +456,7 @@ Cleanups:  4
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntArray = Array with int
 
@@ -499,7 +499,7 @@ Cleanups:  1
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntArray = Array with int
 
@@ -549,7 +549,7 @@ Cleanups:  1
 <!-- TrackMemory: true -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 typealias IntArray = Array with int
 

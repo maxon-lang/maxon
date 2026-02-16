@@ -1,5 +1,5 @@
 // Test: f32-truncation-uses-cvttss2si
-typealias F = f32
+typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
   var a = F{42.9}
@@ -12,29 +12,29 @@ RequiredMLIR: ```
 module {
   func @codegen-internals.main() -> i64 {
   entry:
-    %1 = maxon.literal {value = 42.9 : f32}
-    maxon.assign %1 {var = a} {kind = f32} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.trunc %1
-    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+    %0 = maxon.literal {value = 42.9 : f64}
+    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.trunc %0
+    maxon.assign %1 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.binop %1, %2 {op = lt}
+    %4 = maxon.literal {value = 4294967295 : i64}
+    %5 = maxon.binop %1, %4 {op = gt}
+    %6 = maxon.binop %3, %5 {op = or}
+    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %9
+    %8 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %8
   }
 }
 === standard
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.float_constant {value = 42.900001525878906 : f32}
-    %1 = arith.fptosi_f32 %0
+    %0 = arith.float_constant {value = 42.9 : f64}
+    %1 = arith.fptosi %0
     memref.store %1, __range_val_0
     %2 = arith.constant {value = 0 : i64}
     %3 = arith.cmpi lt %1, %2
@@ -43,7 +43,7 @@ module {
     %6 = arith.ori1 %3, %5
     cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %7 = memref.lea_rdata __panic_msg_8
+    %7 = memref.lea_rdata __panic_msg_7
     %8 = std.ptr_to_i64 %7
     std.call_runtime @maxon_panic %8
   __range_ok_0:
@@ -56,8 +56,8 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.movss xmm0, [rip+__float32_42.9]
-    x86.cvttss2si eax, xmm0
+    x86.movsd xmm0, [rip+__float_42.9]
+    x86.cvttsd2si eax, xmm0
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
@@ -71,7 +71,7 @@ module {
     x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_8]
+    x86.lea_rdata rax, [__panic_msg_7]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

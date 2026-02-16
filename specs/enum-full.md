@@ -165,7 +165,7 @@ var caseName = p.name     // "mars" (case name)
 Cases can carry additional data called associated values:
 
 ```maxon
-typealias ID = i64
+typealias ID = int(i64.min to i64.max)
 
 enum Result
   success(value ID)
@@ -487,7 +487,7 @@ end 'main'
 <!-- test: associated-value-construction -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -511,7 +511,7 @@ end 'main'
 <!-- test: associated-value-function-param -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
     empty
@@ -537,7 +537,7 @@ end 'main'
 <!-- test: associated-value-function-param-empty -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
     empty
@@ -563,7 +563,7 @@ end 'main'
 <!-- test: associated-value-function-return -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Result
     success(value Integer)
@@ -592,7 +592,7 @@ end 'main'
 <!-- test: associated-value-function-param-multi -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum TwoParts
     none
@@ -618,7 +618,7 @@ end 'main'
 <!-- test: associated-value-array-push -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Item
     empty
@@ -646,7 +646,7 @@ end 'main'
 <!-- test: associated-value-for-iterator -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Item
     empty
@@ -677,7 +677,7 @@ end 'main'
 <!-- test: associated-value-for-iterator-mixed -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Slot
     none
@@ -708,7 +708,7 @@ end 'main'
 <!-- test: associated-value-for-iterator-single -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Box
     empty
@@ -851,7 +851,7 @@ error E3032: specs/fragments/enum-full/error.raw-value-type-mismatch.test:4:3: r
 <!-- test: error.associated-value-wrong-count -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Result
   success(value Integer)
@@ -870,7 +870,7 @@ error E3036: specs/fragments/enum-full/error.associated-value-wrong-count.test:1
 <!-- test: error.associated-value-type-mismatch -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   value(n Integer)
@@ -888,7 +888,7 @@ error E3005: specs/fragments/enum-full/error.associated-value-type-mismatch.test
 <!-- test: match-enum-binding-simple -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -910,7 +910,7 @@ end 'main'
 <!-- test: match-enum-binding-multiple -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Result
   success(value Integer)
@@ -932,7 +932,7 @@ end 'main'
 <!-- test: match-expr-enum-binding -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -955,7 +955,7 @@ end 'main'
 <!-- test: match-enum-no-binding -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -977,7 +977,7 @@ end 'main'
 <!-- test: error.match-enum-wrong-binding-count -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   value(n Integer)
@@ -997,7 +997,7 @@ error E3035: specs/fragments/enum-full/error.match-enum-wrong-binding-count.test
 <!-- test: error.match-enum-unknown-case -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -1287,7 +1287,7 @@ end 'main'
 <!-- test: float-rawvalue-in-function -->
 ```maxon
 
-typealias Float = f64
+typealias Float = float(f64.min to f64.max)
 
 enum Weights
   light = 1.5
@@ -1314,7 +1314,7 @@ end 'main'
 <!-- test: int-rawvalue-in-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum HttpStatus
   ok = 200
@@ -1642,7 +1642,7 @@ end 'main'
 <!-- test: fromName-associated-compile-time -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -1664,7 +1664,7 @@ end 'main'
 <!-- test: fromName-associated-empty-case -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -1702,7 +1702,7 @@ error E3034: specs/fragments/enum-full/error.fromName-invalid-case.test:8:26: no
 <!-- test: error.fromName-wrong-arg-count -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   value(n Integer)
@@ -1720,7 +1720,7 @@ error E3036: specs/fragments/enum-full/error.fromName-wrong-arg-count.test:10:26
 <!-- test: fromName-associated-runtime-empty -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -1846,7 +1846,7 @@ end 'main'
 <!-- test: fromRawValue-runtime -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum HttpStatus
   ok = 200
@@ -1873,7 +1873,7 @@ end 'main'
 <!-- test: fromRawValue-failure -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum HttpStatus
   ok = 200
@@ -1932,7 +1932,7 @@ error E3005: specs/fragments/enum-full/error.fromRawValue-type-mismatch.test:8:2
 <!-- test: error.fromRawValue-associated-values -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum Container
   empty
@@ -1974,7 +1974,7 @@ end 'main'
 <!-- test: match-enum-binding-string -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 enum StringResult
   ok(value Integer)
@@ -1996,7 +1996,7 @@ end 'main'
 <!-- test: match-enum-binding-struct -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type EnumPoint
   export var x Integer

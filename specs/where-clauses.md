@@ -74,7 +74,7 @@ A user-defined type that implements Hashable can be used as a Map key:
 <!-- test: where-clauses.custom-hashable-key -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type MyKey implements Hashable, Equatable
     var value Integer
@@ -106,7 +106,7 @@ Using a type that doesn't implement Hashable as a Map key should produce a compi
 <!-- test: where-clauses.constraint-violation -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type NotHashable
     var x Integer
@@ -129,7 +129,7 @@ A user-defined generic type can use where clauses:
 <!-- test: where-clauses.user-defined -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Valuable
     function value() returns Integer
@@ -166,7 +166,7 @@ A type parameter can require multiple interface conformance:
 <!-- test: where-clauses.multiple-interfaces -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface HasName
     function name() returns Integer
@@ -209,7 +209,7 @@ end 'main'
 <!-- test: where-clauses.and-violation -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 interface Foo
     function foo() returns Integer

@@ -17,7 +17,7 @@ Arrays can contain struct values. Each element is a complete copy of the struct.
 <!-- test: array-of-structs-literal -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point
   export var x Integer
@@ -40,7 +40,7 @@ end 'main'
 <!-- test: array-of-structs-indexed-access -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Pair
   export var first Integer

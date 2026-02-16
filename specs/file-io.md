@@ -243,7 +243,7 @@ File not found
 <!-- test: write-and-read-binary -->
 ```maxon
 
-typealias Byte = u8
+typealias Byte = byte(0 to u8.max)
 
 typealias ByteArray = Array with byte
 

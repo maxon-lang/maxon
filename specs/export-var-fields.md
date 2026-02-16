@@ -14,7 +14,7 @@ category: type-system
 Type fields can be marked with `export` to make them accessible from outside the type. By default, fields are private and can only be accessed within the type's methods.
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Value
   export var n Score      // accessible from outside
@@ -37,7 +37,7 @@ v.n = 50             // OK - n is exported and mutable
 Non-exported fields are only accessible within methods of the same type:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 type Counter
   var count Score              // private
@@ -72,7 +72,7 @@ All fields (exported or not) can be initialized in struct literals, since the ty
 <!-- test: export-var-basic -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Value
   export var n Integer
@@ -95,7 +95,7 @@ end 'main'
 <!-- test: export-var-write -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Value
   export var n Integer
@@ -118,7 +118,7 @@ end 'main'
 <!-- test: export-let-readonly -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Config
   export let version Integer
@@ -140,7 +140,7 @@ end 'main'
 <!-- test: private-field-in-method -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Counter
   var count Integer
@@ -168,7 +168,7 @@ end 'main'
 <!-- test: mixed-export-fields -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Box
   export var value Integer
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: error.unexported-field-read -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Value
   var private Integer
@@ -217,7 +217,7 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:
 <!-- test: error.unexported-field-write -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Value
   var private Integer
@@ -240,7 +240,7 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test
 <!-- test: all-fields-private-by-default -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Simple
   var x Integer

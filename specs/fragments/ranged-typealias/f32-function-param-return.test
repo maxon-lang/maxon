@@ -1,5 +1,5 @@
 // Test: f32-function-param-return
-typealias F = f32
+typealias F = float(f32.min to f32.max)
 
 function double(x F) returns F
   return x * 2.0
@@ -12,21 +12,39 @@ end 'main'
 ---
 ---
 module {
-  func @ranged-typealias.double(x: f32) -> f32 {
+  func @ranged-typealias.double(x: f64) -> f64 {
   entry:
+    x86.prologue stack_size=16
     x86.movsd xmm1, [rip+__float_2]
-    x86.cvtsd2ss xmm2, xmm1
-    x86.movsd xmm1, xmm0
-    x86.mulss xmm1, xmm2
-    x86.movsd xmm0, xmm1
+    x86.movsd xmm2, xmm0
+    x86.mulsd xmm2, xmm1
+    x86.movsd [rbp-8], xmm2
+    x86.movsd xmm0, [rip+__float_-3.4028234663852886E+38]
+    x86.ucomisd xmm2, xmm0
+    x86.setb eax
+    x86.movzx eax, eaxb
+    x86.movsd xmm1, [rip+__float_3.4028234663852886E+38]
+    x86.ucomisd xmm2, xmm1
+    x86.seta ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je ranged-typealias.double.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_8]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.movsd xmm0, [rbp-8]
+    x86.epilogue
     x86.ret
   }
   func @ranged-typealias.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.movss xmm0, [rip+__float32_21]
+    x86.movsd xmm0, [rip+__float_21]
     x86.call ranged-typealias.double
-    x86.cvttss2si eax, xmm0
+    x86.cvttsd2si eax, xmm0
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
@@ -40,7 +58,7 @@ module {
     x86.test edx, edx
     x86.je ranged-typealias.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_13]
+    x86.lea_rdata rax, [__panic_msg_18]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

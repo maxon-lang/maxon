@@ -15,7 +15,7 @@ Functions in Maxon are first-class citizens. They can be stored in variables, pa
 Function types describe the signature of a function:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 // A function that takes an int and returns an int
 var transform (Score) returns Score
@@ -30,7 +30,7 @@ var callback ()
 Named parameters can be used for documentation:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 var operation (x Score, y Score) returns Score
 ```
@@ -40,7 +40,7 @@ var operation (x Score, y Score) returns Score
 To get a reference to a function, use the function name without parentheses:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function double(x Score) returns Score
   return x * 2
@@ -60,7 +60,7 @@ end 'main'
 Functions can be passed to other functions:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function apply(f (Score) returns Score, x Score) returns Score
   return f(x)
@@ -83,7 +83,7 @@ end 'main'
 Closures are inline anonymous functions:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var f = (x Score) gives x * 2
@@ -97,7 +97,7 @@ end 'main'
 Closures can be passed directly to higher-order functions:
 
 ```maxon
-typealias Score = i64
+typealias Score = int(i64.min to i64.max)
 
 function apply(f (Score) returns Score, x Score) returns Score
   return f(x)
@@ -116,7 +116,7 @@ end 'main'
 <!-- test: first-class-function.basic-reference -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
   return x * 2
@@ -134,7 +134,7 @@ end 'main'
 <!-- test: first-class-function.pass-as-argument -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
@@ -155,7 +155,7 @@ end 'main'
 <!-- test: first-class-function.closure-in-variable -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var f = (x Integer) gives x * 5
@@ -169,7 +169,7 @@ end 'main'
 <!-- test: first-class-function.closure-as-argument -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
   return f(x)
@@ -186,7 +186,7 @@ end 'main'
 <!-- test: first-class-function.multiple-params -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function calculate(f (Integer, Integer) returns Integer, a Integer, b Integer) returns Integer
   return f(a, b)
@@ -207,7 +207,7 @@ end 'main'
 <!-- test: first-class-function.reassign -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
   return x * 2

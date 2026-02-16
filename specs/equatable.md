@@ -51,7 +51,7 @@ var same = a.equals(b)  // true
 <!-- test: basic-equal -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point implements Equatable
   export var x Integer
@@ -78,7 +78,7 @@ end 'main'
 <!-- test: basic-not-equal -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point implements Equatable
   export var x Integer
@@ -105,7 +105,7 @@ end 'main'
 <!-- test: single-field -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Wrapper implements Equatable
   export var value Integer
@@ -135,7 +135,7 @@ end 'main'
 <!-- test: partial-field-match -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Point implements Equatable
   export var x Integer
@@ -162,7 +162,7 @@ end 'main'
 <!-- test: self-equality -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Box implements Equatable
   export var value Integer
@@ -187,7 +187,7 @@ end 'main'
 <!-- test: equals-in-function -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Id implements Equatable
   export var n Integer
@@ -221,7 +221,7 @@ end 'main'
 <!-- test: equals-branching -->
 ```maxon
 
-typealias Integer = i64
+typealias Integer = int(i64.min to i64.max)
 
 type Token implements Equatable
   export var id Integer
