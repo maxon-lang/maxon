@@ -19,6 +19,7 @@ public class MlirType {
   public static MlirType U8 { get; } = new("u8", 1);
   public static MlirType U32 { get; } = new("u32", 4);
   public static MlirType U64 { get; } = new("u64", 8);
+  public static MlirType F32 { get; } = new("f32", 4);
   public static MlirType F64 { get; } = new("f64", 8);
   public static MlirType I1 { get; } = new("i1", 1);
   public static MlirType Void { get; } = new("void", 0);
@@ -47,6 +48,7 @@ public class MlirType {
     if (type is MlirRangedPrimitiveType ranged) return ranged.Name;
     if (type == I64 || type == U64) return "int";
     if (type == F64) return "float";
+    if (type == F32) return "float";
     if (type == I1) return "bool";
     if (type == I8 || type == U8) return "byte";
     if (type == I32 || type == U32) return "int";
@@ -213,6 +215,7 @@ public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double
   /// Skips i16 (operand size prefix overhead). Returns unsigned types (U8/U32/U64) when range is non-negative.
   private static MlirType ComputeOptimalType(MlirType baseType, double lower, double upper) {
     if (baseType == F64) return F64;
+    if (baseType == F32) return F32;
     bool unsigned = lower >= 0;
     if (lower >= -128 && upper <= 127) return unsigned ? U8 : I8;
     if (lower >= 0 && upper <= 255) return U8;
@@ -250,6 +253,7 @@ public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double
       var effectiveUpper = UpperInclusive ? UpperBound : UpperBound - 1;
       if (BaseType == I64) return LowerBound <= (double)long.MinValue && effectiveUpper >= (double)long.MaxValue;
       if (BaseType == F64) return LowerBound <= double.MinValue && effectiveUpper >= double.MaxValue;
+      if (BaseType == F32) return LowerBound <= (double)-float.MaxValue && effectiveUpper >= (double)float.MaxValue;
       if (BaseType == I8) return LowerBound <= 0 && effectiveUpper >= 255;
       return false;
     }

@@ -453,6 +453,32 @@ public class RegisterManager {
     block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, rdataLabel));
   }
 
+  // --- F32 (single-precision) XMM stack/rip-relative operations ---
+
+  /// <summary>
+  /// Store an XMM value to a stack offset using MOVSS (single-precision).
+  /// </summary>
+  public void EmitXmmStoreToStackF32(StdValue value, int offset, MlirBlock<X86Op> block) {
+    var xmm = EnsureInXmmRegister(value, block);
+    block.AddOp(new X86MovSsMemXmmOp(offset, xmm));
+  }
+
+  /// <summary>
+  /// Load an XMM value from a stack offset using MOVSS (single-precision).
+  /// </summary>
+  public void EmitXmmLoadFromStackF32(StdValue result, int offset, MlirBlock<X86Op> block) {
+    var xmm = AllocateXmmRegister(result);
+    block.AddOp(new X86MovSsXmmMemOp(xmm, offset));
+  }
+
+  /// <summary>
+  /// Allocate an XMM register and load a float32 constant from rdata using MOVSS.
+  /// </summary>
+  public void EmitXmmLoadFromRipRelativeF32(StdValue result, string rdataLabel, MlirBlock<X86Op> block) {
+    var xmm = AllocateXmmRegister(result);
+    block.AddOp(new X86MovSsXmmRipRelOp(xmm, rdataLabel));
+  }
+
   /// <summary>
   /// Ensure both GPR operands are in registers and emit cmp.
   /// </summary>
@@ -546,6 +572,44 @@ public class RegisterManager {
     block.AddOp(new X86CvtSi2SdOp(destXmm, srcGpr));
   }
 
+  // --- F32 conversion operations ---
+
+  /// <summary>
+  /// Emit cvttss2si: convert XMM float32 to GPR integer with truncation.
+  /// </summary>
+  public void EmitCvttSs2Si(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcXmm = EnsureInXmmRegister(input, block);
+    var destGpr = AllocateRegister(result, block);
+    block.AddOp(new X86CvttSs2SiOp(destGpr, srcXmm));
+  }
+
+  /// <summary>
+  /// Emit cvtsi2ss: convert GPR integer to XMM float32.
+  /// </summary>
+  public void EmitCvtSi2Ss(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcGpr = EnsureInRegister(input, block);
+    var destXmm = AllocateXmmRegister(result);
+    block.AddOp(new X86CvtSi2SsOp(destXmm, srcGpr));
+  }
+
+  /// <summary>
+  /// Emit cvtsd2ss: convert double-precision to single-precision.
+  /// </summary>
+  public void EmitCvtSd2Ss(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcXmm = EnsureInXmmRegister(input, block);
+    var destXmm = AllocateXmmRegister(result);
+    block.AddOp(new X86CvtSd2SsOp(destXmm, srcXmm));
+  }
+
+  /// <summary>
+  /// Emit cvtss2sd: convert single-precision to double-precision.
+  /// </summary>
+  public void EmitCvtSs2Sd(StdValue input, StdValue result, MlirBlock<X86Op> block) {
+    var srcXmm = EnsureInXmmRegister(input, block);
+    var destXmm = AllocateXmmRegister(result);
+    block.AddOp(new X86CvtSs2SdOp(destXmm, srcXmm));
+  }
+
   /// <summary>
   /// Emit a unary XMM operation where the instruction reads src and writes dest
   /// independently (e.g. sqrtsd, roundsd). No preliminary copy needed.
@@ -570,12 +634,33 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Emit absf32: clear sign bit via ANDPS with rdata mask.
+  /// </summary>
+  public void EmitAbsF32(StdValue input, StdValue result, string maskLabel, MlirBlock<X86Op> block) {
+    var srcXmm = EnsureInXmmRegister(input, block);
+    var resultXmm = AllocateXmmRegister(result);
+    if (resultXmm != srcXmm) {
+      block.AddOp(new X86MovSsXmmXmmOp(resultXmm, srcXmm));
+    }
+    block.AddOp(new X86AndpsRipRelOp(resultXmm, maskLabel));
+  }
+
+  /// <summary>
   /// Ensure both XMM operands are in registers and emit ucomisd.
   /// </summary>
   public void EmitXmmCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
     var rhsReg = EnsureInXmmRegister(rhs, block);
     var lhsReg = EnsureInXmmRegister(lhs, block);
     block.AddOp(new X86UcomisdOp(lhsReg, rhsReg));
+  }
+
+  /// <summary>
+  /// Ensure both XMM operands are in registers and emit ucomiss (single-precision).
+  /// </summary>
+  public void EmitXmmCompareF32(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
+    var lhsXmm = EnsureInXmmRegister(lhs, block);
+    var rhsXmm = EnsureInXmmRegister(rhs, block);
+    block.AddOp(new X86UcomissOp(lhsXmm, rhsXmm));
   }
 
   /// <summary>
@@ -631,7 +716,7 @@ public class RegisterManager {
     var gprArgs = new List<int>();
     var xmmArgs = new List<int>();
     for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64)
+      if (args[i] is StdF64 or StdF32)
         xmmArgs.Add(i);
       else
         gprArgs.Add(i);
@@ -670,7 +755,7 @@ public class RegisterManager {
     // the placement process.
     var placed = new bool[regArgCount];
     for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64) placed[i] = true;
+      if (args[i] is StdF64 or StdF32) placed[i] = true;
     }
 
     // x86-64 calling convention always uses 64-bit registers for arguments.
@@ -753,7 +838,7 @@ public class RegisterManager {
     InvalidateCallerSavedRegisters();
 
     if (result != null) {
-      if (result is StdF64) {
+      if (result is StdF64 or StdF32) {
         AssignXmm(X86XmmRegister.Xmm0, result);
       } else if (result is StdPtr) {
         // Pointers use 64-bit RAX
@@ -792,7 +877,7 @@ public class RegisterManager {
 
     // Ensure all args are materialized in registers before placement
     foreach (var arg in args) {
-      if (arg is StdF64)
+      if (arg is StdF64 or StdF32)
         EnsureInXmmRegister(arg, block);
       else
         EnsureInRegister(arg, block);
@@ -803,7 +888,7 @@ public class RegisterManager {
     var xmmArgs = new List<int>();
     var argSources = new X86Register?[regArgCount];
     for (int i = 0; i < regArgCount; i++) {
-      if (args[i] is StdF64) {
+      if (args[i] is StdF64 or StdF32) {
         xmmArgs.Add(i);
       } else {
         gprArgs.Add(i);
@@ -933,7 +1018,7 @@ public class RegisterManager {
 
   public void NoteParam(StdValue paramValue, int paramIndex, MlirBlock<X86Op> block) {
     if (paramIndex < CallConvRegs.Length) {
-      if (paramValue is StdF64) {
+      if (paramValue is StdF64 or StdF32) {
         AssignXmm(CallConvXmmRegs[paramIndex], paramValue);
       } else if (paramValue is StdPtr or StdI64) {
         // Pointers and 64-bit integers use full 64-bit register
@@ -949,8 +1034,9 @@ public class RegisterManager {
       }
     } else {
       int stackOffset = 16 + (paramIndex - CallConvRegs.Length) * 8;
-      if (paramValue is StdF64) {
+      if (paramValue is StdF64 or StdF32) {
         var xmm = AllocateXmmRegister(paramValue);
+        // Both F64 and F32 are passed as 8-byte slots on the stack in our calling convention
         block.AddOp(new X86MovSdXmmMemOp(xmm, stackOffset));
       } else if (paramValue is StdPtr or StdI64) {
         var gpr = AllocateRegister(paramValue, block);
@@ -1286,6 +1372,22 @@ public class RegisterManager {
   public void EmitXmmGlobalStore(StdValue value, string globalName, MlirBlock<X86Op> block) {
     var srcXmm = EnsureInXmmRegister(value, block);
     block.AddOp(new X86GlobalStoreXmmOp(globalName, srcXmm));
+  }
+
+  /// <summary>
+  /// Load a global float32 variable into an XMM register via MOVSS RIP-relative addressing.
+  /// </summary>
+  public void EmitXmmGlobalLoadF32(StdValue result, string globalName, MlirBlock<X86Op> block) {
+    var xmm = AllocateXmmRegister(result);
+    block.AddOp(new X86GlobalLoadSsXmmOp(globalName, xmm));
+  }
+
+  /// <summary>
+  /// Store an XMM value to a global float32 variable via MOVSS RIP-relative addressing.
+  /// </summary>
+  public void EmitXmmGlobalStoreF32(StdValue value, string globalName, MlirBlock<X86Op> block) {
+    var xmm = EnsureInXmmRegister(value, block);
+    block.AddOp(new X86GlobalStoreSsXmmOp(globalName, xmm));
   }
 
   /// <summary>

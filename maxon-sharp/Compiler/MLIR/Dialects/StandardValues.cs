@@ -11,6 +11,7 @@ public class StdI64(int id) : StdValue(id);
 public class StdI32(int id) : StdValue(id);
 public class StdU64(int id) : StdI64(id);
 public class StdU32(int id) : StdI32(id);
+public class StdF32(int id) : StdValue(id);
 public class StdF64(int id) : StdValue(id);
 public class StdBool(int id) : StdValue(id);
 public class StdPtr(int id) : StdValue(id);

@@ -10,10 +10,13 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 
 - `bool` is exempt
 - Syntax: `typealias Age = int(0 to 150)` or `int(0 upto 150)` (exclusive upper bound)
-- `min`/`max` keywords for bounds: `typealias FullInt = int(min to max)`
+- Type-qualified `min`/`max` bounds: `typealias FullInt = int(i64.min to i64.max)`
+- Type-qualified bounds: `typealias Handle = int(0 to u32.max)`
+- Shorthand sized types: `typealias Handle = u32` (sugar for `int(0 to u32.max)`)
+- Supported shorthands: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
 - Construction: `Age{42}` (compile-time checked for literals, runtime checked for expressions)
 - `int / int` produces `int` (truncating), not `float`
-- Standard library defines general-purpose aliases (`Integer = int(min to max)`, `Float = float(min to max)`, `Byte = byte(0 to 255)`) and purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `CompareResult`, `Offset`, `MathValue`, `ExitCode`)
+- Standard library defines general-purpose aliases (`Integer = i64`, `Float = f64`, `Byte = u8`) and purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `CompareResult`, `Offset`, `MathValue`, `ExitCode`)
 
 ## Docs
 
@@ -30,12 +33,20 @@ The `to` keyword makes the upper bound inclusive. The `upto` keyword makes it ex
 
 ### Min/max bounds
 
-Use `min` and `max` keywords for the type's full range:
+Use `type.min` and `type.max` for a type's full range:
 
 ```maxon
-typealias Integer = int(min to max)
-typealias Float = float(min to max)
-typealias Byte = byte(0 to 255)
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+typealias Byte = byte(u8.min to u8.max)
+```
+
+Or use shorthand aliases for the same effect:
+
+```maxon
+typealias Integer = i64
+typealias Float = f64
+typealias Byte = u8
 ```
 
 ### Construction
@@ -78,6 +89,30 @@ function bad() returns Score
   return 200       // compile error: outside range
 end 'bad'
 ```
+
+### Type-qualified min/max bounds
+
+Use `type.min` and `type.max` to reference bounds of specific numeric types:
+
+```maxon
+typealias FileHandle = int(0 to u32.max)
+typealias SmallSigned = int(i8.min to i8.max)
+typealias Port = int(0 to u16.max)
+```
+
+Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
+
+### Shorthand sized type aliases
+
+Use sized type names directly as typealias shorthand:
+
+```maxon
+typealias FileHandle = u32    // equivalent to int(0 to 4294967295)
+typealias SmallSigned = i8    // equivalent to int(-128 to 127)
+typealias SmallFloat = f32    // equivalent to float(-3.4028235E+38 to 3.4028235E+38)
+```
+
+Supported shorthands: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
 ## Tests
 
@@ -126,11 +161,11 @@ end 'main'
 ExitCode: 50
 ```
 
-### Min/max keyword bounds
+### Type-qualified min/max keyword bounds
 
 <!-- test: min-max-bounds -->
 ```maxon
-typealias FullInt = int(min to max)
+typealias FullInt = int(i64.min to i64.max)
 
 function main() returns ExitCode
   var x = FullInt{42}
@@ -140,6 +175,7 @@ end 'main'
 ```output
 ExitCode: 42
 ```
+
 
 ### Float ranged typealias
 
@@ -415,4 +451,183 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:11: Value -5 is outside the range of 'Positive' (int(1 to 100))
+```
+
+### Type-qualified bound: u32.max
+
+<!-- test: type-qualified-u32-max -->
+```maxon
+typealias Handle = int(0 to u32.max)
+
+function main() returns ExitCode
+  var h = Handle{42}
+  return h
+end 'main'
+```
+```output
+ExitCode: 42
+```
+
+### Type-qualified bound: i8 range
+
+<!-- test: type-qualified-i8-range -->
+```maxon
+typealias SmallSigned = int(i8.min to i8.max)
+
+function main() returns ExitCode
+  var s = SmallSigned{100}
+  return s
+end 'main'
+```
+```output
+ExitCode: 100
+```
+
+### Type-qualified bound: u16.max
+
+<!-- test: type-qualified-u16-max -->
+```maxon
+typealias Port = int(0 to u16.max)
+
+function main() returns ExitCode
+  var p = Port{8080}
+  return p
+end 'main'
+```
+```output
+ExitCode: 8080
+```
+
+### Shorthand u32 alias
+
+<!-- test: shorthand-u32 -->
+```maxon
+typealias Handle = u32
+
+function main() returns ExitCode
+  var h = Handle{42}
+  return h
+end 'main'
+```
+```output
+ExitCode: 42
+```
+
+### Shorthand i8 alias
+
+<!-- test: shorthand-i8 -->
+```maxon
+typealias SmallInt = i8
+
+function main() returns ExitCode
+  var s = SmallInt{100}
+  return s
+end 'main'
+```
+```output
+ExitCode: 100
+```
+
+### Shorthand f32 alias with float operations
+
+<!-- test: shorthand-f32 -->
+```maxon
+typealias SmallFloat = f32
+
+function main() returns ExitCode
+  var x = SmallFloat{3.5}
+  var y = SmallFloat{1.5}
+  return trunc(x + y)
+end 'main'
+```
+```output
+ExitCode: 5
+```
+
+### F32 arithmetic
+
+<!-- test: f32-arithmetic -->
+```maxon
+typealias F = f32
+
+function main() returns ExitCode
+  var a = F{10.0}
+  var b = F{3.0}
+  var sum = a + b
+  var diff = a - b
+  var prod = a * b
+  var quot = a / b
+  return trunc(sum + diff + prod + quot)
+end 'main'
+```
+```output
+ExitCode: 56
+```
+
+### F32 comparison
+
+<!-- test: f32-comparison -->
+```maxon
+typealias F = f32
+
+function main() returns ExitCode
+  var a = F{3.0}
+  var b = F{5.0}
+  if a < b 'less'
+    return 1
+  end 'less'
+  return 0
+end 'main'
+```
+```output
+ExitCode: 1
+```
+
+### F32 function parameter and return
+
+<!-- test: f32-function-param-return -->
+```maxon
+typealias F = f32
+
+function double(x F) returns F
+  return x * 2.0
+end 'double'
+
+function main() returns ExitCode
+  var x = F{21.0}
+  return trunc(double(x))
+end 'main'
+```
+```output
+ExitCode: 42
+```
+
+### F32 truncation to int
+
+<!-- test: f32-to-int -->
+```maxon
+typealias F = f32
+
+function main() returns ExitCode
+  var x = F{42.9}
+  return trunc(x)
+end 'main'
+```
+```output
+ExitCode: 42
+```
+
+### Hex literal in range bound
+
+<!-- test: hex-range-bound -->
+```maxon
+typealias Handle = int(0 to 0xFFFF)
+
+function main() returns ExitCode
+  var h = Handle{255}
+  return h
+end 'main'
+```
+```output
+ExitCode: 255
 ```

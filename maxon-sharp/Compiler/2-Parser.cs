@@ -28,9 +28,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private bool _parsingTypeAliasRhs;
   private bool _parsingExtension;
   private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
-    ? new(seedModule.TypeDefs.Where(kv =>
-        !seedModule.NonExportedTypeNames.Contains(kv.Key)
-        || !seedModule.TypeDefSourceFiles.TryGetValue(kv.Key, out var src)
+    ? new(seedModule!.TypeDefs.Where(kv =>
+        !seedModule!.NonExportedTypeNames.Contains(kv.Key)
+        || !seedModule!.TypeDefSourceFiles.TryGetValue(kv.Key, out var src)
         || src == sourceFilePath)) : [];
   private string? _currentTypeName;
 
@@ -2054,6 +2054,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return;
       }
 
+      // Shorthand sized type alias: typealias FileHandle = u32
+      if (Check(TokenType.Identifier) && IsSizedTypeName(Current().Value)) {
+        var shortToken = Advance();
+        var (baseType, lower, upper) = ResolveShorthandType(shortToken.Value);
+        var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive: true);
+        _typeRegistry[aliasName] = rangedType;
+        _typeAliasSources[aliasName] = baseType == MlirType.F64 || baseType == MlirType.F32 ? "float" : baseType == MlirType.I8 ? "byte" : "int";
+        return;
+      }
+
       // Ranged primitive alias: typealias Age = int(0 to 150)
       if (Check(TokenType.Int) || Check(TokenType.Float) || Check(TokenType.Byte)) {
         var primitiveToken = Advance();
@@ -2064,10 +2074,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           _ => throw new InvalidOperationException()
         };
         Expect(TokenType.LeftParen);
-        var lower = ParseRangeBound(primitiveToken.Value);
+        var lower = ParseRangeBound();
         bool upperInclusive;
         if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
-        var upper = ParseRangeBound(primitiveToken.Value);
+        var upper = ParseRangeBound();
         Expect(TokenType.RightParen);
         if (lower > upper || (lower == upper && !upperInclusive))
           throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
@@ -2185,21 +2195,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _typeAliasSources[aliasName] = sourceName;
   }
 
-  /// Parses a range bound in a ranged typealias: a numeric literal, negative literal, or min/max keyword.
-  private double ParseRangeBound(string baseTypeName) {
-    // min/max keywords
-    if (Check(TokenType.Identifier) && (Current().Value == "min" || Current().Value == "max")) {
+  /// Parses a range bound in a ranged typealias: a numeric literal, negative literal, min/max keyword, or type.min/type.max.
+  private double ParseRangeBound() {
+    // type.min / type.max (e.g., u32.max, i8.min)
+    if (Check(TokenType.Identifier) && _pos + 2 < _tokens.Count
+        && _tokens[_pos + 1].Type == TokenType.Dot
+        && (_tokens[_pos + 2].Value == "min" || _tokens[_pos + 2].Value == "max")
+        && IsSizedTypeName(Current().Value)) {
+      var typeName = Advance().Value;
+      Advance(); // consume dot
       var keyword = Advance().Value;
-      return (baseTypeName, keyword) switch {
-        ("int", "min") => (double)long.MinValue,
-        ("int", "max") => (double)long.MaxValue,
-
-        ("float", "min") => double.MinValue,
-        ("float", "max") => double.MaxValue,
-        ("byte", "min") => 0,
-        ("byte", "max") => 255,
-        _ => throw new InvalidOperationException()
-      };
+      return ResolveTypeBound(typeName, keyword);
     }
     // Negative literal
     bool negative = false;
@@ -2215,7 +2221,40 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var val = ParseFloatLiteral(Advance());
       return negative ? -val : val;
     }
-    throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', or 'max' in range bound", Current().Line, Current().Column);
+    throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', 'max', or 'type.min'/'type.max' in range bound", Current().Line, Current().Column);
+  }
+
+  private static bool IsSizedTypeName(string name) => name is
+    "u8" or "u16" or "u32" or "u64" or
+    "i8" or "i16" or "i32" or "i64" or
+    "f32" or "f64";
+
+  private static double ResolveTypeBound(string typeName, string keyword) => (typeName, keyword) switch {
+    ("i64", "min") => (double)long.MinValue,
+    ("i64", "max") => (double)long.MaxValue,
+    ("f64", "min") => double.MinValue,
+    ("f64", "max") => double.MaxValue,
+    ("f32", "min") => (double)-float.MaxValue,
+    ("f32", "max") => (double)float.MaxValue,
+    ("u8", "min") => 0,
+    ("u8", "max") => 255,
+    ("u16", "min") => 0,        ("u16", "max") => 65535,
+    ("u32", "min") => 0,        ("u32", "max") => 4294967295,
+    ("u64", "min") => 0,        ("u64", "max") => (double)ulong.MaxValue,
+    ("i8", "min") => -128,      ("i8", "max") => 127,
+    ("i16", "min") => -32768,   ("i16", "max") => 32767,
+    ("i32", "min") => -2147483648, ("i32", "max") => 2147483647,
+    _ => throw new InvalidOperationException($"Unknown type bound: {typeName}.{keyword}")
+  };
+
+  private static (MlirType baseType, double lower, double upper) ResolveShorthandType(string name) {
+    var baseType = name switch {
+      "u8" => MlirType.I8,
+      "f32" => MlirType.F32,
+      "f64" => MlirType.F64,
+      _ => MlirType.I64,
+    };
+    return (baseType, ResolveTypeBound(name, "min"), ResolveTypeBound(name, "max"));
   }
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName, bool isExported = false) {
@@ -3871,6 +3910,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var expectedKind = returnType.ToValueKind();
     if (valueKind == expectedKind || IsWideningCast(valueKind, expectedKind))
       return;
+    // Float literals are F64; allow narrowing to F32 ranged types (range check validates)
+    if (valueKind == MaxonValueKind.Float && expectedKind == MaxonValueKind.Float32)
+      return;
 
     throw new CompileError(ErrorCode.SemanticTypeMismatch,
       $"Cannot return '{KindToTypeName(valueKind)}' from function declared to return '{KindToTypeName(expectedKind)}'",
@@ -4200,6 +4242,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
       _lastRangedTypeName = null;
+      // Use Float32 kind when assigning to an F32-backed ranged type
+      if (kind == MaxonValueKind.Float && rangedTypeName != null
+          && _typeRegistry.TryGetValue(rangedTypeName, out var rt)
+          && rt is MlirRangedPrimitiveType rpt && rpt.OptimalType == MlirType.F32) {
+        kind = MaxonValueKind.Float32;
+      }
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName);
     }
@@ -5780,7 +5828,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       } else {
         upper = ParseRangeEndpoint(compareKind);
       }
-      var lower = compareKind == MaxonValueKind.Float
+      var lower = compareKind is MaxonValueKind.Float or MaxonValueKind.Float32
         ? (RangeBound)new FloatRangeBound(value)
         : new IntRangeBound(value);
       var displayName = $"{value} {(upperInclusive ? "to" : "upto")} {(upper == null ? "max" : RangeBoundDisplay(upper))}";
@@ -5797,7 +5845,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         $"duplicate pattern in match: '{display}'",
         patternLine, patternCol);
     }
-    if (compareKind == MaxonValueKind.Float) {
+    if (compareKind is MaxonValueKind.Float or MaxonValueKind.Float32) {
       return new ExactFloatPattern(value, display, patternLine, patternCol);
     }
     return new ExactIntPattern(value, display, patternLine, patternCol);
@@ -5873,7 +5921,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var tok = Advance();
       var val = ParseIntegerLiteral(tok);
       if (negative) val = -val;
-      if (compareKind == MaxonValueKind.Float) {
+      if (compareKind is MaxonValueKind.Float or MaxonValueKind.Float32) {
         return new FloatRangeBound(val);
       }
       return new IntRangeBound(val);
@@ -5892,18 +5940,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     };
   }
 
-  private static string KindToTypeName(MaxonValueKind kind) {
-    return kind switch {
-      MaxonValueKind.Integer => "int",
-      MaxonValueKind.Float => "float",
-      MaxonValueKind.Bool => "bool",
-      MaxonValueKind.Byte => "byte",
-      MaxonValueKind.Struct => "struct",
-      MaxonValueKind.Enum => "enum",
-      MaxonValueKind.Function => "function",
-      _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
-    };
-  }
+  private static string KindToTypeName(MaxonValueKind kind) => kind switch {
+    MaxonValueKind.Integer => "int",
+    MaxonValueKind.Float => "float",
+    MaxonValueKind.Float32 => "f32",
+    MaxonValueKind.Bool => "bool",
+    MaxonValueKind.Byte => "byte",
+    MaxonValueKind.Struct => "struct",
+    MaxonValueKind.Enum => "enum",
+    MaxonValueKind.Function => "function",
+    _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
+  };
+
+  /// Maps primitive value kinds to their MlirType. Returns null for non-primitive kinds (Struct, Enum, Function).
+  private static MlirType? KindToMlirType(MaxonValueKind kind) => kind switch {
+    MaxonValueKind.Integer => MlirType.I64,
+    MaxonValueKind.Float => MlirType.F64,
+    MaxonValueKind.Float32 => MlirType.F32,
+    MaxonValueKind.Bool => MlirType.I1,
+    MaxonValueKind.Byte => MlirType.I8,
+    MaxonValueKind.Struct => null,
+    MaxonValueKind.Enum => null,
+    MaxonValueKind.Function => null,
+    _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
+  };
 
   private static string ArgTypeName(MaxonValue value, MaxonValueKind kind) {
     return value switch {
@@ -6744,8 +6804,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var inner = ParsePrimary();
       var innerVal = ResolveExprValue(inner);
       var kind = DetermineValueKind(innerVal);
-      var zeroOp = kind == MaxonValueKind.Float
-        ? new MaxonLiteralOp(0.0)
+      var zeroOp = kind is MaxonValueKind.Float or MaxonValueKind.Float32
+        ? new MaxonLiteralOp(0.0, kind)
         : new MaxonLiteralOp(0L);
       _currentBlock!.AddOp(zeroOp);
       var subOp = new MaxonBinOp(MaxonBinOperator.Sub, zeroOp.Result, innerVal, kind);
@@ -7255,7 +7315,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       string userTypeName;
       if (result is ExprResult.VarRef vr) {
         userTypeName = vr.Info.StructTypeName
-          ?? (vr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Bool or MaxonValueKind.Byte ? KindToTypeName(vr.Info.Kind) : null)
+          ?? (vr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Float32 or MaxonValueKind.Bool or MaxonValueKind.Byte ? KindToTypeName(vr.Info.Kind) : null)
           ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct or enum type", originToken.Line, originToken.Column);
       } else if (result is ExprResult.Direct d && d.Value is MaxonStruct ms) {
         userTypeName = ms.TypeName;
@@ -7360,6 +7420,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var resultKind = ifaceMethod.ReturnTypeName switch {
               "int" => MaxonValueKind.Integer,
               "float" => MaxonValueKind.Float,
+              "f32" => MaxonValueKind.Float32,
               "bool" => MaxonValueKind.Bool,
               "byte" => MaxonValueKind.Byte,
               null => (MaxonValueKind?)null,
@@ -7749,16 +7810,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         $"Unknown type '{structTypeName}' in map literal",
         errorToken.Line, errorToken.Column);
     }
-    return kind switch {
-      MaxonValueKind.Integer => MlirType.I64,
-      MaxonValueKind.Float => MlirType.F64,
-      MaxonValueKind.Bool => MlirType.I1,
-      MaxonValueKind.Byte => MlirType.I8,
-      MaxonValueKind.Function => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        "Function types in map literals are not supported", errorToken.Line, errorToken.Column),
-      _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Unsupported value kind '{kind}' in map literal", errorToken.Line, errorToken.Column)
-    };
+    return KindToMlirType(kind) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"Unsupported value kind '{kind}' in map literal", errorToken.Line, errorToken.Column);
   }
 
   /// <summary>
@@ -7831,20 +7884,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// For struct element types, auto-creates a type alias if none exists.
   /// </summary>
   private string FindArrayTypeAliasForElement(MaxonValueKind elementKind, string? elementStructTypeName = null) {
-    // For struct/enum elements with a type name, search for existing alias or auto-create one
-    if ((elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum) && elementStructTypeName != null) {
-      // Search for an existing typealias of Array with this element type
-      foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
-        if (sourceTypeName != "Array") continue;
-        if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
-            && aliasType is MlirStructType st
-            && st.TypeParams.TryGetValue("Element", out var elemType)
-            && elemType.Name == elementStructTypeName) {
-          return aliasName;
-        }
-      }
+    // Resolve the element type name: struct/enum use their type name, primitives use MlirType name
+    string? elementTypeName;
+    if ((elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum) && elementStructTypeName != null)
+      elementTypeName = elementStructTypeName;
+    else
+      elementTypeName = KindToMlirType(elementKind)?.Name;
 
-      // No existing alias - auto-create one (e.g., __Array_Pair, __Array_TokenKind)
+    if (elementTypeName == null) return "Array";
+
+    // Search for an existing typealias of Array with this element type
+    var existing = FindArrayAliasByElementName(elementTypeName);
+    if (existing != null) return existing;
+
+    // For struct/enum elements, auto-create an alias (e.g., __Array_Pair)
+    if ((elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum) && elementStructTypeName != null) {
       var autoAliasName = $"__Array_{elementStructTypeName}";
       if (!_typeRegistry.ContainsKey(autoAliasName)
           && _typeRegistry.TryGetValue("Array", out var arrayType)
@@ -7856,24 +7910,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return autoAliasName;
     }
 
-    // Map element kind to the expected Element type name
-    var elementTypeName = elementKind switch {
-      MaxonValueKind.Integer => "i64",
-      MaxonValueKind.Float => "f64",
-      MaxonValueKind.Byte => "i8",
-      MaxonValueKind.Bool => "i1",
-      MaxonValueKind.Function => null,
-      MaxonValueKind.Enum => throw new InvalidOperationException("Enum element kind should have elementStructTypeName set"),
-      MaxonValueKind.Struct => throw new InvalidOperationException("Struct element kind should have been handled above"),
-      _ => throw new InvalidOperationException($"Unhandled element kind: {elementKind}")
-    };
+    return "Array";
+  }
 
-    if (elementTypeName == null) return "Array";
-
-    // Search for a typealias of Array that has this Element type
+  private string? FindArrayAliasByElementName(string elementTypeName) {
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
       if (sourceTypeName != "Array") continue;
-      // Check if this alias has the matching Element type parameter
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
           && aliasType is MlirStructType st
           && st.TypeParams.TryGetValue("Element", out var elemType)
@@ -7881,8 +7923,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return aliasName;
       }
     }
-
-    return "Array";
+    return null;
   }
 
   /// <summary>
@@ -7986,13 +8027,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var expectedKind = rangedType.BaseType.ToValueKind();
 
     if (innerKind != expectedKind) {
-      // Allow int literal → byte conversion if in range
-      if (expectedKind == MaxonValueKind.Byte && innerKind == MaxonValueKind.Integer) {
-        // Will be validated by range check below
-      } else {
+      bool compatible =
+        (expectedKind == MaxonValueKind.Byte && innerKind == MaxonValueKind.Integer) ||
+        (expectedKind == MaxonValueKind.Float32 && innerKind == MaxonValueKind.Float);
+      if (!compatible) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Cannot construct '{rangedType.Name}' from {KindToTypeName(innerKind)}, expected {MlirType.FormatAsSourceName(rangedType.BaseType)}",
           typeToken.Line, typeToken.Column);
+      }
+      // Re-emit float literal as Float32 so lowering produces StdF32 ops
+      if (expectedKind == MaxonValueKind.Float32 && innerKind == MaxonValueKind.Float) {
+        var lastOp = _currentBlock!.Operations.LastOrDefault();
+        if (lastOp is MaxonLiteralOp lit && lit.Result == innerValue) {
+          _currentBlock.Operations.Remove(lastOp);
+          var f32Lit = new MaxonLiteralOp(lit.FloatValue, MaxonValueKind.Float32);
+          _currentBlock.AddOp(f32Lit);
+          innerValue = f32Lit.Result;
+        }
       }
     }
 
@@ -8011,7 +8062,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == value) {
       double numericValue = litOp.ValueKind switch {
         MaxonValueKind.Integer => (double)litOp.IntValue,
-        MaxonValueKind.Float => litOp.FloatValue,
+        MaxonValueKind.Float or MaxonValueKind.Float32 => litOp.FloatValue,
         MaxonValueKind.Byte => (double)litOp.IntValue,
         _ => double.NaN
       };
@@ -8046,13 +8097,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.AddOp(new MaxonAssignOp(tempVarName, value, true, true, kind));
     _variables[tempVarName] = new VarInfo(kind, true, value, _currentBlock!, null);
 
-    // For comparisons, use Integer kind for both int and byte base types
-    var cmpKind = kind == MaxonValueKind.Float ? MaxonValueKind.Float : MaxonValueKind.Integer;
+    // For comparisons, use the appropriate float kind or Integer for int/byte
+    var cmpKind = kind is MaxonValueKind.Float or MaxonValueKind.Float32 ? kind : MaxonValueKind.Integer;
 
-    bool needsLowerCheck = rangedType.BaseType != MlirType.F64
+    bool isFloatBase = rangedType.BaseType == MlirType.F64 || rangedType.BaseType == MlirType.F32;
+    bool needsLowerCheck = !isFloatBase
       ? rangedType.LowerBound > (double)long.MinValue
       : rangedType.LowerBound > double.MinValue;
-    bool needsUpperCheck = rangedType.BaseType != MlirType.F64
+    bool needsUpperCheck = !isFloatBase
       ? rangedType.UpperBound < (double)long.MaxValue
       : rangedType.UpperBound < double.MaxValue;
 
@@ -8458,15 +8510,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         "Cannot infer element type: no element assignments found in array literal",
         Current().Line, Current().Column);
 
-    return elemAssign.ValueKind switch {
-      MaxonValueKind.Integer => MlirType.I64,
-      MaxonValueKind.Float => MlirType.F64,
-      MaxonValueKind.Bool => MlirType.I1,
-      MaxonValueKind.Byte => MlirType.I8,
-      _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Cannot infer element type from value kind '{elemAssign.ValueKind}'",
-        Current().Line, Current().Column)
-    };
+    return KindToMlirType(elemAssign.ValueKind) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"Cannot infer element type from value kind '{elemAssign.ValueKind}'",
+      Current().Line, Current().Column);
   }
 
   // Resolves an expression result to a MaxonValue, emitting a var_ref op if needed for cross-block references
@@ -8559,15 +8605,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return (source, target) switch {
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => true,
       (MaxonValueKind.Byte, MaxonValueKind.Float) => true,
+      (MaxonValueKind.Byte, MaxonValueKind.Float32) => true,
       (MaxonValueKind.Integer, MaxonValueKind.Float) => true,
+      (MaxonValueKind.Integer, MaxonValueKind.Float32) => true,
       (MaxonValueKind.Integer, MaxonValueKind.Byte) => false,
       (MaxonValueKind.Float, MaxonValueKind.Integer) => false,
       (MaxonValueKind.Float, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Float32, MaxonValueKind.Integer) => false,
+      (MaxonValueKind.Float32, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Float32, MaxonValueKind.Float) => true,
+      (MaxonValueKind.Float, MaxonValueKind.Float32) => false,
       (MaxonValueKind.Bool, MaxonValueKind.Integer) => false,
       (MaxonValueKind.Bool, MaxonValueKind.Float) => false,
+      (MaxonValueKind.Bool, MaxonValueKind.Float32) => false,
       (MaxonValueKind.Bool, MaxonValueKind.Byte) => false,
       (MaxonValueKind.Integer, MaxonValueKind.Bool) => false,
       (MaxonValueKind.Float, MaxonValueKind.Bool) => false,
+      (MaxonValueKind.Float32, MaxonValueKind.Bool) => false,
       (MaxonValueKind.Byte, MaxonValueKind.Bool) => false,
       _ => throw new InvalidOperationException($"Unhandled cast combination: {source} -> {target}")
     };
@@ -8668,8 +8722,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var sourceKind = DetermineValueKind(value);
     return (sourceKind, targetKind) switch {
       (MaxonValueKind.Integer, MaxonValueKind.Float) => PromoteIntToFloat(value),
+      (MaxonValueKind.Integer, MaxonValueKind.Float32) => PromoteIntToFloat(value),
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => value,
       (MaxonValueKind.Byte, MaxonValueKind.Float) => PromoteIntToFloat(value),
+      (MaxonValueKind.Byte, MaxonValueKind.Float32) => PromoteIntToFloat(value),
+      (MaxonValueKind.Float32, MaxonValueKind.Float) => EmitCast(value, MaxonValueKind.Float),
       _ => throw new InvalidOperationException($"Unhandled promotion: {sourceKind} -> {targetKind}")
     };
   }
@@ -9001,9 +9058,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       string paramName, Token callToken) {
     return (argKind, paramKind) switch {
       (MaxonValueKind.Integer, MaxonValueKind.Float) => EmitCast(arg, MaxonValueKind.Float),
+      (MaxonValueKind.Integer, MaxonValueKind.Float32) => EmitCast(arg, MaxonValueKind.Float32),
       (MaxonValueKind.Float, MaxonValueKind.Integer) => EmitCast(arg, MaxonValueKind.Integer),
+      (MaxonValueKind.Float32, MaxonValueKind.Integer) => EmitCast(arg, MaxonValueKind.Integer),
       (MaxonValueKind.Integer, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
       (MaxonValueKind.Float, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
+      (MaxonValueKind.Float32, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
+      (MaxonValueKind.Float32, MaxonValueKind.Float) => EmitCast(arg, MaxonValueKind.Float),
+      (MaxonValueKind.Float, MaxonValueKind.Float32) => EmitCast(arg, MaxonValueKind.Float32),
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => arg, // byte is stored as i64 internally
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"argument type mismatch for '{paramName}': expected '{KindToTypeName(paramKind)}', got '{KindToTypeName(argKind)}'",

@@ -1,9 +1,9 @@
-// Test: min-max-bounds
-typealias FullInt = int(i64.min to i64.max)
+// Test: f32-to-int
+typealias F = f32
 
 function main() returns ExitCode
-  var x = FullInt{42}
-  return x
+  var x = F{42.9}
+  return trunc(x)
 end 'main'
 ---
 ---
@@ -11,7 +11,8 @@ module {
   func @ranged-typealias.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 42
+    x86.movss xmm0, [rip+__float32_42.9]
+    x86.cvttss2si eax, xmm0
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
@@ -25,7 +26,7 @@ module {
     x86.test edx, edx
     x86.je ranged-typealias.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_6]
+    x86.lea_rdata rax, [__panic_msg_8]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

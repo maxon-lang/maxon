@@ -34,6 +34,7 @@ public static class ConstantArrayAnalysisPass {
               literalValues[lit.Result.Id] = lit.IntValue;
               break;
             case MaxonValueKind.Float:
+            case MaxonValueKind.Float32:
               // Float literals can't be stored as long - skip (array won't be marked as all-constant)
               break;
             case MaxonValueKind.Struct:
@@ -61,6 +62,7 @@ public static class ConstantArrayAnalysisPass {
               literalValues[castOp.Result.Id] = inputVal;
               break;
             case MaxonValueKind.Float:
+            case MaxonValueKind.Float32:
               // Cast to float can't be stored as long - don't track
               break;
             case MaxonValueKind.Struct:

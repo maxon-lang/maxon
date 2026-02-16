@@ -273,6 +273,7 @@ public static class DeadStoreEliminationPass {
       case StdLoadI64Op load: varName = load.VarName; return true;
       case StdLoadI32Op load: varName = load.VarName; return true;
       case StdLoadF64Op load: varName = load.VarName; return true;
+      case StdLoadF32Op load: varName = load.VarName; return true;
       case StdLoadI1Op load: varName = load.VarName; return true;
       case StdLoadPtrOp load: varName = load.VarName; return true;
       default: varName = ""; return false;

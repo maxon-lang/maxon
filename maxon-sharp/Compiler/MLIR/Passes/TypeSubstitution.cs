@@ -209,6 +209,7 @@ internal class TypeSubstitution {
     return concreteType switch {
       { } t when t == MlirType.I64 => MaxonValueKind.Integer,
       { } t when t == MlirType.F64 => MaxonValueKind.Float,
+      { } t when t == MlirType.F32 => MaxonValueKind.Float32,
       { } t when t == MlirType.I1 => MaxonValueKind.Bool,
       { } t when t == MlirType.I8 => MaxonValueKind.Byte,
       MlirStructType or MlirEnumType => MaxonValueKind.Integer,

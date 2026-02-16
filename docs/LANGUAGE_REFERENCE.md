@@ -246,15 +246,27 @@ The `to` keyword makes the upper bound inclusive. The `upto` keyword makes it ex
 typealias Index = int(0 upto 100)   // 0 to 99
 ```
 
-**Min/max bounds:**
+**Type-qualified bounds:**
 
-Use `min` and `max` keywords for the type's full range:
+Use `type.min` and `type.max` to reference bounds of specific numeric types:
 
 ```maxon
-typealias Integer = int(min to max)
-typealias Float = float(min to max)
-typealias Byte = byte(0 to 255)
+typealias FileHandle = int(0 to u32.max)
+typealias SmallSigned = int(i8.min to i8.max)
 ```
+
+Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
+
+**Shorthand sized types:**
+
+Use sized type names directly as typealias shorthand:
+
+```maxon
+typealias FileHandle = u32    // equivalent to int(0 to 4294967295)
+typealias SmallFloat = f32    // 32-bit float
+```
+
+Supported: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
 **Construction:**
 
@@ -318,17 +330,17 @@ The standard library provides general-purpose aliases:
 
 | Alias | Definition | Purpose |
 |-------|-----------|---------|
-| `Integer` | `int(min to max)` | General-purpose signed integer |
-| `Float` | `float(min to max)` | General-purpose floating point |
-| `Byte` | `byte(0 to 255)` | Full byte range |
-| `Count` | `int(0 to max)` | Non-negative counts |
-| `Index` | `int(0 to max)` | Array indices |
-| `ExitCode` | `int(0 to 4294967295)` | Process exit codes |
-| `Offset` | `int(min to max)` | Signed offsets |
-| `HashValue` | `int(0 to 4294967295)` | Hash function results |
+| `Integer` | `i64` | General-purpose signed integer |
+| `Float` | `f64` | General-purpose floating point |
+| `Byte` | `u8` | Full byte range |
+| `Count` | `int(0 to i64.max)` | Non-negative counts |
+| `Index` | `int(0 to i64.max)` | Array indices |
+| `ExitCode` | `u32` | Process exit codes |
+| `Offset` | `i64` | Signed offsets |
+| `HashValue` | `u32` | Hash function results |
 | `Codepoint` | `int(0 to 1114111)` | Unicode codepoints |
 | `CompareResult` | `int(-1 to 1)` | Comparison results |
-| `MathValue` | `float(min to max)` | Math function results |
+| `MathValue` | `f64` | Math function results |
 
 ---
 

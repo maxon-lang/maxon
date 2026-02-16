@@ -1,0 +1,58 @@
+// Test: f32-arithmetic
+typealias F = f32
+
+function main() returns ExitCode
+  var a = F{10.0}
+  var b = F{3.0}
+  var sum = a + b
+  var diff = a - b
+  var prod = a * b
+  var quot = a / b
+  return trunc(sum + diff + prod + quot)
+end 'main'
+---
+---
+module {
+  func @ranged-typealias.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movss xmm0, [rip+__float32_10]
+    x86.movss xmm1, [rip+__float32_3]
+    x86.movsd xmm2, xmm0
+    x86.addss xmm2, xmm1
+    x86.movsd xmm3, xmm0
+    x86.subss xmm3, xmm1
+    x86.movsd xmm4, xmm0
+    x86.mulss xmm4, xmm1
+    x86.movsd xmm5, xmm0
+    x86.divss xmm5, xmm1
+    x86.movsd xmm6, xmm2
+    x86.addss xmm6, xmm3
+    x86.movsd xmm7, xmm6
+    x86.addss xmm7, xmm4
+    x86.movsd xmm8, xmm7
+    x86.addss xmm8, xmm5
+    x86.cvttss2si eax, xmm8
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je ranged-typealias.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_17]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -19,7 +19,8 @@ All numeric types in type positions require a `typealias` with range constraints
 typealias Age = int(0 to 150)       // inclusive upper bound
 typealias Idx = int(0 upto 100)     // exclusive upper bound (0-99)
 typealias Pct = float(0.0 to 100.0)
-typealias FullInt = int(min to max)  // min/max for full range
+typealias FullInt = int(i64.min to i64.max)  // type.min/type.max for full range
+typealias Handle = u32                       // shorthand for int(0 to u32.max)
 ```
 
 Construction and range checks:

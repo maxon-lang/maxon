@@ -1,0 +1,30 @@
+// Test: f32-comparison
+typealias F = f32
+
+function main() returns ExitCode
+  var a = F{3.0}
+  var b = F{5.0}
+  if a < b 'less'
+    return 1
+  end 'less'
+  return 0
+end 'main'
+---
+---
+module {
+  func @ranged-typealias.main() -> u32 {
+  entry:
+    x86.movss xmm0, [rip+__float32_3]
+    x86.movss xmm1, [rip+__float32_5]
+    x86.ucomiss xmm0, xmm1
+    x86.jp ranged-typealias.main.less_0.after
+    x86.jae ranged-typealias.main.less_0.after
+  less_0:
+    x86.mov eax, 1
+    x86.ret
+  less_0.after:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

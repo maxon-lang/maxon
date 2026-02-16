@@ -460,6 +460,12 @@ public static class MaxonToStandardConversion {
                   valueMap[litOp.Result] = newOp.Result;
                   break;
                 }
+                case MaxonValueKind.Float32: {
+                  var newOp = new StdConstF32Op((float)litOp.FloatValue);
+                  newBlock.AddOp(newOp);
+                  valueMap[litOp.Result] = newOp.Result;
+                  break;
+                }
                 case MaxonValueKind.Bool: {
                   var newOp = new StdConstI1Op(litOp.BoolValue);
                   newBlock.AddOp(newOp);
@@ -950,7 +956,14 @@ public static class MaxonToStandardConversion {
                 if (rhs is StdI32 or StdU32) rhs = EnsureI64(rhs is StdU32 u2 ? new StdI32(u2.Id) : rhs, newBlock, signExtend: rhs is not StdU32);
               }
 
-              var key = (binOp.Operator, binOp.OperandKind);
+              // F32 values arrive with Float kind from Maxon dialect; dispatch to Float32 ops
+              var effectiveKind = binOp.OperandKind == MaxonValueKind.Float && (lhs is StdF32 || rhs is StdF32)
+                ? MaxonValueKind.Float32 : binOp.OperandKind;
+              if (effectiveKind == MaxonValueKind.Float32) {
+                if (lhs is StdF64 lhsF64) { var cvt = new StdF64ToF32Op(lhsF64); newBlock.AddOp(cvt); lhs = cvt.Result; }
+                if (rhs is StdF64 rhsF64) { var cvt = new StdF64ToF32Op(rhsF64); newBlock.AddOp(cvt); rhs = cvt.Result; }
+              }
+              var key = (binOp.Operator, effectiveKind);
               if (!BinOpFactories.TryGetValue(key, out var factory))
                 throw new InvalidOperationException($"Unsupported binop: {binOp.Operator} on {binOp.OperandKind} in func {func.Name} block {block.Name}");
 
@@ -1015,6 +1028,10 @@ public static class MaxonToStandardConversion {
                 var stdOp = new StdFpToSiOp(f64Input);
                 newBlock.AddOp(stdOp);
                 valueMap[truncOp.Result] = stdOp.Result;
+              } else if (mappedInput is StdF32 f32Input) {
+                var stdOp = new StdFpToSiF32Op(f32Input);
+                newBlock.AddOp(stdOp);
+                valueMap[truncOp.Result] = stdOp.Result;
               } else if (mappedInput is StdI64 or StdI32) {
                 // Ranged int types resolve to integer standard values; truncation only applies to float-to-int
                 valueMap[truncOp.Result] = mappedInput;
@@ -1038,32 +1055,25 @@ public static class MaxonToStandardConversion {
               break;
             }
             case MaxonAbsOp absOp:
-              LowerUnaryF64(valueMap, newBlock, absOp.Input, absOp.Result,
-                input => new StdAbsF64Op(input));
+              LowerUnaryFloat(valueMap, newBlock, absOp.Input, absOp.Result, i => new StdAbsF32Op(i), i => new StdAbsF64Op(i));
               break;
             case MaxonSqrtOp sqrtOp:
-              LowerUnaryF64(valueMap, newBlock, sqrtOp.Input, sqrtOp.Result,
-                input => new StdSqrtF64Op(input));
+              LowerUnaryFloat(valueMap, newBlock, sqrtOp.Input, sqrtOp.Result, i => new StdSqrtF32Op(i), i => new StdSqrtF64Op(i));
               break;
             case MaxonFloorOp floorOp:
-              LowerUnaryF64(valueMap, newBlock, floorOp.Input, floorOp.Result,
-                input => new StdFloorF64Op(input));
+              LowerUnaryFloat(valueMap, newBlock, floorOp.Input, floorOp.Result, i => new StdFloorF32Op(i), i => new StdFloorF64Op(i));
               break;
             case MaxonCeilOp ceilOp:
-              LowerUnaryF64(valueMap, newBlock, ceilOp.Input, ceilOp.Result,
-                input => new StdCeilF64Op(input));
+              LowerUnaryFloat(valueMap, newBlock, ceilOp.Input, ceilOp.Result, i => new StdCeilF32Op(i), i => new StdCeilF64Op(i));
               break;
             case MaxonRoundOp roundOp:
-              LowerUnaryF64(valueMap, newBlock, roundOp.Input, roundOp.Result,
-                input => new StdRoundF64Op(input));
+              LowerUnaryFloat(valueMap, newBlock, roundOp.Input, roundOp.Result, i => new StdRoundF32Op(i), i => new StdRoundF64Op(i));
               break;
             case MaxonMinOp minOp:
-              LowerBinaryF64(valueMap, newBlock, minOp.Lhs, minOp.Rhs, minOp.Result,
-                (l, r) => new StdMinF64Op(l, r));
+              LowerBinaryFloat(valueMap, newBlock, minOp.Lhs, minOp.Rhs, minOp.Result, (l, r) => new StdMinF32Op(l, r), (l, r) => new StdMinF64Op(l, r));
               break;
             case MaxonMaxOp maxOp:
-              LowerBinaryF64(valueMap, newBlock, maxOp.Lhs, maxOp.Rhs, maxOp.Result,
-                (l, r) => new StdMaxF64Op(l, r));
+              LowerBinaryFloat(valueMap, newBlock, maxOp.Lhs, maxOp.Rhs, maxOp.Result, (l, r) => new StdMaxF32Op(l, r), (l, r) => new StdMaxF64Op(l, r));
               break;
             case MaxonCastOp castOp: {
               var input = valueMap[castOp.Input];
@@ -1079,6 +1089,10 @@ public static class MaxonToStandardConversion {
                     throw new InvalidOperationException("i32 to byte conversion not yet implemented");
                   } else if (input is StdF64 f64Input) {
                     var fpToSi = new StdFpToSiOp(f64Input);
+                    newBlock.AddOp(fpToSi);
+                    intInput = fpToSi.Result;
+                  } else if (input is StdF32 f32Input) {
+                    var fpToSi = new StdFpToSiF32Op(f32Input);
                     newBlock.AddOp(fpToSi);
                     intInput = fpToSi.Result;
                   } else if (input is StdBool boolInput) {
@@ -1108,6 +1122,10 @@ public static class MaxonToStandardConversion {
                     var fpToSi = new StdFpToSiOp(f64);
                     newBlock.AddOp(fpToSi);
                     valueMap[castOp.Result] = fpToSi.Result;
+                  } else if (input is StdF32 f32) {
+                    var fpToSi = new StdFpToSiF32Op(f32);
+                    newBlock.AddOp(fpToSi);
+                    valueMap[castOp.Result] = fpToSi.Result;
                   } else if (input is StdBool boolInput) {
                     // Bool to int: bool is already 0 or 1, reinterpret as i64
                     valueMap[castOp.Result] = new StdI64(boolInput.Id);
@@ -1135,6 +1153,11 @@ public static class MaxonToStandardConversion {
                     throw new InvalidOperationException("i32 to float conversion not yet implemented");
                   } else if (input is StdF64 f64) {
                     valueMap[castOp.Result] = f64;
+                  } else if (input is StdF32 f32) {
+                    // f32 to f64: widen
+                    var promote = new StdF32ToF64Op(f32);
+                    newBlock.AddOp(promote);
+                    valueMap[castOp.Result] = promote.Result;
                   } else if (input is StdBool boolInput) {
                     // Bool to float: convert bool (0 or 1) to float
                     var asI64 = new StdI64(boolInput.Id);
@@ -1145,6 +1168,35 @@ public static class MaxonToStandardConversion {
                     throw new InvalidOperationException("Cannot cast pointer to float");
                   } else {
                     throw new InvalidOperationException($"Unsupported cast to float from: {input.GetType().Name}");
+                  }
+                  break;
+                }
+                case MaxonValueKind.Float32: {
+                  if (input is StdI64 i64) {
+                    var sourceIsUnsigned = castOp.SourceIsUnsigned;
+                    if (sourceIsUnsigned) {
+                      var uiToFp = new StdUiToFpF32Op(i64);
+                      newBlock.AddOp(uiToFp);
+                      valueMap[castOp.Result] = uiToFp.Result;
+                    } else {
+                      var siToFp = new StdSiToFpF32Op(i64);
+                      newBlock.AddOp(siToFp);
+                      valueMap[castOp.Result] = siToFp.Result;
+                    }
+                  } else if (input is StdF32 f32) {
+                    valueMap[castOp.Result] = f32;
+                  } else if (input is StdF64 f64) {
+                    // f64 to f32: narrow
+                    var narrow = new StdF64ToF32Op(f64);
+                    newBlock.AddOp(narrow);
+                    valueMap[castOp.Result] = narrow.Result;
+                  } else if (input is StdBool boolInput) {
+                    var asI64 = new StdI64(boolInput.Id);
+                    var siToFp = new StdSiToFpF32Op(asI64);
+                    newBlock.AddOp(siToFp);
+                    valueMap[castOp.Result] = siToFp.Result;
+                  } else {
+                    throw new InvalidOperationException($"Unsupported cast to f32 from: {input.GetType().Name}");
                   }
                   break;
                 }
@@ -1163,6 +1215,12 @@ public static class MaxonToStandardConversion {
                 }
                 case MaxonValueKind.Float: {
                   var loadOp = new StdGlobalLoadF64Op(globalLoad.GlobalName);
+                  newBlock.AddOp(loadOp);
+                  valueMap[globalLoad.Result] = loadOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Float32: {
+                  var loadOp = new StdGlobalLoadF32Op(globalLoad.GlobalName);
                   newBlock.AddOp(loadOp);
                   valueMap[globalLoad.Result] = loadOp.Result;
                   break;
@@ -1215,6 +1273,9 @@ public static class MaxonToStandardConversion {
                     break;
                   case MaxonValueKind.Float:
                     newBlock.AddOp(new StdGlobalStoreF64Op((StdF64)mappedValue, globalStore.GlobalName));
+                    break;
+                  case MaxonValueKind.Float32:
+                    newBlock.AddOp(new StdGlobalStoreF32Op((StdF32)mappedValue, globalStore.GlobalName));
                     break;
                   case MaxonValueKind.Bool:
                     newBlock.AddOp(new StdGlobalStoreI1Op((StdBool)mappedValue, globalStore.GlobalName));
@@ -2221,6 +2282,7 @@ public static class MaxonToStandardConversion {
     if (resultKind == MaxonValueKind.Enum && calleeReturnType is MlirEnumType retEnumType) {
       var backingType = ResolveEnumBackingMlirType(retEnumType);
       if (backingType == MlirType.F64) return new StdF64(MlirContext.Current.NextId());
+      if (backingType == MlirType.F32) return new StdF32(MlirContext.Current.NextId());
       return new StdI64(MlirContext.Current.NextId());
     }
     // Match the callee's actual return width so narrow returns skip the I64 round-trip
@@ -2232,6 +2294,10 @@ public static class MaxonToStandardConversion {
   private static StdF64 PromoteToF64(StdValue value, MlirBlock<StandardOp> block) {
     if (value is StdF64 f64) {
       return f64;
+    } else if (value is StdF32 f32) {
+      var conv = new StdF32ToF64Op(f32);
+      block.AddOp(conv);
+      return conv.Result;
     } else if (value is StdI64 i64) {
       var conv = new StdSiToFpOp(i64);
       block.AddOp(conv);
@@ -2241,27 +2307,45 @@ public static class MaxonToStandardConversion {
     }
   }
 
-  private static void LowerUnaryF64(
+  private static void LowerUnaryFloat(
     Dictionary<MaxonValue, StdValue> valueMap,
     MlirBlock<StandardOp> block,
     MaxonValue maxonInput, MaxonValue maxonResult,
-    Func<StdF64, StdUnaryF64Op> factory) {
-    var input = PromoteToF64(valueMap[maxonInput], block);
-    var stdOp = factory(input);
-    block.AddOp(stdOp);
-    valueMap[maxonResult] = stdOp.Result;
+    Func<StdF32, StdUnaryF32Op> f32Factory,
+    Func<StdF64, StdUnaryF64Op> f64Factory) {
+    var input = valueMap[maxonInput];
+    if (input is StdF32 f32Input) {
+      var op = f32Factory(f32Input);
+      block.AddOp(op);
+      valueMap[maxonResult] = op.Result;
+    } else if (input is StdF64 or StdI64) {
+      var op = f64Factory(PromoteToF64(input, block));
+      block.AddOp(op);
+      valueMap[maxonResult] = op.Result;
+    } else {
+      throw new InvalidOperationException($"LowerUnaryFloat: unexpected input type {input.GetType().Name}");
+    }
   }
 
-  private static void LowerBinaryF64(
+  private static void LowerBinaryFloat(
     Dictionary<MaxonValue, StdValue> valueMap,
     MlirBlock<StandardOp> block,
     MaxonValue maxonLhs, MaxonValue maxonRhs, MaxonValue maxonResult,
-    Func<StdF64, StdF64, StdBinaryF64Op> factory) {
-    var lhs = PromoteToF64(valueMap[maxonLhs], block);
-    var rhs = PromoteToF64(valueMap[maxonRhs], block);
-    var stdOp = factory(lhs, rhs);
-    block.AddOp(stdOp);
-    valueMap[maxonResult] = stdOp.Result;
+    Func<StdF32, StdF32, StdBinaryF32Op> f32Factory,
+    Func<StdF64, StdF64, StdBinaryF64Op> f64Factory) {
+    var lhs = valueMap[maxonLhs];
+    var rhs = valueMap[maxonRhs];
+    if (lhs is StdF32 f32Lhs && rhs is StdF32 f32Rhs) {
+      var op = f32Factory(f32Lhs, f32Rhs);
+      block.AddOp(op);
+      valueMap[maxonResult] = op.Result;
+    } else if (lhs is StdF64 or StdI64 || rhs is StdF64 or StdI64) {
+      var op = f64Factory(PromoteToF64(lhs, block), PromoteToF64(rhs, block));
+      block.AddOp(op);
+      valueMap[maxonResult] = op.Result;
+    } else {
+      throw new InvalidOperationException($"LowerBinaryFloat: unexpected input types {lhs.GetType().Name}, {rhs.GetType().Name}");
+    }
   }
 
   private static void EmitStore(MlirBlock<StandardOp> block, StdValue value, string varName, Dictionary<string, string> varTypes) {
@@ -2277,6 +2361,10 @@ public static class MaxonToStandardConversion {
       case StdF64 f64:
         block.AddOp(new StdStoreF64Op(f64, varName));
         varTypes[varName] = "f64";
+        break;
+      case StdF32 f32:
+        block.AddOp(new StdStoreF32Op(f32, varName));
+        varTypes[varName] = "f32";
         break;
       case StdBool b:
         block.AddOp(new StdStoreI1Op(b, varName));
@@ -2363,6 +2451,11 @@ public static class MaxonToStandardConversion {
       }
       case "f64": {
         var loadOp = new StdLoadF64Op(varName);
+        block.AddOp(loadOp);
+        return loadOp.Result;
+      }
+      case "f32": {
+        var loadOp = new StdLoadF32Op(varName);
         block.AddOp(loadOp);
         return loadOp.Result;
       }
@@ -3027,6 +3120,11 @@ public static class MaxonToStandardConversion {
           } else {
             partInfos.Add(EmitI64ToString(stdVal, block, varTypes));
           }
+        } else if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32ForStr) {
+          // Promote f32 to f64 for string conversion (reuses existing f64 toString runtime)
+          var promote = new StdF32ToF64Op(f32ForStr);
+          block.AddOp(promote);
+          partInfos.Add(EmitF64ToString(promote.Result, block, varTypes));
         } else if (exprValue is MaxonFloat) {
           partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
         } else if (exprValue is MaxonBool) {
@@ -3689,6 +3787,17 @@ public static class MaxonToStandardConversion {
     { (MaxonBinOperator.Gt, MaxonValueKind.Float), (l, r) => { var op = new StdCmpF64Op("gt", (StdF64)l, (StdF64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Le, MaxonValueKind.Float), (l, r) => { var op = new StdCmpF64Op("le", (StdF64)l, (StdF64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Ge, MaxonValueKind.Float), (l, r) => { var op = new StdCmpF64Op("ge", (StdF64)l, (StdF64)r); return (op, op.Result); } },
+    // Float32 operations
+    { (MaxonBinOperator.Add, MaxonValueKind.Float32), (l, r) => { var op = new StdAddF32Op((StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Sub, MaxonValueKind.Float32), (l, r) => { var op = new StdSubF32Op((StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Mul, MaxonValueKind.Float32), (l, r) => { var op = new StdMulF32Op((StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Div, MaxonValueKind.Float32), (l, r) => { var op = new StdDivF32Op((StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Eq, MaxonValueKind.Float32), (l, r) => { var op = new StdCmpF32Op("eq", (StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Ne, MaxonValueKind.Float32), (l, r) => { var op = new StdCmpF32Op("ne", (StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Lt, MaxonValueKind.Float32), (l, r) => { var op = new StdCmpF32Op("lt", (StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Gt, MaxonValueKind.Float32), (l, r) => { var op = new StdCmpF32Op("gt", (StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Le, MaxonValueKind.Float32), (l, r) => { var op = new StdCmpF32Op("le", (StdF32)l, (StdF32)r); return (op, op.Result); } },
+    { (MaxonBinOperator.Ge, MaxonValueKind.Float32), (l, r) => { var op = new StdCmpF32Op("ge", (StdF32)l, (StdF32)r); return (op, op.Result); } },
     { (MaxonBinOperator.Eq, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("eq", (StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Ne, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("ne", (StdI64)l, (StdI64)r); return (op, op.Result); } },
     { (MaxonBinOperator.Lt, MaxonValueKind.Integer), (l, r) => { var op = new StdCmpI64Op("lt", (StdI64)l, (StdI64)r); return (op, op.Result); } },
@@ -3791,7 +3900,7 @@ public static class MaxonToStandardConversion {
     }
 
     // Float identities (safe subset — avoids signed-zero and NaN edge cases)
-    if (binOp.OperandKind == MaxonValueKind.Float) {
+    if (binOp.OperandKind is MaxonValueKind.Float or MaxonValueKind.Float32) {
       double? lVal = lhsLit?.FloatValue;
       double? rVal = rhsLit?.FloatValue;
 
@@ -4005,6 +4114,7 @@ public static class MaxonToStandardConversion {
       resultValue = indirectCallOp.ResultKind switch {
         MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
         MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
+        MaxonValueKind.Float32 => new StdF32(MlirContext.Current.NextId()),
         MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
         MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
         MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
@@ -4034,6 +4144,7 @@ public static class MaxonToStandardConversion {
     return kind switch {
       MaxonValueKind.Integer => MlirType.I64,
       MaxonValueKind.Float => MlirType.F64,
+      MaxonValueKind.Float32 => MlirType.F32,
       MaxonValueKind.Byte => MlirType.I8,
       MaxonValueKind.Bool => MlirType.I8,
       MaxonValueKind.Enum => MlirType.I64,

@@ -40,6 +40,7 @@ public static class StandardToX86Conversion {
           case StdLoadI32Op load: loadedVariables.Add(load.VarName); break;
           case StdLoadI1Op load: loadedVariables.Add(load.VarName); break;
           case StdLoadF64Op load: loadedVariables.Add(load.VarName); break;
+          case StdLoadF32Op load: loadedVariables.Add(load.VarName); break;
           case StdLoadPtrOp load: loadedVariables.Add(load.VarName); break;
           case StdLeaOp lea: leaVariables.Add(lea.VarName); break;
         }
@@ -128,6 +129,13 @@ public static class StandardToX86Conversion {
 
     // Track float constants for rdata deduplication
     var floatConstants = new Dictionary<double, string>();
+    var float32Constants = new Dictionary<float, string>();
+
+    // F32 abs mask (created on demand when StdAbsF32Op is present)
+    var absF32MaskLabel = "__abs_mask_f32";
+    if (func.Body.Blocks.SelectMany(b => b.Operations).Any(op => op is StdAbsF32Op)) {
+      outputModule.RdataEntries.Add((absF32MaskLabel, [0xFF, 0xFF, 0xFF, 0x7F], 1));
+    }
 
     // Track pending comparison for flag-based branching
     StdBool? lastCmpResult = null;
@@ -172,6 +180,12 @@ public static class StandardToX86Conversion {
           if (storeF64 != null && varOffsets.TryGetValue(storeF64.VarName, out int value2)) {
             regManager.EmitXmmStoreToStack(paramOp.Result, value2, x86Block);
             preHandledOps.Add(storeF64);
+          }
+          var storeF32 = srcBlock.Operations.OfType<StdStoreF32Op>()
+            .FirstOrDefault(s => s.Value.Equals(paramOp.Result) && s.VarName == paramOp.Name);
+          if (storeF32 != null && varOffsets.TryGetValue(storeF32.VarName, out int value2b)) {
+            regManager.EmitXmmStoreToStackF32(paramOp.Result, value2b, x86Block);
+            preHandledOps.Add(storeF32);
           }
           // Handle bool (i1) parameters - must also be stored immediately
           var storeI1 = srcBlock.Operations.OfType<StdStoreI1Op>()
@@ -406,6 +420,28 @@ public static class StandardToX86Conversion {
               (l, r) => new X86DivSdOp(l, r));
             break;
 
+          // === F32 Arithmetic ===
+
+          case StdAddF32Op addF32Op:
+            regManager.EmitXmmBinaryRegReg(addF32Op.Lhs, addF32Op.Rhs, addF32Op.Result, x86Block,
+              (l, r) => new X86AddSsOp(l, r));
+            break;
+
+          case StdSubF32Op subF32Op:
+            regManager.EmitXmmBinaryRegReg(subF32Op.Lhs, subF32Op.Rhs, subF32Op.Result, x86Block,
+              (l, r) => new X86SubSsOp(l, r));
+            break;
+
+          case StdMulF32Op mulF32Op:
+            regManager.EmitXmmBinaryRegReg(mulF32Op.Lhs, mulF32Op.Rhs, mulF32Op.Result, x86Block,
+              (l, r) => new X86MulSsOp(l, r));
+            break;
+
+          case StdDivF32Op divF32Op:
+            regManager.EmitXmmBinaryRegReg(divF32Op.Lhs, divF32Op.Rhs, divF32Op.Result, x86Block,
+              (l, r) => new X86DivSsOp(l, r));
+            break;
+
           case StdAndI64Op andOp:
             regManager.EmitBinaryRegReg(andOp.Lhs, andOp.Rhs, andOp.Result, x86Block,
               (l, r) => new X86AndRegRegOp(l, r),
@@ -479,6 +515,32 @@ public static class StandardToX86Conversion {
             regManager.EmitCvttSd2Si(fpToUiOp.Input, fpToUiOp.Result, x86Block);
             break;
 
+          // === F32 Conversion ===
+
+          case StdFpToSiF32Op fpToSiF32Op:
+            regManager.EmitCvttSs2Si(fpToSiF32Op.Input, fpToSiF32Op.Result, x86Block);
+            break;
+
+          case StdFpToUiF32Op fpToUiF32Op:
+            regManager.EmitCvttSs2Si(fpToUiF32Op.Input, fpToUiF32Op.Result, x86Block);
+            break;
+
+          case StdSiToFpF32Op siToFpF32Op:
+            regManager.EmitCvtSi2Ss(siToFpF32Op.Input, siToFpF32Op.Result, x86Block);
+            break;
+
+          case StdUiToFpF32Op uiToFpF32Op:
+            regManager.EmitCvtSi2Ss(uiToFpF32Op.Input, uiToFpF32Op.Result, x86Block);
+            break;
+
+          case StdF64ToF32Op f64ToF32Op:
+            regManager.EmitCvtSd2Ss(f64ToF32Op.Input, f64ToF32Op.Result, x86Block);
+            break;
+
+          case StdF32ToF64Op f32ToF64Op:
+            regManager.EmitCvtSs2Sd(f32ToF64Op.Input, f32ToF64Op.Result, x86Block);
+            break;
+
           case StdAbsF64Op absOp: {
             var maskLabel = GetOrCreateAbsMask(outputModule);
             regManager.EmitAbsF64(absOp.Input, absOp.Result, maskLabel, x86Block);
@@ -515,9 +577,51 @@ public static class StandardToX86Conversion {
               (l, r) => new X86MaxSdOp(l, r));
             break;
 
+          // === F32 Math ===
+
+          case StdAbsF32Op absF32Op:
+            regManager.EmitAbsF32(absF32Op.Input, absF32Op.Result, absF32MaskLabel, x86Block);
+            break;
+
+          case StdSqrtF32Op sqrtF32Op:
+            regManager.EmitXmmUnaryRegReg(sqrtF32Op.Input, sqrtF32Op.Result, x86Block,
+              (d, s) => new X86SqrtSsOp(d, s));
+            break;
+
+          case StdFloorF32Op floorF32Op:
+            regManager.EmitXmmUnaryRegReg(floorF32Op.Input, floorF32Op.Result, x86Block,
+              (d, s) => new X86RoundSsOp(d, s, 0x01));
+            break;
+
+          case StdCeilF32Op ceilF32Op:
+            regManager.EmitXmmUnaryRegReg(ceilF32Op.Input, ceilF32Op.Result, x86Block,
+              (d, s) => new X86RoundSsOp(d, s, 0x02));
+            break;
+
+          case StdRoundF32Op roundF32Op:
+            regManager.EmitXmmUnaryRegReg(roundF32Op.Input, roundF32Op.Result, x86Block,
+              (d, s) => new X86RoundSsOp(d, s, 0x00));
+            break;
+
+          case StdMinF32Op minF32Op:
+            regManager.EmitXmmBinaryRegReg(minF32Op.Lhs, minF32Op.Rhs, minF32Op.Result, x86Block,
+              (l, r) => new X86MinSsOp(l, r));
+            break;
+
+          case StdMaxF32Op maxF32Op:
+            regManager.EmitXmmBinaryRegReg(maxF32Op.Lhs, maxF32Op.Rhs, maxF32Op.Result, x86Block,
+              (l, r) => new X86MaxSsOp(l, r));
+            break;
+
           case StdConstF64Op floatOp: {
             var label = GetOrCreateFloatLabel(floatOp.Value, outputModule, floatConstants);
             regManager.EmitXmmLoadFromRipRelative(floatOp.Result, label, x86Block);
+            break;
+          }
+
+          case StdConstF32Op floatF32Op: {
+            var label = GetOrCreateFloat32Label(floatF32Op.Value, outputModule, float32Constants);
+            regManager.EmitXmmLoadFromRipRelativeF32(floatF32Op.Result, label, x86Block);
             break;
           }
 
@@ -537,6 +641,15 @@ public static class StandardToX86Conversion {
 
           case StdLoadF64Op loadOp:
             regManager.EmitXmmLoadFromStack(loadOp.Result, varOffsets[loadOp.VarName], x86Block);
+            break;
+
+          case StdStoreF32Op storeF32Op:
+            if (!deadStoreOps.Contains(op))
+              regManager.EmitXmmStoreToStackF32(storeF32Op.Value, varOffsets[storeF32Op.VarName], x86Block);
+            break;
+
+          case StdLoadF32Op loadF32Op:
+            regManager.EmitXmmLoadFromStackF32(loadF32Op.Result, varOffsets[loadF32Op.VarName], x86Block);
             break;
 
           case StdStoreI1Op storeBoolOp:
@@ -587,6 +700,13 @@ public static class StandardToX86Conversion {
             lastCmpResult = cmpF64Op.Result;
             lastCmpKind = ComparisonKind.Float;
             lastCmpPredicate = cmpF64Op.Predicate;
+            break;
+
+          case StdCmpF32Op cmpF32Op:
+            regManager.EmitXmmCompareF32(cmpF32Op.Lhs, cmpF32Op.Rhs, x86Block);
+            lastCmpResult = cmpF32Op.Result;
+            lastCmpKind = ComparisonKind.Float;
+            lastCmpPredicate = cmpF32Op.Predicate;
             break;
 
           case StdCondBrOp condBr: {
@@ -662,6 +782,14 @@ public static class StandardToX86Conversion {
             regManager.EmitXmmGlobalStore(globalStoreF64.Value, globalStoreF64.GlobalName, x86Block);
             break;
 
+          case StdGlobalLoadF32Op globalLoadF32:
+            regManager.EmitXmmGlobalLoadF32(globalLoadF32.Result, globalLoadF32.GlobalName, x86Block);
+            break;
+
+          case StdGlobalStoreF32Op globalStoreF32:
+            regManager.EmitXmmGlobalStoreF32(globalStoreF32.Value, globalStoreF32.GlobalName, x86Block);
+            break;
+
           case StdGlobalLoadI1Op globalLoadI1:
             regManager.EmitGlobalLoad(globalLoadI1.Result, globalLoadI1.GlobalName, x86Block);
             break;
@@ -676,7 +804,7 @@ public static class StandardToX86Conversion {
               break;
             }
             if (retOp.ReturnValue != null) {
-              if (retOp.ReturnValue is StdF64) {
+              if (retOp.ReturnValue is StdF64 or StdF32) {
                 regManager.EnsureInXmm0ForReturn(retOp.ReturnValue, x86Block);
               } else if (retOp.ReturnValue is StdPtr) {
                 // Pointers use 64-bit RAX
@@ -930,6 +1058,15 @@ public static class StandardToX86Conversion {
       throw new InvalidOperationException($"No field offsets found for struct variable '{structVarName}'");
     }
     return lowestOffset.Value;
+  }
+
+  private static string GetOrCreateFloat32Label(float value, MlirModule<X86Op> module, Dictionary<float, string> float32Constants) {
+    if (!float32Constants.TryGetValue(value, out var label)) {
+      label = $"__float32_{value.ToString(CultureInfo.InvariantCulture)}";
+      float32Constants[value] = label;
+      module.RdataEntries.Add((label, BitConverter.GetBytes(value), 1));
+    }
+    return label;
   }
 
   private static string GetOrCreateAbsMask(MlirModule<X86Op> module) {

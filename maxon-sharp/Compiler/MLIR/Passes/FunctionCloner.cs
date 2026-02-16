@@ -215,6 +215,7 @@ internal class FunctionCloner {
         var cloned = lit.ValueKind switch {
           MaxonValueKind.Integer => new MaxonLiteralOp(lit.IntValue),
           MaxonValueKind.Float => new MaxonLiteralOp(lit.FloatValue),
+          MaxonValueKind.Float32 => new MaxonLiteralOp(lit.FloatValue, MaxonValueKind.Float32),
           MaxonValueKind.Bool => new MaxonLiteralOp(lit.BoolValue),
           _ => throw new InvalidOperationException($"Unsupported literal kind: {lit.ValueKind}")
         };
@@ -249,7 +250,7 @@ internal class FunctionCloner {
       case MaxonMaxOp ma: { var c = new MaxonMaxOp(MapValue(ma.Lhs), MapValue(ma.Rhs)); RegisterResult(ma.Result, c.Result); return c; }
 
       // Enum ops
-      case MaxonEnumLiteralOp el: { var c = el.BackingKind == MaxonValueKind.Float ? new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.IntValue); RegisterResult(el.Result, c.Result); return c; }
+      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.IntValue); RegisterResult(el.Result, c.Result); return c; }
       case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, ep.EnumTypeName, ep.BackingKind); RegisterResult(ep.Result, c.Result); return c; }
       case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, ev.EnumTypeName, ev.BackingKind); RegisterResult(ev.Result, c.Result); return c; }
       case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(MapValue(er.EnumValue), er.EnumTypeName, er.ResultKind); RegisterResult(er.Result, c.Result); return c; }

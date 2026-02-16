@@ -33,6 +33,25 @@ public abstract class StdBinaryF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public override int PureResultId => Result.Id;
 }
 
+public abstract class StdUnaryF32Op(StdF32 input) : StandardOp {
+  public StdF32 Input { get; } = input;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
+public abstract class StdBinaryF32Op(StdF32 lhs, StdF32 rhs) : StandardOp {
+  public StdF32 Lhs { get; } = lhs;
+  public StdF32 Rhs { get; } = rhs;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
+}
+
 public interface IStoreOp {
   string VarName { get; }
   MlirType StoredType { get; }
@@ -71,6 +90,17 @@ public class StdConstF64Op(double value) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
     new Dictionary<string, MlirAttribute> { ["value"] = new FloatAttr(Value, MlirType.F64) };
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
+}
+
+public class StdConstF32Op(float value) : StandardOp {
+  public override string Mnemonic => "arith.float_constant";
+  public float Value { get; } = value;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> { ["value"] = new FloatAttr(Value, MlirType.F32) };
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
 }
@@ -355,6 +385,24 @@ public class StdDivF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
   public override int PureResultId => Result.Id;
 }
 
+// === F32 Float Arithmetic ===
+
+public class StdAddF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
+  public override string Mnemonic => "arith.addf32";
+}
+
+public class StdSubF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
+  public override string Mnemonic => "arith.subf32";
+}
+
+public class StdMulF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
+  public override string Mnemonic => "arith.mulf32";
+}
+
+public class StdDivF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
+  public override string Mnemonic => "arith.divf32";
+}
+
 // === Float Absolute Value ===
 
 public class StdAbsF64Op(StdF64 input) : StdUnaryF64Op(input) {
@@ -385,6 +433,36 @@ public class StdMinF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
 
 public class StdMaxF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
   public override string Mnemonic => "math.maxf";
+}
+
+// === F32 Float Math Operations ===
+
+public class StdAbsF32Op(StdF32 input) : StdUnaryF32Op(input) {
+  public override string Mnemonic => "math.absf32";
+}
+
+public class StdSqrtF32Op(StdF32 input) : StdUnaryF32Op(input) {
+  public override string Mnemonic => "math.sqrtf32";
+}
+
+public class StdFloorF32Op(StdF32 input) : StdUnaryF32Op(input) {
+  public override string Mnemonic => "math.floorf32";
+}
+
+public class StdCeilF32Op(StdF32 input) : StdUnaryF32Op(input) {
+  public override string Mnemonic => "math.ceilf32";
+}
+
+public class StdRoundF32Op(StdF32 input) : StdUnaryF32Op(input) {
+  public override string Mnemonic => "math.roundf32";
+}
+
+public class StdMinF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
+  public override string Mnemonic => "math.minf32";
+}
+
+public class StdMaxF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
+  public override string Mnemonic => "math.maxf32";
 }
 
 // === Float-to-Int Conversion ===
@@ -443,6 +521,72 @@ public class StdUiToFpOp(StdI64 input) : StandardOp {
   public override int PureResultId => Result.Id;
 }
 
+// === F32 Float-to-Int Conversion ===
+
+public class StdFpToSiF32Op(StdF32 input) : StandardOp {
+  public override string Mnemonic => "arith.fptosi_f32";
+  public StdF32 Input { get; } = input;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
+public class StdFpToUiF32Op(StdF32 input) : StandardOp {
+  public override string Mnemonic => "arith.fptoui_f32";
+  public StdF32 Input { get; } = input;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
+// === F32 Int-to-Float Conversion ===
+
+public class StdSiToFpF32Op(StdI64 input) : StandardOp {
+  public override string Mnemonic => "arith.sitofp_f32";
+  public StdI64 Input { get; } = input;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
+public class StdUiToFpF32Op(StdI64 input) : StandardOp {
+  public override string Mnemonic => "arith.uitofp_f32";
+  public StdI64 Input { get; } = input;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
+// === F64/F32 Precision Conversion ===
+
+public class StdF64ToF32Op(StdF64 input) : StandardOp {
+  public override string Mnemonic => "arith.truncf_f64_to_f32";
+  public StdF64 Input { get; } = input;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
+public class StdF32ToF64Op(StdF32 input) : StandardOp {
+  public override string Mnemonic => "arith.extf_f32_to_f64";
+  public StdF32 Input { get; } = input;
+  public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
 // === Comparison ===
 
 public class StdCmpI64Op(string predicate, StdI64 lhs, StdI64 rhs) : StandardOp {
@@ -474,6 +618,18 @@ public class StdCmpF64Op(string predicate, StdF64 lhs, StdF64 rhs) : StandardOp 
   public string Predicate { get; } = predicate;
   public StdF64 Lhs { get; } = lhs;
   public StdF64 Rhs { get; } = rhs;
+  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
+}
+
+public class StdCmpF32Op(string predicate, StdF32 lhs, StdF32 rhs) : StandardOp {
+  public override string Mnemonic => $"arith.cmpf32 {Predicate}";
+  public string Predicate { get; } = predicate;
+  public StdF32 Lhs { get; } = lhs;
+  public StdF32 Rhs { get; } = rhs;
   public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
@@ -595,6 +751,24 @@ public class StdLoadF64Op(string varName) : StandardOp {
   public override string Mnemonic => $"memref.load {VarName} : f64";
   public string VarName { get; } = varName;
   public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
+}
+
+public class StdStoreF32Op(StdF32 value, string varName) : StandardOp, IStoreOp {
+  public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
+  public StdF32 Value { get; } = value;
+  public string VarName { get; } = varName;
+  public MlirType StoredType => MlirType.F32;
+  public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
+}
+
+public class StdLoadF32Op(string varName) : StandardOp {
+  public override string Mnemonic => $"memref.load {VarName} : f32";
+  public string VarName { get; } = varName;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -768,6 +942,7 @@ public class StdLoadIndirectOp(StdValue basePtr, int fieldOffset, MlirType field
 
 public static class StdValueFactory {
   public static StdValue CreateStdValueForType(MlirType type) {
+    if (type == MlirType.F32) return new StdF32(MlirContext.Current.NextId());
     if (type == MlirType.F64) return new StdF64(MlirContext.Current.NextId());
     if (type == MlirType.I1) return new StdBool(MlirContext.Current.NextId());
     if (type == MlirType.I8) return new StdI64(MlirContext.Current.NextId());
@@ -806,6 +981,15 @@ public class StdGlobalLoadF64Op(string globalName) : StandardOp {
   public override int PureResultId => -1; // Reads mutable global state
 }
 
+public class StdGlobalLoadF32Op(string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_load_f32 @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1; // Reads mutable global state
+}
+
 public class StdGlobalLoadI1Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_i1 @{GlobalName}";
   public string GlobalName { get; } = globalName;
@@ -827,6 +1011,15 @@ public class StdGlobalStoreI64Op(StdI64 value, string globalName) : StandardOp {
 public class StdGlobalStoreF64Op(StdF64 value, string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_store_f64 @{GlobalName}";
   public StdF64 Value { get; } = value;
+  public string GlobalName { get; } = globalName;
+  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
+}
+
+public class StdGlobalStoreF32Op(StdF32 value, string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_store_f32 @{GlobalName}";
+  public StdF32 Value { get; } = value;
   public string GlobalName { get; } = globalName;
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override List<StdValue> ReadValues => [Value];
