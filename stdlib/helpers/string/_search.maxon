@@ -2,14 +2,14 @@
 //
 // Purpose: Centralize string search algorithms for string types.
 
-typealias Integer = int(min to max)
+typealias SearchResult = int(-1 to max)
 
 // ============================================
 // startsWith helpers
 // ============================================
 
 // startsWithManagedRange - Check if range in managed string starts with prefix
-function startsWithManagedRange(haystack __ManagedMemory, offset Integer, len Integer, needle __ManagedMemory) returns bool
+function startsWithManagedRange(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns bool
   var prefixLen = __managed_memory_len(needle)
 
   if prefixLen > len 'length_check'
@@ -36,7 +36,7 @@ end 'startsWithManaged'
 // ============================================
 
 // endsWithManagedRange - Check if range in managed string ends with suffix
-function endsWithManagedRange(haystack __ManagedMemory, offset Integer, len Integer, needle __ManagedMemory) returns bool
+function endsWithManagedRange(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns bool
   var suffixLen = __managed_memory_len(needle)
 
   if suffixLen > len 'length_check'
@@ -64,7 +64,7 @@ end 'endsWithManaged'
 // ============================================
 
 /// Find first occurrence of needle in range, return relative index or -1
-export function findManagedRange(haystack __ManagedMemory, offset Integer, len Integer, needle __ManagedMemory) returns Integer
+export function findManagedRange(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns SearchResult
   var needleLen = __managed_memory_len(needle)
 
   if needleLen == 0 'empty_needle'
@@ -97,6 +97,6 @@ end 'findManagedRange'
 
 /// Find the first occurrence of needle in a __ManagedMemory
 /// Returns the byte index of the match, or -1 if not found
-export function findManaged(haystack __ManagedMemory, needle __ManagedMemory) returns Integer
+export function findManaged(haystack __ManagedMemory, needle __ManagedMemory) returns SearchResult
   return findManagedRange(haystack, offset: 0, len: __managed_memory_len(haystack), needle: needle)
 end 'findManaged'

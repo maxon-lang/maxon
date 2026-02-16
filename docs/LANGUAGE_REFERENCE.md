@@ -13,6 +13,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 2. [Lexical Elements](#lexical-elements)
 3. [Types](#types)
    - [Type Conversions](#type-conversions)
+   - [Ranged Type Aliases](#ranged-type-aliases)
 4. [Types (Composite)](#types-composite)
    - [Interface Extensions](#interface-extensions)
    - [Conditional Extensions](#conditional-extensions)
@@ -44,9 +45,9 @@ end 'main'
 The return value becomes the program's exit code (0-255 on Windows).
 
 ### File Structure
-- One or more function declarations
+- One or more function, type, enum, or typealias declarations
 - Namespace derived from file path
-- Export functions with `export` keyword for cross-file visibility
+- Use `export` keyword for cross-file visibility (applies to functions, types, enums, and typealiases)
 
 ---
 
@@ -225,6 +226,109 @@ var i2 = round(f)  // 4 (nearest)
 var i3 = floor(f)  // 3 (down)
 var i4 = ceil(f)   // 4 (up)
 ```
+
+### Ranged Type Aliases
+
+Every use of `int`, `float`, and `byte` in type positions must go through a `typealias` with mandatory range constraints. This creates a stronger type system where every numeric value has a documented domain. `bool` is exempt from this requirement.
+
+**Declaration:**
+
+```maxon
+typealias Age = int(0 to 150)
+typealias Percentage = float(0.0 to 100.0)
+typealias Pixel = byte(0 to 255)
+typealias Temperature = int(-273 to 1000)
+```
+
+The `to` keyword makes the upper bound inclusive. The `upto` keyword makes it exclusive:
+
+```maxon
+typealias Index = int(0 upto 100)   // 0 to 99
+```
+
+**Min/max bounds:**
+
+Use `min` and `max` keywords for the type's full range:
+
+```maxon
+typealias Integer = int(min to max)
+typealias Float = float(min to max)
+typealias Byte = byte(0 to 255)
+```
+
+**Construction:**
+
+Create values using `TypeName{value}` syntax:
+
+```maxon
+typealias Age = int(0 to 150)
+var myAge = Age{25}
+```
+
+**Compile-time range checks:**
+
+Literal values are checked at compile time. This is a compile error:
+
+```maxon
+typealias SmallInt = int(0 to 10)
+var x = SmallInt{15}   // error: Value 15 is outside the range of 'SmallInt'
+```
+
+**Runtime range checks:**
+
+When the value is a computed expression, a runtime range check is emitted that panics on violation:
+
+```maxon
+typealias Age = int(0 to 150)
+function makeAge(n Integer) returns Integer
+  var a = Age{n}   // runtime check: panics if n < 0 or n > 150
+  return a
+end 'makeAge'
+```
+
+**Return value range checks:**
+
+Functions with a ranged return type have their return values checked:
+- Returning a literal outside the range is a compile error
+- Returning a computed expression emits a runtime range check
+- Types whose range covers the full representation (e.g., `Integer`, `ExitCode`) are exempt
+
+```maxon
+typealias Score = int(0 to 100)
+
+function half(s Score) returns Score
+  return s / 2    // runtime range check on return value
+end 'half'
+```
+
+**Arithmetic:**
+
+Ranged types support standard arithmetic. The result of arithmetic between ranged values is the underlying primitive type:
+
+```maxon
+typealias Score = int(0 to 100)
+var a = Score{30}
+var b = Score{12}
+var sum = a + b    // result is int
+```
+
+**Standard library aliases:**
+
+The standard library provides general-purpose aliases:
+
+| Alias | Definition | Purpose |
+|-------|-----------|---------|
+| `Integer` | `int(min to max)` | General-purpose signed integer |
+| `Float` | `float(min to max)` | General-purpose floating point |
+| `Byte` | `byte(0 to 255)` | Full byte range |
+| `Count` | `int(0 to max)` | Non-negative counts |
+| `Index` | `int(0 to max)` | Array indices |
+| `ExitCode` | `int(0 to 4294967295)` | Process exit codes |
+| `Offset` | `int(min to max)` | Signed offsets |
+| `HashValue` | `int(0 to 4294967295)` | Hash function results |
+| `Codepoint` | `int(0 to 1114111)` | Unicode codepoints |
+| `CompareResult` | `int(-1 to 1)` | Comparison results |
+| `MathValue` | `float(min to max)` | Math function results |
 
 ---
 
@@ -1782,19 +1886,63 @@ Namespaces are derived from file paths:
 | `stdlib/fmt/integer.maxon` | `stdlib.fmt` |
 
 ### Export Keyword
-Make functions visible outside the file:
+
+Functions, types, enums, and typealiases are file-scoped by default. Use the `export` keyword to make them visible to other files:
 
 ```maxon
-export function public_add(a int, b int) returns int
+export function publicAdd(a Integer, b Integer) returns Integer
     return a + b
-end 'public_add'
+end 'publicAdd'
 
-function private_helper(x int) returns int
+function privateHelper(x Integer) returns Integer
     return x * 2
-end 'private_helper'
+end 'privateHelper'
 ```
 
-Only `public_add` can be called from other files.
+Only `publicAdd` can be called from other files.
+
+**Exporting types and enums:**
+
+```maxon
+export type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+export enum Color
+  red
+  green
+  blue
+end 'Color'
+```
+
+Without `export`, types and enums are only usable within the file where they are declared.
+
+**Exporting typealiases:**
+
+```maxon
+export typealias Score = int(0 to 100)
+```
+
+Non-exported typealiases are only visible within their file. The standard library exports aliases like `Integer`, `Float`, `Count`, etc.
+
+**Exporting methods within types:**
+
+Individual methods can be exported independently of the type itself:
+
+```maxon
+export type Calculator
+  var result Integer
+
+  export function add(n Integer)
+    result = result + n
+  end 'add'
+
+  function internalReset()
+    result = 0
+  end 'internalReset'
+end 'Calculator'
+```
 
 ### Qualified Names
 Call functions with full namespace:
@@ -2062,19 +2210,18 @@ return a            // ERROR
 
 ## Code Generation
 
-### LLVM Backend
-- Maxon compiles to LLVM IR
-- LLVM optimizations applied
-- Native executable generated
+### Native x86-64 Backend
+- Maxon uses a custom x86-64 backend (no LLVM dependency)
+- Compiles through an MLIR-inspired multi-stage pipeline
+- Generates native Windows PE executables directly
 
 ### Optimizations
 - Constant folding
 - Dead code elimination
-- LLVM optimization passes (inline, DCE, etc.)
 
 ### Runtime Library
-- Located in `maxon-runtime/runtime-windows.obj` or `maxon-runtime/runtime-linux.o`
-- Provides implementations for LLVM intrinsics
+- Located in `maxon-runtime/runtime-windows.obj`
+- Provides implementations for intrinsic functions
 - Auto-linked with all programs
 - No C runtime dependency
 

@@ -749,6 +749,11 @@ public static class MaxonToStandardConversion {
                 }
               } else {
                 var mappedValue = valueMap[assignOp.Value];
+                // Widen I32/U32 to I64 when the variable was previously stored as I64
+                // (e.g., try...otherwise where the default is I64 but the call result is U32)
+                if (mappedValue is StdI32 && varTypes.TryGetValue(assignOp.VarName, out var prevType) && prevType == "i64") {
+                  mappedValue = EnsureI64(mappedValue is StdU32 u32w ? new StdI32(u32w.Id) : mappedValue, newBlock, signExtend: mappedValue is not StdU32);
+                }
                 // For self fields, store through self's heap pointer only.
                 // Cross-block references load from the heap pointer directly.
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
@@ -930,7 +935,9 @@ public static class MaxonToStandardConversion {
                   break;
                 }
                 if (ot.IsUnsigned) {
-                  var (unsignedOp, unsignedResult) = CreateUnsignedIntBinOp(binOp.Operator, (StdI64)lhs, (StdI64)rhs);
+                  var i64Lhs = lhs is StdI64 l64 ? l64 : (StdI64)EnsureI64(lhs is StdU32 uw ? new StdI32(uw.Id) : lhs, newBlock, signExtend: false);
+                  var i64Rhs = rhs is StdI64 r64 ? r64 : (StdI64)EnsureI64(rhs is StdU32 uw2 ? new StdI32(uw2.Id) : rhs, newBlock, signExtend: false);
+                  var (unsignedOp, unsignedResult) = CreateUnsignedIntBinOp(binOp.Operator, i64Lhs, i64Rhs);
                   newBlock.AddOp(unsignedOp);
                   valueMap[binOp.Result] = unsignedResult;
                   break;
@@ -938,8 +945,7 @@ public static class MaxonToStandardConversion {
               }
 
               // Widen narrowed operands back to i64 for full-width integer ops
-              // (e.g., range check comparisons on values that were narrowed by OptimalType)
-              if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType == null) {
+              if (binOp.OperandKind == MaxonValueKind.Integer) {
                 if (lhs is StdI32 or StdU32) lhs = EnsureI64(lhs is StdU32 u ? new StdI32(u.Id) : lhs, newBlock, signExtend: lhs is not StdU32);
                 if (rhs is StdI32 or StdU32) rhs = EnsureI64(rhs is StdU32 u2 ? new StdI32(u2.Id) : rhs, newBlock, signExtend: rhs is not StdU32);
               }
@@ -1552,6 +1558,11 @@ public static class MaxonToStandardConversion {
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = retEnumType.Name;
       } else if (callResult != null) {
+        // Widen I32/U32 call results to I64 to avoid width mismatches
+        // (e.g., try...otherwise where default is I64 but call result is U32)
+        if (callResult is StdI32) {
+          callResult = EnsureI64(callResult is StdU32 u32cr ? new StdI32(u32cr.Id) : callResult, block, signExtend: callResult is not StdU32);
+        }
         valueMap[result] = callResult;
       }
     }
@@ -3003,10 +3014,18 @@ public static class MaxonToStandardConversion {
         if (structVarNames.TryGetValue(exprValue.Id, out var managedVarName)) {
           partInfos.Add(EmitStructInterpolation(managedVarName, block, varTypes));
         } else if (exprValue is MaxonInteger or MaxonByte) {
-          if (OptimalType?.IsUnsigned ?? false) {
-            partInfos.Add(EmitU64ToString((StdI64)valueMap[exprValue], block, varTypes));
+          var stdVal = valueMap[exprValue];
+          // Widen narrower integer types to i64 for the runtime toString call
+          if (stdVal is StdU32 u32) {
+            stdVal = EnsureI64(new StdI32(u32.Id), block, signExtend: false);
+          } else if (stdVal is StdI32) {
+            stdVal = EnsureI64(stdVal, block, signExtend: true);
+          }
+          bool isUnsigned = (OptimalType?.IsUnsigned ?? false) || stdVal is StdU64;
+          if (isUnsigned) {
+            partInfos.Add(EmitU64ToString(stdVal, block, varTypes));
           } else {
-            partInfos.Add(EmitI64ToString((StdI64)valueMap[exprValue], block, varTypes));
+            partInfos.Add(EmitI64ToString(stdVal, block, varTypes));
           }
         } else if (exprValue is MaxonFloat) {
           partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
@@ -3154,11 +3173,11 @@ public static class MaxonToStandardConversion {
   }
 
   private static (StdI64 Buffer, StdI64 Length) EmitI64ToString(
-    StdI64 intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+    StdValue intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
     EmitRuntimeToString(intValue, "maxon_i64_to_string", 21, block, varTypes);
 
   private static (StdI64 Buffer, StdI64 Length) EmitU64ToString(
-    StdI64 intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
+    StdValue intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
     EmitRuntimeToString(intValue, "maxon_u64_to_string", 21, block, varTypes);
 
   private static (StdI64 Buffer, StdI64 Length) EmitF64ToString(
@@ -3985,7 +4004,6 @@ public static class MaxonToStandardConversion {
     } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
         MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),
-
         MaxonValueKind.Float => new StdF64(MlirContext.Current.NextId()),
         MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
         MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
@@ -4015,7 +4033,6 @@ public static class MaxonToStandardConversion {
   private static MlirType GetManagedMemElementType(MaxonValueKind kind, string context) {
     return kind switch {
       MaxonValueKind.Integer => MlirType.I64,
-
       MaxonValueKind.Float => MlirType.F64,
       MaxonValueKind.Byte => MlirType.I8,
       MaxonValueKind.Bool => MlirType.I8,

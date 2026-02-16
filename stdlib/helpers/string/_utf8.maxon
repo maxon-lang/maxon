@@ -1,7 +1,7 @@
 // UTF-8 utility functions for string processing
 
-typealias Integer = int(min to max)
-typealias Byte = byte(0 to 255)
+typealias RawByte = byte(0 to 255)
+typealias ByteWidth = int(1 to 4)
 
 // UTF-8 encoding:
 //   1-byte (ASCII):  0xxxxxxx         (0x00-0x7F)
@@ -11,7 +11,7 @@ typealias Byte = byte(0 to 255)
 
 /// Get the number of bytes in a UTF-8 sequence from its lead byte
 /// Returns 1-4 for valid lead bytes
-export function utf8ByteLength(leadByte Byte) returns Integer
+export function utf8ByteLength(leadByte RawByte) returns ByteWidth
   // ASCII (0xxxxxxx)
   if leadByte < 128 'ascii'
     return 1
@@ -37,23 +37,23 @@ export function utf8ByteLength(leadByte Byte) returns Integer
 end 'utf8ByteLength'
 
 /// Check if a byte is a UTF-8 continuation byte (10xxxxxx)
-export function utf8IsContinuation(b Byte) returns bool
+export function utf8IsContinuation(b RawByte) returns bool
   return b >= 128 and b < 192
 end 'utf8IsContinuation'
 
 /// Check if a byte is a valid UTF-8 lead byte
-export function utf8IsLead(b Byte) returns bool
+export function utf8IsLead(b RawByte) returns bool
   // Lead byte is either ASCII (< 128) or starts with 11xxxxxx (>= 192)
   return b < 128 or b >= 192
 end 'utf8IsLead'
 
 /// Check if a byte is ASCII (0-127)
-export function utf8IsAscii(b Byte) returns bool
+export function utf8IsAscii(b RawByte) returns bool
   return b < 128
 end 'utf8IsAscii'
 
 /// Get the number of bytes needed to encode a codepoint in UTF-8
-export function utf8EncodeLength(codepoint Integer) returns Integer
+export function utf8EncodeLength(codepoint Codepoint) returns ByteWidth
   if codepoint < 128 'ascii'
     return 1
   end 'ascii'
@@ -71,7 +71,7 @@ end 'utf8EncodeLength'
 
 /// Check if an integer is a valid Unicode codepoint
 /// Returns false for negative values, values > 0x10FFFF, and surrogate pairs (0xD800-0xDFFF)
-export function utf8IsValidCodepoint(cp Integer) returns bool
+export function utf8IsValidCodepoint(cp Codepoint) returns bool
   // Valid range: 0x0000-0x10FFFF, excluding surrogate pairs (0xD800-0xDFFF)
   if cp < 0 or cp > 1114111 'range_check'
     return false
@@ -90,7 +90,7 @@ end 'utf8IsValidCodepoint'
 // ============================================
 
 /// Get the UTF-8 sequence length from the lead byte in a __ManagedMemory
-export function utf8ByteLengthAt(managed __ManagedMemory, pos Integer) returns Integer
+export function utf8ByteLengthAt(managed __ManagedMemory, pos Index) returns ByteWidth
   var b0 = __managed_memory_byte_at(managed, pos)
   if b0 < 128 'ascii'
     return 1
@@ -105,7 +105,7 @@ export function utf8ByteLengthAt(managed __ManagedMemory, pos Integer) returns I
 end 'utf8ByteLengthAt'
 
 /// Decode a UTF-8 codepoint from a __ManagedMemory at the given position
-export function utf8DecodeAt(managed __ManagedMemory, pos Integer) returns Integer
+export function utf8DecodeAt(managed __ManagedMemory, pos Index) returns Codepoint
   var b0 = __managed_memory_byte_at(managed, pos)
   if b0 < 128 'ascii'
     return b0

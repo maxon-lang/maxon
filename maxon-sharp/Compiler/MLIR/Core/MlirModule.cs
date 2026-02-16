@@ -6,8 +6,9 @@ public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = n
   public MlirAttribute? InitValue { get; } = initValue;
 }
 
-// Represents a type alias with its source type and type parameter substitutions
-public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>? TypeParams);
+// Represents a type alias with its source type, type parameter substitutions, and visibility metadata
+public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>? TypeParams,
+    bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null);
 
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);
@@ -37,6 +38,15 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Deferred global var/let initializations from all source files, emitted at start of main()
   public List<DeferredGlobalInit> DeferredGlobalInits { get; } = [];
 
+  // Non-exported type/enum/typealias names — filtered from _typeRegistry when seeding other files
+  public HashSet<string> NonExportedTypeNames { get; } = [];
+
+  // Source file path for each type/enum/typealias (for file-scoped visibility checks)
+  public Dictionary<string, string> TypeDefSourceFiles { get; } = [];
+
+  // Ambiguous exported type names (same name from different files)
+  public HashSet<string> AmbiguousTypeNames { get; } = [];
+
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
   }
@@ -53,6 +63,9 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];
     clone.DeferredGlobalInits.AddRange(DeferredGlobalInits);
+    foreach (var n in NonExportedTypeNames) clone.NonExportedTypeNames.Add(n);
+    foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
+    foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
     return clone;
   }
 
@@ -77,9 +90,20 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     }
     RdataEntries.AddRange(other.RdataEntries);
     Globals.AddRange(other.Globals);
-    foreach (var (k, v) in other.TypeDefs) TypeDefs[k] = v;
+    foreach (var (k, v) in other.TypeDefs)
+      TypeDefs[k] = v;
     foreach (var (k, v) in other.FunctionDefaults) FunctionDefaults.TryAdd(k, v);
-    foreach (var (k, v) in other.TypeAliasSources) TypeAliasSources.TryAdd(k, v);
+    foreach (var (k, v) in other.TypeAliasSources) {
+      if (TypeAliasSources.TryGetValue(k, out var existing)
+          && (existing.IsExported || existing.IsStdlib)
+          && (v.IsExported || v.IsStdlib)
+          && existing.SourceFilePath != v.SourceFilePath)
+        AmbiguousTypeNames.Add(k);
+      TypeAliasSources.TryAdd(k, v);
+    }
+    foreach (var n in other.NonExportedTypeNames) NonExportedTypeNames.Add(n);
+    foreach (var (k, v) in other.TypeDefSourceFiles) TypeDefSourceFiles.TryAdd(k, v);
+    foreach (var n in other.AmbiguousTypeNames) AmbiguousTypeNames.Add(n);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);
     foreach (var (k, v) in other.InterfaceAssociatedTypes) InterfaceAssociatedTypes.TryAdd(k, v);
     foreach (var init in other.DeferredGlobalInits) {

@@ -165,6 +165,9 @@ public partial class X86CodeEmitter {
   private void EmitMaxonWriteStdout() {
     // Stack layout: [rbp-8]=cstr_ptr, [rbp-16]=length, [rbp-24]=handle, [rbp-32]=bytesWritten
     EmitRuntimeFunctionStart("maxon_write_stdout", 1, 0x40);
+    // Zero the bytesWritten slot so upper 4 bytes are clean (WriteFile writes a DWORD)
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // [rbp-32] = 0
     // strlen: RDX = ptr copy, RAX = counter
     EmitMovRegReg(X86Register.Rdx, X86Register.Rcx); // RDX = ptr
     EmitMovRegImm(X86Register.Rax, 0); // RAX = 0 (counter)
@@ -201,6 +204,9 @@ public partial class X86CodeEmitter {
   /// <summary>maxon_write_stderr(cstr_ptr_in_rcx) -> bytes_written_in_rax</summary>
   private void EmitMaxonWriteStderr() {
     EmitRuntimeFunctionStart("maxon_write_stderr", 1, 0x40);
+    // Zero the bytesWritten slot so upper 4 bytes are clean (WriteFile writes a DWORD)
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // [rbp-32] = 0
     EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
     EmitMovRegImm(X86Register.Rax, 0);
     DefineLabel("rt_stderr_strlen_loop");

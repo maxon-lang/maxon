@@ -16,29 +16,22 @@ export enum FileDeleteError implements Error
   notFound
 end 'FileDeleteError'
 
-typealias Integer = int(min to max)
-
-let INVALID_HANDLE = -1
+export typealias FileHandle = int(0 to 4294967295)
 
 export type File
   typealias ByteArray = Array with byte
 
-  /// Open a file for reading, returning INVALID_HANDLE if it doesn't exist
-  static function tryOpen(path String) returns Integer
-    return __file_open_read(path.cstr())
-  end 'tryOpen'
-
   /// Open file for reading, throwing if not found
-  static function openForRead(path String) returns Integer throws FileReadError
-    let handle = tryOpen(path)
-    if handle == INVALID_HANDLE 'notFound'
+  static function openForRead(path String) returns FileHandle throws FileReadError
+    let handle = __file_open_read(path.cstr())
+    if handle < 0 'notFound'
       throw FileReadError.notFound
     end 'notFound'
     return handle
   end 'openForRead'
 
   /// Read file into a managed memory
-  static function readFileData(path String, extraBytes Integer) returns __ManagedMemory throws FileReadError
+  static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
     let handle = try openForRead(path)
     let size = __file_size(handle)
     var managed = __managed_memory_create(size + extraBytes, 1)
@@ -80,8 +73,8 @@ export type File
 
   /// Check if a file exists at the given path
   export static function exists(path String) returns bool
-    let handle = tryOpen(path)
-    if handle == INVALID_HANDLE 'notFound'
+    let handle = __file_open_read(path.cstr())
+    if handle < 0 'notFound'
       return false
     end 'notFound'
     __file_close(handle)

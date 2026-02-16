@@ -17,7 +17,7 @@ Interfaces are declared with the `interface` keyword and contain method signatur
 
 ```maxon
 interface Hashable
-  function hash() returns Integer
+  function hash() returns HashValue
 end 'Hashable'
 ```
 
@@ -52,7 +52,7 @@ type Point implements Hashable
   var x Integer
   var y Integer
 
-  function hash() returns Integer
+  function hash() returns HashValue
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -170,7 +170,7 @@ type Point implements Hashable
   var x Integer
   var y Integer
 
-  function hash() returns Integer
+  function hash() returns HashValue
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -198,7 +198,7 @@ type Point implements Hashable
   var x Integer
   var y Integer
 
-  function hash() returns Integer
+  function hash() returns HashValue
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -276,7 +276,7 @@ type Point implements Hashable, Equatable
   var x Integer
   var y Integer
 
-  function hash() returns Integer
+  function hash() returns HashValue
     return x + y
   end 'hash'
 

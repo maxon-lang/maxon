@@ -1,0 +1,58 @@
+// Test: exported-enum-cross-file
+// --- file: color.maxon
+export enum Color
+  red
+  green
+  blue
+end 'Color'
+
+// --- file: main.maxon
+function main() returns ExitCode
+  var c = Color.blue
+  match c 'check'
+    Color.blue then return 42
+    Color.red then return 0
+    Color.green then return 0
+  end 'check'
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 2
+    x86.mov [rbp-8], eax
+    x86.jmp main.main.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne main.main.check_0.cmp1
+  check_0.case0:
+    x86.mov eax, 42
+    x86.epilogue
+    x86.ret
+  check_0.cmp1:
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne main.main.check_0.cmp2
+  check_0.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.cmp2:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne main.main.check_0.merge
+  check_0.case2:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.merge:
+  }
+}
+---

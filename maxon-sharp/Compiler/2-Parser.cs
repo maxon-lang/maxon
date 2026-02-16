@@ -28,7 +28,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private bool _parsingTypeAliasRhs;
   private bool _parsingExtension;
   private readonly Dictionary<string, MlirType> _typeRegistry = seedModule != null
-    ? new(seedModule.TypeDefs) : [];
+    ? new(seedModule.TypeDefs.Where(kv =>
+        !seedModule.NonExportedTypeNames.Contains(kv.Key)
+        || !seedModule.TypeDefSourceFiles.TryGetValue(kv.Key, out var src)
+        || src == sourceFilePath)) : [];
   private string? _currentTypeName;
 
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
@@ -50,6 +53,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   // Type alias source tracking (aliasName -> sourceTypeName)
   private readonly Dictionary<string, string> _typeAliasSources = [];
+
+  // Export tracking for types, enums, and typealiases defined in this file
+  private readonly HashSet<string> _exportedTypes = [];
+  private readonly HashSet<string> _exportedTypeAliases = [];
+  private readonly HashSet<string> _localTypeAliases = [];
+  private readonly HashSet<string> _seededTypeAliases = [];
 
   // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
   private readonly Dictionary<string, List<string>> _interfaceAssociatedTypes = [];
@@ -417,8 +426,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _functionDefaults.TryAdd(name, defaults);
     foreach (var (name, assocTypes) in source.InterfaceAssociatedTypes)
       _interfaceAssociatedTypes.TryAdd(name, assocTypes);
-    foreach (var (aliasName, aliasInfo) in source.TypeAliasSources)
-      _typeAliasSources.TryAdd(aliasName, aliasInfo.SourceTypeName);
+    foreach (var (aliasName, aliasInfo) in source.TypeAliasSources) {
+      if (aliasInfo.IsExported || aliasInfo.IsStdlib) {
+        if (_typeAliasSources.TryAdd(aliasName, aliasInfo.SourceTypeName))
+          _seededTypeAliases.Add(aliasName);
+      }
+    }
     // Carry forward deferred global inits so the main() parser can emit cross-file inits
     foreach (var init in source.DeferredGlobalInits) {
       if (!target.DeferredGlobalInits.Any(d => d.Name == init.Name))
@@ -436,10 +449,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     foreach (var (name, defaults) in _functionDefaults)
       module.FunctionDefaults.TryAdd(name, defaults);
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
+      if (_seededTypeAliases.Contains(aliasName)) continue;
       Dictionary<string, MlirType>? typeParams = null;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType) && aliasType is MlirStructType st)
         typeParams = st.TypeParams.Count > 0 ? new Dictionary<string, MlirType>(st.TypeParams) : null;
-      module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams);
+      bool isExported = _exportedTypeAliases.Contains(aliasName);
+      module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
+          isExported, _isStdlib, _sourceFilePath);
+      if (_sourceFilePath != null)
+        module.TypeDefSourceFiles[aliasName] = _sourceFilePath;
+      if (!isExported && !_isStdlib)
+        module.NonExportedTypeNames.Add(aliasName);
+    }
+    // Track non-exported types/enums (only for types defined in this file)
+    foreach (var (name, type) in _typeRegistry) {
+      if ((type is MlirStructType || type is MlirEnumType || type is MlirRangedPrimitiveType)
+          && !_exportedTypes.Contains(name)
+          && !_exportedTypeAliases.Contains(name)
+          && !_isStdlib
+          && module.TypeDefSourceFiles.TryGetValue(name, out var src) && src == _sourceFilePath)
+        module.NonExportedTypeNames.Add(name);
     }
     foreach (var (name, assocTypes) in _interfaceAssociatedTypes)
       module.InterfaceAssociatedTypes.TryAdd(name, assocTypes);
@@ -464,7 +493,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       int depth = 0;
       while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
         var t = _tokens[prePos];
-        if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
+        if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
           var aliasName = _tokens[prePos + 1].Value;
           if (!_typeRegistry.ContainsKey(aliasName))
             _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
@@ -514,11 +543,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // Pre-register function signature for forward references
         PreScanFunction(module, null, isExported);
       } else if (Check(TokenType.Type)) {
-        PreScanType(module);
+        PreScanType(module, isExported);
       } else if (Check(TokenType.Enum)) {
-        PreScanEnum(module);
+        PreScanEnum(module, isExported);
       } else if (Check(TokenType.TypeAlias)) {
-        PreScanTypeAlias();
+        PreScanTypeAlias(isExported);
       } else if (Check(TokenType.Interface)) {
         PreScanInterface();
       } else if (Check(TokenType.Extension)) {
@@ -760,7 +789,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames);
 
     if (!module.Functions.Any(f => f.Name == registrationName)) {
-      Logger.Debug(LogCategory.Parser, $"PreScanFunction: registering {registrationName} (owningType={owningType ?? "null"}, exported={isExported})");
       var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
         IsExported = isExported,
         SourceFilePath = _sourceFilePath
@@ -966,7 +994,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _pos = savedPos;
   }
 
-  private void PreScanType(MlirModule<MaxonOp> module) {
+  private void PreScanType(MlirModule<MaxonOp> module, bool isExported = false) {
     Advance(); // consume 'type'
     var typeNameToken = Expect(TokenType.Identifier);
     var typeName = typeNameToken.Value;
@@ -1070,6 +1098,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
       typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
       whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null);
+    if (isExported) _exportedTypes.Add(typeName);
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
 
@@ -1257,7 +1286,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private static string ResolveTypeName(string sourceTypeName) {
     return sourceTypeName switch {
       "int" => MlirType.I64.Name,
-
       "float" => MlirType.F64.Name,
       "bool" => MlirType.I1.Name,
       "byte" => MlirType.I8.Name,
@@ -1370,7 +1398,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return token;
   }
 
-  private void PreScanEnum(MlirModule<MaxonOp> module) {
+  private void PreScanEnum(MlirModule<MaxonOp> module, bool isExported = false) {
     Advance(); // consume 'enum'
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
@@ -1592,6 +1620,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     _currentTypeName = null;
+
+    if (isExported) _exportedTypes.Add(enumName);
 
     // consume 'end'
     if (Check(TokenType.End)) Advance();
@@ -1991,10 +2021,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Creates a concrete struct type by substituting associated type parameters.
   /// Also supports "with N Type" form where N is an integer capacity hint (e.g., Vector with 3 int).
   /// </summary>
-  private void PreScanTypeAlias() {
+  private void PreScanTypeAlias(bool isExported = false) {
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
     var aliasName = aliasNameToken.Value;
+
+    // Duplicate detection only for top-level typealiases (not type-scoped ones)
+    if (_currentTypeName == null && !_localTypeAliases.Add(aliasName))
+      throw new CompileError(ErrorCode.SemanticDuplicateTypeAlias,
+        $"Duplicate typealias '{aliasName}'", aliasNameToken.Line, aliasNameToken.Column);
+
+    if (isExported) _exportedTypeAliases.Add(aliasName);
+
     Expect(TokenType.Equals);
     _parsingTypeAliasRhs = true;
     try {
@@ -3411,10 +3449,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
       "bool" => MlirType.I1,
       "cstring" => MlirType.I64, // raw pointer type for FFI
-      _ => _typeRegistry.TryGetValue(typeName, out var structType)
+      _ => seedModule?.AmbiguousTypeNames.Contains(typeName) == true
+        ? throw new CompileError(ErrorCode.SemanticAmbiguousTypeReference,
+            $"Ambiguous type '{typeName}': multiple definitions exist across files",
+            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)
+        : IsNonExportedCrossFileType(typeName)
+        ? throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}",
+            _tokens[typeNamePos].Line, _tokens[typeNamePos].Column)
+        : _typeRegistry.TryGetValue(typeName, out var structType)
         ? structType
         : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: {typeName}", Current().Line, Current().Column)
     };
+  }
+
+  private bool IsNonExportedCrossFileType(string typeName) {
+    if (seedModule == null || _sourceFilePath == null) return false;
+    if (!seedModule.NonExportedTypeNames.Contains(typeName)) return false;
+    return seedModule.TypeDefSourceFiles.TryGetValue(typeName, out var sourceFile)
+        && sourceFile != _sourceFilePath;
   }
 
   private MlirStructType GetOrCreateTupleType(List<MlirType> elementTypes) {
@@ -3829,41 +3881,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (_currentFunction?.ReturnType is not MlirRangedPrimitiveType rangedType)
       return value;
 
-    // No check needed when the range covers the full base type range
     if (rangedType.IsFullBaseRange)
       return value;
 
-    var expectedKind = rangedType.BaseType == MlirType.I64 ? MaxonValueKind.Integer
-      : rangedType.BaseType == MlirType.F64 ? MaxonValueKind.Float
-      : rangedType.BaseType == MlirType.I8 ? MaxonValueKind.Byte
-      : throw new InvalidOperationException();
-
-    // Compile-time range check for literal constants
-    bool isLiteral = false;
-    if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == value) {
-      double numericValue = litOp.ValueKind switch {
-        MaxonValueKind.Integer => (double)litOp.IntValue,
-        MaxonValueKind.Float => litOp.FloatValue,
-        MaxonValueKind.Byte => (double)litOp.IntValue,
-        _ => double.NaN
-      };
-      if (!double.IsNaN(numericValue)) {
-        isLiteral = true;
-        var upperLimit = rangedType.UpperInclusive ? rangedType.UpperBound : rangedType.UpperBound - 1;
-        if (numericValue < rangedType.LowerBound || numericValue > upperLimit) {
-          throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            $"Value {litOp.IntValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
-            returnToken.Line, returnToken.Column);
-        }
-      }
-    }
-
-    // Runtime range check for non-constant values
-    if (!isLiteral) {
-      value = EmitRuntimeRangeCheck(value, rangedType, expectedKind);
-    }
-
-    return value;
+    var expectedKind = rangedType.BaseType.ToValueKind();
+    return ValidateAndEmitRangeCheck(value, rangedType, expectedKind, returnToken);
   }
 
   private void ParseThrow() {
@@ -7337,7 +7359,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             Expect(TokenType.RightParen);
             var resultKind = ifaceMethod.ReturnTypeName switch {
               "int" => MaxonValueKind.Integer,
-
               "float" => MaxonValueKind.Float,
               "bool" => MaxonValueKind.Bool,
               "byte" => MaxonValueKind.Byte,
@@ -7962,10 +7983,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Expect(TokenType.RightBrace);
 
     var innerKind = DetermineValueKind(innerValue);
-    var expectedKind = rangedType.BaseType == MlirType.I64 ? MaxonValueKind.Integer
-      : rangedType.BaseType == MlirType.F64 ? MaxonValueKind.Float
-      : rangedType.BaseType == MlirType.I8 ? MaxonValueKind.Byte
-      : throw new InvalidOperationException();
+    var expectedKind = rangedType.BaseType.ToValueKind();
 
     if (innerKind != expectedKind) {
       // Allow int literal → byte conversion if in range
@@ -7978,9 +7996,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
-    // Compile-time range check for literal constants
+    innerValue = ValidateAndEmitRangeCheck(innerValue, rangedType, expectedKind, typeToken);
+
+    _lastRangedTypeName = rangedType.Name;
+    return new ExprResult.Direct(innerValue);
+  }
+
+  /// <summary>
+  /// Validates a value against a ranged type's bounds. For literal constants, performs
+  /// a compile-time check. For non-constant values, emits a runtime range check.
+  /// </summary>
+  private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind expectedKind, Token errorToken) {
     bool isLiteral = false;
-    if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == innerValue) {
+    if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == value) {
       double numericValue = litOp.ValueKind switch {
         MaxonValueKind.Integer => (double)litOp.IntValue,
         MaxonValueKind.Float => litOp.FloatValue,
@@ -7993,21 +8021,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (numericValue < rangedType.LowerBound || numericValue > upperLimit) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Value {litOp.IntValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
-            typeToken.Line, typeToken.Column);
+            errorToken.Line, errorToken.Column);
         }
       }
     }
 
-    // Runtime range check for non-constant values
     if (!isLiteral) {
-      innerValue = EmitRuntimeRangeCheck(innerValue, rangedType, expectedKind);
+      value = EmitRuntimeRangeCheck(value, rangedType, expectedKind);
     }
 
-    _lastRangedTypeName = rangedType.Name;
-    return new ExprResult.Direct(innerValue);
+    return value;
   }
 
   private MaxonValue EmitRuntimeRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind kind) {
+    // Skip runtime check for full-range types (no values can be out of range)
+    if (rangedType.IsFullBaseRange) return value;
+
     var checkId = _blockCounter++;
     var panicLabel = $"__range_panic_{checkId}";
     var continueLabel = $"__range_ok_{checkId}";
@@ -8020,29 +8049,49 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // For comparisons, use Integer kind for both int and byte base types
     var cmpKind = kind == MaxonValueKind.Float ? MaxonValueKind.Float : MaxonValueKind.Integer;
 
+    bool needsLowerCheck = rangedType.BaseType != MlirType.F64
+      ? rangedType.LowerBound > (double)long.MinValue
+      : rangedType.LowerBound > double.MinValue;
+    bool needsUpperCheck = rangedType.BaseType != MlirType.F64
+      ? rangedType.UpperBound < (double)long.MaxValue
+      : rangedType.UpperBound < double.MaxValue;
+
+    MaxonValue? outOfRange = null;
+
     // Emit lower bound check: value < lowerBound
-    MaxonLiteralOp lowerLit = rangedType.BaseType == MlirType.F64
-      ? new MaxonLiteralOp(rangedType.LowerBound)
-      : new MaxonLiteralOp((long)rangedType.LowerBound);
-    _currentBlock!.AddOp(lowerLit);
-    var cmpLower = new MaxonBinOp(MaxonBinOperator.Lt, value, lowerLit.Result, cmpKind);
-    _currentBlock!.AddOp(cmpLower);
+    if (needsLowerCheck) {
+      MaxonLiteralOp lowerLit = rangedType.BaseType == MlirType.F64
+        ? new MaxonLiteralOp(rangedType.LowerBound)
+        : new MaxonLiteralOp((long)rangedType.LowerBound);
+      _currentBlock!.AddOp(lowerLit);
+      var cmpLower = new MaxonBinOp(MaxonBinOperator.Lt, value, lowerLit.Result, cmpKind);
+      _currentBlock!.AddOp(cmpLower);
+      outOfRange = cmpLower.Result;
+    }
 
     // Emit upper bound check: value > upperBound (or value >= for upto)
-    var upperOp = rangedType.UpperInclusive ? MaxonBinOperator.Gt : MaxonBinOperator.Ge;
-    MaxonLiteralOp upperLit = rangedType.BaseType == MlirType.F64
-      ? new MaxonLiteralOp(rangedType.UpperBound)
-      : new MaxonLiteralOp((long)rangedType.UpperBound);
-    _currentBlock!.AddOp(upperLit);
-    var cmpUpper = new MaxonBinOp(upperOp, value, upperLit.Result, cmpKind);
-    _currentBlock!.AddOp(cmpUpper);
+    if (needsUpperCheck) {
+      var upperOp = rangedType.UpperInclusive ? MaxonBinOperator.Gt : MaxonBinOperator.Ge;
+      MaxonLiteralOp upperLit = rangedType.BaseType == MlirType.F64
+        ? new MaxonLiteralOp(rangedType.UpperBound)
+        : new MaxonLiteralOp((long)rangedType.UpperBound);
+      _currentBlock!.AddOp(upperLit);
+      var cmpUpper = new MaxonBinOp(upperOp, value, upperLit.Result, cmpKind);
+      _currentBlock!.AddOp(cmpUpper);
 
-    // Combine: outOfRange = cmpLower || cmpUpper
-    var orOp = new MaxonBinOp(MaxonBinOperator.Or, cmpLower.Result, cmpUpper.Result, MaxonValueKind.Bool);
-    _currentBlock!.AddOp(orOp);
+      if (outOfRange != null) {
+        var orOp = new MaxonBinOp(MaxonBinOperator.Or, outOfRange, cmpUpper.Result, MaxonValueKind.Bool);
+        _currentBlock!.AddOp(orOp);
+        outOfRange = orOp.Result;
+      } else {
+        outOfRange = cmpUpper.Result;
+      }
+    }
+
+    if (outOfRange == null) return value;
 
     // Branch: if outOfRange → panic, else → continue
-    _currentBlock!.AddOp(new MaxonCondBrOp(orOp.Result, panicLabel, continueLabel));
+    _currentBlock!.AddOp(new MaxonCondBrOp(outOfRange, panicLabel, continueLabel));
 
     // Panic block
     var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
@@ -8605,7 +8654,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       opToken.Line, opToken.Column);
   }
 
-
   private bool IsSmallIntLiteral(MaxonValue value) {
     // Check if this value is an int literal in 0-255 range
     var lastOps = _currentBlock!.Operations;
@@ -9005,20 +9053,49 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// instance methods where slot 0 is self).
   /// </summary>
   private void ParseArgList(Token callToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, MlirType>? typeParams = null) {
+    // Track where each arg was evaluated for cross-block pinning.
+    var argLocations = new (MlirBlock<MaxonOp>? block, int opIndex)[args.Length];
+
     if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
       ParseNamedArg(callee, args, typeParams);
+      for (int i = 0; i < args.Length; i++)
+        if (args[i] != null && argLocations[i].block == null)
+          argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
     } else {
       args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex], typeParams);
+      argLocations[firstPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
     }
 
     while (Check(TokenType.Comma) && Advance() != null) {
       if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
         ParseNamedArg(callee, args, typeParams);
+        for (int i = 0; i < args.Length; i++)
+          if (args[i] != null && argLocations[i].block == null)
+            argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
       } else {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Second and subsequent arguments must be named. Use 'name: value' syntax",
           callToken.Line, callToken.Column);
       }
+    }
+
+    // If any arg was evaluated in a different block than the final one,
+    // retroactively insert a store in the arg's original block and reload here.
+    var finalBlock = _currentBlock!;
+    for (int i = 0; i < args.Length; i++) {
+      if (args[i] == null || argLocations[i].block == null) continue;
+      if (argLocations[i].block == finalBlock) continue;
+      if (args[i] is MaxonStruct || args[i] is MaxonEnum) continue;
+      var kind = DetermineValueKind(args[i]!);
+      var pinName = $"__arg_pin_{_blockCounter++}";
+      // Insert store in the original block, right after the arg was evaluated
+      var storeOp = new MaxonAssignOp(pinName, args[i]!, true, true, kind);
+      argLocations[i].block!.Operations.Insert(argLocations[i].opIndex, storeOp);
+      _variables[pinName] = new VarInfo(kind, true, args[i]!, argLocations[i].block!, null);
+      // Reload in the current (final) block
+      var reloadOp = new MaxonVarRefOp(pinName, kind);
+      finalBlock.AddOp(reloadOp);
+      args[i] = reloadOp.Result;
     }
   }
 

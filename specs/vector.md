@@ -185,14 +185,14 @@ end 'main'
 -1
 ```
 
-<!-- test: get-negative-index -->
+<!-- test: get-out-of-bounds -->
 ```maxon
 typealias Vec2 = Vector with 2 int
 
 function main() returns ExitCode
   var v = Vec2{}
   v.set(0, value: 10)
-  var result = try v.get(-1) otherwise -1
+  var result = try v.get(5) otherwise -1
   print("{result}\n")
   return 0
 end 'main'

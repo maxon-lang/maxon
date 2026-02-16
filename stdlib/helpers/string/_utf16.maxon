@@ -1,6 +1,6 @@
 // UTF-16 utility functions for string processing
 
-typealias Integer = int(min to max)
+typealias CodeUnit16 = int(0 to 65535)
 
 // UTF-16 encoding:
 //   BMP (U+0000 to U+FFFF): Single 16-bit code unit
@@ -12,7 +12,7 @@ typealias Integer = int(min to max)
 
 /// Get the number of UTF-16 code units needed to encode a codepoint
 /// Returns 1 for BMP characters, 2 for supplementary characters
-export function utf16Width(codepoint Integer) returns Integer
+export function utf16Width(codepoint Codepoint) returns Count
   if codepoint < 65536 'bmp'
     return 1
   end 'bmp'
@@ -21,31 +21,31 @@ end 'utf16Width'
 
 /// Check if a code unit is a high (lead) surrogate
 /// High surrogates are in the range 0xD800 to 0xDBFF
-export function utf16IsLeadSurrogate(codeUnit Integer) returns bool
+export function utf16IsLeadSurrogate(codeUnit CodeUnit16) returns bool
   return codeUnit >= 55296 and codeUnit <= 56319
 end 'utf16IsLeadSurrogate'
 
 /// Check if a code unit is a low (trail) surrogate
 /// Low surrogates are in the range 0xDC00 to 0xDFFF
-export function utf16IsTrailSurrogate(codeUnit Integer) returns bool
+export function utf16IsTrailSurrogate(codeUnit CodeUnit16) returns bool
   return codeUnit >= 56320 and codeUnit <= 57343
 end 'utf16IsTrailSurrogate'
 
 /// Check if a code unit is any type of surrogate
-export function utf16IsSurrogate(codeUnit Integer) returns bool
+export function utf16IsSurrogate(codeUnit CodeUnit16) returns bool
   return codeUnit >= 55296 and codeUnit <= 57343
 end 'utf16IsSurrogate'
 
 /// Check if a codepoint is in the Basic Multilingual Plane
 /// BMP codepoints can be encoded as a single UTF-16 code unit
-export function utf16IsBmp(codepoint Integer) returns bool
+export function utf16IsBmp(codepoint Codepoint) returns bool
   return codepoint >= 0 and codepoint < 65536
 end 'utf16IsBmp'
 
 /// Get the high (lead) surrogate for a codepoint
 /// Only valid for codepoints >= 0x10000 (supplementary characters)
 /// Formula: 0xD800 + ((codepoint - 0x10000) shr 10)
-export function utf16LeadSurrogate(codepoint Integer) returns Integer
+export function utf16LeadSurrogate(codepoint Codepoint) returns CodeUnit16
   var offset = codepoint - 65536  // codepoint - 0x10000
   return 55296 + (offset shr 10)  // 0xD800 + high 10 bits
 end 'utf16LeadSurrogate'
@@ -53,20 +53,20 @@ end 'utf16LeadSurrogate'
 /// Get the low (trail) surrogate for a codepoint
 /// Only valid for codepoints >= 0x10000 (supplementary characters)
 /// Formula: 0xDC00 + ((codepoint - 0x10000) and 0x3FF)
-export function utf16TrailSurrogate(codepoint Integer) returns Integer
+export function utf16TrailSurrogate(codepoint Codepoint) returns CodeUnit16
   var offset = codepoint - 65536  // codepoint - 0x10000
   return 56320 + (offset mod 1024)  // 0xDC00 + low 10 bits
 end 'utf16TrailSurrogate'
 
 /// Decode a surrogate pair to a codepoint
 /// Formula: 0x10000 + ((high - 0xD800) shl 10) + (low - 0xDC00)
-export function utf16DecodeSurrogates(high Integer, low Integer) returns Integer
+export function utf16DecodeSurrogates(high CodeUnit16, low CodeUnit16) returns Codepoint
   var highOffset = high - 55296  // high - 0xD800
   var lowOffset = low - 56320    // low - 0xDC00
   return 65536 + (highOffset * 1024) + lowOffset  // 0x10000 + combined
 end 'utf16DecodeSurrogates'
 
 /// Check if high and low form a valid surrogate pair
-export function utf16IsValidSurrogatePair(high Integer, low Integer) returns bool
+export function utf16IsValidSurrogatePair(high CodeUnit16, low CodeUnit16) returns bool
   return utf16IsLeadSurrogate(high) and utf16IsTrailSurrogate(low)
 end 'utf16IsValidSurrogatePair'

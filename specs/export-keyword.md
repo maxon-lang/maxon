@@ -11,30 +11,54 @@ category: infrastructure
 
 ### Export Keyword
 
-The `export` keyword marks functions, types, and interfaces as visible to other modules. This is primarily used in the standard library to expose public APIs while keeping implementation details private.
+All declarations — functions, types, enums, and typealiases — are file-scoped by default. The `export` keyword makes them visible to other modules. Without `export`, a declaration can only be used within the file where it is defined.
 
 ```text
-export function publicApi() returns int
+export function publicApi() returns Integer
   return privateHelper()
 end 'publicApi'
 
-function privateHelper() returns int
+function privateHelper() returns Integer
   return 42
 end 'privateHelper'
 ```
 
-When modules are compiled together, only exported symbols from earlier modules can be called by later modules.
+When modules are compiled together, only exported symbols from earlier modules can be called by later modules. Non-exported symbols from other files are invisible — attempting to use them produces a compile error.
 
 ### Exporting Types
 
-Types can be exported to make them available to other modules:
+Types can be exported to make them available to other modules. Without `export`, a type is only usable within its file:
 
 ```text
 export type Point
-  var x int
-  var y int
+  export var x Integer
+  export var y Integer
 end 'Point'
 ```
+
+### Exporting Enums
+
+Enums follow the same visibility rules as types:
+
+```text
+export enum Color
+  red
+  green
+  blue
+end 'Color'
+```
+
+Without `export`, an enum is only visible within its declaring file.
+
+### Exporting Type Aliases
+
+Typealiases are also file-scoped by default. Use `export` for cross-file visibility:
+
+```text
+export typealias Score = int(0 to 100)
+```
+
+The standard library exports commonly-used aliases like `Integer`, `Float`, `Byte`, `Count`, `Index`, and `ExitCode`.
 
 ### Exporting Methods
 
@@ -42,9 +66,9 @@ Methods within types can be individually exported:
 
 ```text
 export type Calculator
-  var result int
+  var result Integer
 
-  export function add(n int)
+  export function add(n Integer)
     result = result + n
   end 'add'
 
@@ -281,4 +305,158 @@ end 'main'
 ```
 ```maxoncstderr
 error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:44: Unknown type: UnknownType
+```
+
+<!-- test: exported-type-cross-file -->
+```maxon
+// --- file: point.maxon
+export type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+// --- file: main.maxon
+function main() returns ExitCode
+  var p = Point{x: 20, y: 22}
+  return p.x + p.y
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.non-exported-type-cross-file -->
+```maxon
+// --- file: point.maxon
+type InternalPoint
+  export var x Integer
+end 'InternalPoint'
+
+// --- file: main.maxon
+function main() returns ExitCode
+  var p = InternalPoint{x: 42}
+  return p.x
+end 'main'
+```
+```maxoncstderr
+error E2004: main.maxon:2:11: Undefined variable 'InternalPoint'
+```
+
+<!-- test: exported-enum-cross-file -->
+```maxon
+// --- file: color.maxon
+export enum Color
+  red
+  green
+  blue
+end 'Color'
+
+// --- file: main.maxon
+function main() returns ExitCode
+  var c = Color.blue
+  match c 'check'
+    Color.blue then return 42
+    Color.red then return 0
+    Color.green then return 0
+  end 'check'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.non-exported-enum-cross-file -->
+```maxon
+// --- file: status.maxon
+enum InternalStatus
+  ok
+  err
+end 'InternalStatus'
+
+// --- file: main.maxon
+function main() returns ExitCode
+  var s = InternalStatus.ok
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: main.maxon:2:11: Undefined variable 'InternalStatus'
+```
+
+<!-- test: exported-typealias-cross-file -->
+```maxon
+// --- file: types.maxon
+export typealias Score = int(0 to 100)
+
+// --- file: main.maxon
+function main() returns ExitCode
+  var s = Score{42}
+  return s
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.non-exported-typealias-cross-file -->
+```maxon
+// --- file: types.maxon
+typealias InternalScore = int(0 to 100)
+
+// --- file: main.maxon
+function main() returns ExitCode
+  var s = InternalScore{42}
+  return s
+end 'main'
+```
+```maxoncstderr
+error E2004: main.maxon:2:11: Undefined variable 'InternalScore'
+```
+
+<!-- test: error.duplicate-typealias-same-file -->
+```maxon
+typealias Score = int(0 to 100)
+typealias Score = int(0 to 200)
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3061: specs/fragments/export-keyword/error.duplicate-typealias-same-file.test:3:11: Duplicate typealias 'Score'
+```
+
+<!-- test: non-exported-type-same-file -->
+```maxon
+type InternalPoint
+  export var x Integer
+  export var y Integer
+end 'InternalPoint'
+
+function main() returns ExitCode
+  var p = InternalPoint{x: 20, y: 22}
+  return p.x + p.y
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: non-exported-enum-same-file -->
+```maxon
+enum Direction
+  up
+  down
+end 'Direction'
+
+function main() returns ExitCode
+  var d = Direction.up
+  match d 'check'
+    Direction.up then return 42
+    Direction.down then return 0
+  end 'check'
+end 'main'
+```
+```exitcode
+42
 ```

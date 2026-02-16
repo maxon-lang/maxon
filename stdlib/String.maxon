@@ -1,12 +1,12 @@
 /// UTF-8 encoded immutable string with Unicode grapheme cluster iteration.
 /// @category Text
 
-typealias Integer = int(min to max)
+typealias SearchResult = int(-1 to max)
 
 // String receives __ManagedMemory directly for literal initialization via BuiltinStringLiteral.
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with Character
   var _managed __ManagedMemory
-  var _iterPos Integer
+  var _iterPos Index
 
   // Default type for string literals - compiler discovers this via BuiltinStringLiteral interface
   static function init(managed __ManagedMemory) returns String
@@ -19,7 +19,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     return {_managed: managed, _iterPos: 0}
   end 'fromCString'
 
-  export function byteLength() returns Integer
+  export function byteLength() returns Count
     return __managed_memory_len(_managed)
   end 'byteLength'
 
@@ -28,11 +28,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
   end 'isEmpty'
 
   /// Get grapheme cluster count (number of user-perceived characters)
-  export function count() returns Integer
+  export function count() returns Count
     return countGraphemesManaged(_managed)
   end 'count'
 
-  function hash() returns Integer
+  function hash() returns HashValue
     return hashManagedString(_managed)
   end 'hash'
 
@@ -64,7 +64,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     throw IterationError.exhausted
   end 'next'
 
-  function _makeCharFromBytes(pos Integer, len Integer) returns Character
+  function _makeCharFromBytes(pos Index, len Count) returns Character
     return __make_char_from_bytes(_managed, pos, len)
   end '_makeCharFromBytes'
 
@@ -156,7 +156,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     return {_managed: result, _iterPos: 0}
   end 'slice'
 
-  export function slice(start StringIndex, length Integer) returns String
+  export function slice(start StringIndex, length Count) returns String
     var endBytePos = graphemeOffsetToBytePos(_managed, startBytePos: start.bytePos(), count: length)
     var result = __managed_memory_slice(_managed, start.bytePos(), endBytePos)
     return {_managed: result, _iterPos: 0}
@@ -298,14 +298,14 @@ end 'String'
 
 // StringIndex type - type-safe string position
 export type StringIndex implements Equatable, Comparable
-  var _charIndex Integer
-  var _bytePos Integer
+  var _charIndex Index
+  var _bytePos Index
 
-  export function charIndex() returns Integer
+  export function charIndex() returns Index
     return _charIndex
   end 'charIndex'
 
-  export function bytePos() returns Integer
+  export function bytePos() returns Index
     return _bytePos
   end 'bytePos'
 
@@ -313,7 +313,7 @@ export type StringIndex implements Equatable, Comparable
     return _charIndex == other._charIndex
   end 'equals'
 
-  function compare(other StringIndex) returns Integer
+  function compare(other StringIndex) returns CompareResult
     if _charIndex < other._charIndex 'less'
       return 0 - 1
     end 'less'

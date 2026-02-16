@@ -1,10 +1,8 @@
 /// Fixed-size collection with stack allocation for small data.
 /// @category Collections
 
-typealias Integer = int(min to max)
-
 export type Vector uses Element implements BuiltinArrayLiteral, Iterable with Element
-  var iterIndex Integer            // Current iteration position
+  var iterIndex Index            // Current iteration position
   var managed __ManagedMemory  // Storage for elements
 
   // BuiltinArrayLiteral conformance - initialize Vector from managed memory directly
@@ -18,16 +16,13 @@ export type Vector uses Element implements BuiltinArrayLiteral, Iterable with El
   // =========================================================================
 
   /// Get the fixed size of the vector
-  export function count() returns Integer
+  export function count() returns Count
     return __managed_memory_len(managed)
   end 'count'
 
   /// Get element at index, throws if out of bounds
-  export function get(index Integer) returns Element throws ArrayError
+  export function get(index Index) returns Element throws ArrayError
     var len = __managed_memory_len(managed)
-    if index < 0 'lower'
-      throw ArrayError.indexOutOfBounds
-    end 'lower'
     if index >= len 'upper'
       throw ArrayError.indexOutOfBounds
     end 'upper'
@@ -35,13 +30,11 @@ export type Vector uses Element implements BuiltinArrayLiteral, Iterable with El
   end 'get'
 
   /// Set element at index (no-op if index out of bounds)
-  export function set(index Integer, value Element)
+  export function set(index Index, value Element)
     var len = __managed_memory_len(managed)
-    if index >= 0 'lower'
-      if index < len 'upper'
-        __managed_memory_set_at(managed, index, value)
-      end 'upper'
-    end 'lower'
+    if index < len 'inbounds'
+      __managed_memory_set_at(managed, index, value)
+    end 'inbounds'
   end 'set'
 
   // =========================================================================

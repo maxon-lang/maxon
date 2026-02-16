@@ -112,7 +112,7 @@ public class Compiler {
     // Pre-register type names from all sources so cross-file references resolve
     // (e.g., Character.maxon references String before String.maxon is parsed)
     foreach (var source in sources)
-      PreRegisterTypeNames(module, source);
+      PreRegisterTypeNames(module, source, isStdLib);
 
     // Pre-scan all sources to register function signatures, type details, etc.
     // so that cross-file forward references resolve regardless of parse order
@@ -162,13 +162,14 @@ public class Compiler {
     }
   }
 
-  private static void PreRegisterTypeNames(MlirModule<MaxonOp> module, SourceFile source) {
+  private static void PreRegisterTypeNames(MlirModule<MaxonOp> module, SourceFile source, bool isStdlib = false) {
     var lexer = new Lexer(source.Content);
     var tokens = lexer.Tokenize();
     for (int i = 0; i < tokens.Count - 1; i++) {
       var t = tokens[i];
-      // Skip 'export' prefix
+      bool isExported = false;
       if (t.Type == TokenType.Export && i + 1 < tokens.Count) {
+        isExported = true;
         i++;
         t = tokens[i];
       }
@@ -177,9 +178,15 @@ public class Compiler {
         var name = tokens[i + 1].Value;
         var assocNames = ParseUsesClauseTokens(tokens, i + 2);
         module.TypeDefs.TryAdd(name, new MlirStructType(name, [], assocNames));
+        if (!isExported && !isStdlib)
+          module.NonExportedTypeNames.Add(name);
+        if (source.Path != null) module.TypeDefSourceFiles[name] = source.Path;
         i += 1;
       } else if (t.Type == TokenType.Enum && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
-        module.TypeDefs.TryAdd(tokens[i + 1].Value, new MlirEnumType(tokens[i + 1].Value, [], null, []));
+        var enumName = tokens[i + 1].Value;
+        module.TypeDefs.TryAdd(enumName, new MlirEnumType(enumName, [], null, []));
+        if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(enumName);
+        if (source.Path != null) module.TypeDefSourceFiles[enumName] = source.Path;
         i += 1;
       } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var ifaceName = tokens[i + 1].Value;
@@ -272,8 +279,12 @@ public static class StdlibLoader {
 
     var files = Directory.GetFiles(stdlibPath, "*.maxon", SearchOption.AllDirectories);
 
-    // Sort: helper files (in subdirectories) before top-level files, then alphabetically
+    // Sort: Interfaces.maxon first (foundational typealiases), then helper files
+    // (in subdirectories), then remaining top-level files, alphabetically within each group
     Array.Sort(files, (a, b) => {
+      var aIsInterfaces = Path.GetFileName(a) == "Interfaces.maxon" && Path.GetDirectoryName(a) == stdlibPath;
+      var bIsInterfaces = Path.GetFileName(b) == "Interfaces.maxon" && Path.GetDirectoryName(b) == stdlibPath;
+      if (aIsInterfaces != bIsInterfaces) return aIsInterfaces ? -1 : 1;
       var aIsHelper = Path.GetDirectoryName(a) != stdlibPath;
       var bIsHelper = Path.GetDirectoryName(b) != stdlibPath;
       if (aIsHelper != bIsHelper) return aIsHelper ? -1 : 1;

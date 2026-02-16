@@ -1,14 +1,12 @@
 // String iteration views for byte, codepoint, and UTF-16 access
 
-typealias Integer = int(min to max)
-
 // ============================================
 // ByteView - iterate over raw UTF-8 bytes
 // ============================================
 
 export type ByteView implements Iterable with byte
   var _managed __ManagedMemory
-  var _pos Integer
+  var _pos Index
 
   function next() returns byte throws IterationError
     if _pos >= __managed_memory_len(_managed) 'at_end'
@@ -20,7 +18,7 @@ export type ByteView implements Iterable with byte
   end 'next'
 
   /// Get the number of bytes
-  export function count() returns Integer
+  export function count() returns Count
     return __managed_memory_len(_managed)
   end 'count'
 end 'ByteView'
@@ -31,7 +29,7 @@ end 'ByteView'
 
 export type CodepointView implements Iterable with int
   var _managed __ManagedMemory
-  var _pos Integer
+  var _pos Index
 
   function next() returns int throws IterationError
     if _pos >= __managed_memory_len(_managed) 'at_end'
@@ -44,7 +42,7 @@ export type CodepointView implements Iterable with int
   end 'next'
 
   /// Get the number of codepoints
-  export function count() returns Integer
+  export function count() returns Count
     var count = 0
     var pos = 0
     var len = __managed_memory_len(_managed)
@@ -63,8 +61,8 @@ end 'CodepointView'
 
 export type UTF16View implements Iterable with int
   var _managed __ManagedMemory
-  var _bytePos Integer
-  var _pendingCodepoint Integer  // Codepoint pending its low surrogate (0 if none)
+  var _bytePos Index
+  var _pendingCodepoint Codepoint  // Codepoint pending its low surrogate (0 if none)
 
   function next() returns int throws IterationError
     // If we have a pending codepoint, return its low surrogate
@@ -94,7 +92,7 @@ export type UTF16View implements Iterable with int
   end 'next'
 
   /// Get the number of UTF-16 code units
-  export function count() returns Integer
+  export function count() returns Count
     var count = 0
     var pos = 0
     var len = __managed_memory_len(_managed)

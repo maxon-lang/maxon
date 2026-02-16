@@ -3,7 +3,7 @@ type Point implements Hashable
   var x Integer
   var y Integer
 
-  function hash() returns Integer
+  function hash() returns HashValue
     return x + y * 31
   end 'hash'
 end 'Point'
@@ -20,7 +20,7 @@ Stdout: ```
 ```
 ---
 module {
-  func @Point.hash(__self_ptr: i64) -> i64 {
+  func @Point.hash(__self_ptr: i64) -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -30,7 +30,25 @@ module {
     x86.mov ebx, [eax+8]
     x86.mov eax, 31
     x86.imul ebx, eax
-    x86.lea eax, [edx + ebx]
+    x86.add edx, ebx
+    x86.mov [rbp-16], edx
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rbx, 4294967295
+    x86.cmp rdx, rbx
+    x86.setg edx
+    x86.movzx edx, edxb
+    x86.or eax, edx
+    x86.test eax, eax
+    x86.je Point.hash.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -52,15 +70,17 @@ module {
     x86.mov r9, [rbp-8]
     x86.mov rcx, r9
     x86.call Point.hash
-    x86.mov ecx, 21
-    x86.mov [rbp-96], eax
+    x86.mov ecx, eax
+    x86.mov eax, 21
+    x86.mov [rbp-96], ecx
+    x86.mov rcx, rax
     x86.call maxon_alloc
     x86.mov [rbp-16], eax
     x86.mov rcx, [rbp-96]
     x86.mov rdx, rax
     x86.call maxon_i64_to_string
     x86.mov ecx, [rbp-16]
-    x86.lea_rdata rdx, [__interp_lit_20]
+    x86.lea_rdata rdx, [__interp_lit_29]
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.lea esi, [eax + edx]

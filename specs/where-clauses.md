@@ -76,7 +76,7 @@ A user-defined type that implements Hashable can be used as a Map key:
 type MyKey implements Hashable, Equatable
     var value Integer
 
-    function hash() returns Integer
+    function hash() returns HashValue
         return self.value * 31
     end 'hash'
 

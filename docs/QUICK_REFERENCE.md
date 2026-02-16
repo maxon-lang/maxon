@@ -11,6 +11,26 @@
 | `character literal` | Grapheme cluster | `'A'`, `'é'` |
 | `string literal` | UTF-8 string | `"hello"` |
 
+## Ranged Type Aliases
+
+All numeric types in type positions require a `typealias` with range constraints (`bool` is exempt):
+
+```maxon
+typealias Age = int(0 to 150)       // inclusive upper bound
+typealias Idx = int(0 upto 100)     // exclusive upper bound (0-99)
+typealias Pct = float(0.0 to 100.0)
+typealias FullInt = int(min to max)  // min/max for full range
+```
+
+Construction and range checks:
+```maxon
+var a = Age{25}                     // construct with TypeName{value}
+var x = Age{200}                    // compile error: out of range
+var y = Age{someExpression}         // runtime range check (panics on violation)
+```
+
+Standard library aliases: `Integer`, `Float`, `Byte`, `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `CompareResult`, `MathValue`
+
 ## Literals
 
 ```maxon
@@ -73,6 +93,19 @@ end 'greet'
 
 // Calling: first arg positional, rest named
 greet("Smith", title: "Dr.")
+```
+
+## Visibility
+
+Functions, types, enums, and typealiases are file-scoped by default. Use `export` for cross-file visibility:
+
+```maxon
+export function publicFunc() returns Integer    // visible to other files
+function privateFunc() returns Integer          // only this file
+
+export type Point                               // visible to other files
+export enum Color                               // visible to other files
+export typealias Score = int(0 to 100)          // visible to other files
 ```
 
 ## Control Flow

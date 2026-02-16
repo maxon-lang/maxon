@@ -50,6 +50,9 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.F64) return MaxonValueKind.Float;
     if (type == MlirType.I1) return MaxonValueKind.Bool;
     if (type == MlirType.I8) return MaxonValueKind.Byte;
+    // Unsigned/narrowed integer types from ranged type optimal storage
+    if (type == MlirType.U8) return MaxonValueKind.Byte;
+    if (type == MlirType.I32 || type == MlirType.U32 || type == MlirType.U64) return MaxonValueKind.Integer;
     if (type is MlirRangedPrimitiveType rpt) return rpt.BaseType.ToValueKind();
     if (type is MlirEnumType) return MaxonValueKind.Enum;
     if (type is MlirTypeParameterType) return MaxonValueKind.TypeParameter;

@@ -13,7 +13,7 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 - `min`/`max` keywords for bounds: `typealias FullInt = int(min to max)`
 - Construction: `Age{42}` (compile-time checked for literals, runtime checked for expressions)
 - `int / int` produces `int` (truncating), not `float`
-- Standard library defines `Integer = int(min to max)`, `Float = float(min to max)`, `Byte = byte(0 to 255)`
+- Standard library defines general-purpose aliases (`Integer = int(min to max)`, `Float = float(min to max)`, `Byte = byte(0 to 255)`) and purpose-specific aliases (`Count`, `Index`, `HashValue`, `Codepoint`, `CompareResult`, `Offset`, `MathValue`, `ExitCode`)
 
 ## Docs
 

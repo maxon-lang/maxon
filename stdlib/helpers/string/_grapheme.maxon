@@ -2,14 +2,14 @@
 //
 // Purpose: Centralize grapheme cluster operations (UAX #29 algorithm) for string types.
 
-typealias Integer = int(min to max)
+typealias BreakProperty = int(0 to 20)
 
 // ============================================
 // Find grapheme end helpers (UAX #29)
 // ============================================
 
 // findGraphemeEndManagedRange - Find end of grapheme cluster in range
-function findGraphemeEndManagedRange(managed __ManagedMemory, offset Integer, startPos Integer, len Integer) returns Integer
+function findGraphemeEndManagedRange(managed __ManagedMemory, offset Index, startPos Index, len Count) returns Index
   if startPos >= len 'atEnd'
       return startPos
   end 'atEnd'
@@ -50,7 +50,7 @@ end 'findGraphemeEndManagedRange'
 
 /// Find the end of the grapheme cluster in a __ManagedMemory starting at startPos
 /// Returns the byte offset of the end of the grapheme cluster
-export function findGraphemeEndManaged(managed __ManagedMemory, startPos Integer, len Integer) returns Integer
+export function findGraphemeEndManaged(managed __ManagedMemory, startPos Index, len Count) returns Index
   return findGraphemeEndManagedRange(managed, offset: 0, startPos: startPos, len: len)
 end 'findGraphemeEndManaged'
 
@@ -59,7 +59,7 @@ end 'findGraphemeEndManaged'
 // ============================================
 
 // countGraphemesManagedRange - Count grapheme clusters in range
-function countGraphemesManagedRange(managed __ManagedMemory, offset Integer, len Integer) returns Integer
+function countGraphemesManagedRange(managed __ManagedMemory, offset Index, len Count) returns Count
   var graphemeCount = 0
   var pos = 0
   while pos < len 'countLoop'
@@ -70,13 +70,13 @@ function countGraphemesManagedRange(managed __ManagedMemory, offset Integer, len
 end 'countGraphemesManagedRange'
 
 /// Count the total number of grapheme clusters in a __ManagedMemory
-export function countGraphemesManaged(managed __ManagedMemory) returns Integer
+export function countGraphemesManaged(managed __ManagedMemory) returns Count
   return countGraphemesManagedRange(managed, offset: 0, len: __managed_memory_len(managed))
 end 'countGraphemesManaged'
 
 /// Convert a byte index to a grapheme (character) index
 /// Returns the number of grapheme clusters before the byte position
-export function byteIndexToGraphemeIndex(managed __ManagedMemory, byteIdx Integer) returns Integer
+export function byteIndexToGraphemeIndex(managed __ManagedMemory, byteIdx Index) returns Count
   var graphemeIdx = 0
   var pos = 0
   var len = __managed_memory_len(managed)
@@ -89,7 +89,7 @@ end 'byteIndexToGraphemeIndex'
 
 /// Advance from a byte position by a number of grapheme clusters
 /// Returns the byte position after advancing by `count` graphemes
-export function graphemeOffsetToBytePos(managed __ManagedMemory, startBytePos Integer, count Integer) returns Integer
+export function graphemeOffsetToBytePos(managed __ManagedMemory, startBytePos Index, count Count) returns Index
   var pos = startBytePos
   var len = __managed_memory_len(managed)
   var i = 0
@@ -109,7 +109,7 @@ end 'graphemeOffsetToBytePos'
 // Returns: 0=Other, 1=CR, 2=LF, 3=Control, 4=Extend, 5=ZWJ,
 //          6=Regional_Indicator, 7=Prepend, 8=SpacingMark,
 //          9=L, 10=V, 11=T, 12=LV, 13=LVT
-export function graphemeBreakProperty(cp Integer) returns Integer
+export function graphemeBreakProperty(cp Codepoint) returns BreakProperty
   // CR (return 1)
   if cp == 13 'cr'
       return 1
@@ -191,7 +191,7 @@ export function graphemeBreakProperty(cp Integer) returns Integer
 end 'graphemeBreakProperty'
 
 // Check if codepoint has Extended_Pictographic property (emoji base)
-export function isExtendedPictographic(cp Integer) returns bool
+export function isExtendedPictographic(cp Codepoint) returns bool
   // Basic emoji range U+1F600..U+1F64F
   if cp >= 128512 and cp <= 128591 'emoji_faces'
       return true
@@ -232,7 +232,7 @@ end 'isExtendedPictographic'
 
 // State for tracking complex grapheme sequences
 type GraphemeState
-  export var riCount Integer           // Count of consecutive Regional Indicators (for GB12-13)
+  export var riCount Count           // Count of consecutive Regional Indicators (for GB12-13)
   export var inEmojiSeq bool      // Inside Extended_Pictographic...ZWJ sequence (for GB11)
 end 'GraphemeState'
 
@@ -249,7 +249,7 @@ end 'graphemeStateInit'
 // state: State for tracking RI counts and emoji sequences
 //
 // Returns true if there should be a break BEFORE the current codepoint
-function isGraphemeBreak(prevGbp Integer, currGbp Integer, prevCp Integer, currCp Integer, state GraphemeState) returns bool
+function isGraphemeBreak(prevGbp BreakProperty, currGbp BreakProperty, prevCp Codepoint, currCp Codepoint, state GraphemeState) returns bool
   // Use prevCp to avoid unused parameter warning (reserved for future Extended_Pictographic checks)
   var unused = prevCp
   unused = unused
@@ -339,7 +339,7 @@ function isGraphemeBreak(prevGbp Integer, currGbp Integer, prevCp Integer, currC
 end 'isGraphemeBreak'
 
 // Update grapheme state after processing a codepoint
-function graphemeStateUpdate(state GraphemeState, gbp Integer, cp Integer) returns GraphemeState
+function graphemeStateUpdate(state GraphemeState, gbp BreakProperty, cp Codepoint) returns GraphemeState
   var new_state = GraphemeState{riCount: 0, inEmojiSeq: false}
 
   // Track Regional Indicator sequences (gbp == 6)

@@ -210,7 +210,7 @@ type HashItem implements Equatable, Hashable
     return v == other.v
   end 'equals'
 
-  function hash() returns Integer
+  function hash() returns HashValue
     return v
   end 'hash'
 end 'HashItem'
