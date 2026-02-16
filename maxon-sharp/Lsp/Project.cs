@@ -55,6 +55,11 @@ public class Project(
 
   public CompletionInfo? GetCompletionInfo() => _lastSuccessfulCompletionInfo;
 
+  /// <summary>
+  /// Returns all file contents currently tracked by the project (path -> content).
+  /// </summary>
+  public IEnumerable<KeyValuePair<string, string>> GetFileContents() => _fileContents;
+
   public List<CompileError> GetDiagnostics(string filePath) {
     return _diagnostics.TryGetValue(NormalizePath(filePath), out var errors) ? errors : [];
   }

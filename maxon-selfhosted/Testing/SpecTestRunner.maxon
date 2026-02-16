@@ -1,0 +1,483 @@
+// Spec test runner for the self-hosted compiler.
+// Parses spec files and runs tests by invoking the C# compiler.
+
+// Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
+function trimWhitespace(s String) returns String
+  // Walk string with charAt + indexAfter to find trim boundaries
+  var idx = s.startIndex()
+  let endIdx = s.endIndex()
+  // Skip leading whitespace
+  while idx < endIdx 'leading'
+    var cp = s.charAt(idx)
+    var isCpWs = false
+    for b in cp.bytes() 'checkByte'
+      if b == 32 'sp'
+        isCpWs = true
+      end 'sp' else if b == 10 'lf'
+        isCpWs = true
+      end 'lf' else if b == 13 'cr'
+        isCpWs = true
+      end 'cr' else if b == 9 'tab'
+        isCpWs = true
+      end 'tab'
+    end 'checkByte'
+    if not isCpWs 'notWs'
+      break
+    end 'notWs'
+    idx = try s.indexAfter(idx) otherwise 'done'
+      break
+    end 'done'
+  end 'leading'
+  var startPos = idx
+  // Walk to find last non-whitespace position
+  var lastNonWsEnd = idx
+  while idx < endIdx 'trailing'
+    var cp = s.charAt(idx)
+    let nextIdx = try s.indexAfter(idx) otherwise 'lastOne'
+      var isWs = false
+      for b in cp.bytes() 'checkByte2'
+        if b == 32 'sp2'
+          isWs = true
+        end 'sp2' else if b == 10 'lf2'
+          isWs = true
+        end 'lf2' else if b == 13 'cr2'
+          isWs = true
+        end 'cr2' else if b == 9 'tab2'
+          isWs = true
+        end 'tab2'
+      end 'checkByte2'
+      if not isWs 'notWs2'
+        lastNonWsEnd = endIdx
+      end 'notWs2'
+      break
+    end 'lastOne'
+    var isWs2 = false
+    for b in cp.bytes() 'checkByte3'
+      if b == 32 'sp3'
+        isWs2 = true
+      end 'sp3' else if b == 10 'lf3'
+        isWs2 = true
+      end 'lf3' else if b == 13 'cr3'
+        isWs2 = true
+      end 'cr3' else if b == 9 'tab3'
+        isWs2 = true
+      end 'tab3'
+    end 'checkByte3'
+    if not isWs2 'notWs3'
+      lastNonWsEnd = nextIdx
+    end 'notWs3'
+    idx = nextIdx
+  end 'trailing'
+  return s.slice(startPos, endIndex: lastNonWsEnd)
+end 'trimWhitespace'
+
+// Simple string-to-integer parser.
+function parseInteger(s String) returns ParsedInt throws CompileError
+  var result = 0
+  var negative = false
+  var i = 0
+  for cp in s.codepoints() 'chars'
+    if cp == 45 'minus'
+      if i == 0 'first'
+        negative = true
+        i = i + 1
+        continue
+      end 'first'
+      throw CompileError.readError
+    end 'minus'
+    if cp >= 48 'digit'
+      if cp <= 57 'isDigit'
+        result = result * 10 + cp - 48
+        i = i + 1
+        continue
+      end 'isDigit'
+    end 'digit'
+    throw CompileError.readError
+  end 'chars'
+  if negative 'neg'
+    return 0 - result
+  end 'neg'
+  return result
+end 'parseInteger'
+
+// Whitelisted specs to run (only specs the self-hosted compiler cares about)
+var specWhitelist = StringArray{}
+
+type TestExpectation
+  export var exitCode ParsedInt
+  export var hasExitCode bool
+  export var stdout String
+  export var hasStdout bool
+  export var stderr String
+  export var hasStderr bool
+end 'TestExpectation'
+
+type SpecTest
+  export var name String
+  export var source String
+  export var expectation TestExpectation
+end 'SpecTest'
+
+typealias SpecTestArray = Array with SpecTest
+
+// Find the project root by walking up from cwd looking for a specs/ directory.
+function findProjectRoot() returns String throws CompileError
+  var dir = Directory.currentDirectory()
+  var attempts = 0
+  while attempts < 10 'search'
+    let specsPath = "{dir}/specs"
+    if Directory.exists(specsPath) 'found'
+      return dir
+    end 'found'
+    // Go up one level
+    let lastSlash = try dir.findLast("/") otherwise 'tryBackslash'
+      let lastBs = try dir.findLast("\\") otherwise 'noParent'
+        throw CompileError.directoryNotFound
+      end 'noParent'
+      dir = dir.slice(dir.startIndex(), endIndex: lastBs)
+      attempts = attempts + 1
+      continue
+    end 'tryBackslash'
+    dir = dir.slice(dir.startIndex(), endIndex: lastSlash)
+    attempts = attempts + 1
+  end 'search'
+  throw CompileError.directoryNotFound
+end 'findProjectRoot'
+
+// Split a string by newlines into an array of lines.
+function splitLines(text String) returns StringArray
+  var lines = StringArray{}
+  var remaining = text
+  while not remaining.isEmpty() 'scan'
+    let nlPos = try remaining.findFirst("\n") otherwise 'lastLine'
+      lines.push(remaining)
+      break
+    end 'lastLine'
+    lines.push(remaining.slice(remaining.startIndex(), endIndex: nlPos))
+    let nextIdx = try remaining.indexAfter(nlPos) otherwise 'done'
+      break
+    end 'done'
+    remaining = remaining.slice(nextIdx, endIndex: remaining.endIndex())
+  end 'scan'
+  return lines
+end 'splitLines'
+
+// Parse a spec file and extract tests.
+function parseSpecFile(content String, specName String) returns SpecTestArray
+  var tests = SpecTestArray{}
+  let lines = splitLines(content)
+  var i = 0
+  let lineCount = lines.count()
+
+  while i < lineCount 'scan'
+    let line = try lines.get(i) otherwise 'skip'
+      i = i + 1
+      continue
+    end 'skip'
+
+    // Look for test markers: <!-- test: name -->
+    if line.contains("<!-- test:") 'isTestMarker'
+      let markerStart = try line.findFirst("<!-- test:") otherwise 'skipMarker'
+        i = i + 1
+        continue
+      end 'skipMarker'
+      // Extract test name between "<!-- test: " and " -->"
+      let nameStart = try line.findFirst(": ") otherwise 'skipMarker2'
+        i = i + 1
+        continue
+      end 'skipMarker2'
+      let nameStartIdx = try line.indexAfter(nameStart) otherwise 'skipMarker3'
+        i = i + 1
+        continue
+      end 'skipMarker3'
+      let nameStartIdx2 = try line.indexAfter(nameStartIdx) otherwise 'skipMarker4'
+        i = i + 1
+        continue
+      end 'skipMarker4'
+      let nameEnd = try line.findFirst(" -->") otherwise 'skipMarker5'
+        i = i + 1
+        continue
+      end 'skipMarker5'
+      let testName = line.slice(nameStartIdx2, endIndex: nameEnd)
+
+      // Now scan for code blocks after this marker
+      var source = ""
+      var expectation = TestExpectation{}
+      i = i + 1
+
+      while i < lineCount 'blocks'
+        let blockLine = try lines.get(i) otherwise 'skipBlock'
+          i = i + 1
+          continue
+        end 'skipBlock'
+
+        if blockLine.contains("<!-- test:") 'nextTest'
+          // Hit next test marker, stop parsing this test
+          break
+        end 'nextTest'
+
+        if blockLine.startsWith("```maxon") 'isMaxon'
+          i = i + 1
+          source = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isMaxon'
+
+        if blockLine.startsWith("```exitcode") 'isExitCode'
+          i = i + 1
+          let ecStr = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          let ecVal = try parseInteger(trimWhitespace(ecStr)) otherwise 'badEc'
+            continue
+          end 'badEc'
+          expectation.exitCode = ecVal
+          expectation.hasExitCode = true
+          continue
+        end 'isExitCode'
+
+        if blockLine.startsWith("```stdout") 'isStdout'
+          i = i + 1
+          let stdoutBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.stdout = stdoutBlock
+          expectation.hasStdout = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isStdout'
+
+        if blockLine.startsWith("```maxoncstderr") 'isStderr'
+          i = i + 1
+          let stderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.stderr = stderrBlock
+          expectation.hasStderr = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isStderr'
+
+        i = i + 1
+      end 'blocks'
+
+      if not source.isEmpty() 'hasSource'
+        var test = SpecTest{}
+        test.name = "{specName}/{testName}"
+        test.source = source
+        test.expectation = expectation
+        tests.push(test)
+      end 'hasSource'
+      continue
+    end 'isTestMarker'
+
+    i = i + 1
+  end 'scan'
+
+  return tests
+end 'parseSpecFile'
+
+// Read lines from startLine until a closing ``` is found, joining with newlines.
+function readCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNumber) returns String
+  var result = ""
+  var i = startLine
+  var first = true
+  while i < lineCount 'read'
+    let line = try lines.get(i) otherwise 'done'
+      break
+    end 'done'
+    if line.startsWith("```") 'endBlock'
+      break
+    end 'endBlock'
+    if first 'isFirst'
+      result = line
+      first = false
+    end 'isFirst' else 'notFirst'
+      result = "{result}\n{line}"
+    end 'notFirst'
+    i = i + 1
+  end 'read'
+  return result
+end 'readCodeBlock'
+
+// Skip past a code block's closing ```.
+function skipCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
+  var i = startLine
+  while i < lineCount 'skip'
+    let line = try lines.get(i) otherwise 'done'
+      break
+    end 'done'
+    if line.startsWith("```") 'endBlock'
+      return i + 1
+    end 'endBlock'
+    i = i + 1
+  end 'skip'
+  return i
+end 'skipCodeBlock'
+
+function initWhitelist()
+  specWhitelist.push("selfhosted-basics")
+end 'initWhitelist'
+
+// Run all whitelisted spec tests. Returns (passed, failed).
+export function runAllSpecTests(filter String) returns ExitCode
+  initWhitelist()
+  let root = try findProjectRoot() otherwise 'noRoot'
+    logError(LogCategory.testing, message: "Could not find project root (no specs/ directory found)")
+    return 1
+  end 'noRoot'
+
+  let compilerPath = "{root}/maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe"
+
+  var totalPassed = 0
+  var totalFailed = 0
+  var totalTests = 0
+
+  for specName in specWhitelist 'eachSpec'
+    let specPath = "{root}/specs/{specName}.md"
+    let content = try File.readText(specPath) otherwise 'readErr'
+      logError(LogCategory.testing, message: "Could not read spec: {specPath}")
+      continue
+    end 'readErr'
+
+    let tests = parseSpecFile(content, specName: specName)
+
+    for test in tests 'eachTest'
+      // Apply filter
+      if not filter.isEmpty() 'hasFilter'
+        if not test.name.contains(filter) 'noMatch'
+          continue
+        end 'noMatch'
+      end 'hasFilter'
+
+      totalTests = totalTests + 1
+      let passed = runSingleTest(test, compilerPath: compilerPath, projectRoot: root)
+      if passed 'pass'
+        totalPassed = totalPassed + 1
+      end 'pass' else 'fail'
+        totalFailed = totalFailed + 1
+      end 'fail'
+    end 'eachTest'
+  end 'eachSpec'
+
+  if totalTests == 0 'noTests'
+    logInfo(LogCategory.testing, message: "No tests found")
+    return 0
+  end 'noTests'
+
+  if totalFailed == 0 'allPass'
+    logInfo(LogCategory.testing, message: "Tests: {totalPassed} passed (total: {totalTests})")
+  end 'allPass' else 'someFail'
+    logInfo(LogCategory.testing, message: "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests})")
+  end 'someFail'
+
+  if totalFailed > 0 'hasFail'
+    return 1
+  end 'hasFail'
+  return 0
+end 'runAllSpecTests'
+
+// Run a single test. Returns true if passed.
+function runSingleTest(test SpecTest, compilerPath String, projectRoot String) returns bool
+  let tempDir = "{projectRoot}/temp"
+  let tempSource = "{tempDir}/spectest_temp.maxon"
+  let tempExe = "{tempDir}/spectest_temp.exe"
+
+  // Write source to temp file
+  try File.writeText(tempSource, content: test.source) otherwise 'writeErr'
+    logError(LogCategory.testing, message: "[FAIL] {test.name} - could not write temp file")
+    return false
+  end 'writeErr'
+
+  if test.expectation.hasStderr 'isCompilerError'
+    // Compiler error test: compilation should fail with expected stderr
+    let cap = Process.captureStart("{compilerPath} compile {tempSource}")
+    let stdout = Process.captureStdout(cap)
+    let stderr = Process.captureStderr(cap)
+    let ec = Process.captureWait(cap, timeoutMs: 10000)
+
+    // Normalize stderr: trim, replace backslashes, remove temp path prefix
+    let normalizedStderr = normalizeStderr(stderr, tempSource: tempSource)
+    let expectedStderr = trimWhitespace(test.expectation.stderr)
+
+    if normalizedStderr == expectedStderr 'match'
+      logDebug(LogCategory.testing, message: "[PASS] {test.name}")
+      cleanup(tempSource, tempExe: tempExe)
+      return true
+    end 'match' else 'noMatch'
+      logError(LogCategory.testing, message: "[FAIL] {test.name}")
+      logError(LogCategory.testing, message: "  Expected stderr: {expectedStderr}")
+      logError(LogCategory.testing, message: "  Actual stderr:   {normalizedStderr}")
+      cleanup(tempSource, tempExe: tempExe)
+      return false
+    end 'noMatch'
+  end 'isCompilerError'
+
+  // Success test: compilation should succeed
+  let compileCap = Process.captureStart("{compilerPath} compile {tempSource}")
+  let compileStdout = Process.captureStdout(compileCap)
+  let compileStderr = Process.captureStderr(compileCap)
+  let compileEc = Process.captureWait(compileCap, timeoutMs: 10000)
+
+  if compileEc != 0 'compileFailed'
+    logError(LogCategory.testing, message: "[FAIL] {test.name}")
+    logError(LogCategory.testing, message: "  Compilation failed with exit code {compileEc}")
+    logError(LogCategory.testing, message: "  stderr: {compileStderr}")
+    cleanup(tempSource, tempExe: tempExe)
+    return false
+  end 'compileFailed'
+
+  // Run the compiled executable
+  let runCap = Process.captureStart(tempExe)
+  let runStdout = Process.captureStdout(runCap)
+  let runStderr = Process.captureStderr(runCap)
+  let runEc = Process.captureWait(runCap, timeoutMs: 5000)
+
+  var passed = true
+
+  // Check exit code
+  if test.expectation.hasExitCode 'checkEc'
+    if runEc != test.expectation.exitCode 'ecMismatch'
+      logError(LogCategory.testing, message: "[FAIL] {test.name}")
+      logError(LogCategory.testing, message: "  Expected exit code {test.expectation.exitCode}, got {runEc}")
+      passed = false
+    end 'ecMismatch'
+  end 'checkEc'
+
+  // Check stdout
+  if test.expectation.hasStdout 'checkStdout'
+    let expectedOut = trimWhitespace(test.expectation.stdout)
+    let actualOut = trimWhitespace(runStdout)
+    if actualOut != expectedOut 'stdoutMismatch'
+      if passed 'firstFail'
+        logError(LogCategory.testing, message: "[FAIL] {test.name}")
+      end 'firstFail'
+      logError(LogCategory.testing, message: "  Expected stdout: {expectedOut}")
+      logError(LogCategory.testing, message: "  Actual stdout:   {actualOut}")
+      passed = false
+    end 'stdoutMismatch'
+  end 'checkStdout'
+
+  if passed 'didPass'
+    logDebug(LogCategory.testing, message: "[PASS] {test.name}")
+  end 'didPass'
+
+  cleanup(tempSource, tempExe: tempExe)
+  return passed
+end 'runSingleTest'
+
+function normalizeStderr(stderr String, tempSource String) returns String
+  // Replace backslashes with forward slashes, trim, remove temp file path
+  var result = trimWhitespace(stderr)
+  result = result.replace("\\", with: "/")
+  // Remove the temp source path prefix if present
+  result = result.replace(tempSource, with: "")
+  result = result.replace(tempSource.replace("\\", with: "/"), with: "")
+  return result
+end 'normalizeStderr'
+
+function cleanup(tempSource String, tempExe String)
+  if File.exists(tempSource) 'src'
+    try File.delete(tempSource) otherwise 'delErr'
+    end 'delErr'
+  end 'src'
+  if File.exists(tempExe) 'exe'
+    try File.delete(tempExe) otherwise 'delErr2'
+    end 'delErr2'
+  end 'exe'
+end 'cleanup'

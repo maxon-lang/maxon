@@ -4,6 +4,10 @@ public class MlirType {
   public string Name { get; }
   public virtual int SizeInBytes { get; }
 
+  public string? SourceFilePath { get; set; }
+  public int? SourceLine { get; set; }
+  public int? SourceColumn { get; set; }
+
   public MlirType(string name, int sizeInBytes) {
     Name = name;
     SizeInBytes = sizeInBytes;

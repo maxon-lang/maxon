@@ -105,7 +105,21 @@ end 'runRun'
 
 function runSpecTests(args StringArray) returns ExitCode
     let cleanArgs = processLogArgs(args)
-    let _ = cleanArgs.count()
-    print("spec-test: not yet implemented\n")
-    return 1
+
+    // Parse --filter= option
+    var filter = ""
+    for arg in cleanArgs 'parseArgs'
+        if arg.startsWith("--filter=") 'isFilter'
+            let eqIdx = try arg.findFirst("=") otherwise 'bad'
+                continue
+            end 'bad'
+            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
+                continue
+            end 'bad2'
+            filter = arg.slice(afterEq, endIndex: arg.endIndex())
+        end 'isFilter'
+    end 'parseArgs'
+
+    logInfo(LogCategory.testing, message: "Running self-hosted spec tests...")
+    return runAllSpecTests(filter)
 end 'runSpecTests'

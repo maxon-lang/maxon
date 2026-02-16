@@ -9,10 +9,11 @@ Review the changes that have been made in the project.
 
 1. Review all code changes:
     - Eliminate duplicated code — refactor shared logic into helper methods.
-    - Ensure no `switch` statements use `default` cases — all cases must be handled explicitly.
+    - Ensure no `switch` or 'match' statements use `default` cases — all cases must be handled explicitly.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
     - Ensure comments explain "why" not "what".
     - Fix any problems reported by the IDE
+    - typealias should describe its purpose, not its type
 2. Write a git commit message for these changes.
 
 ## Guidelines

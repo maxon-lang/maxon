@@ -175,28 +175,43 @@ public class Compiler {
       }
 
       if (t.Type == TokenType.Type && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
-        var name = tokens[i + 1].Value;
+        var nameToken = tokens[i + 1];
+        var name = nameToken.Value;
         var assocNames = ParseUsesClauseTokens(tokens, i + 2);
-        module.TypeDefs.TryAdd(name, new MlirStructType(name, [], assocNames));
+        var structType = new MlirStructType(name, [], assocNames);
+        SetSourceLocation(structType, source, nameToken);
+        module.TypeDefs.TryAdd(name, structType);
         if (!isExported && !isStdlib)
           module.NonExportedTypeNames.Add(name);
         if (source.Path != null) module.TypeDefSourceFiles[name] = source.Path;
         i += 1;
       } else if (t.Type == TokenType.Enum && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
-        var enumName = tokens[i + 1].Value;
-        module.TypeDefs.TryAdd(enumName, new MlirEnumType(enumName, [], null, []));
+        var nameToken = tokens[i + 1];
+        var enumName = nameToken.Value;
+        var enumType = new MlirEnumType(enumName, [], null, []);
+        SetSourceLocation(enumType, source, nameToken);
+        module.TypeDefs.TryAdd(enumName, enumType);
         if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(enumName);
         if (source.Path != null) module.TypeDefSourceFiles[enumName] = source.Path;
         i += 1;
       } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
-        var ifaceName = tokens[i + 1].Value;
-        module.TypeDefs.TryAdd(ifaceName, new MlirInterfaceType(ifaceName, []));
+        var nameToken = tokens[i + 1];
+        var ifaceName = nameToken.Value;
+        var ifaceType = new MlirInterfaceType(ifaceName, []);
+        SetSourceLocation(ifaceType, source, nameToken);
+        module.TypeDefs.TryAdd(ifaceName, ifaceType);
         var assocNames = ParseUsesClauseTokens(tokens, i + 2);
         if (assocNames.Count > 0)
           module.InterfaceAssociatedTypes.TryAdd(ifaceName, assocNames);
         i += 1;
       }
     }
+  }
+
+  private static void SetSourceLocation(MlirType type, SourceFile source, Token nameToken) {
+    type.SourceFilePath = source.Path;
+    type.SourceLine = nameToken.Line;
+    type.SourceColumn = nameToken.Column;
   }
 
   /// <summary>

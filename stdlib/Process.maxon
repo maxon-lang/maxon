@@ -13,9 +13,9 @@ end 'ProcessError'
 
 /// Result of process execution
 export type ProcessResult
-  var exitCode ExitCode
-  var stdout String
-  var stderr String
+  export var exitCode ExitCode
+  export var stdout String
+  export var stderr String
 
   /// Check if the process exited successfully (exit code 0)
   export function succeeded() returns bool
@@ -44,4 +44,33 @@ export type Process
     __process_close(handle)
     return exitCode
   end 'execute'
+
+  /// Start a process with stdout/stderr capture, returning a capture handle.
+  /// Use captureStdout/captureStderr to read output, then captureWait to finish.
+  export static function captureStart(command String) returns int
+    var cmdCstr = command.cstr()
+    var cwdCstr = "".cstr()
+    return __process_create_with_capture(cmdCstr, cwdCstr)
+  end 'captureStart'
+
+  /// Read all stdout from a capture handle as a String. Must call before captureWait.
+  export static function captureStdout(capturePtr int) returns String
+    let cstr = __process_read_stdout(capturePtr)
+    return String.fromCString(cstr)
+  end 'captureStdout'
+
+  /// Read all stderr from a capture handle as a String. Must call before captureWait.
+  export static function captureStderr(capturePtr int) returns String
+    let cstr = __process_read_stderr(capturePtr)
+    return String.fromCString(cstr)
+  end 'captureStderr'
+
+  /// Wait for a captured process to complete and return its exit code.
+  export static function captureWait(capturePtr int, timeoutMs Duration) returns int
+    let hProcess = __process_get_handle(capturePtr)
+    let waitResult = __process_wait(hProcess, timeoutMs)
+    let ec = __process_get_exit_code(hProcess)
+    __process_close(hProcess)
+    return ec
+  end 'captureWait'
 end 'Process'

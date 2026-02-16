@@ -3,12 +3,15 @@
 
 export typealias X86OpArray = Array with X86Op
 export typealias IatFixupArray = Array with IatFixup
+export typealias StackSize = i64
+export typealias CodeOffset = i64
+export typealias MachineWord = i64
 
 // Runtime stub offsets (filled in during emit)
 var _writeStdoutOffset = 0
 var _i64ToStringOffset = 0
 
-function emitPrologue(code ByteBuffer, stackSize I64)
+function emitPrologue(code ByteBuffer, stackSize StackSize)
     // push rbp
     code.push(0x55)
     // mov rbp, rsp
@@ -35,7 +38,7 @@ function emitEpilogue(code ByteBuffer)
     code.push(0xC3)
 end 'emitEpilogue'
 
-function emitMovRegImm(code ByteBuffer, value I64)
+function emitMovRegImm(code ByteBuffer, value MachineWord)
     // mov rax, imm32 (sign-extended)
     code.push(0x48)
     code.push(0xC7)
@@ -48,7 +51,7 @@ function emitMovRegImm(code ByteBuffer, value I64)
 end 'emitMovRegImm'
 
 // Store RAX to stack slot: mov [rbp - (slotIndex+1)*8], rax
-function emitMovSlot(code ByteBuffer, slotIndex I64)
+function emitMovSlot(code ByteBuffer, slotIndex VarSlot)
     let offset = (slotIndex + 1) * 8
     // mov [rbp - offset], rax  =>  48 89 45 <disp8>
     code.push(0x48)
@@ -58,7 +61,7 @@ function emitMovSlot(code ByteBuffer, slotIndex I64)
 end 'emitMovSlot'
 
 // Load stack slot to RAX: mov rax, [rbp - (slotIndex+1)*8]
-function emitLoadSlot(code ByteBuffer, slotIndex I64)
+function emitLoadSlot(code ByteBuffer, slotIndex VarSlot)
     let offset = (slotIndex + 1) * 8
     // mov rax, [rbp - offset]  =>  48 8B 45 <disp8>
     code.push(0x48)
@@ -112,7 +115,7 @@ function emitImulRegReg(code ByteBuffer)
 end 'emitImulRegReg'
 
 // Emit a relative call: call <rel32>
-function emitRelativeCall(code ByteBuffer, targetOffset I64)
+function emitRelativeCall(code ByteBuffer, targetOffset CodeOffset)
     code.push(0xE8)
     let callEnd = code.count() + 4
     let rel = targetOffset - callEnd
@@ -123,7 +126,7 @@ function emitRelativeCall(code ByteBuffer, targetOffset I64)
 end 'emitRelativeCall'
 
 // Emit dword placeholder (4 zero bytes)
-function emitDword(code ByteBuffer, value I64)
+function emitDword(code ByteBuffer, value MachineWord)
     code.push(value and 0xFF)
     code.push((value shr 8) and 0xFF)
     code.push((value shr 16) and 0xFF)

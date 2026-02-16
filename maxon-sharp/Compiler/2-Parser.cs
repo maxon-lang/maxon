@@ -834,7 +834,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!module.Functions.Any(f => f.Name == registrationName)) {
       var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
         IsExported = isExported,
-        SourceFilePath = _sourceFilePath
+        SourceFilePath = _sourceFilePath,
+        SourceLine = nameToken.Line,
+        SourceColumn = nameToken.Column
       };
       module.AddFunction(func);
 
@@ -4830,6 +4832,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["__process_close"] = RuntimeCallIntrinsic(
       "Closes a process handle.\n\n`__process_close(handle)`",
       "maxon_process_close", 1, false),
+    ["__process_create_with_capture"] = RuntimeCallIntrinsic(
+      "Creates a process with stdout/stderr capture. Returns capture struct pointer.\n\n`__process_create_with_capture(cstring_cmd, cstring_cwd) returns int`",
+      "maxon_process_create_with_capture", 2, true),
+    ["__process_get_handle"] = RuntimeCallIntrinsic(
+      "Gets hProcess from capture struct.\n\n`__process_get_handle(capture_ptr) returns int`",
+      "maxon_process_get_handle", 1, true),
+    ["__process_read_stdout"] = RuntimeCallIntrinsic(
+      "Reads stdout from capture struct. Returns cstring pointer.\n\n`__process_read_stdout(capture_ptr) returns int`",
+      "maxon_process_read_stdout", 1, true),
+    ["__process_read_stderr"] = RuntimeCallIntrinsic(
+      "Reads stderr from capture struct. Returns cstring pointer.\n\n`__process_read_stderr(capture_ptr) returns int`",
+      "maxon_process_read_stderr", 1, true),
     // === Map intrinsics ===
     ["__map_get_init_key"] = new(
       "Gets a key from initialization managed memory at given index.\n\n`__map_get_init_key(managed, index) returns int`",

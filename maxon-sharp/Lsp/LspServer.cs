@@ -27,6 +27,7 @@ public class LspServer {
         .WithHandler<TextDocumentSyncHandler>()
         .WithHandler<CompletionHandler>()
         .WithHandler<HoverHandler>()
+        .WithHandler<DefinitionHandler>()
         .WithServices(services => {
           services.AddSingleton(this);
         })
@@ -389,6 +390,270 @@ public class LspServer {
       new Position(position.Line, start + word.Length)
     );
   }
+
+  public Location? GetDefinition(DocumentUri uri, Position position) {
+    if (!_documents.TryGetValue(uri, out var content))
+      return null;
+
+    var lines = content.Split('\n');
+    if (position.Line >= lines.Length)
+      return null;
+
+    var line = lines[position.Line];
+    var word = GetWordAtPosition(line, position.Character);
+    if (string.IsNullOrEmpty(word))
+      return null;
+
+    // Try local definition first (let/var bindings, function parameters, for-loop variables)
+    var localDef = FindLocalDefinition(lines, word, (int)position.Line, uri);
+    if (localDef != null)
+      return localDef;
+
+    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    var project = ProjectManager.FindProjectForFile(filePath);
+
+    // Text-based search for type/typealias/enum/interface/function declarations
+    // across the current file, project files, and stdlib
+    var textDef = FindDefinitionByTextSearch(word, project);
+    if (textDef != null)
+      return textDef;
+
+    return null;
+  }
+
+  /// <summary>
+  /// Search project files and stdlib source for declarations of the given name.
+  /// Looks for: type NAME, typealias NAME, enum NAME, interface NAME, function NAME(
+  /// </summary>
+  private static Location? FindDefinitionByTextSearch(string word, Project? project) {
+    // Collect all files to search: project files first, then stdlib
+    var filesToSearch = new List<(string path, string content)>();
+
+    if (project != null) {
+      foreach (var (path, content) in project.GetFileContents())
+        filesToSearch.Add((path, content));
+    }
+
+    // Add stdlib files
+    var stdlibSources = StdlibLoader.LoadStdlibModules();
+    foreach (var source in stdlibSources)
+      filesToSearch.Add((source.Path, source.Content));
+
+    // Declaration patterns to match (the name must be followed by appropriate context)
+    foreach (var (path, content) in filesToSearch) {
+      var fileLines = content.Split('\n');
+      for (int i = 0; i < fileLines.Length; i++) {
+        var trimmed = fileLines[i].TrimStart();
+        // Strip leading "export "
+        var decl = trimmed;
+        if (decl.StartsWith("export "))
+          decl = decl[7..];
+
+        var col = FindDeclarationOfName(decl, word);
+        if (col < 0) continue;
+
+        // Adjust column for "export " prefix and leading whitespace
+        var indent = fileLines[i].Length - fileLines[i].TrimStart().Length;
+        var exportOffset = trimmed.StartsWith("export ") ? 7 : 0;
+        var finalCol = indent + exportOffset + col;
+
+        return new Location {
+          Uri = DocumentUri.FromFileSystemPath(path),
+          Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+            new Position(i, finalCol),
+            new Position(i, finalCol + word.Length)
+          )
+        };
+      }
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// Check if a line (with "export " already stripped) declares the given name.
+  /// Returns the column of the name within the line, or -1.
+  /// Matches: type NAME, typealias NAME, enum NAME, interface NAME, function NAME(
+  /// </summary>
+  private static int FindDeclarationOfName(string decl, string word) {
+    // type NAME (may have "uses" or "implements" after)
+    if (decl.StartsWith("type ") && MatchesName(decl, 5, word))
+      return 5;
+    // typealias NAME
+    if (decl.StartsWith("typealias ") && MatchesName(decl, 10, word))
+      return 10;
+    // enum NAME
+    if (decl.StartsWith("enum ") && MatchesName(decl, 5, word))
+      return 5;
+    // interface NAME
+    if (decl.StartsWith("interface ") && MatchesName(decl, 10, word))
+      return 10;
+    // function NAME(
+    if (decl.StartsWith("function ") && MatchesName(decl, 9, word))
+      return 9;
+    return -1;
+  }
+
+  /// <summary>
+  /// Check if 'word' appears at position 'offset' in the line, followed by
+  /// a non-word character (space, paren, newline, end of string, etc.)
+  /// </summary>
+  private static bool MatchesName(string line, int offset, string word) {
+    if (offset + word.Length > line.Length)
+      return false;
+    if (line.AsSpan(offset, word.Length).SequenceEqual(word.AsSpan()) == false)
+      return false;
+    // Must be followed by a non-word char or end of line
+    var afterEnd = offset + word.Length;
+    if (afterEnd >= line.Length)
+      return true;
+    return !IsWordChar(line[afterEnd]);
+  }
+
+  /// <summary>
+  /// Find the definition of a local variable, parameter, or for-loop variable
+  /// by scanning the current document. Looks for:
+  ///   - let NAME = ... / var NAME = ...
+  ///   - function foo(NAME Type, ...)
+  ///   - for NAME in ...
+  /// </summary>
+  private static Location? FindLocalDefinition(string[] lines, string word, int cursorLine, DocumentUri uri) {
+    // First, find the enclosing function to know where to look for parameters
+    int funcLine = -1;
+    for (int i = cursorLine; i >= 0; i--) {
+      var trimmed = lines[i].TrimStart();
+      if (trimmed.StartsWith("function ") || trimmed.StartsWith("export function ")) {
+        funcLine = i;
+        break;
+      }
+    }
+
+    // Scan backwards from cursor for let/var/for declarations
+    for (int i = cursorLine; i >= 0; i--) {
+      var trimmed = lines[i].TrimStart();
+      var col = FindLetVarDeclaration(trimmed, word);
+      if (col >= 0) {
+        // Adjust column for leading whitespace
+        var indent = lines[i].Length - lines[i].TrimStart().Length;
+        return MakeLocation(uri, i, indent + col, word.Length);
+      }
+
+      // Check for-loop variable: "for NAME in ..."
+      col = FindForLoopVariable(trimmed, word);
+      if (col >= 0) {
+        var indent = lines[i].Length - lines[i].TrimStart().Length;
+        return MakeLocation(uri, i, indent + col, word.Length);
+      }
+
+      // If we've reached the enclosing function declaration, check its parameters
+      if (i == funcLine) {
+        col = FindParameterDeclaration(lines[i], word);
+        if (col >= 0)
+          return MakeLocation(uri, i, col, word.Length);
+        break;
+      }
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// Check if a trimmed line declares 'word' via let or var.
+  /// Returns the column (relative to trimmed line) of the name, or -1.
+  /// Handles: let NAME = ..., var NAME = ..., let NAME Type = ...
+  /// </summary>
+  private static int FindLetVarDeclaration(string trimmed, string word) {
+    string? rest = null;
+    if (trimmed.StartsWith("let "))
+      rest = trimmed[4..];
+    else if (trimmed.StartsWith("var "))
+      rest = trimmed[4..];
+
+    if (rest == null) return -1;
+
+    // The name is the first word in rest
+    var nameEnd = 0;
+    while (nameEnd < rest.Length && IsWordChar(rest[nameEnd]))
+      nameEnd++;
+
+    if (nameEnd == 0) return -1;
+    var name = rest[..nameEnd];
+    if (name != word) return -1;
+
+    // Column offset: "let " or "var " = 4 chars
+    return 4;
+  }
+
+  /// <summary>
+  /// Check if a trimmed line declares 'word' as a for-loop variable.
+  /// Handles: for NAME in ...
+  /// Returns the column (relative to trimmed line) of the name, or -1.
+  /// </summary>
+  private static int FindForLoopVariable(string trimmed, string word) {
+    if (!trimmed.StartsWith("for ")) return -1;
+    var rest = trimmed[4..];
+
+    var nameEnd = 0;
+    while (nameEnd < rest.Length && IsWordChar(rest[nameEnd]))
+      nameEnd++;
+
+    if (nameEnd == 0) return -1;
+    var name = rest[..nameEnd];
+    if (name != word) return -1;
+
+    // Verify " in " follows
+    var afterName = rest[nameEnd..];
+    if (!afterName.StartsWith(" in ") && !afterName.StartsWith(" in\n") && !afterName.StartsWith(" in\r"))
+      return -1;
+
+    return 4; // "for " = 4 chars
+  }
+
+  /// <summary>
+  /// Check if a function declaration line contains 'word' as a parameter name.
+  /// Maxon parameters: function foo(name Type, name2 Type2)
+  /// Returns the column of the parameter name, or -1.
+  /// </summary>
+  private static int FindParameterDeclaration(string line, string word) {
+    var parenIdx = line.IndexOf('(');
+    if (parenIdx < 0) return -1;
+
+    var closeIdx = line.IndexOf(')', parenIdx);
+    if (closeIdx < 0) closeIdx = line.Length;
+
+    var paramsStr = line[(parenIdx + 1)..closeIdx];
+    // Split by comma, each param is "name Type"
+    var paramParts = paramsStr.Split(',');
+    foreach (var part in paramParts) {
+      var p = part.Trim();
+      // Extract the parameter name (first word)
+      var nameEnd = 0;
+      while (nameEnd < p.Length && IsWordChar(p[nameEnd]))
+        nameEnd++;
+      if (nameEnd == 0) continue;
+      var paramName = p[..nameEnd];
+      if (paramName != word) continue;
+
+      // Find the actual column in the original line
+      var searchStart = parenIdx + 1;
+      var idx = line.IndexOf(paramName, searchStart);
+      if (idx >= 0)
+        return idx;
+    }
+
+    return -1;
+  }
+
+  private static Location MakeLocation(DocumentUri uri, int line, int col, int length) {
+    return new Location {
+      Uri = uri,
+      Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+        new Position(line, col),
+        new Position(line, col + length)
+      )
+    };
+  }
+
 }
 
 public record CompletionInfo(

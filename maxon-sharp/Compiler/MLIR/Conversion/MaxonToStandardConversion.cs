@@ -893,7 +893,15 @@ public static class MaxonToStandardConversion {
             }
             case MaxonFieldAssignOp fieldAssign: {
               var structName = structVarNames[fieldAssign.StructValue.Id];
-              var mappedVal = valueMap[fieldAssign.NewValue];
+              if (!valueMap.TryGetValue(fieldAssign.NewValue, out StdValue? mappedVal)) {
+                // NewValue might be a struct var ref (e.g., assigning a String to a field).
+                // In that case, load its heap pointer from the named variable.
+                if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var newValStructName)) {
+                  mappedVal = EmitLoad(newBlock, newValStructName, varTypes);
+                } else {
+                  throw new InvalidOperationException($"MaxonFieldAssignOp: NewValue %{fieldAssign.NewValue.Id} not in valueMap or structVarNames for {structName}.{fieldAssign.FieldName} in func {func.Name}");
+                }
+              }
               // Resolve the field type and offset from the struct type definition
               var faParentTypeName = structValueTypes.TryGetValue(fieldAssign.StructValue.Id, out var faptn) ? faptn : null;
               MlirStructType? faParentStructType = null;

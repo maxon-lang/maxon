@@ -2,24 +2,26 @@
 // Consumes tokens and emits Maxon dialect ops (no separate AST).
 // Returns a flat array of ops for the main function body.
 
-export typealias TokenArray = Array with Token
 export typealias MaxonOpArray = Array with MaxonOp
-export typealias ParsePosition = u64
 export typealias StringArray = Array with String
-export typealias IntArray = Array with int
+export typealias ValueId = i64
+export typealias VarSlot = i64
+export typealias ParsedInt = i64
+typealias TokenIndex = i64
+typealias VarSlotArray = Array with int
 
 // Symbol table: parallel arrays for variable names and slot indices
 var _varNames = StringArray{}
-var _varSlots = IntArray{}
+var _varSlots = VarSlotArray{}
 var _nextSlot = 0
 
 function resetSymbolTable()
     _varNames = StringArray{}
-    _varSlots = IntArray{}
+    _varSlots = VarSlotArray{}
     _nextSlot = 0
 end 'resetSymbolTable'
 
-function defineVariable(name String) returns I64
+function defineVariable(name String) returns VarSlot
     let slot = _nextSlot
     _varNames.push(name)
     _varSlots.push(slot)
@@ -27,7 +29,7 @@ function defineVariable(name String) returns I64
     return slot
 end 'defineVariable'
 
-function lookupVariable(name String) returns I64
+function lookupVariable(name String) returns VarSlot
     var i = _varNames.count() - 1
     while i >= 0 'lookup'
         let vn = try _varNames.get(i) otherwise ""
@@ -67,7 +69,7 @@ end 'parse'
 
 // --- Function parsing ---
 
-function parseFunction(tokens TokenArray, startPos ParsePosition) returns MaxonOpArray
+function parseFunction(tokens TokenArray, startPos TokenIndex) returns MaxonOpArray
     var pos = startPos
     pos = pos + 1  // skip 'function'
 
@@ -120,7 +122,7 @@ end 'parseFunction'
 
 // --- Statement parsing ---
 
-function parseReturnStatement(tokens TokenArray, startPos I64, ops MaxonOpArray) returns I64
+function parseReturnStatement(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns TokenIndex
     var pos = startPos + 1  // skip 'return'
     let resultId = parseExpression(tokens, startPos: pos, ops: ops)
     pos = resultId.nextPos
@@ -128,7 +130,7 @@ function parseReturnStatement(tokens TokenArray, startPos I64, ops MaxonOpArray)
     return pos
 end 'parseReturnStatement'
 
-function parseVarDecl(tokens TokenArray, startPos I64, ops MaxonOpArray) returns I64
+function parseVarDecl(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns TokenIndex
     var pos = startPos + 1  // skip 'var'/'let'
     let nameToken = tokenAt(tokens, pos: pos)
     pos = pos + 1  // skip name
@@ -140,7 +142,7 @@ function parseVarDecl(tokens TokenArray, startPos I64, ops MaxonOpArray) returns
     return pos
 end 'parseVarDecl'
 
-function parsePrintStatement(tokens TokenArray, startPos I64, ops MaxonOpArray) returns I64
+function parsePrintStatement(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns TokenIndex
     var pos = startPos + 1  // skip 'print'
     pos = pos + 1  // skip '('
     let strToken = tokenAt(tokens, pos: pos)
@@ -242,15 +244,15 @@ end 'parseStringInterpolation'
 
 // Result of parsing an expression: the value ID and next token position
 export type ExprResult
-    export var valueId I64
-    export var nextPos I64
+    export var valueId ValueId
+    export var nextPos TokenIndex
 end 'ExprResult'
 
-function parseExpression(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+function parseExpression(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
     return parseAddSub(tokens, startPos: startPos, ops: ops)
 end 'parseExpression'
 
-function parseAddSub(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+function parseAddSub(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
     var result = parseMulDiv(tokens, startPos: startPos, ops: ops)
     var pos = result.nextPos
     var leftId = result.valueId
@@ -285,7 +287,7 @@ function parseAddSub(tokens TokenArray, startPos I64, ops MaxonOpArray) returns 
     return {valueId: leftId, nextPos: pos}
 end 'parseAddSub'
 
-function parseMulDiv(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+function parseMulDiv(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
     var result = parsePrimary(tokens, startPos: startPos, ops: ops)
     var pos = result.nextPos
     var leftId = result.valueId
@@ -309,7 +311,7 @@ function parseMulDiv(tokens TokenArray, startPos I64, ops MaxonOpArray) returns 
     return {valueId: leftId, nextPos: pos}
 end 'parseMulDiv'
 
-function parsePrimary(tokens TokenArray, startPos I64, ops MaxonOpArray) returns ExprResult
+function parsePrimary(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
     let token = tokenAt(tokens, pos: startPos)
 
     if token.kind == TokenKind.intLiteral 'isInt'
@@ -340,7 +342,7 @@ end 'parsePrimary'
 
 // --- String Helpers ---
 
-function stringLength(s String) returns I64
+function stringLength(s String) returns CharOffset
     var len = 0
     for ch in s 'count'
         len = len + 1
@@ -348,7 +350,7 @@ function stringLength(s String) returns I64
     return len
 end 'stringLength'
 
-function stringCharAt(s String, pos I64) returns I64
+function stringCharAt(s String, pos CharOffset) returns AsciiValue
     var i = 0
     for ch in s 'find'
         if i == pos 'found'
@@ -359,7 +361,7 @@ function stringCharAt(s String, pos I64) returns I64
     return 0
 end 'stringCharAt'
 
-function stringSlice(s String, startPos I64, endPos I64) returns String
+function stringSlice(s String, startPos CharOffset, endPos CharOffset) returns String
     var result = ByteBuffer.create(endPos - startPos)
     var i = 0
     for ch in s 'slice'
@@ -374,7 +376,7 @@ end 'stringSlice'
 function stringToByteArray(s String) returns ByteArray
     var arr = ByteArray{}
     for ch in s 'convert'
-        arr.push(try ch.asciiValue() otherwise 0 as U8)
+        arr.push(try ch.asciiValue() otherwise 0)
     end 'convert'
     return arr
 end 'stringToByteArray'
@@ -394,7 +396,7 @@ end 'bufferToString'
 
 // --- Helpers ---
 
-function skipNewlines(tokens TokenArray, startPos I64) returns I64
+function skipNewlines(tokens TokenArray, startPos TokenIndex) returns TokenIndex
     var pos = startPos
     while pos < tokens.count() 'skip'
         let token = tokenAt(tokens, pos: pos)
@@ -407,11 +409,11 @@ function skipNewlines(tokens TokenArray, startPos I64) returns I64
     return pos
 end 'skipNewlines'
 
-function tokenAt(tokens TokenArray, pos I64) returns Token
+function tokenAt(tokens TokenArray, pos TokenIndex) returns Token
     return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: "", line: 0, column: 0}
 end 'tokenAt'
 
-function parseInt(s String) returns I64
+function parseInt(s String) returns ParsedInt
     var result = 0
     for ch in s 'digits'
         let b = try ch.asciiValue() otherwise 0
