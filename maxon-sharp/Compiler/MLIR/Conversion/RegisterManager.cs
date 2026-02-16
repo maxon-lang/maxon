@@ -26,6 +26,7 @@ public class RegisterManager {
   private readonly Dictionary<StdValue, long> _constantValues = [];
   private readonly Dictionary<StdValue, X86Register> _registerHints = [];
   private int _currentOpIndex;
+  private int _scratchIdCounter = -1000;
 
   // Spill slot allocation: offsets grow downward (more negative) from the variable area
   private int _spillBaseOffset;
@@ -529,6 +530,59 @@ public class RegisterManager {
     var reg = AllocateRegister(result, block);
     block.AddOp(new X86SetccOp(condition, reg));
     block.AddOp(new X86MovzxRegOp(reg));
+  }
+
+  /// <summary>
+  /// Materialize a float comparison result with NaN-correct IEEE 754 semantics.
+  /// For eq/ne, a single setcc is insufficient because ucomisd sets ZF=1 for NaN.
+  /// </summary>
+  public void EmitFloatSetcc(StdValue result, string predicate, MlirBlock<X86Op> block) {
+    var reg = AllocateRegister(result, block);
+    switch (predicate) {
+      case "eq":
+        // ordered equal: (ZF=1) AND (PF=0)
+        EmitCompoundSetcc(reg, "e", "np", (a, b) => new X86AndRegRegOp(a, b), block);
+        break;
+      case "ne":
+        // unordered not-equal: (ZF=0) OR (PF=1)
+        EmitCompoundSetcc(reg, "ne", "p", (a, b) => new X86OrRegRegOp(a, b), block);
+        break;
+      case "gt":
+        block.AddOp(new X86SetccOp("a", reg));
+        block.AddOp(new X86MovzxRegOp(reg));
+        break;
+      case "ge":
+        block.AddOp(new X86SetccOp("ae", reg));
+        block.AddOp(new X86MovzxRegOp(reg));
+        break;
+      case "lt":
+        block.AddOp(new X86SetccOp("b", reg));
+        block.AddOp(new X86MovzxRegOp(reg));
+        break;
+      case "le":
+        block.AddOp(new X86SetccOp("be", reg));
+        block.AddOp(new X86MovzxRegOp(reg));
+        break;
+      case var unknown:
+        throw new InvalidOperationException($"Unknown float comparison predicate for setcc: {unknown}");
+    }
+  }
+
+  /// <summary>
+  /// Emit two setcc instructions and combine them, using a scratch register for the second.
+  /// </summary>
+  private void EmitCompoundSetcc(X86Register reg, string cond1, string cond2,
+      Func<X86Register, X86Register, X86Op> combine, MlirBlock<X86Op> block) {
+    block.AddOp(new X86SetccOp(cond1, reg));
+    block.AddOp(new X86MovzxRegOp(reg));
+    var scratch = new StdBool(_scratchIdCounter--);
+    var tmpReg = AllocateRegister(scratch, block, protect1: reg);
+    block.AddOp(new X86SetccOp(cond2, tmpReg));
+    block.AddOp(new X86MovzxRegOp(tmpReg));
+    block.AddOp(combine(reg, tmpReg));
+    _valueToRegister.Remove(scratch);
+    _registerContents.Remove(tmpReg);
+    _lastUsed.Remove(tmpReg);
   }
 
   /// <summary>

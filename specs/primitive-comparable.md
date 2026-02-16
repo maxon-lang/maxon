@@ -26,6 +26,11 @@ Compares two values and returns an `Ordering` enum value.
 - `Ordering.equalTo` if `self == other`
 - `Ordering.greaterThan` if `self > other`
 
+**NaN handling (float only):**
+Float comparison uses a total ordering where NaN sorts below all other values
+(including negative infinity). Two NaN values compare as equal. This matches
+Swift's `isTotallyOrdered(belowOrEqualTo:)` semantics.
+
 **Example:**
 ```maxon
 var a = 10
@@ -142,6 +147,86 @@ function main() returns ExitCode
   var b = 2.71
   var result = a.compare(b)
   if result == Ordering.greaterThan 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.compare.nan-less-than-normal -->
+```maxon
+function main() returns ExitCode
+  var nan = 0.0 / 0.0
+  var x = 42.0
+  var result = nan.compare(x)
+  if result == Ordering.lessThan 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.compare.normal-greater-than-nan -->
+```maxon
+function main() returns ExitCode
+  var nan = 0.0 / 0.0
+  var x = 42.0
+  var result = x.compare(nan)
+  if result == Ordering.greaterThan 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.compare.nan-nan-equal -->
+```maxon
+function main() returns ExitCode
+  var a = 0.0 / 0.0
+  var b = 0.0 / 0.0
+  var result = a.compare(b)
+  if result == Ordering.equalTo 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.compare.nan-less-than-negative -->
+```maxon
+function main() returns ExitCode
+  var nan = 0.0 / 0.0
+  var x = 0.0 - 999999.0
+  var result = nan.compare(x)
+  if result == Ordering.lessThan 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: float.compare.positive-negative-zero -->
+```maxon
+function main() returns ExitCode
+  var pos = 0.0
+  var neg = 0.0 - 0.0
+  var result = pos.compare(neg)
+  if result == Ordering.equalTo 'check'
     return 0
   end 'check'
   return 1

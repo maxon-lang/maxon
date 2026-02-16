@@ -7,6 +7,7 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 enum ComparisonKind { Integer, UnsignedInteger, Float }
 
 public static class StandardToX86Conversion {
+  [ThreadStatic] private static int _floatBranchCounter;
   public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
     var result = new MlirModule<X86Op>();
     result.RdataEntries.AddRange(module.RdataEntries);
@@ -220,13 +221,16 @@ public static class StandardToX86Conversion {
         // If there's a pending comparison result and this op is NOT a condBr
         // that uses it, materialize the comparison into a register via setcc.
         if (lastCmpResult != null && !(op is StdCondBrOp cb && cb.Condition == lastCmpResult)) {
-          var setccCond = lastCmpKind!.Value switch {
-            ComparisonKind.Integer => IntegerPredicateToSetcc(lastCmpPredicate!),
-            ComparisonKind.UnsignedInteger => UnsignedPredicateToSetcc(lastCmpPredicate!),
-            ComparisonKind.Float => FloatPredicateToSetcc(lastCmpPredicate!),
-            _ => throw new InvalidOperationException($"Unsupported comparison kind for setcc: {lastCmpKind}")
-          };
-          regManager.EmitSetcc(lastCmpResult, setccCond, x86Block);
+          if (lastCmpKind!.Value == ComparisonKind.Float) {
+            regManager.EmitFloatSetcc(lastCmpResult, lastCmpPredicate!, x86Block);
+          } else {
+            var setccCond = lastCmpKind!.Value switch {
+              ComparisonKind.Integer => IntegerPredicateToSetcc(lastCmpPredicate!),
+              ComparisonKind.UnsignedInteger => UnsignedPredicateToSetcc(lastCmpPredicate!),
+              _ => throw new InvalidOperationException($"Unsupported comparison kind for setcc: {lastCmpKind}")
+            };
+            regManager.EmitSetcc(lastCmpResult, setccCond, x86Block);
+          }
           lastCmpResult = null;
           lastCmpKind = null;
           lastCmpPredicate = null;
@@ -720,7 +724,7 @@ public static class StandardToX86Conversion {
                   x86Block.AddOp(new X86JccOp(InvertUnsignedPredicate(lastCmpPredicate!), scopedElse));
                   break;
                 case ComparisonKind.Float:
-                  EmitFloatCondBranch(lastCmpPredicate!, scopedElse, x86Block);
+                  EmitFloatCondBranch(lastCmpPredicate!, scopedElse, x86Block, newFunc);
                   break;
                 default:
                   throw new InvalidOperationException($"Unsupported comparison kind for conditional branch: {lastCmpKind}");
@@ -968,22 +972,13 @@ public static class StandardToX86Conversion {
     _ => throw new InvalidOperationException($"Unknown unsigned comparison predicate: {predicate}")
   };
 
-  private static string FloatPredicateToSetcc(string predicate) => predicate switch {
-    "eq" => "e",
-    "ne" => "ne",
-    "gt" => "a",
-    "ge" => "ae",
-    "lt" => "b",
-    "le" => "be",
-    _ => throw new InvalidOperationException($"Unknown float comparison predicate: {predicate}")
-  };
-
   /// <summary>
   /// Emit conditional branch(es) for a float comparison.
   /// ucomisd sets CF/ZF/PF flags. We jump to elseLabel when the condition is FALSE.
   /// For ordered comparisons, unordered (NaN) falls through to else.
   /// </summary>
-  private static void EmitFloatCondBranch(string predicate, string elseLabel, MlirBlock<X86Op> block) {
+  private static void EmitFloatCondBranch(string predicate, string elseLabel,
+      MlirBlock<X86Op> block, MlirFunction<X86Op> func) {
     // ucomisd(A, B) flag results:
     //   A > B:  ZF=0, PF=0, CF=0
     //   A < B:  ZF=0, PF=0, CF=1
@@ -991,36 +986,35 @@ public static class StandardToX86Conversion {
     //   NaN:    ZF=1, PF=1, CF=1
     switch (predicate) {
       case "eq":
-        // false when ZF=0 or PF=1
+        // false when ZF=0 or PF=1 (not-equal or NaN)
         block.AddOp(new X86JccOp("ne", elseLabel));
         block.AddOp(new X86JccOp("p", elseLabel));
         break;
-      case "ne":
-        // true when ZF=0 or PF=1; false when ZF=1 and PF=0
-        // Jump to else when ZF=1 and PF=0 — use jp to skip the je
-        // Actually: ne is true except when exactly equal (ZF=1, PF=0)
-        // So jump to else only when e and np. Use: jp over, je else, over:
-        // Simpler: use "e" to jump to else (this treats NaN as not-equal, which is correct)
+      case "ne": {
+        // true when ZF=0 (not-equal) or PF=1 (NaN). false only when ZF=1 and PF=0.
+        // jp skip; je else; skip: — PF=1 (NaN) skips the je, so NaN != x is true
+        var skipBlockName = $"__fcmp_ne_skip_{_floatBranchCounter++}";
+        var scopedSkip = $"{func.Name}.{skipBlockName}";
+        block.AddOp(new X86JccOp("p", scopedSkip));
         block.AddOp(new X86JccOp("e", elseLabel));
+        func.Body.AddBlock(skipBlockName);
         break;
+      }
       case "gt":
-        // A > B: CF=0, ZF=0 → use "a" (above). False when CF=1 or ZF=1 → "be"
+        // false when CF=1 or ZF=1 (below-or-equal, or NaN)
         block.AddOp(new X86JccOp("be", elseLabel));
         break;
       case "ge":
-        // A >= B: CF=0 → use "ae". False when CF=1 → "b"
+        // false when CF=1 (below, or NaN)
         block.AddOp(new X86JccOp("b", elseLabel));
         break;
       case "lt":
-        // A < B: CF=1 → use "b". False when CF=0 → "ae". Also false on NaN (PF=1, CF=1 but that's "below")
-        // Actually for unordered: CF=1, so NaN would look like "less than" — wrong.
-        // For proper NaN handling: jump if PF=1 (unordered) OR CF=0
+        // false when PF=1 (NaN) or CF=0 (above-or-equal)
         block.AddOp(new X86JccOp("p", elseLabel));
         block.AddOp(new X86JccOp("ae", elseLabel));
         break;
       case "le":
-        // A <= B: CF=1 or ZF=1. False when CF=0 and ZF=0 → "a"
-        // But NaN gives CF=1, ZF=1, PF=1 which looks like "be" — wrong.
+        // false when PF=1 (NaN) or (CF=0 and ZF=0) (above)
         block.AddOp(new X86JccOp("p", elseLabel));
         block.AddOp(new X86JccOp("a", elseLabel));
         break;

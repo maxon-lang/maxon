@@ -1,0 +1,41 @@
+// Test: float.compare.normal-greater-than-nan
+function main() returns ExitCode
+  var nan = 0.0 / 0.0
+  var x = 42.0
+  var result = x.compare(nan)
+  if result == Ordering.greaterThan 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @primitive-comparable.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_0]
+    x86.movsd xmm1, [rip+__float_0]
+    x86.movsd xmm2, xmm0
+    x86.divsd xmm2, xmm1
+    x86.movsd xmm3, [rip+__float_42]
+    x86.movsd xmm0, xmm3
+    x86.movsd xmm1, xmm2
+    x86.call stdlib.float.compare
+    x86.mov [rbp-8], eax
+    x86.mov eax, 2
+    x86.mov ecx, [rbp-8]
+    x86.cmp ecx, eax
+    x86.jne primitive-comparable.main.check_0.after
+  check_0:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  }
+}
+---
