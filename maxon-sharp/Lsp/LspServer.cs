@@ -28,6 +28,8 @@ public class LspServer {
         .WithHandler<CompletionHandler>()
         .WithHandler<HoverHandler>()
         .WithHandler<DefinitionHandler>()
+        .WithHandler<RenameHandler>()
+        .WithHandler<PrepareRenameHandler>()
         .WithServices(services => {
           services.AddSingleton(this);
         })
@@ -305,7 +307,201 @@ public class LspServer {
       };
     }
 
+    // Try to show type information for variables, functions, and types
+    var symbolHover = GetSymbolHover(uri, position, lines, line, word);
+    if (symbolHover != null) return symbolHover;
+
     return null;
+  }
+
+  private Hover? GetSymbolHover(DocumentUri uri, Position position, string[] lines, string line, string word) {
+    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    var project = ProjectManager.FindProjectForFile(filePath);
+    var info = project?.GetCompletionInfo();
+    if (info == null) return null;
+
+    var normalizedPath = Project.NormalizePath(filePath);
+
+    // Check if it's a type name
+    if (info.TypeDefs.TryGetValue(word, out var mlirType)) {
+      return MakeTypeHover(mlirType, word, position, line);
+    }
+
+    // Check if it's a function name — show signature
+    var funcHover = GetFunctionHover(info, word, position, line);
+    if (funcHover != null) return funcHover;
+
+    // Find the enclosing function at the cursor position using compiler data
+    var enclosingFunc = FindEnclosingFunction(info.Functions, normalizedPath, (int)position.Line + 1);
+
+    // Check function parameters
+    if (enclosingFunc != null) {
+      for (int i = 0; i < enclosingFunc.ParamNames.Count && i < enclosingFunc.ParamTypes.Count; i++) {
+        if (enclosingFunc.ParamNames[i] == word) {
+          var typeName = enclosingFunc.ParamTypes[i].Name;
+          return MakeHover($"parameter {word} {typeName}", position, line, word);
+        }
+      }
+    }
+
+    // Check local variable declarations in the enclosing function's body
+    if (enclosingFunc != null) {
+      var varType = FindVariableTypeInFunction(enclosingFunc, word);
+      if (varType != null) {
+        return MakeHover($"{varType.Value.keyword} {word} {varType.Value.typeName}", position, line, word);
+      }
+    }
+
+    // Check top-level global variables by scanning all functions for global loads
+    var globalType = FindGlobalVariableType(info.Functions, word);
+    if (globalType != null) {
+      return MakeHover($"var {word} {globalType}", position, line, word);
+    }
+
+    return null;
+  }
+
+  /// <summary>
+  /// Find the function whose source location encloses the given cursor position.
+  /// </summary>
+  private static MlirFunction<MaxonOp>? FindEnclosingFunction(
+    List<MlirFunction<MaxonOp>> functions, string normalizedPath, int cursorLine1Based
+  ) {
+    MlirFunction<MaxonOp>? best = null;
+    int bestLine = -1;
+    foreach (var func in functions) {
+      if (func.SourceFilePath == null || func.SourceLine == null) continue;
+      var funcPath = Project.NormalizePath(func.SourceFilePath);
+      if (!funcPath.Equals(normalizedPath, StringComparison.OrdinalIgnoreCase)) continue;
+      var funcLine = func.SourceLine.Value;
+      if (funcLine <= cursorLine1Based && funcLine > bestLine) {
+        best = func;
+        bestLine = funcLine;
+      }
+    }
+    return best;
+  }
+
+  /// <summary>
+  /// Search a function's body ops for a variable declaration matching the given name.
+  /// Returns the keyword (let/var) and type name if found.
+  /// </summary>
+  private static (string keyword, string typeName)? FindVariableTypeInFunction(
+    MlirFunction<MaxonOp> func, string varName
+  ) {
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonAssignOp assign && assign.IsDeclaration && assign.VarName == varName) {
+          var keyword = assign.IsMutable ? "var" : "let";
+          var typeName = assign.ValueKind switch {
+            MaxonValueKind.Struct when assign.Value is MaxonStruct s => s.TypeName,
+            MaxonValueKind.Enum when assign.Value is MaxonEnum e => e.TypeName,
+            _ => assign.ValueKind.ToString().ToLower()
+          };
+          return (keyword, typeName);
+        }
+      }
+    }
+    return null;
+  }
+
+  /// <summary>
+  /// Search for a global variable's type by finding MaxonGlobalLoadOp references to it.
+  /// </summary>
+  private static string? FindGlobalVariableType(List<MlirFunction<MaxonOp>> functions, string globalName) {
+    foreach (var func in functions) {
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is MaxonGlobalLoadOp load && load.GlobalName == globalName) {
+            if (load.StructTypeName != null) return load.StructTypeName;
+            if (load.EnumTypeName != null) return load.EnumTypeName;
+            return load.ValueKind.ToString().ToLower();
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  private static Hover? GetFunctionHover(CompletionInfo info, string word, Position position, string line) {
+    var matchingFuncs = info.Functions.Where(f => {
+      if (f.Name == word) return true;
+      var dotIdx = f.Name.LastIndexOf('.');
+      if (dotIdx >= 0) {
+        var methodPart = f.Name[(dotIdx + 1)..];
+        var dollarIdx = methodPart.IndexOf('$');
+        if (dollarIdx >= 0) methodPart = methodPart[..dollarIdx];
+        return methodPart == word;
+      }
+      return false;
+    }).ToList();
+
+    if (matchingFuncs.Count == 0) return null;
+
+    var signatures = new List<string>();
+    foreach (var func in matchingFuncs) {
+      var paramParts = new List<string>();
+      for (int i = 0; i < func.ParamNames.Count; i++) {
+        var paramType = i < func.ParamTypes.Count ? func.ParamTypes[i].Name : "?";
+        paramParts.Add($"{func.ParamNames[i]} {paramType}");
+      }
+      var paramsStr = string.Join(", ", paramParts);
+      var returnStr = func.ReturnType != null && func.ReturnType.Name != "void"
+        ? $" returns {func.ReturnType.Name}" : "";
+      var throwsStr = func.ThrowsType != null ? $" throws {func.ThrowsType.Name}" : "";
+      signatures.Add($"function {word}({paramsStr}){returnStr}{throwsStr}");
+    }
+
+    var unique = signatures.Distinct().ToList();
+    var value = string.Join("\n\n", unique.Select(s => $"```maxon\n{s}\n```"));
+
+    return new Hover {
+      Contents = new MarkedStringsOrMarkupContent(
+        new MarkupContent { Kind = MarkupKind.Markdown, Value = value }
+      ),
+      Range = GetWordRange(position, line, word)
+    };
+  }
+
+  private static Hover MakeTypeHover(MlirType mlirType, string word, Position position, string line) {
+    string kind;
+    string details = "";
+    if (mlirType is MlirStructType structType) {
+      kind = "type";
+      var fields = structType.Fields
+        .Where(f => f.IsExported)
+        .Select(f => $"  export var {f.Name} {f.Type.Name}");
+      if (fields.Any())
+        details = "\n\n" + string.Join("\n", fields);
+    } else if (mlirType is MlirEnumType) {
+      kind = "enum";
+    } else if (mlirType is MlirInterfaceType) {
+      kind = "interface";
+    } else {
+      kind = "type";
+    }
+
+    return new Hover {
+      Contents = new MarkedStringsOrMarkupContent(
+        new MarkupContent {
+          Kind = MarkupKind.Markdown,
+          Value = $"```maxon\n{kind} {word}\n```{details}"
+        }
+      ),
+      Range = GetWordRange(position, line, word)
+    };
+  }
+
+  private static Hover MakeHover(string code, Position position, string line, string word) {
+    return new Hover {
+      Contents = new MarkedStringsOrMarkupContent(
+        new MarkupContent {
+          Kind = MarkupKind.Markdown,
+          Value = $"```maxon\n{code}\n```"
+        }
+      ),
+      Range = GetWordRange(position, line, word)
+    };
   }
 
   /// <summary>
@@ -449,11 +645,10 @@ public class LspServer {
         if (decl.StartsWith("export "))
           decl = decl[7..];
 
-        var col = FindDeclarationOfName(decl, word);
-        if (col < 0) continue;
-
-        // Adjust column for "export " prefix and leading whitespace
         var indent = fileLines[i].Length - fileLines[i].TrimStart().Length;
+        var isTopLevel = indent == 0;
+        var col = FindDeclarationOfName(decl, word, isTopLevel);
+        if (col < 0) continue;
         var exportOffset = trimmed.StartsWith("export ") ? 7 : 0;
         var finalCol = indent + exportOffset + col;
 
@@ -473,9 +668,10 @@ public class LspServer {
   /// <summary>
   /// Check if a line (with "export " already stripped) declares the given name.
   /// Returns the column of the name within the line, or -1.
-  /// Matches: type NAME, typealias NAME, enum NAME, interface NAME, function NAME(
+  /// Matches: type NAME, typealias NAME, enum NAME, interface NAME, function NAME(,
+  /// and top-level let NAME / var NAME (when isTopLevel is true)
   /// </summary>
-  private static int FindDeclarationOfName(string decl, string word) {
+  private static int FindDeclarationOfName(string decl, string word, bool isTopLevel = false) {
     // type NAME (may have "uses" or "implements" after)
     if (decl.StartsWith("type ") && MatchesName(decl, 5, word))
       return 5;
@@ -491,6 +687,13 @@ public class LspServer {
     // function NAME(
     if (decl.StartsWith("function ") && MatchesName(decl, 9, word))
       return 9;
+    // Top-level let NAME / var NAME (only at file scope, not inside functions)
+    if (isTopLevel) {
+      if (decl.StartsWith("let ") && MatchesName(decl, 4, word))
+        return 4;
+      if (decl.StartsWith("var ") && MatchesName(decl, 4, word))
+        return 4;
+    }
     return -1;
   }
 
@@ -531,17 +734,18 @@ public class LspServer {
     // Scan backwards from cursor for let/var/for declarations
     for (int i = cursorLine; i >= 0; i--) {
       var trimmed = lines[i].TrimStart();
+      var indent = lines[i].Length - trimmed.Length;
       var col = FindLetVarDeclaration(trimmed, word);
       if (col >= 0) {
-        // Adjust column for leading whitespace
-        var indent = lines[i].Length - lines[i].TrimStart().Length;
+        // Skip top-level let/var (no indentation) — those are handled as globals
+        if (indent == 0)
+          return null;
         return MakeLocation(uri, i, indent + col, word.Length);
       }
 
       // Check for-loop variable: "for NAME in ..."
       col = FindForLoopVariable(trimmed, word);
       if (col >= 0) {
-        var indent = lines[i].Length - lines[i].TrimStart().Length;
         return MakeLocation(uri, i, indent + col, word.Length);
       }
 
@@ -652,6 +856,312 @@ public class LspServer {
         new Position(line, col + length)
       )
     };
+  }
+
+  // ── Rename support ──────────────────────────────────────────────────
+
+  public RangeOrPlaceholderRange? PrepareRename(DocumentUri uri, Position position) {
+    if (!_documents.TryGetValue(uri, out var content))
+      return null;
+
+    var lines = content.Split('\n');
+    if (position.Line >= lines.Length)
+      return null;
+
+    var line = lines[position.Line];
+    var word = GetWordAtPosition(line, position.Character);
+    if (string.IsNullOrEmpty(word))
+      return null;
+
+    // Reject keywords (unless inside enum body where they're case names)
+    if (Lexer.KeywordMap.ContainsKey(word) && !IsInsideEnumBody(lines, (int)position.Line))
+      return null;
+
+    // Reject compiler builtins
+    if (Parser.CompilerBuiltins.ContainsKey(word))
+      return null;
+
+    // Must be able to find a definition for this symbol
+    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    var project = ProjectManager.FindProjectForFile(filePath);
+
+    // Check local definition
+    var localDef = FindLocalDefinition(lines, word, (int)position.Line, uri);
+    if (localDef != null) {
+      // Local definitions are always in the current file, so always renamable
+      return new RangeOrPlaceholderRange(GetWordRange(position, line, word));
+    }
+
+    // Check global definition
+    var globalDef = FindDefinitionByTextSearch(word, project);
+    if (globalDef != null) {
+      // Reject if definition is in stdlib
+      var defPath = globalDef.Uri.GetFileSystemPath() ?? globalDef.Uri.ToString();
+      if (IsStdlibFile(defPath))
+        return null;
+      return new RangeOrPlaceholderRange(GetWordRange(position, line, word));
+    }
+
+    return null;
+  }
+
+  public WorkspaceEdit? GetRename(DocumentUri uri, Position position, string newName) {
+    if (!_documents.TryGetValue(uri, out var content))
+      return null;
+
+    var lines = content.Split('\n');
+    if (position.Line >= lines.Length)
+      return null;
+
+    var line = lines[position.Line];
+    var word = GetWordAtPosition(line, position.Character);
+    if (string.IsNullOrEmpty(word) || word == newName)
+      return null;
+
+    // Validate new name is a valid identifier
+    if (!IsValidIdentifier(newName))
+      return null;
+
+    // Reject renaming to a keyword
+    if (Lexer.KeywordMap.ContainsKey(newName))
+      return null;
+
+    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    var project = ProjectManager.FindProjectForFile(filePath);
+
+    // Classify: local or global?
+    var localDef = FindLocalDefinition(lines, word, (int)position.Line, uri);
+    if (localDef != null) {
+      var references = FindLocalReferences(lines, word, (int)position.Line, filePath);
+      return BuildWorkspaceEdit(references, word, newName);
+    }
+
+    var globalDef = FindDefinitionByTextSearch(word, project);
+    if (globalDef != null) {
+      var defPath = globalDef.Uri.GetFileSystemPath() ?? globalDef.Uri.ToString();
+      if (IsStdlibFile(defPath))
+        return null;
+
+      // Top-level let/var are file-scoped, not project-wide
+      if (IsFileScopedDeclaration(globalDef)) {
+        var references = FindFileScopedReferences(word, defPath);
+        return BuildWorkspaceEdit(references, word, newName);
+      }
+
+      var references2 = FindGlobalReferences(word, project);
+      return BuildWorkspaceEdit(references2, word, newName);
+    }
+
+    return null;
+  }
+
+  private static bool IsValidIdentifier(string name) {
+    if (string.IsNullOrEmpty(name))
+      return false;
+    if (!char.IsLetter(name[0]) && name[0] != '_')
+      return false;
+    for (int i = 1; i < name.Length; i++) {
+      if (!IsWordChar(name[i]))
+        return false;
+    }
+    return true;
+  }
+
+  /// <summary>
+  /// Check if a definition location points to a non-exported top-level let/var
+  /// declaration (file-scoped, not project-wide).
+  /// </summary>
+  private static bool IsFileScopedDeclaration(Location def) {
+    var defPath = def.Uri.GetFileSystemPath() ?? def.Uri.ToString();
+    try {
+      var content = File.ReadAllText(defPath);
+      var lines = content.Split('\n');
+      var lineIdx = (int)def.Range.Start.Line;
+      if (lineIdx >= lines.Length) return false;
+      var trimmed = lines[lineIdx].TrimStart();
+      // Exported let/var can be used across files
+      if (trimmed.StartsWith("export ")) return false;
+      return trimmed.StartsWith("let ") || trimmed.StartsWith("var ");
+    } catch {
+      return false;
+    }
+  }
+
+  /// <summary>
+  /// Find all references to a file-scoped symbol within a single file.
+  /// Also finds end-label references.
+  /// </summary>
+  private List<(string path, int line, int col)> FindFileScopedReferences(string word, string filePath) {
+    var references = new List<(string path, int line, int col)>();
+
+    // Try open document first, fall back to disk
+    string? content = null;
+    foreach (var (docUri, docContent) in _documents) {
+      var docPath = docUri.GetFileSystemPath() ?? docUri.ToString();
+      if (Project.NormalizePath(docPath) == Project.NormalizePath(filePath)) {
+        content = docContent;
+        break;
+      }
+    }
+    content ??= File.ReadAllText(filePath);
+
+    var fileLines = content.Split('\n');
+    for (int i = 0; i < fileLines.Length; i++) {
+      foreach (var col in FindAllWordOccurrences(fileLines[i], word))
+        references.Add((filePath, i, col));
+    }
+
+    return references;
+  }
+
+  private static bool IsStdlibFile(string path) {
+    var stdlibPath = StdlibLoader.FindStdlibPath();
+    if (stdlibPath == null) return false;
+    var normalizedPath = Project.NormalizePath(path);
+    var normalizedStdlib = Project.NormalizePath(stdlibPath);
+    return normalizedPath.StartsWith(normalizedStdlib, StringComparison.OrdinalIgnoreCase);
+  }
+
+  /// <summary>
+  /// Find all references to a local symbol (let/var/param/for-var) within the
+  /// enclosing function scope.
+  /// </summary>
+  private static List<(string path, int line, int col)> FindLocalReferences(
+    string[] lines, string word, int cursorLine, string filePath
+  ) {
+    var references = new List<(string path, int line, int col)>();
+
+    var scope = FindEnclosingFunctionScope(lines, cursorLine);
+    if (scope == null) return references;
+
+    var (startLine, endLine) = scope.Value;
+    for (int i = startLine; i <= endLine && i < lines.Length; i++) {
+      foreach (var col in FindAllWordOccurrences(lines[i], word)) {
+        references.Add((filePath, i, col));
+      }
+    }
+
+    return references;
+  }
+
+  /// <summary>
+  /// Find all references to a global symbol (function/type/enum/interface/typealias)
+  /// across all project files. Also finds end-label references.
+  /// </summary>
+  private List<(string path, int line, int col)> FindGlobalReferences(string word, Project? project) {
+    var references = new List<(string path, int line, int col)>();
+    if (project == null) return references;
+
+    foreach (var (path, content) in project.GetFileContents()) {
+      var fileLines = content.Split('\n');
+      for (int i = 0; i < fileLines.Length; i++) {
+        // Word-boundary matches
+        foreach (var col in FindAllWordOccurrences(fileLines[i], word)) {
+          references.Add((path, i, col));
+        }
+        // End-label matches: end 'word'
+        var endLabelCol = FindEndLabelOccurrence(fileLines[i], word);
+        if (endLabelCol >= 0)
+          references.Add((path, i, endLabelCol));
+      }
+    }
+
+    return references;
+  }
+
+  /// <summary>
+  /// Find the start and end lines of the enclosing function scope.
+  /// </summary>
+  private static (int startLine, int endLine)? FindEnclosingFunctionScope(string[] lines, int cursorLine) {
+    // Scan backwards for function declaration
+    int funcLine = -1;
+    string? funcName = null;
+    for (int i = cursorLine; i >= 0; i--) {
+      var trimmed = lines[i].TrimStart();
+      var stripped = trimmed;
+      if (stripped.StartsWith("export ")) stripped = stripped[7..];
+      if (stripped.StartsWith("static ")) stripped = stripped[7..];
+      if (stripped.StartsWith("function ")) {
+        funcLine = i;
+        var rest = stripped[9..];
+        var nameEnd = 0;
+        while (nameEnd < rest.Length && IsWordChar(rest[nameEnd])) nameEnd++;
+        if (nameEnd > 0) funcName = rest[..nameEnd];
+        break;
+      }
+    }
+
+    if (funcLine < 0 || funcName == null) return null;
+
+    // Scan forward for end 'funcName'
+    var endPattern = $"end '{funcName}'";
+    for (int i = funcLine + 1; i < lines.Length; i++) {
+      var trimmed = lines[i].TrimStart();
+      if (trimmed == endPattern || trimmed.StartsWith(endPattern + " ") || trimmed.StartsWith(endPattern + "\r"))
+        return (funcLine, i);
+    }
+
+    // Fallback: function goes to end of file
+    return (funcLine, lines.Length - 1);
+  }
+
+  /// <summary>
+  /// Find all positions where 'word' appears as a whole word (with non-word boundaries)
+  /// in a single line of text.
+  /// </summary>
+  private static List<int> FindAllWordOccurrences(string lineText, string word) {
+    var results = new List<int>();
+    var searchStart = 0;
+    while (true) {
+      var idx = lineText.IndexOf(word, searchStart, StringComparison.Ordinal);
+      if (idx < 0) break;
+
+      var charBefore = idx > 0 ? lineText[idx - 1] : '\0';
+      var afterIdx = idx + word.Length;
+      var charAfter = afterIdx < lineText.Length ? lineText[afterIdx] : '\0';
+
+      if (!IsWordChar(charBefore) && !IsWordChar(charAfter))
+        results.Add(idx);
+
+      searchStart = idx + 1;
+    }
+    return results;
+  }
+
+  /// <summary>
+  /// Check if a line contains an end-label matching the word: end 'word'
+  /// Returns the column of the name inside the quotes, or -1.
+  /// </summary>
+  private static int FindEndLabelOccurrence(string lineText, string word) {
+    var trimmed = lineText.TrimStart();
+    if (!trimmed.StartsWith("end '")) return -1;
+
+    var pattern = $"'{word}'";
+    var idx = lineText.IndexOf(pattern, StringComparison.Ordinal);
+    if (idx < 0) return -1;
+
+    // Return the position of the name (inside the quotes)
+    return idx + 1;
+  }
+
+  private static WorkspaceEdit BuildWorkspaceEdit(
+    List<(string path, int line, int col)> references, string oldName, string newName
+  ) {
+    var changes = new Dictionary<DocumentUri, IEnumerable<TextEdit>>();
+
+    foreach (var group in references.GroupBy(r => r.path)) {
+      var uri = DocumentUri.FromFileSystemPath(group.Key);
+      var edits = group.Select(r => new TextEdit {
+        Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+          new Position(r.line, r.col),
+          new Position(r.line, r.col + oldName.Length)
+        ),
+        NewText = newName
+      }).ToList();
+      changes[uri] = edits;
+    }
+
+    return new WorkspaceEdit { Changes = changes };
   }
 
 }

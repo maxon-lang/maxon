@@ -8,33 +8,33 @@ export typealias ValueId = i64
 export typealias VarSlot = i64
 export typealias ParsedInt = i64
 typealias TokenIndex = i64
-typealias VarSlotArray = Array with int
+typealias VarSlotArray = Array with VarSlot
 
 // Symbol table: parallel arrays for variable names and slot indices
-var _varNames = StringArray{}
-var _varSlots = VarSlotArray{}
-var _nextSlot = 0
+var varNames = StringArray{}
+var varSlots = VarSlotArray{}
+var nextSlot = 0
 
 function resetSymbolTable()
-    _varNames = StringArray{}
-    _varSlots = VarSlotArray{}
-    _nextSlot = 0
+    varNames = StringArray{}
+    varSlots = VarSlotArray{}
+    nextSlot = 0
 end 'resetSymbolTable'
 
 function defineVariable(name String) returns VarSlot
-    let slot = _nextSlot
-    _varNames.push(name)
-    _varSlots.push(slot)
-    _nextSlot = _nextSlot + 1
+    let slot = nextSlot
+    varNames.push(name)
+    varSlots.push(slot)
+    nextSlot = nextSlot + 1
     return slot
 end 'defineVariable'
 
 function lookupVariable(name String) returns VarSlot
-    var i = _varNames.count() - 1
+    var i = varNames.count() - 1
     while i >= 0 'lookup'
-        let vn = try _varNames.get(i) otherwise ""
+        let vn = try varNames.get(i) otherwise ""
         if vn == name 'found'
-            return try _varSlots.get(i) otherwise 0
+            return try varSlots.get(i) otherwise 0
         end 'found'
         i = i - 1
     end 'lookup'
