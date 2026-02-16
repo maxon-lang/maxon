@@ -30,6 +30,7 @@ public class LspServer {
         .WithHandler<DefinitionHandler>()
         .WithHandler<RenameHandler>()
         .WithHandler<PrepareRenameHandler>()
+        .WithHandler<DidChangeWatchedFilesHandler>()
         .WithServices(services => {
           services.AddSingleton(this);
         })
@@ -308,13 +309,13 @@ public class LspServer {
     }
 
     // Try to show type information for variables, functions, and types
-    var symbolHover = GetSymbolHover(uri, position, lines, line, word);
+    var symbolHover = GetSymbolHover(uri, position, line, word);
     if (symbolHover != null) return symbolHover;
 
     return null;
   }
 
-  private Hover? GetSymbolHover(DocumentUri uri, Position position, string[] lines, string line, string word) {
+  private Hover? GetSymbolHover(DocumentUri uri, Position position, string line, string word) {
     var filePath = uri.GetFileSystemPath() ?? uri.ToString();
     var project = ProjectManager.FindProjectForFile(filePath);
     var info = project?.GetCompletionInfo();
@@ -1048,7 +1049,7 @@ public class LspServer {
   /// Find all references to a global symbol (function/type/enum/interface/typealias)
   /// across all project files. Also finds end-label references.
   /// </summary>
-  private List<(string path, int line, int col)> FindGlobalReferences(string word, Project? project) {
+  private static List<(string path, int line, int col)> FindGlobalReferences(string word, Project? project) {
     var references = new List<(string path, int line, int col)>();
     if (project == null) return references;
 

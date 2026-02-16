@@ -156,3 +156,37 @@ Optimizations
 2	Stack-slot-to-register tracking in RegisterManager — skip loads when value is already in a register	High	High
 4	Generalized store forwarding — extend beyond adjacent pairs at the Standard IR level	Medium	Moderate
 5	Smarter pre-call spills — skip spilling values whose last use is this call (even non-arguments)	Low-Med	Low
+
+
+### AI Assistance
+
+1. Provide an llms.txt File
+This is an emerging standard (used by projects like Svelte) specifically for AI consumption. While humans like formatted HTML, AI agents perform better with a linear, high-density markdown file.
+
+What it is: A file located at /llms.txt on your docs site.
+
+Why it works: It acts as a curated "brain dump" that agents can ingest in one go, stripping away UI noise and navigation, and focusing purely on syntax, API signatures, and rules.
+
+2. Build a Language Server Protocol (LSP)
+Since you are already deep into compiler architecture (IR stages, register allocation, etc.), building an LSP is the "gold standard" for AI effectiveness.
+
+The AI Connection: When an agent (like Cursor or GitHub Copilot) interacts with a codebase, it uses the LSP to understand the symbol graph.
+
+Why it's better than docs: An LSP provides real-time semantic validation. If an AI suggests code that violates your memory management rules, the LSP will flag the error immediately. This allows the agent to "self-correct" before it ever presents the code to you.
+
+3. Create a "Synthetic Golden Dataset"
+AI agents struggle with a new language because they lack "intuition" for common patterns. You can bridge this by generating a synthetic dataset of Prompt + Correct Code + Explanation triplets.
+
+Seed Examples: Write 50–100 high-quality "idiomatic" examples covering everything from basic loops to your specific string handling and iterators.
+
+Chain-of-Thought (CoT) Guides: For complex features (like your custom memory management), provide examples that include the "internal monologue" of how to solve a problem in your language.
+
+Example: "To process this list, I must first initialize the iterator because in [Your Language], iterators are stateful..."
+
+4. Grammar-Based Constraints (BNF/Tree-sitter)
+If you provide an agent with your language's formal grammar (like a Tree-sitter parser or a BNF file), it can use that to ensure the code it generates is syntactically valid.
+
+Many advanced AI agents can use these files to "constrain" their output, preventing them from hallucinating keywords or syntax from other languages like C# or Rust.
+
+5. Specialized "System Instructions" for the Compiler
+Since you're building the compiler itself, you can provide the AI with a "Mental Model of the IR." * Instead of just showing the surface syntax, explain why the compiler expects certain patterns for optimization. When an AI understands the underlying architecture (like how you handle phi nodes), it is less likely to write "clever" code that the compiler can't actually lower to machine code efficiently.
