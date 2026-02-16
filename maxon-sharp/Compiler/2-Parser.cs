@@ -2237,10 +2237,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           _ => throw new InvalidOperationException()
         };
         Expect(TokenType.LeftParen);
-        var lower = ParseRangeBound();
+        var (lower, lowerQualifier) = ParseRangeBound();
         bool upperInclusive;
         if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
-        var upper = ParseRangeBound();
+        var (upper, upperQualifier) = ParseRangeBound();
         Expect(TokenType.RightParen);
         if (lower > upper || (lower == upper && !upperInclusive))
           throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
@@ -2250,6 +2250,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // byte ranges must fit within 0..255
         if (baseType == MlirType.I8 && (lower < 0 || upper > 255))
           throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to 255", primitiveToken.Line, primitiveToken.Column);
+        // When both bounds use type qualifiers, they must reference the same type (e.g. i64.min to i64.max, not i32.min to u64.max)
+        if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
+          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
+        // A type-qualified bound paired with a literal must form a natural range (e.g. 0 to u32.max, not 0 to i64.max)
+        if (lowerQualifier == null && upperQualifier != null && !upperQualifier.StartsWith('u') && baseType != MlirType.F64 && baseType != MlirType.F32)
+          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Suspicious range: literal lower bound with '{upperQualifier}.max' — did you mean '{upperQualifier}.min to {upperQualifier}.max' or '0 to u{upperQualifier[1..]}.max'?", primitiveToken.Line, primitiveToken.Column);
+        if (lowerQualifier != null && upperQualifier == null && !lowerQualifier.StartsWith('i') && baseType != MlirType.F64 && baseType != MlirType.F32)
+          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Suspicious range: '{lowerQualifier}.min' with literal upper bound — did you mean '{lowerQualifier}.min to {lowerQualifier}.max'?", primitiveToken.Line, primitiveToken.Column);
         var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
         _typeRegistry[aliasName] = rangedType;
         _typeAliasSources[aliasName] = primitiveToken.Value;
@@ -2364,8 +2372,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _typeAliasSources[aliasName] = sourceName;
   }
 
-  /// Parses a range bound in a ranged typealias: a numeric literal, negative literal, min/max keyword, or type.min/type.max.
-  private double ParseRangeBound() {
+  /// Parses a range bound in a ranged typealias: a numeric literal, negative literal, or type.min/type.max.
+  /// Returns the value and the type qualifier name (e.g. "i64") if a type-qualified bound was used, null otherwise.
+  private (double value, string? qualifier) ParseRangeBound() {
     // type.min / type.max (e.g., u32.max, i8.min)
     if (Check(TokenType.Identifier) && _pos + 2 < _tokens.Count
         && _tokens[_pos + 1].Type == TokenType.Dot
@@ -2374,7 +2383,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var typeName = Advance().Value;
       Advance(); // consume dot
       var keyword = Advance().Value;
-      return ResolveTypeBound(typeName, keyword);
+      return (ResolveTypeBound(typeName, keyword), typeName);
     }
     // Negative literal
     bool negative = false;
@@ -2384,11 +2393,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     if (Check(TokenType.IntegerLiteral)) {
       var val = (double)ParseIntegerLiteral(Advance());
-      return negative ? -val : val;
+      return (negative ? -val : val, null);
     }
     if (Check(TokenType.FloatLiteral)) {
       var val = ParseFloatLiteral(Advance());
-      return negative ? -val : val;
+      return (negative ? -val : val, null);
     }
     throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', 'max', or 'type.min'/'type.max' in range bound", Current().Line, Current().Column);
   }
@@ -5072,10 +5081,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (resolvedSiblingName == null)
       return null;
     Advance(); // consume '('
-    var structVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
     var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedSiblingName, token.Line, token.Column);
-    var (siblingArgs, siblingCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, structVal);
-    return CreateFunctionCall(qualifiedFuncToken, siblingArgs, siblingCallee);
+
+    // Check if the resolved function is actually an instance method (first param is "self").
+    // Module-level functions in the same file should be called without prepending self.
+    var resolvedFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == resolvedSiblingName || UnmangleName(f.Name) == resolvedSiblingName);
+    if (resolvedFunc != null && resolvedFunc.ParamNames.Count > 0 && resolvedFunc.ParamNames[0] == "self") {
+      var structVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
+      var (siblingArgs, siblingCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, structVal);
+      return CreateFunctionCall(qualifiedFuncToken, siblingArgs, siblingCallee);
+    }
+
+    var (args, callee) = ParseCallArgs(qualifiedFuncToken);
+    return CreateFunctionCall(qualifiedFuncToken, args, callee);
   }
 
   private void ParseQualifiedCallStatement() {

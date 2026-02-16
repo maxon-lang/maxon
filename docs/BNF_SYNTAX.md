@@ -256,7 +256,17 @@ sized_type_ref
               = 'u8' | 'u16' | 'u32' | 'u64'
               | 'i8' | 'i16' | 'i32' | 'i64'
               | 'f32' | 'f64'
+```
 
+**Range validation constraints:**
+
+- Lower bound must be less than upper bound (or less than or equal for `to`)
+- When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`)
+- A signed type qualifier (`iN.max`) cannot be paired with a literal on the other side — use the full range (`iN.min to iN.max`) or an unsigned type (`0 to uN.max`)
+- Integer ranges cannot span both negative values and values above `i64.max`
+- `byte` ranges must have bounds within 0 to 255
+
+```
 generic_type  = IDENTIFIER 'with' type_args
 
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'

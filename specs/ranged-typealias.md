@@ -93,6 +93,16 @@ typealias Port = int(0 to u16.max)
 
 Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
+### Range validation
+
+The compiler validates that ranges are representable:
+
+- Lower bound must be less than upper bound
+- When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`)
+- A type-qualified bound paired with a literal must form a natural range — `0 to u32.max` is valid, but `0 to i64.max` is an error (use `i64.min to i64.max` or `0 to u64.max` instead)
+- Integer ranges cannot span both negative and above `i64.max` (no single 64-bit type can represent this)
+- Byte ranges must have bounds within 0 to 255
+
 
 ## Tests
 
@@ -686,6 +696,34 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/ranged-typealias/error.byte-range-overflow.test:2:21: Invalid byte range: bounds must be within 0 to 255
+```
+
+### Error: literal with signed type max
+
+<!-- test: error.literal-with-signed-max -->
+```maxon
+typealias Bad = int(0 to i64.max)
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.literal-with-signed-max.test:2:17: Suspicious range: literal lower bound with 'i64.max' — did you mean 'i64.min to i64.max' or '0 to u64.max'?
+```
+
+### Error: mismatched type bounds
+
+<!-- test: error.mismatched-type-bounds -->
+```maxon
+typealias Bad = int(i8.min to i32.max)
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.mismatched-type-bounds.test:2:17: Mismatched type bounds: 'i8.min' and 'i32.max' must reference the same type
 ```
 
 ### Error: bare sized type shorthand not allowed

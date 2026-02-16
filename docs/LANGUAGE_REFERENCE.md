@@ -257,6 +257,8 @@ typealias SmallSigned = int(i8.min to i8.max)
 
 Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
+When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`). A type-qualified bound paired with a literal must form a natural range — `0 to u32.max` is valid, but `0 to i64.max` is an error (use `i64.min to i64.max` or `0 to u64.max` instead). Byte ranges must have bounds within 0 to 255.
+
 **Construction:**
 
 Create values using `TypeName{value}` syntax:
