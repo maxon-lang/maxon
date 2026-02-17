@@ -96,6 +96,8 @@ public static partial class SpecParser {
       var source = ExtractCodeBlock(testSection, "maxon");
       if (source == null) continue;
 
+      ValidateCodeBlockLanguages(testName, testSection);
+
       var exitCode = ExtractCodeBlock(testSection, "exitcode");
       var stdout = ExtractCodeBlock(testSection, "stdout");
       var stderr = ExtractCodeBlock(testSection, "maxoncstderr");
@@ -109,6 +111,11 @@ public static partial class SpecParser {
           ExpectedStderr = stderr
         };
       } else {
+        if (exitCode == null && stdout == null && requiredMLIR == null && requiredRdata == null) {
+          throw new Exception(
+            $"Test '{testName}' has a maxon block but no result checks. " +
+            "Add an exitcode, stdout, maxoncstderr, RequiredMLIR, or RequiredRdata block.");
+        }
         expectation = new SuccessExpectation {
           ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
           Stdout = stdout,
@@ -203,6 +210,21 @@ public static partial class SpecParser {
     return files.Count > 0 ? files : null;
   }
 
+  private static readonly HashSet<string> KnownCodeBlockLanguages = [
+    "maxon", "exitcode", "stdout", "maxoncstderr", "RequiredMLIR", "RequiredRdata"
+  ];
+
+  private static void ValidateCodeBlockLanguages(string testName, string testSection) {
+    foreach (Match match in CodeBlockLanguageRegex().Matches(testSection)) {
+      var language = match.Groups[1].Value;
+      if (!KnownCodeBlockLanguages.Contains(language)) {
+        throw new Exception(
+          $"Test '{testName}' has unrecognized code block language '{language}'. " +
+          $"Valid languages: {string.Join(", ", KnownCodeBlockLanguages)}");
+      }
+    }
+  }
+
   private static string? ExtractCodeBlock(string content, string language) {
     var pattern = $@"```{Regex.Escape(language)}\r?\n(.*?)```";
     var match = Regex.Match(content, pattern, RegexOptions.Singleline);
@@ -241,4 +263,7 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline)]
   private static partial Regex FileMarkerRegex();
+
+  [GeneratedRegex(@"```([a-zA-Z]\w*)\r?\n", RegexOptions.Multiline)]
+  private static partial Regex CodeBlockLanguageRegex();
 }
