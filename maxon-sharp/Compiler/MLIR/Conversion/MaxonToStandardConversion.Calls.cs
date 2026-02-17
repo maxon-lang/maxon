@@ -52,7 +52,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string>? fnEnvVarNames = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
       isTryCall: false, funcLookup, block, valueMap, varTypes, structVarNames,
-      structValueTypes, typeDefs, managedVarOwners, mutatingFunctions, fnEnvVarNames: fnEnvVarNames);
+      structValueTypes, typeDefs, managedVarOwners, mutatingFunctions, fnEnvVarNames: fnEnvVarNames,
+      argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames);
   }
 
   /// <summary>
@@ -75,7 +76,9 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, List<string>>? managedVarOwners,
     HashSet<string>? mutatingFunctions,
     MaxonValue? errorFlagValue = null,
-    Dictionary<int, string>? fnEnvVarNames = null) {
+    Dictionary<int, string>? fnEnvVarNames = null,
+    List<bool>? argMutabilities = null,
+    List<string?>? argVarNames = null) {
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
     // Use the resolved fully-qualified name for call emission (e.g., "String.hash" → "stdlib.String.hash")
@@ -140,7 +143,19 @@ public static partial class MaxonToStandardConversion {
       }
     }
 
-    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs, fnEnvVarNames);
+    // Mutability enforcement: immutable args cannot be passed to mutating params
+    if (_mutatingParams != null && _mutatingParams.TryGetValue(calleeFunc.Name, out var calleeMutParams)
+        && argMutabilities != null) {
+      for (int i = 0; i < calleeFunc.ParamNames.Count && i < argMutabilities.Count; i++) {
+        if (calleeMutParams.Contains(calleeFunc.ParamNames[i]) && !argMutabilities[i]) {
+          throw new CompileError(
+            ErrorCode.SemanticImmutableRefToMutatingParam,
+            $"cannot pass immutable 'let' variable to function that mutates parameter '{calleeFunc.ParamNames[i]}'");
+        }
+      }
+    }
+
+    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs, fnEnvVarNames, argVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
     bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirEnumType cret && cret.HasAssociatedValues;
@@ -350,6 +365,7 @@ public static partial class MaxonToStandardConversion {
     LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
       tryCallOp.ResultKind, isTryCall: true, funcLookup, block, valueMap, varTypes,
       structVarNames, structValueTypes, typeDefs,
-      null, null, tryCallOp.ErrorFlag);
+      null, null, tryCallOp.ErrorFlag,
+      argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames);
   }
 }

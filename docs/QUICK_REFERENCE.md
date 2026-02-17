@@ -100,6 +100,17 @@ end 'greet'
 greet("Smith", title: "Dr.")
 ```
 
+**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference — mutations propagate back to the caller's `var` variable. Passing a `let` variable to a mutating parameter is a compile error (E3063). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
+
+## Closures
+
+```maxon
+let addX = (n int) gives n + x   // single expression body
+let double = (n int) gives n * 2
+```
+
+Closures capture variables from the enclosing scope **by reference**. Changes to a captured variable after the closure is created are visible inside the closure when it runs.
+
 ## Visibility
 
 All declarations are file-scoped by default. Use `export` for cross-file visibility:

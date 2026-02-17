@@ -16,6 +16,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private string? _anonymousStructTypeHint;
   // Tracks the ranged primitive type name from the most recent construction expression (e.g., Age{42})
   private string? _lastRangedTypeName;
+  // Set by ResolveExprValue: true when the resolved expression was a mutable variable reference
+  private bool _lastExprWasMutableVar;
+  // Set by ResolveExprValue: the variable name of the last resolved expression (null for non-variable expressions)
+  private string? _lastExprVarName;
+  // Set by ParseCallArgs/ParseInstanceMethodCallArgs: per-argument mutability for the most recent call
+  private List<bool>? _lastArgMutabilities;
+  // Set by ParseCallArgs/ParseInstanceMethodCallArgs: per-argument variable names for the most recent call
+  private List<string?>? _lastArgVarNames;
   private MlirRangedPrimitiveType? _lastCastRangedType;
   private readonly Dictionary<string, VarInfo> _variables = [];
   private readonly Stack<HashSet<string>> _scopeStack = new();
@@ -3508,30 +3516,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (paramType is MlirStructType structType) {
         var structParamOp = new MaxonStructParamOp(i + paramOffset, paramNames[i], structType.Name);
         _currentBlock!.AddOp(structParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock!, structType.Name);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, true, structParamOp.Result, _currentBlock!, structType.Name);
       } else if (paramType is MlirEnumType enumType) {
         var backingKind = GetEnumBackingKind(enumType);
         var enumParamOp = new MaxonEnumParamOp(i + paramOffset, paramNames[i], enumType.Name, backingKind);
         _currentBlock!.AddOp(enumParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, false, enumParamOp.Result, _currentBlock!, enumType.Name);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, true, enumParamOp.Result, _currentBlock!, enumType.Name);
       } else if (paramType is MlirFunctionType fnType) {
         var fnParamOp = new MaxonFunctionParamOp(i + paramOffset, paramNames[i], fnType);
         _currentBlock!.AddOp(fnParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, false, fnParamOp.Result, _currentBlock!, FnTypeName: fnType);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, true, fnParamOp.Result, _currentBlock!, FnTypeName: fnType);
       } else if (paramType is MlirRangedPrimitiveType rangedParam) {
         var kind = rangedParam.BaseType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
         _currentBlock!.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock!, rangedParam.Name);
+        _variables[paramNames[i]] = new VarInfo(kind, true, paramOp.Result, _currentBlock!, rangedParam.Name);
       } else if (paramType is MlirTypeParameterType tp) {
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.TypeParameter, false, paramOp.Result, _currentBlock!, tp.ParameterName);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.TypeParameter, true, paramOp.Result, _currentBlock!, tp.ParameterName);
       } else {
         var kind = paramType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
         _currentBlock!.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(kind, false, paramOp.Result, _currentBlock!);
+        _variables[paramNames[i]] = new VarInfo(kind, true, paramOp.Result, _currentBlock!);
       }
     }
   }
@@ -4260,6 +4268,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Replace the MaxonCallOp with a MaxonTryCallOp
     _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
     var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
+    tryCallOp.ArgMutabilities = callOp.ArgMutabilities;
+    tryCallOp.ArgVarNames = callOp.ArgVarNames;
     _currentBlock!.AddOp(tryCallOp);
 
     // Void-returning functions can't be used as values in assignments
@@ -4592,6 +4602,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var lastOp = _currentBlock!.Operations.LastOrDefault();
     return lastOp switch {
       MaxonFunctionRefOp fnRefOp => fnRefOp.FunctionType,
+      MaxonClosureCreateOp closureOp => closureOp.FunctionType,
       MaxonFunctionParamOp fnParamOp => fnParamOp.FunctionType,
       MaxonFunctionVarRefOp fnVarRefOp => fnVarRefOp.FunctionType,
       _ => throw new InvalidOperationException($"Cannot determine function type from {lastOp?.GetType().Name}")
@@ -5200,6 +5211,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ResolvedVar.Global(var info) => EmitGlobalLoad(name, info).Value,
       _ => throw new InvalidOperationException()
     };
+    // Set self mutability and variable name for pass-by-reference tracking
+    _lastExprWasMutableVar = resolved switch {
+      ResolvedVar.Local(var info) => info.Mutable,
+      ResolvedVar.Global(var info) => info.Mutable,
+      _ => false
+    };
+    _lastExprVarName = name;
 
     var qualifiedToken = new Token(TokenType.Identifier, methodName, methodToken.Line, methodToken.Column);
     var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, structVal);
@@ -5341,6 +5359,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Replace MaxonCallOp with MaxonTryCallOp
     _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
     var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
+    tryCallOp.ArgMutabilities = callOp.ArgMutabilities;
+    tryCallOp.ArgVarNames = callOp.ArgVarNames;
     _currentBlock!.AddOp(tryCallOp);
 
     // Store error flag and result to mutable variables for cross-block access
@@ -8795,6 +8815,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   // Resolves an expression result to a MaxonValue, emitting a var_ref op if needed for cross-block references
   private MaxonValue ResolveExprValue(ExprResult expr) {
+    _lastExprWasMutableVar = expr is ExprResult.VarRef { Info.Mutable: true };
+    _lastExprVarName = expr is ExprResult.VarRef vr ? vr.VarName : null;
     switch (expr) {
       case ExprResult.Direct d:
         return d.Value;
@@ -9208,6 +9230,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (Check(TokenType.RightParen)) {
       Advance();
+      _lastArgMutabilities = callee.ParamTypes.Count > 0
+        ? new List<bool>(new bool[callee.ParamTypes.Count])
+        : null;
+      _lastArgVarNames = callee.ParamTypes.Count > 0
+        ? new List<string?>(new string?[callee.ParamTypes.Count])
+        : null;
       if (callee.ParamTypes.Count > 0) {
         return (FillDefaultArgs(functionNameToken, callee, new MaxonValue?[callee.ParamTypes.Count]), callee);
       }
@@ -9215,9 +9243,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var args = new MaxonValue?[callee.ParamTypes.Count];
-    ParseArgList(functionNameToken, callee, args, firstPositionalIndex: 0);
+    var argMuts = new bool[callee.ParamTypes.Count];
+    var argNames = new string?[callee.ParamTypes.Count];
+    ParseArgList(functionNameToken, callee, args, firstPositionalIndex: 0, argMutabilities: argMuts, argVarNames: argNames);
     Expect(TokenType.RightParen);
 
+    _lastArgMutabilities = new List<bool>(argMuts);
+    _lastArgVarNames = new List<string?>(argNames);
     return (FillDefaultArgs(functionNameToken, callee, args), callee);
   }
 
@@ -9404,23 +9436,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// slot used when the first argument is positional (0 for normal calls, 1 for
   /// instance methods where slot 0 is self).
   /// </summary>
-  private void ParseArgList(Token callToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, MlirType>? typeParams = null) {
+  private void ParseArgList(Token callToken, MlirFunction<MaxonOp> callee, MaxonValue?[] args, int firstPositionalIndex, Dictionary<string, MlirType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
     // Track where each arg was evaluated for cross-block pinning.
     var argLocations = new (MlirBlock<MaxonOp>? block, int opIndex)[args.Length];
 
     if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
-      ParseNamedArg(callee, args, typeParams);
+      ParseNamedArg(callee, args, typeParams, argMutabilities, argVarNames);
       for (int i = 0; i < args.Length; i++)
         if (args[i] != null && argLocations[i].block == null)
           argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
     } else {
       args[firstPositionalIndex] = ParseCallArgValue(callee.ParamTypes[firstPositionalIndex], typeParams);
+      if (argMutabilities != null) argMutabilities[firstPositionalIndex] = _lastExprWasMutableVar;
+      if (argVarNames != null) argVarNames[firstPositionalIndex] = _lastExprVarName;
       argLocations[firstPositionalIndex] = (_currentBlock!, _currentBlock!.Operations.Count);
     }
 
     while (Check(TokenType.Comma) && Advance() != null) {
       if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
-        ParseNamedArg(callee, args, typeParams);
+        ParseNamedArg(callee, args, typeParams, argMutabilities, argVarNames);
         for (int i = 0; i < args.Length; i++)
           if (args[i] != null && argLocations[i].block == null)
             argLocations[i] = (_currentBlock!, _currentBlock!.Operations.Count);
@@ -9451,13 +9485,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
-  private void ParseNamedArg(MlirFunction<MaxonOp> callee, MaxonValue?[] args, Dictionary<string, MlirType>? typeParams = null) {
+  private void ParseNamedArg(MlirFunction<MaxonOp> callee, MaxonValue?[] args, Dictionary<string, MlirType>? typeParams = null, bool[]? argMutabilities = null, string?[]? argVarNames = null) {
     var nameToken = Advance();
     Advance(); // consume ':'
     var idx = callee.ParamNames.IndexOf(nameToken.Value);
     if (idx < 0)
       throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
     args[idx] = ParseCallArgValue(callee.ParamTypes[idx], typeParams);
+    if (argMutabilities != null) argMutabilities[idx] = _lastExprWasMutableVar;
+    if (argVarNames != null) argVarNames[idx] = _lastExprVarName;
   }
 
   /// <summary>
@@ -9465,11 +9501,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// The first explicit argument is positional (maps to index 1), subsequent args must be named.
   /// </summary>
   private (List<MaxonValue> args, MlirFunction<MaxonOp> callee) ParseInstanceMethodCallArgs(Token methodNameToken, MaxonValue selfValue) {
+    // Capture self mutability and var name before argument parsing overwrites them
+    var selfMutable = _lastExprWasMutableVar;
+    var selfVarName = _lastExprVarName;
+
     var candidates = ResolveFunctionOverloads(methodNameToken.Value);
     var callee = SelectOverloadByNamedArgs(candidates, methodNameToken);
 
     var args = new MaxonValue?[callee.ParamTypes.Count];
     args[0] = selfValue;
+
+    var argMuts = new bool[callee.ParamTypes.Count];
+    argMuts[0] = selfMutable;
+    var argNames = new string?[callee.ParamTypes.Count];
+    argNames[0] = selfVarName;
 
     // Resolve type parameters from the self value's concrete struct type
     Dictionary<string, MlirType>? typeParams = null;
@@ -9478,10 +9523,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     if (!Check(TokenType.RightParen)) {
-      ParseArgList(methodNameToken, callee, args, firstPositionalIndex: 1, typeParams);
+      ParseArgList(methodNameToken, callee, args, firstPositionalIndex: 1, typeParams, argMutabilities: argMuts, argVarNames: argNames);
     }
 
     Expect(TokenType.RightParen);
+    _lastArgMutabilities = new List<bool>(argMuts);
+    _lastArgVarNames = new List<string?>(argNames);
     return (FillDefaultArgs(methodNameToken, callee, args), callee);
   }
 
@@ -9714,6 +9761,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
+    callOp.ArgMutabilities = _lastArgMutabilities;
+    callOp.ArgVarNames = _lastArgVarNames;
+    _lastArgMutabilities = null;
+    _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
     _lastRangedTypeName = null;
     return callOp;
@@ -9735,6 +9786,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
+    callOp.ArgMutabilities = _lastArgMutabilities;
+    callOp.ArgVarNames = _lastArgVarNames;
+    _lastArgMutabilities = null;
+    _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
     _lastRangedTypeName = null;
     return callOp;

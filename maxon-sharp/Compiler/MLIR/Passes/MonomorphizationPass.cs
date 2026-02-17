@@ -198,9 +198,11 @@ public static class MonomorphizationPass {
                   && resultStruct.TypeName != newResultStructTypeName) {
                 resultStruct.TypeName = newResultStructTypeName;
               }
-              block.Operations[i] = call is MaxonTryCallOp tryCall
-                ? new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName)
-                : new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
+              if (call is MaxonTryCallOp tryCall) {
+                block.Operations[i] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames };
+              } else {
+                block.Operations[i] = new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames };
+              }
               if (newResultKind != call.ResultKind && call.Result != null) {
                 UpdateSubsequentAssignOps(block, i + 1, call.Result, newResultKind);
               }
@@ -336,11 +338,11 @@ public static class MonomorphizationPass {
       if (op is MaxonCallOp call) {
         var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
           call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
-        block.Operations[opIndex] = new MaxonCallOp(newCallee, call.Args, call.Result, resultKind, resultStructTypeName);
+        block.Operations[opIndex] = new MaxonCallOp(newCallee, call.Args, call.Result, resultKind, resultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames };
       } else if (op is MaxonTryCallOp tryCall) {
         var (resultKind, resultStructTypeName) = ResolveMonomorphizedResultType(
           tryCall.ResultKind, tryCall.ResultStructTypeName, newCallee, funcLookup);
-        block.Operations[opIndex] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, resultKind, resultStructTypeName);
+        block.Operations[opIndex] = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, resultKind, resultStructTypeName) { ArgMutabilities = tryCall.ArgMutabilities, ArgVarNames = tryCall.ArgVarNames };
       }
     }
 
@@ -432,7 +434,7 @@ public static class MonomorphizationPass {
         var newCallee = sub.SubstituteCallee(tryCall.Callee);
         var newArgs = tryCall.Args.Select(mapValue).ToList();
         var resultStructTypeName = tryCall.ResultStructTypeName != null ? sub.SubstituteName(tryCall.ResultStructTypeName) : null;
-        var cloned = new MaxonTryCallOp(newCallee, newArgs, tryCall.ResultKind, resultStructTypeName);
+        var cloned = new MaxonTryCallOp(newCallee, newArgs, tryCall.ResultKind, resultStructTypeName) { ArgMutabilities = tryCall.ArgMutabilities, ArgVarNames = tryCall.ArgVarNames };
         if (tryCall.Result != null && cloned.Result != null)
           valueMap[tryCall.Result.Id] = cloned.Result;
         valueMap[tryCall.ErrorFlag.Id] = cloned.ErrorFlag;
@@ -442,7 +444,7 @@ public static class MonomorphizationPass {
         var newCallee = sub.SubstituteCallee(call.Callee);
         var newArgs = call.Args.Select(mapValue).ToList();
         var resultStructTypeName = call.ResultStructTypeName != null ? sub.SubstituteName(call.ResultStructTypeName) : null;
-        var cloned = new MaxonCallOp(newCallee, newArgs, call.Result != null ? mapValue(call.Result) : null, call.ResultKind, resultStructTypeName);
+        var cloned = new MaxonCallOp(newCallee, newArgs, call.Result != null ? mapValue(call.Result) : null, call.ResultKind, resultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames };
         return cloned;
       }
       case MaxonAssignOp assign:

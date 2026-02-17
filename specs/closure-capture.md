@@ -8,14 +8,14 @@ category: functions
 
 ## Documentation
 
-Closures can capture variables from their enclosing scope. When a closure references a variable that is not one of its parameters, the value is captured at the time the closure is created.
+Closures can capture variables from their enclosing scope. When a closure references a variable that is not one of its parameters, the variable is captured by reference.
 
 ```text
 var offset = 10
 var f = (x int) gives x + offset
 ```
 
-Captured variables are read-only copies — changes to the original variable after the closure is created are not reflected inside the closure.
+Because captures are by reference, the closure always sees the current value of the captured variable, even if it changes after the closure is created.
 
 This is especially useful with higher-order functions like `map`:
 

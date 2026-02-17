@@ -65,6 +65,11 @@ public static class DeadStoreEliminationPass {
     if (allVarNames.Count == 0) return;
     var fieldVarMap = BuildFieldVarMap(allVarNames);
 
+    // Variables whose address is taken via LEA are "escaped" — external code
+    // (closures, callbacks) may read them at any time, so stores to escaped
+    // variables must never be eliminated by liveness analysis.
+    var escapedVars = CollectEscapedVars(func, fieldVarMap);
+
     // Build CFG: block name → successor block names
     var successors = new Dictionary<string, List<string>>();
     for (int bi = 0; bi < blocks.Count; bi++) {
@@ -134,7 +139,7 @@ public static class DeadStoreEliminationPass {
     // Per-block backward scan to eliminate dead stores
     int totalEliminated = 0;
     foreach (var block in blocks) {
-      totalEliminated += EliminateWithLiveness(block, liveOutMap[block.Name], fieldVarMap);
+      totalEliminated += EliminateWithLiveness(block, liveOutMap[block.Name], fieldVarMap, escapedVars);
     }
 
     if (totalEliminated > 0) {
@@ -232,8 +237,11 @@ public static class DeadStoreEliminationPass {
   /// A store to X is dead if X is not live at the point of the store.
   /// </summary>
   private static int EliminateWithLiveness(MlirBlock<StandardOp> block,
-      HashSet<string> liveOutSet, Dictionary<string, HashSet<string>> fieldVarMap) {
+      HashSet<string> liveOutSet, Dictionary<string, HashSet<string>> fieldVarMap,
+      HashSet<string> escapedVars) {
     var live = new HashSet<string>(liveOutSet);
+    // Escaped variables are always considered live
+    live.UnionWith(escapedVars);
     var ops = block.Operations;
     var deadIndices = new HashSet<int>();
 
@@ -312,6 +320,30 @@ public static class DeadStoreEliminationPass {
   private static bool IsDeadPureOp(StandardOp op, HashSet<int> usedIds) {
     int resultId = op.PureResultId;
     return resultId >= 0 && !usedIds.Contains(resultId);
+  }
+
+  /// <summary>
+  /// Collects variables whose address is taken via StdLeaOp anywhere in the function.
+  /// These variables have "escaped" — external code may read/write them through pointers,
+  /// so stores to them must never be eliminated by liveness analysis.
+  /// Also includes field variables (e.g., x.field) when x is escaped.
+  /// </summary>
+  private static HashSet<string> CollectEscapedVars(
+      MlirFunction<StandardOp> func, Dictionary<string, HashSet<string>> fieldVarMap) {
+    var escaped = new HashSet<string>();
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is StdLeaOp lea) {
+          escaped.Add(lea.VarName);
+          if (fieldVarMap.TryGetValue(lea.VarName, out var fields)) {
+            foreach (var field in fields) {
+              escaped.Add(field);
+            }
+          }
+        }
+      }
+    }
+    return escaped;
   }
 
   private static void FlushVariable(Dictionary<string, int> pendingStore, string varName) {

@@ -344,6 +344,10 @@ public class MaxonCallOp : MaxonOp {
   public MaxonValueKind? ResultKind { get; }
   // The struct type name for calls returning a struct
   public string? ResultStructTypeName { get; }
+  // Whether each argument at the call site came from a mutable variable
+  public List<bool>? ArgMutabilities { get; set; }
+  // The variable name each argument came from (null for literals/expressions)
+  public List<string?>? ArgVarNames { get; set; }
 
   public MaxonCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
     Callee = callee;

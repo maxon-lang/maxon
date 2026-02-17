@@ -286,6 +286,17 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// Converts a varTypes string key (e.g. "i64", "f64") to an MlirType for StdStoreIndirectOp.
+  private static MlirType VarTypeToMlirType(string varType) => varType switch {
+    "i64" => MlirType.I64,
+    "f64" => MlirType.F64,
+    "f32" => MlirType.F32,
+    "i1" => MlirType.I1,
+    "i32" => MlirType.I32,
+    "ptr" => MlirType.I64,
+    _ => throw new InvalidOperationException($"Unsupported var type for MlirType conversion: {varType}"),
+  };
+
   private static bool IsStructInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"

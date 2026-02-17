@@ -20,6 +20,8 @@ This reference provides complete syntax and semantics for the Maxon programming 
 5. [Enums](#enums)
 6. [Variables](#variables)
 7. [Functions](#functions)
+   - [Parameter Passing](#parameter-passing)
+   - [Closures](#closures)
 8. [Expressions](#expressions)
 9. [Statements](#statements)
 10. [Error Handling](#error-handling)
@@ -1157,6 +1159,78 @@ greet("Alice")                    // Single param is positional
 divide(100, divisor: 5)           // First positional, second named
 ```
 
+### Parameter Passing
+
+Maxon uses **automatic pass-by-reference** for parameters that are assigned to inside the function body.
+
+**By-value (read-only parameters):** If a function only reads a parameter, the value is passed directly — no indirection overhead.
+
+**By-reference (mutated parameters):** If a function assigns to a parameter (directly or through a field or element), the compiler passes a pointer to the caller's storage. This allows the called function to mutate the caller's variable.
+
+```maxon
+function increment(n int)
+    n = n + 1       // assigns to n — passed by reference
+end 'increment'
+
+function main() returns ExitCode
+    var x = 10
+    increment(x)    // x is now 11
+    return x
+end 'main'
+```
+
+**Mutability rules:**
+
+- If the caller passes a `var` variable, the parameter is mutable and assignments propagate back to the caller.
+- If the caller passes a `let` variable to a function that mutates its parameter, the compiler raises error **E3063**.
+- If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
+
+```maxon
+function double(n int)
+    n = n * 2
+end 'double'
+
+function main() returns ExitCode
+    var x = 5
+    double(x)       // OK — x is var; x becomes 10
+
+    let y = 5
+    double(y)       // ERROR E3063: cannot pass let variable to mutating parameter
+
+    double(5)       // OK — literal creates a temporary; mutation has no visible effect
+    return x
+end 'main'
+```
+
+**Ownership interaction:** When a `var` variable is passed to a mutating parameter, ownership transfers to the callee for the duration of the call. After the call returns, the caller's variable reflects the updated value and ownership is restored. The variable cannot be used again in a branch where the call may not return (e.g., after a `throw`).
+
+### Closures
+
+Closures are anonymous functions expressed inline using `gives` syntax:
+
+```maxon
+(param) gives expression
+(param1, param2) gives expression
+() gives expression
+```
+
+**Capture by reference:** Closures capture variables from the enclosing scope by reference, not by value. This means changes to a captured variable after the closure is created are visible inside the closure when it executes.
+
+```maxon
+function main() returns ExitCode
+    var x = 10
+    let addX = (n int) gives n + x   // captures x by reference
+    x = 20
+    var result = addX(5)             // evaluates with x == 20, result is 25
+    return result
+end 'main'
+```
+
+**Notes:**
+- Closure parameters may optionally omit the type annotation when the type can be inferred from context.
+- Closures can only appear where a function-type value is expected.
+- Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
+
 ### Extern Functions
 
 Declare external functions (Windows API, C libraries):
@@ -2281,8 +2355,8 @@ return a            // ERROR
 - Use-after-move prevented at compile time (see Ownership System above)
 
 ### Calling Convention
-- Simple types (int, float, bool, character) passed by value
-- Arrays passed as pointer
+- Parameters that are only read are passed by value (simple types in registers, arrays as pointer)
+- Parameters that are assigned to inside the callee are passed by reference (pointer to caller's storage)
 - Return values passed by value (in register or stack)
 
 ---

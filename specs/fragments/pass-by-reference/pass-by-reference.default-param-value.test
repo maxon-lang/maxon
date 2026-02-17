@@ -1,0 +1,52 @@
+// Test: pass-by-reference.default-param-value
+
+typealias Integer = int(i64.min to i64.max)
+
+function addOffset(x Integer, offset Integer = 10) returns Integer
+  return x + offset
+end 'addOffset'
+
+function main() returns ExitCode
+  var result = addOffset(x: 32)
+  return result
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @pass-by-reference.addOffset(x: i64, offset: i64) -> i64 {
+  entry:
+    x86.lea eax, [ecx + edx]
+    x86.ret
+  }
+  func @pass-by-reference.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 32
+    x86.mov ecx, 10
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call pass-by-reference.addOffset
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je pass-by-reference.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

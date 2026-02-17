@@ -329,18 +329,34 @@ public static partial class MaxonToStandardConversion {
 		int envSize = closureOp.CapturedValues.Count * 8;
 		var envPtr = EmitAlloc(block, envSize);
 
-		// Store each captured value into the environment
+		// Store the ADDRESS of each captured variable into the environment
+		// so that closures capture by reference (reads see mutations after capture)
 		for (int i = 0; i < closureOp.CapturedValues.Count; i++) {
-			var capturedMaxonVal = closureOp.CapturedValues[i];
-			StdValue capturedStdVal;
-			if (closureOp.CapturedKinds[i] == MaxonValueKind.Struct
-				&& structVarNames.TryGetValue(capturedMaxonVal.Id, out var capturedStructName)) {
-				capturedStdVal = EmitLoad(block, capturedStructName, varTypes);
+			var capturedName = closureOp.CapturedNames[i];
+			StdValue addressVal;
+
+			if (_refParamPtrVars != null && _refParamPtrVars.TryGetValue(capturedName, out var refPtrName)) {
+				// Variable is itself a ref param — forward the existing reference pointer
+				addressVal = EmitLoad(block, refPtrName, varTypes);
+			} else if (closureOp.CapturedKinds[i] == MaxonValueKind.Struct
+					   && structVarNames.TryGetValue(closureOp.CapturedValues[i].Id, out var capturedStructName)) {
+				// Struct variable: take address of the slot holding the heap pointer
+				var leaOp = new StdLeaOp(capturedStructName);
+				block.AddOp(leaOp);
+				var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
+				block.AddOp(ptrToI64);
+				addressVal = ptrToI64.Result;
 			} else {
-				capturedStdVal = valueMap[capturedMaxonVal];
+				// Primitive/enum variable: take address of the variable's stack slot
+				var leaOp = new StdLeaOp(capturedName);
+				block.AddOp(leaOp);
+				var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
+				block.AddOp(ptrToI64);
+				addressVal = ptrToI64.Result;
 			}
 
-			block.AddOp(new StdStoreIndirectOp(capturedStdVal, envPtr, i * 8, MlirType.I64));
+			Logger.Trace(LogCategory.Mlir, $"Closure capture-by-ref: storing address of '{capturedName}' at env offset {i * 8}");
+			block.AddOp(new StdStoreIndirectOp(addressVal, envPtr, i * 8, MlirType.I64));
 		}
 
 		// Track the env_ptr for this closure
@@ -358,19 +374,35 @@ public static partial class MaxonToStandardConversion {
 		Dictionary<int, string> structValueTypes) {
 		// Load the __env parameter (stored as a variable during function lowering)
 		var envBasePtr = EmitLoad(block, "__env", varTypes);
-		// Load captured value at the appropriate offset
-		var loadOp = new StdLoadIndirectOp(envBasePtr, envLoadOp.Index * 8, MlirType.I64);
-		block.AddOp(loadOp);
+		// Environment stores ADDRESSES, not values — load address then dereference
+		var addrLoadOp = new StdLoadIndirectOp(envBasePtr, envLoadOp.Index * 8, MlirType.I64);
+		block.AddOp(addrLoadOp);
+
+		// Dereference type must match the captured variable's original storage type
+		var derefType = envLoadOp.Kind switch {
+			MaxonValueKind.Float => MlirType.F64,
+			MaxonValueKind.Bool => MlirType.I1,
+			MaxonValueKind.Integer => MlirType.I64,
+			MaxonValueKind.Byte => MlirType.I64,
+			MaxonValueKind.Short => MlirType.I64,
+			MaxonValueKind.Struct => MlirType.I64,
+			MaxonValueKind.Enum => MlirType.I64,
+			MaxonValueKind.Function => MlirType.I64,
+			MaxonValueKind.Float32 => MlirType.F32,
+			MaxonValueKind.TypeParameter => throw new InvalidOperationException($"Cannot dereference captured type parameter '{envLoadOp.Name}'"),
+		};
+		var derefOp = new StdLoadIndirectOp(addrLoadOp.Result, 0, derefType);
+		block.AddOp(derefOp);
 
 		if (envLoadOp.Kind == MaxonValueKind.Struct) {
-			// Struct captures are heap pointers — track in structVarNames and structValueTypes
+			// Struct captures: dereferenced value is the heap pointer — track it
 			var structVarName = $"__capture_{envLoadOp.Name}";
-			EmitStore(block, loadOp.Result, structVarName, varTypes);
+			EmitStore(block, derefOp.Result, structVarName, varTypes);
 			structVarNames[envLoadOp.Result.Id] = structVarName;
 			if (envLoadOp.StructTypeName != null)
 				structValueTypes[envLoadOp.Result.Id] = envLoadOp.StructTypeName;
 		}
-		valueMap[envLoadOp.Result] = loadOp.Result;
+		valueMap[envLoadOp.Result] = derefOp.Result;
 	}
 
 	private static void LowerFunctionParam(

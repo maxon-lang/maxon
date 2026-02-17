@@ -334,11 +334,60 @@ public static partial class MaxonToStandardConversion {
     List<StdValue> newArgs,
     string calleeName,
     Dictionary<string, MlirType> typeDefs,
-    Dictionary<int, string>? fnEnvVarNames = null) {
+    Dictionary<int, string>? fnEnvVarNames = null,
+    List<string?>? argVarNames = null) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
+
+    // Look up which params the callee mutates
+    HashSet<string>? calleeMutatedParams = null;
+    _mutatingParams?.TryGetValue(calleeFunc.Name, out calleeMutatedParams);
 
     for (int i = 0; i < args.Count; i++) {
       var arg = args[i];
+
+      // Pass-by-reference: if this param is mutated by the callee, pass address instead of value
+      if (calleeMutatedParams != null && i < calleeFunc.ParamNames.Count
+          && calleeMutatedParams.Contains(calleeFunc.ParamNames[i])
+          && calleeFunc.ParamNames[i] != "self") {
+        string? argVarName = null;
+        if (structVarNames.TryGetValue(arg.Id, out var svn)) argVarName = svn;
+        else if (argVarNames != null && i < argVarNames.Count) argVarName = argVarNames[i];
+
+        if (argVarName != null && varTypes.ContainsKey(argVarName)) {
+          // If this variable is itself a ref param, forward the original pointer
+          // so writes propagate all the way back to the original caller
+          if (_refParamPtrVars != null && _refParamPtrVars.TryGetValue(argVarName, out var refPtrVar)) {
+            Logger.Trace(LogCategory.Mlir, $"Pass-by-ref: forwarding existing ref pointer for '{argVarName}' in call to '{calleeName}'");
+            var refPtr = EmitLoad(block, refPtrVar, varTypes);
+            newArgs.Add(refPtr);
+          } else {
+            var leaOp = new StdLeaOp(argVarName);
+            block.AddOp(leaOp);
+            var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
+            block.AddOp(ptrToI64);
+            newArgs.Add(ptrToI64.Result);
+          }
+        } else {
+          // Literal/expression: create a temporary so the callee has a valid address to read from
+          Logger.Trace(LogCategory.Mlir, $"Pass-by-ref: creating temporary for literal/expression arg {i} in call to '{calleeName}'");
+          var tempName = $"__ref_temp_{MlirContext.Current.NextId()}";
+          if (valueMap.TryGetValue(arg, out var argVal)) {
+            EmitStore(block, argVal, tempName, varTypes);
+          } else if (structVarNames.TryGetValue(arg.Id, out var sn)) {
+            var hp = EmitLoad(block, sn, varTypes);
+            EmitStore(block, hp, tempName, varTypes);
+          } else {
+            throw new InvalidOperationException($"Cannot resolve arg for pass-by-ref temp in call to '{calleeName}', arg {i}");
+          }
+          var leaOp = new StdLeaOp(tempName);
+          block.AddOp(leaOp);
+          var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
+          block.AddOp(ptrToI64);
+          newArgs.Add(ptrToI64.Result);
+        }
+        continue;
+      }
+
       if (calleeIsEnumInstance && i == 0) {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirEnumType enumArgType && enumArgType.HasAssociatedValues

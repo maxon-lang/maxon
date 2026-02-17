@@ -42,6 +42,9 @@ public static class StandardToX86Conversion {
         }
       }
     }
+    // LEA variables need stack slots for their address to be taken
+    foreach (var leaVar in leaVariables)
+      loadedVariables.Add(leaVar);
     // Struct fields are live if their parent struct is referenced by LEA
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
@@ -1045,6 +1048,9 @@ public static class StandardToX86Conversion {
   /// and the first field ends up at the highest address in the contiguous block.
   /// </summary>
   private static int FindFirstFieldOffset(string structVarName, Dictionary<string, int> varOffsets) {
+    // Check if the variable itself has a direct offset (primitive/scalar variables)
+    if (varOffsets.TryGetValue(structVarName, out var directOffset))
+      return directOffset;
     // Find all field offsets for this struct prefix
     int? lowestOffset = null;
     foreach (var (name, offset) in varOffsets) {

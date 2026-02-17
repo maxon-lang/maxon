@@ -28,25 +28,30 @@ module {
   }
   func @closure-capture.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.mov eax, 10
+    x86.mov [rbp-8], eax
     x86.mov ecx, 20
+    x86.mov [rbp-16], ecx
     x86.lea_func edx, [__closure_0]
     x86.mov ebx, 16
-    x86.mov [rbp-24], edx
+    x86.mov [rbp-40], edx
     x86.mov rcx, rbx
     x86.call maxon_alloc
-    x86.mov esi, 10
-    x86.mov [eax+0], esi
-    x86.mov edi, 20
-    x86.mov [eax+8], edi
-    x86.mov [rbp-8], eax
-    x86.mov r8, 5
-    x86.mov r9, [rbp-8]
-    x86.mov rcx, [rbp-24]
-    x86.mov rdx, r9
+    x86.lea rsi, [rbp-8]
+    x86.mov rdi, rsi
+    x86.mov [eax+0], edi
+    x86.lea r8, [rbp-16]
+    x86.mov r9, r8
+    x86.mov [eax+8], r9
+    x86.mov [rbp-24], eax
+    x86.mov eax, 5
+    x86.mov ecx, [rbp-24]
+    x86.mov rdx, rcx
+    x86.mov r8, rax
+    x86.mov rcx, [rbp-40]
     x86.call closure-capture.apply
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-32], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl ecx
@@ -63,7 +68,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }
@@ -73,10 +78,12 @@ module {
     x86.mov [rbp-8], edx
     x86.mov eax, [rbp-8]
     x86.mov ebx, [eax+0]
-    x86.add ecx, ebx
+    x86.mov eax, [ebx+0]
+    x86.add ecx, eax
     x86.mov eax, [rbp-8]
     x86.mov ebx, [eax+8]
-    x86.lea eax, [ecx + ebx]
+    x86.mov eax, [ebx+0]
+    x86.lea eax, [ecx + eax]
     x86.epilogue
     x86.ret
   }

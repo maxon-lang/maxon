@@ -1,34 +1,36 @@
-// Test: closure-capture.ignore-param
+// Test: pass-by-reference.closure-capture-after-mutation
 
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+function apply(f () returns Integer) returns Integer
+  return f()
 end 'apply'
 
 function main() returns ExitCode
-  var value = 42
-  var result = apply(f: (_ Integer) gives value, x: 99)
+  var x = 10
+  var f = () gives x
+  x = 99
+  var result = apply(f: f)
   return result
 end 'main'
 ---
-ExitCode: 42
+ExitCode: 99
 ---
 module {
-  func @closure-capture.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  func @pass-by-reference.apply(f: i64, __env_f: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
     x86.mov r10, ecx
-    x86.mov rcx, r8
+    x86.mov rcx, rdx
     x86.call r10
     x86.epilogue
     x86.ret
   }
-  func @closure-capture.main() -> u32 {
+  func @pass-by-reference.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.mov eax, 42
+    x86.mov eax, 10
     x86.mov [rbp-8], eax
     x86.lea_func ecx, [__closure_0]
     x86.mov edx, 8
@@ -40,11 +42,11 @@ module {
     x86.mov [eax+0], esi
     x86.mov [rbp-16], eax
     x86.mov edi, 99
+    x86.mov [rbp-8], edi
     x86.mov r8, [rbp-16]
     x86.mov rcx, [rbp-32]
     x86.mov rdx, r8
-    x86.mov r8, rdi
-    x86.call closure-capture.apply
+    x86.call pass-by-reference.apply
     x86.mov [rbp-24], eax
     x86.xor r9, r9
     x86.cmp eax, r9
@@ -56,9 +58,9 @@ module {
     x86.movzx eax, eaxb
     x86.or ecx, eax
     x86.test ecx, ecx
-    x86.je closure-capture.main.__range_ok_0
+    x86.je pass-by-reference.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_15]
+    x86.lea_rdata rax, [__panic_msg_13]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -66,13 +68,13 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @__closure_0(_: i64, __env: i64) -> i64 {
+  func @__closure_0(__env: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], edx
+    x86.mov [rbp-8], ecx
     x86.mov eax, [rbp-8]
-    x86.mov ebx, [eax+0]
-    x86.mov eax, [ebx+0]
+    x86.mov edx, [eax+0]
+    x86.mov eax, [edx+0]
     x86.epilogue
     x86.ret
   }

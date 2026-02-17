@@ -74,6 +74,7 @@ public enum ErrorCode {
   SemanticAmbiguousTypeReference = 3060,
   SemanticDuplicateTypeAlias = 3061,
   SemanticUnusedTypeAlias = 3062,
+  SemanticImmutableRefToMutatingParam = 3063,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,
