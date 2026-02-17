@@ -64,9 +64,15 @@ oct_int       = '0o' oct_digit { oct_digit | '_' }
 FLOAT         = digit { digit } '.' digit { digit } [ ('e' | 'E') ['+' | '-'] digit { digit } ]
 
 STRING        = '"' { string_char | escape_seq } '"'
-STRING_INTERP = '"' { string_char | escape_seq | '{' expression '}' } '"'
+STRING_INTERP = '"' { string_char | escape_seq | '{' expression [ ':' format_spec ] '}' } '"'
 string_char   = <any character except '"', '\', '{', '}', or newline>
 escape_seq    = '\n' | '\t' | '\\' | '\"' | '\{' | '\}'
+format_spec   = int_format | float_format
+int_format    = ['0'] [width] [int_type]
+int_type      = 'd' | 'x' | 'X' | 'b' | 'o'
+float_format  = ['0'] [width] '.' precision
+width         = digit { digit }
+precision     = digit { digit }
 
 CHARACTER     = "'" ( grapheme_cluster | char_escape ) "'"
 grapheme_cluster = <any extended grapheme cluster>

@@ -122,18 +122,34 @@ public static partial class MaxonToStandardConversion {
 						stdVal = EnsureI64(stdVal, block, signExtend: true);
 					}
 					bool isUnsigned = (OptimalType?.IsUnsigned ?? false) || stdVal is StdU64;
-					if (isUnsigned) {
-						partInfos.Add(EmitU64ToString(stdVal, block, varTypes));
+					if (FormatSpec != null) {
+						if (isUnsigned) {
+							partInfos.Add(EmitU64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
+						} else {
+							partInfos.Add(EmitI64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
+						}
 					} else {
-						partInfos.Add(EmitI64ToString(stdVal, block, varTypes));
+						if (isUnsigned) {
+							partInfos.Add(EmitU64ToString(stdVal, block, varTypes));
+						} else {
+							partInfos.Add(EmitI64ToString(stdVal, block, varTypes));
+						}
 					}
 				} else if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32ForStr) {
 					// Promote f32 to f64 for string conversion (reuses existing f64 toString runtime)
 					var promote = new StdF32ToF64Op(f32ForStr);
 					block.AddOp(promote);
-					partInfos.Add(EmitF64ToString(promote.Result, block, varTypes));
+					if (FormatSpec != null) {
+						partInfos.Add(EmitF64ToStringFormatted(promote.Result, FormatSpec, block, varTypes, result));
+					} else {
+						partInfos.Add(EmitF64ToString(promote.Result, block, varTypes));
+					}
 				} else if (exprValue is MaxonFloat) {
-					partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
+					if (FormatSpec != null) {
+						partInfos.Add(EmitF64ToStringFormatted((StdF64)valueMap[exprValue], FormatSpec, block, varTypes, result));
+					} else {
+						partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
+					}
 				} else if (exprValue is MaxonBool) {
 					partInfos.Add(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
 				} else if (exprValue is MaxonEnum enumValue) {
@@ -284,6 +300,62 @@ public static partial class MaxonToStandardConversion {
 	private static (StdI64 Buffer, StdI64 Length) EmitF64ToString(
 	  StdF64 floatValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(floatValue, "maxon_f64_to_string", 32, block, varTypes);
+
+	/// <summary>
+	/// Allocates a buffer, emits the format spec as rdata, calls a formatted runtime conversion function,
+	/// and returns (buffer, length). Used for format-specifier string interpolation on built-in types.
+	/// </summary>
+	private static (StdI64 Buffer, StdI64 Length) EmitRuntimeToStringFormatted(
+	  StdValue value,
+	  string runtimeFuncName,
+	  int bufferSize,
+	  string formatSpec,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes,
+	  MlirModule<StandardOp> result) {
+
+		var bufResult = EmitAlloc(block, bufferSize);
+
+		// Store buffer pointer so it survives the runtime call
+		var bufVarName = $"__tostr_buf_{bufResult.Id}";
+		EmitStore(block, bufResult, bufVarName, varTypes);
+
+		// Emit format spec as rdata literal
+		var fmtId = MlirContext.Current.NextId();
+		var fmtLabel = $"__fmt_spec_{fmtId}";
+		var fmtUtf8 = System.Text.Encoding.UTF8.GetBytes(formatSpec);
+		var fmtNull = new byte[fmtUtf8.Length + 1];
+		Array.Copy(fmtUtf8, fmtNull, fmtUtf8.Length);
+		result.RdataEntries.Add((fmtLabel, fmtNull, 1));
+
+		var fmtLea = new StdLeaRdataOp(fmtLabel);
+		block.AddOp(fmtLea);
+		var fmtPtr = new StdPtrToI64Op(fmtLea.Result);
+		block.AddOp(fmtPtr);
+		var fmtLen = new StdConstI64Op(fmtUtf8.Length);
+		block.AddOp(fmtLen);
+
+		var lenResult = new StdI64(MlirContext.Current.NextId());
+		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult, fmtPtr.Result, fmtLen.Result], lenResult));
+
+		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
+		return (finalBuf, lenResult);
+	}
+
+	private static (StdI64 Buffer, StdI64 Length) EmitI64ToStringFormatted(
+	  StdValue intValue, string formatSpec, MlirBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
+	  EmitRuntimeToStringFormatted(intValue, "maxon_i64_to_string_fmt", 72, formatSpec, block, varTypes, result);
+
+	private static (StdI64 Buffer, StdI64 Length) EmitU64ToStringFormatted(
+	  StdValue intValue, string formatSpec, MlirBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
+	  EmitRuntimeToStringFormatted(intValue, "maxon_u64_to_string_fmt", 72, formatSpec, block, varTypes, result);
+
+	private static (StdI64 Buffer, StdI64 Length) EmitF64ToStringFormatted(
+	  StdValue floatValue, string formatSpec, MlirBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
+	  EmitRuntimeToStringFormatted(floatValue, "maxon_f64_to_string_fmt", 72, formatSpec, block, varTypes, result);
 
 	/// <summary>
 	/// Handles interpolation of struct values. For String/Character types (which have buffer/length

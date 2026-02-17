@@ -22,6 +22,9 @@ public partial class X86CodeEmitter {
     EmitMaxonU64ToString();
     EmitMaxonF64ToString();
     EmitMaxonBoolToString();
+    EmitMaxonI64ToStringFmt();
+    EmitMaxonU64ToStringFmt();
+    EmitMaxonF64ToStringFmt();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
     EmitMaxonFileOpenRead();
@@ -635,6 +638,758 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, 5);
 
     DefineLabel("rt_boolstr_epilogue");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_i64_to_string_fmt(value_in_rcx, buffer_ptr_in_rdx, fmt_ptr_in_r8, fmt_len_in_r9) -> length_in_rax
+  /// Converts a signed 64-bit integer to a formatted string representation.
+  /// Format specifiers: [0][width][type] where type is d(ecimal), x(hex), X(HEX), b(inary), o(ctal)
+  /// Examples: "04" = zero-pad to width 4, "x" = lowercase hex, "06X" = zero-pad hex to 6
+  /// Buffer must be >= 72 bytes. Returns byte count (excluding null terminator).
+  /// Stack layout:
+  ///   [rbp-0x08] = value
+  ///   [rbp-0x10] = buffer pointer
+  ///   [rbp-0x18] = fmt_ptr
+  ///   [rbp-0x20] = fmt_len
+  ///   [rbp-0x28] = is_negative flag
+  ///   [rbp-0x30] = fill char ('0' or ' ')
+  ///   [rbp-0x38] = min_width
+  ///   [rbp-0x40] = type char ('d', 'x', 'X', 'b', 'o'), 0 = default decimal
+  ///   [rbp-0x48] = digit count (after conversion, before padding)
+  ///   [rbp-0x50] = scratch / write position
+  /// </summary>
+  private void EmitMaxonI64ToStringFmt() {
+    EmitRuntimeFunctionStart("maxon_i64_to_string_fmt", 4, 0x80);
+
+    // ---- Parse format string ----
+    // Default fill = ' ', width = 0, type = 0 (decimal)
+    EmitMovRegImm(X86Register.Rax, ' ');
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // fill = ' '
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // width = 0
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // type = 0
+
+    // If fmt_len == 0, jump to decimal conversion with no formatting
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // RCX = fmt_len
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_i64fmt_convert");
+
+    // RSI = fmt_ptr, RCX = fmt_len (index counter)
+    EmitMovRegMem(X86Register.Rsi, -0x18, 8);
+    EmitMovRegImm(X86Register.Rcx, 0); // parse index
+
+    // Check first char: if '0', set fill='0' and advance
+    EmitBytes(0x8A, 0x06); // MOV AL, [RSI]
+    EmitBytes(0x3C, 0x30); // CMP AL, '0'
+    EmitJcc("nz", "rt_i64fmt_parse_width");
+    EmitMovRegImm(X86Register.Rax, '0');
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // fill = '0'
+    EmitBytes(0x48, 0xFF, 0xC6); // INC RSI
+    EmitBytes(0x48, 0xFF, 0xC1); // INC RCX (consumed one char)
+
+    // Parse width digits
+    DefineLabel("rt_i64fmt_parse_width");
+    EmitMovMemReg(-0x50, X86Register.Rcx, 8); // save parse index
+    EmitMovRegImm(X86Register.Rdi, 0); // RDI = accumulated width
+
+    DefineLabel("rt_i64fmt_width_loop");
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8); // RCX = parse index
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // RDX = fmt_len
+    EmitBytes(0x48, 0x39, 0xD1); // CMP RCX, RDX
+    EmitJcc("ge", "rt_i64fmt_parse_done"); // past end of format string
+    EmitBytes(0x8A, 0x06); // MOV AL, [RSI]
+    // Check if digit: '0' <= AL <= '9'
+    EmitBytes(0x3C, 0x30); // CMP AL, '0'
+    EmitJcc("l", "rt_i64fmt_check_type");
+    EmitBytes(0x3C, 0x39); // CMP AL, '9'
+    EmitJcc("g", "rt_i64fmt_check_type");
+    // It's a digit: width = width * 10 + (AL - '0')
+    EmitBytes(0x0F, 0xB6, 0xC0); // MOVZX EAX, AL
+    EmitBytes(0x48, 0x83, 0xE8, 0x30); // SUB RAX, '0'
+    // RDI = RDI * 10 + RAX
+    EmitBytes(0x48, 0x6B, 0xFF, 0x0A); // IMUL RDI, RDI, 10
+    EmitBytes(0x48, 0x01, 0xC7); // ADD RDI, RAX
+    EmitBytes(0x48, 0xFF, 0xC6); // INC RSI
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitBytes(0x48, 0xFF, 0xC1); // INC RCX
+    EmitMovMemReg(-0x50, X86Register.Rcx, 8);
+    EmitJmp("rt_i64fmt_width_loop");
+
+    // Check if current char is a type specifier
+    DefineLabel("rt_i64fmt_check_type");
+    EmitBytes(0x0F, 0xB6, 0xC0); // MOVZX EAX, AL
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // type = current char
+
+    DefineLabel("rt_i64fmt_parse_done");
+    EmitMovMemReg(-0x38, X86Register.Rdi, 8); // width = accumulated width
+
+    // ---- Convert value based on type ----
+    DefineLabel("rt_i64fmt_convert");
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = type char
+
+    // Check for hex: 'x' = 0x78, 'X' = 0x58
+    EmitBytes(0x48, 0x83, 0xF8, 0x78); // CMP RAX, 'x'
+    EmitJcc("z", "rt_i64fmt_hex");
+    EmitBytes(0x48, 0x83, 0xF8, 0x58); // CMP RAX, 'X'
+    EmitJcc("z", "rt_i64fmt_hex");
+
+    // Check for binary: 'b' = 0x62
+    EmitBytes(0x48, 0x83, 0xF8, 0x62); // CMP RAX, 'b'
+    EmitJcc("z", "rt_i64fmt_binary");
+
+    // Check for octal: 'o' = 0x6F
+    EmitBytes(0x48, 0x83, 0xF8, 0x6F); // CMP RAX, 'o'
+    EmitJcc("z", "rt_i64fmt_octal");
+
+    // Default: decimal conversion
+    // ---- Decimal path ----
+    // Check sign first
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // is_negative = 0
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = value
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("ns", "rt_i64fmt_dec_positive");
+    // Negative
+    EmitBytes(0x48, 0xF7, 0xD9); // NEG rcx
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // store |value|
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // is_negative = 1
+
+    DefineLabel("rt_i64fmt_dec_positive");
+    // R9 = buffer + 64 (work backwards)
+    EmitMovRegMem(X86Register.R9, -0x10, 8); // R9 = buffer
+    EmitAddRegImm(X86Register.R9, 64);
+    EmitBytes(0x41, 0xC6, 0x01, 0x00); // MOV byte [r9], 0
+
+    // Special case zero
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("nz", "rt_i64fmt_dec_loop");
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+    EmitBytes(0x41, 0xC6, 0x01, 0x30); // MOV byte [r9], '0'
+    EmitJmp("rt_i64fmt_dec_digits_done");
+
+    DefineLabel("rt_i64fmt_dec_loop");
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = value
+    EmitMovRegImm(X86Register.Rcx, 10);
+    EmitBytes(0x48, 0x31, 0xD2); // XOR rdx, rdx
+    EmitBytes(0x48, 0xF7, 0xF1); // DIV rcx
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // store quotient
+    EmitAddRegImm(X86Register.Rdx, 0x30);
+    EmitBytes(0x41, 0x88, 0x11); // MOV byte [r9], dl
+    EmitBytes(0x48, 0x83, 0x7D, 0xF8, 0x00); // CMP qword [rbp-8], 0
+    EmitJcc("nz", "rt_i64fmt_dec_loop");
+
+    DefineLabel("rt_i64fmt_dec_digits_done");
+    // digit_count = (buffer + 64) - R9
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitAddRegImm(X86Register.Rax, 64);
+    EmitBytes(0x4C, 0x29, 0xC8); // SUB rax, r9
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // digit_count
+
+    // Now apply padding and write to buffer
+    // Total content: sign (0 or 1) + max(digit_count, width - sign_len)
+    // R9 still points to first digit in temp area (buffer+64 area)
+    EmitJmp("rt_i64fmt_apply_padding");
+
+    // ---- Hex path ----
+    DefineLabel("rt_i64fmt_hex");
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // no sign for hex
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = value (treat as unsigned)
+
+    // R9 = buffer + 64 (work backwards)
+    EmitMovRegMem(X86Register.R9, -0x10, 8);
+    EmitAddRegImm(X86Register.R9, 64);
+    EmitBytes(0x41, 0xC6, 0x01, 0x00); // null terminator
+
+    // Special case zero
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("nz", "rt_i64fmt_hex_loop");
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+    EmitBytes(0x41, 0xC6, 0x01, 0x30); // MOV byte [r9], '0'
+    EmitJmp("rt_i64fmt_hex_done");
+
+    DefineLabel("rt_i64fmt_hex_loop");
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+    // Get lowest nibble: RAX = RCX & 0x0F
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitBytes(0x48, 0x83, 0xE0, 0x0F); // AND rax, 0x0F
+    // Convert to hex digit
+    EmitBytes(0x48, 0x83, 0xF8, 0x0A); // CMP rax, 10
+    EmitJcc("l", "rt_i64fmt_hex_digit");
+    // A-F or a-f: check type char for case
+    EmitMovRegMem(X86Register.Rdx, -0x40, 8); // type char
+    EmitBytes(0x48, 0x83, 0xFA, 0x58); // CMP rdx, 'X'
+    EmitJcc("z", "rt_i64fmt_hex_upper");
+    EmitAddRegImm(X86Register.Rax, 0x57); // 'a' - 10 = 0x57
+    EmitJmp("rt_i64fmt_hex_write");
+    DefineLabel("rt_i64fmt_hex_upper");
+    EmitAddRegImm(X86Register.Rax, 0x37); // 'A' - 10 = 0x37
+    EmitJmp("rt_i64fmt_hex_write");
+    DefineLabel("rt_i64fmt_hex_digit");
+    EmitAddRegImm(X86Register.Rax, 0x30); // '0'
+    DefineLabel("rt_i64fmt_hex_write");
+    EmitBytes(0x41, 0x88, 0x01); // MOV byte [r9], al
+    // Shift right by 4
+    EmitBytes(0x48, 0xC1, 0xE9, 0x04); // SHR rcx, 4
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("nz", "rt_i64fmt_hex_loop");
+
+    DefineLabel("rt_i64fmt_hex_done");
+    // digit_count = (buffer + 64) - R9
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitAddRegImm(X86Register.Rax, 64);
+    EmitBytes(0x4C, 0x29, 0xC8); // SUB rax, r9
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+    EmitJmp("rt_i64fmt_apply_padding");
+
+    // ---- Binary path ----
+    DefineLabel("rt_i64fmt_binary");
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // no sign for binary
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+
+    EmitMovRegMem(X86Register.R9, -0x10, 8);
+    EmitAddRegImm(X86Register.R9, 64);
+    EmitBytes(0x41, 0xC6, 0x01, 0x00);
+
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("nz", "rt_i64fmt_bin_loop");
+    EmitBytes(0x49, 0xFF, 0xC9);
+    EmitBytes(0x41, 0xC6, 0x01, 0x30); // '0'
+    EmitJmp("rt_i64fmt_bin_done");
+
+    DefineLabel("rt_i64fmt_bin_loop");
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitBytes(0x48, 0x83, 0xE0, 0x01); // AND rax, 1
+    EmitAddRegImm(X86Register.Rax, 0x30); // '0' or '1'
+    EmitBytes(0x41, 0x88, 0x01); // MOV byte [r9], al
+    EmitBytes(0x48, 0xD1, 0xE9); // SHR rcx, 1
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("nz", "rt_i64fmt_bin_loop");
+
+    DefineLabel("rt_i64fmt_bin_done");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitAddRegImm(X86Register.Rax, 64);
+    EmitBytes(0x4C, 0x29, 0xC8); // SUB rax, r9
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+    EmitJmp("rt_i64fmt_apply_padding");
+
+    // ---- Octal path ----
+    DefineLabel("rt_i64fmt_octal");
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+
+    EmitMovRegMem(X86Register.R9, -0x10, 8);
+    EmitAddRegImm(X86Register.R9, 64);
+    EmitBytes(0x41, 0xC6, 0x01, 0x00);
+
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("nz", "rt_i64fmt_oct_loop");
+    EmitBytes(0x49, 0xFF, 0xC9);
+    EmitBytes(0x41, 0xC6, 0x01, 0x30);
+    EmitJmp("rt_i64fmt_oct_done");
+
+    DefineLabel("rt_i64fmt_oct_loop");
+    EmitBytes(0x49, 0xFF, 0xC9); // DEC r9
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitBytes(0x48, 0x83, 0xE0, 0x07); // AND rax, 7
+    EmitAddRegImm(X86Register.Rax, 0x30);
+    EmitBytes(0x41, 0x88, 0x01); // MOV byte [r9], al
+    EmitBytes(0x48, 0xC1, 0xE9, 0x03); // SHR rcx, 3
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("nz", "rt_i64fmt_oct_loop");
+
+    DefineLabel("rt_i64fmt_oct_done");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitAddRegImm(X86Register.Rax, 64);
+    EmitBytes(0x4C, 0x29, 0xC8);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+    // Fall through to apply_padding
+
+    // ---- Apply padding and assemble final result ----
+    // R9 = pointer to first digit in temp area
+    // [rbp-0x48] = digit_count
+    // [rbp-0x28] = is_negative (0 or 1)
+    // [rbp-0x30] = fill char
+    // [rbp-0x38] = min_width
+    DefineLabel("rt_i64fmt_apply_padding");
+
+    // sign_len = is_negative
+    EmitMovRegMem(X86Register.R8, -0x28, 8); // R8 = sign_len (0 or 1)
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8); // RCX = digit_count
+    EmitMovRegMem(X86Register.Rdx, -0x38, 8); // RDX = min_width
+
+    // content_len = sign_len + digit_count
+    EmitMovRegReg(X86Register.Rax, X86Register.R8);
+    EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx => content_len
+
+    // pad_count = max(0, min_width - content_len)
+    EmitMovRegReg(X86Register.Rdi, X86Register.Rdx); // RDI = min_width
+    EmitBytes(0x48, 0x29, 0xC7); // SUB rdi, rax => pad_count (may be negative)
+    // If pad_count <= 0, set to 0
+    EmitBytes(0x48, 0x85, 0xFF); // TEST rdi, rdi
+    EmitJcc("g", "rt_i64fmt_has_padding");
+    EmitMovRegImm(X86Register.Rdi, 0);
+    DefineLabel("rt_i64fmt_has_padding");
+
+    // total_len = content_len + pad_count
+    // Now write to buffer: [sign] [pad_chars] [digits]
+    // If fill is '0', sign comes first, then pad, then digits
+    // If fill is ' ', pad comes first, then sign, then digits
+    EmitMovRegMem(X86Register.Rsi, -0x10, 8); // RSI = buffer (write position)
+
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = fill char
+    EmitBytes(0x48, 0x83, 0xF8, 0x30); // CMP rax, '0'
+    EmitJcc("z", "rt_i64fmt_zero_fill");
+
+    // ---- Space fill: [spaces] [sign] [digits] ----
+    // Write pad_count spaces
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdi); // RCX = pad_count
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_i64fmt_space_sign");
+    DefineLabel("rt_i64fmt_space_loop");
+    EmitBytes(0xC6, 0x06, 0x20); // MOV byte [rsi], ' '
+    EmitBytes(0x48, 0xFF, 0xC6); // INC rsi
+    EmitBytes(0x48, 0xFF, 0xC9); // DEC rcx
+    EmitJcc("nz", "rt_i64fmt_space_loop");
+
+    DefineLabel("rt_i64fmt_space_sign");
+    // Write sign if negative
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_i64fmt_copy_digits");
+    EmitBytes(0xC6, 0x06, 0x2D); // MOV byte [rsi], '-'
+    EmitBytes(0x48, 0xFF, 0xC6); // INC rsi
+    EmitJmp("rt_i64fmt_copy_digits");
+
+    // ---- Zero fill: [sign] [zeros] [digits] ----
+    DefineLabel("rt_i64fmt_zero_fill");
+    // Write sign if negative
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_i64fmt_write_zeros");
+    EmitBytes(0xC6, 0x06, 0x2D); // MOV byte [rsi], '-'
+    EmitBytes(0x48, 0xFF, 0xC6); // INC rsi
+
+    DefineLabel("rt_i64fmt_write_zeros");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdi); // RCX = pad_count
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("z", "rt_i64fmt_copy_digits");
+    DefineLabel("rt_i64fmt_zero_loop");
+    EmitBytes(0xC6, 0x06, 0x30); // MOV byte [rsi], '0'
+    EmitBytes(0x48, 0xFF, 0xC6); // INC rsi
+    EmitBytes(0x48, 0xFF, 0xC9); // DEC rcx
+    EmitJcc("nz", "rt_i64fmt_zero_loop");
+
+    // ---- Copy digits from R9 to RSI ----
+    DefineLabel("rt_i64fmt_copy_digits");
+    // RDI = RSI (dest), RSI = R9 (src), but REP MOVSB uses RSI→RDI
+    // Save current write pos
+    EmitMovMemReg(-0x50, X86Register.Rsi, 8);
+    // Set up REP MOVSB: RSI = src (R9), RDI = dest (saved write pos), RCX = count
+    EmitBytes(0x4C, 0x89, 0xCE); // MOV rsi, r9
+    EmitMovRegMem(X86Register.Rdi, -0x50, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8); // digit_count
+    EmitBytes(0xF3, 0xA4); // REP MOVSB
+
+    // Null-terminate: RDI now points past the last copied byte
+    EmitBytes(0xC6, 0x07, 0x00); // MOV byte [rdi], 0
+
+    // Compute total length = RDI - buffer
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // buffer
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdi);
+    EmitBytes(0x48, 0x29, 0xC1); // SUB rcx, rax
+    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
+
+    DefineLabel("rt_i64fmt_epilogue");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_u64_to_string_fmt(value_in_rcx, buffer_ptr_in_rdx, fmt_ptr_in_r8, fmt_len_in_r9) -> length_in_rax
+  /// Unsigned variant — tail-calls i64_fmt. Safe because current unsigned types (byte, u16) are
+  /// zero-extended to 64-bit, so the sign bit is never set and i64_fmt's sign check is a no-op.
+  /// </summary>
+  private void EmitMaxonU64ToStringFmt() {
+    // Tail-call into the signed variant — the i64_fmt sign check (TEST rcx,rcx / JNS)
+    // skips negation when the sign bit is clear, which is always true for our unsigned types.
+    EmitRuntimeFunctionStart("maxon_u64_to_string_fmt", 4, 0x80);
+
+    // Reload args and tear down frame before jumping into the i64 variant
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitMovRegMem(X86Register.R8, -0x18, 8);
+    EmitMovRegMem(X86Register.R9, -0x20, 8);
+    // Tear down our frame and tail-call i64 variant
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xE9); _relCallFixups.Add((_code.Count, "maxon_i64_to_string_fmt")); EmitDword(0);
+  }
+
+  /// <summary>
+  /// maxon_f64_to_string_fmt(value_in_xmm0, buffer_ptr_in_rdx, fmt_ptr_in_r8, fmt_len_in_r9) -> length_in_rax
+  /// Converts a float64 to a formatted string representation.
+  /// Format specifiers: [width][.precision] — e.g., ".2" (2 decimal places), "8.2" (width 8, 2 dp)
+  /// Buffer must be >= 72 bytes. Returns byte count (excluding null terminator).
+  /// Stack layout:
+  ///   [rbp-0x08] = float value (overwritten from XMM0)
+  ///   [rbp-0x10] = buffer pointer
+  ///   [rbp-0x18] = fmt_ptr
+  ///   [rbp-0x20] = fmt_len
+  ///   [rbp-0x28] = is_negative
+  ///   [rbp-0x30] = min_width
+  ///   [rbp-0x38] = precision (default 6, -1 = not set)
+  ///   [rbp-0x40] = integer part (i64)
+  ///   [rbp-0x48] = integer part length (after i64_to_string call)
+  ///   [rbp-0x50] = scratch / write position
+  ///   [rbp-0x58] = fill char ('0' or ' ')
+  /// </summary>
+  private void EmitMaxonF64ToStringFmt() {
+    EmitRuntimeFunctionStart("maxon_f64_to_string_fmt", 4, 0xC0);
+
+    // Overwrite [rbp-8] with the actual float value from XMM0
+    EmitMovMemXmm(-0x08, X86XmmRegister.Xmm0, FloatPrecision.F64);
+
+    // ---- Parse format string: [0][width][.precision] ----
+    // Defaults
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // width = 0
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // precision = -1 (not specified)
+    EmitMovRegImm(X86Register.Rax, ' ');
+    EmitMovMemReg(-0x58, X86Register.Rax, 8); // fill = ' '
+
+    // If fmt_len == 0, use default formatting (delegates to maxon_f64_to_string)
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("z", "rt_f64fmt_default");
+
+    EmitMovRegMem(X86Register.Rsi, -0x18, 8); // RSI = fmt_ptr
+    EmitMovRegImm(X86Register.Rcx, 0); // parse index
+
+    // Check for '0' fill
+    EmitBytes(0x8A, 0x06); // MOV AL, [RSI]
+    EmitBytes(0x3C, 0x30); // CMP AL, '0'
+    EmitJcc("nz", "rt_f64fmt_parse_width");
+    // Check next char — if it's a '.', then '0' is not a fill char, it's just before precision
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // fmt_len
+    EmitBytes(0x48, 0x83, 0xFA, 0x01); // CMP rdx, 1
+    EmitJcc("le", "rt_f64fmt_parse_width"); // only "0" — treat as width 0
+    EmitBytes(0x8A, 0x46, 0x01); // MOV AL, [RSI+1]
+    EmitBytes(0x3C, 0x2E); // CMP AL, '.'
+    EmitJcc("z", "rt_f64fmt_parse_width"); // "0." means precision, not fill
+    // It's a fill char
+    EmitMovRegImm(X86Register.Rax, '0');
+    EmitMovMemReg(-0x58, X86Register.Rax, 8);
+    EmitBytes(0x48, 0xFF, 0xC6); // INC RSI
+    EmitBytes(0x48, 0xFF, 0xC1); // INC RCX
+
+    // Parse width digits
+    DefineLabel("rt_f64fmt_parse_width");
+    EmitMovMemReg(-0x50, X86Register.Rcx, 8); // save parse index
+    EmitMovRegImm(X86Register.Rdi, 0); // accumulated width
+
+    DefineLabel("rt_f64fmt_width_loop");
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8);
+    EmitBytes(0x48, 0x39, 0xD1); // CMP rcx, rdx
+    EmitJcc("ge", "rt_f64fmt_width_done");
+    EmitBytes(0x8A, 0x06); // MOV AL, [RSI]
+    EmitBytes(0x3C, 0x2E); // CMP AL, '.'
+    EmitJcc("z", "rt_f64fmt_dot");
+    EmitBytes(0x3C, 0x30); // CMP AL, '0'
+    EmitJcc("l", "rt_f64fmt_width_done");
+    EmitBytes(0x3C, 0x39); // CMP AL, '9'
+    EmitJcc("g", "rt_f64fmt_width_done");
+    // digit
+    EmitBytes(0x0F, 0xB6, 0xC0); // MOVZX EAX, AL
+    EmitBytes(0x48, 0x83, 0xE8, 0x30); // SUB rax, '0'
+    EmitBytes(0x48, 0x6B, 0xFF, 0x0A); // IMUL rdi, rdi, 10
+    EmitBytes(0x48, 0x01, 0xC7); // ADD rdi, rax
+    EmitBytes(0x48, 0xFF, 0xC6); // INC RSI
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitBytes(0x48, 0xFF, 0xC1);
+    EmitMovMemReg(-0x50, X86Register.Rcx, 8);
+    EmitJmp("rt_f64fmt_width_loop");
+
+    DefineLabel("rt_f64fmt_dot");
+    EmitMovMemReg(-0x30, X86Register.Rdi, 8); // save width
+    EmitBytes(0x48, 0xFF, 0xC6); // INC RSI (skip '.')
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitBytes(0x48, 0xFF, 0xC1);
+    EmitMovMemReg(-0x50, X86Register.Rcx, 8);
+
+    // Parse precision digits
+    EmitMovRegImm(X86Register.Rdi, 0); // accumulated precision
+    DefineLabel("rt_f64fmt_prec_loop");
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8);
+    EmitBytes(0x48, 0x39, 0xD1);
+    EmitJcc("ge", "rt_f64fmt_prec_done");
+    EmitBytes(0x8A, 0x06); // MOV AL, [RSI]
+    EmitBytes(0x3C, 0x30);
+    EmitJcc("l", "rt_f64fmt_prec_done");
+    EmitBytes(0x3C, 0x39);
+    EmitJcc("g", "rt_f64fmt_prec_done");
+    EmitBytes(0x0F, 0xB6, 0xC0);
+    EmitBytes(0x48, 0x83, 0xE8, 0x30);
+    EmitBytes(0x48, 0x6B, 0xFF, 0x0A);
+    EmitBytes(0x48, 0x01, 0xC7);
+    EmitBytes(0x48, 0xFF, 0xC6);
+    EmitMovRegMem(X86Register.Rcx, -0x50, 8);
+    EmitBytes(0x48, 0xFF, 0xC1);
+    EmitMovMemReg(-0x50, X86Register.Rcx, 8);
+    EmitJmp("rt_f64fmt_prec_loop");
+
+    DefineLabel("rt_f64fmt_prec_done");
+    EmitMovMemReg(-0x38, X86Register.Rdi, 8); // precision
+    EmitJmp("rt_f64fmt_convert");
+
+    DefineLabel("rt_f64fmt_width_done");
+    EmitMovMemReg(-0x30, X86Register.Rdi, 8); // width
+
+    // ---- Convert ----
+    DefineLabel("rt_f64fmt_convert");
+    // If precision == -1 and width == 0, delegate to default f64_to_string
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitBytes(0x48, 0x83, 0xF8, 0xFF); // CMP rax, -1 (sign-extended byte)
+    EmitJcc("nz", "rt_f64fmt_has_precision");
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("nz", "rt_f64fmt_has_width_no_prec");
+
+    // No precision, no width — use default
+    DefineLabel("rt_f64fmt_default");
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_f64_to_string")); EmitDword(0);
+    EmitJmp("rt_f64fmt_epilogue");
+
+    // Has width but no precision — use default formatting, then pad
+    DefineLabel("rt_f64fmt_has_width_no_prec");
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_f64_to_string")); EmitDword(0);
+    // RAX = content_len from default conversion
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // save content_len
+    EmitJmp("rt_f64fmt_apply_width");
+
+    DefineLabel("rt_f64fmt_has_precision");
+    // If precision > 20, clamp to 20
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitBytes(0x48, 0x83, 0xF8, 0x14); // CMP rax, 20
+    EmitJcc("le", "rt_f64fmt_prec_ok");
+    EmitMovRegImm(X86Register.Rax, 20);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+    DefineLabel("rt_f64fmt_prec_ok");
+
+    // ---- Handle sign ----
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // is_negative = 0
+
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64);
+    EmitBytes(0x66, 0x0F, 0x57, 0xC9); // XORPD xmm1, xmm1 (zero)
+    EmitUcomisXmm(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0, FloatPrecision.F64);
+    EmitJcc("be", "rt_f64fmt_positive");
+    // Negative: negate
+    EmitSubXmm(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0, FloatPrecision.F64);
+    EmitMovMemXmm(-0x08, X86XmmRegister.Xmm1, FloatPrecision.F64);
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    DefineLabel("rt_f64fmt_positive");
+    // ---- Extract integer part ----
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64);
+
+    // Rounding: add 0.5 * 10^-precision to handle cases like 3.14159 with .2 → 3.14
+    // We need proper rounding: frac * 10^precision, + 0.5, truncate
+    // First get integer part
+    EmitCvttFloat2Si(X86Register.Rax, X86XmmRegister.Xmm0, FloatPrecision.F64);
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // integer part
+
+    // Write integer part to buffer (offset by 1 if negative for '-' prefix)
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitBytes(0x48, 0x01, 0xCA); // ADD rdx, rcx
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // int_part_len
+
+    // Write '-' if negative
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("z", "rt_f64fmt_no_sign");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitBytes(0xC6, 0x00, 0x2D); // MOV byte [rax], '-'
+    // Adjust int_part_len to include sign
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+
+    DefineLabel("rt_f64fmt_no_sign");
+    // ---- Handle precision 0: no decimal point ----
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_f64fmt_has_frac");
+    // Just the integer part, null-terminate
+    EmitMovRegMem(X86Register.Rdi, -0x10, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitBytes(0x48, 0x01, 0xCF); // ADD rdi, rcx
+    EmitBytes(0xC6, 0x07, 0x00); // null-terminate
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // content_len = int_part_len
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+    EmitJmp("rt_f64fmt_apply_width");
+
+    DefineLabel("rt_f64fmt_has_frac");
+    // Write '.' after integer part
+    EmitMovRegMem(X86Register.Rdi, -0x10, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8);
+    EmitBytes(0x48, 0x01, 0xCF); // ADD rdi, rcx
+    EmitBytes(0xC6, 0x07, 0x2E); // MOV byte [rdi], '.'
+    EmitBytes(0x48, 0xFF, 0xC7); // INC rdi
+
+    // ---- Compute fractional part: (|value| - int_part) * 10^precision + 0.5, truncate ----
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64); // |value|
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);
+    EmitCvtSi2Float(X86XmmRegister.Xmm1, X86Register.Rax, FloatPrecision.F64);
+    EmitSubXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64); // XMM0 = frac part
+
+    // Multiply by 10^precision: loop precision times, multiply by 10
+    EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(10.0));
+    EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8); // MOVQ xmm1, rax
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // precision
+
+    DefineLabel("rt_f64fmt_mul_loop");
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("z", "rt_f64fmt_mul_done");
+    EmitMulXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64);
+    EmitBytes(0x48, 0xFF, 0xC9); // DEC rcx
+    EmitJmp("rt_f64fmt_mul_loop");
+
+    DefineLabel("rt_f64fmt_mul_done");
+    // Add 0.5 for rounding
+    EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(0.5));
+    EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8); // MOVQ xmm1, rax
+    EmitAddXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64);
+    EmitCvttFloat2Si(X86Register.Rax, X86XmmRegister.Xmm0, FloatPrecision.F64); // RAX = frac digits
+
+    // Write precision digits (right-to-left then place)
+    // We write them backwards into a temp area, then copy forward
+    // Use [rbp-0x80..0x80+20] as temp area (buffer+60..80 area is safe since buffer >= 72)
+    EmitMovMemReg(-0x50, X86Register.Rdi, 8); // save write pos (after '.')
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // precision
+    EmitMovMemReg(-0x60, X86Register.Rcx, 8); // save precision loop counter
+
+    // Write digits from LSB to MSB at [rdi+precision-1] down to [rdi]
+    DefineLabel("rt_f64fmt_frac_write");
+    EmitMovRegMem(X86Register.Rcx, -0x60, 8);
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("z", "rt_f64fmt_frac_written");
+    EmitBytes(0x48, 0xFF, 0xC9); // DEC rcx
+    EmitMovMemReg(-0x60, X86Register.Rcx, 8);
+    // Divide RAX by 10
+    EmitBytes(0x48, 0x31, 0xD2); // XOR rdx, rdx
+    EmitMovRegImm(X86Register.R8, 10);
+    EmitBytes(0x49, 0xF7, 0xF0); // DIV r8
+    EmitAddRegImm(X86Register.Rdx, 0x30); // remainder + '0'
+    // Write at [rdi + rcx]
+    EmitMovRegMem(X86Register.Rdi, -0x50, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x60, 8);
+    EmitBytes(0x88, 0x14, 0x0F); // MOV byte [rdi+rcx], dl
+    EmitJmp("rt_f64fmt_frac_write");
+
+    DefineLabel("rt_f64fmt_frac_written");
+    // Null-terminate after all precision digits
+    EmitMovRegMem(X86Register.Rdi, -0x50, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // precision
+    EmitBytes(0x48, 0x01, 0xCF); // ADD rdi, rcx
+    EmitBytes(0xC6, 0x07, 0x00); // null-terminate
+
+    // content_len = int_part_len + 1 (dot) + precision
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // int_part_len
+    EmitAddRegImm(X86Register.Rax, 1); // dot
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // content_len
+
+    // ---- Apply width padding ----
+    DefineLabel("rt_f64fmt_apply_width");
+    EmitMovRegMem(X86Register.Rdx, -0x30, 8); // min_width
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // content_len
+    EmitBytes(0x48, 0x39, 0xC2); // CMP rdx, rax
+    EmitJcc("le", "rt_f64fmt_no_pad"); // width <= content_len, no padding needed
+
+    // pad_count = width - content_len
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitBytes(0x48, 0x29, 0xC1); // SUB rcx, rax => pad_count
+
+    // Shift existing content right by pad_count
+    // First, compute new total length
+    EmitMovRegReg(X86Register.R8, X86Register.Rdx); // R8 = total_len (= width)
+
+    // Move content from buffer to buffer+pad_count (memmove right)
+    // Work backwards to avoid overlap issues
+    EmitMovRegMem(X86Register.Rsi, -0x10, 8); // buffer
+    EmitMovRegMem(X86Register.Rdi, -0x48, 8); // content_len
+    // src = buffer + content_len - 1, dst = buffer + width - 1, count = content_len
+    EmitMovRegReg(X86Register.Rax, X86Register.Rsi);
+    EmitMovRegMem(X86Register.Rdx, -0x48, 8);
+    EmitBytes(0x48, 0x01, 0xD0); // ADD rax, rdx
+    EmitBytes(0x48, 0xFF, 0xC8); // DEC rax => src_end = buffer + content_len - 1
+
+    EmitMovRegReg(X86Register.Rdi, X86Register.Rsi);
+    EmitBytes(0x4C, 0x01, 0xC7); // ADD rdi, r8
+    EmitBytes(0x48, 0xFF, 0xCF); // DEC rdi => dst_end = buffer + width - 1
+
+    EmitMovRegMem(X86Register.Rdx, -0x48, 8); // count = content_len
+
+    DefineLabel("rt_f64fmt_shift_loop");
+    EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
+    EmitJcc("z", "rt_f64fmt_shift_done");
+    // Copy byte [rax] -> [rdi]
+    EmitBytes(0x8A, 0x08); // MOV CL, [rax]
+    EmitBytes(0x88, 0x0F); // MOV [rdi], CL
+    EmitBytes(0x48, 0xFF, 0xC8); // DEC rax
+    EmitBytes(0x48, 0xFF, 0xCF); // DEC rdi
+    EmitBytes(0x48, 0xFF, 0xCA); // DEC rdx
+    EmitJmp("rt_f64fmt_shift_loop");
+
+    DefineLabel("rt_f64fmt_shift_done");
+    // Fill padding area with fill char
+    EmitMovRegMem(X86Register.Rsi, -0x10, 8); // buffer start
+    // pad_count = width - content_len (recalculate since we clobbered regs)
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // width
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // content_len
+    EmitBytes(0x48, 0x29, 0xC1); // SUB rcx, rax => pad_count
+    EmitMovRegMem(X86Register.Rax, -0x58, 8); // fill char
+
+    DefineLabel("rt_f64fmt_fill_loop");
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_f64fmt_fill_done");
+    EmitBytes(0x88, 0x06); // MOV [rsi], al
+    EmitBytes(0x48, 0xFF, 0xC6); // INC rsi
+    EmitBytes(0x48, 0xFF, 0xC9); // DEC rcx
+    EmitJmp("rt_f64fmt_fill_loop");
+
+    DefineLabel("rt_f64fmt_fill_done");
+    // Null-terminate at buffer + width
+    EmitMovRegMem(X86Register.Rsi, -0x10, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // width
+    EmitBytes(0x48, 0x01, 0xC6); // ADD rsi, rax
+    EmitBytes(0xC6, 0x06, 0x00); // null-terminate
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // return width as length
+    EmitJmp("rt_f64fmt_epilogue");
+
+    DefineLabel("rt_f64fmt_no_pad");
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // return content_len
+
+    DefineLabel("rt_f64fmt_epilogue");
     EmitRuntimeFunctionEnd();
   }
 

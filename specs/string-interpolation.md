@@ -888,3 +888,152 @@ end 'main'
 ```stdout
 Priorities: low and high
 ```
+
+### Integer Format Specifier - Zero Padding
+
+<!-- test: int-format-zero-pad -->
+```maxon
+function main() returns ExitCode
+  var n = 42
+  print("{n:04}\n")
+  var m = 7
+  print("{m:04}\n")
+  var big = 12345
+  print("{big:04}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0042
+0007
+12345
+```
+
+### Integer Format Specifier - Hex
+
+<!-- test: int-format-hex -->
+```maxon
+function main() returns ExitCode
+  var n = 255
+  print("{n:x}\n")
+  print("{n:X}\n")
+  var m = 0
+  print("{m:x}\n")
+  var big = 65535
+  print("{big:x}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ff
+FF
+0
+ffff
+```
+
+### Integer Format Specifier - Width
+
+<!-- test: int-format-width -->
+```maxon
+function main() returns ExitCode
+  var n = 42
+  print("[{n:6}]\n")
+  print("[{n:2}]\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[    42]
+[42]
+```
+
+### Integer Format Specifier - Negative Zero Padding
+
+<!-- test: int-format-neg-zero-pad -->
+```maxon
+function main() returns ExitCode
+  var n = -42
+  print("{n:06}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-00042
+```
+
+### Float Format Specifier - Precision
+
+<!-- test: float-format-precision -->
+```maxon
+function main() returns ExitCode
+  var f = 3.14159
+  print("{f:.2}\n")
+  print("{f:.4}\n")
+  var g = 2.0
+  print("{g:.3}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3.14
+3.1416
+2.000
+```
+
+### Float Format Specifier - Width and Precision
+
+<!-- test: float-format-width-precision -->
+```maxon
+function main() returns ExitCode
+  var f = 3.14
+  print("[{f:8.2}]\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[    3.14]
+```
+
+### Enum Raw Value Format Specifier
+
+<!-- test: enum-rawvalue-format -->
+```maxon
+enum ErrorCode
+  ok = 0
+  notFound = 404
+  serverError = 500
+end 'ErrorCode'
+
+function main() returns ExitCode
+  var code = ErrorCode.notFound
+  print("E{code.rawValue:04}\n")
+  var ok = ErrorCode.ok
+  print("E{ok.rawValue:04}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+E0404
+E0000
+```

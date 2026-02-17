@@ -52,6 +52,8 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 
 // Strings
 "Hello, {name}!"    // interpolation with {}
+"{n:04}"            // format specifier: zero-pad to width 4
+"{f:.2}"            // format specifier: 2 decimal places
 "Line1\nLine2"      // escape sequences: \n \t \\ \" \{ \}
 ```
 
@@ -486,7 +488,8 @@ try c.asciiValue()                   // throws CharacterError
 | `Equatable` | `equals(other) -> bool` |
 | `Comparable` | `compare(other) -> Ordering` |
 | `Cloneable` | `clone() -> Self` |
-| `Stringable` | `toString(format) -> String` |
+| `Stringable` | `toString() -> String` |
+| `FormattedStringable` | `toString(format) -> String` |
 | `Iterable uses E` | `next() -> E throws IterationError` |
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
 | `Error` | (marker for throwable enums) |

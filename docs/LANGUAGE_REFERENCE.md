@@ -177,6 +177,46 @@ print("Use \{expr\} syntax")   // "Use {expr} syntax"
 
 Any expression can be embedded. Built-in types (`int`, `float`, `bool`) are automatically converted to strings. Custom types must implement the `Stringable` interface.
 
+**Format Specifiers** (control output formatting)
+
+Append a format specifier after a colon inside the interpolation braces: `{expr:spec}`
+
+*Integer format specifiers:* `[0][width][type]`
+- `0` — pad with zeros instead of spaces
+- `width` — minimum output width (right-aligned)
+- `type` — `d` decimal (default), `x` lowercase hex, `X` uppercase hex, `b` binary, `o` octal
+
+```maxon
+var n = 42
+print("{n:04}")      // "0042"  — zero-pad to width 4
+print("{n:6}")       // "    42" — space-pad to width 6
+print("{n:x}")       // "2a"    — lowercase hex
+print("{n:04X}")     // "002A"  — zero-padded uppercase hex
+
+var neg = -42
+print("{neg:06}")    // "-00042" — sign comes before padding
+```
+
+*Float format specifiers:* `[0][width][.precision]`
+- `0` — pad with zeros instead of spaces
+- `width` — minimum total output width (right-aligned)
+- `.precision` — number of decimal places (max 20)
+
+```maxon
+var f = 3.14159
+print("{f:.2}")      // "3.14"     — 2 decimal places
+print("{f:.4}")      // "3.1416"   — 4 decimal places (rounded)
+print("{f:8.2}")     // "    3.14" — width 8, 2 decimal places
+```
+
+Custom types can implement `FormattedStringable` to support format specifiers:
+
+```maxon
+interface FormattedStringable
+    function toString(format String) returns String
+end 'FormattedStringable'
+```
+
 **Boolean Literals**
 ```maxon
 true
