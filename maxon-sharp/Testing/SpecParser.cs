@@ -112,10 +112,10 @@ public static partial class SpecParser {
           ExpectedStderr = stderr
         };
       } else {
-        if (exitCode == null && stdout == null && requiredMLIR == null && requiredRdata == null) {
+        if (exitCode == null && stdout == null && requiredMLIR == null && requiredRdata == null && requiredData == null) {
           throw new Exception(
             $"Test '{testName}' has a maxon block but no result checks. " +
-            "Add an exitcode, stdout, maxoncstderr, RequiredMLIR, or RequiredRdata block.");
+            "Add an exitcode, stdout, maxoncstderr, RequiredMLIR, RequiredRdata, or RequiredData block.");
         }
         expectation = new SuccessExpectation {
           ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
@@ -213,7 +213,7 @@ public static partial class SpecParser {
   }
 
   private static readonly HashSet<string> KnownCodeBlockLanguages = [
-    "maxon", "exitcode", "stdout", "maxoncstderr", "RequiredMLIR", "RequiredRdata"
+    "maxon", "exitcode", "stdout", "maxoncstderr", "RequiredMLIR", "RequiredRdata", "RequiredData"
   ];
 
   private static void ValidateCodeBlockLanguages(string testName, string testSection) {

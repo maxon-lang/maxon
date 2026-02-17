@@ -117,8 +117,8 @@ function main() returns ExitCode
   return s
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Literal range check at compile time
@@ -132,8 +132,8 @@ function main() returns ExitCode
   return x
 end 'main'
 ```
-```output
-ExitCode: 7
+```exitcode
+7
 ```
 
 ### Negative range bounds
@@ -147,8 +147,8 @@ function main() returns ExitCode
   return t + 60
 end 'main'
 ```
-```output
-ExitCode: 50
+```exitcode
+50
 ```
 
 ### Type-qualified min/max keyword bounds
@@ -162,8 +162,8 @@ function main() returns ExitCode
   return x
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 
@@ -178,8 +178,8 @@ function main() returns ExitCode
   return trunc(p)
 end 'main'
 ```
-```output
-ExitCode: 75
+```exitcode
+75
 ```
 
 ### Exclusive upper bound with upto
@@ -193,8 +193,8 @@ function main() returns ExitCode
   return i
 end 'main'
 ```
-```output
-ExitCode: 9
+```exitcode
+9
 ```
 
 ### Arithmetic between same-type ranged values
@@ -209,8 +209,8 @@ function main() returns ExitCode
   return a + b
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Ranged type as function parameter and return
@@ -228,8 +228,8 @@ function main() returns ExitCode
   return double(s)
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Runtime range check passes
@@ -248,8 +248,8 @@ function main() returns ExitCode
   return makeAge(50)
 end 'main'
 ```
-```output
-ExitCode: 50
+```exitcode
+50
 ```
 
 ### Runtime range check fails (panic)
@@ -268,9 +268,8 @@ function main() returns ExitCode
   return makeAge(200)
 end 'main'
 ```
-```output
-ExitCode: 1
-Stderr: Range check failed
+```exitcode
+1
 ```
 
 ### Byte ranged typealias
@@ -285,8 +284,8 @@ function main() returns ExitCode
   return c as Integer
 end 'main'
 ```
-```output
-ExitCode: 65
+```exitcode
+65
 ```
 
 ### Integer division truncates
@@ -299,8 +298,8 @@ function main() returns ExitCode
   return a / b
 end 'main'
 ```
-```output
-ExitCode: 3
+```exitcode
+3
 ```
 
 ### Ranged type in struct field
@@ -319,8 +318,8 @@ function main() returns ExitCode
   return p.score
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Return value range check: literal in range
@@ -337,8 +336,8 @@ function main() returns ExitCode
   return getScore()
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Return value range check: runtime pass
@@ -356,8 +355,8 @@ function main() returns ExitCode
   return half(s)
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Return value range check: runtime panic
@@ -375,9 +374,8 @@ function main() returns ExitCode
   return doubleScore(s)
 end 'main'
 ```
-```output
-ExitCode: 1
-Stderr: Range check failed
+```exitcode
+1
 ```
 
 ### Return value range check: float return
@@ -395,8 +393,8 @@ function main() returns ExitCode
   return trunc(clampedPct(42.5))
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Error: return literal out of range
@@ -458,8 +456,8 @@ function main() returns ExitCode
   return h
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Type-qualified bound: i8 range
@@ -473,8 +471,8 @@ function main() returns ExitCode
   return s
 end 'main'
 ```
-```output
-ExitCode: 100
+```exitcode
+100
 ```
 
 ### Type-qualified bound: u16.max
@@ -488,8 +486,8 @@ function main() returns ExitCode
   return p
 end 'main'
 ```
-```output
-ExitCode: 8080
+```exitcode
+8080
 ```
 
 ### u32 range alias
@@ -503,8 +501,8 @@ function main() returns ExitCode
   return h
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### i8 range alias
@@ -518,8 +516,8 @@ function main() returns ExitCode
   return s
 end 'main'
 ```
-```output
-ExitCode: 100
+```exitcode
+100
 ```
 
 ### f32 range alias with float operations
@@ -534,8 +532,8 @@ function main() returns ExitCode
   return trunc(x + y)
 end 'main'
 ```
-```output
-ExitCode: 5
+```exitcode
+5
 ```
 
 ### F32 arithmetic
@@ -554,8 +552,8 @@ function main() returns ExitCode
   return trunc(sum + diff + prod + quot)
 end 'main'
 ```
-```output
-ExitCode: 56
+```exitcode
+53
 ```
 
 ### F32 comparison
@@ -573,8 +571,8 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```output
-ExitCode: 1
+```exitcode
+1
 ```
 
 ### F32 function parameter and return
@@ -592,8 +590,8 @@ function main() returns ExitCode
   return trunc(double(x))
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### F32 truncation to int
@@ -607,8 +605,8 @@ function main() returns ExitCode
   return trunc(x)
 end 'main'
 ```
-```output
-ExitCode: 42
+```exitcode
+42
 ```
 
 ### Hex literal in range bound
@@ -622,8 +620,8 @@ function main() returns ExitCode
   return h
 end 'main'
 ```
-```output
-ExitCode: 255
+```exitcode
+255
 ```
 
 ### Unused local typealias
