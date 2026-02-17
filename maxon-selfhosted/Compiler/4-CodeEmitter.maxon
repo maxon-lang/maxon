@@ -7,9 +7,8 @@ export typealias StackSize = int(0 to u64.max)
 export typealias CodeOffset = int(0 to u64.max)
 export typealias MachineWord = int(0 to u64.max)
 
-// Runtime stub offsets (filled in during emit)
-var _writeStdoutOffset = 0
-var _i64ToStringOffset = 0
+// Runtime stub offsets are returned from emitWriteStdout/emitI64ToString
+// and threaded to call sites as parameters.
 
 function emitPrologue(code ByteBuffer, stackSize StackSize)
     // push rbp
@@ -137,8 +136,8 @@ end 'emitDword'
 
 // write_stdout(ptr_in_rcx, len_in_rdx)
 // Stack: [rbp-8]=ptr, [rbp-16]=len, [rbp-24]=handle, [rbp-32]=bytesWritten
-function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray)
-    _writeStdoutOffset = code.count()
+function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray) returns CodeOffset
+    let offset = code.count()
 
     // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x40
     code.push(0x55)
@@ -237,12 +236,14 @@ function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray)
     code.push(0xEC)
     code.push(0x5D)
     code.push(0xC3)
+
+    return offset
 end 'emitWriteStdout'
 
 // i64_to_string(value_in_rcx, buffer_in_rdx) -> length in RAX
 // Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=is_negative/length
-function emitI64ToString(code ByteBuffer)
-    _i64ToStringOffset = code.count()
+function emitI64ToString(code ByteBuffer) returns CodeOffset
+    let offset = code.count()
 
     // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x30
     code.push(0x55)
@@ -486,12 +487,14 @@ function emitI64ToString(code ByteBuffer)
     code.push(0xEC)
     code.push(0x5D)
     code.push(0xC3)
+
+    return offset
 end 'emitI64ToString'
 
 // --- Print Operations ---
 
 // Emit printLiteral: jump over data island, then call write_stdout
-function emitPrintLiteral(code ByteBuffer, data ByteBuffer)
+function emitPrintLiteral(code ByteBuffer, data ByteBuffer, writeStdoutOffset CodeOffset)
     let dataLen = data.count()
     if dataLen == 0 'empty'
         return
@@ -529,12 +532,12 @@ function emitPrintLiteral(code ByteBuffer, data ByteBuffer)
     emitDword(code, value: dataLen)
 
     // call write_stdout
-    emitRelativeCall(code, targetOffset: _writeStdoutOffset)
+    emitRelativeCall(code, targetOffset: writeStdoutOffset)
 end 'emitPrintLiteral'
 
 // Emit printInt: value assumed in RAX, convert to string then print
 // Uses stack buffer at [rbp-<high offset>] for the conversion buffer
-function emitPrintInt(code ByteBuffer)
+function emitPrintInt(code ByteBuffer, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
     // Save rax (the value) to rcx for i64_to_string arg1
     // mov rcx, rax
     code.push(0x48)
@@ -548,7 +551,7 @@ function emitPrintInt(code ByteBuffer)
     code.push(0x24)
 
     // call i64_to_string (returns length in rax)
-    emitRelativeCall(code, targetOffset: _i64ToStringOffset)
+    emitRelativeCall(code, targetOffset: i64ToStringOffset)
 
     // Now rax = length, buffer at rsp
     // mov rdx, rax (length)
@@ -563,7 +566,7 @@ function emitPrintInt(code ByteBuffer)
     code.push(0x24)
 
     // call write_stdout
-    emitRelativeCall(code, targetOffset: _writeStdoutOffset)
+    emitRelativeCall(code, targetOffset: writeStdoutOffset)
 end 'emitPrintInt'
 
 // Emit X86 ops to machine code.
@@ -606,8 +609,8 @@ export function emit(x86Ops X86OpArray) returns CodeResult
 
     // Emit runtime stubs (before main, so offsets are known)
     logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
-    emitWriteStdout(code, iatFixups: iatFixups)
-    emitI64ToString(code)
+    let writeStdoutOff = emitWriteStdout(code, iatFixups: iatFixups)
+    let i64ToStringOff = emitI64ToString(code)
 
     // Emit main function body
     let mainOffset = code.count()
@@ -625,8 +628,8 @@ export function emit(x86Ops X86OpArray) returns CodeResult
             imulRegReg(destReg, srcReg) then emitImulRegReg(code)
             pushRax then emitPushRax(code)
             popRcx then emitPopRcx(code)
-            printLiteral(data) then emitPrintLiteral(code, data: data)
-            printInt then emitPrintInt(code)
+            printLiteral(data) then emitPrintLiteral(code, data: data, writeStdoutOffset: writeStdoutOff)
+            printInt then emitPrintInt(code, writeStdoutOffset: writeStdoutOff, i64ToStringOffset: i64ToStringOff)
         end 'emit'
     end 'opLoop'
 

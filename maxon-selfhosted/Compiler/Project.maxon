@@ -1,0 +1,48 @@
+// Project type: encapsulates all per-project compilation state.
+// Each project has its own query database, value ID counter, and parser state.
+// This enables multiple projects to be compiled independently (e.g., in an LSP server).
+
+export type Project
+    // Query database (incremental compilation cache)
+    export var db QueryDatabase
+    export var dbInitialized bool
+
+    // SSA value ID counter (MLIR pipeline)
+    export var nextValueId_ ValueId
+
+    // Parser symbol table (reset per function parse)
+    export var parserVarNames StringArray
+    export var parserVarSlots VarSlotArray
+    export var parserNextSlot VarSlot
+
+    // Project metadata
+    export var rootPath String
+    export var isSingleFile bool
+end 'Project'
+
+export typealias ProjectArray = Array with Project
+
+export function createProject(rootPath String, isSingleFile bool) returns Project
+    return Project{
+        db: QueryDatabase{
+            currentRevision: 0,
+            sourceFiles: SourceFileMap{},
+            sourcePaths: StringArray{},
+            tokenCache: TokenCacheMap{},
+            parseCache: ParseCacheMap{},
+            allMaxonOpsCache: MaxonOpsMemo{value: MaxonOpArray{}, computedAt: 0, verifiedAt: 0},
+            allStdOpsCache: StdOpsMemo{value: StdOpArray{}, computedAt: 0, verifiedAt: 0},
+            allX86OpsCache: X86OpsMemo{value: X86OpArray{}, computedAt: 0, verifiedAt: 0},
+            codeCache: CodeMemo{value: CodeResult{code: ByteBuffer.create(0), mainCallFixupOffset: 0, iatFixups: IatFixupArray{}}, computedAt: 0, verifiedAt: 0},
+            dependencies: DependencyArray{},
+            activeQueryStack: QueryKeyArray{}
+        },
+        dbInitialized: false,
+        nextValueId_: 0,
+        parserVarNames: StringArray{},
+        parserVarSlots: VarSlotArray{},
+        parserNextSlot: 0,
+        rootPath: rootPath,
+        isSingleFile: isSingleFile
+    }
+end 'createProject'

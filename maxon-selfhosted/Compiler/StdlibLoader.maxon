@@ -1,0 +1,82 @@
+var _cachedStdlibOps = MaxonOpArray{}
+var _stdlibLoaded = false
+var _stdlibNextValueId = 0
+
+export function findStdlibPath() returns String
+    var dir = Directory.currentDirectory()
+    var attempts = 0
+    while attempts < 10 'search'
+        let candidate = "{dir}/stdlib_selfhosted"
+        if Directory.exists(candidate) 'found'
+            return candidate
+        end 'found'
+        // Go up one level (same pattern as SpecTestRunner findProjectRoot)
+        let lastSlash = try dir.findLast("/") otherwise 'tryBackslash'
+            let lastBs = try dir.findLast("\\") otherwise 'noParent'
+                return ""
+            end 'noParent'
+            dir = dir.slice(dir.startIndex(), endIndex: lastBs)
+            attempts = attempts + 1
+            continue
+        end 'tryBackslash'
+        dir = dir.slice(dir.startIndex(), endIndex: lastSlash)
+        attempts = attempts + 1
+    end 'search'
+    return ""
+end 'findStdlibPath'
+
+export function getStdlibOps(project Project) returns MaxonOpArray
+    if _stdlibLoaded 'cached'
+        return _cachedStdlibOps
+    end 'cached'
+
+    let stdlibPath = findStdlibPath()
+    if stdlibPath == "" 'noStdlib'
+        logDebug(LogCategory.compiler, message: "No stdlib_selfhosted/ found, skipping stdlib")
+        _stdlibLoaded = true
+        return _cachedStdlibOps
+    end 'noStdlib'
+
+    logDebug(LogCategory.compiler, message: "Loading stdlib from {stdlibPath}")
+
+    // Whitelist of stdlib files to load
+    var stdlibFiles = StringArray{}
+    stdlibFiles.push("{stdlibPath}/StdlibTest.maxon")
+
+    var allOps = MaxonOpArray{}
+    var i = 0
+    while i < stdlibFiles.count() 'eachFile'
+        let filePath = try stdlibFiles.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+        if File.exists(filePath) 'exists'
+            let bytes = try File.readBinary(filePath) otherwise 'readErr'
+                logDebug(LogCategory.compiler, message: "  Failed to read {filePath}")
+                i = i + 1
+                continue
+            end 'readErr'
+            logDebug(LogCategory.compiler, message: "  Parsing {filePath}")
+            let tokens = tokenize(bytes)
+            let ops = try parse(project, tokens: tokens, filePath: filePath) otherwise 'parseErr'
+                logDebug(LogCategory.compiler, message: "  Failed to parse {filePath}")
+                i = i + 1
+                continue
+            end 'parseErr'
+            allOps.append(ops)
+        end 'exists'
+        i = i + 1
+    end 'eachFile'
+
+    _cachedStdlibOps = allOps
+    _stdlibNextValueId = getNextValueId(project)
+    _stdlibLoaded = true
+
+    logDebug(LogCategory.compiler, message: "Stdlib loaded: {stdlibFiles.count()} files, {allOps.count()} ops, nextValueId={_stdlibNextValueId}")
+
+    return _cachedStdlibOps
+end 'getStdlibOps'
+
+export function getStdlibNextValueId() returns ValueId
+    return _stdlibNextValueId
+end 'getStdlibNextValueId'

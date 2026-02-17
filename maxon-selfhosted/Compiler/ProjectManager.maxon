@@ -1,0 +1,182 @@
+// Multi-project management for the self-hosted compiler.
+// Manages multiple Project instances, discovers project roots by walking up
+// directories looking for build.maxon, and maps files to their projects.
+
+export type ProjectManager
+    // Parallel arrays: keys[i] is the normalized path key for projects[i]
+    export var keys StringArray
+    export var projects ProjectArray
+end 'ProjectManager'
+
+export function createProjectManager() returns ProjectManager
+    return ProjectManager{
+        keys: StringArray{},
+        projects: ProjectArray{}
+    }
+end 'createProjectManager'
+
+// Returns the project that owns filePath, creating one if needed.
+// Walks up from filePath looking for build.maxon to determine project root.
+// Falls back to a single-file project if no build.maxon is found.
+export function getOrCreateProject(mgr ProjectManager, filePath String) returns Project throws CompileError
+    // Check if an existing project already contains this file
+    let existingIdx = findProjectIndexForFile(mgr, filePath: filePath)
+    if existingIdx >= 0 'found'
+        return try mgr.projects.get(existingIdx) otherwise 'unreachable'
+            throw CompileError.fileNotFound
+        end 'unreachable'
+    end 'found'
+
+    // Discover project root
+    let root = findProjectRoot(filePath)
+
+    if not root.isEmpty() 'hasRoot'
+        let normalizedRoot = normalizePath(root)
+
+        // Check if we already have a project for this root
+        var i = 0
+        let keyCount = mgr.keys.count()
+        while i < keyCount 'search'
+            let key = try mgr.keys.get(i) otherwise ""
+            if key == normalizedRoot 'match'
+                return try mgr.projects.get(i) otherwise 'unreachable2'
+                    throw CompileError.fileNotFound
+                end 'unreachable2'
+            end 'match'
+            i = i + 1
+        end 'search'
+
+        // Create a new directory project
+        let project = createProject(root, isSingleFile: false)
+        mgr.keys.push(normalizedRoot)
+        mgr.projects.push(project)
+        return project
+    end 'hasRoot'
+
+    // No build.maxon found -- single-file project
+    let normalizedFile = normalizePath(filePath)
+
+    // Check if we already have a project for this exact file
+    var j = 0
+    let keyCount2 = mgr.keys.count()
+    while j < keyCount2 'search2'
+        let key = try mgr.keys.get(j) otherwise ""
+        if key == normalizedFile 'match2'
+            return try mgr.projects.get(j) otherwise 'unreachable3'
+                throw CompileError.fileNotFound
+            end 'unreachable3'
+        end 'match2'
+        j = j + 1
+    end 'search2'
+
+    let singleProject = createProject(filePath, isSingleFile: true)
+    mgr.keys.push(normalizedFile)
+    mgr.projects.push(singleProject)
+    return singleProject
+end 'getOrCreateProject'
+
+// Searches all managed projects for one that contains filePath.
+// Throws CompileError if no project contains the file.
+export function findProjectForFile(mgr ProjectManager, filePath String) returns Project throws CompileError
+    let idx = findProjectIndexForFile(mgr, filePath: filePath)
+    if idx >= 0 'found'
+        return try mgr.projects.get(idx) otherwise 'unreachable'
+            throw CompileError.fileNotFound
+        end 'unreachable'
+    end 'found'
+    throw CompileError.fileNotFound
+end 'findProjectForFile'
+
+// Returns the index of the project containing filePath, or -1 if none.
+function findProjectIndexForFile(mgr ProjectManager, filePath String) returns Index
+    let normalized = normalizePath(filePath)
+    var i = 0
+    let count = mgr.projects.count()
+    while i < count 'scan'
+        let project = try mgr.projects.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+        if projectContainsFile(project, filePath: normalized) 'contains'
+            return i
+        end 'contains'
+        i = i + 1
+    end 'scan'
+    return 0 - 1
+end 'findProjectIndexForFile'
+
+// Checks whether a project owns the given (already-normalized) file path.
+function projectContainsFile(project Project, filePath String) returns bool
+    let normalizedRoot = normalizePath(project.rootPath)
+    if project.isSingleFile 'single'
+        return filePath == normalizedRoot
+    end 'single'
+    // Directory project: file must be under root directory
+    let rootWithSlash = normalizedRoot.concat("/")
+    return filePath.startsWith(rootWithSlash)
+end 'projectContainsFile'
+
+// Walks up from filePath's directory looking for build.maxon.
+// Returns the directory containing build.maxon, or "" if not found.
+export function findProjectRoot(filePath String) returns String
+    var dir = directoryOf(filePath)
+    var attempts = 0
+    while attempts < 20 'search'
+        if dir.isEmpty() 'empty'
+            return ""
+        end 'empty'
+        let buildPath = "{dir}/build.maxon"
+        // Also check with backslash for Windows paths
+        let buildPathBs = "{dir}\\build.maxon"
+        if File.exists(buildPath) 'foundFwd'
+            return dir
+        end 'foundFwd'
+        if File.exists(buildPathBs) 'foundBs'
+            return dir
+        end 'foundBs'
+        let parent = parentDirectory(dir)
+        if parent == dir 'atRoot'
+            return ""
+        end 'atRoot'
+        dir = parent
+        attempts = attempts + 1
+    end 'search'
+    return ""
+end 'findProjectRoot'
+
+// Normalizes a path by replacing backslashes with forward slashes.
+export function normalizePath(path String) returns String
+    return path.replace("\\", with: "/")
+end 'normalizePath'
+
+// Returns the directory portion of a file path (everything before the last separator).
+export function directoryOf(path String) returns String
+    let normalized = normalizePath(path)
+    let lastSlash = try normalized.findLast("/") otherwise 'noSlash'
+        return ""
+    end 'noSlash'
+    return normalized.slice(normalized.startIndex(), endIndex: lastSlash)
+end 'directoryOf'
+
+// Returns the parent of a directory path (everything before the last separator).
+// Returns the same directory if no parent can be found (filesystem root).
+export function parentDirectory(dir String) returns String
+    let normalized = normalizePath(dir)
+    // Remove trailing slash if present
+    var trimmed = normalized
+    if trimmed.endsWith("/") 'trailing'
+        let endIdx = trimmed.endIndex()
+        let lastCharIdx = try trimmed.findLast("/") otherwise 'noSlash'
+            return dir
+        end 'noSlash'
+        trimmed = trimmed.slice(trimmed.startIndex(), endIndex: lastCharIdx)
+    end 'trailing'
+    let lastSlash = try trimmed.findLast("/") otherwise 'noParent'
+        return dir
+    end 'noParent'
+    let result = trimmed.slice(trimmed.startIndex(), endIndex: lastSlash)
+    if result.isEmpty() 'root'
+        return dir
+    end 'root'
+    return result
+end 'parentDirectory'

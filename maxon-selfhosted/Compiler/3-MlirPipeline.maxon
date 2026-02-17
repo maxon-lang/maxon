@@ -1,24 +1,23 @@
 // Core MLIR types for the self-hosted compiler's intermediate representation.
 
 // SSA value IDs — each operation result gets a unique integer ID.
+// The counter lives in Project.nextValueId_ for per-project isolation.
 
-var _nextValueId = 0
-
-export function nextValueId() returns ValueId
-    let id = _nextValueId
-    _nextValueId = _nextValueId + 1
+export function nextValueId(project Project) returns ValueId
+    let id = project.nextValueId_
+    project.nextValueId_ = project.nextValueId_ + 1
     return id
 end 'nextValueId'
 
-export function resetValueIds()
-    _nextValueId = 0
+export function resetValueIds(project Project)
+    project.nextValueId_ = 0
 end 'resetValueIds'
 
-export function getNextValueId() returns ValueId
-    return _nextValueId
+export function getNextValueId(project Project) returns ValueId
+    return project.nextValueId_
 end 'getNextValueId'
 
 // Advance the counter past a range of IDs (e.g., when restoring cached parse results).
-export function setNextValueId(id ValueId)
-    _nextValueId = id
+export function setNextValueId(project Project, id ValueId)
+    project.nextValueId_ = id
 end 'setNextValueId'
