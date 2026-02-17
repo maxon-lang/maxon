@@ -539,3 +539,24 @@ i64 10
 f64 2.5
 i8 1
 ```
+
+<!-- test: top-level-let-struct-reassign-error -->
+Reassigning an immutable top-level `let` struct variable should error.
+```maxon
+typealias SmallInt = int(0 to 255)
+
+type Point
+    export var x SmallInt
+    export var y SmallInt
+end 'Point'
+
+let origin = Point{x: 0, y: 0}
+
+function main() returns ExitCode
+    origin = Point{x: 1, y: 1}
+    return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: specs/fragments/static-variables/top-level-let-struct-reassign-error.test:12:5: cannot assign to immutable variable: 'origin'
+```

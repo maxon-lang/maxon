@@ -69,22 +69,22 @@ end 'main'
 Explicit type annotations are not allowed on var declarations.
 ```maxon
 function main() returns ExitCode
-  var x = 0
+  var x: int = 0
   return x
 end 'main'
 ```
-```error
-E002
+```maxoncstderr
+error E2010: specs/fragments/variables/var-explicit-type-error.test:3:8: Expected '=' but got ':'
 ```
 
 <!-- test: let-explicit-type-error -->
 Explicit type annotations are not allowed on let declarations.
 ```maxon
 function main() returns ExitCode
-  let x = 0
+  let x: int = 0
   return x
 end 'main'
 ```
-```error
-E002
+```maxoncstderr
+error E2010: specs/fragments/variables/let-explicit-type-error.test:3:8: Expected '=' but got ':'
 ```

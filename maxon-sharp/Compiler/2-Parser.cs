@@ -4608,13 +4608,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     switch (ResolveVariable(name)) {
       case ResolvedVar.Global(var globalInfo): {
+        if (!globalInfo.Mutable) {
+          throw new CompileError(ErrorCode.ParserImmutableVariable,
+            $"cannot assign to immutable variable: '{name}'",
+            nameToken.Line, nameToken.Column);
+        }
         var newValue = ResolveExprValue(ParseExpression());
         _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newValue, globalInfo.Kind));
         break;
       }
       case ResolvedVar.Local(var varInfo): {
         if (!varInfo.Mutable) {
-          throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Variable '{name}' is not mutable", nameToken.Line, nameToken.Column);
+          throw new CompileError(ErrorCode.ParserImmutableVariable,
+            $"cannot assign to immutable variable: '{name}'",
+            nameToken.Line, nameToken.Column);
         }
         var newVal = ResolveExprValue(ParseExpression());
         MlirFunctionType? fnType = null;

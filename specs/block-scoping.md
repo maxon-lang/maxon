@@ -57,7 +57,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/block-scoping/for-iterator-immutable.test:5:5: Variable 'item' is not mutable
+error E2013: specs/fragments/block-scoping/for-iterator-immutable.test:5:5: cannot assign to immutable variable: 'item'
 ```
 
 <!-- test: for-iterator-not-accessible-after -->
@@ -99,7 +99,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/block-scoping/for-destructured-immutable.test:5:5: Variable 'value' is not mutable
+error E2013: specs/fragments/block-scoping/for-destructured-immutable.test:5:5: cannot assign to immutable variable: 'value'
 ```
 
 <!-- test: for-destructured-not-accessible-after -->
