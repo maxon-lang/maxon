@@ -435,12 +435,12 @@ public partial class X86CodeEmitter {
 
     // Prologue saved RCX to [rbp-8] and RDX to [rbp-16], but the float is in XMM0.
     // Overwrite [rbp-8] with the actual float value.
-    EmitMovSdMemXmm(-0x08, X86XmmRegister.Xmm0);
+    EmitMovMemXmm(-0x08, X86XmmRegister.Xmm0, FloatPrecision.F64);
 
     // ---- Special case: value == 0.0 ----
     // XORPD xmm1, xmm1 to get 0.0
     EmitBytes(0x66, 0x0F, 0x57, 0xC9); // XORPD xmm1, xmm1
-    EmitUcomisd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1);
+    EmitUcomisXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64);
     EmitJcc("nz", "rt_f64str_not_zero");
     // Also jump if parity is set (NaN)
     EmitJcc("p", "rt_f64str_not_zero");
@@ -460,26 +460,26 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x18, X86Register.Rax, 8);
 
     // Reload value into XMM0 and compare with zero
-    EmitMovSdXmmMem(X86XmmRegister.Xmm0, -0x08);
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64);
     // XORPD xmm1, xmm1 for zero
     EmitBytes(0x66, 0x0F, 0x57, 0xC9); // XORPD xmm1, xmm1
-    EmitUcomisd(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0);
+    EmitUcomisXmm(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0, FloatPrecision.F64);
     // If 0.0 > value (i.e., value is negative), UCOMISD sets CF
     EmitJcc("be", "rt_f64str_positive");
 
     // Negative: negate by subtracting from zero (0.0 - value)
     // XMM1 is already 0.0
-    EmitSubSd(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0); // XMM1 = 0.0 - value = |value|
+    EmitSubXmm(X86XmmRegister.Xmm1, X86XmmRegister.Xmm0, FloatPrecision.F64); // XMM1 = 0.0 - value = |value|
     // Store |value| back
-    EmitMovSdMemXmm(-0x08, X86XmmRegister.Xmm1);
+    EmitMovMemXmm(-0x08, X86XmmRegister.Xmm1, FloatPrecision.F64);
     // is_negative = 1
     EmitMovRegImm(X86Register.Rax, 1);
     EmitMovMemReg(-0x18, X86Register.Rax, 8);
 
     // ---- Extract integer part ----
     DefineLabel("rt_f64str_positive");
-    EmitMovSdXmmMem(X86XmmRegister.Xmm0, -0x08); // XMM0 = |value|
-    EmitCvttSd2Si(X86Register.Rax, X86XmmRegister.Xmm0); // RAX = truncate(|value|)
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64); // XMM0 = |value|
+    EmitCvttFloat2Si(X86Register.Rax, X86XmmRegister.Xmm0, FloatPrecision.F64); // RAX = truncate(|value|)
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-0x30] = integer part
 
     // Set up args for maxon_i64_to_string: RCX = integer part, RDX = buffer (possibly offset by 1 for '-')
@@ -514,24 +514,24 @@ public partial class X86CodeEmitter {
 
     // ---- Extract fractional part ----
     // Reload |value| and integer part
-    EmitMovSdXmmMem(X86XmmRegister.Xmm0, -0x08); // XMM0 = |value|
+    EmitMovXmmMem(X86XmmRegister.Xmm0, -0x08, FloatPrecision.F64); // XMM0 = |value|
     EmitMovRegMem(X86Register.Rax, -0x30, 8);     // RAX = integer part
-    EmitCvtSi2Sd(X86XmmRegister.Xmm1, X86Register.Rax); // XMM1 = (double)integer_part
-    EmitSubSd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1); // XMM0 = fractional part
+    EmitCvtSi2Float(X86XmmRegister.Xmm1, X86Register.Rax, FloatPrecision.F64); // XMM1 = (double)integer_part
+    EmitSubXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64); // XMM0 = fractional part
 
     // Multiply by 1000000 for 6 decimal places
     // Load 1000000.0 into XMM1 via GPR to avoid rdata dependency
     EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(1000000.0));
     EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8); // MOVQ XMM1, RAX
-    EmitMulSd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1); // XMM0 = frac * 1000000
+    EmitMulXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64); // XMM0 = frac * 1000000
 
     // Add 0.5 for rounding
     // Load 0.5 into XMM1 via GPR to avoid rdata dependency
     EmitMovRegImm(X86Register.Rax, BitConverter.DoubleToInt64Bits(0.5));
     EmitBytes(0x66, 0x48, 0x0F, 0x6E, 0xC8); // MOVQ XMM1, RAX
-    EmitAddSd(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1); // XMM0 = frac * 1000000 + 0.5
+    EmitAddXmm(X86XmmRegister.Xmm0, X86XmmRegister.Xmm1, FloatPrecision.F64); // XMM0 = frac * 1000000 + 0.5
 
-    EmitCvttSd2Si(X86Register.Rax, X86XmmRegister.Xmm0); // RAX = rounded 6-digit fractional integer
+    EmitCvttFloat2Si(X86Register.Rax, X86XmmRegister.Xmm0, FloatPrecision.F64); // RAX = rounded 6-digit fractional integer
 
     // Clamp to 999999 if rounding pushed it to 1000000 (avoids carry into integer part)
     EmitBytes(0x48, 0x3D, 0x40, 0x42, 0x0F, 0x00); // CMP RAX, 1000000

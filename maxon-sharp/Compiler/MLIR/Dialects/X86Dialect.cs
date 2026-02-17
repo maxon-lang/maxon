@@ -13,6 +13,8 @@ public enum X86XmmRegister {
   Xmm8, Xmm9, Xmm10, Xmm11, Xmm12, Xmm13, Xmm14, Xmm15
 }
 
+public enum FloatPrecision { F64, F32 }
+
 public abstract class X86Op : IPrintableOp {
   public abstract string Mnemonic { get; }
   public IReadOnlyList<string> PrintableResults => [];
@@ -161,112 +163,67 @@ public class X86MovMemRspRegOp(int offset, X86Register src) : X86Op {
   public override string Mnemonic => $"x86.mov [rsp+{Offset}], {Src.ToString().ToLower()}";
 }
 
-public class X86MovSdXmmRipRelOp(X86XmmRegister dest, string rdataLabel) : X86Op {
+public class X86MovXmmRipRelOp(X86XmmRegister dest, string rdataLabel, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public string RdataLabel { get; } = rdataLabel;
-  public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
 }
 
-public class X86MovSsXmmRipRelOp(X86XmmRegister dest, string rdataLabel) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public string RdataLabel { get; } = rdataLabel;
-  public override string Mnemonic => $"x86.movss {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
-}
-
-public class X86MovSdMemXmmOp(int displacement, X86XmmRegister src) : X86Op {
+public class X86MovMemXmmOp(int displacement, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public int Displacement { get; } = displacement;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movsd [rbp{Displacement}], {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} [rbp{Displacement}], {Src.ToString().ToLower()}";
 }
 
-public class X86MovSsMemXmmOp(int displacement, X86XmmRegister src) : X86Op {
-  public int Displacement { get; } = displacement;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movss [rbp{Displacement}], {Src.ToString().ToLower()}";
-}
-
-public class X86MovSdXmmXmmOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+public class X86MovXmmXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86MovSsXmmXmmOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86MovSdXmmMemOp(X86XmmRegister dest, int displacement) : X86Op {
+public class X86MovXmmMemOp(X86XmmRegister dest, int displacement, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public int Displacement { get; } = displacement;
-  public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [rbp{Displacement}]";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, [rbp{Displacement}]";
 }
 
-public class X86MovSsXmmMemOp(X86XmmRegister dest, int displacement) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public int Displacement { get; } = displacement;
-  public override string Mnemonic => $"x86.movss {Dest.ToString().ToLower()}, [rbp{Displacement}]";
-}
-
-public class X86AddSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+public class X86AddXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.addsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.add{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86AddSsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+public class X86SubXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.addss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.sub{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86SubSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+public class X86MulXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.subsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mul{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86SubSsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+public class X86DivXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.subss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.div{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86MulSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.mulsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86MulSsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.mulss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86DivSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.divsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86DivSsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.divss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86CvttSd2SiOp(X86Register dest, X86XmmRegister src) : X86Op {
+public class X86CvttFloat2SiOp(X86Register dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86Register Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.cvttsd2si {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86CvttSs2SiOp(X86Register dest, X86XmmRegister src) : X86Op {
-  public X86Register Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.cvttss2si {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.cvtt{(Precision == FloatPrecision.F64 ? "sd" : "ss")}2si {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
 public class X86MovqXmmToGprOp(X86Register dest, X86XmmRegister src) : X86Op {
@@ -275,16 +232,11 @@ public class X86MovqXmmToGprOp(X86Register dest, X86XmmRegister src) : X86Op {
   public override string Mnemonic => $"x86.movq {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86CvtSi2SdOp(X86XmmRegister dest, X86Register src) : X86Op {
+public class X86CvtSi2FloatOp(X86XmmRegister dest, X86Register src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86Register Src { get; } = src;
-  public override string Mnemonic => $"x86.cvtsi2sd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86CvtSi2SsOp(X86XmmRegister dest, X86Register src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86Register Src { get; } = src;
-  public override string Mnemonic => $"x86.cvtsi2ss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.cvtsi2{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
 public class X86CvtSd2SsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
@@ -299,66 +251,40 @@ public class X86CvtSs2SdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
   public override string Mnemonic => $"x86.cvtss2sd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86AndpdRipRelOp(X86XmmRegister dest, string rdataLabel) : X86Op {
+public class X86AndMaskRipRelOp(X86XmmRegister dest, string rdataLabel, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public string RdataLabel { get; } = rdataLabel;
-  public override string Mnemonic => $"x86.andpd {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.{(Precision == FloatPrecision.F64 ? "andpd" : "andps")} {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
 }
 
-public class X86AndpsRipRelOp(X86XmmRegister dest, string rdataLabel) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public string RdataLabel { get; } = rdataLabel;
-  public override string Mnemonic => $"x86.andps {Dest.ToString().ToLower()}, [rip+{RdataLabel}]";
-}
-
-public class X86SqrtSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+public class X86SqrtXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.sqrtsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.sqrt{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86SqrtSsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.sqrtss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86RoundSdOp(X86XmmRegister dest, X86XmmRegister src, byte mode) : X86Op {
+public class X86RoundXmmOp(X86XmmRegister dest, X86XmmRegister src, byte mode, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
   public byte Mode { get; } = mode;
-  public override string Mnemonic => $"x86.roundsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}, {Mode}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.round{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}, {Mode}";
 }
 
-public class X86RoundSsOp(X86XmmRegister dest, X86XmmRegister src, byte mode) : X86Op {
+public class X86MinXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public byte Mode { get; } = mode;
-  public override string Mnemonic => $"x86.roundss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}, {Mode}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.min{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
-public class X86MinSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
+public class X86MaxXmmOp(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.minsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86MinSsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.minss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86MaxSdOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.maxsd {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
-}
-
-public class X86MaxSsOp(X86XmmRegister dest, X86XmmRegister src) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.maxss {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.max{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 
 public class X86CmpRegRegOp(X86Register lhs, X86Register rhs) : X86Op {
@@ -373,16 +299,11 @@ public class X86TestRegRegOp(X86Register lhs, X86Register rhs) : X86Op {
   public override string Mnemonic => $"x86.test {Lhs.ToString().ToLower()}, {Rhs.ToString().ToLower()}";
 }
 
-public class X86UcomisdOp(X86XmmRegister src1, X86XmmRegister src2) : X86Op {
+public class X86UcomisXmmOp(X86XmmRegister src1, X86XmmRegister src2, FloatPrecision precision) : X86Op {
   public X86XmmRegister Src1 { get; } = src1;
   public X86XmmRegister Src2 { get; } = src2;
-  public override string Mnemonic => $"x86.ucomisd {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
-}
-
-public class X86UcomissOp(X86XmmRegister src1, X86XmmRegister src2) : X86Op {
-  public X86XmmRegister Src1 { get; } = src1;
-  public X86XmmRegister Src2 { get; } = src2;
-  public override string Mnemonic => $"x86.ucomiss {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.ucomis{(Precision == FloatPrecision.F64 ? "d" : "s")} {Src1.ToString().ToLower()}, {Src2.ToString().ToLower()}";
 }
 
 public class X86SetccOp(string condition, X86Register dest) : X86Op {
@@ -491,36 +412,22 @@ public class X86MovRegIndirectMemOp(X86Register dest, X86Register baseReg, int d
   public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
 }
 
-// MOVSD [baseReg+disp], xmm - store float through register-indirect addressing
-public class X86MovSdIndirectMemXmmOp(X86Register baseReg, int displacement, X86XmmRegister src) : X86Op {
+// MOV[SD/SS] [baseReg+disp], xmm - store float through register-indirect addressing
+public class X86MovIndirectMemXmmOp(X86Register baseReg, int displacement, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public X86Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movsd [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}";
 }
 
-// MOVSS [baseReg+disp], xmm - store f32 through register-indirect addressing
-public class X86MovSsIndirectMemXmmOp(X86Register baseReg, int displacement, X86XmmRegister src) : X86Op {
-  public X86Register BaseReg { get; } = baseReg;
-  public int Displacement { get; } = displacement;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movss [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}";
-}
-
-// MOVSD xmm, [baseReg+disp] - load float through register-indirect addressing
-public class X86MovSdXmmIndirectMemOp(X86XmmRegister dest, X86Register baseReg, int displacement) : X86Op {
+// MOV[SD/SS] xmm, [baseReg+disp] - load float through register-indirect addressing
+public class X86MovXmmIndirectMemOp(X86XmmRegister dest, X86Register baseReg, int displacement, FloatPrecision precision) : X86Op {
   public X86XmmRegister Dest { get; } = dest;
   public X86Register BaseReg { get; } = baseReg;
   public int Displacement { get; } = displacement;
-  public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
-}
-
-// MOVSS xmm, [baseReg+disp] - load f32 through register-indirect addressing
-public class X86MovSsXmmIndirectMemOp(X86XmmRegister dest, X86Register baseReg, int displacement) : X86Op {
-  public X86XmmRegister Dest { get; } = dest;
-  public X86Register BaseReg { get; } = baseReg;
-  public int Displacement { get; } = displacement;
-  public override string Mnemonic => $"x86.movss {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, [{BaseReg.ToString().ToLower()}+{Displacement}]";
 }
 
 // MOVZX dest64, byte ptr [baseReg+disp] - load byte and zero-extend to 64-bit
@@ -557,32 +464,20 @@ public class X86GlobalStoreOp(string globalName, X86Register src) : X86Op {
   public override string Mnemonic => $"x86.mov [rip+{GlobalName}], {Src.ToString().ToLower()}";
 }
 
-// MOVSD xmm, [rip + globalName] - load float global
-public class X86GlobalLoadXmmOp(string globalName, X86XmmRegister dest) : X86Op {
+// MOV[SD/SS] xmm, [rip + globalName] - load float global
+public class X86GlobalLoadXmmOp(string globalName, X86XmmRegister dest, FloatPrecision precision) : X86Op {
   public string GlobalName { get; } = globalName;
   public X86XmmRegister Dest { get; } = dest;
-  public override string Mnemonic => $"x86.movsd {Dest.ToString().ToLower()}, [rip+{GlobalName}]";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} {Dest.ToString().ToLower()}, [rip+{GlobalName}]";
 }
 
-// MOVSD [rip + globalName], xmm - store float global
-public class X86GlobalStoreXmmOp(string globalName, X86XmmRegister src) : X86Op {
+// MOV[SD/SS] [rip + globalName], xmm - store float global
+public class X86GlobalStoreXmmOp(string globalName, X86XmmRegister src, FloatPrecision precision) : X86Op {
   public string GlobalName { get; } = globalName;
   public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movsd [rip+{GlobalName}], {Src.ToString().ToLower()}";
-}
-
-// MOVSS xmm, [rip + globalName] - load f32 global
-public class X86GlobalLoadSsXmmOp(string globalName, X86XmmRegister dest) : X86Op {
-  public string GlobalName { get; } = globalName;
-  public X86XmmRegister Dest { get; } = dest;
-  public override string Mnemonic => $"x86.movss {Dest.ToString().ToLower()}, [rip+{GlobalName}]";
-}
-
-// MOVSS [rip + globalName], xmm - store f32 global
-public class X86GlobalStoreSsXmmOp(string globalName, X86XmmRegister src) : X86Op {
-  public string GlobalName { get; } = globalName;
-  public X86XmmRegister Src { get; } = src;
-  public override string Mnemonic => $"x86.movss [rip+{GlobalName}], {Src.ToString().ToLower()}";
+  public FloatPrecision Precision { get; } = precision;
+  public override string Mnemonic => $"x86.mov{(Precision == FloatPrecision.F64 ? "sd" : "ss")} [rip+{GlobalName}], {Src.ToString().ToLower()}";
 }
 
 // REP MOVSB - block copy RSI -> RDI, RCX bytes

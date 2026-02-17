@@ -73,27 +73,18 @@ public static class StoreForwardingPass {
   }
 
   private static bool TryGetLoadInfo(StandardOp op, out string varName, out StdValue result) {
-    switch (op) {
-      case StdLoadI64Op load: varName = load.VarName; result = load.Result; return true;
-      case StdLoadI32Op load: varName = load.VarName; result = load.Result; return true;
-      case StdLoadF64Op load: varName = load.VarName; result = load.Result; return true;
-      case StdLoadF32Op load: varName = load.VarName; result = load.Result; return true;
-      case StdLoadI1Op load: varName = load.VarName; result = load.Result; return true;
-      case StdLoadPtrOp load: varName = load.VarName; result = load.Result; return true;
-      default: varName = ""; result = null!; return false;
+    if (op is ILoadOp load) {
+      varName = load.VarName;
+      result = load.Result;
+      return true;
     }
+    varName = "";
+    result = null!;
+    return false;
   }
 
   private static StdValue GetStoredValue(IStoreOp store) {
-    return store switch {
-      StdStoreI64Op s => s.Value,
-      StdStoreI32Op s => s.Value,
-      StdStoreF64Op s => s.Value,
-      StdStoreF32Op s => s.Value,
-      StdStoreI1Op s => s.Value,
-      StdStorePtrOp s => s.Value,
-      _ => throw new InvalidOperationException($"Unknown store type: {store.GetType().Name}"),
-    };
+    return store.Value;
   }
 
   private static StandardOp CreateStore(StdValue value, string varName) {

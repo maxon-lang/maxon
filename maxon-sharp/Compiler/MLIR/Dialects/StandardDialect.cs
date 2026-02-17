@@ -2,6 +2,15 @@ using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
 
+public enum StdBinaryOperator {
+  Add, Sub, Mul,
+  DivSigned, DivUnsigned,
+  RemSigned, RemUnsigned,
+  And, Or, Xor,
+  Shl, ShrSigned, ShrUnsigned,
+  Min, Max,
+}
+
 public abstract class StandardOp : IPrintableOp {
   public abstract string Mnemonic { get; }
   public virtual IReadOnlyList<string> PrintableResults => [];
@@ -24,6 +33,7 @@ public abstract class StdUnaryF64Op(StdF64 input) : StandardOp {
 }
 
 public abstract class StdBinaryF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+  public abstract StdBinaryOperator Operator { get; }
   public StdF64 Lhs { get; } = lhs;
   public StdF64 Rhs { get; } = rhs;
   public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
@@ -43,6 +53,7 @@ public abstract class StdUnaryF32Op(StdF32 input) : StandardOp {
 }
 
 public abstract class StdBinaryF32Op(StdF32 lhs, StdF32 rhs) : StandardOp {
+  public abstract StdBinaryOperator Operator { get; }
   public StdF32 Lhs { get; } = lhs;
   public StdF32 Rhs { get; } = rhs;
   public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
@@ -54,7 +65,13 @@ public abstract class StdBinaryF32Op(StdF32 lhs, StdF32 rhs) : StandardOp {
 
 public interface IStoreOp {
   string VarName { get; }
+  StdValue Value { get; }
   MlirType StoredType { get; }
+}
+
+public interface ILoadOp {
+  string VarName { get; }
+  StdValue Result { get; }
 }
 
 // === Integer Constants ===
@@ -121,6 +138,7 @@ public class StdConstI1Op(bool value) : StandardOp {
 // === Integer Arithmetic ===
 
 public abstract class StdBinaryI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
+  public abstract StdBinaryOperator Operator { get; }
   public StdI64 Lhs { get; } = lhs;
   public StdI64 Rhs { get; } = rhs;
   public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
@@ -132,13 +150,16 @@ public abstract class StdBinaryI64Op(StdI64 lhs, StdI64 rhs) : StandardOp {
 
 public class StdAddI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.addi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Add;
 }
 
 public class StdSubI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.subi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Sub;
 }
 
 public abstract class StdBinaryI32Op(StdI32 lhs, StdI32 rhs) : StandardOp {
+  public abstract StdBinaryOperator Operator { get; }
   public StdI32 Lhs { get; } = lhs;
   public StdI32 Rhs { get; } = rhs;
   public StdI32 Result { get; } = new StdI32(MlirContext.Current.NextId());
@@ -150,56 +171,69 @@ public abstract class StdBinaryI32Op(StdI32 lhs, StdI32 rhs) : StandardOp {
 
 public class StdAddI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.addi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Add;
 }
 
 public class StdSubI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.subi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Sub;
 }
 
 public class StdMulI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.muli";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Mul;
 }
 
 public class StdDivI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.divsi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.DivSigned;
 }
 
 public class StdDivU32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.divui";
+  public override StdBinaryOperator Operator => StdBinaryOperator.DivUnsigned;
 }
 
 public class StdRemI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.remsi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.RemSigned;
 }
 
 public class StdRemU32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.remui";
+  public override StdBinaryOperator Operator => StdBinaryOperator.RemUnsigned;
 }
 
 // === I32 Bitwise Operations ===
 
 public class StdAndI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.andi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.And;
 }
 
 public class StdOrI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.ori";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Or;
 }
 
 public class StdXorI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.xori";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Xor;
 }
 
 public class StdShlI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.shli";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Shl;
 }
 
 public class StdShrI32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.shrsi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.ShrSigned;
 }
 
 public class StdShrU32Op(StdI32 lhs, StdI32 rhs) : StdBinaryI32Op(lhs, rhs) {
   public override string Mnemonic => "arith.shrui";
+  public override StdBinaryOperator Operator => StdBinaryOperator.ShrUnsigned;
 }
 
 // === I32 Comparison ===
@@ -278,16 +312,18 @@ public class StdUiToFpI32Op(StdI32 input) : StandardOp {
 public class StdStoreI32Op(StdI32 value, string varName) : StandardOp, IStoreOp {
   public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
   public StdI32 Value { get; } = value;
+  StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.I32;
   public override List<StdValue> ReadValues => [Value];
   public override int PureResultId => -1;
 }
 
-public class StdLoadI32Op(string varName) : StandardOp {
+public class StdLoadI32Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : i32";
   public string VarName { get; } = varName;
   public StdI32 Result { get; } = new StdI32(MlirContext.Current.NextId());
+  StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -295,112 +331,103 @@ public class StdLoadI32Op(string varName) : StandardOp {
 
 public class StdRemI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.remsi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.RemSigned;
 }
 
 public class StdMulI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.muli";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Mul;
 }
 
 public class StdDivI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.divsi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.DivSigned;
 }
 
 public class StdDivU64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.divui";
+  public override StdBinaryOperator Operator => StdBinaryOperator.DivUnsigned;
 }
 
 public class StdRemU64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.remui";
+  public override StdBinaryOperator Operator => StdBinaryOperator.RemUnsigned;
 }
 
 // === Bitwise Integer Operations ===
 
 public class StdAndI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.andi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.And;
 }
 
 public class StdOrI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.ori";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Or;
 }
 
 public class StdXorI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.xori";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Xor;
 }
 
 public class StdShlI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.shli";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Shl;
 }
 
 public class StdShrI64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.shrsi";
+  public override StdBinaryOperator Operator => StdBinaryOperator.ShrSigned;
 }
 
 public class StdShrU64Op(StdI64 lhs, StdI64 rhs) : StdBinaryI64Op(lhs, rhs) {
   public override string Mnemonic => "arith.shrui";
+  public override StdBinaryOperator Operator => StdBinaryOperator.ShrUnsigned;
 }
 
 // === Float Arithmetic ===
 
-public class StdAddF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+public class StdAddF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
   public override string Mnemonic => "arith.addf";
-  public StdF64 Lhs { get; } = lhs;
-  public StdF64 Rhs { get; } = rhs;
-  public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override List<StdValue> ReadValues => [Lhs, Rhs];
-  public override int PureResultId => Result.Id;
+  public override StdBinaryOperator Operator => StdBinaryOperator.Add;
 }
 
-public class StdSubF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+public class StdSubF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
   public override string Mnemonic => "arith.subf";
-  public StdF64 Lhs { get; } = lhs;
-  public StdF64 Rhs { get; } = rhs;
-  public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override List<StdValue> ReadValues => [Lhs, Rhs];
-  public override int PureResultId => Result.Id;
+  public override StdBinaryOperator Operator => StdBinaryOperator.Sub;
 }
 
-public class StdMulF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+public class StdMulF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
   public override string Mnemonic => "arith.mulf";
-  public StdF64 Lhs { get; } = lhs;
-  public StdF64 Rhs { get; } = rhs;
-  public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override List<StdValue> ReadValues => [Lhs, Rhs];
-  public override int PureResultId => Result.Id;
+  public override StdBinaryOperator Operator => StdBinaryOperator.Mul;
 }
 
-public class StdDivF64Op(StdF64 lhs, StdF64 rhs) : StandardOp {
+public class StdDivF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
   public override string Mnemonic => "arith.divf";
-  public StdF64 Lhs { get; } = lhs;
-  public StdF64 Rhs { get; } = rhs;
-  public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override List<StdValue> ReadValues => [Lhs, Rhs];
-  public override int PureResultId => Result.Id;
+  public override StdBinaryOperator Operator => StdBinaryOperator.DivSigned;
 }
 
 // === F32 Float Arithmetic ===
 
 public class StdAddF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
   public override string Mnemonic => "arith.addf32";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Add;
 }
 
 public class StdSubF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
   public override string Mnemonic => "arith.subf32";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Sub;
 }
 
 public class StdMulF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
   public override string Mnemonic => "arith.mulf32";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Mul;
 }
 
 public class StdDivF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
   public override string Mnemonic => "arith.divf32";
+  public override StdBinaryOperator Operator => StdBinaryOperator.DivSigned;
 }
 
 // === Float Absolute Value ===
@@ -429,10 +456,12 @@ public class StdRoundF64Op(StdF64 input) : StdUnaryF64Op(input) {
 
 public class StdMinF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
   public override string Mnemonic => "math.minf";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Min;
 }
 
 public class StdMaxF64Op(StdF64 lhs, StdF64 rhs) : StdBinaryF64Op(lhs, rhs) {
   public override string Mnemonic => "math.maxf";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Max;
 }
 
 // === F32 Float Math Operations ===
@@ -459,10 +488,12 @@ public class StdRoundF32Op(StdF32 input) : StdUnaryF32Op(input) {
 
 public class StdMinF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
   public override string Mnemonic => "math.minf32";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Min;
 }
 
 public class StdMaxF32Op(StdF32 lhs, StdF32 rhs) : StdBinaryF32Op(lhs, rhs) {
   public override string Mnemonic => "math.maxf32";
+  public override StdBinaryOperator Operator => StdBinaryOperator.Max;
 }
 
 // === Float-to-Int Conversion ===
@@ -667,37 +698,30 @@ public class StdSelectI64Op(StdBool condition, StdI64 trueValue, StdI64 falseVal
 
 // === Bool Logical Operations ===
 
-public class StdAndI1Op(StdBool lhs, StdBool rhs) : StandardOp {
+public abstract class StdBinaryI1Op(StdBool lhs, StdBool rhs) : StandardOp {
+  public abstract StdBinaryOperator Operator { get; }
+  public StdBool Lhs { get; } = lhs;
+  public StdBool Rhs { get; } = rhs;
+  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override List<StdValue> ReadValues => [Lhs, Rhs];
+  public override int PureResultId => Result.Id;
+}
+
+public class StdAndI1Op(StdBool lhs, StdBool rhs) : StdBinaryI1Op(lhs, rhs) {
   public override string Mnemonic => "arith.andi1";
-  public StdBool Lhs { get; } = lhs;
-  public StdBool Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override List<StdValue> ReadValues => [Lhs, Rhs];
-  public override int PureResultId => Result.Id;
+  public override StdBinaryOperator Operator => StdBinaryOperator.And;
 }
 
-public class StdOrI1Op(StdBool lhs, StdBool rhs) : StandardOp {
+public class StdOrI1Op(StdBool lhs, StdBool rhs) : StdBinaryI1Op(lhs, rhs) {
   public override string Mnemonic => "arith.ori1";
-  public StdBool Lhs { get; } = lhs;
-  public StdBool Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override List<StdValue> ReadValues => [Lhs, Rhs];
-  public override int PureResultId => Result.Id;
+  public override StdBinaryOperator Operator => StdBinaryOperator.Or;
 }
 
-public class StdXorI1Op(StdBool lhs, StdBool rhs) : StandardOp {
+public class StdXorI1Op(StdBool lhs, StdBool rhs) : StdBinaryI1Op(lhs, rhs) {
   public override string Mnemonic => "arith.xori1";
-  public StdBool Lhs { get; } = lhs;
-  public StdBool Rhs { get; } = rhs;
-  public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
-  public override List<StdValue> ReadValues => [Lhs, Rhs];
-  public override int PureResultId => Result.Id;
+  public override StdBinaryOperator Operator => StdBinaryOperator.Xor;
 }
 
 // === Memory Operations ===
@@ -705,6 +729,7 @@ public class StdXorI1Op(StdBool lhs, StdBool rhs) : StandardOp {
 public class StdStoreI64Op(StdI64 value, string varName) : StandardOp, IStoreOp {
   public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
   public StdI64 Value { get; } = value;
+  StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.I64;
   public override List<StdValue> ReadValues => [Value];
@@ -714,16 +739,18 @@ public class StdStoreI64Op(StdI64 value, string varName) : StandardOp, IStoreOp 
 public class StdStoreF64Op(StdF64 value, string varName) : StandardOp, IStoreOp {
   public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
   public StdF64 Value { get; } = value;
+  StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.F64;
   public override List<StdValue> ReadValues => [Value];
   public override int PureResultId => -1;
 }
 
-public class StdLoadI64Op(string varName) : StandardOp {
+public class StdLoadI64Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : i64";
   public string VarName { get; } = varName;
   public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -732,25 +759,28 @@ public class StdLoadI64Op(string varName) : StandardOp {
 public class StdStoreI1Op(StdBool value, string varName) : StandardOp, IStoreOp {
   public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
   public StdBool Value { get; } = value;
+  StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.I1;
   public override List<StdValue> ReadValues => [Value];
   public override int PureResultId => -1;
 }
 
-public class StdLoadI1Op(string varName) : StandardOp {
+public class StdLoadI1Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : i1";
   public string VarName { get; } = varName;
   public StdBool Result { get; } = new StdBool(MlirContext.Current.NextId());
+  StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
 }
 
-public class StdLoadF64Op(string varName) : StandardOp {
+public class StdLoadF64Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : f64";
   public string VarName { get; } = varName;
   public StdF64 Result { get; } = new StdF64(MlirContext.Current.NextId());
+  StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -759,16 +789,18 @@ public class StdLoadF64Op(string varName) : StandardOp {
 public class StdStoreF32Op(StdF32 value, string varName) : StandardOp, IStoreOp {
   public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
   public StdF32 Value { get; } = value;
+  StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.F32;
   public override List<StdValue> ReadValues => [Value];
   public override int PureResultId => -1;
 }
 
-public class StdLoadF32Op(string varName) : StandardOp {
+public class StdLoadF32Op(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : f32";
   public string VarName { get; } = varName;
   public StdF32 Result { get; } = new StdF32(MlirContext.Current.NextId());
+  StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;
@@ -777,16 +809,18 @@ public class StdLoadF32Op(string varName) : StandardOp {
 public class StdStorePtrOp(StdPtr value, string varName) : StandardOp, IStoreOp {
   public override string Mnemonic => $"memref.store %{Value.Id}, {VarName}";
   public StdPtr Value { get; } = value;
+  StdValue IStoreOp.Value => Value;
   public string VarName { get; } = varName;
   public MlirType StoredType => MlirType.I64; // Function pointers are 64-bit
   public override List<StdValue> ReadValues => [Value];
   public override int PureResultId => -1;
 }
 
-public class StdLoadPtrOp(string varName) : StandardOp {
+public class StdLoadPtrOp(string varName) : StandardOp, ILoadOp {
   public override string Mnemonic => $"memref.load {VarName} : ptr";
   public string VarName { get; } = varName;
   public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
+  StdValue ILoadOp.Result => Result;
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => Result.Id;

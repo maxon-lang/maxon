@@ -434,7 +434,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmStoreToStack(StdValue value, int offset, MlirBlock<X86Op> block) {
     var srcXmm = EnsureInXmmRegister(value, block);
-    block.AddOp(new X86MovSdMemXmmOp(offset, srcXmm));
+    block.AddOp(new X86MovMemXmmOp(offset, srcXmm, FloatPrecision.F64));
     NoteXmmStoreToStack(value, offset);
   }
 
@@ -443,7 +443,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmLoadFromStack(StdValue result, int offset, MlirBlock<X86Op> block) {
     var xmmReg = AllocateXmmRegister(result);
-    block.AddOp(new X86MovSdXmmMemOp(xmmReg, offset));
+    block.AddOp(new X86MovXmmMemOp(xmmReg, offset, FloatPrecision.F64));
   }
 
   /// <summary>
@@ -451,7 +451,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmLoadFromRipRelative(StdValue result, string rdataLabel, MlirBlock<X86Op> block) {
     var xmmReg = AllocateXmmRegister(result);
-    block.AddOp(new X86MovSdXmmRipRelOp(xmmReg, rdataLabel));
+    block.AddOp(new X86MovXmmRipRelOp(xmmReg, rdataLabel, FloatPrecision.F64));
   }
 
   // --- F32 (single-precision) XMM stack/rip-relative operations ---
@@ -461,7 +461,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmStoreToStackF32(StdValue value, int offset, MlirBlock<X86Op> block) {
     var xmm = EnsureInXmmRegister(value, block);
-    block.AddOp(new X86MovSsMemXmmOp(offset, xmm));
+    block.AddOp(new X86MovMemXmmOp(offset, xmm, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -469,7 +469,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmLoadFromStackF32(StdValue result, int offset, MlirBlock<X86Op> block) {
     var xmm = AllocateXmmRegister(result);
-    block.AddOp(new X86MovSsXmmMemOp(xmm, offset));
+    block.AddOp(new X86MovXmmMemOp(xmm, offset, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -477,7 +477,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmLoadFromRipRelativeF32(StdValue result, string rdataLabel, MlirBlock<X86Op> block) {
     var xmm = AllocateXmmRegister(result);
-    block.AddOp(new X86MovSsXmmRipRelOp(xmm, rdataLabel));
+    block.AddOp(new X86MovXmmRipRelOp(xmm, rdataLabel, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -594,7 +594,7 @@ public class RegisterManager {
     var lhsXmm = EnsureInXmmRegister(lhs, block);
     var resultXmm = AllocateXmmRegister(result);
     if (resultXmm != lhsXmm) {
-      block.AddOp(new X86MovSdXmmXmmOp(resultXmm, lhsXmm));
+      block.AddOp(new X86MovXmmXmmOp(resultXmm, lhsXmm, FloatPrecision.F64));
     }
     block.AddOp(makeOp(resultXmm, rhsXmm));
   }
@@ -605,7 +605,7 @@ public class RegisterManager {
   public void EmitCvttSd2Si(StdValue input, StdValue result, MlirBlock<X86Op> block) {
     var srcXmm = EnsureInXmmRegister(input, block);
     var destGpr = AllocateRegister(result, block);
-    block.AddOp(new X86CvttSd2SiOp(destGpr, srcXmm));
+    block.AddOp(new X86CvttFloat2SiOp(destGpr, srcXmm, FloatPrecision.F64));
   }
 
   /// <summary>
@@ -623,7 +623,7 @@ public class RegisterManager {
   public void EmitCvtSi2Sd(StdValue input, StdValue result, MlirBlock<X86Op> block) {
     var srcGpr = EnsureInRegister(input, block);
     var destXmm = AllocateXmmRegister(result);
-    block.AddOp(new X86CvtSi2SdOp(destXmm, srcGpr));
+    block.AddOp(new X86CvtSi2FloatOp(destXmm, srcGpr, FloatPrecision.F64));
   }
 
   // --- F32 conversion operations ---
@@ -634,7 +634,7 @@ public class RegisterManager {
   public void EmitCvttSs2Si(StdValue input, StdValue result, MlirBlock<X86Op> block) {
     var srcXmm = EnsureInXmmRegister(input, block);
     var destGpr = AllocateRegister(result, block);
-    block.AddOp(new X86CvttSs2SiOp(destGpr, srcXmm));
+    block.AddOp(new X86CvttFloat2SiOp(destGpr, srcXmm, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -643,7 +643,7 @@ public class RegisterManager {
   public void EmitCvtSi2Ss(StdValue input, StdValue result, MlirBlock<X86Op> block) {
     var srcGpr = EnsureInRegister(input, block);
     var destXmm = AllocateXmmRegister(result);
-    block.AddOp(new X86CvtSi2SsOp(destXmm, srcGpr));
+    block.AddOp(new X86CvtSi2FloatOp(destXmm, srcGpr, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -682,9 +682,9 @@ public class RegisterManager {
     var srcXmm = EnsureInXmmRegister(input, block);
     var resultXmm = AllocateXmmRegister(result);
     if (resultXmm != srcXmm) {
-      block.AddOp(new X86MovSdXmmXmmOp(resultXmm, srcXmm));
+      block.AddOp(new X86MovXmmXmmOp(resultXmm, srcXmm, FloatPrecision.F64));
     }
-    block.AddOp(new X86AndpdRipRelOp(resultXmm, maskLabel));
+    block.AddOp(new X86AndMaskRipRelOp(resultXmm, maskLabel, FloatPrecision.F64));
   }
 
   /// <summary>
@@ -694,9 +694,9 @@ public class RegisterManager {
     var srcXmm = EnsureInXmmRegister(input, block);
     var resultXmm = AllocateXmmRegister(result);
     if (resultXmm != srcXmm) {
-      block.AddOp(new X86MovSsXmmXmmOp(resultXmm, srcXmm));
+      block.AddOp(new X86MovXmmXmmOp(resultXmm, srcXmm, FloatPrecision.F32));
     }
-    block.AddOp(new X86AndpsRipRelOp(resultXmm, maskLabel));
+    block.AddOp(new X86AndMaskRipRelOp(resultXmm, maskLabel, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -705,7 +705,7 @@ public class RegisterManager {
   public void EmitXmmCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
     var rhsReg = EnsureInXmmRegister(rhs, block);
     var lhsReg = EnsureInXmmRegister(lhs, block);
-    block.AddOp(new X86UcomisdOp(lhsReg, rhsReg));
+    block.AddOp(new X86UcomisXmmOp(lhsReg, rhsReg, FloatPrecision.F64));
   }
 
   /// <summary>
@@ -714,7 +714,7 @@ public class RegisterManager {
   public void EmitXmmCompareF32(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
     var lhsXmm = EnsureInXmmRegister(lhs, block);
     var rhsXmm = EnsureInXmmRegister(rhs, block);
-    block.AddOp(new X86UcomissOp(lhsXmm, rhsXmm));
+    block.AddOp(new X86UcomisXmmOp(lhsXmm, rhsXmm, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -1091,7 +1091,7 @@ public class RegisterManager {
       if (paramValue is StdF64 or StdF32) {
         var xmm = AllocateXmmRegister(paramValue);
         // Both F64 and F32 are passed as 8-byte slots on the stack in our calling convention
-        block.AddOp(new X86MovSdXmmMemOp(xmm, stackOffset));
+        block.AddOp(new X86MovXmmMemOp(xmm, stackOffset, FloatPrecision.F64));
       } else if (paramValue is StdPtr or StdI64) {
         var gpr = AllocateRegister(paramValue, block);
         block.AddOp(new X86MovRegMemOp(gpr, stackOffset, sizeInBytes: 8));
@@ -1135,7 +1135,7 @@ public class RegisterManager {
         && !_valueXmmStackHome.ContainsKey(value)
         && !(consumedByCall != null && consumedByCall.Contains(value))) {
         _nextSpillOffset -= 8;
-        block.AddOp(new X86MovSdMemXmmOp(_nextSpillOffset, xmm));
+        block.AddOp(new X86MovMemXmmOp(_nextSpillOffset, xmm, FloatPrecision.F64));
         _valueXmmStackHome[value] = _nextSpillOffset;
       }
     }
@@ -1228,7 +1228,7 @@ public class RegisterManager {
 
     if (_valueXmmStackHome.TryGetValue(value, out var displacement)) {
       var reloadReg = AllocateXmmRegister(value);
-      block.AddOp(new X86MovSdXmmMemOp(reloadReg, displacement));
+      block.AddOp(new X86MovXmmMemOp(reloadReg, displacement, FloatPrecision.F64));
       return reloadReg;
     }
 
@@ -1362,7 +1362,7 @@ public class RegisterManager {
     var baseReg = EnsureInRegister(basePtr, block);
     if (fieldType == MlirType.F64) {
       var srcXmm = EnsureInXmmRegister(value, block);
-      block.AddOp(new X86MovSdIndirectMemXmmOp(baseReg, fieldOffset, srcXmm));
+      block.AddOp(new X86MovIndirectMemXmmOp(baseReg, fieldOffset, srcXmm, FloatPrecision.F64));
     } else if (fieldType == MlirType.I1 || fieldType == MlirType.I8) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovByteIndirectRegOp(baseReg, fieldOffset, srcReg));
@@ -1381,7 +1381,7 @@ public class RegisterManager {
     var baseReg = EnsureInRegister(basePtr, block);
     if (fieldType == MlirType.F64) {
       var destXmm = AllocateXmmRegister(result);
-      block.AddOp(new X86MovSdXmmIndirectMemOp(destXmm, baseReg, fieldOffset));
+      block.AddOp(new X86MovXmmIndirectMemOp(destXmm, baseReg, fieldOffset, FloatPrecision.F64));
     } else if (fieldType == MlirType.I1 || fieldType == MlirType.I8) {
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovzxRegByteIndirectOp(destGpr, baseReg, fieldOffset));
@@ -1417,7 +1417,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmGlobalLoad(StdValue result, string globalName, MlirBlock<X86Op> block) {
     var xmmReg = AllocateXmmRegister(result);
-    block.AddOp(new X86GlobalLoadXmmOp(globalName, xmmReg));
+    block.AddOp(new X86GlobalLoadXmmOp(globalName, xmmReg, FloatPrecision.F64));
   }
 
   /// <summary>
@@ -1425,7 +1425,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmGlobalStore(StdValue value, string globalName, MlirBlock<X86Op> block) {
     var srcXmm = EnsureInXmmRegister(value, block);
-    block.AddOp(new X86GlobalStoreXmmOp(globalName, srcXmm));
+    block.AddOp(new X86GlobalStoreXmmOp(globalName, srcXmm, FloatPrecision.F64));
   }
 
   /// <summary>
@@ -1433,7 +1433,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmGlobalLoadF32(StdValue result, string globalName, MlirBlock<X86Op> block) {
     var xmm = AllocateXmmRegister(result);
-    block.AddOp(new X86GlobalLoadSsXmmOp(globalName, xmm));
+    block.AddOp(new X86GlobalLoadXmmOp(globalName, xmm, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -1441,7 +1441,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitXmmGlobalStoreF32(StdValue value, string globalName, MlirBlock<X86Op> block) {
     var xmm = EnsureInXmmRegister(value, block);
-    block.AddOp(new X86GlobalStoreSsXmmOp(globalName, xmm));
+    block.AddOp(new X86GlobalStoreXmmOp(globalName, xmm, FloatPrecision.F32));
   }
 
   /// <summary>
@@ -1450,7 +1450,7 @@ public class RegisterManager {
   public void EnsureInXmm0ForReturn(StdValue value, MlirBlock<X86Op> block) {
     var xmmReg = EnsureInXmmRegister(value, block);
     if (xmmReg != X86XmmRegister.Xmm0) {
-      block.AddOp(new X86MovSdXmmXmmOp(X86XmmRegister.Xmm0, xmmReg));
+      block.AddOp(new X86MovXmmXmmOp(X86XmmRegister.Xmm0, xmmReg, FloatPrecision.F64));
     }
   }
 
@@ -1556,7 +1556,7 @@ public class RegisterManager {
           }
         }
         if (!targetBlocked) {
-          block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], xmmSources[i]!.Value));
+          block.AddOp(new X86MovXmmXmmOp(CallConvXmmRegs[i], xmmSources[i]!.Value, FloatPrecision.F64));
           placed[i] = true;
           progress = true;
         }
@@ -1573,9 +1573,9 @@ public class RegisterManager {
         continue;
       }
       var temp = X86XmmRegister.Xmm15;
-      block.AddOp(new X86MovSdXmmXmmOp(temp, xmmSources[i]!.Value));
-      block.AddOp(new X86MovSdXmmXmmOp(xmmSources[i]!.Value, CallConvXmmRegs[i]));
-      block.AddOp(new X86MovSdXmmXmmOp(CallConvXmmRegs[i], temp));
+      block.AddOp(new X86MovXmmXmmOp(temp, xmmSources[i]!.Value, FloatPrecision.F64));
+      block.AddOp(new X86MovXmmXmmOp(xmmSources[i]!.Value, CallConvXmmRegs[i], FloatPrecision.F64));
+      block.AddOp(new X86MovXmmXmmOp(CallConvXmmRegs[i], temp, FloatPrecision.F64));
       // Update the other arg's source to reflect the swap
       foreach (int j in xmmArgs) {
         if (j != i && !placed[j] && xmmSources[j] == CallConvXmmRegs[i]) {

@@ -80,7 +80,7 @@ public static class PeepholePass {
       case X86JmpOp:
       case X86RetOp:
       case X86GlobalLoadOp:
-      case X86CvttSd2SiOp:
+      case X86CvttFloat2SiOp:
         break;
       // Single GPR read
       case X86MovRegRegOp mov: yield return mov.Src; break;
@@ -93,7 +93,7 @@ public static class PeepholePass {
       case X86MovMemRspRegOp storeRsp: yield return storeRsp.Src; break;
       case X86GlobalStoreOp gs: yield return gs.Src; break;
       case X86CallIndirectOp callInd: yield return callInd.Target; break;
-      case X86CvtSi2SdOp cvt: yield return cvt.Src; break;
+      case X86CvtSi2FloatOp cvt: yield return cvt.Src; break;
       // Two GPR reads
       case X86AddRegRegOp add: yield return add.Dest; yield return add.Src; break;
       case X86SubRegRegOp sub: yield return sub.Dest; yield return sub.Src; break;
@@ -119,8 +119,8 @@ public static class PeepholePass {
       // REP MOVSB reads RSI, RDI, RCX
       case X86RepMovsbOp: yield return X86Register.Rsi; yield return X86Register.Rdi; yield return X86Register.Rcx; break;
       // XMM ops that read GPR base registers
-      case X86MovSdIndirectMemXmmOp sdStoreInd: yield return sdStoreInd.BaseReg; break;
-      case X86MovSdXmmIndirectMemOp sdLoadInd: yield return sdLoadInd.BaseReg; break;
+      case X86MovIndirectMemXmmOp sdStoreInd: yield return sdStoreInd.BaseReg; break;
+      case X86MovXmmIndirectMemOp sdLoadInd: yield return sdLoadInd.BaseReg; break;
       // Calls/imports: conservatively assume all caller-saved registers are read
       case X86CallDirectOp:
       case X86CallImportOp:

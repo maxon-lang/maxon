@@ -37,12 +37,7 @@ public static class StandardToX86Conversion {
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         switch (op) {
-          case StdLoadI64Op load: loadedVariables.Add(load.VarName); break;
-          case StdLoadI32Op load: loadedVariables.Add(load.VarName); break;
-          case StdLoadI1Op load: loadedVariables.Add(load.VarName); break;
-          case StdLoadF64Op load: loadedVariables.Add(load.VarName); break;
-          case StdLoadF32Op load: loadedVariables.Add(load.VarName); break;
-          case StdLoadPtrOp load: loadedVariables.Add(load.VarName); break;
+          case ILoadOp load: loadedVariables.Add(load.VarName); break;
           case StdLeaOp lea: leaVariables.Add(lea.VarName); break;
         }
       }
@@ -249,38 +244,65 @@ public static class StandardToX86Conversion {
             regManager.EmitLoadImmediate(boolOp.Result, boolOp.Value ? 1 : 0, x86Block);
             break;
 
-          case StdAddI64Op addOp:
-            regManager.EmitBinaryRegReg(addOp.Lhs, addOp.Rhs, addOp.Result, x86Block,
-              (l, r) => new X86AddRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, addOp.Lhs, currentOpIndex),
-              useLeaForAdd: true);
-            break;
-
-          case StdSubI64Op subOp:
-            regManager.EmitBinaryRegReg(subOp.Lhs, subOp.Rhs, subOp.Result, x86Block,
-              (l, r) => new X86SubRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, subOp.Lhs, currentOpIndex));
-            break;
-
-          case StdMulI64Op mulOp:
-            regManager.EmitMultiply(mulOp.Lhs, mulOp.Rhs, mulOp.Result, x86Block,
-              lhsConsumed: IsLastUse(lastUseOfValue, mulOp.Lhs, currentOpIndex));
-            break;
-
-          case StdDivI64Op divOp:
-            regManager.EmitDivision(divOp.Lhs, divOp.Rhs, divOp.Result, x86Block);
-            break;
-
-          case StdRemI64Op remOp:
-            regManager.EmitRemainder(remOp.Lhs, remOp.Rhs, remOp.Result, x86Block);
-            break;
-
-          case StdDivU64Op divUOp:
-            regManager.EmitUnsignedDivision(divUOp.Lhs, divUOp.Rhs, divUOp.Result, x86Block);
-            break;
-
-          case StdRemU64Op remUOp:
-            regManager.EmitUnsignedRemainder(remUOp.Lhs, remUOp.Rhs, remUOp.Result, x86Block);
+          case StdBinaryI64Op binOp:
+            switch (binOp.Operator) {
+              case StdBinaryOperator.Add:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86AddRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex),
+                  useLeaForAdd: true);
+                break;
+              case StdBinaryOperator.Sub:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86SubRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Mul:
+                regManager.EmitMultiply(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.DivSigned:
+                regManager.EmitDivision(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.RemSigned:
+                regManager.EmitRemainder(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.DivUnsigned:
+                regManager.EmitUnsignedDivision(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.RemUnsigned:
+                regManager.EmitUnsignedRemainder(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.And:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86AndRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Or:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86OrRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Xor:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86XorRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Shl:
+                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  dest => new X86ShlRegClOp(dest));
+                break;
+              case StdBinaryOperator.ShrSigned:
+                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  dest => new X86SarRegClOp(dest));
+                break;
+              case StdBinaryOperator.ShrUnsigned:
+                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  dest => new X86ShrRegClOp(dest));
+                break;
+              default:
+                throw new InvalidOperationException($"Unsupported I64 binary operator: {binOp.Operator}");
+            }
             break;
 
           // === I32 Arithmetic ===
@@ -289,71 +311,65 @@ public static class StandardToX86Conversion {
             regManager.EmitLoadImmediate(constI32Op.Result, constI32Op.Value, x86Block);
             break;
 
-          case StdAddI32Op addI32Op:
-            regManager.EmitBinaryRegReg(addI32Op.Lhs, addI32Op.Rhs, addI32Op.Result, x86Block,
-              (l, r) => new X86AddRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, addI32Op.Lhs, currentOpIndex),
-              useLeaForAdd: true);
-            break;
-
-          case StdSubI32Op subI32Op:
-            regManager.EmitBinaryRegReg(subI32Op.Lhs, subI32Op.Rhs, subI32Op.Result, x86Block,
-              (l, r) => new X86SubRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, subI32Op.Lhs, currentOpIndex));
-            break;
-
-          case StdMulI32Op mulI32Op:
-            regManager.EmitMultiply(mulI32Op.Lhs, mulI32Op.Rhs, mulI32Op.Result, x86Block,
-              lhsConsumed: IsLastUse(lastUseOfValue, mulI32Op.Lhs, currentOpIndex));
-            break;
-
-          case StdDivI32Op divI32Op:
-            regManager.EmitDivision32(divI32Op.Lhs, divI32Op.Rhs, divI32Op.Result, x86Block);
-            break;
-
-          case StdRemI32Op remI32Op:
-            regManager.EmitRemainder32(remI32Op.Lhs, remI32Op.Rhs, remI32Op.Result, x86Block);
-            break;
-
-          case StdDivU32Op divU32Op:
-            regManager.EmitUnsignedDivision32(divU32Op.Lhs, divU32Op.Rhs, divU32Op.Result, x86Block);
-            break;
-
-          case StdRemU32Op remU32Op:
-            regManager.EmitUnsignedRemainder32(remU32Op.Lhs, remU32Op.Rhs, remU32Op.Result, x86Block);
-            break;
-
-          case StdAndI32Op andI32Op:
-            regManager.EmitBinaryRegReg(andI32Op.Lhs, andI32Op.Rhs, andI32Op.Result, x86Block,
-              (l, r) => new X86AndRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, andI32Op.Lhs, currentOpIndex));
-            break;
-
-          case StdOrI32Op orI32Op:
-            regManager.EmitBinaryRegReg(orI32Op.Lhs, orI32Op.Rhs, orI32Op.Result, x86Block,
-              (l, r) => new X86OrRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, orI32Op.Lhs, currentOpIndex));
-            break;
-
-          case StdXorI32Op xorI32Op:
-            regManager.EmitBinaryRegReg(xorI32Op.Lhs, xorI32Op.Rhs, xorI32Op.Result, x86Block,
-              (l, r) => new X86XorRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, xorI32Op.Lhs, currentOpIndex));
-            break;
-
-          case StdShlI32Op shlI32Op:
-            regManager.EmitShift(shlI32Op.Lhs, shlI32Op.Rhs, shlI32Op.Result, x86Block,
-              dest => new X86ShlRegClOp(dest));
-            break;
-
-          case StdShrI32Op shrI32Op:
-            regManager.EmitShift(shrI32Op.Lhs, shrI32Op.Rhs, shrI32Op.Result, x86Block,
-              dest => new X86SarRegClOp(dest));
-            break;
-
-          case StdShrU32Op shrU32Op:
-            regManager.EmitShift(shrU32Op.Lhs, shrU32Op.Rhs, shrU32Op.Result, x86Block,
-              dest => new X86ShrRegClOp(dest));
+          case StdBinaryI32Op binOp:
+            switch (binOp.Operator) {
+              case StdBinaryOperator.Add:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86AddRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex),
+                  useLeaForAdd: true);
+                break;
+              case StdBinaryOperator.Sub:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86SubRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Mul:
+                regManager.EmitMultiply(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.DivSigned:
+                regManager.EmitDivision32(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.RemSigned:
+                regManager.EmitRemainder32(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.DivUnsigned:
+                regManager.EmitUnsignedDivision32(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.RemUnsigned:
+                regManager.EmitUnsignedRemainder32(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block);
+                break;
+              case StdBinaryOperator.And:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86AndRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Or:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86OrRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Xor:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86XorRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Shl:
+                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  dest => new X86ShlRegClOp(dest));
+                break;
+              case StdBinaryOperator.ShrSigned:
+                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  dest => new X86SarRegClOp(dest));
+                break;
+              case StdBinaryOperator.ShrUnsigned:
+                regManager.EmitShift(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  dest => new X86ShrRegClOp(dest));
+                break;
+              default:
+                throw new InvalidOperationException($"Unsupported I32 binary operator: {binOp.Operator}");
+            }
             break;
 
           case StdCmpI32Op cmpI32Op:
@@ -404,97 +420,90 @@ public static class StandardToX86Conversion {
             regManager.EmitCvtSi2Sd(uiToFpI32Op.Input, uiToFpI32Op.Result, x86Block);
             break;
 
-          case StdAddF64Op addF64Op:
-            regManager.EmitXmmBinaryRegReg(addF64Op.Lhs, addF64Op.Rhs, addF64Op.Result, x86Block,
-              (l, r) => new X86AddSdOp(l, r));
-            break;
-
-          case StdSubF64Op subF64Op:
-            regManager.EmitXmmBinaryRegReg(subF64Op.Lhs, subF64Op.Rhs, subF64Op.Result, x86Block,
-              (l, r) => new X86SubSdOp(l, r));
-            break;
-
-          case StdMulF64Op mulF64Op:
-            regManager.EmitXmmBinaryRegReg(mulF64Op.Lhs, mulF64Op.Rhs, mulF64Op.Result, x86Block,
-              (l, r) => new X86MulSdOp(l, r));
-            break;
-
-          case StdDivF64Op divF64Op:
-            regManager.EmitXmmBinaryRegReg(divF64Op.Lhs, divF64Op.Rhs, divF64Op.Result, x86Block,
-              (l, r) => new X86DivSdOp(l, r));
+          case StdBinaryF64Op binOp:
+            switch (binOp.Operator) {
+              case StdBinaryOperator.Add:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86AddXmmOp(l, r, FloatPrecision.F64));
+                break;
+              case StdBinaryOperator.Sub:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86SubXmmOp(l, r, FloatPrecision.F64));
+                break;
+              case StdBinaryOperator.Mul:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86MulXmmOp(l, r, FloatPrecision.F64));
+                break;
+              case StdBinaryOperator.DivSigned:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86DivXmmOp(l, r, FloatPrecision.F64));
+                break;
+              case StdBinaryOperator.Min:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86MinXmmOp(l, r, FloatPrecision.F64));
+                break;
+              case StdBinaryOperator.Max:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86MaxXmmOp(l, r, FloatPrecision.F64));
+                break;
+              default:
+                throw new InvalidOperationException($"Unsupported F64 binary operator: {binOp.Operator}");
+            }
             break;
 
           // === F32 Arithmetic ===
 
-          case StdAddF32Op addF32Op:
-            regManager.EmitXmmBinaryRegReg(addF32Op.Lhs, addF32Op.Rhs, addF32Op.Result, x86Block,
-              (l, r) => new X86AddSsOp(l, r));
+          case StdBinaryF32Op binOp:
+            switch (binOp.Operator) {
+              case StdBinaryOperator.Add:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86AddXmmOp(l, r, FloatPrecision.F32));
+                break;
+              case StdBinaryOperator.Sub:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86SubXmmOp(l, r, FloatPrecision.F32));
+                break;
+              case StdBinaryOperator.Mul:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86MulXmmOp(l, r, FloatPrecision.F32));
+                break;
+              case StdBinaryOperator.DivSigned:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86DivXmmOp(l, r, FloatPrecision.F32));
+                break;
+              case StdBinaryOperator.Min:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86MinXmmOp(l, r, FloatPrecision.F32));
+                break;
+              case StdBinaryOperator.Max:
+                regManager.EmitXmmBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86MaxXmmOp(l, r, FloatPrecision.F32));
+                break;
+              default:
+                throw new InvalidOperationException($"Unsupported F32 binary operator: {binOp.Operator}");
+            }
             break;
 
-          case StdSubF32Op subF32Op:
-            regManager.EmitXmmBinaryRegReg(subF32Op.Lhs, subF32Op.Rhs, subF32Op.Result, x86Block,
-              (l, r) => new X86SubSsOp(l, r));
-            break;
-
-          case StdMulF32Op mulF32Op:
-            regManager.EmitXmmBinaryRegReg(mulF32Op.Lhs, mulF32Op.Rhs, mulF32Op.Result, x86Block,
-              (l, r) => new X86MulSsOp(l, r));
-            break;
-
-          case StdDivF32Op divF32Op:
-            regManager.EmitXmmBinaryRegReg(divF32Op.Lhs, divF32Op.Rhs, divF32Op.Result, x86Block,
-              (l, r) => new X86DivSsOp(l, r));
-            break;
-
-          case StdAndI64Op andOp:
-            regManager.EmitBinaryRegReg(andOp.Lhs, andOp.Rhs, andOp.Result, x86Block,
-              (l, r) => new X86AndRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, andOp.Lhs, currentOpIndex));
-            break;
-
-          case StdOrI64Op orOp:
-            regManager.EmitBinaryRegReg(orOp.Lhs, orOp.Rhs, orOp.Result, x86Block,
-              (l, r) => new X86OrRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, orOp.Lhs, currentOpIndex));
-            break;
-
-          case StdXorI64Op xorOp:
-            regManager.EmitBinaryRegReg(xorOp.Lhs, xorOp.Rhs, xorOp.Result, x86Block,
-              (l, r) => new X86XorRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, xorOp.Lhs, currentOpIndex));
-            break;
-
-          case StdAndI1Op andI1Op:
-            regManager.EmitBinaryRegReg(andI1Op.Lhs, andI1Op.Rhs, andI1Op.Result, x86Block,
-              (l, r) => new X86AndRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, andI1Op.Lhs, currentOpIndex));
-            break;
-
-          case StdOrI1Op orI1Op:
-            regManager.EmitBinaryRegReg(orI1Op.Lhs, orI1Op.Rhs, orI1Op.Result, x86Block,
-              (l, r) => new X86OrRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, orI1Op.Lhs, currentOpIndex));
-            break;
-
-          case StdXorI1Op xorI1Op:
-            regManager.EmitBinaryRegReg(xorI1Op.Lhs, xorI1Op.Rhs, xorI1Op.Result, x86Block,
-              (l, r) => new X86XorRegRegOp(l, r),
-              lhsConsumed: IsLastUse(lastUseOfValue, xorI1Op.Lhs, currentOpIndex));
-            break;
-
-          case StdShlI64Op shlOp:
-            regManager.EmitShift(shlOp.Lhs, shlOp.Rhs, shlOp.Result, x86Block,
-              dest => new X86ShlRegClOp(dest));
-            break;
-
-          case StdShrI64Op shrOp:
-            regManager.EmitShift(shrOp.Lhs, shrOp.Rhs, shrOp.Result, x86Block,
-              dest => new X86SarRegClOp(dest));
-            break;
-
-          case StdShrU64Op shrUOp:
-            regManager.EmitShift(shrUOp.Lhs, shrUOp.Rhs, shrUOp.Result, x86Block,
-              dest => new X86ShrRegClOp(dest));
+          case StdBinaryI1Op binOp:
+            switch (binOp.Operator) {
+              case StdBinaryOperator.And:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86AndRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Or:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86OrRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              case StdBinaryOperator.Xor:
+                regManager.EmitBinaryRegReg(binOp.Lhs, binOp.Rhs, binOp.Result, x86Block,
+                  (l, r) => new X86XorRegRegOp(l, r),
+                  lhsConsumed: IsLastUse(lastUseOfValue, binOp.Lhs, currentOpIndex));
+                break;
+              default:
+                throw new InvalidOperationException($"Unsupported I1 binary operator: {binOp.Operator}");
+            }
             break;
 
           case StdFpToSiOp fpToSiOp:
@@ -553,32 +562,22 @@ public static class StandardToX86Conversion {
 
           case StdSqrtF64Op sqrtOp:
             regManager.EmitXmmUnaryRegReg(sqrtOp.Input, sqrtOp.Result, x86Block,
-              (d, s) => new X86SqrtSdOp(d, s));
+              (d, s) => new X86SqrtXmmOp(d, s, FloatPrecision.F64));
             break;
 
           case StdFloorF64Op floorOp:
             regManager.EmitXmmUnaryRegReg(floorOp.Input, floorOp.Result, x86Block,
-              (d, s) => new X86RoundSdOp(d, s, 0x01));
+              (d, s) => new X86RoundXmmOp(d, s, 0x01, FloatPrecision.F64));
             break;
 
           case StdCeilF64Op ceilOp:
             regManager.EmitXmmUnaryRegReg(ceilOp.Input, ceilOp.Result, x86Block,
-              (d, s) => new X86RoundSdOp(d, s, 0x02));
+              (d, s) => new X86RoundXmmOp(d, s, 0x02, FloatPrecision.F64));
             break;
 
           case StdRoundF64Op roundOp:
             regManager.EmitXmmUnaryRegReg(roundOp.Input, roundOp.Result, x86Block,
-              (d, s) => new X86RoundSdOp(d, s, 0x00));
-            break;
-
-          case StdMinF64Op minOp:
-            regManager.EmitXmmBinaryRegReg(minOp.Lhs, minOp.Rhs, minOp.Result, x86Block,
-              (l, r) => new X86MinSdOp(l, r));
-            break;
-
-          case StdMaxF64Op maxOp:
-            regManager.EmitXmmBinaryRegReg(maxOp.Lhs, maxOp.Rhs, maxOp.Result, x86Block,
-              (l, r) => new X86MaxSdOp(l, r));
+              (d, s) => new X86RoundXmmOp(d, s, 0x00, FloatPrecision.F64));
             break;
 
           // === F32 Math ===
@@ -589,32 +588,22 @@ public static class StandardToX86Conversion {
 
           case StdSqrtF32Op sqrtF32Op:
             regManager.EmitXmmUnaryRegReg(sqrtF32Op.Input, sqrtF32Op.Result, x86Block,
-              (d, s) => new X86SqrtSsOp(d, s));
+              (d, s) => new X86SqrtXmmOp(d, s, FloatPrecision.F32));
             break;
 
           case StdFloorF32Op floorF32Op:
             regManager.EmitXmmUnaryRegReg(floorF32Op.Input, floorF32Op.Result, x86Block,
-              (d, s) => new X86RoundSsOp(d, s, 0x01));
+              (d, s) => new X86RoundXmmOp(d, s, 0x01, FloatPrecision.F32));
             break;
 
           case StdCeilF32Op ceilF32Op:
             regManager.EmitXmmUnaryRegReg(ceilF32Op.Input, ceilF32Op.Result, x86Block,
-              (d, s) => new X86RoundSsOp(d, s, 0x02));
+              (d, s) => new X86RoundXmmOp(d, s, 0x02, FloatPrecision.F32));
             break;
 
           case StdRoundF32Op roundF32Op:
             regManager.EmitXmmUnaryRegReg(roundF32Op.Input, roundF32Op.Result, x86Block,
-              (d, s) => new X86RoundSsOp(d, s, 0x00));
-            break;
-
-          case StdMinF32Op minF32Op:
-            regManager.EmitXmmBinaryRegReg(minF32Op.Lhs, minF32Op.Rhs, minF32Op.Result, x86Block,
-              (l, r) => new X86MinSsOp(l, r));
-            break;
-
-          case StdMaxF32Op maxF32Op:
-            regManager.EmitXmmBinaryRegReg(maxF32Op.Lhs, maxF32Op.Rhs, maxF32Op.Result, x86Block,
-              (l, r) => new X86MaxSsOp(l, r));
+              (d, s) => new X86RoundXmmOp(d, s, 0x00, FloatPrecision.F32));
             break;
 
           case StdConstF64Op floatOp: {

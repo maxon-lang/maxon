@@ -170,14 +170,14 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86MovRegMemOp movReg:
         EmitMovRegMem(movReg.Dest, movReg.Displacement, movReg.SizeInBytes);
         break;
-      case X86MovSdXmmRipRelOp movsd:
-        EmitMovSdXmmRipRel(movsd.Dest, movsd.RdataLabel);
+      case X86MovXmmRipRelOp mov:
+        EmitMovXmmRipRel(mov.Dest, mov.RdataLabel, mov.Precision);
         break;
-      case X86MovSdMemXmmOp movsd:
-        EmitMovSdMemXmm(movsd.Displacement, movsd.Src);
+      case X86MovMemXmmOp mov:
+        EmitMovMemXmm(mov.Displacement, mov.Src, mov.Precision);
         break;
-      case X86MovSdXmmMemOp movsd:
-        EmitMovSdXmmMem(movsd.Dest, movsd.Displacement);
+      case X86MovXmmMemOp mov:
+        EmitMovXmmMem(mov.Dest, mov.Displacement, mov.Precision);
         break;
       case X86CmpRegRegOp cmp:
         EmitCmpRegReg(cmp.Lhs, cmp.Rhs);
@@ -185,47 +185,47 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86TestRegRegOp test:
         EmitTestRegReg(test.Lhs, test.Rhs);
         break;
-      case X86AddSdOp addsd:
-        EmitAddSd(addsd.Dest, addsd.Src);
+      case X86AddXmmOp add:
+        EmitAddXmm(add.Dest, add.Src, add.Precision);
         break;
-      case X86SubSdOp subsd:
-        EmitSubSd(subsd.Dest, subsd.Src);
+      case X86SubXmmOp sub:
+        EmitSubXmm(sub.Dest, sub.Src, sub.Precision);
         break;
-      case X86MulSdOp mulsd:
-        EmitMulSd(mulsd.Dest, mulsd.Src);
+      case X86MulXmmOp mul:
+        EmitMulXmm(mul.Dest, mul.Src, mul.Precision);
         break;
-      case X86DivSdOp divsd:
-        EmitDivSd(divsd.Dest, divsd.Src);
+      case X86DivXmmOp div:
+        EmitDivXmm(div.Dest, div.Src, div.Precision);
         break;
-      case X86CvttSd2SiOp cvttsd2si:
-        EmitCvttSd2Si(cvttsd2si.Dest, cvttsd2si.Src);
+      case X86CvttFloat2SiOp cvtt:
+        EmitCvttFloat2Si(cvtt.Dest, cvtt.Src, cvtt.Precision);
         break;
       case X86MovqXmmToGprOp movq:
         EmitMovqXmmToGpr(movq.Dest, movq.Src);
         break;
-      case X86CvtSi2SdOp cvtsi2sd:
-        EmitCvtSi2Sd(cvtsi2sd.Dest, cvtsi2sd.Src);
+      case X86CvtSi2FloatOp cvt:
+        EmitCvtSi2Float(cvt.Dest, cvt.Src, cvt.Precision);
         break;
-      case X86AndpdRipRelOp andpd:
-        EmitAndpdRipRel(andpd.Dest, andpd.RdataLabel);
+      case X86AndMaskRipRelOp andMask:
+        EmitAndMaskRipRel(andMask.Dest, andMask.RdataLabel, andMask.Precision);
         break;
-      case X86SqrtSdOp sqrtsd:
-        EmitSqrtSd(sqrtsd.Dest, sqrtsd.Src);
+      case X86SqrtXmmOp sqrt:
+        EmitSqrtXmm(sqrt.Dest, sqrt.Src, sqrt.Precision);
         break;
-      case X86RoundSdOp roundsd:
-        EmitRoundSd(roundsd.Dest, roundsd.Src, roundsd.Mode);
+      case X86RoundXmmOp round:
+        EmitRoundXmm(round.Dest, round.Src, round.Mode, round.Precision);
         break;
-      case X86MinSdOp minsd:
-        EmitMinSd(minsd.Dest, minsd.Src);
+      case X86MinXmmOp min:
+        EmitMinXmm(min.Dest, min.Src, min.Precision);
         break;
-      case X86MaxSdOp maxsd:
-        EmitMaxSd(maxsd.Dest, maxsd.Src);
+      case X86MaxXmmOp max:
+        EmitMaxXmm(max.Dest, max.Src, max.Precision);
         break;
-      case X86MovSdXmmXmmOp movsdReg:
-        EmitMovSdXmmXmm(movsdReg.Dest, movsdReg.Src);
+      case X86MovXmmXmmOp movXmm:
+        EmitMovXmmXmm(movXmm.Dest, movXmm.Src, movXmm.Precision);
         break;
-      case X86UcomisdOp ucomisd:
-        EmitUcomisd(ucomisd.Src1, ucomisd.Src2);
+      case X86UcomisXmmOp ucomis:
+        EmitUcomisXmm(ucomis.Src1, ucomis.Src2, ucomis.Precision);
         break;
       case X86SetccOp setcc:
         EmitSetcc(setcc.Condition, setcc.Dest);
@@ -275,11 +275,11 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86MovRegIndirectMemOp movInd:
         EmitMovRegIndirectMem(movInd.Dest, movInd.BaseReg, movInd.Displacement);
         break;
-      case X86MovSdIndirectMemXmmOp movsdInd:
-        EmitMovSdIndirectMemXmm(movsdInd.BaseReg, movsdInd.Displacement, movsdInd.Src);
+      case X86MovIndirectMemXmmOp movInd:
+        EmitMovIndirectMemXmm(movInd.BaseReg, movInd.Displacement, movInd.Src, movInd.Precision);
         break;
-      case X86MovSdXmmIndirectMemOp movsdInd:
-        EmitMovSdXmmIndirectMem(movsdInd.Dest, movsdInd.BaseReg, movsdInd.Displacement);
+      case X86MovXmmIndirectMemOp movInd:
+        EmitMovXmmIndirectMem(movInd.Dest, movInd.BaseReg, movInd.Displacement, movInd.Precision);
         break;
       case X86MovzxRegByteIndirectOp movzxByte:
         EmitMovzxRegByteIndirect(movzxByte.Dest, movzxByte.BaseReg, movzxByte.Displacement);
@@ -294,10 +294,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
         EmitGlobalStoreReg(globalStore.Src, globalStore.GlobalName);
         break;
       case X86GlobalLoadXmmOp globalLoadXmm:
-        EmitGlobalLoadXmm(globalLoadXmm.Dest, globalLoadXmm.GlobalName);
+        EmitGlobalLoadXmm(globalLoadXmm.Dest, globalLoadXmm.GlobalName, globalLoadXmm.Precision);
         break;
       case X86GlobalStoreXmmOp globalStoreXmm:
-        EmitGlobalStoreXmm(globalStoreXmm.Src, globalStoreXmm.GlobalName);
+        EmitGlobalStoreXmm(globalStoreXmm.Src, globalStoreXmm.GlobalName, globalStoreXmm.Precision);
         break;
       case X86RepMovsbOp:
         EmitBytes(0xF3, 0xA4); // REP MOVSB
@@ -308,71 +308,11 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86CmovneRegRegOp cmovne:
         EmitCmovneRegReg(cmovne.Dest, cmovne.Src);
         break;
-      case X86MovSsXmmRipRelOp movss:
-        EmitMovSsXmmRipRel(movss.Dest, movss.RdataLabel);
-        break;
-      case X86MovSsMemXmmOp movss:
-        EmitMovSsMemXmm(movss.Displacement, movss.Src);
-        break;
-      case X86MovSsXmmMemOp movss:
-        EmitMovSsXmmMem(movss.Dest, movss.Displacement);
-        break;
-      case X86MovSsXmmXmmOp movss:
-        EmitMovSsXmmXmm(movss.Dest, movss.Src);
-        break;
-      case X86AddSsOp addss:
-        EmitAddSs(addss.Dest, addss.Src);
-        break;
-      case X86SubSsOp subss:
-        EmitSubSs(subss.Dest, subss.Src);
-        break;
-      case X86MulSsOp mulss:
-        EmitMulSs(mulss.Dest, mulss.Src);
-        break;
-      case X86DivSsOp divss:
-        EmitDivSs(divss.Dest, divss.Src);
-        break;
-      case X86SqrtSsOp sqrtss:
-        EmitSqrtSs(sqrtss.Dest, sqrtss.Src);
-        break;
-      case X86RoundSsOp roundss:
-        EmitRoundSs(roundss.Dest, roundss.Src, roundss.Mode);
-        break;
-      case X86MinSsOp minss:
-        EmitMinSs(minss.Dest, minss.Src);
-        break;
-      case X86MaxSsOp maxss:
-        EmitMaxSs(maxss.Dest, maxss.Src);
-        break;
-      case X86CvttSs2SiOp cvttss2si:
-        EmitCvttSs2Si(cvttss2si.Dest, cvttss2si.Src);
-        break;
-      case X86CvtSi2SsOp cvtsi2ss:
-        EmitCvtSi2Ss(cvtsi2ss.Dest, cvtsi2ss.Src);
-        break;
       case X86CvtSd2SsOp cvtsd2ss:
         EmitCvtSd2Ss(cvtsd2ss.Dest, cvtsd2ss.Src);
         break;
       case X86CvtSs2SdOp cvtss2sd:
         EmitCvtSs2Sd(cvtss2sd.Dest, cvtss2sd.Src);
-        break;
-      case X86AndpsRipRelOp andps:
-        EmitAndpsRipRel(andps.Dest, andps.RdataLabel);
-        break;
-      case X86UcomissOp ucomiss:
-        EmitUcomiss(ucomiss.Src1, ucomiss.Src2);
-        break;
-      case X86MovSsIndirectMemXmmOp movssInd:
-        EmitMovSsIndirectMemXmm(movssInd.BaseReg, movssInd.Displacement, movssInd.Src);
-        break;
-      case X86MovSsXmmIndirectMemOp movssInd:
-        EmitMovSsXmmIndirectMem(movssInd.Dest, movssInd.BaseReg, movssInd.Displacement);
-        break;
-      case X86GlobalLoadSsXmmOp globalLoadSs:
-        EmitGlobalLoadXmmF32(globalLoadSs.Dest, globalLoadSs.GlobalName);
-        break;
-      case X86GlobalStoreSsXmmOp globalStoreSs:
-        EmitGlobalStoreXmmF32(globalStoreSs.Src, globalStoreSs.GlobalName);
         break;
       default:
         throw new InvalidOperationException($"No X86 emission for: {op.GetType().Name} ({op.Mnemonic})");
@@ -1075,10 +1015,12 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitByte((byte)(0xC0 | ((destCode & 7) << 3) | (srcCode & 7)));
   }
 
-  private void EmitMovSdXmmRipRel(X86XmmRegister dest, string rdataLabel) {
-    // MOVSD xmm, [rip+disp32]: F2 0F 10 /r (ModRM: mod=00, r/m=101 for RIP-relative)
+  private static byte PrecPrefix(FloatPrecision p) => p == FloatPrecision.F64 ? (byte)0xF2 : (byte)0xF3;
+
+  private void EmitMovXmmRipRel(X86XmmRegister dest, string rdataLabel, FloatPrecision precision) {
+    // MOV[SD/SS] xmm, [rip+disp32]: prefix 0F 10 /r (ModRM: mod=00, r/m=101 for RIP-relative)
     var reg = XmmRegCode(dest);
-    EmitByte(0xF2);
+    EmitByte(PrecPrefix(precision));
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x10);
     EmitByte((byte)(0x05 | ((reg & 7) << 3)));
@@ -1086,21 +1028,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
-  private void EmitMovSsXmmRipRel(X86XmmRegister dest, string rdataLabel) {
-    // MOVSS xmm, [rip+disp32]: F3 0F 10 /r (ModRM: mod=00, r/m=101 for RIP-relative)
-    var reg = XmmRegCode(dest);
-    EmitByte(0xF3);
-    Rex.NoW().Reg(reg).EmitIf(this);
-    EmitBytes(0x0F, 0x10);
-    EmitByte((byte)(0x05 | ((reg & 7) << 3)));
-    _rdataFixups.Add((_code.Count, rdataLabel));
-    EmitDword(0); // placeholder for RIP-relative displacement
-  }
-
-  private void EmitMovSdMemXmm(int displacement, X86XmmRegister src) {
-    // MOVSD [rbp+disp], xmm: F2 0F 11 /r
+  private void EmitMovMemXmm(int displacement, X86XmmRegister src, FloatPrecision precision) {
+    // MOV[SD/SS] [rbp+disp], xmm: prefix 0F 11 /r
     var reg = XmmRegCode(src);
-    EmitByte(0xF2);
+    EmitByte(PrecPrefix(precision));
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x11);
     if (displacement >= -128 && displacement <= 127) {
@@ -1112,25 +1043,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     }
   }
 
-  private void EmitMovSsMemXmm(int displacement, X86XmmRegister src) {
-    // MOVSS [rbp+disp], xmm: F3 0F 11 /r
-    var reg = XmmRegCode(src);
-    EmitByte(0xF3);
-    Rex.NoW().Reg(reg).EmitIf(this);
-    EmitBytes(0x0F, 0x11);
-    if (displacement >= -128 && displacement <= 127) {
-      EmitByte((byte)(0x45 | ((reg & 7) << 3))); // mod=01, r/m=rbp(5)
-      EmitByte((byte)(displacement & 0xFF));
-    } else {
-      EmitByte((byte)(0x85 | ((reg & 7) << 3))); // mod=10, r/m=rbp(5)
-      EmitDword(displacement);
-    }
-  }
-
-  private void EmitMovSdXmmMem(X86XmmRegister dest, int displacement) {
-    // MOVSD xmm, [rbp+disp]: F2 0F 10 /r
+  private void EmitMovXmmMem(X86XmmRegister dest, int displacement, FloatPrecision precision) {
+    // MOV[SD/SS] xmm, [rbp+disp]: prefix 0F 10 /r
     var reg = XmmRegCode(dest);
-    EmitByte(0xF2);
+    EmitByte(PrecPrefix(precision));
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x10);
     if (displacement >= -128 && displacement <= 127) {
@@ -1142,67 +1058,28 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     }
   }
 
-  private void EmitMovSsXmmMem(X86XmmRegister dest, int displacement) {
-    // MOVSS xmm, [rbp+disp]: F3 0F 10 /r
-    var reg = XmmRegCode(dest);
-    EmitByte(0xF3);
-    Rex.NoW().Reg(reg).EmitIf(this);
-    EmitBytes(0x0F, 0x10);
-    if (displacement >= -128 && displacement <= 127) {
-      EmitByte((byte)(0x45 | ((reg & 7) << 3)));
-      EmitByte((byte)(displacement & 0xFF));
-    } else {
-      EmitByte((byte)(0x85 | ((reg & 7) << 3)));
-      EmitDword(displacement);
-    }
+  private void EmitAddXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x58, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitAddSd(X86XmmRegister dest, X86XmmRegister src) {
-    // ADDSD xmm, xmm: F2 0F 58 /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x58, XmmRegCode(dest), XmmRegCode(src));
+  private void EmitSubXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x5C, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitSubSd(X86XmmRegister dest, X86XmmRegister src) {
-    // SUBSD xmm, xmm: F2 0F 5C /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x5C, XmmRegCode(dest), XmmRegCode(src));
+  private void EmitMulXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x59, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitMulSd(X86XmmRegister dest, X86XmmRegister src) {
-    // MULSD xmm, xmm: F2 0F 59 /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x59, XmmRegCode(dest), XmmRegCode(src));
+  private void EmitDivXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x5E, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitDivSd(X86XmmRegister dest, X86XmmRegister src) {
-    // DIVSD xmm, xmm: F2 0F 5E /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x5E, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitAddSs(X86XmmRegister dest, X86XmmRegister src) {
-    // ADDSS xmm, xmm: F3 0F 58 /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x58, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitSubSs(X86XmmRegister dest, X86XmmRegister src) {
-    // SUBSS xmm, xmm: F3 0F 5C /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x5C, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitMulSs(X86XmmRegister dest, X86XmmRegister src) {
-    // MULSS xmm, xmm: F3 0F 59 /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x59, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitDivSs(X86XmmRegister dest, X86XmmRegister src) {
-    // DIVSS xmm, xmm: F3 0F 5E /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x5E, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitCvttSd2Si(X86Register dest, X86XmmRegister src) {
-    RequireGpr(dest, nameof(EmitCvttSd2Si));
-    // CVTTSD2SI r64, xmm: F2 REX.W 0F 2C /r
+  private void EmitCvttFloat2Si(X86Register dest, X86XmmRegister src, FloatPrecision precision) {
+    RequireGpr(dest, nameof(EmitCvttFloat2Si));
+    // CVTT[SD/SS]2SI r64, xmm: prefix REX.W 0F 2C /r
     var d = RegCode(dest);
     var s = XmmRegCode(src);
-    EmitByte(0xF2);
+    EmitByte(PrecPrefix(precision));
     Rex.W().Reg(dest).Rm(s).Emit(this);
     EmitBytes(0x0F, 0x2C);
     EmitByte((byte)(0xC0 | (d << 3) | (s & 7)));
@@ -1219,34 +1096,12 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitByte((byte)(0xC0 | ((s & 7) << 3) | (d & 7)));
   }
 
-  private void EmitCvtSi2Sd(X86XmmRegister dest, X86Register src) {
-    RequireGpr(src, nameof(EmitCvtSi2Sd));
-    // CVTSI2SD xmm, r64: F2 REX.W 0F 2A /r
+  private void EmitCvtSi2Float(X86XmmRegister dest, X86Register src, FloatPrecision precision) {
+    RequireGpr(src, nameof(EmitCvtSi2Float));
+    // CVTSI2[SD/SS] xmm, r64: prefix REX.W 0F 2A /r
     var d = XmmRegCode(dest);
     var s = RegCode(src);
-    EmitByte(0xF2);
-    Rex.W().Reg(d).Rm(src).Emit(this);
-    EmitBytes(0x0F, 0x2A);
-    EmitByte((byte)(0xC0 | ((d & 7) << 3) | (s & 7)));
-  }
-
-  private void EmitCvttSs2Si(X86Register dest, X86XmmRegister src) {
-    RequireGpr(dest, nameof(EmitCvttSs2Si));
-    // CVTTSS2SI r64, xmm: F3 REX.W 0F 2C /r
-    var d = RegCode(dest);
-    var s = XmmRegCode(src);
-    EmitByte(0xF3);
-    Rex.W().Reg(dest).Rm(s).Emit(this);
-    EmitBytes(0x0F, 0x2C);
-    EmitByte((byte)(0xC0 | (d << 3) | (s & 7)));
-  }
-
-  private void EmitCvtSi2Ss(X86XmmRegister dest, X86Register src) {
-    RequireGpr(src, nameof(EmitCvtSi2Ss));
-    // CVTSI2SS xmm, r64: F3 REX.W 0F 2A /r
-    var d = XmmRegCode(dest);
-    var s = RegCode(src);
-    EmitByte(0xF3);
+    EmitByte(PrecPrefix(precision));
     Rex.W().Reg(d).Rm(src).Emit(this);
     EmitBytes(0x0F, 0x2A);
     EmitByte((byte)(0xC0 | ((d & 7) << 3) | (s & 7)));
@@ -1262,10 +1117,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitXmmRegRegOp(0xF3, 0x0F, 0x5A, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitAndpdRipRel(X86XmmRegister dest, string rdataLabel) {
-    // ANDPD xmm, [rip+disp32]: 66 0F 54 /r (ModRM: mod=00, r/m=101 for RIP-relative)
+  private void EmitAndMaskRipRel(X86XmmRegister dest, string rdataLabel, FloatPrecision precision) {
+    // ANDPD: 66 0F 54 /r, ANDPS: 0F 54 /r (no prefix)
     var reg = XmmRegCode(dest);
-    EmitByte(0x66);
+    if (precision == FloatPrecision.F64) EmitByte(0x66);
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x54);
     EmitByte((byte)(0x05 | ((reg & 7) << 3)));
@@ -1273,90 +1128,45 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
-  private void EmitAndpsRipRel(X86XmmRegister dest, string rdataLabel) {
-    // ANDPS xmm, [rip+disp32]: 0F 54 /r (ModRM: mod=00, r/m=101 for RIP-relative)
-    var reg = XmmRegCode(dest);
-    Rex.NoW().Reg(reg).EmitIf(this);
-    EmitBytes(0x0F, 0x54);
-    EmitByte((byte)(0x05 | ((reg & 7) << 3)));
-    _rdataFixups.Add((_code.Count, rdataLabel));
-    EmitDword(0); // placeholder for RIP-relative displacement
+  private void EmitSqrtXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x51, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitSqrtSd(X86XmmRegister dest, X86XmmRegister src) {
-    // SQRTSD xmm, xmm: F2 0F 51 /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x51, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitSqrtSs(X86XmmRegister dest, X86XmmRegister src) {
-    // SQRTSS xmm, xmm: F3 0F 51 /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x51, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitRoundSd(X86XmmRegister dest, X86XmmRegister src, byte mode) {
-    // ROUNDSD xmm, xmm, imm8: 66 0F 3A 0B /r ib
+  private void EmitRoundXmm(X86XmmRegister dest, X86XmmRegister src, byte mode, FloatPrecision precision) {
+    // ROUND[SD/SS] xmm, xmm, imm8: 66 0F 3A [0B/0A] /r ib
     var d = XmmRegCode(dest);
     var s = XmmRegCode(src);
     EmitByte(0x66);
     Rex.NoW().Reg(d).Rm(s).EmitIf(this);
-    EmitBytes(0x0F, 0x3A, 0x0B);
+    EmitBytes(0x0F, 0x3A, precision == FloatPrecision.F64 ? (byte)0x0B : (byte)0x0A);
     EmitByte((byte)(0xC0 | ((d & 7) << 3) | (s & 7)));
     EmitByte(mode);
   }
 
-  private void EmitRoundSs(X86XmmRegister dest, X86XmmRegister src, byte mode) {
-    // ROUNDSS xmm, xmm, imm8: 66 0F 3A 0A /r ib
-    var d = XmmRegCode(dest);
-    var s = XmmRegCode(src);
-    EmitByte(0x66);
-    Rex.NoW().Reg(d).Rm(s).EmitIf(this);
-    EmitBytes(0x0F, 0x3A, 0x0A);
-    EmitByte((byte)(0xC0 | ((d & 7) << 3) | (s & 7)));
-    EmitByte(mode);
+  private void EmitMinXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x5D, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitMinSd(X86XmmRegister dest, X86XmmRegister src) {
-    // MINSD xmm, xmm: F2 0F 5D /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x5D, XmmRegCode(dest), XmmRegCode(src));
+  private void EmitMaxXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x5F, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitMaxSd(X86XmmRegister dest, X86XmmRegister src) {
-    // MAXSD xmm, xmm: F2 0F 5F /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x5F, XmmRegCode(dest), XmmRegCode(src));
+  private void EmitMovXmmXmm(X86XmmRegister dest, X86XmmRegister src, FloatPrecision precision) {
+    EmitXmmRegRegOp(PrecPrefix(precision), 0x0F, 0x10, XmmRegCode(dest), XmmRegCode(src));
   }
 
-  private void EmitMinSs(X86XmmRegister dest, X86XmmRegister src) {
-    // MINSS xmm, xmm: F3 0F 5D /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x5D, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitMaxSs(X86XmmRegister dest, X86XmmRegister src) {
-    // MAXSS xmm, xmm: F3 0F 5F /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x5F, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitMovSdXmmXmm(X86XmmRegister dest, X86XmmRegister src) {
-    // MOVSD xmm, xmm: F2 0F 10 /r
-    EmitXmmRegRegOp(0xF2, 0x0F, 0x10, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitMovSsXmmXmm(X86XmmRegister dest, X86XmmRegister src) {
-    // MOVSS xmm, xmm: F3 0F 10 /r
-    EmitXmmRegRegOp(0xF3, 0x0F, 0x10, XmmRegCode(dest), XmmRegCode(src));
-  }
-
-  private void EmitUcomisd(X86XmmRegister src1, X86XmmRegister src2) {
-    // UCOMISD xmm, xmm: 66 0F 2E /r
-    EmitXmmRegRegOp(0x66, 0x0F, 0x2E, XmmRegCode(src1), XmmRegCode(src2));
-  }
-
-  private void EmitUcomiss(X86XmmRegister src1, X86XmmRegister src2) {
-    // UCOMISS xmm, xmm: 0F 2E /r (no prefix byte)
-    var s1 = XmmRegCode(src1);
-    var s2 = XmmRegCode(src2);
-    Rex.NoW().Reg(s1).Rm(s2).EmitIf(this);
-    EmitBytes(0x0F, 0x2E);
-    EmitByte((byte)(0xC0 | ((s1 & 7) << 3) | (s2 & 7)));
+  private void EmitUcomisXmm(X86XmmRegister src1, X86XmmRegister src2, FloatPrecision precision) {
+    if (precision == FloatPrecision.F64) {
+      // UCOMISD xmm, xmm: 66 0F 2E /r
+      EmitXmmRegRegOp(0x66, 0x0F, 0x2E, XmmRegCode(src1), XmmRegCode(src2));
+    } else {
+      // UCOMISS xmm, xmm: 0F 2E /r (no prefix byte)
+      var s1 = XmmRegCode(src1);
+      var s2 = XmmRegCode(src2);
+      Rex.NoW().Reg(s1).Rm(s2).EmitIf(this);
+      EmitBytes(0x0F, 0x2E);
+      EmitByte((byte)(0xC0 | ((s1 & 7) << 3) | (s2 & 7)));
+    }
   }
 
   private void EmitJcc(string condition, string target) {
@@ -1469,41 +1279,21 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitModRmWithBase(baseReg, src, displacement);
   }
 
-  private void EmitMovSdIndirectMemXmm(X86Register baseReg, int displacement, X86XmmRegister src) {
-    RequireGpr(baseReg, nameof(EmitMovSdIndirectMemXmm));
-    // MOVSD [baseReg+disp], xmm: F2 [REX] 0F 11 /r
+  private void EmitMovIndirectMemXmm(X86Register baseReg, int displacement, X86XmmRegister src, FloatPrecision precision) {
+    RequireGpr(baseReg, nameof(EmitMovIndirectMemXmm));
+    // MOV[SD/SS] [baseReg+disp], xmm: prefix [REX] 0F 11 /r
     var reg = XmmRegCode(src);
-    EmitByte(0xF2);
+    EmitByte(PrecPrefix(precision));
     Rex.NoW().Reg(reg).Rm(baseReg).EmitIf(this);
     EmitBytes(0x0F, 0x11);
     EmitModRmWithBaseXmm(baseReg, reg, displacement);
   }
 
-  private void EmitMovSdXmmIndirectMem(X86XmmRegister dest, X86Register baseReg, int displacement) {
-    RequireGpr(baseReg, nameof(EmitMovSdXmmIndirectMem));
-    // MOVSD xmm, [baseReg+disp]: F2 [REX] 0F 10 /r
+  private void EmitMovXmmIndirectMem(X86XmmRegister dest, X86Register baseReg, int displacement, FloatPrecision precision) {
+    RequireGpr(baseReg, nameof(EmitMovXmmIndirectMem));
+    // MOV[SD/SS] xmm, [baseReg+disp]: prefix [REX] 0F 10 /r
     var reg = XmmRegCode(dest);
-    EmitByte(0xF2);
-    Rex.NoW().Reg(reg).Rm(baseReg).EmitIf(this);
-    EmitBytes(0x0F, 0x10);
-    EmitModRmWithBaseXmm(baseReg, reg, displacement);
-  }
-
-  private void EmitMovSsIndirectMemXmm(X86Register baseReg, int displacement, X86XmmRegister src) {
-    RequireGpr(baseReg, nameof(EmitMovSsIndirectMemXmm));
-    // MOVSS [baseReg+disp], xmm: F3 [REX] 0F 11 /r
-    var reg = XmmRegCode(src);
-    EmitByte(0xF3);
-    Rex.NoW().Reg(reg).Rm(baseReg).EmitIf(this);
-    EmitBytes(0x0F, 0x11);
-    EmitModRmWithBaseXmm(baseReg, reg, displacement);
-  }
-
-  private void EmitMovSsXmmIndirectMem(X86XmmRegister dest, X86Register baseReg, int displacement) {
-    RequireGpr(baseReg, nameof(EmitMovSsXmmIndirectMem));
-    // MOVSS xmm, [baseReg+disp]: F3 [REX] 0F 10 /r
-    var reg = XmmRegCode(dest);
-    EmitByte(0xF3);
+    EmitByte(PrecPrefix(precision));
     Rex.NoW().Reg(reg).Rm(baseReg).EmitIf(this);
     EmitBytes(0x0F, 0x10);
     EmitModRmWithBaseXmm(baseReg, reg, displacement);
@@ -1590,10 +1380,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
-  private void EmitGlobalLoadXmm(X86XmmRegister dest, string globalName) {
-    // MOVSD xmm, [rip+disp32]: F2 [REX] 0F 10 /r (mod=00, r/m=101 for RIP-relative)
+  private void EmitGlobalLoadXmm(X86XmmRegister dest, string globalName, FloatPrecision precision) {
+    // MOV[SD/SS] xmm, [rip+disp32]: prefix [REX] 0F 10 /r (mod=00, r/m=101 for RIP-relative)
     var reg = XmmRegCode(dest);
-    EmitByte(0xF2);
+    EmitByte(PrecPrefix(precision));
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x10);
     EmitByte((byte)(0x05 | ((reg & 7) << 3)));
@@ -1601,32 +1391,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
-  private void EmitGlobalStoreXmm(X86XmmRegister src, string globalName) {
-    // MOVSD [rip+disp32], xmm: F2 [REX] 0F 11 /r (mod=00, r/m=101 for RIP-relative)
+  private void EmitGlobalStoreXmm(X86XmmRegister src, string globalName, FloatPrecision precision) {
+    // MOV[SD/SS] [rip+disp32], xmm: prefix [REX] 0F 11 /r (mod=00, r/m=101 for RIP-relative)
     var reg = XmmRegCode(src);
-    EmitByte(0xF2);
-    Rex.NoW().Reg(reg).EmitIf(this);
-    EmitBytes(0x0F, 0x11);
-    EmitByte((byte)(0x05 | ((reg & 7) << 3)));
-    _globalFixups.Add((_code.Count, globalName));
-    EmitDword(0); // placeholder for RIP-relative displacement
-  }
-
-  private void EmitGlobalLoadXmmF32(X86XmmRegister dest, string globalName) {
-    // MOVSS xmm, [rip+disp32]: F3 [REX] 0F 10 /r (mod=00, r/m=101 for RIP-relative)
-    var reg = XmmRegCode(dest);
-    EmitByte(0xF3);
-    Rex.NoW().Reg(reg).EmitIf(this);
-    EmitBytes(0x0F, 0x10);
-    EmitByte((byte)(0x05 | ((reg & 7) << 3)));
-    _globalFixups.Add((_code.Count, globalName));
-    EmitDword(0); // placeholder for RIP-relative displacement
-  }
-
-  private void EmitGlobalStoreXmmF32(X86XmmRegister src, string globalName) {
-    // MOVSS [rip+disp32], xmm: F3 [REX] 0F 11 /r (mod=00, r/m=101 for RIP-relative)
-    var reg = XmmRegCode(src);
-    EmitByte(0xF3);
+    EmitByte(PrecPrefix(precision));
     Rex.NoW().Reg(reg).EmitIf(this);
     EmitBytes(0x0F, 0x11);
     EmitByte((byte)(0x05 | ((reg & 7) << 3)));
