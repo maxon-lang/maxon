@@ -659,7 +659,6 @@ public partial class X86CodeEmitter {
   ///   [rbp-0x48] = digit count (after conversion, before padding)
   ///   [rbp-0x50] = scratch / write position
   /// </summary>
-  [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "IDE0230:Use UTF-8 string literal", Justification = "<Pending>")]
   private void EmitMaxonI64ToStringFmt() {
     EmitRuntimeFunctionStart("maxon_i64_to_string_fmt", 4, 0x80);
 

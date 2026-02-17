@@ -9776,16 +9776,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private (MaxonValueKind Kind, string? StructTypeName) OverrideResultKindForElementType(MaxonValueKind resultKind, string? resultStructTypeName, List<MaxonValue> args) {
     if (resultKind == MaxonValueKind.TypeParameter && args.Count > 0 && args[0] is MaxonStruct selfStruct) {
       if (_typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
-          && selfType is MlirStructType selfStructType
-          && selfStructType.TypeParams.TryGetValue("Element", out var elementType)) {
-        if (elementType is MlirTypeParameterType) return (resultKind, resultStructTypeName);
-        var kind = elementType.ToValueKind();
-        var typeName = elementType switch {
-          MlirStructType s => s.Name,
-          MlirEnumType e => e.Name,
-          _ => (string?)null
-        };
-        return (kind, typeName);
+          && selfType is MlirStructType selfStructType) {
+        // Check common type parameter names: "Element" (Array/Iterable), "Value" (Map), "Key" (Map)
+        MlirType? resolvedType = null;
+        if (selfStructType.TypeParams.TryGetValue("Element", out var elementType))
+          resolvedType = elementType;
+        else if (selfStructType.TypeParams.TryGetValue("Value", out var valueType))
+          resolvedType = valueType;
+
+        if (resolvedType != null) {
+          if (resolvedType is MlirTypeParameterType) return (resultKind, resultStructTypeName);
+          var kind = resolvedType.ToValueKind();
+          var typeName = resolvedType switch {
+            MlirStructType s => s.Name,
+            MlirEnumType e => e.Name,
+            _ => (string?)null
+          };
+          return (kind, typeName);
+        }
       }
     }
     return (resultKind, resultStructTypeName);

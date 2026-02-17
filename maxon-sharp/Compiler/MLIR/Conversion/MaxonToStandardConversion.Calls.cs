@@ -191,17 +191,7 @@ public static partial class MaxonToStandardConversion {
           EmitStore(block, callResult, retVarName, varTypes);
         }
 
-        // Load tag from offset 0
-        var tagLoaded = EmitStructFieldLoad(block, retVarName, 0, MlirType.I64, varTypes);
-        EmitStore(block, tagLoaded, $"{retVarName}.__tag", varTypes);
-
-        // Load payload slots
-        int maxPayload = GetMaxFlatPayloadSlots(retEnumType, typeDefs);
-        for (int pi = 0; pi < maxPayload; pi++) {
-          var payloadLoaded = EmitStructFieldLoad(block, retVarName, 8 + pi * 8, MlirType.I64, varTypes);
-          EmitStore(block, payloadLoaded, $"{retVarName}.__payload_{pi}", varTypes);
-        }
-
+        UnpackEnumHeapToFlatVars(block, retVarName, retEnumType, varTypes, typeDefs);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = retEnumType.Name;
       } else if (callResult != null) {
@@ -239,26 +229,13 @@ public static partial class MaxonToStandardConversion {
     // No self write-back needed: with heap refs, all field mutations go through
     // the heap pointer directly, so the caller sees changes automatically.
 
-    // Associated-value enum return: pack into heap block
+    // Associated-value enum return: caller expects a heap pointer, not flat vars
     if (retOp.Value != null
         && structVarNames.TryGetValue(retOp.Value.Id, out var enumRetPrefix)
         && structValueTypes.TryGetValue(retOp.Value.Id, out var enumRetTypeName)
         && typeDefs.TryGetValue(enumRetTypeName, out var enumRetTypeDef)
         && enumRetTypeDef is MlirEnumType enumRetType && enumRetType.HasAssociatedValues) {
-      int maxPayload = GetMaxFlatPayloadSlots(enumRetType, typeDefs);
-      int heapSize = 8 + maxPayload * 8;
-      var heapPtr = EmitAlloc(block, heapSize);
-
-      // Store tag at offset 0
-      var tagVal = EmitLoad(block, $"{enumRetPrefix}.__tag", varTypes);
-      block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
-
-      // Store payload slots
-      for (int pi = 0; pi < maxPayload; pi++) {
-        var payloadVal = EmitLoad(block, $"{enumRetPrefix}.__payload_{pi}", varTypes);
-        block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
-      }
-
+      var heapPtr = PackEnumFlatVarsToHeap(block, enumRetPrefix, enumRetType, varTypes, typeDefs);
       EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
       block.AddOp(new StdReturnOp(heapPtr));
       return;
@@ -334,21 +311,8 @@ public static partial class MaxonToStandardConversion {
     if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
         && errorTypeDef is MlirEnumType errorEnumType && errorEnumType.HasAssociatedValues) {
-      // Pack tag + payload into a heap block and return the heap pointer in RDX
-      int maxPayload = GetMaxFlatPayloadSlots(errorEnumType, typeDefs);
-      int heapSize = 8 + maxPayload * 8;
-      var heapPtr = EmitAlloc(block, heapSize);
-
-      // Store tag at offset 0
-      var tagVal = EmitLoad(block, $"{enumPrefix}.__tag", varTypes);
-      block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
-
-      // Store payload slots
-      for (int pi = 0; pi < maxPayload; pi++) {
-        var payloadVal = EmitLoad(block, $"{enumPrefix}.__payload_{pi}", varTypes);
-        block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
-      }
-
+      // Error return expects a heap pointer in RDX, not flat vars
+      var heapPtr = PackEnumFlatVarsToHeap(block, enumPrefix, errorEnumType, varTypes, typeDefs);
       block.AddOp(new StdErrorReturnOp(heapPtr));
     } else {
       // Simple error enum: the error value is the ordinal. Add 1 to make non-zero (0 = success).

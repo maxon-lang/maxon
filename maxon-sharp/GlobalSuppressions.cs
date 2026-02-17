@@ -6,3 +6,4 @@
 using System.Diagnostics.CodeAnalysis;
 
 [assembly: SuppressMessage("Style", "IDE0130:Namespace does not match folder structure", Justification = "Using flat namespace structure")]
+[assembly: SuppressMessage("Style", "IDE0230:Use UTF-8 string literal", Justification = "<Pending>", Scope = "namespaceanddescendants", Target = "~N:MaxonSharp.Compiler.Mlir")]

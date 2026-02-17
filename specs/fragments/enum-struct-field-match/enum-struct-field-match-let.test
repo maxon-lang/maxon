@@ -1,0 +1,121 @@
+// Test: enum-struct-field-match-let
+typealias SmallInt = int(0 to 255)
+
+export enum Color
+    red(intensity SmallInt)
+    blue
+end 'Color'
+
+export type Palette
+    export var primary Color
+    export var secondary Color
+end 'Palette'
+
+function checkPrimary(p Palette) returns bool
+    let c = p.primary
+    match c 'mc'
+        red(intensity) then return true
+        blue then return false
+    end 'mc'
+    return false
+end 'checkPrimary'
+
+function main() returns ExitCode
+    let p = Palette{primary: Color.red(255), secondary: Color.blue}
+    if checkPrimary(p) 'ok'
+        return 1
+    end 'ok'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @enum-struct-field-match.checkPrimary(p: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+0]
+    x86.mov eax, [rbp-16]
+    x86.mov ebx, [eax+8]
+    x86.mov [rbp-24], edx
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.jmp enum-struct-field-match.checkPrimary.mc_0.cmp0
+  mc_0.cmp0:
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne enum-struct-field-match.checkPrimary.mc_0.cmp1
+  mc_0.case0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  mc_0.cmp1:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne enum-struct-field-match.checkPrimary.mc_0.merge
+  mc_0.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  mc_0.merge:
+  __dead_1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @enum-struct-field-match.main() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 255
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 1
+    x86.mov [rbp-24], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-32], ebx
+    x86.mov esi, 16
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.mov [rbp-40], eax
+    x86.mov edi, 16
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.mov r8, [rbp-8]
+    x86.mov [eax+0], r8
+    x86.mov r9, [rbp-16]
+    x86.mov [eax+8], r9
+    x86.mov ecx, [rbp-40]
+    x86.mov [ecx+0], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov ecx, [rbp-24]
+    x86.mov [eax+0], ecx
+    x86.mov ecx, [rbp-32]
+    x86.mov [eax+8], ecx
+    x86.mov ecx, [rbp-40]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-40]
+    x86.mov rcx, rax
+    x86.call enum-struct-field-match.checkPrimary
+    x86.test eax, eax
+    x86.je enum-struct-field-match.main.ok_0.after
+  ok_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  ok_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

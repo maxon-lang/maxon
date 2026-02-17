@@ -340,4 +340,34 @@ public static partial class MaxonToStandardConversion {
     }
     return payloadIndex; // fallback
   }
+
+  /// Unpack an associated-value enum's heap pointer into flat __tag/__payload_N variables.
+  /// Downstream code accesses enum values through these flat variables rather than indirection.
+  private static void UnpackEnumHeapToFlatVars(
+    MlirBlock<StandardOp> block, string varName, MlirEnumType enumType,
+    Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
+    var tagLoaded = EmitStructFieldLoad(block, varName, 0, MlirType.I64, varTypes);
+    EmitStore(block, tagLoaded, $"{varName}.__tag", varTypes);
+    int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
+    for (int pi = 0; pi < maxPayload; pi++) {
+      var payloadLoaded = EmitStructFieldLoad(block, varName, 8 + pi * 8, MlirType.I64, varTypes);
+      EmitStore(block, payloadLoaded, $"{varName}.__payload_{pi}", varTypes);
+    }
+  }
+
+  /// Pack flat __tag/__payload_N variables into a new heap-allocated block for storage in struct fields.
+  private static StdI64 PackEnumFlatVarsToHeap(
+    MlirBlock<StandardOp> block, string varName, MlirEnumType enumType,
+    Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
+    int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
+    int heapSize = 8 + maxPayload * 8;
+    var heapPtr = EmitAlloc(block, heapSize);
+    var tagVal = EmitLoad(block, $"{varName}.__tag", varTypes);
+    block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
+    for (int pi = 0; pi < maxPayload; pi++) {
+      var payloadVal = EmitLoad(block, $"{varName}.__payload_{pi}", varTypes);
+      block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
+    }
+    return heapPtr;
+  }
 }
