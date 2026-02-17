@@ -185,22 +185,6 @@ end 'main'
 -1
 ```
 
-<!-- test: get-out-of-bounds -->
-```maxon
-typealias Vec2 = Vector with 2 int
-
-function main() returns ExitCode
-  var v = Vec2{}
-  v.set(0, value: 10)
-  var result = try v.get(5) otherwise -1
-  print("{result}\n")
-  return 0
-end 'main'
-```
-```stdout
--1
-```
-
 <!-- test: set-out-of-bounds-noop -->
 Setting an out-of-bounds index is a no-op, matching Array behavior.
 ```maxon

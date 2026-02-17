@@ -50,6 +50,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
     // Load all fragments
     var fragments = LoadAllFragments();
+    if (_filter == null && genResult.Generated > 0 && fragments.Count != genResult.Generated) {
+      throw new InvalidOperationException(
+        $"Fragment count mismatch: generated {genResult.Generated} but loaded {fragments.Count}. " +
+        "Some fragments may have failed to parse.");
+    }
     if (_filter != null) {
       fragments = [.. fragments.Where(f => GetTestPath(f).Contains(_filter, StringComparison.OrdinalIgnoreCase))];
     }
@@ -152,9 +157,10 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
     foreach (var file in Directory.GetFiles(_fragmentDir, "*.test", SearchOption.AllDirectories)) {
       var fragment = FragmentGenerator.ParseFragment(file);
-      if (fragment != null) {
-        fragments.Add(fragment);
+      if (fragment == null) {
+        throw new InvalidOperationException($"Failed to parse fragment file: {file}");
       }
+      fragments.Add(fragment);
     }
 
     return fragments;

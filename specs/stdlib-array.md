@@ -453,25 +453,6 @@ end 'main'
 0
 ```
 
-<!-- test: get-empty-module-level-array -->
-Get on an empty module-level array throws error and is caught by otherwise.
-
-```maxon
-typealias IntArray = Array with int
-var arr = IntArray{}
-
-function main() returns ExitCode
-  var val = try arr.get(0) otherwise -1
-  if val == -1 'check'
-    return 0
-  end 'check'
-  return 1
-end 'main'
-```
-```exitcode
-0
-```
-
 <!-- test: reserve-capacity -->
 Reserve capacity for efficiency.
 

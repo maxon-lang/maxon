@@ -125,6 +125,19 @@ public static partial class FragmentGenerator {
     var workerCount = Math.Max(1, Environment.ProcessorCount / 2);
     var compilerMtime = GetCompilerMtime();
 
+    // Check for duplicate test names within specs
+    foreach (var spec in specs) {
+      var dupes = spec.Tests.GroupBy(t => t.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+      if (dupes.Count > 0) {
+        foreach (var dupe in dupes) {
+          errors.Add($"Duplicate test name '{dupe}' in {spec.FilePath}");
+        }
+      }
+    }
+    if (!errors.IsEmpty) {
+      return new FragmentGenerationResult(0, errors.Count);
+    }
+
     Parallel.ForEach(specs, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, spec => {
       var specFile = new FileInfo(spec.FilePath);
       var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
