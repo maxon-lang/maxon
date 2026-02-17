@@ -1,82 +1,92 @@
 // Self-hosted Maxon compiler core.
+// Uses a Salsa-style query database for incremental compilation.
 
 // Shared across all compiler files.
 export typealias Byte = byte(0 to u8.max)
+export typealias ByteArray = Array with byte
+
+// Module-level query database, persists across compilations for incremental reuse.
+export var db = QueryDatabase{}
+export var dbInitialized = false
+
+// --- Compiler entry points ---
 
 // Compiles a file or directory and returns the output executable path.
 export function compile(path String) returns String throws CompileError
-    logDebug(LogCategory.compiler, message: "Starting compilation")
-    var sources = SourceFileArray{}
+    logDebug(LogCategory.compiler, message: "Starting incremental compilation")
 
-    if File.exists(path) 'isFile'
-        let bytes = try File.readBinary(path) otherwise 'readErr'
-            throw CompileError.readError
-        end 'readErr'
+    if not dbInitialized 'init'
+        db = QueryDatabase{
+            currentRevision: 1,
+            sourceFiles: SourceFileMap{},
+            sourcePaths: StringArray{},
+            tokenCache: TokenCacheMap{},
+            parseCache: ParseCacheMap{},
+            allMaxonOpsCache: MaxonOpsMemo{value: MaxonOpArray{}, computedAt: 0, verifiedAt: 0},
+            allStdOpsCache: StdOpsMemo{value: StdOpArray{}, computedAt: 0, verifiedAt: 0},
+            allX86OpsCache: X86OpsMemo{value: X86OpArray{}, computedAt: 0, verifiedAt: 0},
+            codeCache: CodeMemo{value: CodeResult{code: ByteBuffer.create(0), mainCallFixupOffset: 0, iatFixups: IatFixupArray{}}, computedAt: 0, verifiedAt: 0},
+            dependencies: DependencyArray{},
+            activeQueryStack: QueryKeyArray{}
+        }
+        dbInitialized = true
+    end 'init'
 
-        sources.push({ path: path, content: bytes })
-    end 'isFile' else if Directory.exists(path) 'isDir'
-        let entries = try Directory.list(path) otherwise 'listErr'
-            throw CompileError.directoryNotFound
-        end 'listErr'
+    try loadSourceFiles(path)
 
-        for name in entries 'loop'
-            if name.endsWith(".maxon") 'isMaxon'
-                let filePath = "{path}\\{name}"
-                let bytes = try File.readBinary(filePath) otherwise 'skip'
-                    continue
-                end 'skip'
+    logDebug(LogCategory.compiler, message: "Loaded {db.sourcePaths.count()} source files (revision {db.currentRevision})")
 
-                sources.push({ path: filePath, content: bytes })
-            end 'isMaxon'
-        end 'loop'
-    end 'isDir' else 'notFound'
-        throw CompileError.fileNotFound
-    end 'notFound'
+    let codeResult = try queryCodeResult()
 
-    if sources.count() == 0 'noFiles'
+    let firstPath = try db.sourcePaths.get(0) otherwise 'noFiles'
         throw CompileError.noSourceFiles
     end 'noFiles'
 
-    logDebug(LogCategory.compiler, message: "Compiling {sources.count()} source files")
-    var allOps = MaxonOpArray{}
-    for source in sources 'compile'
-        let tokens = tokenize(source.content)
-        let ops = try parse(tokens, filePath: source.path)
-        allOps.append(ops)
-    end 'compile'
-
-    logDebug(LogCategory.mlir, message: "Starting MLIR pipeline")
-
-    let stdOps = lowerMaxonOpsToStd(allOps)
-    logDebug(LogCategory.mlir, message: "Lowered Maxon to Standard")
-
-    let x86Ops = lowerStdOpsToX86(stdOps)
-    logDebug(LogCategory.mlir, message: "Lowered Standard to X86")
-
-    let codeResult = emit(x86Ops)
-
-    let first = try sources.get(0) otherwise 'unreachable'
-        throw CompileError.noSourceFiles
-    end 'unreachable'
-
-    let outputPath = changeExtension(first.path, ext: ".exe")
+    let outputPath = changeExtension(firstPath, ext: ".exe")
     writePe(outputPath, codeResult: codeResult)
 
     logInfo(LogCategory.compiler, message: "Wrote {codeResult.code.count()} bytes code to {outputPath}")
     return outputPath
 end 'compile'
 
+// Notify the query database that a single file has changed (for IDE use).
+export function fileChanged(path String, content ByteArray)
+    if dbInitialized 'ready'
+        setSourceFile(path, content: content)
+    end 'ready'
+end 'fileChanged'
 
-export typealias ByteArray = Array with byte
+// --- Source file loading ---
 
-type SourceFile
-    export var path String
-    export var content ByteArray
-end 'SourceFile'
+function loadSourceFiles(path String) throws CompileError
+    if File.exists(path) 'isFile'
+        let bytes = try File.readBinary(path) otherwise 'readErr'
+            throw CompileError.readError
+        end 'readErr'
+        setSourceFile(path, content: bytes)
+    end 'isFile' else if Directory.exists(path) 'isDir'
+        let dirEntries = try Directory.list(path) otherwise 'listErr'
+            throw CompileError.directoryNotFound
+        end 'listErr'
 
-typealias SourceFileArray = Array with SourceFile
+        for name in dirEntries 'loop'
+            if name.endsWith(".maxon") 'isMaxon'
+                let filePath = "{path}\\{name}"
+                let bytes = try File.readBinary(filePath) otherwise 'skip'
+                    continue
+                end 'skip'
+                setSourceFile(filePath, content: bytes)
+            end 'isMaxon'
+        end 'loop'
+    end 'isDir' else 'notFound'
+        throw CompileError.fileNotFound
+    end 'notFound'
 
-// Replaces the file extension (e.g. ".maxon" -> ".exe").
+    if db.sourcePaths.count() == 0 'noFiles'
+        throw CompileError.noSourceFiles
+    end 'noFiles'
+end 'loadSourceFiles'
+
 function changeExtension(path String, ext String) returns String
     let dotIdx = try path.findLast(".") otherwise path.endIndex()
     let base = path.slice(path.startIndex(), endIndex: dotIdx)

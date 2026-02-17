@@ -1,0 +1,271 @@
+// Query engine: dependency tracking, validation, and cache management.
+// Implements the core Salsa-style memoization and invalidation logic.
+// All functions operate on the module-level `db` from 0-Compiler.maxon.
+
+// --- Source file input management ---
+
+// Set or update a source file input. Bumps revision only if content changed.
+export function setSourceFile(path String, content ByteArray)
+    if db.sourceFiles.contains(path) 'exists'
+        let existing = try db.sourceFiles.get(path) otherwise 'skip'
+            return
+        end 'skip'
+        if existing.content.count() == content.count() 'sameLen'
+            // Simple equality check: compare length only for now
+            // (full byte comparison would be more accurate but expensive)
+            var same = true
+            var i = 0
+            while i < content.count() 'cmp'
+                let a = try existing.content.get(i) otherwise 0
+                let b = try content.get(i) otherwise 1
+                if not a == b 'diff'
+                    same = false
+                    break
+                end 'diff'
+                i = i + 1
+            end 'cmp'
+            if same 'unchanged'
+                return
+            end 'unchanged'
+        end 'sameLen'
+    end 'exists' else 'newFile'
+        db.sourcePaths.push(path)
+    end 'newFile'
+
+    db.currentRevision = db.currentRevision + 1
+    let entry = SourceFileEntry{content: content, changedAtRevision: db.currentRevision}
+    db.sourceFiles.insert(path, value: entry)
+end 'setSourceFile'
+
+// --- Dependency tracking ---
+
+// Record that the currently active query depends on `dependency`.
+export function recordDependency(dependency QueryKey)
+    let stackLen = db.activeQueryStack.count()
+    if stackLen == 0 'noActive'
+        return
+    end 'noActive'
+    let dependent = try db.activeQueryStack.get(stackLen - 1) otherwise 'err'
+        return
+    end 'err'
+    let dep = Dependency{dependent: dependent, dependency: dependency}
+    db.dependencies.push(dep)
+end 'recordDependency'
+
+// Remove all dependency entries where `dependent` matches `key`.
+export function clearDepsFor(key QueryKey)
+    var newDeps = DependencyArray{}
+    var i = 0
+    while i < db.dependencies.count() 'scan'
+        let dep = try db.dependencies.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+        if not queryKeysEqual(dep.dependent, b: key) 'keep'
+            newDeps.push(dep)
+        end 'keep'
+        i = i + 1
+    end 'scan'
+    db.dependencies = newDeps
+end 'clearDepsFor'
+
+// --- Query key equality ---
+
+export function queryKeysEqual(a QueryKey, b QueryKey) returns bool
+    match a 'matchA'
+        sourceFile(path) then return matchSourceFile(b, path: path)
+        tokens(path) then return matchTokens(b, path: path)
+        parseOps(path) then return matchParseOps(b, path: path)
+        allMaxonOps then return matchAllMaxonOps(b)
+        allStdOps then return matchAllStdOps(b)
+        allX86Ops then return matchAllX86Ops(b)
+        codeResult then return matchCodeResult(b)
+    end 'matchA'
+    return false
+end 'queryKeysEqual'
+
+function matchSourceFile(b QueryKey, path String) returns bool
+    match b 'matchB'
+        sourceFile(bPath) then return path == bPath
+        tokens(bPath) then return false
+        parseOps(bPath) then return false
+        allMaxonOps then return false
+        allStdOps then return false
+        allX86Ops then return false
+        codeResult then return false
+    end 'matchB'
+    return false
+end 'matchSourceFile'
+
+function matchTokens(b QueryKey, path String) returns bool
+    match b 'matchB'
+        sourceFile(bPath) then return false
+        tokens(bPath) then return path == bPath
+        parseOps(bPath) then return false
+        allMaxonOps then return false
+        allStdOps then return false
+        allX86Ops then return false
+        codeResult then return false
+    end 'matchB'
+    return false
+end 'matchTokens'
+
+function matchParseOps(b QueryKey, path String) returns bool
+    match b 'matchB'
+        sourceFile(bPath) then return false
+        tokens(bPath) then return false
+        parseOps(bPath) then return path == bPath
+        allMaxonOps then return false
+        allStdOps then return false
+        allX86Ops then return false
+        codeResult then return false
+    end 'matchB'
+    return false
+end 'matchParseOps'
+
+function matchAllMaxonOps(b QueryKey) returns bool
+    match b 'matchB'
+        sourceFile(bPath) then return false
+        tokens(bPath) then return false
+        parseOps(bPath) then return false
+        allMaxonOps then return true
+        allStdOps then return false
+        allX86Ops then return false
+        codeResult then return false
+    end 'matchB'
+    return false
+end 'matchAllMaxonOps'
+
+function matchAllStdOps(b QueryKey) returns bool
+    match b 'matchB'
+        sourceFile(bPath) then return false
+        tokens(bPath) then return false
+        parseOps(bPath) then return false
+        allMaxonOps then return false
+        allStdOps then return true
+        allX86Ops then return false
+        codeResult then return false
+    end 'matchB'
+    return false
+end 'matchAllStdOps'
+
+function matchAllX86Ops(b QueryKey) returns bool
+    match b 'matchB'
+        sourceFile(bPath) then return false
+        tokens(bPath) then return false
+        parseOps(bPath) then return false
+        allMaxonOps then return false
+        allStdOps then return false
+        allX86Ops then return true
+        codeResult then return false
+    end 'matchB'
+    return false
+end 'matchAllX86Ops'
+
+function matchCodeResult(b QueryKey) returns bool
+    match b 'matchB'
+        sourceFile(bPath) then return false
+        tokens(bPath) then return false
+        parseOps(bPath) then return false
+        allMaxonOps then return false
+        allStdOps then return false
+        allX86Ops then return false
+        codeResult then return true
+    end 'matchB'
+    return false
+end 'matchCodeResult'
+
+// --- Cache validation ---
+
+// Check if a source file input is unchanged since a given revision.
+export function isInputUnchanged(path String, since Revision) returns bool
+    if db.sourceFiles.contains(path) 'has'
+        let entry = try db.sourceFiles.get(path) otherwise 'err'
+            return false
+        end 'err'
+        return entry.changedAtRevision <= since
+    end 'has'
+    return false
+end 'isInputUnchanged'
+
+// Check if all dependencies of a query are still valid.
+// Walks dependency entries for `key` and checks all upstream inputs are unchanged.
+export function areDepsValid(key QueryKey, computedAt Revision) returns bool
+    var i = 0
+    while i < db.dependencies.count() 'scan'
+        let dep = try db.dependencies.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+        if queryKeysEqual(dep.dependent, b: key) 'match'
+            if not isDependencyValid(dep.dependency, since: computedAt) 'invalid'
+                return false
+            end 'invalid'
+        end 'match'
+        i = i + 1
+    end 'scan'
+    return true
+end 'areDepsValid'
+
+// Check if a single dependency is still valid since a given revision.
+function isDependencyValid(dep QueryKey, since Revision) returns bool
+    match dep 'matchDep'
+        sourceFile(path) then return isInputUnchanged(path, since: since)
+        tokens(path) then return isTokensCacheValid(path, since: since)
+        parseOps(path) then return isParseCacheValid(path, since: since)
+        allMaxonOps then return isAllMaxonOpsCacheValid(since)
+        allStdOps then return isAllStdOpsCacheValid(since)
+        allX86Ops then return isAllX86OpsCacheValid(since)
+        codeResult then return isCodeCacheValid(since)
+    end 'matchDep'
+    return false
+end 'isDependencyValid'
+
+function isAllMaxonOpsCacheValid(since Revision) returns bool
+    return db.allMaxonOpsCache.computedAt > 0 and db.allMaxonOpsCache.verifiedAt >= since
+end 'isAllMaxonOpsCacheValid'
+
+function isAllStdOpsCacheValid(since Revision) returns bool
+    return db.allStdOpsCache.computedAt > 0 and db.allStdOpsCache.verifiedAt >= since
+end 'isAllStdOpsCacheValid'
+
+function isAllX86OpsCacheValid(since Revision) returns bool
+    return db.allX86OpsCache.computedAt > 0 and db.allX86OpsCache.verifiedAt >= since
+end 'isAllX86OpsCacheValid'
+
+function isCodeCacheValid(since Revision) returns bool
+    return db.codeCache.computedAt > 0 and db.codeCache.verifiedAt >= since
+end 'isCodeCacheValid'
+
+function isTokensCacheValid(path String, since Revision) returns bool
+    if db.tokenCache.contains(path) 'has'
+        let memo = try db.tokenCache.get(path) otherwise 'err'
+            return false
+        end 'err'
+        return memo.verifiedAt >= since
+    end 'has'
+    return false
+end 'isTokensCacheValid'
+
+function isParseCacheValid(path String, since Revision) returns bool
+    if db.parseCache.contains(path) 'has'
+        let memo = try db.parseCache.get(path) otherwise 'err'
+            return false
+        end 'err'
+        return memo.verifiedAt >= since
+    end 'has'
+    return false
+end 'isParseCacheValid'
+
+// --- Query stack management ---
+
+export function pushQuery(key QueryKey)
+    db.activeQueryStack.push(key)
+end 'pushQuery'
+
+export function popQuery()
+    let len = db.activeQueryStack.count()
+    if len > 0 'hasPop'
+        try db.activeQueryStack.pop() otherwise ignore
+    end 'hasPop'
+end 'popQuery'

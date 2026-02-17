@@ -1,0 +1,236 @@
+// Typed query functions wrapping each compiler phase.
+// Each follows the Salsa memoization pattern:
+//   1. Record dependency (caller depends on this query)
+//   2. Check cache — if present and valid, return cached value
+//   3. Push self onto activeQueryStack
+//   4. Clear old dependencies for self
+//   5. Compute result (calling upstream queries records deps)
+//   6. Pop from activeQueryStack
+//   7. Store result in cache with current revision
+//   8. Return result
+// All functions operate on the module-level `db` from 0-Compiler.maxon.
+
+// --- Input query: source file content ---
+
+export function querySourceFile(path String) returns ByteArray throws CompileError
+    recordDependency(QueryKey.sourceFile(path))
+    let entry = try db.sourceFiles.get(path) otherwise 'missing'
+        throw CompileError.fileNotFound
+    end 'missing'
+    return entry.content
+end 'querySourceFile'
+
+// --- Per-file derived query: tokenize ---
+
+export function queryTokens(path String) returns TokenArray throws CompileError
+    let key = QueryKey.tokens(path)
+    recordDependency(key)
+
+    // Check cache
+    if db.tokenCache.contains(path) 'checkCache'
+        let memo = try db.tokenCache.get(path) otherwise 'nope'
+            logDebug(LogCategory.compiler, message: "queryTokens cache miss for {path}")
+        end 'nope'
+        if memo.computedAt > 0 'hasValue'
+            if areDepsValid(key, computedAt: memo.computedAt) 'valid'
+                logDebug(LogCategory.compiler, message: "queryTokens cache hit for {path}")
+                let verified = TokenMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: db.currentRevision}
+                db.tokenCache.insert(path, value: verified)
+                return memo.value
+            end 'valid'
+        end 'hasValue'
+    end 'checkCache'
+
+    logDebug(LogCategory.compiler, message: "queryTokens computing for {path}")
+
+    // Compute
+    pushQuery(key)
+    clearDepsFor(key)
+
+    let content = try querySourceFile(path)
+    let tokens = tokenize(content)
+
+    popQuery()
+
+    // Store
+    let newMemo = TokenMemo{value: tokens, computedAt: db.currentRevision, verifiedAt: db.currentRevision}
+    db.tokenCache.insert(path, value: newMemo)
+
+    return tokens
+end 'queryTokens'
+
+// --- Per-file derived query: parse ---
+
+export function queryParseOps(path String) returns MaxonOpArray throws CompileError
+    let key = QueryKey.parseOps(path)
+    recordDependency(key)
+
+    // Check cache
+    if db.parseCache.contains(path) 'checkCache'
+        let memo = try db.parseCache.get(path) otherwise 'nope'
+            logDebug(LogCategory.compiler, message: "queryParseOps cache miss for {path}")
+        end 'nope'
+        if memo.computedAt > 0 'hasValue'
+            if areDepsValid(key, computedAt: memo.computedAt) 'valid'
+                logDebug(LogCategory.compiler, message: "queryParseOps cache hit for {path}")
+                let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: db.currentRevision}
+                db.parseCache.insert(path, value: verified)
+                return memo.value
+            end 'valid'
+        end 'hasValue'
+    end 'checkCache'
+
+    logDebug(LogCategory.compiler, message: "queryParseOps computing for {path}")
+
+    // Compute
+    pushQuery(key)
+    clearDepsFor(key)
+
+    let tokens = try queryTokens(path)
+    let ops = try parse(tokens, filePath: path)
+
+    popQuery()
+
+    // Store
+    let newMemo = ParseMemo{value: ops, computedAt: db.currentRevision, verifiedAt: db.currentRevision}
+    db.parseCache.insert(path, value: newMemo)
+
+    return ops
+end 'queryParseOps'
+
+// --- Whole-program derived query: all maxon ops ---
+
+export function queryAllMaxonOps() returns MaxonOpArray throws CompileError
+    let key = QueryKey.allMaxonOps
+    recordDependency(key)
+
+    // Check cache
+    if db.allMaxonOpsCache.computedAt > 0 'hasCache'
+        if areDepsValid(key, computedAt: db.allMaxonOpsCache.computedAt) 'valid'
+            logDebug(LogCategory.compiler, message: "queryAllMaxonOps cache hit")
+            db.allMaxonOpsCache.verifiedAt = db.currentRevision
+            return db.allMaxonOpsCache.value
+        end 'valid'
+    end 'hasCache'
+
+    logDebug(LogCategory.compiler, message: "queryAllMaxonOps computing")
+
+    // Compute
+    pushQuery(key)
+    clearDepsFor(key)
+
+    resetValueIds()
+    var allOps = MaxonOpArray{}
+    var i = 0
+    while i < db.sourcePaths.count() 'eachFile'
+        let path = try db.sourcePaths.get(i) otherwise 'err'
+            break
+        end 'err'
+        let ops = try queryParseOps(path)
+        allOps.append(ops)
+        i = i + 1
+    end 'eachFile'
+
+    popQuery()
+
+    // Store
+    db.allMaxonOpsCache = MaxonOpsMemo{value: allOps, computedAt: db.currentRevision, verifiedAt: db.currentRevision}
+
+    return allOps
+end 'queryAllMaxonOps'
+
+// --- Whole-program derived query: standard ops ---
+
+export function queryAllStdOps() returns StdOpArray throws CompileError
+    let key = QueryKey.allStdOps
+    recordDependency(key)
+
+    // Check cache
+    if db.allStdOpsCache.computedAt > 0 'hasCache'
+        if areDepsValid(key, computedAt: db.allStdOpsCache.computedAt) 'valid'
+            logDebug(LogCategory.compiler, message: "queryAllStdOps cache hit")
+            db.allStdOpsCache.verifiedAt = db.currentRevision
+            return db.allStdOpsCache.value
+        end 'valid'
+    end 'hasCache'
+
+    logDebug(LogCategory.compiler, message: "queryAllStdOps computing")
+
+    // Compute
+    pushQuery(key)
+    clearDepsFor(key)
+
+    let maxonOps = try queryAllMaxonOps()
+    let result = lowerMaxonOpsToStd(maxonOps)
+
+    popQuery()
+
+    // Store
+    db.allStdOpsCache = StdOpsMemo{value: result, computedAt: db.currentRevision, verifiedAt: db.currentRevision}
+
+    return result
+end 'queryAllStdOps'
+
+// --- Whole-program derived query: x86 ops ---
+
+export function queryAllX86Ops() returns X86OpArray throws CompileError
+    let key = QueryKey.allX86Ops
+    recordDependency(key)
+
+    // Check cache
+    if db.allX86OpsCache.computedAt > 0 'hasCache'
+        if areDepsValid(key, computedAt: db.allX86OpsCache.computedAt) 'valid'
+            logDebug(LogCategory.compiler, message: "queryAllX86Ops cache hit")
+            db.allX86OpsCache.verifiedAt = db.currentRevision
+            return db.allX86OpsCache.value
+        end 'valid'
+    end 'hasCache'
+
+    logDebug(LogCategory.compiler, message: "queryAllX86Ops computing")
+
+    // Compute
+    pushQuery(key)
+    clearDepsFor(key)
+
+    let stdOps = try queryAllStdOps()
+    let result = lowerStdOpsToX86(stdOps)
+
+    popQuery()
+
+    // Store
+    db.allX86OpsCache = X86OpsMemo{value: result, computedAt: db.currentRevision, verifiedAt: db.currentRevision}
+
+    return result
+end 'queryAllX86Ops'
+
+// --- Whole-program derived query: code emission ---
+
+export function queryCodeResult() returns CodeResult throws CompileError
+    let key = QueryKey.codeResult
+    recordDependency(key)
+
+    // Check cache
+    if db.codeCache.computedAt > 0 'hasCache'
+        if areDepsValid(key, computedAt: db.codeCache.computedAt) 'valid'
+            logDebug(LogCategory.compiler, message: "queryCodeResult cache hit")
+            db.codeCache.verifiedAt = db.currentRevision
+            return db.codeCache.value
+        end 'valid'
+    end 'hasCache'
+
+    logDebug(LogCategory.compiler, message: "queryCodeResult computing")
+
+    // Compute
+    pushQuery(key)
+    clearDepsFor(key)
+
+    let x86Ops = try queryAllX86Ops()
+    let result = emit(x86Ops)
+
+    popQuery()
+
+    // Store
+    db.codeCache = CodeMemo{value: result, computedAt: db.currentRevision, verifiedAt: db.currentRevision}
+
+    return result
+end 'queryCodeResult'

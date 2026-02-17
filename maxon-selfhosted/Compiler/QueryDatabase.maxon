@@ -1,0 +1,99 @@
+// Core types for the Salsa-style incremental query system.
+// The query database holds all cached compilation results and dependency information.
+
+export typealias Revision = int(0 to u64.max)
+export typealias SignedIndex = int(i64.min to i64.max)
+
+// Per-file memo types for caching intermediate results.
+export type TokenMemo
+    export var value TokenArray
+    export var computedAt Revision
+    export var verifiedAt Revision
+end 'TokenMemo'
+
+export type ParseMemo
+    export var value MaxonOpArray
+    export var computedAt Revision
+    export var verifiedAt Revision
+end 'ParseMemo'
+
+// Whole-program memo types.
+export type MaxonOpsMemo
+    export var value MaxonOpArray
+    export var computedAt Revision
+    export var verifiedAt Revision
+end 'MaxonOpsMemo'
+
+export type StdOpsMemo
+    export var value StdOpArray
+    export var computedAt Revision
+    export var verifiedAt Revision
+end 'StdOpsMemo'
+
+export type X86OpsMemo
+    export var value X86OpArray
+    export var computedAt Revision
+    export var verifiedAt Revision
+end 'X86OpsMemo'
+
+export type CodeMemo
+    export var value CodeResult
+    export var computedAt Revision
+    export var verifiedAt Revision
+end 'CodeMemo'
+
+// Map typealiases for per-file caches.
+export typealias TokenCacheMap = Map with (String, TokenMemo)
+export typealias ParseCacheMap = Map with (String, ParseMemo)
+
+// Source file entry tracking content and when it changed.
+export type SourceFileEntry
+    export var content ByteArray
+    export var changedAtRevision Revision
+end 'SourceFileEntry'
+
+export typealias SourceFileMap = Map with (String, SourceFileEntry)
+
+// Query key enum identifies each query by type + parameters.
+export enum QueryKey
+    sourceFile(path String)
+    tokens(path String)
+    parseOps(path String)
+    allMaxonOps
+    allStdOps
+    allX86Ops
+    codeResult
+end 'QueryKey'
+
+export typealias QueryKeyArray = Array with QueryKey
+
+// Dependency edge: the query `dependent` depends on `dependency`.
+export type Dependency
+    export var dependent QueryKey
+    export var dependency QueryKey
+end 'Dependency'
+
+export typealias DependencyArray = Array with Dependency
+
+// The central query database holding all inputs, caches, and dependency info.
+export type QueryDatabase
+    export var currentRevision Revision
+
+    // Source file inputs
+    export var sourceFiles SourceFileMap
+    export var sourcePaths StringArray
+
+    // Per-file caches
+    export var tokenCache TokenCacheMap
+    export var parseCache ParseCacheMap
+
+    // Whole-program caches (sentinel: computedAt == 0 means not yet computed)
+    export var allMaxonOpsCache MaxonOpsMemo
+    export var allStdOpsCache StdOpsMemo
+    export var allX86OpsCache X86OpsMemo
+    export var codeCache CodeMemo
+
+    // Dependency tracking
+    export var dependencies DependencyArray
+    export var activeQueryStack QueryKeyArray
+end 'QueryDatabase'
