@@ -288,14 +288,14 @@ public static partial class MaxonToStandardConversion {
         foreach (var op in block.Operations) {
           switch (op) {
             case MaxonParamOp paramOp: {
-              if (refParamPtrVars.ContainsKey(paramOp.Name)) {
+              if (refParamPtrVars.TryGetValue(paramOp.Name, out string? value)) {
                 // Mutated param: receive reference pointer, dereference for initial local copy
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
                 int pFlatIdx = paramFlatIndex.GetValueOrDefault(paramOp.Index, paramOp.Index);
                 newBlock.AddOp(new StdParamOp(pFlatIdx, paramOp.Name, ptrVal));
-                EmitStore(newBlock, ptrVal, refParamPtrVars[paramOp.Name], varTypes);
+                EmitStore(newBlock, ptrVal, value, varTypes);
                 // Dereference to get the initial value
-                var loadRef = new StdLoadI64Op(refParamPtrVars[paramOp.Name]);
+                var loadRef = new StdLoadI64Op(value);
                 newBlock.AddOp(loadRef);
                 var origType = func.ParamTypes[paramOp.Index];
                 var derefType = origType is MlirRangedPrimitiveType rpt ? rpt.BaseType : origType;
@@ -321,14 +321,14 @@ public static partial class MaxonToStandardConversion {
                 EmitStore(newBlock, selfPtrVal, "self", varTypes);
                 structVarNames[structParamOp.Result.Id] = "self";
                 structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
-              } else if (refParamPtrVars.ContainsKey(structParamOp.Name)) {
+              } else if (refParamPtrVars.TryGetValue(structParamOp.Name, out string? value)) {
                 // Mutated struct param: receive pointer-to-heap-pointer, dereference for local copy
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, structParamOp.Name, ptrVal));
-                EmitStore(newBlock, ptrVal, refParamPtrVars[structParamOp.Name], varTypes);
+                EmitStore(newBlock, ptrVal, value, varTypes);
                 // Dereference: load pointer-to-slot, then load the heap pointer from the slot
-                var loadRef = new StdLoadI64Op(refParamPtrVars[structParamOp.Name]);
+                var loadRef = new StdLoadI64Op(value);
                 newBlock.AddOp(loadRef);
                 var deref = new StdLoadIndirectOp(loadRef.Result, 0, MlirType.I64);
                 newBlock.AddOp(deref);
@@ -437,10 +437,10 @@ public static partial class MaxonToStandardConversion {
                 int ptrFlatIdx = structParamPtrIndex[enumParamOp.Index];
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, enumParamOp.Name, ptrVal));
-                if (refParamPtrVars.ContainsKey(enumParamOp.Name)) {
+                if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                   // Mutated assoc-value enum: receive pointer-to-heap-pointer
-                  EmitStore(newBlock, ptrVal, refParamPtrVars[enumParamOp.Name], varTypes);
-                  var loadRef = new StdLoadI64Op(refParamPtrVars[enumParamOp.Name]);
+                  EmitStore(newBlock, ptrVal, value, varTypes);
+                  var loadRef = new StdLoadI64Op(value);
                   newBlock.AddOp(loadRef);
                   var deref = new StdLoadIndirectOp(loadRef.Result, 0, MlirType.I64);
                   newBlock.AddOp(deref);
@@ -452,13 +452,13 @@ public static partial class MaxonToStandardConversion {
                 UnpackEnumHeapToFlatVars(newBlock, enumParamOp.Name, epEnumType, varTypes, module.TypeDefs);
                 structVarNames[enumParamOp.Result.Id] = enumParamOp.Name;
                 structValueTypes[enumParamOp.Result.Id] = enumParamOp.EnumTypeName;
-              } else if (refParamPtrVars.ContainsKey(enumParamOp.Name)) {
+              } else if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                 // Mutated simple enum: receive i64 pointer, dereference for local copy
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
                 int pFlatIdx = paramFlatIndex.GetValueOrDefault(enumParamOp.Index, enumParamOp.Index);
                 newBlock.AddOp(new StdParamOp(pFlatIdx, enumParamOp.Name, ptrVal));
-                EmitStore(newBlock, ptrVal, refParamPtrVars[enumParamOp.Name], varTypes);
-                var loadRef = new StdLoadI64Op(refParamPtrVars[enumParamOp.Name]);
+                EmitStore(newBlock, ptrVal, value, varTypes);
+                var loadRef = new StdLoadI64Op(value);
                 newBlock.AddOp(loadRef);
                 var enumBackingType = enumParamOp.BackingKind == MaxonValueKind.Float ? MlirType.F64 : MlirType.I64;
                 var deref = new StdLoadIndirectOp(loadRef.Result, 0, enumBackingType);

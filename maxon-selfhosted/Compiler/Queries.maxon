@@ -13,7 +13,7 @@
 // --- Input query: source file content ---
 
 export function querySourceFile(project Project, path String) returns ByteArray throws CompileError
-    recordDependency(project, QueryKey.sourceFile(path))
+    recordDependency(project, dependency: QueryKey.sourceFile(path))
     let entry = try project.db.sourceFiles.get(path) otherwise 'missing'
         throw CompileError.fileNotFound
     end 'missing'
@@ -24,7 +24,7 @@ end 'querySourceFile'
 
 export function queryTokens(project Project, path String) returns TokenArray throws CompileError
     let key = QueryKey.tokens(path)
-    recordDependency(project, key)
+    recordDependency(project, dependency: key)
 
     // Check cache
     if project.db.tokenCache.contains(path) 'checkCache'
@@ -32,7 +32,7 @@ export function queryTokens(project Project, path String) returns TokenArray thr
             logDebug(LogCategory.compiler, message: "queryTokens cache miss for {path}")
         end 'nope'
         if memo.computedAt > 0 'hasValue'
-            if areDepsValid(project, key, computedAt: memo.computedAt) 'valid'
+            if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
                 logDebug(LogCategory.compiler, message: "queryTokens cache hit for {path}")
                 let verified = TokenMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision}
                 project.db.tokenCache.insert(path, value: verified)
@@ -44,10 +44,10 @@ export function queryTokens(project Project, path String) returns TokenArray thr
     logDebug(LogCategory.compiler, message: "queryTokens computing for {path}")
 
     // Compute
-    pushQuery(project, key)
-    clearDepsFor(project, key)
+    pushQuery(project, key: key)
+    clearDepsFor(project, key: key)
 
-    let content = try querySourceFile(project, path)
+    let content = try querySourceFile(project, path: path)
     let tokens = tokenize(content)
 
     popQuery(project)
@@ -63,7 +63,7 @@ end 'queryTokens'
 
 export function queryParseOps(project Project, path String) returns MaxonOpArray throws CompileError
     let key = QueryKey.parseOps(path)
-    recordDependency(project, key)
+    recordDependency(project, dependency: key)
 
     // Check cache
     if project.db.parseCache.contains(path) 'checkCache'
@@ -71,7 +71,7 @@ export function queryParseOps(project Project, path String) returns MaxonOpArray
             logDebug(LogCategory.compiler, message: "queryParseOps cache miss for {path}")
         end 'nope'
         if memo.computedAt > 0 'hasValue'
-            if areDepsValid(project, key, computedAt: memo.computedAt) 'valid'
+            if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
                 logDebug(LogCategory.compiler, message: "queryParseOps cache hit for {path}")
                 let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: memo.nextValueIdAfterParse}
                 project.db.parseCache.insert(path, value: verified)
@@ -83,10 +83,10 @@ export function queryParseOps(project Project, path String) returns MaxonOpArray
     logDebug(LogCategory.compiler, message: "queryParseOps computing for {path}")
 
     // Compute
-    pushQuery(project, key)
-    clearDepsFor(project, key)
+    pushQuery(project, key: key)
+    clearDepsFor(project, key: key)
 
-    let tokens = try queryTokens(project, path)
+    let tokens = try queryTokens(project, path: path)
     let ops = try parse(project, tokens: tokens, filePath: path)
     let nextId = getNextValueId(project)
 
@@ -103,11 +103,11 @@ end 'queryParseOps'
 
 export function queryAllMaxonOps(project Project) returns MaxonOpArray throws CompileError
     let key = QueryKey.allMaxonOps
-    recordDependency(project, key)
+    recordDependency(project, dependency: key)
 
     // Check cache
     if project.db.allMaxonOpsCache.computedAt > 0 'hasCache'
-        if areDepsValid(project, key, computedAt: project.db.allMaxonOpsCache.computedAt) 'valid'
+        if areDepsValid(project, key: key, computedAt: project.db.allMaxonOpsCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryAllMaxonOps cache hit")
             project.db.allMaxonOpsCache.verifiedAt = project.db.currentRevision
             return project.db.allMaxonOpsCache.value
@@ -117,8 +117,8 @@ export function queryAllMaxonOps(project Project) returns MaxonOpArray throws Co
     logDebug(LogCategory.compiler, message: "queryAllMaxonOps computing")
 
     // Compute
-    pushQuery(project, key)
-    clearDepsFor(project, key)
+    pushQuery(project, key: key)
+    clearDepsFor(project, key: key)
 
     // ValueIds must be sequential across all files. When a file is served
     // from cache, advance the counter past its IDs to avoid collisions.
@@ -136,7 +136,7 @@ export function queryAllMaxonOps(project Project) returns MaxonOpArray throws Co
         let path = try project.db.sourcePaths.get(i) otherwise 'err'
             break
         end 'err'
-        let ops = try queryParseOps(project, path)
+        let ops = try queryParseOps(project, path: path)
         // When a file was served from cache, the parser didn't run so the
         // ValueId counter wasn't advanced. Restore it from the cached memo.
         if project.db.parseCache.contains(path) 'hasCache'
@@ -163,11 +163,11 @@ end 'queryAllMaxonOps'
 
 export function queryAllStdOps(project Project) returns StdOpArray throws CompileError
     let key = QueryKey.allStdOps
-    recordDependency(project, key)
+    recordDependency(project, dependency: key)
 
     // Check cache
     if project.db.allStdOpsCache.computedAt > 0 'hasCache'
-        if areDepsValid(project, key, computedAt: project.db.allStdOpsCache.computedAt) 'valid'
+        if areDepsValid(project, key: key, computedAt: project.db.allStdOpsCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryAllStdOps cache hit")
             project.db.allStdOpsCache.verifiedAt = project.db.currentRevision
             return project.db.allStdOpsCache.value
@@ -177,8 +177,8 @@ export function queryAllStdOps(project Project) returns StdOpArray throws Compil
     logDebug(LogCategory.compiler, message: "queryAllStdOps computing")
 
     // Compute
-    pushQuery(project, key)
-    clearDepsFor(project, key)
+    pushQuery(project, key: key)
+    clearDepsFor(project, key: key)
 
     let maxonOps = try queryAllMaxonOps(project)
     let result = lowerMaxonOpsToStd(maxonOps)
@@ -195,11 +195,11 @@ end 'queryAllStdOps'
 
 export function queryAllX86Ops(project Project) returns X86OpArray throws CompileError
     let key = QueryKey.allX86Ops
-    recordDependency(project, key)
+    recordDependency(project, dependency: key)
 
     // Check cache
     if project.db.allX86OpsCache.computedAt > 0 'hasCache'
-        if areDepsValid(project, key, computedAt: project.db.allX86OpsCache.computedAt) 'valid'
+        if areDepsValid(project, key: key, computedAt: project.db.allX86OpsCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryAllX86Ops cache hit")
             project.db.allX86OpsCache.verifiedAt = project.db.currentRevision
             return project.db.allX86OpsCache.value
@@ -209,8 +209,8 @@ export function queryAllX86Ops(project Project) returns X86OpArray throws Compil
     logDebug(LogCategory.compiler, message: "queryAllX86Ops computing")
 
     // Compute
-    pushQuery(project, key)
-    clearDepsFor(project, key)
+    pushQuery(project, key: key)
+    clearDepsFor(project, key: key)
 
     let stdOps = try queryAllStdOps(project)
     let result = lowerStdOpsToX86(stdOps)
@@ -227,11 +227,11 @@ end 'queryAllX86Ops'
 
 export function queryCodeResult(project Project) returns CodeResult throws CompileError
     let key = QueryKey.codeResult
-    recordDependency(project, key)
+    recordDependency(project, dependency: key)
 
     // Check cache
     if project.db.codeCache.computedAt > 0 'hasCache'
-        if areDepsValid(project, key, computedAt: project.db.codeCache.computedAt) 'valid'
+        if areDepsValid(project, key: key, computedAt: project.db.codeCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryCodeResult cache hit")
             project.db.codeCache.verifiedAt = project.db.currentRevision
             return project.db.codeCache.value
@@ -241,8 +241,8 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
     logDebug(LogCategory.compiler, message: "queryCodeResult computing")
 
     // Compute
-    pushQuery(project, key)
-    clearDepsFor(project, key)
+    pushQuery(project, key: key)
+    clearDepsFor(project, key: key)
 
     let x86Ops = try queryAllX86Ops(project)
     let result = emit(x86Ops)

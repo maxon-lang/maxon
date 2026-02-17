@@ -523,10 +523,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     int depth = 0;
     while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
       var t = _tokens[prePos];
-      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; }
-      else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; }
-      else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; }
-      else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
+      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[prePos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
           _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
@@ -4267,9 +4264,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Replace the MaxonCallOp with a MaxonTryCallOp
     _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
-    tryCallOp.ArgMutabilities = callOp.ArgMutabilities;
-    tryCallOp.ArgVarNames = callOp.ArgVarNames;
+    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
+      ArgMutabilities = callOp.ArgMutabilities,
+      ArgVarNames = callOp.ArgVarNames
+    };
     _currentBlock!.AddOp(tryCallOp);
 
     // Void-returning functions can't be used as values in assignments
@@ -5358,9 +5356,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Replace MaxonCallOp with MaxonTryCallOp
     _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName);
-    tryCallOp.ArgMutabilities = callOp.ArgMutabilities;
-    tryCallOp.ArgVarNames = callOp.ArgVarNames;
+    var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
+      ArgMutabilities = callOp.ArgMutabilities,
+      ArgVarNames = callOp.ArgVarNames
+    };
     _currentBlock!.AddOp(tryCallOp);
 
     // Store error flag and result to mutable variables for cross-block access
@@ -9231,10 +9230,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.RightParen)) {
       Advance();
       _lastArgMutabilities = callee.ParamTypes.Count > 0
-        ? new List<bool>(new bool[callee.ParamTypes.Count])
+        ? [.. new bool[callee.ParamTypes.Count]]
         : null;
       _lastArgVarNames = callee.ParamTypes.Count > 0
-        ? new List<string?>(new string?[callee.ParamTypes.Count])
+        ? [.. new string?[callee.ParamTypes.Count]]
         : null;
       if (callee.ParamTypes.Count > 0) {
         return (FillDefaultArgs(functionNameToken, callee, new MaxonValue?[callee.ParamTypes.Count]), callee);
@@ -9248,8 +9247,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ParseArgList(functionNameToken, callee, args, firstPositionalIndex: 0, argMutabilities: argMuts, argVarNames: argNames);
     Expect(TokenType.RightParen);
 
-    _lastArgMutabilities = new List<bool>(argMuts);
-    _lastArgVarNames = new List<string?>(argNames);
+    _lastArgMutabilities = [.. argMuts];
+    _lastArgVarNames = [.. argNames];
     return (FillDefaultArgs(functionNameToken, callee, args), callee);
   }
 
@@ -9527,8 +9526,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     Expect(TokenType.RightParen);
-    _lastArgMutabilities = new List<bool>(argMuts);
-    _lastArgVarNames = new List<string?>(argNames);
+    _lastArgMutabilities = [.. argMuts];
+    _lastArgVarNames = [.. argNames];
     return (FillDefaultArgs(methodNameToken, callee, args), callee);
   }
 
@@ -9760,9 +9759,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
-    var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
-    callOp.ArgMutabilities = _lastArgMutabilities;
-    callOp.ArgVarNames = _lastArgVarNames;
+    var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
+      ArgMutabilities = _lastArgMutabilities,
+      ArgVarNames = _lastArgVarNames
+    };
     _lastArgMutabilities = null;
     _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
@@ -9785,9 +9785,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
-    var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName);
-    callOp.ArgMutabilities = _lastArgMutabilities;
-    callOp.ArgVarNames = _lastArgVarNames;
+    var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
+      ArgMutabilities = _lastArgMutabilities,
+      ArgVarNames = _lastArgVarNames
+    };
     _lastArgMutabilities = null;
     _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
