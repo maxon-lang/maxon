@@ -1,0 +1,46 @@
+// Structured error codes and error formatting for the compiler.
+// Mirrors maxon-sharp ErrorCode.cs and CompileError.cs.
+
+// Error codes grouped by compilation stage:
+// - 1xxx: Lexer errors
+// - 2xxx: Parser errors
+// - 3xxx: Semantic analysis errors
+// - 4xxx: MLIR pipeline errors
+// - 5xxx: Code emitter errors
+// - 6xxx: PE writer errors
+export enum ErrorCode
+    parserExpectedExpression = 2004
+    semanticUndefinedVariable = 3003
+end 'ErrorCode'
+
+typealias ErrorLineNumber = int(0 to u64.max)
+typealias ErrorColumnNumber = int(0 to u64.max)
+
+export function formatErrorCode(code ErrorCode) returns String
+    let val = code.rawValue
+    if val < 10 'lt10'
+        return "E000{val}"
+    end 'lt10' else if val < 100 'lt100'
+        return "E00{val}"
+    end 'lt100' else if val < 1000 'lt1000'
+        return "E0{val}"
+    end 'lt1000' else 'gte1000'
+        return "E{val}"
+    end 'gte1000'
+end 'formatErrorCode'
+
+// Logs a structured compile error to stderr and throws CompileError.compileError.
+// Format: "[CMP] ERROR: error E3003: filePath:line:column: message"
+export function raiseCompileError(code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath String) throws CompileError
+    let codeStr = formatErrorCode(code)
+    logError(LogCategory.compiler, message: "error {codeStr}: {filePath}:{line}:{column}: {message}")
+    throw CompileError.compileError
+end 'raiseCompileError'
+
+export enum CompileError implements Error
+    fileNotFound
+    directoryNotFound
+    noSourceFiles
+    readError
+    compileError
+end 'CompileError'

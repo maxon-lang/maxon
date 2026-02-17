@@ -5,7 +5,7 @@
 export typealias MaxonOpArray = Array with MaxonOp
 export typealias StringArray = Array with String
 export typealias ValueId = int(0 to u64.max)
-export typealias VarSlot = int(i64.min to i64.max)
+export typealias VarSlot = int(0 to u64.max)
 export typealias ParsedInt = int(i64.min to i64.max)
 typealias TokenIndex = int(0 to u64.max)
 typealias VarSlotArray = Array with VarSlot
@@ -29,7 +29,7 @@ function defineVariable(name String) returns VarSlot
     return slot
 end 'defineVariable'
 
-function lookupVariable(name String) returns VarSlot
+function lookupVariable(name String, token Token, filePath String) returns VarSlot throws CompileError
     var i = varNames.count() - 1
     while i >= 0 'lookup'
         let vn = try varNames.get(i) otherwise ""
@@ -38,10 +38,11 @@ function lookupVariable(name String) returns VarSlot
         end 'found'
         i = i - 1
     end 'lookup'
-    return 0 - 1
+    try raiseCompileError(ErrorCode.semanticUndefinedVariable, message: "Undefined variable '{name}'", line: token.line, column: token.column, filePath: filePath)
+    return 0
 end 'lookupVariable'
 
-export function parse(tokens TokenArray) returns MaxonOpArray
+export function parse(tokens TokenArray, filePath String) returns MaxonOpArray throws CompileError
     logDebug(LogCategory.parser, message: "Starting parser")
     var pos = 0
 
@@ -53,7 +54,7 @@ export function parse(tokens TokenArray) returns MaxonOpArray
             break
         end 'isEof'
         if token.kind == TokenKind.kwFunction 'isFunction'
-            let result = parseFunction(tokens, startPos: pos)
+            let result = try parseFunction(tokens, startPos: pos, filePath: filePath)
             logDebug(LogCategory.parser, message: "Parser complete: {result.count()} ops")
             return result
         end 'isFunction' else 'notFunction'
@@ -69,7 +70,7 @@ end 'parse'
 
 // --- Function parsing ---
 
-function parseFunction(tokens TokenArray, startPos TokenIndex) returns MaxonOpArray
+function parseFunction(tokens TokenArray, startPos TokenIndex, filePath String) returns MaxonOpArray throws CompileError
     var pos = startPos
     pos = pos + 1  // skip 'function'
 
@@ -102,13 +103,13 @@ function parseFunction(tokens TokenArray, startPos TokenIndex) returns MaxonOpAr
             break
         end 'isEnd'
         if stmtToken.kind == TokenKind.kwReturn 'isReturn'
-            pos = parseReturnStatement(tokens, startPos: pos, ops: ops)
+            pos = try parseReturnStatement(tokens, startPos: pos, ops: ops, filePath: filePath)
         end 'isReturn' else 'notReturn'
             if stmtToken.kind == TokenKind.kwVar or stmtToken.kind == TokenKind.kwLet 'isVarDecl'
-                pos = parseVarDecl(tokens, startPos: pos, ops: ops)
+                pos = try parseVarDecl(tokens, startPos: pos, ops: ops, filePath: filePath)
             end 'isVarDecl' else 'notVarDecl'
                 if stmtToken.kind == TokenKind.kwPrint 'isPrint'
-                    pos = parsePrintStatement(tokens, startPos: pos, ops: ops)
+                    pos = try parsePrintStatement(tokens, startPos: pos, ops: ops, filePath: filePath)
                 end 'isPrint' else 'notPrint'
                     pos = pos + 1
                 end 'notPrint'
@@ -122,27 +123,27 @@ end 'parseFunction'
 
 // --- Statement parsing ---
 
-function parseReturnStatement(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns TokenIndex
+function parseReturnStatement(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
     var pos = startPos + 1  // skip 'return'
-    let resultId = parseExpression(tokens, startPos: pos, ops: ops)
+    let resultId = try parseExpression(tokens, startPos: pos, ops: ops, filePath: filePath)
     pos = resultId.nextPos
     ops.push(MaxonOp.returnOp(resultId.valueId))
     return pos
 end 'parseReturnStatement'
 
-function parseVarDecl(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns TokenIndex
+function parseVarDecl(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
     var pos = startPos + 1  // skip 'var'/'let'
     let nameToken = tokenAt(tokens, pos: pos)
     pos = pos + 1  // skip name
     pos = pos + 1  // skip '='
-    let exprResult = parseExpression(tokens, startPos: pos, ops: ops)
+    let exprResult = try parseExpression(tokens, startPos: pos, ops: ops, filePath: filePath)
     pos = exprResult.nextPos
     let slot = defineVariable(nameToken.value)
     ops.push(MaxonOp.varDecl(slot, exprResult.valueId))
     return pos
 end 'parseVarDecl'
 
-function parsePrintStatement(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns TokenIndex
+function parsePrintStatement(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
     var pos = startPos + 1  // skip 'print'
     pos = pos + 1  // skip '('
     let strToken = tokenAt(tokens, pos: pos)
@@ -150,14 +151,14 @@ function parsePrintStatement(tokens TokenArray, startPos TokenIndex, ops MaxonOp
     pos = pos + 1  // skip ')'
 
     // Parse the double-quoted string for interpolation segments
-    parseStringInterpolation(strToken.value, ops: ops)
+    try parseStringInterpolation(strToken.value, ops: ops, filePath: filePath)
 
     return pos
 end 'parsePrintStatement'
 
 // --- String Interpolation ---
 
-function parseStringInterpolation(str String, ops MaxonOpArray)
+function parseStringInterpolation(str String, ops MaxonOpArray, filePath String) throws CompileError
     var buf = ByteBuffer.create(64)
     var i = 0
     let len = stringLength(str)
@@ -223,7 +224,7 @@ function parseStringInterpolation(str String, ops MaxonOpArray)
             // Tokenize and parse the expression between braces
             let exprStr = stringSlice(str, startPos: exprStart, endPos: i)
             let exprTokens = tokenize(stringToByteArray(exprStr))
-            let exprResult = parseExpression(exprTokens, startPos: 0, ops: ops)
+            let exprResult = try parseExpression(exprTokens, startPos: 0, ops: ops, filePath: filePath)
             ops.push(MaxonOp.printInt(exprResult.valueId))
 
             i = i + 1  // skip closing brace
@@ -248,12 +249,12 @@ export type ExprResult
     export var nextPos TokenIndex
 end 'ExprResult'
 
-function parseExpression(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
-    return parseAddSub(tokens, startPos: startPos, ops: ops)
+function parseExpression(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    return try parseAddSub(tokens, startPos: startPos, ops: ops, filePath: filePath)
 end 'parseExpression'
 
-function parseAddSub(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
-    var result = parseMulDiv(tokens, startPos: startPos, ops: ops)
+function parseAddSub(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    var result = try parseMulDiv(tokens, startPos: startPos, ops: ops, filePath: filePath)
     var pos = result.nextPos
     var leftId = result.valueId
 
@@ -262,7 +263,7 @@ function parseAddSub(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) r
         if opToken.kind == TokenKind.plus 'isAdd'
             pos = pos + 1
             ops.push(MaxonOp.pushValue)
-            let right = parseMulDiv(tokens, startPos: pos, ops: ops)
+            let right = try parseMulDiv(tokens, startPos: pos, ops: ops, filePath: filePath)
             pos = right.nextPos
             ops.push(MaxonOp.popToRcx)
             let resultId = nextValueId()
@@ -272,7 +273,7 @@ function parseAddSub(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) r
             if opToken.kind == TokenKind.minus 'isSub'
                 pos = pos + 1
                 ops.push(MaxonOp.pushValue)
-                let right = parseMulDiv(tokens, startPos: pos, ops: ops)
+                let right = try parseMulDiv(tokens, startPos: pos, ops: ops, filePath: filePath)
                 pos = right.nextPos
                 ops.push(MaxonOp.popToRcx)
                 let resultId = nextValueId()
@@ -287,8 +288,8 @@ function parseAddSub(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) r
     return {valueId: leftId, nextPos: pos}
 end 'parseAddSub'
 
-function parseMulDiv(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
-    var result = parsePrimary(tokens, startPos: startPos, ops: ops)
+function parseMulDiv(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    var result = try parsePrimary(tokens, startPos: startPos, ops: ops, filePath: filePath)
     var pos = result.nextPos
     var leftId = result.valueId
 
@@ -297,7 +298,7 @@ function parseMulDiv(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) r
         if opToken.kind == TokenKind.star 'isMul'
             pos = pos + 1
             ops.push(MaxonOp.pushValue)
-            let right = parsePrimary(tokens, startPos: pos, ops: ops)
+            let right = try parsePrimary(tokens, startPos: pos, ops: ops, filePath: filePath)
             pos = right.nextPos
             ops.push(MaxonOp.popToRcx)
             let resultId = nextValueId()
@@ -311,7 +312,7 @@ function parseMulDiv(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) r
     return {valueId: leftId, nextPos: pos}
 end 'parseMulDiv'
 
-function parsePrimary(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) returns ExprResult
+function parsePrimary(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
     let token = tokenAt(tokens, pos: startPos)
 
     if token.kind == TokenKind.intLiteral 'isInt'
@@ -322,14 +323,14 @@ function parsePrimary(tokens TokenArray, startPos TokenIndex, ops MaxonOpArray) 
     end 'isInt'
 
     if token.kind == TokenKind.identifier 'isIdent'
-        let slot = lookupVariable(token.value)
+        let slot = try lookupVariable(token.value, token: token, filePath: filePath)
         let id = nextValueId()
         ops.push(MaxonOp.varLoad(id, slot))
         return {valueId: id, nextPos: startPos + 1}
     end 'isIdent'
 
     if token.kind == TokenKind.leftParen 'isParen'
-        let inner = parseExpression(tokens, startPos: startPos + 1, ops: ops)
+        let inner = try parseExpression(tokens, startPos: startPos + 1, ops: ops, filePath: filePath)
         // skip closing paren
         return {valueId: inner.valueId, nextPos: inner.nextPos + 1}
     end 'isParen'
