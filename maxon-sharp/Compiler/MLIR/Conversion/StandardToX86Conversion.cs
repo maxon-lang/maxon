@@ -791,6 +791,14 @@ public static class StandardToX86Conversion {
             regManager.EmitGlobalStore(globalStoreI1.Value, globalStoreI1.GlobalName, x86Block, size: 1);
             break;
 
+          case StdGlobalLoadI8Op globalLoadI8:
+            regManager.EmitGlobalLoad(globalLoadI8.Result, globalLoadI8.GlobalName, x86Block, size: 1);
+            break;
+
+          case StdGlobalStoreI8Op globalStoreI8:
+            regManager.EmitGlobalStore(globalStoreI8.Value, globalStoreI8.GlobalName, x86Block, size: 1);
+            break;
+
           case StdGlobalLoadI16Op globalLoadI16:
             regManager.EmitGlobalLoad(globalLoadI16.Result, globalLoadI16.GlobalName, x86Block, size: 2);
             break;

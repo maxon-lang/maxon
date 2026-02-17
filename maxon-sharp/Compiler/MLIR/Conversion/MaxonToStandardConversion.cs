@@ -1242,57 +1242,33 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonGlobalLoadOp globalLoad: {
-              switch (globalLoad.ValueKind) {
-                case MaxonValueKind.Integer: {
-                  var loadOp = new StdGlobalLoadI64Op(globalLoad.GlobalName);
-                  newBlock.AddOp(loadOp);
-                  valueMap[globalLoad.Result] = loadOp.Result;
-                  break;
-                }
-                case MaxonValueKind.Float: {
-                  var loadOp = new StdGlobalLoadF64Op(globalLoad.GlobalName);
-                  newBlock.AddOp(loadOp);
-                  valueMap[globalLoad.Result] = loadOp.Result;
-                  break;
-                }
-                case MaxonValueKind.Float32: {
-                  var loadOp = new StdGlobalLoadF32Op(globalLoad.GlobalName);
-                  newBlock.AddOp(loadOp);
-                  valueMap[globalLoad.Result] = loadOp.Result;
-                  break;
-                }
-                case MaxonValueKind.Bool: {
-                  var loadOp = new StdGlobalLoadI1Op(globalLoad.GlobalName);
-                  newBlock.AddOp(loadOp);
-                  valueMap[globalLoad.Result] = loadOp.Result;
-                  break;
-                }
-                case MaxonValueKind.Short: {
-                  var loadOp = new StdGlobalLoadI16Op(globalLoad.GlobalName);
-                  newBlock.AddOp(loadOp);
-                  valueMap[globalLoad.Result] = loadOp.Result;
-                  break;
-                }
-                case MaxonValueKind.Enum: {
-                  var loadOp = new StdGlobalLoadI64Op(globalLoad.GlobalName);
-                  newBlock.AddOp(loadOp);
-                  valueMap[globalLoad.Result] = loadOp.Result;
-                  break;
-                }
-                case MaxonValueKind.Struct: {
-                  var loadOp = new StdGlobalLoadI64Op(globalLoad.GlobalName);
-                  newBlock.AddOp(loadOp);
-                  valueMap[globalLoad.Result] = loadOp.Result;
-                  // Store loaded pointer in a temp so method calls can find it via structVarNames
-                  var tempName = $"__global_{globalLoad.GlobalName}_{globalLoad.Result.Id}";
-                  EmitStore(newBlock, loadOp.Result, tempName, varTypes);
-                  structVarNames[globalLoad.Result.Id] = tempName;
-                  if (globalLoad.StructTypeName != null)
-                    structValueTypes[globalLoad.Result.Id] = globalLoad.StructTypeName;
-                  break;
-                }
-                default:
-                  throw new InvalidOperationException($"Unsupported global variable type: {globalLoad.ValueKind}");
+              StandardOp loadOp = globalLoad.ValueKind switch {
+                MaxonValueKind.Integer or MaxonValueKind.Enum => new StdGlobalLoadI64Op(globalLoad.GlobalName),
+                MaxonValueKind.Float => new StdGlobalLoadF64Op(globalLoad.GlobalName),
+                MaxonValueKind.Float32 => new StdGlobalLoadF32Op(globalLoad.GlobalName),
+                MaxonValueKind.Bool => new StdGlobalLoadI1Op(globalLoad.GlobalName),
+                MaxonValueKind.Byte => new StdGlobalLoadI8Op(globalLoad.GlobalName),
+                MaxonValueKind.Short => new StdGlobalLoadI16Op(globalLoad.GlobalName),
+                MaxonValueKind.Struct => new StdGlobalLoadI64Op(globalLoad.GlobalName),
+                MaxonValueKind.Function or MaxonValueKind.TypeParameter or _ =>
+                  throw new InvalidOperationException($"Cannot use {globalLoad.ValueKind} as global variable type"),
+              };
+              newBlock.AddOp(loadOp);
+              valueMap[globalLoad.Result] = loadOp switch {
+                StdGlobalLoadI64Op i64 => i64.Result,
+                StdGlobalLoadF64Op f64 => f64.Result,
+                StdGlobalLoadF32Op f32 => f32.Result,
+                StdGlobalLoadI1Op i1 => i1.Result,
+                StdGlobalLoadI8Op i8 => i8.Result,
+                StdGlobalLoadI16Op i16 => i16.Result,
+                _ => throw new InvalidOperationException()
+              };
+              if (globalLoad.ValueKind == MaxonValueKind.Struct) {
+                var tempName = $"__global_{globalLoad.GlobalName}_{globalLoad.Result.Id}";
+                EmitStore(newBlock, valueMap[globalLoad.Result], tempName, varTypes);
+                structVarNames[globalLoad.Result.Id] = tempName;
+                if (globalLoad.StructTypeName != null)
+                  structValueTypes[globalLoad.Result.Id] = globalLoad.StructTypeName;
               }
               break;
             }
@@ -1309,28 +1285,23 @@ public static partial class MaxonToStandardConversion {
                 }
               } else {
                 var mappedValue = valueMap[globalStore.Value];
-                switch (globalStore.ValueKind) {
-                  case MaxonValueKind.Integer:
-                    newBlock.AddOp(new StdGlobalStoreI64Op((StdI64)mappedValue, globalStore.GlobalName));
-                    break;
-                  case MaxonValueKind.Float:
-                    newBlock.AddOp(new StdGlobalStoreF64Op((StdF64)mappedValue, globalStore.GlobalName));
-                    break;
-                  case MaxonValueKind.Float32:
-                    newBlock.AddOp(new StdGlobalStoreF32Op((StdF32)mappedValue, globalStore.GlobalName));
-                    break;
-                  case MaxonValueKind.Bool:
-                    newBlock.AddOp(new StdGlobalStoreI1Op((StdBool)mappedValue, globalStore.GlobalName));
-                    break;
-                  case MaxonValueKind.Short:
-                    newBlock.AddOp(new StdGlobalStoreI16Op((StdI64)mappedValue, globalStore.GlobalName));
-                    break;
-                  case MaxonValueKind.Enum:
-                    newBlock.AddOp(new StdGlobalStoreI64Op((StdI64)mappedValue, globalStore.GlobalName));
-                    break;
-                  default:
-                    throw new InvalidOperationException($"Unsupported global variable type: {globalStore.ValueKind}");
-                }
+                var storeOp = globalStore.ValueKind switch {
+                  MaxonValueKind.Integer or MaxonValueKind.Enum =>
+                    (StandardOp)new StdGlobalStoreI64Op((StdI64)mappedValue, globalStore.GlobalName),
+                  MaxonValueKind.Float =>
+                    new StdGlobalStoreF64Op((StdF64)mappedValue, globalStore.GlobalName),
+                  MaxonValueKind.Float32 =>
+                    new StdGlobalStoreF32Op((StdF32)mappedValue, globalStore.GlobalName),
+                  MaxonValueKind.Bool =>
+                    new StdGlobalStoreI1Op((StdBool)mappedValue, globalStore.GlobalName),
+                  MaxonValueKind.Byte =>
+                    new StdGlobalStoreI8Op((StdI64)mappedValue, globalStore.GlobalName),
+                  MaxonValueKind.Short =>
+                    new StdGlobalStoreI16Op((StdI64)mappedValue, globalStore.GlobalName),
+                  MaxonValueKind.Struct or MaxonValueKind.Function or MaxonValueKind.TypeParameter or _ =>
+                    throw new InvalidOperationException($"Cannot use {globalStore.ValueKind} as global variable type"),
+                };
+                newBlock.AddOp(storeOp);
               }
               break;
             }

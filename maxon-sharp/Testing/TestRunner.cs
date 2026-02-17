@@ -156,10 +156,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
 
     foreach (var file in Directory.GetFiles(_fragmentDir, "*.test", SearchOption.AllDirectories)) {
-      var fragment = FragmentGenerator.ParseFragment(file);
-      if (fragment == null) {
-        throw new InvalidOperationException($"Failed to parse fragment file: {file}");
-      }
+      var fragment = FragmentGenerator.ParseFragment(file) ?? throw new InvalidOperationException($"Failed to parse fragment file: {file}");
       fragments.Add(fragment);
     }
 

@@ -1022,7 +1022,7 @@ end 'main'
 - `let` declares an immutable top-level constant (compile-time evaluated)
 - Must have an initializer with a constant expression (integer, float, bool, or string literal)
 - Initialized before `main()` executes
-- Accessible from any function in the same module
+- Accessible from any function in the same file (use `export` for cross-file visibility)
 
 **Use Cases:**
 - Configuration constants (`let MAX_BUFFER_SIZE = 4096`)
@@ -1951,7 +1951,7 @@ Namespaces are derived from file paths:
 
 ### Export Keyword
 
-Functions, types, enums, and typealiases are file-scoped by default. Use the `export` keyword to make them visible to other files:
+Functions, types, enums, typealiases, and top-level variables are file-scoped by default. Use the `export` keyword to make them visible to other files:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -1993,6 +1993,15 @@ export typealias Score = int(0 to 100)
 ```
 
 Non-exported typealiases are only visible within their file. The standard library exports purpose-specific aliases like `Count`, `Index`, `ExitCode`, etc.
+
+**Exporting top-level variables:**
+
+```maxon
+export var sharedCounter = 0
+export let MAX_CONNECTIONS = 100
+```
+
+Exported variables can be read and (for `var`) modified from other files in the same project.
 
 **Exporting methods within types:**
 

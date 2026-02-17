@@ -40,7 +40,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
-  private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column);
+  private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false);
   private readonly List<DeferredDecl> _deferredExprLets = [];
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
   private readonly List<DeferredDecl> _deferredExprVars = [];
@@ -573,6 +573,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (!target.DeferredGlobalInits.Any(d => d.Name == init.Name))
         target.DeferredGlobalInits.Add(init);
     }
+    // Seed exported global variables so cross-file references resolve
+    foreach (var (name, meta) in source.GlobalVarInfos) {
+      if (!source.NonExportedGlobalVarNames.Contains(name))
+        _globalVars.TryAdd(name, new GlobalVarInfo(meta.Kind, meta.Mutable, meta.EnumTypeName, meta.TypeName));
+    }
   }
 
   /// <summary>
@@ -631,7 +636,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         int exprStart = _pos;
         SkipToEndOfLine();
         if (IsComplexInitializer(exprStart)) {
-          _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+          _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
             nameToken.Value, _tokens, exprStart, _pos, IsMutable: false, nameToken.Line, nameToken.Column, _sourceFilePath));
         } else {
@@ -644,11 +649,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         int exprStart = _pos;
         SkipToEndOfLine();
         if (IsComplexInitializer(exprStart)) {
-          _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+          _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
             nameToken.Value, _tokens, exprStart, _pos, IsMutable: true, nameToken.Line, nameToken.Column, _sourceFilePath));
         } else {
-          _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+          _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
         }
       } else if (Check(TokenType.Function)) {
         // Pre-register function signature for forward references
@@ -703,16 +708,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       string? enumTypeName = value is EnumConstantValue ecv ? ecv.EnumTypeName : null;
       module.Globals.Add(new MlirGlobal(deferred.Name, fieldType, defaultValue));
       _globalVars[deferred.Name] = new GlobalVarInfo(kind, true, enumTypeName);
+      module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(kind, true, enumTypeName);
+      if (!deferred.IsExported && !_isStdlib)
+        module.NonExportedGlobalVarNames.Add(deferred.Name);
     }
 
     // Register deferred expression vars/lets as globals (initialized at runtime in main)
     foreach (var deferred in _deferredExprVars) {
+      var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: InferDeferredTypeName(deferred));
+      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: typeName);
+      module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName);
+      if (!deferred.IsExported && !_isStdlib)
+        module.NonExportedGlobalVarNames.Add(deferred.Name);
     }
     foreach (var deferred in _deferredExprLets) {
+      var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: InferDeferredTypeName(deferred));
+      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: typeName);
+      module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName);
+      if (!deferred.IsExported && !_isStdlib)
+        module.NonExportedGlobalVarNames.Add(deferred.Name);
     }
   }
 

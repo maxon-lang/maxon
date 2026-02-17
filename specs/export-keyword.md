@@ -11,7 +11,7 @@ category: infrastructure
 
 ### Export Keyword
 
-All declarations — functions, types, enums, and typealiases — are file-scoped by default. The `export` keyword makes them visible to other modules. Without `export`, a declaration can only be used within the file where it is defined.
+All declarations — functions, types, enums, typealiases, and top-level variables — are file-scoped by default. The `export` keyword makes them visible to other modules. Without `export`, a declaration can only be used within the file where it is defined.
 
 ```text
 export function publicApi() returns Integer
@@ -475,6 +475,58 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: exported-var-cross-file -->
+Cross-file access to an exported module-level var with a simple constant value.
+```maxon
+// --- file: counter.maxon
+export var counter = 10
+
+// --- file: main.maxon
+function main() returns ExitCode
+    return counter
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: exported-struct-var-cross-file -->
+Cross-file access to an exported module-level struct var.
+```maxon
+// --- file: state.maxon
+typealias SmallInt = int(0 to 255)
+
+export type Counter
+    export var value SmallInt
+end 'Counter'
+
+export var shared = Counter{value: 0}
+
+// --- file: main.maxon
+function main() returns ExitCode
+    shared.value = 42
+    return shared.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.non-exported-var-cross-file -->
+Non-exported module-level var should not be accessible from another file.
+```maxon
+// --- file: state.maxon
+var secret = 99
+
+// --- file: main.maxon
+function main() returns ExitCode
+    return secret
+end 'main'
+```
+```maxoncstderr
+error E2004: main.maxon:2:12: Undefined variable 'secret'
 ```
 
 <!-- test: non-exported-enum-same-file -->

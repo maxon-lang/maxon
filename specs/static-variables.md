@@ -540,6 +540,21 @@ f64 2.5
 i8 1
 ```
 
+<!-- test: top-level-var-byte-ranged-type -->
+Module-level var with a byte-sized ranged type.
+```maxon
+typealias SmallInt = int(0 to 255)
+
+var counter = SmallInt{42}
+
+function main() returns ExitCode
+    return counter
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: top-level-let-struct-reassign-error -->
 Reassigning an immutable top-level `let` struct variable should error.
 ```maxon

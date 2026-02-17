@@ -1071,6 +1071,24 @@ public class StdGlobalStoreI1Op(StdBool value, string globalName) : StandardOp {
   public override int PureResultId => -1;
 }
 
+public class StdGlobalLoadI8Op(string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_load_i8 @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1;
+}
+
+public class StdGlobalStoreI8Op(StdI64 value, string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_store_i8 @{GlobalName}";
+  public StdI64 Value { get; } = value;
+  public string GlobalName { get; } = globalName;
+  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
+}
+
 public class StdGlobalLoadI16Op(string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_load_i16 @{GlobalName}";
   public string GlobalName { get; } = globalName;

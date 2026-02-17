@@ -1,3 +1,5 @@
+using MaxonSharp.Compiler.Mlir.Dialects;
+
 namespace MaxonSharp.Compiler.Mlir.Core;
 
 public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = null) {
@@ -12,6 +14,9 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
 
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);
+
+// Metadata for a module-level global variable (stored in MlirModule.GlobalVarInfos for cross-file seeding)
+public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null);
 
 // Deferred global variable initialization: stores tokens for expressions that must be evaluated at main() entry
 public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column, string? SourceFilePath = null);
@@ -41,6 +46,12 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Non-exported type/enum/typealias names — filtered from _typeRegistry when seeding other files
   public HashSet<string> NonExportedTypeNames { get; } = [];
 
+  // Global variable metadata for cross-file seeding (name -> kind/mutability/type info)
+  public Dictionary<string, GlobalVarMetadata> GlobalVarInfos { get; } = [];
+
+  // Non-exported global var names — filtered when seeding _globalVars to other files
+  public HashSet<string> NonExportedGlobalVarNames { get; } = [];
+
   // Source file path for each type/enum/typealias (for file-scoped visibility checks)
   public Dictionary<string, string> TypeDefSourceFiles { get; } = [];
 
@@ -64,6 +75,8 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];
     clone.DeferredGlobalInits.AddRange(DeferredGlobalInits);
     foreach (var n in NonExportedTypeNames) clone.NonExportedTypeNames.Add(n);
+    foreach (var (k, v) in GlobalVarInfos) clone.GlobalVarInfos[k] = v;
+    foreach (var n in NonExportedGlobalVarNames) clone.NonExportedGlobalVarNames.Add(n);
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
     foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
     return clone;
@@ -105,6 +118,8 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
       TypeAliasSources.TryAdd(k, v);
     }
     foreach (var n in other.NonExportedTypeNames) NonExportedTypeNames.Add(n);
+    foreach (var (k, v) in other.GlobalVarInfos) GlobalVarInfos.TryAdd(k, v);
+    foreach (var n in other.NonExportedGlobalVarNames) NonExportedGlobalVarNames.Add(n);
     foreach (var (k, v) in other.TypeDefSourceFiles) TypeDefSourceFiles.TryAdd(k, v);
     foreach (var n in other.AmbiguousTypeNames) AmbiguousTypeNames.Add(n);
     foreach (var (k, v) in other.ConstantArrayLiterals) ConstantArrayLiterals.TryAdd(k, v);

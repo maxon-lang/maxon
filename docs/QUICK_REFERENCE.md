@@ -102,7 +102,7 @@ greet("Smith", title: "Dr.")
 
 ## Visibility
 
-Functions, types, enums, and typealiases are file-scoped by default. Use `export` for cross-file visibility:
+All declarations are file-scoped by default. Use `export` for cross-file visibility:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -112,6 +112,7 @@ function privateFunc() returns Score           // only this file
 export type Point                               // visible to other files
 export enum Color                               // visible to other files
 export typealias Score = int(0 to 100)          // visible to other files
+export var sharedCounter = 0                    // visible to other files
 ```
 
 ## Control Flow
