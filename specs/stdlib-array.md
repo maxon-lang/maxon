@@ -500,7 +500,7 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```output
+```stdout
 helloworld
 ```
 ```exitcode
@@ -529,7 +529,7 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```output
+```stdout
 hello this is a longer stringworld this is also a longer string
 ```
 ```exitcode
@@ -556,7 +556,7 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```output
+```stdout
 firstsecond
 ```
 ```exitcode
@@ -581,7 +581,7 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```output
+```stdout
 abc
 ```
 ```exitcode
@@ -605,7 +605,7 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```output
+```stdout
 two
 ```
 ```exitcode
