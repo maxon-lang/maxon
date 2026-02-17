@@ -60,11 +60,13 @@ end 'fileChanged'
 
 function loadSourceFiles(path String) throws CompileError
     if File.exists(path) 'isFile'
+        logTrace(LogCategory.compiler, message: "Loading single file: {path}")
         let bytes = try File.readBinary(path) otherwise 'readErr'
             throw CompileError.readError
         end 'readErr'
         setSourceFile(path, content: bytes)
     end 'isFile' else if Directory.exists(path) 'isDir'
+        logTrace(LogCategory.compiler, message: "Loading directory: {path}")
         let dirEntries = try Directory.list(path) otherwise 'listErr'
             throw CompileError.directoryNotFound
         end 'listErr'
@@ -72,6 +74,7 @@ function loadSourceFiles(path String) throws CompileError
         for name in dirEntries 'loop'
             if name.endsWith(".maxon") 'isMaxon'
                 let filePath = "{path}\\{name}"
+                logTrace(LogCategory.compiler, message: "Loading file: {filePath}")
                 let bytes = try File.readBinary(filePath) otherwise 'skip'
                     continue
                 end 'skip'

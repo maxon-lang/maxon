@@ -6,25 +6,26 @@
 
 // Set or update a source file input. Bumps revision only if content changed.
 export function setSourceFile(path String, content ByteArray)
+    logTrace(LogCategory.compiler, message: "setSourceFile: {path}")
     if db.sourceFiles.contains(path) 'exists'
         let existing = try db.sourceFiles.get(path) otherwise 'skip'
             return
         end 'skip'
-        if existing.content.count() == content.count() 'sameLen'
-            // Simple equality check: compare length only for now
-            // (full byte comparison would be more accurate but expensive)
+        // Compare content byte-by-byte to avoid unnecessary revision bumps
+        let existingContent = existing.content
+        if existingContent.count() == content.count() 'sameLen'
             var same = true
             var i = 0
-            while i < content.count() 'cmp'
-                let a = try existing.content.get(i) otherwise 0
+            while i < content.count() and same 'cmp'
+                let a = try existingContent.get(i) otherwise 0
                 let b = try content.get(i) otherwise 1
-                if not a == b 'diff'
+                if a != b 'diff'
                     same = false
-                    break
                 end 'diff'
                 i = i + 1
             end 'cmp'
             if same 'unchanged'
+                logTrace(LogCategory.compiler, message: "  unchanged, skipping")
                 return
             end 'unchanged'
         end 'sameLen'
@@ -33,6 +34,7 @@ export function setSourceFile(path String, content ByteArray)
     end 'newFile'
 
     db.currentRevision = db.currentRevision + 1
+    logTrace(LogCategory.compiler, message: "  changed at revision {db.currentRevision}")
     let entry = SourceFileEntry{content: content, changedAtRevision: db.currentRevision}
     db.sourceFiles.insert(path, value: entry)
 end 'setSourceFile'
@@ -188,8 +190,7 @@ export function isInputUnchanged(path String, since Revision) returns bool
     return false
 end 'isInputUnchanged'
 
-// Check if all dependencies of a query are still valid.
-// Walks dependency entries for `key` and checks all upstream inputs are unchanged.
+// Walk dependency entries for `key` and verify all upstream inputs are unchanged.
 export function areDepsValid(key QueryKey, computedAt Revision) returns bool
     var i = 0
     while i < db.dependencies.count() 'scan'
@@ -221,22 +222,6 @@ function isDependencyValid(dep QueryKey, since Revision) returns bool
     return false
 end 'isDependencyValid'
 
-function isAllMaxonOpsCacheValid(since Revision) returns bool
-    return db.allMaxonOpsCache.computedAt > 0 and db.allMaxonOpsCache.verifiedAt >= since
-end 'isAllMaxonOpsCacheValid'
-
-function isAllStdOpsCacheValid(since Revision) returns bool
-    return db.allStdOpsCache.computedAt > 0 and db.allStdOpsCache.verifiedAt >= since
-end 'isAllStdOpsCacheValid'
-
-function isAllX86OpsCacheValid(since Revision) returns bool
-    return db.allX86OpsCache.computedAt > 0 and db.allX86OpsCache.verifiedAt >= since
-end 'isAllX86OpsCacheValid'
-
-function isCodeCacheValid(since Revision) returns bool
-    return db.codeCache.computedAt > 0 and db.codeCache.verifiedAt >= since
-end 'isCodeCacheValid'
-
 function isTokensCacheValid(path String, since Revision) returns bool
     if db.tokenCache.contains(path) 'has'
         let memo = try db.tokenCache.get(path) otherwise 'err'
@@ -257,6 +242,22 @@ function isParseCacheValid(path String, since Revision) returns bool
     return false
 end 'isParseCacheValid'
 
+function isAllMaxonOpsCacheValid(since Revision) returns bool
+    return db.allMaxonOpsCache.computedAt > 0 and db.allMaxonOpsCache.verifiedAt >= since
+end 'isAllMaxonOpsCacheValid'
+
+function isAllStdOpsCacheValid(since Revision) returns bool
+    return db.allStdOpsCache.computedAt > 0 and db.allStdOpsCache.verifiedAt >= since
+end 'isAllStdOpsCacheValid'
+
+function isAllX86OpsCacheValid(since Revision) returns bool
+    return db.allX86OpsCache.computedAt > 0 and db.allX86OpsCache.verifiedAt >= since
+end 'isAllX86OpsCacheValid'
+
+function isCodeCacheValid(since Revision) returns bool
+    return db.codeCache.computedAt > 0 and db.codeCache.verifiedAt >= since
+end 'isCodeCacheValid'
+
 // --- Query stack management ---
 
 export function pushQuery(key QueryKey)
@@ -264,8 +265,7 @@ export function pushQuery(key QueryKey)
 end 'pushQuery'
 
 export function popQuery()
-    let len = db.activeQueryStack.count()
-    if len > 0 'hasPop'
+    if db.activeQueryStack.count() > 0 'hasPop'
         try db.activeQueryStack.pop() otherwise ignore
     end 'hasPop'
 end 'popQuery'

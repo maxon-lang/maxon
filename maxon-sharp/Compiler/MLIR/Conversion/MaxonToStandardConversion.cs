@@ -878,7 +878,14 @@ public static partial class MaxonToStandardConversion {
                   EmitStore(newBlock, loaded, tempVarName, varTypes);
                 }
                 structVarNames[fieldAccess.Result.Id] = tempVarName;
-                varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
+                // Only update varNameToStructPrefix if the field name doesn't shadow
+                // an existing parameter or local variable (e.g., a param named "data"
+                // must not be overwritten by a field access like "existing.data").
+                if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
+                  varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
+                } else {
+                  Logger.Trace(LogCategory.Mlir, $"Skipping varNameToStructPrefix['{fieldAccess.FieldName}'] — shadows existing variable");
+                }
                 // Propagate type info for the nested struct field
                 if (fieldDef?.Type is MlirStructType fieldStructType)
                   structValueTypes[fieldAccess.Result.Id] = fieldStructType.Name;

@@ -569,7 +569,7 @@ end 'emitPrintInt'
 // Emit X86 ops to machine code.
 // Returns a CodeResult with the code bytes and fixup offsets.
 export function emit(x86Ops X86OpArray) returns CodeResult
-    logDebug(LogCategory.codegen, message: "Emitting machine code")
+    logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops")
     var code = ByteBuffer.create(1024)
     var iatFixups = IatFixupArray{}
 
@@ -605,11 +605,13 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     code.push(0xCC)
 
     // Emit runtime stubs (before main, so offsets are known)
+    logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
     emitWriteStdout(code, iatFixups: iatFixups)
     emitI64ToString(code)
 
     // Emit main function body
     let mainOffset = code.count()
+    logTrace(LogCategory.codegen, message: "Main function at code offset {mainOffset}")
 
     for op in x86Ops 'opLoop'
         match op 'emit'

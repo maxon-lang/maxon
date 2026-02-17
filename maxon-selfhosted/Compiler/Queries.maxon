@@ -1,7 +1,7 @@
 // Typed query functions wrapping each compiler phase.
 // Each follows the Salsa memoization pattern:
 //   1. Record dependency (caller depends on this query)
-//   2. Check cache — if present and valid, return cached value
+//   2. Check cache -- if present and valid, return cached value
 //   3. Push self onto activeQueryStack
 //   4. Clear old dependencies for self
 //   5. Compute result (calling upstream queries records deps)
@@ -73,7 +73,7 @@ export function queryParseOps(path String) returns MaxonOpArray throws CompileEr
         if memo.computedAt > 0 'hasValue'
             if areDepsValid(key, computedAt: memo.computedAt) 'valid'
                 logDebug(LogCategory.compiler, message: "queryParseOps cache hit for {path}")
-                let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: db.currentRevision}
+                let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: db.currentRevision, nextValueIdAfterParse: memo.nextValueIdAfterParse}
                 db.parseCache.insert(path, value: verified)
                 return memo.value
             end 'valid'
@@ -88,11 +88,12 @@ export function queryParseOps(path String) returns MaxonOpArray throws CompileEr
 
     let tokens = try queryTokens(path)
     let ops = try parse(tokens, filePath: path)
+    let nextId = getNextValueId()
 
     popQuery()
 
     // Store
-    let newMemo = ParseMemo{value: ops, computedAt: db.currentRevision, verifiedAt: db.currentRevision}
+    let newMemo = ParseMemo{value: ops, computedAt: db.currentRevision, verifiedAt: db.currentRevision, nextValueIdAfterParse: nextId}
     db.parseCache.insert(path, value: newMemo)
 
     return ops
@@ -119,6 +120,8 @@ export function queryAllMaxonOps() returns MaxonOpArray throws CompileError
     pushQuery(key)
     clearDepsFor(key)
 
+    // ValueIds must be sequential across all files. When a file is served
+    // from cache, advance the counter past its IDs to avoid collisions.
     resetValueIds()
     var allOps = MaxonOpArray{}
     var i = 0
@@ -127,6 +130,16 @@ export function queryAllMaxonOps() returns MaxonOpArray throws CompileError
             break
         end 'err'
         let ops = try queryParseOps(path)
+        // When a file was served from cache, the parser didn't run so the
+        // ValueId counter wasn't advanced. Restore it from the cached memo.
+        if db.parseCache.contains(path) 'hasCache'
+            let memo = try db.parseCache.get(path) otherwise 'skipAdv'
+                break
+            end 'skipAdv'
+            if memo.nextValueIdAfterParse > getNextValueId() 'advance'
+                setNextValueId(memo.nextValueIdAfterParse)
+            end 'advance'
+        end 'hasCache'
         allOps.append(ops)
         i = i + 1
     end 'eachFile'

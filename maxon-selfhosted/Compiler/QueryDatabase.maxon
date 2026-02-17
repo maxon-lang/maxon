@@ -1,8 +1,8 @@
 // Core types for the Salsa-style incremental query system.
 // The query database holds all cached compilation results and dependency information.
 
+// Revision counter: 0 is the sentinel for "not yet computed".
 export typealias Revision = int(0 to u64.max)
-export typealias SignedIndex = int(i64.min to i64.max)
 
 // Per-file memo types for caching intermediate results.
 export type TokenMemo
@@ -15,6 +15,9 @@ export type ParseMemo
     export var value MaxonOpArray
     export var computedAt Revision
     export var verifiedAt Revision
+    // Tracks the next ValueId after parsing this file, so cached results
+    // can advance the counter to avoid ID collisions with subsequent files.
+    export var nextValueIdAfterParse ValueId
 end 'ParseMemo'
 
 // Whole-program memo types.
@@ -83,7 +86,7 @@ export type QueryDatabase
     export var sourceFiles SourceFileMap
     export var sourcePaths StringArray
 
-    // Per-file caches
+    // Per-file caches (keyed by path; absence means not cached)
     export var tokenCache TokenCacheMap
     export var parseCache ParseCacheMap
 
