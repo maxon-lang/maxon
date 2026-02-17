@@ -556,22 +556,24 @@ module {
   func @codegen-internals.main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = add} {optimalType = u32}
-    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = add}
+    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = lt}
+    %7 = maxon.literal {value = 4294967295 : i64}
+    %8 = maxon.binop %4, %7 {op = gt}
+    %9 = maxon.binop %6, %8 {op = or}
+    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %9
+    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %11
   }
 }
 === standard
@@ -580,25 +582,21 @@ module {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 3 : i64}
-    %2 = arith.trunci %0
-    %3 = arith.trunci %1
-    %4 = arith.addi %2, %3
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.extui %4
-    %7 = arith.cmpi lt %6, %5
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.extui %4
-    %10 = arith.cmpi gt %9, %8
-    %11 = arith.ori1 %7, %10
-    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+    %2 = arith.addi %0, %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_rdata __panic_msg_8
-    %13 = std.ptr_to_i64 %12
-    std.call_runtime @maxon_panic %13
+    %8 = memref.lea_rdata __panic_msg_10
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
   __range_ok_0:
-    %14 = memref.load __range_val_0 : i32
-    func.return %14
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
   }
 }
 === x86
@@ -608,29 +606,25 @@ module {
     x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 3
-    x86.mov edx, eax
-    x86.mov ebx, ecx
-    x86.add edx, ebx
-    x86.mov [rbp-4], edx
-    x86.xor esi, esi
-    x86.mov edi, edx
-    x86.cmp edi, esi
-    x86.setl r8
-    x86.movzx r8, r8b
-    x86.mov r9, 4294967295
-    x86.mov eax, edx
-    x86.cmp rax, r9
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or r8, eax
-    x86.test r8, r8
+    x86.add eax, ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_8]
+    x86.lea_rdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-4]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -656,22 +650,24 @@ module {
   func @codegen-internals.main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = div} {optimalType = u32}
-    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = div}
+    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = lt}
+    %7 = maxon.literal {value = 4294967295 : i64}
+    %8 = maxon.binop %4, %7 {op = gt}
+    %9 = maxon.binop %6, %8 {op = or}
+    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %9
+    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %11
   }
 }
 === standard
@@ -680,25 +676,21 @@ module {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
-    %2 = arith.trunci %0
-    %3 = arith.trunci %1
-    %4 = arith.divui %2, %3
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.extui %4
-    %7 = arith.cmpi lt %6, %5
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.extui %4
-    %10 = arith.cmpi gt %9, %8
-    %11 = arith.ori1 %7, %10
-    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+    %2 = arith.divsi %0, %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_rdata __panic_msg_8
-    %13 = std.ptr_to_i64 %12
-    std.call_runtime @maxon_panic %13
+    %8 = memref.lea_rdata __panic_msg_10
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
   __range_ok_0:
-    %14 = memref.load __range_val_0 : i32
-    func.return %14
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
   }
 }
 === x86
@@ -708,32 +700,26 @@ module {
     x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
-    x86.mov edx, eax
-    x86.mov ebx, ecx
-    x86.mov [rbp-12], edx
-    x86.mov eax, edx
+    x86.cqo
+    x86.idiv ecx
+    x86.mov [rbp-8], eax
     x86.xor edx, edx
-    x86.div32 ebx
-    x86.mov [rbp-4], eax
-    x86.xor esi, esi
-    x86.mov edi, eax
-    x86.cmp edi, esi
-    x86.setl r8
-    x86.movzx r8, r8b
-    x86.mov r9, 4294967295
-    x86.mov ecx, eax
-    x86.cmp rcx, r9
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or r8, eax
-    x86.test r8, r8
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_8]
+    x86.lea_rdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-4]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -865,17 +851,19 @@ module {
   func @codegen-internals.main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = gt} {optimalType = u32}
-    maxon.cond_br %2 [then: check_0, else: check_0.after]
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = gt}
+    maxon.cond_br %4 [then: check_0, else: check_0.after]
   check_0:
-    %3 = maxon.literal {value = 1 : i64}
-    maxon.return %3
+    %5 = maxon.literal {value = 1 : i64}
+    maxon.return %5
   check_0.after:
-    %4 = maxon.literal {value = 0 : i64}
-    maxon.return %4
+    %6 = maxon.literal {value = 0 : i64}
+    maxon.return %6
   }
 }
 === standard
@@ -884,16 +872,14 @@ module {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 3 : i64}
-    %2 = arith.trunci %0
-    %3 = arith.trunci %1
-    %4 = arith.cmpui ugt %2, %3
-    cf.cond_br %4 [then: check_0, else: check_0.after]
+    %2 = arith.cmpi gt %0, %1
+    cf.cond_br %2 [then: check_0, else: check_0.after]
   check_0:
-    %5 = arith.constant {value = 1 : i64}
-    func.return %5
+    %3 = arith.constant {value = 1 : i64}
+    func.return %3
   check_0.after:
-    %6 = arith.constant {value = 0 : i64}
-    func.return %6
+    %4 = arith.constant {value = 0 : i64}
+    func.return %4
   }
 }
 === x86
@@ -902,10 +888,8 @@ module {
   entry:
     x86.mov eax, 10
     x86.mov ecx, 3
-    x86.mov edx, eax
-    x86.mov ebx, ecx
-    x86.cmp edx, ebx
-    x86.jbe codegen-internals.main.check_0.after
+    x86.cmp eax, ecx
+    x86.jle codegen-internals.main.check_0.after
   check_0:
     x86.mov eax, 1
     x86.ret
@@ -935,22 +919,24 @@ module {
   func @codegen-internals.main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
-    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = mod} {optimalType = u32}
-    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.binop %2, %3 {op = lt}
-    %5 = maxon.literal {value = 4294967295 : i64}
-    %6 = maxon.binop %2, %5 {op = gt}
-    %7 = maxon.binop %4, %6 {op = or}
-    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = mod}
+    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = lt}
+    %7 = maxon.literal {value = 4294967295 : i64}
+    %8 = maxon.binop %4, %7 {op = gt}
+    %9 = maxon.binop %6, %8 {op = or}
+    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %9
+    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %11
   }
 }
 === standard
@@ -959,25 +945,21 @@ module {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
-    %2 = arith.trunci %0
-    %3 = arith.trunci %1
-    %4 = arith.remui %2, %3
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.extui %4
-    %7 = arith.cmpi lt %6, %5
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.extui %4
-    %10 = arith.cmpi gt %9, %8
-    %11 = arith.ori1 %7, %10
-    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+    %2 = arith.remsi %0, %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_rdata __panic_msg_8
-    %13 = std.ptr_to_i64 %12
-    std.call_runtime @maxon_panic %13
+    %8 = memref.lea_rdata __panic_msg_10
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
   __range_ok_0:
-    %14 = memref.load __range_val_0 : i32
-    func.return %14
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
   }
 }
 === x86
@@ -987,32 +969,26 @@ module {
     x86.prologue stack_size=16
     x86.mov eax, 20
     x86.mov ecx, 3
-    x86.mov edx, eax
-    x86.mov ebx, ecx
-    x86.mov [rbp-12], edx
-    x86.mov eax, edx
-    x86.xor edx, edx
-    x86.div32 ebx
-    x86.mov [rbp-4], edx
-    x86.xor esi, esi
-    x86.mov edi, edx
-    x86.cmp edi, esi
-    x86.setl r8
-    x86.movzx r8, r8b
-    x86.mov r9, 4294967295
-    x86.mov eax, edx
-    x86.cmp rax, r9
-    x86.setg eax
+    x86.cqo
+    x86.idiv ecx
+    x86.mov [rbp-8], edx
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.setl eax
     x86.movzx eax, eaxb
-    x86.or r8, eax
-    x86.test r8, r8
+    x86.mov rcx, 4294967295
+    x86.cmp rdx, rcx
+    x86.setg edx
+    x86.movzx edx, edxb
+    x86.or eax, edx
+    x86.test eax, eax
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_8]
+    x86.lea_rdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-4]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

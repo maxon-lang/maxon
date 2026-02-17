@@ -30,6 +30,8 @@ var x = Age{200}                    // compile error: out of range
 var y = Age{someExpression}         // runtime range check (panics on violation)
 ```
 
+Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.
+
 Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `MathValue`
 
 ## Literals

@@ -1,0 +1,41 @@
+// Test: short-type.u16-arithmetic-32bit
+typealias U16 = int(0 to 65535)
+
+function main() returns ExitCode
+  var a = U16{1000}
+  var b = U16{500}
+  return a - b
+end 'main'
+---
+ExitCode: 500
+---
+module {
+  func @short-type.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 1000
+    x86.mov ecx, 500
+    x86.sub eax, ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je short-type.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_10]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

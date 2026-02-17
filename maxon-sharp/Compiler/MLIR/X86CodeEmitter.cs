@@ -291,6 +291,12 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86MovByteIndirectRegOp movByte:
         EmitMovByteIndirectReg(movByte.BaseReg, movByte.Displacement, movByte.Src);
         break;
+      case X86MovzxRegWordIndirectOp movzxWord:
+        EmitMovzxRegWordIndirect(movzxWord.Dest, movzxWord.BaseReg, movzxWord.Displacement);
+        break;
+      case X86MovWordIndirectRegOp movWord:
+        EmitMovWordIndirectReg(movWord.BaseReg, movWord.Displacement, movWord.Src);
+        break;
       case X86GlobalLoadOp globalLoad:
         EmitGlobalLoadReg(globalLoad.Dest, globalLoad.GlobalName, globalLoad.Size);
         break;
@@ -1283,6 +1289,25 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitModRmWithBase(baseReg, src, displacement);
   }
 
+  private void EmitMovzxRegWordIndirect(X86Register dest, X86Register baseReg, int displacement) {
+    RequireGpr(dest, nameof(EmitMovzxRegWordIndirect));
+    RequireGpr(baseReg, nameof(EmitMovzxRegWordIndirect));
+    // MOVZX r32, word ptr [baseReg+disp]: [REX] 0F B7 /r (32-bit dest zero-extends to 64-bit)
+    Rex.NoW().Reg(dest).Rm(baseReg).EmitIf(this);
+    EmitBytes(0x0F, 0xB7);
+    EmitModRmWithBase(baseReg, dest, displacement);
+  }
+
+  private void EmitMovWordIndirectReg(X86Register baseReg, int displacement, X86Register src) {
+    RequireGpr(baseReg, nameof(EmitMovWordIndirectReg));
+    RequireGpr(src, nameof(EmitMovWordIndirectReg));
+    // MOV word ptr [baseReg+disp], src16: 66 [REX] 89 /r
+    EmitByte(0x66);
+    Rex.NoW().Reg(src).Rm(baseReg).EmitIf(this);
+    EmitByte(0x89);
+    EmitModRmWithBase(baseReg, src, displacement);
+  }
+
   private void EmitMovIndirectMemXmm(X86Register baseReg, int displacement, X86XmmRegister src, FloatPrecision precision) {
     RequireGpr(baseReg, nameof(EmitMovIndirectMemXmm));
     // MOV[SD/SS] [baseReg+disp], xmm: prefix [REX] 0F 11 /r
@@ -1361,6 +1386,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       // Using r32 destination zero-extends to r64 automatically
       Rex.NoW().Reg(dest).EmitIf(this);
       EmitBytes(0x0F, 0xB6);
+    } else if (size == 2) {
+      // MOVZX r32, word [rip+disp32]: 0F B7 /r (mod=00, r/m=101 for RIP-relative)
+      Rex.NoW().Reg(dest).EmitIf(this);
+      EmitBytes(0x0F, 0xB7);
     } else if (size == 4) {
       // MOV r32, [rip+disp32]: 8B /r (no REX.W, so 32-bit operand, zero-extends to r64)
       Rex.NoW().Reg(dest).EmitIf(this);
@@ -1391,6 +1420,11 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       // MOV byte [rip+disp32], r8: REX + 88 /r (mod=00, r/m=101 for RIP-relative)
       Rex.NoW().Reg(src).ByteReg(src).EmitIf(this);
       EmitByte(0x88);
+    } else if (size == 2) {
+      // MOV word [rip+disp32], r16: 66 [REX] 89 /r
+      EmitByte(0x66);
+      Rex.NoW().Reg(src).EmitIf(this);
+      EmitByte(0x89);
     } else if (size == 4) {
       // MOV dword [rip+disp32], r32: 89 /r (no REX.W)
       Rex.NoW().Reg(src).EmitIf(this);

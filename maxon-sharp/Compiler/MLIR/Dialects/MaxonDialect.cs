@@ -2,7 +2,7 @@ using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
 
-public enum MaxonValueKind { Integer, Float, Float32, Bool, Byte, Struct, Enum, Function, TypeParameter }
+public enum MaxonValueKind { Integer, Float, Float32, Bool, Byte, Short, Struct, Enum, Function, TypeParameter }
 
 public static class MaxonValueKindExtensions {
   public static MlirType ToMlirType(this MaxonValueKind kind) => kind switch {
@@ -11,6 +11,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Float32 => MlirType.F32,
     MaxonValueKind.Bool => MlirType.I1,
     MaxonValueKind.Byte => MlirType.I8,
+    MaxonValueKind.Short => MlirType.I16,
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require lookup via type registry, not ToMlirType()"),
     MaxonValueKind.Enum => throw new InvalidOperationException("Enum kinds require lookup via type registry, not ToMlirType()"),
     MaxonValueKind.Function => throw new InvalidOperationException("Function kinds require lookup via function type, not ToMlirType()"),
@@ -25,6 +26,7 @@ public static class MaxonValueKindExtensions {
   public static int ElementSize(this MaxonValueKind kind) => kind switch {
     MaxonValueKind.Bool => 1,
     MaxonValueKind.Byte => 1,
+    MaxonValueKind.Short => 2,
     MaxonValueKind.Integer => 8,
     MaxonValueKind.Float => 8,
     MaxonValueKind.Float32 => 4,
@@ -41,6 +43,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Float32 => new MaxonFloat(MlirContext.Current.NextId()),
     MaxonValueKind.Bool => new MaxonBool(MlirContext.Current.NextId()),
     MaxonValueKind.Byte => new MaxonByte(MlirContext.Current.NextId()),
+    MaxonValueKind.Short => new MaxonShort(MlirContext.Current.NextId()),
     MaxonValueKind.Struct => throw new InvalidOperationException("Struct kinds require a type name, use CreateStructValue() instead"),
     MaxonValueKind.Enum => new MaxonInteger(MlirContext.Current.NextId()),
     MaxonValueKind.Function => new MaxonFunctionPtr(MlirContext.Current.NextId()),
@@ -56,6 +59,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.I8) return MaxonValueKind.Byte;
     // Unsigned/narrowed integer types from ranged type optimal storage
     if (type == MlirType.U8) return MaxonValueKind.Byte;
+    if (type == MlirType.I16 || type == MlirType.U16) return MaxonValueKind.Short;
     if (type == MlirType.I32 || type == MlirType.U32 || type == MlirType.U64) return MaxonValueKind.Integer;
     if (type is MlirRangedPrimitiveType rpt) return rpt.BaseType.ToValueKind();
     if (type is MlirEnumType) return MaxonValueKind.Enum;
@@ -71,6 +75,7 @@ public static class MaxonValueKindExtensions {
     MaxonValueKind.Float32 => new StdF32(MlirContext.Current.NextId()),
     MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
     MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
+    MaxonValueKind.Short => new StdI64(MlirContext.Current.NextId()),
     MaxonValueKind.Struct => new StdPtr(MlirContext.Current.NextId()),
     MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
     MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
@@ -108,6 +113,7 @@ public class MaxonLiteralOp : MaxonOp {
       MaxonValueKind.Float32 => new Dictionary<string, MlirAttribute> { ["value"] = new FloatAttr(FloatValue, MlirType.F32) },
       MaxonValueKind.Bool => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(BoolValue ? 1 : 0, MlirType.I1) },
       MaxonValueKind.Byte => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(IntValue, MlirType.I8) },
+      MaxonValueKind.Short => new Dictionary<string, MlirAttribute> { ["value"] = new IntegerAttr(IntValue, MlirType.I16) },
       MaxonValueKind.Struct => throw new InvalidOperationException("Struct literals are not MaxonLiteralOp"),
       MaxonValueKind.Enum => throw new InvalidOperationException("Enum literals are not MaxonLiteralOp"),
       _ => throw new ArgumentOutOfRangeException(),

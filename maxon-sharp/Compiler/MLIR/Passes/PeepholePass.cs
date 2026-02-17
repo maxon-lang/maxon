@@ -109,6 +109,8 @@ public static class PeepholePass {
       case X86MovRegIndirectMemOp loadInd: yield return loadInd.BaseReg; break;
       case X86MovzxRegByteIndirectOp movzxInd: yield return movzxInd.BaseReg; break;
       case X86MovByteIndirectRegOp storeByteInd: yield return storeByteInd.BaseReg; yield return storeByteInd.Src; break;
+      case X86MovzxRegWordIndirectOp movzxWordInd: yield return movzxWordInd.BaseReg; break;
+      case X86MovWordIndirectRegOp storeWordInd: yield return storeWordInd.BaseReg; yield return storeWordInd.Src; break;
       // Shift reads dest + implicit ECX
       case X86ShlRegClOp shl: yield return shl.Dest; yield return X86Register.Ecx; break;
       case X86SarRegClOp sar: yield return sar.Dest; yield return X86Register.Ecx; break;

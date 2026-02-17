@@ -981,6 +981,8 @@ public static class StdValueFactory {
     if (type == MlirType.I1) return new StdBool(MlirContext.Current.NextId());
     if (type == MlirType.I8) return new StdI64(MlirContext.Current.NextId());
     if (type == MlirType.U8) return new StdI64(MlirContext.Current.NextId());
+    if (type == MlirType.I16) return new StdI64(MlirContext.Current.NextId());
+    if (type == MlirType.U16) return new StdI64(MlirContext.Current.NextId());
     if (type == MlirType.I32) return new StdI32(MlirContext.Current.NextId());
     if (type == MlirType.U32) return new StdU32(MlirContext.Current.NextId());
     if (type == MlirType.I64) return new StdI64(MlirContext.Current.NextId());
@@ -1063,6 +1065,24 @@ public class StdGlobalStoreF32Op(StdF32 value, string globalName) : StandardOp {
 public class StdGlobalStoreI1Op(StdBool value, string globalName) : StandardOp {
   public override string Mnemonic => $"std.global_store_i1 @{GlobalName}";
   public StdBool Value { get; } = value;
+  public string GlobalName { get; } = globalName;
+  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override List<StdValue> ReadValues => [Value];
+  public override int PureResultId => -1;
+}
+
+public class StdGlobalLoadI16Op(string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_load_i16 @{GlobalName}";
+  public string GlobalName { get; } = globalName;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1;
+}
+
+public class StdGlobalStoreI16Op(StdI64 value, string globalName) : StandardOp {
+  public override string Mnemonic => $"std.global_store_i16 @{GlobalName}";
+  public StdI64 Value { get; } = value;
   public string GlobalName { get; } = globalName;
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override List<StdValue> ReadValues => [Value];

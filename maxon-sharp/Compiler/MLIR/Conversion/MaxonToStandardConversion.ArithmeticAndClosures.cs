@@ -149,6 +149,23 @@ public static partial class MaxonToStandardConversion {
 	{ (MaxonBinOperator.Ge, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("ge", (StdI64)l, (StdI64)r); return (op, op.Result); } },
 	{ (MaxonBinOperator.Add, MaxonValueKind.Byte), (l, r) => { var op = new StdAddI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
 	{ (MaxonBinOperator.Sub, MaxonValueKind.Byte), (l, r) => { var op = new StdSubI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+    // Short operations (shorts are represented as I64 at standard level)
+    { (MaxonBinOperator.Eq, MaxonValueKind.Short), (l, r) => { var op = new StdCmpI64Op("eq", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Ne, MaxonValueKind.Short), (l, r) => { var op = new StdCmpI64Op("ne", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Lt, MaxonValueKind.Short), (l, r) => { var op = new StdCmpI64Op("lt", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Gt, MaxonValueKind.Short), (l, r) => { var op = new StdCmpI64Op("gt", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Le, MaxonValueKind.Short), (l, r) => { var op = new StdCmpI64Op("le", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Ge, MaxonValueKind.Short), (l, r) => { var op = new StdCmpI64Op("ge", (StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Add, MaxonValueKind.Short), (l, r) => { var op = new StdAddI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Sub, MaxonValueKind.Short), (l, r) => { var op = new StdSubI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Mul, MaxonValueKind.Short), (l, r) => { var op = new StdMulI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Div, MaxonValueKind.Short), (l, r) => { var op = new StdDivI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Mod, MaxonValueKind.Short), (l, r) => { var op = new StdRemI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.BitAnd, MaxonValueKind.Short), (l, r) => { var op = new StdAndI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.BitOr, MaxonValueKind.Short), (l, r) => { var op = new StdOrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.BitXor, MaxonValueKind.Short), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Shl, MaxonValueKind.Short), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+	{ (MaxonBinOperator.Shr, MaxonValueKind.Short), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     // Logical operations (bool)
     { (MaxonBinOperator.And, MaxonValueKind.Bool), (l, r) => { var op = new StdAndI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
 	{ (MaxonBinOperator.Or, MaxonValueKind.Bool), (l, r) => { var op = new StdOrI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
@@ -186,7 +203,7 @@ public static partial class MaxonToStandardConversion {
 		var rhsStd = valueMap[binOp.Rhs];
 
 		// Integer / Byte identities
-		if (binOp.OperandKind is MaxonValueKind.Integer or MaxonValueKind.Byte) {
+		if (binOp.OperandKind is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short) {
 			long? lVal = lhsLit?.IntValue;
 			long? rVal = rhsLit?.IntValue;
 
@@ -447,6 +464,7 @@ public static partial class MaxonToStandardConversion {
 				MaxonValueKind.Float32 => new StdF32(MlirContext.Current.NextId()),
 				MaxonValueKind.Bool => new StdBool(MlirContext.Current.NextId()),
 				MaxonValueKind.Byte => new StdI64(MlirContext.Current.NextId()),
+				MaxonValueKind.Short => new StdI64(MlirContext.Current.NextId()),
 				MaxonValueKind.Enum => new StdI64(MlirContext.Current.NextId()),
 				MaxonValueKind.Function => new StdPtr(MlirContext.Current.NextId()),
 				MaxonValueKind.TypeParameter => new StdI64(MlirContext.Current.NextId()),
@@ -476,6 +494,7 @@ public static partial class MaxonToStandardConversion {
 			MaxonValueKind.Float => MlirType.F64,
 			MaxonValueKind.Float32 => MlirType.F32,
 			MaxonValueKind.Byte => MlirType.I8,
+			MaxonValueKind.Short => MlirType.I16,
 			MaxonValueKind.Bool => MlirType.I8,
 			MaxonValueKind.Enum => MlirType.I64,
 			MaxonValueKind.Struct => MlirType.I64, // struct references are pointers

@@ -160,6 +160,7 @@ internal class FunctionCloner {
       MaxonFloat => new MaxonFloat(newId),
       MaxonBool => new MaxonBool(newId),
       MaxonByte => new MaxonByte(newId),
+      MaxonShort => new MaxonShort(newId),
       MaxonStruct s => new MaxonStruct(newId, _typeSubstitution.SubstituteName(s.TypeName)),
       MaxonEnum e => new MaxonEnum(newId, e.TypeName),
       MaxonFunctionPtr => new MaxonFunctionPtr(newId),

@@ -446,29 +446,47 @@ public class X86MovByteIndirectRegOp(X86Register baseReg, int displacement, X86R
   public override string Mnemonic => $"x86.mov byte ptr [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}b";
 }
 
+// MOVZX dest32, word ptr [baseReg+disp] - load 16-bit and zero-extend to 32/64-bit
+public class X86MovzxRegWordIndirectOp(X86Register dest, X86Register baseReg, int displacement) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public override string Mnemonic => $"x86.movzx {Dest.ToString().ToLower()}, word ptr [{BaseReg.ToString().ToLower()}+{Displacement}]";
+}
+
+// MOV word ptr [baseReg+disp], src16 - store low 16 bits of register to memory
+public class X86MovWordIndirectRegOp(X86Register baseReg, int displacement, X86Register src) : X86Op {
+  public X86Register BaseReg { get; } = baseReg;
+  public int Displacement { get; } = displacement;
+  public X86Register Src { get; } = src;
+  public override string Mnemonic => $"x86.mov word ptr [{BaseReg.ToString().ToLower()}+{Displacement}], {Src.ToString().ToLower()}w";
+}
+
 // ============================================================================
 // Global variable operations (RIP-relative addressing)
 // ============================================================================
 
-// MOV dest, [rip + globalName] - load integer/bool global (size: 1, 4, or 8 bytes)
+// MOV dest, [rip + globalName] - load integer/bool global (size: 1, 2, 4, or 8 bytes)
 public class X86GlobalLoadOp(string globalName, X86Register dest, int size = 8) : X86Op {
   public string GlobalName { get; } = globalName;
   public X86Register Dest { get; } = dest;
   public int Size { get; } = size;
   public override string Mnemonic => Size switch {
     1 => $"x86.movzx {Dest.ToString().ToLower()}, byte [rip+{GlobalName}]",
+    2 => $"x86.movzx {Dest.ToString().ToLower()}, word [rip+{GlobalName}]",
     4 => $"x86.mov {Dest.ToString().ToLower()}, dword [rip+{GlobalName}]",
     _ => $"x86.mov {Dest.ToString().ToLower()}, qword [rip+{GlobalName}]"
   };
 }
 
-// MOV [rip + globalName], src - store integer/bool global (size: 1, 4, or 8 bytes)
+// MOV [rip + globalName], src - store integer/bool global (size: 1, 2, 4, or 8 bytes)
 public class X86GlobalStoreOp(string globalName, X86Register src, int size = 8) : X86Op {
   public string GlobalName { get; } = globalName;
   public X86Register Src { get; } = src;
   public int Size { get; } = size;
   public override string Mnemonic => Size switch {
     1 => $"x86.mov byte [rip+{GlobalName}], {Src.ToString().ToLower()}",
+    2 => $"x86.mov word [rip+{GlobalName}], {Src.ToString().ToLower()}",
     4 => $"x86.mov dword [rip+{GlobalName}], {Src.ToString().ToLower()}",
     _ => $"x86.mov qword [rip+{GlobalName}], {Src.ToString().ToLower()}"
   };

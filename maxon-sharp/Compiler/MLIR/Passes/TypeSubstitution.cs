@@ -212,6 +212,7 @@ internal class TypeSubstitution {
       { } t when t == MlirType.F32 => MaxonValueKind.Float32,
       { } t when t == MlirType.I1 => MaxonValueKind.Bool,
       { } t when t == MlirType.I8 => MaxonValueKind.Byte,
+      { } t when t == MlirType.I16 || t == MlirType.U16 => MaxonValueKind.Short,
       MlirStructType or MlirEnumType => MaxonValueKind.Integer,
       MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
       MlirTypeParameterType => MaxonValueKind.TypeParameter,

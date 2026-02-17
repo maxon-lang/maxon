@@ -316,6 +316,30 @@ var b = Score{12}
 var sum = a + b    // result is int
 ```
 
+All arithmetic on ranged integer types uses 64-bit operations regardless of storage type.
+
+**Storage:**
+
+The compiler automatically selects the smallest x86-optimal integer width that can represent the declared range for storage in arrays and global variables. All arithmetic still uses 64-bit operations.
+
+| Range fits in | Storage used |
+|---------------|-------------|
+| 0 to 255 | u8 (1 byte) |
+| -128 to 127 | i8 (1 byte) |
+| 0 to 65535 | u16 (2 bytes) |
+| -32768 to 32767 | i16 (2 bytes) |
+| 0 to 4294967295 | u32 (4 bytes) |
+| -2147483648 to 2147483647 | i32 (4 bytes) |
+| anything wider | i64 (8 bytes) |
+
+```maxon
+typealias Pixel = int(0 to 65535)    // stored as u16 in arrays and globals
+typealias Offset = int(-32768 to 32767)  // stored as i16 in arrays and globals
+typealias Age = int(0 to 150)        // stored as u8 in arrays and globals
+```
+
+Local variables always use 64-bit registers regardless of the ranged type's storage class.
+
 **Standard library aliases:**
 
 The standard library provides purpose-specific aliases:

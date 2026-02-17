@@ -478,6 +478,12 @@ public static partial class MaxonToStandardConversion {
                   valueMap[litOp.Result] = newOp.Result;
                   break;
                 }
+                case MaxonValueKind.Short: {
+                  var newOp = new StdConstI64Op(litOp.IntValue & 0xFFFF);
+                  newBlock.AddOp(newOp);
+                  valueMap[litOp.Result] = newOp.Result;
+                  break;
+                }
                 default:
                   throw new InvalidOperationException($"Unsupported literal kind: {litOp.ValueKind}");
               }
@@ -518,10 +524,19 @@ public static partial class MaxonToStandardConversion {
                   int elemSize = constArrayInfo.ElementSize;
                   var rdataBytes = new byte[constArrayInfo.Values.Length * elemSize];
                   for (int i = 0; i < constArrayInfo.Values.Length; i++) {
-                    if (elemSize == 1) {
-                      rdataBytes[i] = (byte)constArrayInfo.Values[i];
-                    } else {
-                      BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                    switch (elemSize) {
+                      case 1:
+                        rdataBytes[i] = (byte)constArrayInfo.Values[i];
+                        break;
+                      case 2:
+                        BitConverter.GetBytes((ushort)constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                        break;
+                      case 4:
+                        BitConverter.GetBytes((int)constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                        break;
+                      case 8:
+                        BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
+                        break;
                     }
                   }
                   result.RdataEntries.Add((constArrayInfo.RdataLabel, rdataBytes, elemSize));
@@ -1120,7 +1135,7 @@ public static partial class MaxonToStandardConversion {
                   break;
                 }
                 case MaxonValueKind.Integer: {
-                  // Byte/int to int: pass through (bytes are already stored as I64)
+                  // Byte/short/int to int: pass through (sub-word types are stored as I64)
                   if (input is StdI64 i64) {
                     valueMap[castOp.Result] = i64;
                   } else if (input is StdI32 i32) {
@@ -1208,7 +1223,20 @@ public static partial class MaxonToStandardConversion {
                   }
                   break;
                 }
-                default:
+                case MaxonValueKind.Short: {
+                  // Cast to short: pass through (short uses i64 at standard level)
+                  if (input is StdI64 i64) {
+                    valueMap[castOp.Result] = i64;
+                  } else {
+                    throw new InvalidOperationException($"Unsupported cast to short from: {input.GetType().Name}");
+                  }
+                  break;
+                }
+                case MaxonValueKind.Bool:
+                case MaxonValueKind.Struct:
+                case MaxonValueKind.Enum:
+                case MaxonValueKind.Function:
+                case MaxonValueKind.TypeParameter:
                   throw new InvalidOperationException($"Unsupported cast target kind: {castOp.TargetKind}");
               }
               break;
@@ -1235,6 +1263,12 @@ public static partial class MaxonToStandardConversion {
                 }
                 case MaxonValueKind.Bool: {
                   var loadOp = new StdGlobalLoadI1Op(globalLoad.GlobalName);
+                  newBlock.AddOp(loadOp);
+                  valueMap[globalLoad.Result] = loadOp.Result;
+                  break;
+                }
+                case MaxonValueKind.Short: {
+                  var loadOp = new StdGlobalLoadI16Op(globalLoad.GlobalName);
                   newBlock.AddOp(loadOp);
                   valueMap[globalLoad.Result] = loadOp.Result;
                   break;
@@ -1287,6 +1321,9 @@ public static partial class MaxonToStandardConversion {
                     break;
                   case MaxonValueKind.Bool:
                     newBlock.AddOp(new StdGlobalStoreI1Op((StdBool)mappedValue, globalStore.GlobalName));
+                    break;
+                  case MaxonValueKind.Short:
+                    newBlock.AddOp(new StdGlobalStoreI16Op((StdI64)mappedValue, globalStore.GlobalName));
                     break;
                   case MaxonValueKind.Enum:
                     newBlock.AddOp(new StdGlobalStoreI64Op((StdI64)mappedValue, globalStore.GlobalName));

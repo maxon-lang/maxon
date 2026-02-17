@@ -113,7 +113,7 @@ public static partial class MaxonToStandardConversion {
 
 				if (structVarNames.TryGetValue(exprValue.Id, out var managedVarName)) {
 					partInfos.Add(EmitStructInterpolation(managedVarName, block, varTypes));
-				} else if (exprValue is MaxonInteger or MaxonByte) {
+				} else if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
 					var stdVal = valueMap[exprValue];
 					// Widen narrower integer types to i64 for the runtime toString call
 					if (stdVal is StdU32 u32) {

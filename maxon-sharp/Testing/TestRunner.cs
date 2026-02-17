@@ -576,6 +576,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           result.AddRange(BitConverter.GetBytes(s));
           break;
         }
+        case "u16": {
+          var parts = value.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+          foreach (var part in parts) {
+            if (!ushort.TryParse(part.Trim(), out var u)) return null;
+            result.AddRange(BitConverter.GetBytes(u));
+          }
+          break;
+        }
         case "i32": {
           if (!int.TryParse(value, out var n)) return null;
           result.AddRange(BitConverter.GetBytes(n));

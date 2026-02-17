@@ -31,6 +31,7 @@ public static class ConstantArrayAnalysisPass {
               literalValues[lit.Result.Id] = lit.BoolValue ? 1L : 0L;
               break;
             case MaxonValueKind.Byte:
+            case MaxonValueKind.Short:
               literalValues[lit.Result.Id] = lit.IntValue;
               break;
             case MaxonValueKind.Float:
@@ -57,6 +58,9 @@ public static class ConstantArrayAnalysisPass {
               break;
             case MaxonValueKind.Bool:
               literalValues[castOp.Result.Id] = inputVal != 0 ? 1L : 0L;
+              break;
+            case MaxonValueKind.Short:
+              literalValues[castOp.Result.Id] = inputVal & 0xFFFF;
               break;
             case MaxonValueKind.Integer:
               literalValues[castOp.Result.Id] = inputVal;

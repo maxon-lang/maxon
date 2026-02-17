@@ -686,6 +686,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _pos = savedPos2;
 
       var (fieldType, defaultValue) = ConstValueToAttribute(value, deferred.Line, deferred.Column);
+      // Use ranged type's optimal storage size for the global (e.g., U16{42} → i16)
+      if (_tokens[deferred.TokenStart].Type == TokenType.Identifier
+          && _typeRegistry.TryGetValue(_tokens[deferred.TokenStart].Value, out var rangedGlobalType)
+          && rangedGlobalType is MlirRangedPrimitiveType rpt) {
+        fieldType = rpt.OptimalType;
+        defaultValue = new IntegerAttr(((IntegerAttr)defaultValue).Value, fieldType);
+      }
       var kind = fieldType.ToValueKind();
       string? enumTypeName = value is EnumConstantValue ecv ? ecv.EnumTypeName : null;
       module.Globals.Add(new MlirGlobal(deferred.Name, fieldType, defaultValue));
@@ -724,7 +731,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (_tokens[exprStart].Type == TokenType.LeftBracket) return true;
     if (_tokens[exprStart].Type == TokenType.Identifier
         && exprStart + 1 < _tokens.Count
-        && _tokens[exprStart + 1].Type == TokenType.LeftBrace) return true;
+        && _tokens[exprStart + 1].Type == TokenType.LeftBrace) {
+      // Ranged type constructions (e.g., U16{42}) are simple constants, not complex initializers
+      if (_typeRegistry.TryGetValue(_tokens[exprStart].Value, out var t) && t is MlirRangedPrimitiveType)
+        return false;
+      return true;
+    }
     return false;
   }
 
@@ -2724,6 +2736,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     if (Check(TokenType.Identifier)) {
       var token = Advance();
+      // Handle ranged type construction: TypeName{expr}
+      if (Check(TokenType.LeftBrace) && _typeRegistry.TryGetValue(token.Value, out var rangedCheck) && rangedCheck is MlirRangedPrimitiveType rangedConst) {
+        _usedTypeAliases.Add(token.Value);
+        Advance(); // consume '{'
+        var innerVal = EvalConstExpr(decls, evaluated, evaluating);
+        Expect(TokenType.RightBrace);
+        // Validate range at compile time
+        double numericVal = innerVal is long lv ? (double)lv : innerVal is double dv ? dv : throw new CompileError(
+          ErrorCode.SemanticTypeMismatch, $"Cannot construct '{rangedConst.Name}' from non-numeric value", token.Line, token.Column);
+        var upperLimit = rangedConst.UpperInclusive ? rangedConst.UpperBound : rangedConst.UpperBound - 1;
+        if (numericVal < rangedConst.LowerBound || numericVal > upperLimit) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"Value {innerVal} is outside the range of '{rangedConst.Name}' ({rangedConst.FormatRange()})", token.Line, token.Column);
+        }
+        return innerVal;
+      }
       // Handle enum constant: EnumType.caseName
       if (Check(TokenType.Dot) && _typeRegistry.TryGetValue(token.Value, out var constType) && constType is MlirEnumType constEnumType) {
         Advance(); // consume '.'
@@ -6154,6 +6182,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     MaxonValueKind.Float32 => "f32",
     MaxonValueKind.Bool => "bool",
     MaxonValueKind.Byte => "byte",
+    MaxonValueKind.Short => "int",
     MaxonValueKind.Struct => "struct",
     MaxonValueKind.Enum => "enum",
     MaxonValueKind.Function => "function",
@@ -6167,6 +6196,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     MaxonValueKind.Float32 => MlirType.F32,
     MaxonValueKind.Bool => MlirType.I1,
     MaxonValueKind.Byte => MlirType.I8,
+    MaxonValueKind.Short => MlirType.I16,
     MaxonValueKind.Struct => null,
     MaxonValueKind.Enum => null,
     MaxonValueKind.Function => null,
@@ -7512,7 +7542,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       string userTypeName;
       if (result is ExprResult.VarRef vr) {
         userTypeName = vr.Info.StructTypeName
-          ?? (vr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Float32 or MaxonValueKind.Bool or MaxonValueKind.Byte ? KindToTypeName(vr.Info.Kind) : null)
+          ?? (vr.Info.Kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Float32 or MaxonValueKind.Bool or MaxonValueKind.Byte or MaxonValueKind.Short ? KindToTypeName(vr.Info.Kind) : null)
           ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Variable '{vr.VarName}' is not a struct or enum type", originToken.Line, originToken.Column);
       } else if (result is ExprResult.Direct d && d.Value is MaxonStruct ms) {
         userTypeName = ms.TypeName;
@@ -8111,6 +8141,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return autoAliasName;
     }
 
+    // For sub-word primitives (Short, Byte), auto-create an alias so Element type is bound
+    if (elementKind == MaxonValueKind.Short || elementKind == MaxonValueKind.Byte) {
+      var elemMlirType = KindToMlirType(elementKind)!;
+      var autoAliasName = $"__Array_{elemMlirType.Name}";
+      if (!_typeRegistry.ContainsKey(autoAliasName)
+          && _typeRegistry.TryGetValue("Array", out var arrayType)
+          && arrayType is MlirStructType arrayStruct) {
+        var substitution = new Dictionary<string, MlirType> { ["Element"] = elemMlirType };
+        RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
+      }
+      return autoAliasName;
+    }
+
     return "Array";
   }
 
@@ -8249,6 +8292,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     innerValue = ValidateAndEmitRangeCheck(innerValue, rangedType, expectedKind, typeToken);
+
+    // Re-tag as Short when the optimal storage type is i16/u16
+    var optimalKind = rangedType.OptimalType.ToValueKind();
+    if (optimalKind == MaxonValueKind.Short) {
+      var castOp = new MaxonCastOp(innerValue, MaxonValueKind.Short);
+      _currentBlock!.AddOp(castOp);
+      innerValue = castOp.Result;
+    }
 
     _lastRangedTypeName = rangedType.Name;
     return new ExprResult.Direct(innerValue);
@@ -8778,6 +8829,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonFloat => MlirType.F64,
       MaxonBool => MlirType.I1,
       MaxonByte => MlirType.I8,
+      MaxonShort => MlirType.I16,
       MaxonStruct ms => _typeRegistry.TryGetValue(ms.TypeName, out var st) ? st
         : throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown struct type: {ms.TypeName}", Current().Line, Current().Column),
       MaxonEnum me => _typeRegistry.TryGetValue(me.TypeName, out var et) ? et
@@ -8793,6 +8845,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonFloat => MaxonValueKind.Float,
       MaxonBool => MaxonValueKind.Bool,
       MaxonByte => MaxonValueKind.Byte,
+      MaxonShort => MaxonValueKind.Short,
       MaxonStruct => MaxonValueKind.Struct,
       MaxonEnum => MaxonValueKind.Enum,
       MaxonFunctionPtr => MaxonValueKind.Function,
@@ -8807,19 +8860,29 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => true,
       (MaxonValueKind.Byte, MaxonValueKind.Float) => true,
       (MaxonValueKind.Byte, MaxonValueKind.Float32) => true,
+      (MaxonValueKind.Short, MaxonValueKind.Integer) => true,
+      (MaxonValueKind.Short, MaxonValueKind.Float) => true,
+      (MaxonValueKind.Short, MaxonValueKind.Float32) => true,
       (MaxonValueKind.Integer, MaxonValueKind.Float) => true,
       (MaxonValueKind.Integer, MaxonValueKind.Float32) => true,
+      (MaxonValueKind.Integer, MaxonValueKind.Short) => false,
       (MaxonValueKind.Integer, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Short, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Short, MaxonValueKind.Bool) => false,
+      (MaxonValueKind.Byte, MaxonValueKind.Short) => true,
       (MaxonValueKind.Float, MaxonValueKind.Integer) => false,
       (MaxonValueKind.Float, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Float, MaxonValueKind.Short) => false,
       (MaxonValueKind.Float32, MaxonValueKind.Integer) => false,
       (MaxonValueKind.Float32, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Float32, MaxonValueKind.Short) => false,
       (MaxonValueKind.Float32, MaxonValueKind.Float) => true,
       (MaxonValueKind.Float, MaxonValueKind.Float32) => false,
       (MaxonValueKind.Bool, MaxonValueKind.Integer) => false,
       (MaxonValueKind.Bool, MaxonValueKind.Float) => false,
       (MaxonValueKind.Bool, MaxonValueKind.Float32) => false,
       (MaxonValueKind.Bool, MaxonValueKind.Byte) => false,
+      (MaxonValueKind.Bool, MaxonValueKind.Short) => false,
       (MaxonValueKind.Integer, MaxonValueKind.Bool) => false,
       (MaxonValueKind.Float, MaxonValueKind.Bool) => false,
       (MaxonValueKind.Float32, MaxonValueKind.Bool) => false,
@@ -9745,6 +9808,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonFloat => MaxonValueKind.Float,
       MaxonBool => MaxonValueKind.Bool,
       MaxonByte => MaxonValueKind.Byte,
+      MaxonShort => MaxonValueKind.Short,
       MaxonStruct => MaxonValueKind.Struct,
       MaxonEnum => MaxonValueKind.Enum,
       _ => throw new InvalidOperationException($"Unknown MaxonValue type: {value.GetType()}")
