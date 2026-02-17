@@ -310,6 +310,20 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           }
         }
 
+        // Check Required Data (.data section)
+        if (successExpectation.RequiredData != null) {
+          var (dataPassed, dataMessage) = CheckRequiredData(successExpectation.RequiredData, exePath);
+          if (!dataPassed) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = $"Required Data mismatch: {dataMessage}",
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
+          }
+        }
+
         // Run the executable if we have runtime expectations
         if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null) {
           var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
@@ -478,13 +492,19 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
   }
 
   // ============================================================================
-  // RequiredRdata verification
+  // PE section content verification
   // ============================================================================
 
-  private static (bool Passed, string? Message) CheckRequiredRdata(string requiredRdata, string exePath) {
-    var expectedBytes = ParseTypedRdataValues(requiredRdata);
+  private static (bool Passed, string? Message) CheckRequiredRdata(string requiredRdata, string exePath) =>
+    CheckRequiredSection(requiredRdata, exePath, ".rdata");
+
+  private static (bool Passed, string? Message) CheckRequiredData(string requiredData, string exePath) =>
+    CheckRequiredSection(requiredData, exePath, ".data");
+
+  private static (bool Passed, string? Message) CheckRequiredSection(string requiredContent, string exePath, string sectionName) {
+    var expectedBytes = ParseTypedSectionValues(requiredContent);
     if (expectedBytes == null) {
-      return (false, "Failed to parse RequiredRdata typed values");
+      return (false, $"Failed to parse typed values for {sectionName}");
     }
 
     var sections = ParsePeSections(exePath);
@@ -492,21 +512,21 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       return (false, "Failed to parse PE sections");
     }
 
-    var rdataSection = sections.FirstOrDefault(s => s.Name == ".rdata");
-    if (rdataSection == null) {
-      return (false, "PE does not contain .rdata section");
+    var section = sections.FirstOrDefault(s => s.Name == sectionName);
+    if (section == null) {
+      return (false, $"PE does not contain {sectionName} section");
     }
 
-    var actualBytes = ReadPeSectionData(exePath, rdataSection);
+    var actualBytes = ReadPeSectionData(exePath, section);
     if (actualBytes == null) {
-      return (false, "Failed to read .rdata section data");
+      return (false, $"Failed to read {sectionName} section data");
     }
 
     if (actualBytes.AsSpan().SequenceEqual(expectedBytes)) {
       return (true, null);
     }
 
-    return (false, $"Rdata mismatch.\nExpected ({expectedBytes.Length} bytes): {FormatHex(expectedBytes)}\nActual ({actualBytes.Length} bytes): {FormatHex(actualBytes)}");
+    return (false, $"{sectionName} mismatch.\nExpected ({expectedBytes.Length} bytes): {FormatHex(expectedBytes)}\nActual ({actualBytes.Length} bytes): {FormatHex(actualBytes)}");
   }
 
   private static string FormatHex(byte[] data) {
@@ -521,7 +541,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
   /// <summary>
   /// Parses typed value lines into a concatenated byte array.
   /// </summary>
-  private static byte[]? ParseTypedRdataValues(string block) {
+  private static byte[]? ParseTypedSectionValues(string block) {
     var result = new List<byte>();
     var lines = block.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
@@ -541,6 +561,26 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           result.AddRange(BitConverter.GetBytes(d));
           break;
         }
+        case "f32": {
+          if (!float.TryParse(value, CultureInfo.InvariantCulture, out var f)) return null;
+          result.AddRange(BitConverter.GetBytes(f));
+          break;
+        }
+        case "i8": {
+          if (!sbyte.TryParse(value, out var sb)) return null;
+          result.Add((byte)sb);
+          break;
+        }
+        case "i16": {
+          if (!short.TryParse(value, out var s)) return null;
+          result.AddRange(BitConverter.GetBytes(s));
+          break;
+        }
+        case "i32": {
+          if (!int.TryParse(value, out var n)) return null;
+          result.AddRange(BitConverter.GetBytes(n));
+          break;
+        }
         case "i64": {
           if (!long.TryParse(value, out var l)) return null;
           result.AddRange(BitConverter.GetBytes(l));
@@ -557,8 +597,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         case "i8[]": {
           var parts = value.Split(',');
           foreach (var part in parts) {
-            if (!byte.TryParse(part.Trim(), out var b)) return null;
-            result.Add(b);
+            if (!sbyte.TryParse(part.Trim(), out var sb)) return null;
+            result.Add((byte)sb);
           }
           break;
         }
@@ -570,6 +610,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           } catch (InvalidEscapeException) {
             return null;
           }
+          break;
+        }
+        case "pad": {
+          if (!int.TryParse(value, out var count) || count < 0) return null;
+          for (var j = 0; j < count; j++) result.Add(0);
           break;
         }
         default:

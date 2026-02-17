@@ -76,6 +76,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
   }
 
   public void DefineGlobal(string name, int size, long initValue) {
+    // Align to natural alignment (1->1, 4->4, 8->8)
+    var alignment = size >= 8 ? 8 : size >= 4 ? 4 : size >= 2 ? 2 : 1;
+    var padding = (alignment - (_data.Count % alignment)) % alignment;
+    for (var i = 0; i < padding; i++) _data.Add(0);
     _globalLabels[name] = _data.Count;
     var bytes = new byte[size];
     if (initValue != 0) {
@@ -288,10 +292,10 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
         EmitMovByteIndirectReg(movByte.BaseReg, movByte.Displacement, movByte.Src);
         break;
       case X86GlobalLoadOp globalLoad:
-        EmitGlobalLoadReg(globalLoad.Dest, globalLoad.GlobalName);
+        EmitGlobalLoadReg(globalLoad.Dest, globalLoad.GlobalName, globalLoad.Size);
         break;
       case X86GlobalStoreOp globalStore:
-        EmitGlobalStoreReg(globalStore.Src, globalStore.GlobalName);
+        EmitGlobalStoreReg(globalStore.Src, globalStore.GlobalName, globalStore.Size);
         break;
       case X86GlobalLoadXmmOp globalLoadXmm:
         EmitGlobalLoadXmm(globalLoadXmm.Dest, globalLoadXmm.GlobalName, globalLoadXmm.Precision);
@@ -1350,11 +1354,22 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
 
   // --- Global variable load/store (RIP-relative addressing) ---
 
-  private void EmitGlobalLoadReg(X86Register dest, string globalName) {
+  private void EmitGlobalLoadReg(X86Register dest, string globalName, int size = 8) {
     RequireGpr(dest, nameof(EmitGlobalLoadReg));
-    // MOV r64, [rip+disp32]: REX.W + 8B /r (mod=00, r/m=101 for RIP-relative)
-    Rex.W().Reg(dest).Emit(this);
-    EmitByte(0x8B);
+    if (size == 1) {
+      // MOVZX r32, byte [rip+disp32]: 0F B6 /r (mod=00, r/m=101 for RIP-relative)
+      // Using r32 destination zero-extends to r64 automatically
+      Rex.NoW().Reg(dest).EmitIf(this);
+      EmitBytes(0x0F, 0xB6);
+    } else if (size == 4) {
+      // MOV r32, [rip+disp32]: 8B /r (no REX.W, so 32-bit operand, zero-extends to r64)
+      Rex.NoW().Reg(dest).EmitIf(this);
+      EmitByte(0x8B);
+    } else {
+      // MOV r64, [rip+disp32]: REX.W + 8B /r
+      Rex.W().Reg(dest).Emit(this);
+      EmitByte(0x8B);
+    }
     EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
     _globalFixups.Add((_code.Count, globalName));
     EmitDword(0); // placeholder for RIP-relative displacement
@@ -1370,11 +1385,21 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitDword(0); // placeholder for RIP-relative displacement
   }
 
-  private void EmitGlobalStoreReg(X86Register src, string globalName) {
+  private void EmitGlobalStoreReg(X86Register src, string globalName, int size = 8) {
     RequireGpr(src, nameof(EmitGlobalStoreReg));
-    // MOV [rip+disp32], r64: REX.W + 89 /r (mod=00, r/m=101 for RIP-relative)
-    Rex.W().Reg(src).Emit(this);
-    EmitByte(0x89);
+    if (size == 1) {
+      // MOV byte [rip+disp32], r8: REX + 88 /r (mod=00, r/m=101 for RIP-relative)
+      Rex.NoW().Reg(src).ByteReg(src).EmitIf(this);
+      EmitByte(0x88);
+    } else if (size == 4) {
+      // MOV dword [rip+disp32], r32: 89 /r (no REX.W)
+      Rex.NoW().Reg(src).EmitIf(this);
+      EmitByte(0x89);
+    } else {
+      // MOV [rip+disp32], r64: REX.W + 89 /r
+      Rex.W().Reg(src).Emit(this);
+      EmitByte(0x89);
+    }
     EmitByte((byte)(0x05 | (RegCode(src) << 3))); // mod=00, r/m=101 (RIP-relative)
     _globalFixups.Add((_code.Count, globalName));
     EmitDword(0); // placeholder for RIP-relative displacement

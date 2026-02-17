@@ -1399,17 +1399,17 @@ public class RegisterManager {
   /// <summary>
   /// Load a global integer/bool variable into a GPR register via RIP-relative addressing.
   /// </summary>
-  public void EmitGlobalLoad(StdValue result, string globalName, MlirBlock<X86Op> block) {
+  public void EmitGlobalLoad(StdValue result, string globalName, MlirBlock<X86Op> block, int size = 8) {
     var gpr = AllocateRegister(result, block);
-    block.AddOp(new X86GlobalLoadOp(globalName, gpr));
+    block.AddOp(new X86GlobalLoadOp(globalName, gpr, size));
   }
 
   /// <summary>
   /// Store a GPR value to a global variable via RIP-relative addressing.
   /// </summary>
-  public void EmitGlobalStore(StdValue value, string globalName, MlirBlock<X86Op> block) {
+  public void EmitGlobalStore(StdValue value, string globalName, MlirBlock<X86Op> block, int size = 8) {
     var reg = EnsureInRegister(value, block);
-    block.AddOp(new X86GlobalStoreOp(globalName, reg));
+    block.AddOp(new X86GlobalStoreOp(globalName, reg, size));
   }
 
   /// <summary>

@@ -784,11 +784,11 @@ public static class StandardToX86Conversion {
             break;
 
           case StdGlobalLoadI1Op globalLoadI1:
-            regManager.EmitGlobalLoad(globalLoadI1.Result, globalLoadI1.GlobalName, x86Block);
+            regManager.EmitGlobalLoad(globalLoadI1.Result, globalLoadI1.GlobalName, x86Block, size: 1);
             break;
 
           case StdGlobalStoreI1Op globalStoreI1:
-            regManager.EmitGlobalStore(globalStoreI1.Value, globalStoreI1.GlobalName, x86Block);
+            regManager.EmitGlobalStore(globalStoreI1.Value, globalStoreI1.GlobalName, x86Block, size: 1);
             break;
 
           case StdReturnOp retOp: {

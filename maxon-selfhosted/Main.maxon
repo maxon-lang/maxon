@@ -2,15 +2,21 @@
 // Mirrors maxon-sharp/Program.cs command structure.
 
 function main() returns ExitCode
-    let args = CommandLine.args()
+    let allArgs = CommandLine.args()
 
-    if let command = try args.get(0) 'dispatch'
-        let rest = args.slice(1, endIndex: args.count())
+    if let command = try allArgs.get(0) 'dispatch'
+        let rest = allArgs.slice(1, endIndex: allArgs.count())
+        let cleanRest = try processLogArgs(rest) otherwise (e) 'badArgs'
+            match e 'matchErr'
+                invalidOption(a) then print("Invalid --log option: {a}\n")
+            end 'matchErr'
+            return 1
+        end 'badArgs'
 
         match command 'cmd'
-            "build" then return runBuild(rest)
-            "run" then return runRun(rest)
-            "spec-test" then return runSpecTests(rest)
+            "build" then return runBuild(cleanRest)
+            "run" then return runRun(cleanRest)
+            "spec-test" then return runSpecTests(cleanRest)
             default then printUsage()
         end 'cmd'
     end 'dispatch' else 'noArgs'
@@ -41,45 +47,11 @@ function printUsage()
     print("  --log=CATEGORY:LEVEL     Set specific category to LEVEL\n")
     print("\n")
     print("Log levels: none, error, info, debug, trace\n")
-    print("Log categories: compiler, lexer, parser, semantic, hir, lir, optimizer, codegen, pe, testing\n")
+    print("Log categories: compiler, lexer, parser, semantic, mlir, codegen, pe, testing\n")
 end 'printUsage'
 
-// Processes --log= options from args and returns remaining args.
-function processLogArgs(args StringArray) returns StringArray
-    var remaining = StringArray{}
-    var i = 0
-    while i < args.count() 'loop'
-        let arg = try args.get(i) otherwise 'skip'
-            i = i + 1
-            continue
-        end 'skip'
-        if arg.startsWith("--log=") 'isLog'
-            let eqIdx = try arg.findFirst("=") otherwise 'bad'
-                print("Invalid --log option: {arg}\n")
-                i = i + 1
-                continue
-            end 'bad'
-            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
-                print("Invalid --log option: {arg}\n")
-                i = i + 1
-                continue
-            end 'bad2'
-            let optionStr = arg.slice(afterEq, endIndex: arg.endIndex())
-            let ok = parseLogOption(optionStr)
-            if not ok 'badOption'
-                print("Invalid --log option: {arg}\n")
-            end 'badOption'
-        end 'isLog' else 'notLog'
-            remaining.push(arg)
-        end 'notLog'
-        i = i + 1
-    end 'loop'
-    return remaining
-end 'processLogArgs'
-
 function runBuild(args StringArray) returns ExitCode
-    let cleanArgs = processLogArgs(args)
-    let path = try cleanArgs.get(0) otherwise Directory.currentDirectory()
+    let path = try args.get(0) otherwise Directory.currentDirectory()
 
     let outputPath = try compile(path) otherwise 'err'
         return 1
@@ -91,18 +63,15 @@ function runBuild(args StringArray) returns ExitCode
 end 'runBuild'
 
 function runRun(args StringArray) returns ExitCode
-    let cleanArgs = processLogArgs(args)
-    let _ = cleanArgs.count()
+    let _ = args.count()
     print("run: not yet implemented\n")
     return 1
 end 'runRun'
 
 function runSpecTests(args StringArray) returns ExitCode
-    let cleanArgs = processLogArgs(args)
-
     // Parse --filter= option
     var filter = ""
-    for arg in cleanArgs 'parseArgs'
+    for arg in args 'parseArgs'
         if arg.startsWith("--filter=") 'isFilter'
             let eqIdx = try arg.findFirst("=") otherwise 'bad'
                 continue

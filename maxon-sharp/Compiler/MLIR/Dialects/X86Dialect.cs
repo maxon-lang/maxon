@@ -450,18 +450,28 @@ public class X86MovByteIndirectRegOp(X86Register baseReg, int displacement, X86R
 // Global variable operations (RIP-relative addressing)
 // ============================================================================
 
-// MOV dest, [rip + globalName] - load integer/bool global
-public class X86GlobalLoadOp(string globalName, X86Register dest) : X86Op {
+// MOV dest, [rip + globalName] - load integer/bool global (size: 1, 4, or 8 bytes)
+public class X86GlobalLoadOp(string globalName, X86Register dest, int size = 8) : X86Op {
   public string GlobalName { get; } = globalName;
   public X86Register Dest { get; } = dest;
-  public override string Mnemonic => $"x86.mov {Dest.ToString().ToLower()}, [rip+{GlobalName}]";
+  public int Size { get; } = size;
+  public override string Mnemonic => Size switch {
+    1 => $"x86.movzx {Dest.ToString().ToLower()}, byte [rip+{GlobalName}]",
+    4 => $"x86.mov {Dest.ToString().ToLower()}, dword [rip+{GlobalName}]",
+    _ => $"x86.mov {Dest.ToString().ToLower()}, qword [rip+{GlobalName}]"
+  };
 }
 
-// MOV [rip + globalName], src - store integer/bool global
-public class X86GlobalStoreOp(string globalName, X86Register src) : X86Op {
+// MOV [rip + globalName], src - store integer/bool global (size: 1, 4, or 8 bytes)
+public class X86GlobalStoreOp(string globalName, X86Register src, int size = 8) : X86Op {
   public string GlobalName { get; } = globalName;
   public X86Register Src { get; } = src;
-  public override string Mnemonic => $"x86.mov [rip+{GlobalName}], {Src.ToString().ToLower()}";
+  public int Size { get; } = size;
+  public override string Mnemonic => Size switch {
+    1 => $"x86.mov byte [rip+{GlobalName}], {Src.ToString().ToLower()}",
+    4 => $"x86.mov dword [rip+{GlobalName}], {Src.ToString().ToLower()}",
+    _ => $"x86.mov qword [rip+{GlobalName}], {Src.ToString().ToLower()}"
+  };
 }
 
 // MOV[SD/SS] xmm, [rip + globalName] - load float global

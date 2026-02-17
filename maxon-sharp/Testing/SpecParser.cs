@@ -102,6 +102,7 @@ public static partial class SpecParser {
 
       var requiredMLIR = ExtractCodeBlock(testSection, "RequiredMLIR");
       var requiredRdata = ExtractCodeBlock(testSection, "RequiredRdata");
+      var requiredData = ExtractCodeBlock(testSection, "RequiredData");
 
       TestExpectation expectation;
       if (stderr != null) {
@@ -114,6 +115,7 @@ public static partial class SpecParser {
           Stdout = stdout,
           RequiredMLIR = requiredMLIR,
           RequiredRdata = requiredRdata,
+          RequiredData = requiredData,
           TrackMemory = trackMemory
         };
       }

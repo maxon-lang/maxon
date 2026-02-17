@@ -150,6 +150,36 @@ f64 3.14
 
 The `RequiredRdata` block is optional. When present, the test compiles the source to an executable, reads the `.rdata` PE section, and compares it byte-for-byte against the expected values.
 
+### Data Section Verification
+
+To verify the `.data` section (mutable globals), include a `RequiredData` block. Same format as `RequiredRdata`, with additional types:
+
+- `i8 1` — 1 byte, signed int8
+- `i16 256` — 2 bytes, little-endian int16
+- `i32 42` — 4 bytes, little-endian int32
+- `f32 1.5` — 4 bytes, IEEE 754 little-endian float
+- `pad 7` — N zero bytes (alignment padding)
+
+Example:
+
+```maxon
+var flag = true
+var counter = 42
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+i8 1
+```
+
+Note: Globals are sorted largest-first in the data section to minimize alignment padding, so the i64 appears before the i8 regardless of source order.
+
 ### Executable Examples (Compile Errors)
 
 For code that demonstrates compile/parse errors:

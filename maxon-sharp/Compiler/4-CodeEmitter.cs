@@ -33,8 +33,8 @@ public class CodeEmitter {
       emitter.DefineRdata(label, rdataBytes, alignment);
     }
 
-    // Emit globals (define them in the data section)
-    foreach (var global in module.Globals) {
+    // Emit globals largest-first to eliminate alignment padding
+    foreach (var global in module.Globals.OrderByDescending(g => g.Type.SizeInBytes)) {
       var size = global.Type.SizeInBytes;
       long initValue = 0;
       if (global.InitValue is IntegerAttr intAttr) {

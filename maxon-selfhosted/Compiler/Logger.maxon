@@ -21,6 +21,50 @@ end 'LogCategory'
 
 var globalLogLevel = 2
 
+// Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
+// Ranges kept at i64-width because Array with ranged types smaller than i64 has a sizing bug.
+typealias StoredLevel = int(0 to u64.max)
+typealias CategoryIndex = int(0 to u64.max)
+typealias CategoryLevelArray = Array with StoredLevel
+var categoryLogLevels = CategoryLevelArray{}
+var categoryLevelsInitialized = false
+
+function ensureCategoryLevels()
+    if categoryLevelsInitialized 'alreadyDone'
+        return
+    end 'alreadyDone'
+    categoryLevelsInitialized = true
+    var i = 0
+    while i < 8 'fill'
+        categoryLogLevels.push(0)
+        i = i + 1
+    end 'fill'
+end 'ensureCategoryLevels'
+
+function categoryIndex(category LogCategory) returns CategoryIndex
+    match category 'idx'
+        LogCategory.compiler then return 0
+        LogCategory.lexer then return 1
+        LogCategory.parser then return 2
+        LogCategory.semantic then return 3
+        LogCategory.mlir then return 4
+        LogCategory.codegen then return 5
+        LogCategory.pe then return 6
+        LogCategory.testing then return 7
+    end 'idx'
+end 'categoryIndex'
+
+function effectiveLogLevel(category LogCategory) returns StoredLevel
+    if categoryLevelsInitialized 'hasLevels'
+        let idx = categoryIndex(category)
+        let stored = try categoryLogLevels.get(idx) otherwise 0
+        if stored > 0 'hasOverride'
+            return stored - 1
+        end 'hasOverride'
+    end 'hasLevels'
+    return globalLogLevel
+end 'effectiveLogLevel'
+
 export function logError(category LogCategory, message String)
     log(category, level: LogLevel.ERROR, message: message)
 end 'logError'
@@ -41,17 +85,75 @@ export function setLogLevel(level LogLevel)
     globalLogLevel = level.rawValue
 end 'setLogLevel'
 
+export function setCategoryLogLevel(category LogCategory, level LogLevel)
+    ensureCategoryLevels()
+    let idx = categoryIndex(category)
+    categoryLogLevels.set(idx, value: level.rawValue + 1)
+end 'setCategoryLogLevel'
+
+export enum ArgError implements Error
+    invalidOption(arg String)
+end 'ArgError'
+
+// Processes --log= options from args and returns remaining args.
+export function processLogArgs(args StringArray) returns StringArray throws ArgError
+    var remaining = StringArray{}
+
+    for arg in args 'loop'
+        if arg.startsWith("--log=") 'isLog'
+            let eqIdx = try arg.findFirst("=") otherwise 'bad'
+                throw ArgError.invalidOption(arg)
+            end 'bad'
+
+            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
+                throw ArgError.invalidOption(arg)
+            end 'bad2'
+
+            let optionStr = arg.slice(afterEq, endIndex: arg.endIndex())
+            let ok = parseLogOption(optionStr)
+            if not ok 'badOption'
+                throw ArgError.invalidOption(arg)
+            end 'badOption'
+        end 'isLog' else 'notLog'
+            remaining.push(arg)
+        end 'notLog'
+    end 'loop'
+
+    return remaining
+end 'processLogArgs'
+
 // Parses a log option string like "debug" or "lexer:trace".
 export function parseLogOption(option String) returns bool
-    let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
+    let colonIdx = try option.findFirst(":") otherwise 'noColon'
+        let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
+            return false
+        end 'badLevel'
+        setLogLevel(level)
+        return true
+    end 'noColon'
+
+    let afterColon = try option.indexAfter(colonIdx) otherwise 'bad'
         return false
-    end 'badLevel'
-    setLogLevel(level)
+    end 'bad'
+
+    let categoryStr = option.slice(option.startIndex(), endIndex: colonIdx)
+    let levelStr = option.slice(afterColon, endIndex: option.endIndex())
+
+    let category = try LogCategory.fromName(categoryStr) otherwise 'badCat'
+        return false
+    end 'badCat'
+
+    let level = try LogLevel.fromName(levelStr.toUpper()) otherwise 'badLevel2'
+        return false
+    end 'badLevel2'
+
+    setCategoryLogLevel(category, level: level)
     return true
 end 'parseLogOption'
 
 function log(category LogCategory, level LogLevel, message String)
-    if level.rawValue <= globalLogLevel 'check'
+    let effectiveLevel = effectiveLogLevel(category)
+    if level.rawValue <= effectiveLevel 'check'
         printError("[{category.rawValue}] {level.name}: {message}\n")
     end 'check'
 end 'log'

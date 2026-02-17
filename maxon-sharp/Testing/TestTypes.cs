@@ -57,6 +57,11 @@ public class SuccessExpectation : TestExpectation {
   /// Each line is a typed value (e.g. "f64 3.14", "i64[] 10, 20, 30", "utf8 \"hello\0\"").
   /// </summary>
   public string? RequiredRdata { get; init; }
+  /// <summary>
+  /// Typed value lines describing the exact expected .data section contents.
+  /// Each line is a typed value (e.g. "i8 0", "i64 42").
+  /// </summary>
+  public string? RequiredData { get; init; }
 }
 
 /// <summary>

@@ -218,6 +218,12 @@ public static partial class FragmentGenerator {
         sb.AppendLine(success.RequiredRdata);
         sb.AppendLine("```");
       }
+
+      if (success.RequiredData != null) {
+        sb.AppendLine("RequiredData: ```");
+        sb.AppendLine(success.RequiredData);
+        sb.AppendLine("```");
+      }
     } else if (test.Expectation is CompilerErrorExpectation compilerError) {
       sb.AppendLine("MaxoncStderr: ```");
       sb.AppendLine(compilerError.ExpectedStderr);
@@ -350,6 +356,7 @@ public static partial class FragmentGenerator {
     string? stdout = null;
     string? requiredMLIR = null;
     string? requiredRdata = null;
+    string? requiredData = null;
     string? expectedError = null;
     string? args = null;
     bool trackMemory = false;
@@ -375,6 +382,8 @@ public static partial class FragmentGenerator {
         requiredMLIR = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("RequiredRdata: ```")) {
         requiredRdata = ExtractMultilineValue(lines, ref i);
+      } else if (line.StartsWith("RequiredData: ```")) {
+        requiredData = ExtractMultilineValue(lines, ref i);
       }
 
       i++;
@@ -391,6 +400,7 @@ public static partial class FragmentGenerator {
       Stdout = stdout,
       RequiredMLIR = requiredMLIR,
       RequiredRdata = requiredRdata,
+      RequiredData = requiredData,
       TrackMemory = trackMemory
     }, args, trackMemory);
   }

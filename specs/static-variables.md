@@ -253,6 +253,29 @@ end 'main'
 42
 ```
 
+<!-- test: static-var-bool-adjacent-globals -->
+Bool global followed by non-zero global must not bleed adjacent data.
+
+```maxon
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+  if flag 'checkFalse'
+    print("flag should be false\n")
+    return 1
+  end 'checkFalse'
+  if counter == 42 'checkCounter'
+    return 0
+  end 'checkCounter'
+  print("counter wrong\n")
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: top-level-var-enum-initializer -->
 ```maxon
 enum Color
@@ -365,4 +388,154 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: data-section-bool-1byte -->
+A single bool global occupies 1 byte in the .data section.
+
+```maxon
+var flag = true
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i8 1
+```
+
+<!-- test: data-section-i64-8byte -->
+A single i64 global occupies 8 bytes in the .data section.
+
+```maxon
+var counter = 42
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+```
+
+<!-- test: data-section-f64-8byte -->
+A single f64 global occupies 8 bytes in the .data section.
+
+```maxon
+var pi = 3.14
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+f64 3.14
+```
+
+<!-- test: data-section-bool-then-i64-sorted -->
+A bool and i64 global: sorted largest-first, no padding needed.
+
+```maxon
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+i8 0
+```
+
+<!-- test: data-section-bool-true-then-i64 -->
+A true bool and i64: sorted largest-first, no padding needed.
+
+```maxon
+var flag = true
+var counter = 99
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 99
+i8 1
+```
+
+<!-- test: data-section-i64-then-bool -->
+An i64 followed by a bool: no padding needed since bool has 1-byte alignment.
+
+```maxon
+var counter = 7
+var flag = true
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 7
+i8 1
+```
+
+<!-- test: data-section-multiple-bools -->
+Multiple consecutive bools occupy 1 byte each with no padding.
+
+```maxon
+var a = true
+var b = false
+var c = true
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i8 1
+i8 0
+i8 1
+```
+
+<!-- test: data-section-mixed-types -->
+Mixed bool, i64, f64 globals sorted largest-first, no padding.
+
+```maxon
+var flag = true
+var count = 10
+var ratio = 2.5
+
+function main() returns ExitCode
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 10
+f64 2.5
+i8 1
 ```

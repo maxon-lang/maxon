@@ -89,7 +89,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
       }
     }
     RdataEntries.AddRange(other.RdataEntries);
-    Globals.AddRange(other.Globals);
+    foreach (var global in other.Globals) {
+      if (!Globals.Any(g => g.Name == global.Name))
+        Globals.Add(global);
+    }
     foreach (var (k, v) in other.TypeDefs)
       TypeDefs[k] = v;
     foreach (var (k, v) in other.FunctionDefaults) FunctionDefaults.TryAdd(k, v);
