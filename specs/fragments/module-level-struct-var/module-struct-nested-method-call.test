@@ -1,0 +1,114 @@
+// Test: module-struct-nested-method-call
+typealias ByteArray = Array with byte
+
+type State
+    export var items ByteArray
+end 'State'
+
+var state = State{items: ByteArray{}}
+
+function main() returns ExitCode
+    state.items.push(10)
+    state.items.push(20)
+    return state.items.count()
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @module-level-struct-var.main() -> u32 {
+  entry:
+    x86.prologue stack_size=80
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.xor edx, edx
+    x86.xor ebx, ebx
+    x86.mov esi, 1
+    x86.mov edi, 32
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov r8, [rbp-8]
+    x86.xor r9, r9
+    x86.mov [r8+0], r9
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 1
+    x86.mov [eax+24], ecx
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.mov eax, 8
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-24]
+    x86.mov qword [rip+state], eax
+    x86.mov eax, qword [rip+state]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-40], ecx
+    x86.mov eax, 10
+    x86.mov ecx, 255
+    x86.and eax, ecx
+    x86.mov ecx, [rbp-40]
+    x86.mov rdx, rax
+    x86.call ByteArray.push
+    x86.mov eax, qword [rip+state]
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-56], ecx
+    x86.mov eax, 20
+    x86.mov ecx, 255
+    x86.and eax, ecx
+    x86.mov ecx, [rbp-56]
+    x86.mov rdx, rax
+    x86.call ByteArray.push
+    x86.mov eax, qword [rip+state]
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-72], ecx
+    x86.mov eax, [rbp-72]
+    x86.mov rcx, rax
+    x86.call ByteArray.count
+    x86.mov [rbp-80], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je module-level-struct-var.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_rdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-80]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

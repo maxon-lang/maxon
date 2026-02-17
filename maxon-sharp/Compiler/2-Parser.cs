@@ -49,6 +49,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null);
   private readonly Dictionary<string, GlobalVarInfo> _globalVars = [];
 
+  // Unified variable resolution result
+  private abstract record ResolvedVar {
+    public record Local(VarInfo Info) : ResolvedVar;
+    public record Global(GlobalVarInfo Info) : ResolvedVar;
+  }
+
   // Default parameter values (funcName -> index -> value)
   private readonly Dictionary<string, Dictionary<int, MlirAttribute>> _functionDefaults = [];
 
@@ -3870,7 +3876,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Tuple positional field assignment: t.0 = value
     if (_pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.IntegerLiteral) {
-      ParseFieldAssignment();
+      ParseAssignment();
       return;
     }
 
@@ -3889,7 +3895,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           return;
         }
         // Otherwise it's an instance field assignment: p.x = 30
-        ParseFieldAssignment();
+        ParseAssignment();
         return;
       }
 
@@ -3897,7 +3903,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // Nested field access chain: o.inner.x = ... or o.inner.method(...)
         // Scan ahead to find what terminates the chain
         if (IsNestedFieldChainEndingWith(TokenType.Equals)) {
-          ParseFieldAssignment();
+          ParseAssignment();
           return;
         }
         if (IsNestedFieldChainEndingWith(TokenType.LeftParen)) {
@@ -3914,30 +3920,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
 
         // Check for instance method call: var.method(...)
-        if (_variables.TryGetValue(nameToken.Value, out var varInfo) && varInfo.StructTypeName != null) {
-          var instanceMethodName = $"{varInfo.StructTypeName}.{_tokens[_pos + 2].Value}";
+        var resolved = ResolveVariable(nameToken.Value);
+        var structTypeName = resolved switch {
+          ResolvedVar.Local(var info) => info.StructTypeName,
+          ResolvedVar.Global(var info) => info.TypeName,
+          null => null,
+          _ => throw new InvalidOperationException()
+        };
+        if (structTypeName != null) {
+          var instanceMethodName = $"{structTypeName}.{_tokens[_pos + 2].Value}";
           var resolvedName = ResolveMethodName(instanceMethodName);
           if (resolvedName != null) {
-            _referencedVars.Add(nameToken.Value);
-            ParseInstanceMethodCallStatement(varInfo, resolvedName);
-            return;
-          }
-        }
-
-        // Check for instance method call on global struct var: globalVar.method(...)
-        if (_globalVars.TryGetValue(nameToken.Value, out var gVarInfo) && gVarInfo.TypeName != null) {
-          var instanceMethodName = $"{gVarInfo.TypeName}.{_tokens[_pos + 2].Value}";
-          var resolvedName = ResolveMethodName(instanceMethodName);
-          if (resolvedName != null) {
-            ParseGlobalStructMethodCallStatement(nameToken, gVarInfo, resolvedName);
+            ParseInstanceMethodCallStatement(nameToken.Value, resolved!, resolvedName);
             return;
           }
         }
       }
     }
 
-    // Fall through to field assignment
-    ParseFieldAssignment();
+    // Fall through to assignment (handles field chains)
+    ParseAssignment();
   }
 
   /// Validates field exists and is accessible, emits MaxonFieldAccessOp, returns updated current value and struct type name.
@@ -3982,19 +3984,65 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return false;
   }
 
+  /// Resolves a variable name by checking local scope then global scope.
+  private ResolvedVar? ResolveVariable(string name) {
+    if (_variables.TryGetValue(name, out var varInfo)) {
+      _referencedVars.Add(name);
+      return new ResolvedVar.Local(varInfo);
+    }
+    if (_globalVars.TryGetValue(name, out var globalVarInfo))
+      return new ResolvedVar.Global(globalVarInfo);
+    return null;
+  }
+
+  /// Resolves a variable and emits a load for globals, returning an ExprResult.
+  private ExprResult LoadVariable(string name, Token token) {
+    return ResolveVariable(name) switch {
+      ResolvedVar.Local(var info) => new ExprResult.VarRef(name, info),
+      ResolvedVar.Global(var info) => EmitGlobalLoad(name, info),
+      null => throw new CompileError(ErrorCode.SemanticUndefinedVariable,
+        $"Undefined variable '{name}'", token.Line, token.Column),
+      _ => throw new InvalidOperationException()
+    };
+  }
+
+  private ExprResult.Direct EmitGlobalLoad(string name, GlobalVarInfo info) {
+    var loadOp = new MaxonGlobalLoadOp(name, info.Kind, info.EnumTypeName,
+      structTypeName: info.Kind == MaxonValueKind.Struct ? info.TypeName : null);
+    _currentBlock!.AddOp(loadOp);
+    return new ExprResult.Direct(loadOp.Result);
+  }
+
+  /// Resolves a variable name to its struct value and type name, checking both local and global scope.
+  private (MaxonValue value, string structTypeName) ResolveStructVariable(string name, Token nameToken, bool requireMutable = false) {
+    switch (ResolveVariable(name)) {
+      case ResolvedVar.Local(var info) when info.StructTypeName != null:
+        if (requireMutable && !info.Mutable) {
+          throw new CompileError(ErrorCode.ParserImmutableVariable,
+            $"cannot assign to immutable variable: '{name}'",
+            nameToken.Line, nameToken.Column);
+        }
+        return (ResolveExprValue(new ExprResult.VarRef(name, info)), info.StructTypeName);
+      case ResolvedVar.Global(var info) when info.Kind == MaxonValueKind.Struct && info.TypeName != null:
+        if (requireMutable && !info.Mutable) {
+          throw new CompileError(ErrorCode.ParserImmutableVariable,
+            $"cannot assign to immutable variable: '{name}'",
+            nameToken.Line, nameToken.Column);
+        }
+        var loadOp = new MaxonGlobalLoadOp(name, info.Kind, info.EnumTypeName, structTypeName: info.TypeName);
+        _currentBlock!.AddOp(loadOp);
+        return (loadOp.Result, info.TypeName);
+    }
+    throw new CompileError(ErrorCode.SemanticUndefinedVariable,
+      $"Undefined variable '{name}'",
+      nameToken.Line, nameToken.Column);
+  }
+
   private void ParseNestedFieldMethodCall() {
     // Handles: o.inner.field.method(args)
     // Walk the chain of field accesses until we reach the final identifier followed by '('
     var nameToken = Advance(); // consume root variable name
-    if (!_variables.TryGetValue(nameToken.Value, out var varInfo) || varInfo.StructTypeName == null) {
-      throw new CompileError(ErrorCode.SemanticUndefinedVariable,
-        $"Undefined variable '{nameToken.Value}'",
-        nameToken.Line, nameToken.Column);
-    }
-    _referencedVars.Add(nameToken.Value);
-
-    var currentStructTypeName = varInfo.StructTypeName;
-    var currentValue = ResolveExprValue(new ExprResult.VarRef(nameToken.Value, varInfo));
+    var (currentValue, currentStructTypeName) = ResolveStructVariable(nameToken.Value, nameToken);
 
     // Walk intermediate field accesses: consume '.fieldName' pairs
     // Stop when the next segment is followed by '(' (method call)
@@ -4030,9 +4078,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Advance(); // consume '.'
     var fieldToken = Expect(TokenType.Identifier);
 
-    if (!_variables.TryGetValue("self", out var selfInfo)) {
-      throw new CompileError(ErrorCode.SemanticUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
-    }
+    var selfInfo = (ResolveVariable("self") as ResolvedVar.Local)?.Info
+      ?? throw new CompileError(ErrorCode.SemanticUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
 
     if (Check(TokenType.Equals)) {
       // self.field = value
@@ -4538,35 +4585,52 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseAssignment() {
     var nameToken = Advance(); // consume identifier
     var name = nameToken.Value;
-    Expect(TokenType.Equals);
 
-    // Check if it's a global variable assignment
-    if (_globalVars.TryGetValue(name, out var globalInfo)) {
-      var newValue = ResolveExprValue(ParseExpression());
-      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newValue, globalInfo.Kind));
+    // Field assignment: name.field[.field...] = expr
+    if (Check(TokenType.Dot)) {
+      Expect(TokenType.Dot);
+      var fieldToken = ExpectFieldName();
+      var (currentValue, currentStructTypeName) = ResolveStructVariable(name, nameToken, requireMutable: true);
+
+      while (Check(TokenType.Dot)) {
+        (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(currentValue, currentStructTypeName, fieldToken);
+        Advance(); // consume '.'
+        fieldToken = ExpectFieldName();
+      }
+
+      Expect(TokenType.Equals);
+      EmitFieldAssignment(currentStructTypeName, currentValue, fieldToken, nameToken);
       return;
     }
 
-    if (!_variables.TryGetValue(name, out var varInfo)) {
-      throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
-    }
-    _referencedVars.Add(name);
-    if (!varInfo.Mutable) {
-      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Variable '{name}' is not mutable", nameToken.Line, nameToken.Column);
-    }
+    // Simple assignment: name = expr
+    Expect(TokenType.Equals);
 
-    var newVal = ResolveExprValue(ParseExpression());
-    // Capture function type before adding the assign op (which would change the last op)
-    MlirFunctionType? fnType = null;
-    if (varInfo.Kind == MaxonValueKind.Function) {
-      fnType = GetFunctionTypeFromLastOp();
-    }
-    _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
-    // Preserve function type if reassigning a function variable
-    if (varInfo.Kind == MaxonValueKind.Function) {
-      _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, FnTypeName: fnType);
-    } else {
-      _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName);
+    switch (ResolveVariable(name)) {
+      case ResolvedVar.Global(var globalInfo): {
+        var newValue = ResolveExprValue(ParseExpression());
+        _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newValue, globalInfo.Kind));
+        break;
+      }
+      case ResolvedVar.Local(var varInfo): {
+        if (!varInfo.Mutable) {
+          throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Variable '{name}' is not mutable", nameToken.Line, nameToken.Column);
+        }
+        var newVal = ResolveExprValue(ParseExpression());
+        MlirFunctionType? fnType = null;
+        if (varInfo.Kind == MaxonValueKind.Function) {
+          fnType = GetFunctionTypeFromLastOp();
+        }
+        _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
+        if (varInfo.Kind == MaxonValueKind.Function) {
+          _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, FnTypeName: fnType);
+        } else {
+          _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName);
+        }
+        break;
+      }
+      case null:
+        throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
     }
   }
 
@@ -4594,43 +4658,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return new Token(TokenType.Identifier, $"_{index}", tok.Line, tok.Column);
     }
     return Expect(TokenType.Identifier);
-  }
-
-  private void ParseFieldAssignment() {
-    var nameToken = Advance(); // consume struct var name
-    var name = nameToken.Value;
-    Expect(TokenType.Dot);
-    var fieldToken = ExpectFieldName();
-
-    if (!_variables.TryGetValue(name, out var varInfo)) {
-      throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
-    }
-    _referencedVars.Add(name);
-
-    if (!varInfo.Mutable) {
-      throw new CompileError(ErrorCode.ParserImmutableVariable,
-        $"cannot assign to immutable variable: '{name}'",
-        nameToken.Line, nameToken.Column);
-    }
-
-    // Parse chain of intermediate field accesses: o.inner.inner2...fieldN = value
-    // Emit MaxonFieldAccessOp for each intermediate struct-typed field,
-    // then MaxonFieldAssignOp for the final field.
-    var currentStructTypeName = varInfo.StructTypeName!;
-    var currentValue = ResolveExprValue(new ExprResult.VarRef(name, varInfo));
-
-    while (Check(TokenType.Dot)) {
-      // This is an intermediate field - it must be struct-typed so we can continue the chain
-      (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(currentValue, currentStructTypeName, fieldToken);
-
-      Advance(); // consume '.'
-      fieldToken = ExpectFieldName();
-    }
-
-    Expect(TokenType.Equals);
-
-    // Now emit the final field assignment
-    EmitFieldAssignment(currentStructTypeName, currentValue, fieldToken, nameToken);
   }
 
   private void EmitFieldAssignment(string structTypeName, MaxonValue structVal, Token fieldToken, Token errorToken) {
@@ -5097,7 +5124,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private MaxonCallOp? TrySiblingMethodCall(Token token) {
-    if (_currentTypeName == null || !_variables.TryGetValue("self", out var selfInfo))
+    if (_currentTypeName == null || ResolveVariable("self") is not ResolvedVar.Local(var selfInfo))
       return null;
 
     // Construct namespace-qualified type name for sibling method lookup
@@ -5139,30 +5166,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     OverrideCalleeForTypeAlias(callOp, typeToken.Value, qualifiedName);
   }
 
-  private void ParseInstanceMethodCallStatement(VarInfo varInfo, string methodName) {
+  private void ParseInstanceMethodCallStatement(string name, ResolvedVar resolved, string methodName) {
     Advance(); // consume variable name
     Advance(); // consume '.'
     var methodToken = Advance(); // consume method name
     Advance(); // consume '('
 
-    var structVal = varInfo.Value;
+    MaxonValue structVal = resolved switch {
+      ResolvedVar.Local(var info) => info.Value,
+      ResolvedVar.Global(var info) => EmitGlobalLoad(name, info).Value,
+      _ => throw new InvalidOperationException()
+    };
+
     var qualifiedToken = new Token(TokenType.Identifier, methodName, methodToken.Line, methodToken.Column);
     var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, structVal);
-    CreateFunctionCall(qualifiedToken, args, callee);
-  }
-
-  private void ParseGlobalStructMethodCallStatement(Token nameToken, GlobalVarInfo gVarInfo, string methodName) {
-    Advance(); // consume variable name
-    Advance(); // consume '.'
-    var methodToken = Advance(); // consume method name
-    Advance(); // consume '('
-
-    var loadOp = new MaxonGlobalLoadOp(nameToken.Value, gVarInfo.Kind,
-      structTypeName: gVarInfo.TypeName);
-    _currentBlock!.AddOp(loadOp);
-
-    var qualifiedToken = new Token(TokenType.Identifier, methodName, methodToken.Line, methodToken.Column);
-    var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, loadOp.Result);
     CreateFunctionCall(qualifiedToken, args, callee);
   }
 
@@ -7153,10 +7170,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (Check(TokenType.Self)) {
       var selfToken = Advance(); // consume 'self'
-      if (!_variables.TryGetValue("self", out var selfVarInfo)) {
-        throw new CompileError(ErrorCode.SemanticUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
-      }
-      _referencedVars.Add("self");
+      var selfVarInfo = (ResolveVariable("self") as ResolvedVar.Local)?.Info
+        ?? throw new CompileError(ErrorCode.SemanticUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
       return ParseFieldAccessChain(new ExprResult.VarRef("self", selfVarInfo), selfToken);
     }
 
@@ -7402,9 +7417,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
 
         // Check for indirect call through function-typed variable
-        if (_variables.TryGetValue(token.Value, out var fnVarInfo) && fnVarInfo.Kind == MaxonValueKind.Function) {
+        if (ResolveVariable(token.Value) is ResolvedVar.Local(var fnVarInfo) && fnVarInfo.Kind == MaxonValueKind.Function) {
           Logger.Debug(LogCategory.Parser, $"  Indirect call through function variable: {token.Value}");
-          _referencedVars.Add(token.Value);
           var fnType = fnVarInfo.FnTypeName!;
           Advance(); // consume '('
           var indirectArgs = ParseIndirectCallArgs(token, fnType);
@@ -7458,21 +7472,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return EmitConstantLiteral(constValue);
       }
 
-      // Check for global variable reference
-      if (_globalVars.TryGetValue(token.Value, out var globalVarInfo)) {
-        var loadOp = new MaxonGlobalLoadOp(token.Value, globalVarInfo.Kind, globalVarInfo.EnumTypeName,
-          structTypeName: globalVarInfo.Kind == MaxonValueKind.Struct ? globalVarInfo.TypeName : null);
-        _currentBlock!.AddOp(loadOp);
-        var globalResult = new ExprResult.Direct(loadOp.Result);
-        if (globalVarInfo.Kind == MaxonValueKind.Struct)
-          return ParseFieldAccessChain(globalResult, token);
-        return globalResult;
-      }
-
-      // Variable reference
-      if (_variables.TryGetValue(token.Value, out var varInfo)) {
-        _referencedVars.Add(token.Value);
-        return ParseFieldAccessChain(new ExprResult.VarRef(token.Value, varInfo), token);
+      // Variable reference (local or global)
+      switch (ResolveVariable(token.Value)) {
+        case ResolvedVar.Local(var info):
+          return ParseFieldAccessChain(new ExprResult.VarRef(token.Value, info), token);
+        case ResolvedVar.Global(var info):
+          return ParseFieldAccessChain(EmitGlobalLoad(token.Value, info), token);
+        case null:
+          break;
       }
 
       // Function reference (bare function name without parentheses = function pointer)
@@ -7509,11 +7516,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Keywords used as variable names (e.g., parameter named 'with')
     if (CheckIdentifierLike()) {
       var token = Advance();
-      if (_variables.TryGetValue(token.Value, out var kwVarInfo)) {
-        _referencedVars.Add(token.Value);
-        return ParseFieldAccessChain(new ExprResult.VarRef(token.Value, kwVarInfo), token);
-      }
-      throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
+      return ParseFieldAccessChain(LoadVariable(token.Value, token), token);
     }
 
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected expression, got '{Current().Value}'", Current().Line, Current().Column);
