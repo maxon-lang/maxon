@@ -1,0 +1,95 @@
+// Test: simple-panic
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to 255)
+
+function dangerous(value Integer) returns Byte
+  return Byte{value}
+end
+
+function main() returns ExitCode
+  let result = dangerous(Integer{300})
+  return 0 as ExitCode
+end
+---
+ExitCode: 1
+Stderr: ```
+panic at simple-panic.test:6: Range check failed for type 'Byte': value outside int(0 to 255)
+Stack trace:
+  in panic-stack-trace.dangerous
+  in panic-stack-trace.main
+  in _start
+```
+---
+module {
+  func @panic-stack-trace.dangerous(value: i64) -> u8 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov edx, 255
+    x86.cmp ecx, edx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je panic-stack-trace.dangerous.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_6]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 255
+    x86.cmp eax, ebx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je panic-stack-trace.dangerous.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_13]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @panic-stack-trace.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 300
+    x86.mov rcx, rax
+    x86.call panic-stack-trace.dangerous
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je panic-stack-trace.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

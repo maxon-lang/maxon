@@ -24,6 +24,7 @@ public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart
 public class MlirModule<TOp> where TOp : IPrintableOp {
   public List<MlirFunction<TOp>> Functions { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
+  public List<(string label, byte[] bytes, int alignment)> SymdataEntries { get; } = [];
   public List<MlirGlobal> Globals { get; } = [];
   public Dictionary<string, MlirType> TypeDefs { get; } = [];
   public Dictionary<string, Dictionary<int, MlirAttribute>> FunctionDefaults { get; } = [];
@@ -66,6 +67,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     var clone = new MlirModule<TOp>();
     clone.Functions.AddRange(Functions);
     clone.RdataEntries.AddRange(RdataEntries);
+    clone.SymdataEntries.AddRange(SymdataEntries);
     clone.Globals.AddRange(Globals);
     foreach (var (k, v) in TypeDefs) clone.TypeDefs[k] = v;
     foreach (var (k, v) in FunctionDefaults) clone.FunctionDefaults[k] = v;
@@ -102,6 +104,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
       }
     }
     RdataEntries.AddRange(other.RdataEntries);
+    SymdataEntries.AddRange(other.SymdataEntries);
     foreach (var global in other.Globals) {
       if (!Globals.Any(g => g.Name == global.Name))
         Globals.Add(global);

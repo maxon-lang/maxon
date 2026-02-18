@@ -95,7 +95,6 @@ end 'main'
 ```
 ```RequiredRdata
 u16 10 20 30
-utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 
 ### U16 Arithmetic Uses 32-bit Ops

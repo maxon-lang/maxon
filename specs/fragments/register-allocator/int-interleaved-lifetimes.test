@@ -50,7 +50,7 @@ module {
     %17 = maxon.binop %14, %16 {op = or}
     maxon.cond_br %17 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at int-interleaved-lifetimes.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %19 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %19
@@ -81,7 +81,7 @@ module {
     %17 = arith.ori1 %14, %16
     cf.cond_br %17 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %18 = memref.lea_rdata __panic_msg_18
+    %18 = memref.lea_symdata __panic_msg_18
     %19 = std.ptr_to_i64 %18
     std.call_runtime @maxon_panic %19
   __range_ok_0:
@@ -122,7 +122,7 @@ module {
     x86.test eax, eax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_18]
+    x86.lea_symdata rax, [__panic_msg_18]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

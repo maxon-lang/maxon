@@ -46,6 +46,10 @@ public abstract class TestExpectation { }
 public class SuccessExpectation : TestExpectation {
   public int? ExitCode { get; init; }
   public string? Stdout { get; init; }
+  /// <summary>
+  /// Expected runtime stderr output (e.g., panic messages with stack traces).
+  /// </summary>
+  public string? Stderr { get; init; }
   public bool TrackMemory { get; init; }
   /// <summary>
   /// All pipeline stages concatenated with "--- stagename" markers.

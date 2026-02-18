@@ -450,13 +450,13 @@ public static partial class MaxonToStandardConversion {
 	  MaxonPanicOp op,
 	  MlirBlock<StandardOp> block,
 	  MlirModule<StandardOp> result) {
-		// Store panic message as null-terminated C string in rdata
+		// Store panic message as null-terminated C string in symdata (.symtab section)
 		var bytes = System.Text.Encoding.UTF8.GetBytes(op.Message + "\n");
 		var cstrBytes = new byte[bytes.Length + 1]; // null-terminated
 		bytes.CopyTo(cstrBytes, 0);
-		result.RdataEntries.Add((op.RdataLabel, cstrBytes, 1));
+		result.SymdataEntries.Add((op.SymdataLabel, cstrBytes, 1));
 		// LEA to get pointer to the message
-		var leaOp = new StdLeaRdataOp(op.RdataLabel);
+		var leaOp = new StdLeaSymdataOp(op.SymdataLabel);
 		block.AddOp(leaOp);
 		var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
 		block.AddOp(ptrToI64);

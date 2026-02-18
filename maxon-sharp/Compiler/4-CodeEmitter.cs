@@ -11,6 +11,7 @@ public record CodeEmitResult(
   byte[] Code,
   byte[] Rdata,
   byte[] Data,
+  byte[] Symdata,
   IReadOnlyList<ImportEntry> Imports
 );
 
@@ -31,6 +32,11 @@ public class CodeEmitter {
     // Define rdata constants from module's RdataEntries (populated during StandardToX86 conversion)
     foreach (var (label, rdataBytes, alignment) in module.RdataEntries) {
       emitter.DefineRdata(label, rdataBytes, alignment);
+    }
+
+    // Define symdata entries (panic messages go in .symtab section, not .rdata)
+    foreach (var (label, symdataBytes, alignment) in module.SymdataEntries) {
+      emitter.DefineSymdata(label, symdataBytes, alignment);
     }
 
     // Emit globals largest-first to eliminate alignment padding
@@ -83,12 +89,23 @@ public class CodeEmitter {
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();
 
+    // Build function symbol table for stack traces
+    var symbolEntries = new List<(string name, int codeOffset)>();
+    // Add _start so the stack walker knows where to stop
+    var startOffset = emitter.GetLabelOffset("_start");
+    if (startOffset >= 0) symbolEntries.Add(("_start", startOffset));
+    foreach (var func in module.Functions) {
+      var offset = emitter.GetLabelOffset(func.Name);
+      if (offset >= 0) symbolEntries.Add((func.Name, offset));
+    }
+    emitter.EmitSymbolTable(symbolEntries);
+
     emitter.ResolveLabels();
 
     var codeSize = (uint)emitter.GetCode().Length;
     var codeSizeVirtual = AlignUp(codeSize, 0x1000);
 
-    // Section order: .text -> .rdata -> .data -> .idata
+    // Section order: .text -> .rdata -> .data -> .symtab -> .idata
     // Calculate virtual section sizes for RVA calculations
     var rdataSize = (uint)emitter.GetRdata().Length;
     var rdataSizeVirtual = emitter.HasRdata ? AlignUp(rdataSize, 0x1000) : 0;
@@ -105,24 +122,34 @@ public class CodeEmitter {
       emitter.ResolveGlobals(dataRvaOffset);
     }
 
+    var dataSize = (uint)emitter.GetData().Length;
+    var dataSizeVirtual = emitter.HasGlobals ? AlignUp(dataSize, 0x1000) : 0;
+
+    // Resolve symdata references (symtab section comes after data)
+    if (emitter.HasSymdata) {
+      var symdataRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual);
+      emitter.ResolveSymdata(symdataRvaOffset);
+    }
+
+    var symdataSize = (uint)emitter.GetSymdata().Length;
+    var symdataSizeVirtual = emitter.HasSymdata ? AlignUp(symdataSize, 0x1000) : 0;
+
     // Resolve import references
-    // IAT comes after data section (if present) or directly after rdata/code
+    // IAT comes after symtab section
     if (emitter.HasImports) {
-      var dataSize = (uint)emitter.GetData().Length;
-      var dataSizeVirtual = emitter.HasGlobals ? AlignUp(dataSize, 0x1000) : 0;
-      // IAT is at the start of the .idata section, which follows .data
-      var iatRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual);
+      var iatRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual + symdataSizeVirtual);
       emitter.ResolveImports(iatRvaOffset);
     }
 
     var code = emitter.GetCode();
     var rdata = emitter.GetRdata();
     var data = emitter.GetData();
+    var symdata = emitter.GetSymdata();
     var imports = emitter.Imports;
 
-    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {imports.Count} imports");
+    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {symdata.Length} bytes symdata, {imports.Count} imports");
 
-    return new CodeEmitResult(code, rdata, data, imports);
+    return new CodeEmitResult(code, rdata, data, symdata, imports);
   }
 
   /// <summary>

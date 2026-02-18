@@ -5019,6 +5019,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(cmpOp);
         return cmpOp.Result;
       }),
+    ["__create_directory"] = new(
+      "Creates a directory. Returns true on success, false on failure.\n\n`__create_directory(cstring_path) returns bool`",
+      p => {
+        var path = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonCallRuntimeOp("maxon_create_directory", [path], true);
+        p._currentBlock!.AddOp(op);
+        var zeroOp = new MaxonLiteralOp(0L);
+        p._currentBlock!.AddOp(zeroOp);
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(cmpOp);
+        return cmpOp.Result;
+      }),
     ["__get_current_directory"] = RuntimeCallIntrinsic(
       "Gets the current working directory as a C string.\n\n`__get_current_directory() returns int`",
       "maxon_get_current_directory", 0, true),
@@ -8375,13 +8388,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     if (!isLiteral) {
-      value = EmitRuntimeRangeCheck(value, rangedType, expectedKind);
+      value = EmitRuntimeRangeCheck(value, rangedType, expectedKind, errorToken.Line, _sourceFilePath);
     }
 
     return value;
   }
 
-  private MaxonValue EmitRuntimeRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind kind) {
+  private MaxonValue EmitRuntimeRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind kind, int sourceLine, string? sourceFilePath) {
     // Skip runtime check for full-range types (no values can be out of range)
     if (rangedType.IsFullBaseRange) return value;
 
@@ -8444,8 +8457,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Panic block
     var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
+    var sourceFileName = sourceFilePath != null ? Path.GetFileName(sourceFilePath) : "unknown";
     panicBlock.AddOp(new MaxonPanicOp(
-      $"Range check failed for type '{rangedType.Name}': value outside {rangedType.FormatRange()}"));
+      $"panic at {sourceFileName}:{sourceLine}: Range check failed for type '{rangedType.Name}': value outside {rangedType.FormatRange()}"));
 
     // Continue block — reload value from temp variable
     _currentBlock = _currentFunction!.Body.AddBlock(continueLabel);

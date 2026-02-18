@@ -1262,6 +1262,11 @@ public class RegisterManager {
     block.AddOp(new X86LeaRipRelOp(To64Bit(gpr), rdataLabel));
   }
 
+  public void EmitLeaSymdataRelative(StdPtr result, string symdataLabel, MlirBlock<X86Op> block) {
+    var gpr = AllocateRegister(result, block);
+    block.AddOp(new X86LeaSymdataRelOp(To64Bit(gpr), symdataLabel));
+  }
+
   /// <summary>
   /// Move one value to another (same register, type reinterpretation).
   /// Used for StdPtrToI64Op where the value is the same register.

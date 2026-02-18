@@ -18,6 +18,7 @@ public partial class X86CodeEmitter {
     EmitMaxonWriteStdout();
     EmitMaxonWriteStderr();
     EmitMaxonPanic();
+    EmitMaxonPanicPrintFrame();
     EmitMaxonI64ToString();
     EmitMaxonU64ToString();
     EmitMaxonF64ToString();
@@ -39,6 +40,7 @@ public partial class X86CodeEmitter {
     EmitMaxonFindNextFile();
     EmitMaxonFindClose();
     EmitMaxonDirectoryExists();
+    EmitMaxonCreateDirectory();
     EmitMaxonGetCurrentDirectory();
     EmitMaxonProcessCreate();
     EmitMaxonProcessWait();
@@ -239,20 +241,185 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>maxon_panic(cstr_ptr_in_rcx): write message to stderr, then ExitProcess(1)</summary>
+  /// <summary>
+  /// maxon_panic(cstr_ptr_in_rcx): write message to stderr, print stack trace, then ExitProcess(1).
+  /// Stack layout:
+  ///   [rbp-0x08] = cstr_ptr (panic message)
+  ///   [rbp-0x10] = text_base (absolute address of _start)
+  ///   [rbp-0x18] = symtable_ptr (absolute address of __symtable in .symtab)
+  ///   [rbp-0x20] = current frame rbp for stack walk
+  ///   [rbp-0x28] = frame counter (counts down from 32)
+  ///   [rbp-0x30] = symtable entry count
+  ///   [rbp-0x38] = text_offset for current frame lookup
+  /// </summary>
   private void EmitMaxonPanic() {
-    EmitRuntimeFunctionStart("maxon_panic", 1, 0x40);
-    // Call maxon_write_stderr with the message (rcx already has cstr_ptr)
+    DefineSymdata("__panic_stacktrace", System.Text.Encoding.UTF8.GetBytes("Stack trace:\n\0"));
+    DefineSymdata("__panic_in", System.Text.Encoding.UTF8.GetBytes("  in \0"));
+    DefineSymdata("__panic_newline", System.Text.Encoding.UTF8.GetBytes("\n\0"));
+    DefineSymdata("__panic_unknown", System.Text.Encoding.UTF8.GetBytes("<unknown>\0"));
+
+    EmitRuntimeFunctionStart("maxon_panic", 1, 0x60);
+
+    // Print the panic message
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
     EmitDword(0);
-    // Call ExitProcess(1)
+
+    // Compute text_base = absolute address of _start
+    EmitLeaFuncAddr(X86Register.Rax, "_start");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+
+    // Load symtable pointer (from symdata section)
+    EmitLeaRegSymdataRel(X86Register.Rax, "__symtable");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+
+    // Read symtable count (first 4 bytes)
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitBytes(0x8B, 0x00); // MOV eax, [rax]
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+
+    // Print "Stack trace:\n"
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__panic_stacktrace");
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
+    EmitDword(0);
+
+    // Print first frame: [rbp+8] is return addr within the panicking function
+    EmitMovRegMem(X86Register.Rax, 0x08, 8); // return addr into panicking function
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // text_base
+    EmitBytes(0x48, 0x29, 0xD0); // SUB rax, rdx => text offset
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_panic_print_frame"));
+    EmitDword(0);
+
+    // Initialize: frame_rbp = [rbp] (caller's saved rbp), counter = 32
+    EmitMovRegMem(X86Register.Rax, 0, 8);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rax, 32);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    // Stack walk loop
+    DefineLabel("rt_panic_walk_loop");
+
+    // Check frame counter
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_panic_walk_done");
+
+    // Decrement counter
+    EmitBytes(0x48, 0xFF, 0xC8); // DEC rax
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+
+    // Load current frame_rbp
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_panic_walk_done");
+
+    // Get return address: [frame_rbp + 8]
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, 8);
+    EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
+    EmitJcc("z", "rt_panic_walk_done");
+
+    // Compute text offset = return_addr - text_base
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitBytes(0x48, 0x29, 0xCA); // SUB rdx, rcx
+    EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
+    EmitJcc("s", "rt_panic_walk_done"); // negative = outside .text
+
+    // Save text_offset for print_frame helper
+    EmitMovMemReg(-0x38, X86Register.Rdx, 8);
+
+    // Advance frame_rbp to next frame before calling helper (which clobbers regs)
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, 0); // [frame_rbp] = prev rbp
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+
+    // Print this frame
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_panic_print_frame"));
+    EmitDword(0);
+
+    EmitJmp("rt_panic_walk_loop");
+
+    DefineLabel("rt_panic_walk_done");
     EmitMovRegImm(X86Register.Rcx, 1);
     EmitCallImport("kernel32.dll", "ExitProcess");
-    // Should never reach here
     EmitByte(0xCC); // int3
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Helper: looks up [rbp-0x38] (text_offset) in the symbol table and prints "  in funcName\n".
+  /// Shares maxon_panic's stack frame (accesses [rbp-0x18], [rbp-0x30], [rbp-0x38]).
+  /// </summary>
+  private void EmitMaxonPanicPrintFrame() {
+    DefineLabel("maxon_panic_print_frame");
+
+    // Print "  in "
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__panic_in");
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
+    EmitDword(0);
+
+    // Linear scan: find largest code_offset <= text_offset
+    // symtable: count(4) | entries[count] of {codeOffset(4), nameOffset(4)} | strings
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = symtable_ptr
+    EmitAddRegImm(X86Register.Rax, 4); // RAX = &entries[0]
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = count
+    EmitMovRegMem(X86Register.Rdx, -0x38, 8); // RDX = target text_offset
+    EmitMovRegImm(X86Register.R8, -1); // R8 = best name_offset (-1 = none)
+    EmitMovRegImm(X86Register.R9, 0);  // R9 = loop index
+
+    DefineLabel("rt_panic_lookup_loop");
+    EmitCmpRegReg(X86Register.R9, X86Register.Rcx);
+    EmitJcc("ae", "rt_panic_lookup_done"); // unsigned: index >= count
+
+    // R11 = &entries[R9] = RAX + R9*8
+    EmitBytes(0x4E, 0x8D, 0x1C, 0xC8); // LEA r11, [rax + r9*8]
+
+    // Load entry code_offset: MOV r10d, [r11] (zero-extends to 64-bit)
+    EmitBytes(0x45, 0x8B, 0x13); // MOV r10d, [r11]
+
+    // if text_offset < entry_offset, skip
+    EmitCmpRegReg(X86Register.Rdx, X86Register.R10);
+    EmitJcc("b", "rt_panic_lookup_next"); // unsigned below
+
+    // entry_offset <= text_offset: update best match
+    EmitBytes(0x45, 0x8B, 0x43, 0x04); // MOV r8d, [r11+4] (name_offset)
+
+    DefineLabel("rt_panic_lookup_next");
+    EmitBytes(0x49, 0xFF, 0xC1); // INC r9
+    EmitJmp("rt_panic_lookup_loop");
+
+    DefineLabel("rt_panic_lookup_done");
+
+    // Check if we found a match
+    EmitBytes(0x49, 0x83, 0xF8, 0xFF); // CMP r8, -1
+    EmitJcc("z", "rt_panic_print_unknown");
+
+    // Print function name: symtable_ptr + name_offset
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitBytes(0x4C, 0x01, 0xC1); // ADD rcx, r8
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
+    EmitDword(0);
+    EmitJmp("rt_panic_print_newline");
+
+    DefineLabel("rt_panic_print_unknown");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__panic_unknown");
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
+    EmitDword(0);
+
+    DefineLabel("rt_panic_print_newline");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__panic_newline");
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
+    EmitDword(0);
+
+    EmitByte(0xC3); // ret
   }
 
   /// <summary>
@@ -1830,6 +1997,19 @@ public partial class X86CodeEmitter {
     EmitSetcc("nz", X86Register.Rax);
     EmitMovzxReg8To64(X86Register.Rax);
     DefineLabel("rt_direx_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_create_directory(cstring_path) -> nonzero on success, 0 on failure
+  /// Calls CreateDirectoryA(path, NULL).
+  /// </summary>
+  private void EmitMaxonCreateDirectory() {
+    EmitRuntimeFunctionStart("maxon_create_directory", 1, 0x40);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: path
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // arg2: lpSecurityAttributes = NULL
+    EmitCallImport("kernel32.dll", "CreateDirectoryA");
+    // RAX = nonzero on success, 0 on failure
     EmitRuntimeFunctionEnd();
   }
 

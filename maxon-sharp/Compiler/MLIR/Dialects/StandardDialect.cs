@@ -950,6 +950,16 @@ public class StdLeaRdataOp(string rdataLabel) : StandardOp {
   public override int PureResultId => Result.Id;
 }
 
+// Gets the address of a symdata label via RIP-relative addressing (for panic messages in .symtab)
+public class StdLeaSymdataOp(string symdataLabel) : StandardOp {
+  public override string Mnemonic => $"memref.lea_symdata {SymdataLabel}";
+  public string SymdataLabel { get; } = symdataLabel;
+  public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
+}
+
 // Store a value through a pointer at a given offset (for sret writes)
 public class StdStoreIndirectOp(StdValue value, StdValue basePtr, int fieldOffset, MlirType fieldType) : StandardOp {
   public override string Mnemonic => $"memref.store_indirect %{Value.Id}, %{BasePtr.Id}+{FieldOffset}";

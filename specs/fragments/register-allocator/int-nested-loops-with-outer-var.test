@@ -64,7 +64,7 @@ module {
     %23 = maxon.binop %20, %22 {op = or}
     maxon.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at int-nested-loops-with-outer-var.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_2:
     %25 = maxon.var_ref {var = __range_val_2} {type = i64}
     maxon.return %25
@@ -119,7 +119,7 @@ module {
     %23 = arith.ori1 %20, %22
     cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %24 = memref.lea_rdata __panic_msg_24
+    %24 = memref.lea_symdata __panic_msg_24
     %25 = std.ptr_to_i64 %24
     std.call_runtime @maxon_panic %25
   __range_ok_2:
@@ -182,7 +182,7 @@ module {
     x86.test edx, edx
     x86.je register-allocator.main.__range_ok_2
   __range_panic_2:
-    x86.lea_rdata rax, [__panic_msg_24]
+    x86.lea_symdata rax, [__panic_msg_24]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:

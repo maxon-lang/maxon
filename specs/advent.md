@@ -88,7 +88,7 @@ module {
     %10 = maxon.binop %7, %9 {op = or}
     maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at day2.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %12 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %12
@@ -116,7 +116,7 @@ module {
     %10 = arith.ori1 %7, %9
     cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %11 = memref.lea_rdata __panic_msg_11
+    %11 = memref.lea_symdata __panic_msg_11
     %12 = std.ptr_to_i64 %11
     std.call_runtime @maxon_panic %12
   __range_ok_0:
@@ -152,7 +152,7 @@ module {
     x86.test ebx, ebx
     x86.je advent.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_11]
+    x86.lea_symdata rax, [__panic_msg_11]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -235,7 +235,7 @@ module {
     %28 = maxon.binop %25, %27 {op = or}
     maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
   __range_panic_8:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at day4a.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_8:
     %30 = maxon.var_ref {var = __range_val_8} {type = i64}
     maxon.return %30
@@ -313,7 +313,7 @@ module {
     %44 = arith.ori1 %41, %43
     cf.cond_br %44 [then: __range_panic_8, else: __range_ok_8]
   __range_panic_8:
-    %45 = memref.lea_rdata __panic_msg_29
+    %45 = memref.lea_symdata __panic_msg_29
     %46 = std.ptr_to_i64 %45
     std.call_runtime @maxon_panic %46
   __range_ok_8:
@@ -409,7 +409,7 @@ module {
     x86.test edx, edx
     x86.je advent.main.__range_ok_8
   __range_panic_8:
-    x86.lea_rdata rax, [__panic_msg_29]
+    x86.lea_symdata rax, [__panic_msg_29]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_8:
@@ -492,7 +492,7 @@ module {
     %28 = maxon.binop %25, %27 {op = or}
     maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
   __range_panic_8:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at day4b.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_8:
     %30 = maxon.var_ref {var = __range_val_8} {type = i64}
     maxon.return %30
@@ -572,7 +572,7 @@ module {
     %45 = arith.ori1 %42, %44
     cf.cond_br %45 [then: __range_panic_8, else: __range_ok_8]
   __range_panic_8:
-    %46 = memref.lea_rdata __panic_msg_29
+    %46 = memref.lea_symdata __panic_msg_29
     %47 = std.ptr_to_i64 %46
     std.call_runtime @maxon_panic %47
   __range_ok_8:
@@ -670,7 +670,7 @@ module {
     x86.test edx, edx
     x86.je advent.main.__range_ok_8
   __range_panic_8:
-    x86.lea_rdata rax, [__panic_msg_29]
+    x86.lea_symdata rax, [__panic_msg_29]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_8:

@@ -328,7 +328,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         }
 
         // Run the executable if we have runtime expectations
-        if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null) {
+        if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
           var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
 
           if (successExpectation.ExitCode.HasValue && ExitCode != successExpectation.ExitCode.Value) {
@@ -349,6 +349,20 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
                 TestName = fragment.TestName,
                 Passed = false,
                 ErrorMessage = $"Stdout mismatch:\nExpected: {expectedStdout}\nActual: {actualStdout}",
+                Duration = sw.Elapsed,
+                FilePath = fragment.FilePath
+              };
+            }
+          }
+
+          if (successExpectation.Stderr != null) {
+            var expectedStderr = successExpectation.Stderr.Replace("\r\n", "\n").Trim();
+            var actualStderr = Stderr.Replace("\r\n", "\n").Trim();
+            if (expectedStderr != actualStderr) {
+              return new TestResult {
+                TestName = fragment.TestName,
+                Passed = false,
+                ErrorMessage = $"Stderr mismatch:\nExpected: {expectedStderr}\nActual: {actualStderr}",
                 Duration = sw.Elapsed,
                 FilePath = fragment.FilePath
               };
@@ -525,7 +539,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       return (false, $"Failed to read {sectionName} section data");
     }
 
-    if (actualBytes.AsSpan().SequenceEqual(expectedBytes)) {
+    if (actualBytes.SequenceEqual(expectedBytes)) {
       return (true, null);
     }
 
@@ -717,8 +731,12 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
       foreach (var test in spec.Tests) {
         if (test.Expectation is SuccessExpectation success && success.RequiredMLIR != null) {
-          // Compile the test to get the current IR
-          var sources = new[] { new Compiler.SourceFile(spec.FilePath, test.Source) };
+          // Compile with the same "// Test:" comment prefix and fragment path that fragments use,
+          // so line numbers and filenames in panic messages match between update and verification
+          var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
+          var fragmentPath = Path.GetFullPath(Path.Combine(_fragmentDir, specName, $"{test.Name}.test"));
+          var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
+          var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
           var exePath = Path.Combine(_tempDir, $"{Path.GetFileNameWithoutExtension(spec.FilePath)}_{test.Name}_temp.exe");
           var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 
@@ -750,7 +768,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       }
 
       if (updated) {
-        File.WriteAllText(spec.FilePath, specContent);
+        File.WriteAllText(spec.FilePath, specContent.Replace("\r\n", "\n"));
         updatedSpecs++;
       }
     }

@@ -57,7 +57,7 @@ end 'main'
 10
 ```
 
-Optionally include stdout output:
+Optionally include stdout and/or stderr output:
 
 ```maxon
 function main() returns ExitCode
@@ -70,6 +70,32 @@ end 'main'
 ```
 ```stdout
 42
+```
+
+Runtime stderr (e.g., panic messages with stack traces) can be verified with a `stderr` block:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to 255)
+
+function dangerous(value Integer) returns Byte
+  return Byte{value}
+end
+
+function main() returns ExitCode
+  let result = dangerous(Integer{300})
+  return 0 as ExitCode
+end
+```
+```exitcode
+1
+```
+```stderr
+panic at example.test:6: Range check failed for type 'Byte': value outside int(0 to 255)
+Stack trace:
+  in example.dangerous
+  in example.main
+  in _start
 ```
 
 ### IR Verification
@@ -242,7 +268,7 @@ When no `// --- file:` markers are present, behavior is unchanged (single-file t
    - No output block needed
 
 2. **`maxon` blocks** must be followed by EITHER:
-   - `` `exitcode `` + optional `` `stdout `` (for successful execution)
+   - `` `exitcode `` + optional `` `stdout `` and/or `` `stderr `` (for successful execution)
    - `` `maxoncstderr `` (for compile/parse errors)
 
 3. **In Documentation section:**

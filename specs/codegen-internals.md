@@ -127,7 +127,6 @@ end 'main'
 ```
 ```RequiredRdata
 i64[] 10, 20, 30
-utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 
 <!-- test: rdata-bool-array-uses-i8 -->
@@ -159,7 +158,6 @@ end 'main'
 ```
 ```RequiredRdata
 i8[] 1, 0, 1, 0
-utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 
 <!-- test: rdata-byte-array-uses-i8 -->
@@ -181,7 +179,6 @@ end 'main'
 ```
 ```RequiredRdata
 i8[] 10, 20, 30
-utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 
 <!-- test: rdata-cow-mutation-copies-to-heap -->
@@ -197,7 +194,6 @@ end 'main'
 ```
 ```RequiredRdata
 i64 42
-utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 ```RequiredMLIR
 === maxon
@@ -240,7 +236,7 @@ module {
     %24 = maxon.binop %21, %23 {op = or}
     maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
     %26 = maxon.var_ref {var = __range_val_5} {type = i64}
     maxon.return %26
@@ -306,7 +302,7 @@ module {
     %37 = arith.ori1 %34, %36
     cf.cond_br %37 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %38 = memref.lea_rdata __panic_msg_25
+    %38 = memref.lea_symdata __panic_msg_25
     %39 = std.ptr_to_i64 %38
     std.call_runtime @maxon_panic %39
   __range_ok_5:
@@ -390,7 +386,7 @@ module {
     x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_5
   __range_panic_5:
-    x86.lea_rdata rax, [__panic_msg_25]
+    x86.lea_symdata rax, [__panic_msg_25]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
@@ -570,7 +566,7 @@ module {
     %9 = maxon.binop %6, %8 {op = or}
     maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-unsigned-add.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %11 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %11
@@ -591,7 +587,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_rdata __panic_msg_10
+    %8 = memref.lea_symdata __panic_msg_10
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -620,7 +616,7 @@ module {
     x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -664,7 +660,7 @@ module {
     %9 = maxon.binop %6, %8 {op = or}
     maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-unsigned-div.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %11 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %11
@@ -685,7 +681,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_rdata __panic_msg_10
+    %8 = memref.lea_symdata __panic_msg_10
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -715,7 +711,7 @@ module {
     x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -757,7 +753,7 @@ module {
     %7 = maxon.binop %4, %6 {op = or}
     maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-signed-div.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %9 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %9
@@ -782,7 +778,7 @@ module {
     %11 = arith.ori1 %7, %10
     cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_rdata __panic_msg_8
+    %12 = memref.lea_symdata __panic_msg_8
     %13 = std.ptr_to_i64 %12
     std.call_runtime @maxon_panic %13
   __range_ok_0:
@@ -818,7 +814,7 @@ module {
     x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_8]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -933,7 +929,7 @@ module {
     %9 = maxon.binop %6, %8 {op = or}
     maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-unsigned-mod.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %11 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %11
@@ -954,7 +950,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_rdata __panic_msg_10
+    %8 = memref.lea_symdata __panic_msg_10
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -984,7 +980,7 @@ module {
     x86.test eax, eax
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1026,7 +1022,7 @@ module {
     %7 = maxon.binop %4, %6 {op = or}
     maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i64-signed-no-narrowing.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %9 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %9
@@ -1047,7 +1043,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_rdata __panic_msg_8
+    %8 = memref.lea_symdata __panic_msg_8
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -1077,7 +1073,7 @@ module {
     x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_8]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1119,7 +1115,7 @@ module {
     %7 = maxon.binop %4, %6 {op = or}
     maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i8-range-uses-i32-arithmetic.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %9 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %9
@@ -1144,7 +1140,7 @@ module {
     %11 = arith.ori1 %7, %10
     cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_rdata __panic_msg_8
+    %12 = memref.lea_symdata __panic_msg_8
     %13 = std.ptr_to_i64 %12
     std.call_runtime @maxon_panic %13
   __range_ok_0:
@@ -1180,7 +1176,7 @@ module {
     x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_8]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1223,7 +1219,7 @@ module {
     %8 = maxon.binop %5, %7 {op = or}
     maxon.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at f32-arithmetic-uses-ss-instructions.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %10 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %10
@@ -1245,7 +1241,7 @@ module {
     %8 = arith.ori1 %5, %7
     cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %9 = memref.lea_rdata __panic_msg_9
+    %9 = memref.lea_symdata __panic_msg_9
     %10 = std.ptr_to_i64 %9
     std.call_runtime @maxon_panic %10
   __range_ok_0:
@@ -1276,7 +1272,7 @@ module {
     x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_9]
+    x86.lea_symdata rax, [__panic_msg_9]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1385,7 +1381,7 @@ module {
     %6 = maxon.binop %3, %5 {op = or}
     maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at f32-truncation-uses-cvttss2si.test:6: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %8 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %8
@@ -1405,7 +1401,7 @@ module {
     %6 = arith.ori1 %3, %5
     cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %7 = memref.lea_rdata __panic_msg_7
+    %7 = memref.lea_symdata __panic_msg_7
     %8 = std.ptr_to_i64 %7
     std.call_runtime @maxon_panic %8
   __range_ok_0:
@@ -1433,7 +1429,7 @@ module {
     x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_7]
+    x86.lea_symdata rax, [__panic_msg_7]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

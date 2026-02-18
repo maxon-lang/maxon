@@ -916,7 +916,7 @@ public class MaxonCStringWriteStderrOp(MaxonValue cstrPtr) : MaxonOp {
 public class MaxonPanicOp(string message) : MaxonOp {
   public override string Mnemonic => $"maxon.panic \"{Message}\"";
   public string Message { get; } = message;
-  public string RdataLabel { get; } = $"__panic_msg_{MlirContext.Current.NextId()}";
+  public string SymdataLabel { get; } = $"__panic_msg_{MlirContext.Current.NextId()}";
 }
 
 /// Generic runtime function call op for intrinsics that delegate to a runtime function.

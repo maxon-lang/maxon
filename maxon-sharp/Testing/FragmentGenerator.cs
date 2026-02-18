@@ -218,6 +218,11 @@ public static partial class FragmentGenerator {
         sb.AppendLine(success.Stdout);
         sb.AppendLine("```");
       }
+      if (success.Stderr != null) {
+        sb.AppendLine("Stderr: ```");
+        sb.AppendLine(success.Stderr);
+        sb.AppendLine("```");
+      }
 
       // Write required MLIR if specified
       if (success.RequiredMLIR != null) {
@@ -367,6 +372,7 @@ public static partial class FragmentGenerator {
     var lines = section.Split('\n');
     int? exitCode = null;
     string? stdout = null;
+    string? stderr = null;
     string? requiredMLIR = null;
     string? requiredRdata = null;
     string? requiredData = null;
@@ -391,6 +397,8 @@ public static partial class FragmentGenerator {
         expectedError = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("Stdout: ```")) {
         stdout = ExtractMultilineValue(lines, ref i);
+      } else if (line.StartsWith("Stderr: ```")) {
+        stderr = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("RequiredMLIR: ```")) {
         requiredMLIR = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("RequiredRdata: ```")) {
@@ -411,6 +419,7 @@ public static partial class FragmentGenerator {
     return (new SuccessExpectation {
       ExitCode = exitCode,
       Stdout = stdout,
+      Stderr = stderr,
       RequiredMLIR = requiredMLIR,
       RequiredRdata = requiredRdata,
       RequiredData = requiredData,

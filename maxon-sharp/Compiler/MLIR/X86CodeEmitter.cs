@@ -37,6 +37,11 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
   // Function address fixups: code offset -> function name (for LEA of function addresses)
   private readonly List<(int offset, string funcName)> _funcAddrFixups = [];
 
+  // Symdata section: symbol table for stack traces (separate from rdata)
+  private readonly List<byte> _symdata = [];
+  private readonly Dictionary<string, int> _symdataLabels = [];
+  private readonly List<(int offset, string label)> _symdataFixups = [];
+
   // Chkstk call sites for patching
   private readonly List<int> _chkstkCallSites = [];
 
@@ -49,6 +54,7 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
   public bool HasRdata => _rdata.Count > 0;
   public bool HasGlobals => _data.Count > 0;
   public bool HasImports => _imports.Count > 0;
+  public bool HasSymdata => _symdata.Count > 0;
 
   // --- Label management ---
 
@@ -73,6 +79,15 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     }
     _rdataLabels[label] = _rdata.Count;
     _rdata.AddRange(bytes);
+  }
+
+  public void DefineSymdata(string label, byte[] bytes, int alignment = 1) {
+    if (alignment > 1) {
+      var padding = (alignment - (_symdata.Count % alignment)) % alignment;
+      for (var i = 0; i < padding; i++) _symdata.Add(0);
+    }
+    _symdataLabels[label] = _symdata.Count;
+    _symdata.AddRange(bytes);
   }
 
   public void DefineGlobal(string name, int size, long initValue) {
@@ -267,6 +282,9 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86LeaRipRelOp leaRip:
         EmitLeaRegRipRel(leaRip.Dest, leaRip.RdataLabel);
         break;
+      case X86LeaSymdataRelOp leaSymdata:
+        EmitLeaRegSymdataRel(leaSymdata.Dest, leaSymdata.SymdataLabel);
+        break;
       case X86LeaFuncAddrOp leaFunc:
         EmitLeaFuncAddr(leaFunc.Dest, leaFunc.FunctionName);
         break;
@@ -435,6 +453,18 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     }
   }
 
+  public void ResolveSymdata(int rvaOffset) {
+    var codeSize = _code.Count;
+    foreach (var (offset, label) in _symdataFixups) {
+      if (!_symdataLabels.TryGetValue(label, out var symdataOffset)) {
+        throw new InvalidOperationException($"Unresolved symdata label: {label}");
+      }
+      var target = codeSize + rvaOffset + symdataOffset;
+      var rel = target - (offset + 4);
+      PatchDword(offset, rel);
+    }
+  }
+
   public void ResolveGlobals(int rvaOffset) {
     var codeSize = _code.Count;
     foreach (var (offset, name) in _globalFixups) {
@@ -478,11 +508,51 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     }
   }
 
+  // --- Symbol table ---
+
+  public int GetLabelOffset(string name) {
+    return _labels.TryGetValue(name, out var offset) ? offset : -1;
+  }
+
+  /// <summary>
+  /// Emits a sorted function symbol table into symdata for stack trace lookups.
+  /// Format: count(4) | entries[count] of {codeOffset(4), nameOffset(4)} | name strings
+  /// </summary>
+  public void EmitSymbolTable(List<(string name, int codeOffset)> functions) {
+    functions.Sort((a, b) => a.codeOffset.CompareTo(b.codeOffset));
+
+    // Build the name strings block and record their offsets within it
+    var nameStrings = new List<byte>();
+    var nameOffsets = new List<int>();
+    foreach (var (name, _) in functions) {
+      nameOffsets.Add(nameStrings.Count);
+      nameStrings.AddRange(System.Text.Encoding.UTF8.GetBytes(name));
+      nameStrings.Add(0); // null terminator
+    }
+
+    // Header size: 4 (count) + 8 * count (entries)
+    var headerSize = 4 + 8 * functions.Count;
+
+    // Build full table bytes
+    var table = new byte[headerSize + nameStrings.Count];
+    BitConverter.GetBytes(functions.Count).CopyTo(table, 0);
+    for (int i = 0; i < functions.Count; i++) {
+      var entryOffset = 4 + i * 8;
+      BitConverter.GetBytes(functions[i].codeOffset).CopyTo(table, entryOffset);
+      BitConverter.GetBytes(headerSize + nameOffsets[i]).CopyTo(table, entryOffset + 4);
+    }
+    // Copy name strings after the header+entries
+    nameStrings.CopyTo(table, headerSize);
+
+    DefineSymdata("__symtable", table, 4);
+  }
+
   // --- Output ---
 
   public byte[] GetCode() => [.. _code];
   public byte[] GetRdata() => [.. _rdata];
   public byte[] GetData() => [.. _data];
+  public byte[] GetSymdata() => [.. _symdata];
 
   // --- Private helpers ---
 
@@ -1219,6 +1289,16 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
     EmitByte((byte)(0x05 | (RegCode(dest) << 3))); // mod=00, r/m=101 (RIP-relative)
     _rdataFixups.Add((_code.Count, rdataLabel));
     EmitDword(0); // placeholder for RIP-relative displacement
+  }
+
+  private void EmitLeaRegSymdataRel(X86Register dest, string symdataLabel) {
+    RequireGpr(dest, nameof(EmitLeaRegSymdataRel));
+    // LEA r64, [rip+disp32]: same encoding as rdata, but fixup resolves against symdata section
+    Rex.W().Reg(dest).Emit(this);
+    EmitByte(0x8D);
+    EmitByte((byte)(0x05 | (RegCode(dest) << 3)));
+    _symdataFixups.Add((_code.Count, symdataLabel));
+    EmitDword(0);
   }
 
   private void EmitLeaFuncAddr(X86Register dest, string functionName) {

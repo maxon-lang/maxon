@@ -9,7 +9,7 @@ public class PeWriter {
   private const uint SectionAlignment = 0x1000;  // 4096 bytes
   private const ulong ImageBase = 0x140000000;   // Default for 64-bit
 
-  public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null, IReadOnlyList<ImportEntry>? imports = null) {
+  public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null, IReadOnlyList<ImportEntry>? imports = null, byte[]? symdata = null) {
     Logger.Debug(LogCategory.Pe, $"Writing PE file: {path}");
     using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
     using var writer = new BinaryWriter(fs);
@@ -17,9 +17,11 @@ public class PeWriter {
     rdata ??= [];
     data ??= [];
     imports ??= [];
+    symdata ??= [];
 
     var hasRdata = rdata.Length > 0;
     var hasData = data.Length > 0;
+    var hasSymdata = symdata.Length > 0;
     var hasImports = imports.Count > 0;
 
     // Build import section data if needed
@@ -41,6 +43,7 @@ public class PeWriter {
     var numSections = 1u;
     if (hasRdata) numSections++;
     if (hasData) numSections++;
+    if (hasSymdata) numSections++;
     if (hasImports) numSections++;
 
     var headersSize = dosHeaderSize + 4 + coffHeaderSize + optionalHeaderSize + (sectionHeaderSize * numSections);
@@ -58,15 +61,20 @@ public class PeWriter {
     var dataSizeAligned = hasData ? AlignUp(dataSize, FileAlignment) : 0;
     var dataSizeVirtual = hasData ? AlignUp(dataSize, SectionAlignment) : 0;
 
+    var symdataSize = (uint)symdata.Length;
+    var symdataSizeAligned = hasSymdata ? AlignUp(symdataSize, FileAlignment) : 0;
+    var symdataSizeVirtual = hasSymdata ? AlignUp(symdataSize, SectionAlignment) : 0;
+
     var idataSize = (uint)idataSection.Length;
     var idataSizeAligned = hasImports ? AlignUp(idataSize, FileAlignment) : 0;
     var idataSizeVirtual = hasImports ? AlignUp(idataSize, SectionAlignment) : 0;
 
-    // Section RVAs: .text -> .rdata -> .data -> .idata
+    // Section RVAs: .text -> .rdata -> .data -> .symtab -> .idata
     var textRva = SectionAlignment;  // .text section starts at section alignment
     var rdataRva = textRva + codeSizeVirtual;  // .rdata section follows .text
     var dataRva = rdataRva + rdataSizeVirtual;  // .data section follows .rdata
-    var idataRva = dataRva + dataSizeVirtual;  // .idata section follows .data
+    var symdataRva = dataRva + dataSizeVirtual;  // .symtab section follows .data
+    var idataRva = symdataRva + symdataSizeVirtual;  // .idata section follows .symtab
 
     // Adjust RVAs in import section data for actual position
     if (hasImports) {
@@ -77,13 +85,15 @@ public class PeWriter {
 
     // Calculate image size (last section RVA + its virtual size)
     var imageSize = idataRva + idataSizeVirtual;
-    if (!hasImports) imageSize = dataRva + dataSizeVirtual;
-    if (!hasData && !hasImports) imageSize = rdataRva + rdataSizeVirtual;
-    if (!hasRdata && !hasData && !hasImports) imageSize = textRva + codeSizeVirtual;
+    if (!hasImports) imageSize = symdataRva + symdataSizeVirtual;
+    if (!hasSymdata && !hasImports) imageSize = dataRva + dataSizeVirtual;
+    if (!hasData && !hasSymdata && !hasImports) imageSize = rdataRva + rdataSizeVirtual;
+    if (!hasRdata && !hasData && !hasSymdata && !hasImports) imageSize = textRva + codeSizeVirtual;
 
     Logger.Debug(LogCategory.Pe, $"Code section: {codeSize} bytes at RVA 0x{textRva:X}");
     if (hasRdata) Logger.Debug(LogCategory.Pe, $"Rdata section: {rdataSize} bytes at RVA 0x{rdataRva:X}");
     if (hasData) Logger.Debug(LogCategory.Pe, $"Data section: {dataSize} bytes at RVA 0x{dataRva:X}");
+    if (hasSymdata) Logger.Debug(LogCategory.Pe, $"Symdata section: {symdataSize} bytes at RVA 0x{symdataRva:X}");
     if (hasImports) Logger.Debug(LogCategory.Pe, $"Import section: {idataSize} bytes at RVA 0x{idataRva:X}");
 
     // DOS Header
@@ -108,7 +118,7 @@ public class PeWriter {
     writer.Write((byte)14);          // MajorLinkerVersion
     writer.Write((byte)0);           // MinorLinkerVersion
     writer.Write(codeSizeAligned);   // SizeOfCode
-    writer.Write(dataSizeAligned + idataSizeAligned);  // SizeOfInitializedData
+    writer.Write(dataSizeAligned + symdataSizeAligned + idataSizeAligned);  // SizeOfInitializedData
     writer.Write((uint)0);           // SizeOfUninitializedData
     writer.Write(textRva);           // AddressOfEntryPoint (RVA of code)
     writer.Write(textRva);           // BaseOfCode
@@ -172,6 +182,12 @@ public class PeWriter {
       currentRawDataPos += dataSizeAligned;
     }
 
+    // Section Header: .symtab (if present) - read-only symbol table for stack traces
+    if (hasSymdata) {
+      WriteSectionHeader(writer, ".symtab", symdataSize, symdataRva, symdataSizeAligned, currentRawDataPos, 0x40000040);
+      currentRawDataPos += symdataSizeAligned;
+    }
+
     // Section Header: .idata (if present)
     if (hasImports) {
       WriteSectionHeader(writer, ".idata", idataSize, idataRva, idataSizeAligned, currentRawDataPos, 0xC0000040);
@@ -206,6 +222,15 @@ public class PeWriter {
       var dataPadding = dataSizeAligned - dataSize;
       if (dataPadding > 0) {
         writer.Write(new byte[dataPadding]);
+      }
+    }
+
+    // .symtab section (symbol table for stack traces)
+    if (hasSymdata) {
+      writer.Write(symdata);
+      var symdataPadding = symdataSizeAligned - symdataSize;
+      if (symdataPadding > 0) {
+        writer.Write(new byte[symdataPadding]);
       }
     }
 

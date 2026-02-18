@@ -47,7 +47,7 @@ module {
     %24 = maxon.binop %21, %23 {op = or}
     maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
     %26 = maxon.var_ref {var = __range_val_5} {type = i64}
     maxon.return %26
@@ -113,7 +113,7 @@ module {
     %37 = arith.ori1 %34, %36
     cf.cond_br %37 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %38 = memref.lea_rdata __panic_msg_25
+    %38 = memref.lea_symdata __panic_msg_25
     %39 = std.ptr_to_i64 %38
     std.call_runtime @maxon_panic %39
   __range_ok_5:
@@ -197,7 +197,7 @@ module {
     x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_5
   __range_panic_5:
-    x86.lea_rdata rax, [__panic_msg_25]
+    x86.lea_symdata rax, [__panic_msg_25]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
@@ -209,7 +209,6 @@ module {
 ```
 RequiredRdata: ```
 i64 42
-utf8 "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)\n\0"
 ```
 ---
 ---

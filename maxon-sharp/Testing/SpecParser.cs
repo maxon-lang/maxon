@@ -100,26 +100,28 @@ public static partial class SpecParser {
 
       var exitCode = ExtractCodeBlock(testSection, "exitcode");
       var stdout = ExtractCodeBlock(testSection, "stdout");
-      var stderr = ExtractCodeBlock(testSection, "maxoncstderr");
+      var runtimeStderr = ExtractCodeBlock(testSection, "stderr");
+      var compilerStderr = ExtractCodeBlock(testSection, "maxoncstderr");
 
       var requiredMLIR = ExtractCodeBlock(testSection, "RequiredMLIR");
       var requiredRdata = ExtractCodeBlock(testSection, "RequiredRdata");
       var requiredData = ExtractCodeBlock(testSection, "RequiredData");
 
       TestExpectation expectation;
-      if (stderr != null) {
+      if (compilerStderr != null) {
         expectation = new CompilerErrorExpectation {
-          ExpectedStderr = stderr
+          ExpectedStderr = compilerStderr
         };
       } else {
-        if (exitCode == null && stdout == null && requiredMLIR == null && requiredRdata == null && requiredData == null) {
+        if (exitCode == null && stdout == null && runtimeStderr == null && requiredMLIR == null && requiredRdata == null && requiredData == null) {
           throw new Exception(
             $"Test '{testName}' has a maxon block but no result checks. " +
-            "Add an exitcode, stdout, maxoncstderr, RequiredMLIR, RequiredRdata, or RequiredData block.");
+            "Add an exitcode, stdout, stderr, maxoncstderr, RequiredMLIR, RequiredRdata, or RequiredData block.");
         }
         expectation = new SuccessExpectation {
           ExitCode = exitCode != null ? int.Parse(exitCode.Trim()) : null,
           Stdout = stdout,
+          Stderr = runtimeStderr,
           RequiredMLIR = requiredMLIR,
           RequiredRdata = requiredRdata,
           RequiredData = requiredData,
@@ -213,7 +215,7 @@ public static partial class SpecParser {
   }
 
   private static readonly HashSet<string> KnownCodeBlockLanguages = [
-    "maxon", "exitcode", "stdout", "maxoncstderr", "RequiredMLIR", "RequiredRdata", "RequiredData"
+    "maxon", "exitcode", "stdout", "stderr", "maxoncstderr", "RequiredMLIR", "RequiredRdata", "RequiredData"
   ];
 
   private static void ValidateCodeBlockLanguages(string testName, string testSection) {

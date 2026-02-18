@@ -27,7 +27,7 @@ module {
     %8 = maxon.binop %5, %7 {op = or}
     maxon.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at f32-arithmetic-uses-ss-instructions.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %10 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %10
@@ -49,7 +49,7 @@ module {
     %8 = arith.ori1 %5, %7
     cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %9 = memref.lea_rdata __panic_msg_9
+    %9 = memref.lea_symdata __panic_msg_9
     %10 = std.ptr_to_i64 %9
     std.call_runtime @maxon_panic %10
   __range_ok_0:
@@ -80,7 +80,7 @@ module {
     x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_9]
+    x86.lea_symdata rax, [__panic_msg_9]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

@@ -32,7 +32,7 @@ module {
     %11 = maxon.binop %8, %10 {op = or}
     maxon.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at int-expression-both-sides-complex.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
     %13 = maxon.var_ref {var = __range_val_0} {type = i64}
     maxon.return %13
@@ -57,7 +57,7 @@ module {
     %11 = arith.ori1 %8, %10
     cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_rdata __panic_msg_12
+    %12 = memref.lea_symdata __panic_msg_12
     %13 = std.ptr_to_i64 %12
     std.call_runtime @maxon_panic %13
   __range_ok_0:
@@ -90,7 +90,7 @@ module {
     x86.test edi, edi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_rdata rax, [__panic_msg_12]
+    x86.lea_symdata rax, [__panic_msg_12]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

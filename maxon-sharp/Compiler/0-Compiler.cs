@@ -62,8 +62,8 @@ public class Compiler {
       var codeResult = CodeEmitter.Emit(mlirResult.Module, trackAllocs);
 
       // Stage 6: Write PE executable
-      PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Imports);
-      Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Imports.Count} imports to {outputPath}");
+      PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Imports, codeResult.Symdata);
+      Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath}");
 
       return new CompileResult(true, null, mlirResult.AllStagesIr);
     } catch (CompileError ex) {
