@@ -1,0 +1,135 @@
+// Test: stack-probing-large-struct
+typealias BigVec = Vector with 2048 int
+typealias Depth = int(-1 to 50)
+
+function recurse(n Depth) returns Depth
+  var v = BigVec{skipZeroInit: true}
+  v.set(2047, value: n)
+  if n <= 0 'base'
+    return Depth{0}
+  end 'base'
+  return recurse(n - 1)
+end 'recurse'
+
+function main() returns ExitCode
+  return recurse(50)
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @codegen-internals.recurse(n: i64) -> i8 {
+  entry:
+    x86.prologue stack_size=16464
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.xor edx, edx
+    x86.mov ebx, 2048
+    x86.xor esi, esi
+    x86.mov edi, 8
+    x86.lea rdi, [rbp-40]
+    x86.xor eax, eax
+    x86.mov ecx, 4
+    x86.rep_stosq
+    x86.lea rcx, [rbp-40]
+    x86.mov rax, rcx
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-48]
+    x86.mov [eax+0], edx
+    x86.mov edx, [rbp-48]
+    x86.mov [edx+8], ebx
+    x86.mov ebx, [rbp-48]
+    x86.mov [ebx+16], esi
+    x86.mov esi, [rbp-48]
+    x86.mov edi, 8
+    x86.mov [esi+24], edi
+    x86.lea rdi, [rbp-64]
+    x86.xor eax, eax
+    x86.mov ecx, 2
+    x86.rep_stosq
+    x86.lea r8, [rbp-64]
+    x86.mov r9, r8
+    x86.mov [rbp-72], r9
+    x86.mov eax, [rbp-72]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-72]
+    x86.mov [ecx+8], eax
+    x86.lea rax, [rbp-16456]
+    x86.mov rcx, rax
+    x86.mov eax, [rbp-72]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.mov eax, 2048
+    x86.mov [edx+16], eax
+    x86.mov eax, 2047
+    x86.mov ecx, [rbp-72]
+    x86.mov rdx, rax
+    x86.mov r8, [rbp-8]
+    x86.call BigVec.set
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, ecx
+    x86.mov ecx, eax
+    x86.cmp edx, ecx
+    x86.jg codegen-internals.recurse.base_1.after
+  base_1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  base_1.after:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.sub ecx, eax
+    x86.call codegen-internals.recurse
+    x86.mov [rbp-16464], eax
+    x86.mov edx, -1
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov esi, 50
+    x86.cmp eax, esi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je codegen-internals.recurse.__range_ok_2
+  __range_panic_2:
+    x86.lea_symdata rax, [__panic_msg_21]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-16464]
+    x86.epilogue
+    x86.ret
+  }
+  func @codegen-internals.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 50
+    x86.mov rcx, rax
+    x86.call codegen-internals.recurse
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_30]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

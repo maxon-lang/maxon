@@ -38,10 +38,22 @@ String literals are stored in `.rdata` with null termination. The compiler handl
 
 ## Tests
 
-0<!-- disabled-test: stack-probing-large-struct-recursive -->
+<!-- test: stack-probing-large-struct -->
 ```maxon
+typealias BigVec = Vector with 2048 int
+typealias Depth = int(-1 to 50)
+
+function recurse(n Depth) returns Depth
+  var v = BigVec{skipZeroInit: true}
+  v.set(2047, value: n)
+  if n <= 0 'base'
+    return Depth{0}
+  end 'base'
+  return recurse(n - 1)
+end 'recurse'
+
 function main() returns ExitCode
-  return 0
+  return recurse(50)
 end 'main'
 ```
 ```exitcode

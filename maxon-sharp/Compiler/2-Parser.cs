@@ -8556,15 +8556,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var fieldValues = new List<(string, MaxonValue)>();
     var providedFields = new HashSet<string>();
 
-    // Track array literal tag if this is a Vector-like type with __capacity
+    // Track array literal tag for types with __capacity and __ManagedMemory
     string? arrayLiteralTag = null;
     int arrayLiteralCount = 0;
+    bool skipZeroInit = false;
 
     SkipNewlines();
     if (!Check(TokenType.RightBrace)) {
       do {
         SkipNewlines();
         var fieldNameToken = Expect(TokenType.Identifier);
+
+        // skipZeroInit is a compiler directive for BuiltinArrayLiteral types, not a real field
+        if (fieldNameToken.Value == "skipZeroInit") {
+          if (!structType.ConformingInterfaces.Contains("BuiltinArrayLiteral")) {
+            throw new CompileError(ErrorCode.SemanticUnknownField,
+              $"'skipZeroInit' is only valid on types conforming to BuiltinArrayLiteral",
+              fieldNameToken.Line, fieldNameToken.Column);
+          }
+          Expect(TokenType.Colon);
+          Expect(TokenType.True);
+          skipZeroInit = true;
+          // Not a real field — don't add to fieldValues or providedFields
+          continue;
+        }
+
         _ = structType.GetField(fieldNameToken.Value) ?? throw new CompileError(ErrorCode.SemanticUnknownField,
             $"Type '{typeName}' has no field '{fieldNameToken.Value}'",
             fieldNameToken.Line, fieldNameToken.Column);
@@ -8602,7 +8618,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     foreach (var field in structType.Fields) {
       if (!providedFields.Contains(field.Name)) {
         if (field.DefaultValue == null) {
-          // Special case: Vector-like type with __capacity and managed __ManagedMemory field
+          // Fixed-capacity type with managed __ManagedMemory field
           if (field.Name == "managed" && field.Type.Name == "__ManagedMemory" &&
               structType.ConstParams.TryGetValue("__capacity", out var capacity)) {
             // Determine element type from struct's type parameters
@@ -8614,15 +8630,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var elemKind = elemType.ToValueKind();
             int elemSize = elemType.ElementSize;
 
-            // Create N zero-valued elements on the stack (in reverse order for proper memory layout)
             arrayLiteralTag = $"__arr_{_blockCounter++}";
             arrayLiteralCount = (int)capacity;
-            for (int i = arrayLiteralCount - 1; i >= 0; i--) {
-              var zeroVal = new MaxonLiteralOp(0L);
-              _currentBlock!.AddOp(zeroVal);
-              var elemVarName = $"{arrayLiteralTag}.{i}";
-              var assignOp = new MaxonAssignOp(elemVarName, zeroVal.Result, isDeclaration: true, isMutable: false, elemKind);
-              _currentBlock!.AddOp(assignOp);
+            if (!skipZeroInit) {
+              // Create N zero-valued elements on the stack (in reverse order for proper memory layout)
+              for (int i = arrayLiteralCount - 1; i >= 0; i--) {
+                var zeroVal = new MaxonLiteralOp(0L);
+                _currentBlock!.AddOp(zeroVal);
+                var elemVarName = $"{arrayLiteralTag}.{i}";
+                var assignOp = new MaxonAssignOp(elemVarName, zeroVal.Result, isDeclaration: true, isMutable: false, elemKind);
+                _currentBlock!.AddOp(assignOp);
+              }
             }
 
             // Create __ManagedMemory struct with stack-allocated buffer
@@ -8630,7 +8648,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             _currentBlock!.AddOp(bufLit);
             var lenLit = new MaxonLiteralOp(capacity);
             _currentBlock!.AddOp(lenLit);
-            var capLit = new MaxonLiteralOp(0L); // capacity = 0 means stack-allocated
+            var capLit = new MaxonLiteralOp(0L); // capacity=0 means read-only (rdata/stack); conversion patches when writable
             _currentBlock!.AddOp(capLit);
             var elemSizeLit = new MaxonLiteralOp((long)elemSize);
             _currentBlock!.AddOp(elemSizeLit);
@@ -8666,10 +8684,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Expect(TokenType.RightBrace);
 
     var structLiteral = new MaxonStructLiteralOp(typeName, fieldValues);
-    // If this is a Vector-like type, set the array literal tag for lowering
+    // Set the array literal tag for lowering if this type has a __ManagedMemory buffer
     if (arrayLiteralTag != null) {
       structLiteral.ArrayLiteralTag = arrayLiteralTag;
       structLiteral.ArrayLiteralCount = arrayLiteralCount;
+      structLiteral.SkipZeroInit = skipZeroInit;
     }
     _currentBlock!.AddOp(structLiteral);
     return new ExprResult.Direct(structLiteral.Result);

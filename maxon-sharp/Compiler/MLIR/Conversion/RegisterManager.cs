@@ -1347,6 +1347,19 @@ public class RegisterManager {
     Invalidate(X86Register.Ecx);
   }
 
+  public void EmitBulkZero(int baseOffset, int qwordCount, MlirBlock<X86Op> block) {
+    SpillRegisterIfOccupied(X86Register.Eax, block);
+    SpillRegisterIfOccupied(X86Register.Edi, block);
+    SpillRegisterIfOccupied(X86Register.Ecx, block);
+    block.AddOp(new X86LeaRegMemOp(X86Register.Rdi, baseOffset));
+    block.AddOp(new X86XorRegRegOp(X86Register.Eax, X86Register.Eax));
+    block.AddOp(new X86MovRegImmOp(X86Register.Ecx, qwordCount));
+    block.AddOp(new X86RepStosqOp());
+    Invalidate(X86Register.Eax);
+    Invalidate(X86Register.Edi);
+    Invalidate(X86Register.Ecx);
+  }
+
   // Check if two register names refer to the same physical register
   // (e.g., Edi and Rdi, or Eax and Rax).
   private static bool SamePhysReg(X86Register a, X86Register b) {

@@ -120,6 +120,8 @@ public static class PeepholePass {
       case X86IdivRegOp idiv: yield return X86Register.Rax; yield return X86Register.Rdx; yield return idiv.Divisor; break;
       // REP MOVSB reads RSI, RDI, RCX
       case X86RepMovsbOp: yield return X86Register.Rsi; yield return X86Register.Rdi; yield return X86Register.Rcx; break;
+      // REP STOSQ reads RAX, RDI, RCX
+      case X86RepStosqOp: yield return X86Register.Rax; yield return X86Register.Rdi; yield return X86Register.Rcx; break;
       // XMM ops that read GPR base registers
       case X86MovIndirectMemXmmOp sdStoreInd: yield return sdStoreInd.BaseReg; break;
       case X86MovXmmIndirectMemOp sdLoadInd: yield return sdLoadInd.BaseReg; break;

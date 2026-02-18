@@ -542,6 +542,8 @@ public class MaxonStructLiteralOp(string typeName, List<(string FieldName, Maxon
   // For array literals: tag prefix and count of sequential element variables
   public string? ArrayLiteralTag { get; set; }
   public int ArrayLiteralCount { get; set; }
+  // Skip element zero-initialization (stack space reserved but not cleared)
+  public bool SkipZeroInit { get; set; }
 }
 
 // Reads a field: p.x

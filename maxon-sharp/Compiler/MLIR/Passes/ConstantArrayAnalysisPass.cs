@@ -121,6 +121,12 @@ public static class ConstantArrayAnalysisPass {
           }
           int elementSize = (int)elemSizeVal;
 
+          // Mutable structs with stack-sized element buffers keep data on the stack
+          // so .set() can write directly without COW heap-copying
+          if (assignOp.IsMutable && HasStackAllocatableBuffer(arrayStructLit.TypeName, module.TypeDefs)) {
+            continue;
+          }
+
           // Include function name in rdata label to avoid conflicts
           var rdataLabel = $"__const_array_{func.Name}_{assignOp.VarName}";
           module.ConstantArrayLiterals[arrayStructLit.Result.Id] =
@@ -128,6 +134,12 @@ public static class ConstantArrayAnalysisPass {
         }
       }
     }
+  }
+
+  private static bool HasStackAllocatableBuffer(string typeName, Dictionary<string, MlirType> typeDefs) {
+    if (!typeDefs.TryGetValue(typeName, out var typeDef)) return false;
+    if (typeDef is not MlirStructType structType) return false;
+    return structType.HasStackAllocatableBuffer;
   }
 
   /// <summary>

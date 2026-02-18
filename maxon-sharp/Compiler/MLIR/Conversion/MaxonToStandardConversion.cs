@@ -122,6 +122,7 @@ public static partial class MaxonToStandardConversion {
 
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
       var escapingArrayLiterals = FindEscapingArrayLiterals(func);
+      var stackAllocIds = FindStackAllocatableStructs(func, module.TypeDefs, escapingArrayLiterals);
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
@@ -287,7 +288,56 @@ public static partial class MaxonToStandardConversion {
           }
         }
 
+        // Pre-scan: detect contiguous zero-init array element sequences that can
+        // be replaced with a single StdBulkZeroOp during lowering.
+        var bulkZeroSkipOps = new HashSet<MaxonOp>();
+        var bulkZeroEmitPoints = new Dictionary<MaxonOp, (string tag, int count)>();
+        {
+          int i = 0;
+          var ops = block.Operations;
+          while (i < ops.Count - 1) {
+            // Look for: MaxonLiteralOp(0) + MaxonAssignOp(__tag.N, isDecl)
+            if (ops[i] is MaxonLiteralOp lit0
+                && lit0.ValueKind == MaxonValueKind.Integer && lit0.IntValue == 0
+                && ops[i + 1] is MaxonAssignOp assign0
+                && assign0.Value.Id == lit0.Result.Id
+                && assign0.IsDeclaration) {
+              var dotIdx = assign0.VarName.IndexOf('.');
+              if (dotIdx >= 0 && assign0.VarName.StartsWith("__arr_")) {
+                var tag = assign0.VarName[..dotIdx];
+                int groupStart = i;
+                int count = 0;
+                // Collect all consecutive zero-init pairs with the same tag
+                while (i < ops.Count - 1
+                    && ops[i] is MaxonLiteralOp litN
+                    && litN.ValueKind == MaxonValueKind.Integer && litN.IntValue == 0
+                    && ops[i + 1] is MaxonAssignOp assignN
+                    && assignN.Value.Id == litN.Result.Id
+                    && assignN.IsDeclaration
+                    && assignN.VarName.StartsWith($"{tag}.")) {
+                  count++;
+                  i += 2;
+                }
+                if (count >= 8) {
+                  // Mark all ops in the group for skipping
+                  for (int j = groupStart; j < groupStart + count * 2; j++)
+                    bulkZeroSkipOps.Add(ops[j]);
+                  // First op in group triggers bulk zero emission
+                  bulkZeroEmitPoints[ops[groupStart]] = (tag, count);
+                }
+                continue;
+              }
+            }
+            i++;
+          }
+        }
+
         foreach (var op in block.Operations) {
+          if (bulkZeroSkipOps.Contains(op)) {
+            if (bulkZeroEmitPoints.TryGetValue(op, out var bzInfo))
+              newBlock.AddOp(new StdBulkZeroOp(bzInfo.tag, bzInfo.count));
+            continue;
+          }
           switch (op) {
             case MaxonParamOp paramOp: {
               if (refParamPtrVars.TryGetValue(paramOp.Name, out string? value)) {
@@ -608,9 +658,12 @@ public static partial class MaxonToStandardConversion {
                 : $"__struct_{structLitOp.Result.Id}";
               var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
 
-              // Allocate heap memory for the struct
-              var heapPtr = EmitAlloc(newBlock, structType.SizeInBytes);
-              EmitStore(newBlock, heapPtr, tempName, varTypes);
+              // Allocate memory for the struct (stack for eligible vectors, heap otherwise)
+              bool useStackAlloc = stackAllocIds.Contains(structLitOp.Result.Id);
+              var structPtr = useStackAlloc
+                ? EmitStackAlloc(newBlock, structType.SizeInBytes)
+                : EmitAlloc(newBlock, structType.SizeInBytes);
+              EmitStore(newBlock, structPtr, tempName, varTypes);
 
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                 var field = structType.GetField(fieldName)!;
@@ -708,6 +761,10 @@ public static partial class MaxonToStandardConversion {
                   rdataPtr = heapBuf;
                 } else {
                   // Stack buffer is safe — array is only used within this function
+                  if (structLitOp.SkipZeroInit) {
+                    // Reserve stack space without clearing it
+                    newBlock.AddOp(new StdBulkZeroOp(structLitOp.ArrayLiteralTag, structLitOp.ArrayLiteralCount, zeroInit: false));
+                  }
                   var leaOp = new StdLeaOp(structLitOp.ArrayLiteralTag);
                   newBlock.AddOp(leaOp);
                   var castOp = new StdPtrToI64Op(leaOp.Result);
@@ -715,16 +772,16 @@ public static partial class MaxonToStandardConversion {
                   rdataPtr = castOp.Result;
                 }
 
-                // Only set capacity for heap-allocated escape buffers, NOT for constant/rdata buffers
-                var usedHeapEscape = escapingArrayLiterals.Contains(structLitOp.Result.Id)
-                  && !module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id);
+                // Set capacity for writable buffers (heap escape or stack-local),
+                // but NOT for constant/rdata buffers which are read-only
+                bool isConstantBuffer = module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id);
+                bool bufferIsWritable = !isConstantBuffer;
                 if (structLitOp.TypeName == "__ManagedMemory") {
                   // buffer is directly on this struct at offset 0
                   var bufferField = structType.GetField("buffer")!;
                   EmitStructFieldStore(newBlock, rdataPtr, tempName, bufferField.Offset, MlirType.I64, varTypes);
-                  // Heap escape buffers are writable — set capacity to element count
-                  // so COW check knows this buffer is heap-owned (capacity=0 means read-only/rdata)
-                  if (usedHeapEscape) {
+                  // Writable buffers (stack or heap) get capacity=count so COW check passes
+                  if (bufferIsWritable) {
                     var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
                     newBlock.AddOp(capOp);
                     EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
@@ -737,8 +794,8 @@ public static partial class MaxonToStandardConversion {
                   var managedType = (MlirStructType)managedField.Type;
                   var bufferField = managedType.GetField("buffer")!;
                   newBlock.AddOp(new StdStoreIndirectOp(rdataPtr, managedHeapPtr, bufferField.Offset, MlirType.I64));
-                  // Heap escape buffers are writable — set capacity to element count
-                  if (usedHeapEscape) {
+                  // Writable buffers (stack or heap) get capacity=count so COW check passes
+                  if (bufferIsWritable) {
                     var capOp = new StdConstI64Op(structLitOp.ArrayLiteralCount);
                     newBlock.AddOp(capOp);
                     var capField = managedType.GetField("capacity")!;

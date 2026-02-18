@@ -111,8 +111,16 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86PrologueOp prologue:
         EmitPushReg(X86Register.Rbp);
         EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
-        if (prologue.StackSize > 0)
+        if (prologue.StackSize > 4096) {
+          // Large frames need __chkstk to probe guard pages
+          EmitMovRegImm(X86Register.Eax, prologue.StackSize);
+          EmitByte(0xE8); // call rel32
+          _chkstkCallSites.Add(_code.Count);
+          EmitDword(0); // placeholder, patched by PatchChkstkCalls
+          EmitSubRegReg(X86Register.Rsp, X86Register.Rax);
+        } else if (prologue.StackSize > 0) {
           EmitSubRegImm(X86Register.Rsp, prologue.StackSize);
+        }
         break;
       case X86EpilogueOp:
         EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
@@ -330,6 +338,9 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
       case X86RepMovsbOp:
         EmitBytes(0xF3, 0xA4); // REP MOVSB
         break;
+      case X86RepStosqOp:
+        EmitBytes(0xF3, 0x48, 0xAB); // REP STOSQ
+        break;
       case X86CallImportOp callImport:
         EmitCallImport(callImport.DllName, callImport.FunctionName);
         break;
@@ -391,8 +402,27 @@ public partial class X86CodeEmitter(bool trackAllocs = false) {
 
   public void EmitChkstk() {
     DefineLabel("__chkstk");
-    // Minimal chkstk: just return. For large stack frames Windows requires
-    // probing each page, but for basic.maxon this is sufficient.
+    // Probes each 4K page between current rsp and rsp-rax to trigger
+    // guard page expansion on Windows. rax = allocation size (preserved).
+    // Uses r10/r11 as scratch (caller-saved, safe in prologue context).
+
+    // r10 = rsp (save original rsp, accounting for return address on stack)
+    EmitMovRegReg(X86Register.R10, X86Register.Rsp);
+
+    // r11 = rsp - rax (target address)
+    EmitMovRegReg(X86Register.R11, X86Register.Rsp);
+    EmitSubRegReg(X86Register.R11, X86Register.Rax);
+
+    // Probe loop: touch each 4K page
+    DefineLabel("__chkstk_loop");
+    EmitSubRegImm(X86Register.Rsp, 4096);
+    // test dword ptr [rsp], 0 — read-probe to trigger guard page expansion
+    EmitByte(0xF7); EmitByte(0x04); EmitByte(0x24); EmitDword(0);
+    EmitCmpRegReg(X86Register.Rsp, X86Register.R11);
+    EmitJcc("a", "__chkstk_loop"); // loop while rsp > target
+
+    // Restore original rsp (caller will do sub rsp, rax)
+    EmitMovRegReg(X86Register.Rsp, X86Register.R10);
     EmitByte(0xC3); // ret
   }
 

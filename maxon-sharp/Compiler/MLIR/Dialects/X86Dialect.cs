@@ -520,6 +520,11 @@ public class X86RepMovsbOp : X86Op {
   public override string Mnemonic => "x86.rep_movsb";
 }
 
+// REP STOSQ - fill RCX qwords at RDI with RAX
+public class X86RepStosqOp : X86Op {
+  public override string Mnemonic => "x86.rep_stosq";
+}
+
 // CALL [rip+IAT] for imported DLL function
 public class X86CallImportOp(string dllName, string functionName) : X86Op {
   public string DllName { get; } = dllName;

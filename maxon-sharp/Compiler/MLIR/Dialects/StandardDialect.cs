@@ -940,6 +940,21 @@ public class StdLeaOp(string varName) : StandardOp {
   public override int PureResultId => -1; // Address escape — removing would change semantics
 }
 
+// Bulk zero-initialize N contiguous qwords at a tagged stack region.
+// Fields are named {Tag}.0 through {Tag}.{QwordCount-1}.
+public class StdBulkZeroOp(string tag, int qwordCount, bool zeroInit = true) : StandardOp {
+  public override string Mnemonic => $"memref.bulk_zero {Tag}, {QwordCount}";
+  public string Tag { get; } = tag;
+  public int QwordCount { get; } = qwordCount;
+  public bool ZeroInit { get; } = zeroInit;
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => -1;
+  public IEnumerable<string> FieldNames() {
+    for (int i = 0; i < QwordCount; i++)
+      yield return $"{Tag}.{i}";
+  }
+}
+
 // Gets the address of an rdata label via RIP-relative addressing (for constant data in .rdata)
 public class StdLeaRdataOp(string rdataLabel) : StandardOp {
   public override string Mnemonic => $"memref.lea_rdata {RdataLabel}";

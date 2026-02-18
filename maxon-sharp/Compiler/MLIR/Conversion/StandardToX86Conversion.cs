@@ -53,6 +53,9 @@ public static class StandardToX86Conversion {
           var dotIdx = store.VarName.IndexOf('.');
           if (dotIdx >= 0 && leaVariables.Contains(store.VarName[..dotIdx]))
             loadedVariables.Add(store.VarName);
+        } else if (op is StdBulkZeroOp bulkZero && leaVariables.Contains(bulkZero.Tag)) {
+          foreach (var fieldName in bulkZero.FieldNames())
+            loadedVariables.Add(fieldName);
         }
       }
     }
@@ -66,6 +69,16 @@ public static class StandardToX86Conversion {
     int varStackSize = 0;
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
+        if (op is StdBulkZeroOp bulkZero) {
+          foreach (var fieldName in bulkZero.FieldNames()) {
+            if (!loadedVariables.Contains(fieldName)) continue;
+            if (!varOffsets.ContainsKey(fieldName)) {
+              varStackSize += 8;
+              varOffsets[fieldName] = -varStackSize;
+            }
+          }
+          continue;
+        }
         if (op is not IStoreOp store) continue;
         if (!loadedVariables.Contains(store.VarName)) {
           deadStoreOps.Add(op);
@@ -619,6 +632,15 @@ public static class StandardToX86Conversion {
           case StdConstF32Op floatF32Op: {
             var label = GetOrCreateFloat32Label(floatF32Op.Value, outputModule, float32Constants);
             regManager.EmitXmmLoadFromRipRelativeF32(floatF32Op.Result, label, x86Block);
+            break;
+          }
+
+          case StdBulkZeroOp bulkZeroOp: {
+            if (bulkZeroOp.ZeroInit) {
+              var baseOffset = FindFirstFieldOffset(bulkZeroOp.Tag, varOffsets);
+              regManager.EmitBulkZero(baseOffset, bulkZeroOp.QwordCount, x86Block);
+            }
+            // When !ZeroInit, stack space is reserved by field offsets but not cleared
             break;
           }
 

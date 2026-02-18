@@ -115,6 +115,15 @@ public class MlirStructType : MlirType {
 
   public MlirStructField? GetField(string name) => Fields.FirstOrDefault(f => f.Name == name);
 
+  // Element buffers up to this size are stack-allocated instead of heap-allocated
+  public const int MaxStackAllocBufferBytes = 16384;
+
+  /// Whether this type has a fixed-capacity __ManagedMemory buffer small enough to stack-allocate.
+  public bool HasStackAllocatableBuffer =>
+    ConstParams.TryGetValue("__capacity", out var capacity)
+    && TypeParams.TryGetValue("Element", out var elemType)
+    && capacity * elemType.ElementSize <= MaxStackAllocBufferBytes;
+
   public static MlirStructType CreateTupleType(List<MlirType> elementTypes) {
     // Resolve ranged primitive types to base types for consistent tuple struct layout.
     var resolved = elementTypes.Select(t => MlirType.Resolve(t)).ToList();

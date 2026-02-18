@@ -8,71 +8,211 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
----
+RequiredMLIR: ```
+=== maxon
+module {
+  func @vector.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = __arr_0.2} {kind = i64} {decl = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    maxon.assign %2 {var = __arr_0.1} {kind = i64} {decl = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    maxon.assign %3 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
+    %4 = maxon.literal {value = 0 : i64}
+    %5 = maxon.literal {value = 3 : i64}
+    %6 = maxon.literal {value = 0 : i64}
+    %7 = maxon.literal {value = 8 : i64}
+    %8 = maxon.struct_literal @__ManagedMemory
+    %9 = maxon.struct_literal @Vec3
+    maxon.assign %9 {var = v} {decl = 1 : i1} {mut = 1 : i1}
+    %10 = maxon.literal {value = 0 : i64}
+    %11 = maxon.literal {value = 42 : i64}
+    maxon.call @Vec3.set %9, %10, %11
+    %12 = maxon.struct_var_ref v
+    %13 = maxon.literal {value = 0 : i64}
+    %16, %15 = maxon.try_call @Vec3.get %12, %13
+    %17 = maxon.literal {value = 0 : i64}
+    maxon.assign %17 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %16 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.literal {value = 0 : i64}
+    %19 = maxon.binop %15, %18 {op = ne}
+    maxon.cond_br %19 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+  otherwise_default_error_3:
+    %20 = maxon.var_ref {var = __try_default_2} {type = i64}
+    maxon.assign %20 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_4
+  otherwise_default_continue_4:
+    %21 = maxon.var_ref {var = __try_result_1} {type = i64}
+    maxon.assign %21 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %22 = maxon.literal {value = 0 : i64}
+    %23 = maxon.binop %21, %22 {op = lt}
+    %24 = maxon.literal {value = 4294967295 : i64}
+    %25 = maxon.binop %21, %24 {op = gt}
+    %26 = maxon.binop %23, %25 {op = or}
+    maxon.cond_br %26 [then: __range_panic_5, else: __range_ok_5]
+  __range_panic_5:
+    maxon.panic "panic at set-and-get.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_5:
+    %28 = maxon.var_ref {var = __range_val_5} {type = i64}
+    maxon.return %28
+  }
+}
+=== standard
 module {
   func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    %0 = arith.constant {value = 0 : i64}
+    %1 = arith.constant {value = 0 : i64}
+    memref.store %1, __arr_0.2
+    %2 = arith.constant {value = 0 : i64}
+    memref.store %2, __arr_0.1
+    %3 = arith.constant {value = 0 : i64}
+    memref.store %3, __arr_0.0
+    %4 = arith.constant {value = 0 : i64}
+    %5 = arith.constant {value = 3 : i64}
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.constant {value = 8 : i64}
+    memref.bulk_zero __stk_8, 4
+    %9 = memref.lea __stk_8
+    %10 = std.ptr_to_i64 %9
+    memref.store %10, __struct_8
+    %11 = memref.load __struct_8 : i64
+    memref.store_indirect %4, %11+0
+    %12 = memref.load __struct_8 : i64
+    memref.store_indirect %5, %12+8
+    %13 = memref.load __struct_8 : i64
+    memref.store_indirect %6, %13+16
+    %14 = memref.load __struct_8 : i64
+    memref.store_indirect %7, %14+24
+    memref.bulk_zero __stk_15, 2
+    %16 = memref.lea __stk_15
+    %17 = std.ptr_to_i64 %16
+    memref.store %17, v
+    %18 = memref.load v : i64
+    memref.store_indirect %0, %18+0
+    %19 = memref.load __struct_8 : i64
+    %20 = memref.load v : i64
+    memref.store_indirect %19, %20+8
+    %21 = memref.lea __arr_0
+    %22 = std.ptr_to_i64 %21
+    %23 = memref.load v : i64
+    %24 = memref.load_indirect %23+8
+    memref.store_indirect %22, %24+0
+    %25 = arith.constant {value = 3 : i64}
+    memref.store_indirect %25, %24+16
+    %26 = arith.constant {value = 0 : i64}
+    %27 = arith.constant {value = 42 : i64}
+    %28 = memref.load v : i64
+    func.call @Vec3.set %28, %26, %27
+    %29 = arith.constant {value = 0 : i64}
+    %30 = memref.load v : i64
+    %31, %32 = func.try_call @Vec3.get %30, %29
+    %33 = arith.constant {value = 0 : i64}
+    memref.store %33, __try_default_2
+    memref.store %31, __try_result_1
+    %34 = arith.constant {value = 0 : i64}
+    %35 = arith.cmpi ne %32, %34
+    cf.cond_br %35 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+  otherwise_default_error_3:
+    %36 = memref.load __try_default_2 : i64
+    memref.store %36, __try_result_1
+    cf.br otherwise_default_continue_4
+  otherwise_default_continue_4:
+    %37 = memref.load __try_result_1 : i64
+    memref.store %37, __range_val_5
+    %38 = arith.constant {value = 0 : i64}
+    %39 = arith.cmpi lt %37, %38
+    %40 = arith.constant {value = 4294967295 : i64}
+    %41 = arith.cmpi gt %37, %40
+    %42 = arith.ori1 %39, %41
+    cf.cond_br %42 [then: __range_panic_5, else: __range_ok_5]
+  __range_panic_5:
+    %43 = memref.lea_symdata __panic_msg_27
+    %44 = std.ptr_to_i64 %43
+    std.call_runtime @maxon_panic %44
+  __range_ok_5:
+    %45 = memref.load __range_val_5 : i64
+    func.return %45
+  }
+}
+=== x86
+module {
+  func @vector.main() -> u32 {
+  entry:
+    x86.prologue stack_size=112
     x86.xor eax, eax
     x86.xor ecx, ecx
-    x86.mov edx, 3
+    x86.mov [rbp-8], ecx
+    x86.xor edx, edx
+    x86.mov [rbp-16], edx
     x86.xor ebx, ebx
-    x86.mov esi, 8
-    x86.mov edi, 32
-    x86.mov rcx, rdi
-    x86.call maxon_alloc
-    x86.mov [rbp-8], eax
-    x86.mov r8, [rbp-8]
-    x86.xor r9, r9
-    x86.mov [r8+0], r9
-    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], ebx
+    x86.xor esi, esi
+    x86.mov edi, 3
+    x86.xor r8, r8
+    x86.mov r9, 8
+    x86.lea rdi, [rbp-56]
+    x86.xor eax, eax
+    x86.mov ecx, 4
+    x86.rep_stosq
+    x86.lea rax, [rbp-56]
+    x86.mov rcx, rax
+    x86.mov [rbp-64], ecx
+    x86.mov eax, [rbp-64]
+    x86.mov [eax+0], esi
+    x86.mov eax, [rbp-64]
     x86.mov ecx, 3
     x86.mov [eax+8], ecx
-    x86.mov eax, [rbp-8]
-    x86.xor ecx, ecx
-    x86.mov [eax+16], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, 8
-    x86.mov [eax+24], ecx
-    x86.mov eax, 16
+    x86.mov eax, [rbp-64]
+    x86.mov [eax+16], r8
+    x86.mov eax, [rbp-64]
+    x86.mov [eax+24], r9
+    x86.lea rdi, [rbp-80]
+    x86.xor eax, eax
+    x86.mov ecx, 2
+    x86.rep_stosq
+    x86.lea rax, [rbp-80]
     x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
+    x86.mov [rbp-88], ecx
+    x86.mov eax, [rbp-88]
     x86.xor ecx, ecx
     x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-88]
     x86.mov [ecx+8], eax
-    x86.lea_rdata rax, [__const_array_vector.main_v]
+    x86.lea rax, [rbp-24]
     x86.mov rcx, rax
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-88]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
+    x86.mov eax, 3
+    x86.mov [edx+16], eax
     x86.xor eax, eax
     x86.mov ecx, 42
-    x86.mov edx, [rbp-16]
+    x86.mov edx, [rbp-88]
     x86.mov r8, rcx
     x86.mov rcx, rdx
     x86.mov rdx, rax
     x86.call Vec3.set
     x86.xor eax, eax
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-88]
     x86.mov rdx, rax
     x86.call Vec3.get
     x86.xor ecx, ecx
-    x86.mov [rbp-24], ecx
-    x86.mov [rbp-32], eax
+    x86.mov [rbp-96], ecx
+    x86.mov [rbp-104], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je vector.main.otherwise_default_continue_4
   otherwise_default_error_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-104], eax
     x86.jmp vector.main.otherwise_default_continue_4
   otherwise_default_continue_4:
-    x86.mov eax, [rbp-32]
-    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-104]
+    x86.mov [rbp-112], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -89,9 +229,11 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-112]
     x86.epilogue
     x86.ret
   }
 }
+```
+---
 ---
