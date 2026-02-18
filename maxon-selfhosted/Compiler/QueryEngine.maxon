@@ -226,54 +226,107 @@ export function areDepsValid(project Project, key QueryKey, computedAt Revision)
 end 'areDepsValid'
 
 // Check if a single dependency is still valid since a given revision.
+// For derived queries, recursively validates their own dependencies.
 function isDependencyValid(project Project, dep QueryKey, since Revision) returns bool
     match dep 'matchDep'
         sourceFile(path) then return isInputUnchanged(project, path: path, since: since)
-        tokens(path) then return isTokensCacheValid(project, path: path, since: since)
-        parseOps(path) then return isParseCacheValid(project, path: path, since: since)
-        allMaxonOps then return isAllMaxonOpsCacheValid(project, since: since)
-        allStdOps then return isAllStdOpsCacheValid(project, since: since)
-        allX86Ops then return isAllX86OpsCacheValid(project, since: since)
-        codeResult then return isCodeCacheValid(project, since: since)
+        tokens(path) then return isTokensCacheValidDeep(project, path: path)
+        parseOps(path) then return isParseCacheValidDeep(project, path: path)
+        allMaxonOps then return isAllMaxonOpsCacheValidDeep(project)
+        allStdOps then return isAllStdOpsCacheValidDeep(project)
+        allX86Ops then return isAllX86OpsCacheValidDeep(project)
+        codeResult then return isCodeCacheValidDeep(project)
     end 'matchDep'
     return false
 end 'isDependencyValid'
 
-function isTokensCacheValid(project Project, path String, since Revision) returns bool
+function isTokensCacheValidDeep(project Project, path String) returns bool
     if project.db.tokenCache.contains(path) 'has'
         let memo = try project.db.tokenCache.get(path) otherwise 'err'
             return false
         end 'err'
-        return memo.verifiedAt >= since
+        if memo.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+            return true
+        end 'recentlyVerified'
+        let key = QueryKey.tokens(path)
+        if areDepsValid(project, key: key, computedAt: memo.computedAt) 'depsOk'
+            let verified = TokenMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision}
+            project.db.tokenCache.insert(path, value: verified)
+            return true
+        end 'depsOk'
     end 'has'
     return false
-end 'isTokensCacheValid'
+end 'isTokensCacheValidDeep'
 
-function isParseCacheValid(project Project, path String, since Revision) returns bool
+function isParseCacheValidDeep(project Project, path String) returns bool
     if project.db.parseCache.contains(path) 'has'
         let memo = try project.db.parseCache.get(path) otherwise 'err'
             return false
         end 'err'
-        return memo.verifiedAt >= since
+        if memo.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+            return true
+        end 'recentlyVerified'
+        let key = QueryKey.parseOps(path)
+        if areDepsValid(project, key: key, computedAt: memo.computedAt) 'depsOk'
+            let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: memo.nextValueIdAfterParse}
+            project.db.parseCache.insert(path, value: verified)
+            return true
+        end 'depsOk'
     end 'has'
     return false
-end 'isParseCacheValid'
+end 'isParseCacheValidDeep'
 
-function isAllMaxonOpsCacheValid(project Project, since Revision) returns bool
-    return project.db.allMaxonOpsCache.computedAt > 0 and project.db.allMaxonOpsCache.verifiedAt >= since
-end 'isAllMaxonOpsCacheValid'
+function isAllMaxonOpsCacheValidDeep(project Project) returns bool
+    if project.db.allMaxonOpsCache.computedAt > 0 'has'
+        if project.db.allMaxonOpsCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+            return true
+        end 'recentlyVerified'
+        if areDepsValid(project, key: QueryKey.allMaxonOps, computedAt: project.db.allMaxonOpsCache.computedAt) 'depsOk'
+            project.db.allMaxonOpsCache.verifiedAt = project.db.currentRevision
+            return true
+        end 'depsOk'
+    end 'has'
+    return false
+end 'isAllMaxonOpsCacheValidDeep'
 
-function isAllStdOpsCacheValid(project Project, since Revision) returns bool
-    return project.db.allStdOpsCache.computedAt > 0 and project.db.allStdOpsCache.verifiedAt >= since
-end 'isAllStdOpsCacheValid'
+function isAllStdOpsCacheValidDeep(project Project) returns bool
+    if project.db.allStdOpsCache.computedAt > 0 'has'
+        if project.db.allStdOpsCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+            return true
+        end 'recentlyVerified'
+        if areDepsValid(project, key: QueryKey.allStdOps, computedAt: project.db.allStdOpsCache.computedAt) 'depsOk'
+            project.db.allStdOpsCache.verifiedAt = project.db.currentRevision
+            return true
+        end 'depsOk'
+    end 'has'
+    return false
+end 'isAllStdOpsCacheValidDeep'
 
-function isAllX86OpsCacheValid(project Project, since Revision) returns bool
-    return project.db.allX86OpsCache.computedAt > 0 and project.db.allX86OpsCache.verifiedAt >= since
-end 'isAllX86OpsCacheValid'
+function isAllX86OpsCacheValidDeep(project Project) returns bool
+    if project.db.allX86OpsCache.computedAt > 0 'has'
+        if project.db.allX86OpsCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+            return true
+        end 'recentlyVerified'
+        if areDepsValid(project, key: QueryKey.allX86Ops, computedAt: project.db.allX86OpsCache.computedAt) 'depsOk'
+            project.db.allX86OpsCache.verifiedAt = project.db.currentRevision
+            return true
+        end 'depsOk'
+    end 'has'
+    return false
+end 'isAllX86OpsCacheValidDeep'
 
-function isCodeCacheValid(project Project, since Revision) returns bool
-    return project.db.codeCache.computedAt > 0 and project.db.codeCache.verifiedAt >= since
-end 'isCodeCacheValid'
+function isCodeCacheValidDeep(project Project) returns bool
+    if project.db.codeCache.computedAt > 0 'has'
+        if project.db.codeCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+            return true
+        end 'recentlyVerified'
+        if areDepsValid(project, key: QueryKey.codeResult, computedAt: project.db.codeCache.computedAt) 'depsOk'
+            project.db.codeCache.verifiedAt = project.db.currentRevision
+            return true
+        end 'depsOk'
+    end 'has'
+    return false
+end 'isCodeCacheValidDeep'
 
 // --- Query stack management ---
 
