@@ -1,0 +1,127 @@
+// Test: managed-string-loop-concatenation-cleanup
+function main() returns ExitCode
+  var s = ""
+  var a = "a"
+  var i = 0
+  while i < 5 'loop'
+    s = s.concat(a)
+    i = i + 1
+  end 'loop'
+  return s.byteLength()
+end 'main'
+---
+ExitCode: 5
+---
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    x86.prologue stack_size=80
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.xor edx, edx
+    x86.mov ebx, 32
+    x86.mov [rbp-72], ecx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-72]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.xor r9, r9
+    x86.mov [r8+8], r9
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [edx+0], ecx
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-16]
+    x86.mov [edx+8], ecx
+    x86.mov [rbp-24], eax
+    x86.lea_rdata rax, [__str_1]
+    x86.mov rcx, rax
+    x86.mov eax, 1
+    x86.mov edx, 32
+    x86.mov [rbp-80], ecx
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-80]
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 1
+    x86.mov [eax+8], ecx
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-32]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-32]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, [rbp-40]
+    x86.mov [edx+0], ecx
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-40]
+    x86.mov [edx+8], ecx
+    x86.mov [rbp-48], eax
+    x86.xor eax, eax
+    x86.mov [rbp-56], eax
+    x86.jmp codegen-internals.main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 5
+    x86.mov ecx, [rbp-56]
+    x86.cmp ecx, eax
+    x86.jge codegen-internals.main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-48]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call stdlib.String.concat
+    x86.mov [rbp-24], eax
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-56]
+    x86.add ebx, edx
+    x86.mov [rbp-56], ebx
+    x86.jmp codegen-internals.main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, rax
+    x86.call stdlib.String.byteLength
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je codegen-internals.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_19]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-64]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

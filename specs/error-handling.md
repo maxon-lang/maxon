@@ -452,7 +452,7 @@ end 'main'
 error E3057: specs/fragments/error-handling/error.throwing-function-requires-try.test:15:13: throwing function requires try: 'mayFail'
 ```
 
-<!-- disabled-test: error.throwing-method-requires-try -->
+<!-- test: error.throwing-method-requires-try -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -464,7 +464,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/error-handling.error.throwing-method-requires-try.1.test:7:19: throwing function requires try: 'get'
+error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:7:17: throwing function requires try: 'stdlib.Array.get'
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
@@ -486,7 +486,7 @@ end 'main'
 error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.test:11:13: try requires a throwing function: ''error-handling.noFail' does not throw'
 ```
 
-<!-- disabled-test: error.try-on-non-throwing-method -->
+<!-- test: error.try-on-non-throwing-method -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -498,7 +498,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling.error.try-on-non-throwing-method.1.test:7:23: try requires a throwing function: ''count' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:7:13: try requires a throwing function: ''stdlib.Array.count' does not throw'
 ```
 
 <!-- disabled-test: error.otherwise-without-try -->

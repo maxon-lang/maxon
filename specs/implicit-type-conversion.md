@@ -226,7 +226,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: no-string-to-int -->
+<!-- test: no-string-to-int -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -241,7 +241,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E022: specs/fragments/implicit-type-conversion.no-string-to-int.1.test:11:5: argument type mismatch for 'x': expected 'int', got 'String'
+error E3005: specs/fragments/implicit-type-conversion/no-string-to-int.test:11:10: argument type mismatch for 'x': expected 'Integer', got 'String'
 ```
 
 <!-- test: no-bool-to-int -->

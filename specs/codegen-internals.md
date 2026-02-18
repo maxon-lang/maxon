@@ -51,7 +51,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: managed-memory-heap-array-generates-free -->
+<!-- test: managed-memory-heap-array-generates-free -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -66,7 +66,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: managed-memory-scope-cleanup-generates-free -->
+<!-- test: managed-memory-scope-cleanup-generates-free -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -86,7 +86,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: managed-memory-loop-growth-generates-realloc -->
+<!-- test: managed-memory-loop-growth-generates-realloc -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -104,7 +104,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: managed-memory-fixed-size-array-literal-cleanup -->
+<!-- test: managed-memory-fixed-size-array-literal-cleanup -->
 ```maxon
 function main() returns ExitCode
   var arr = [10, 20, 30]
@@ -397,7 +397,7 @@ module {
 }
 ```
 
-<!-- disabled-test: rdata-cow-multiple-mutations -->
+<!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns ExitCode
   var arr = [1, 2, 3]
@@ -418,7 +418,7 @@ end 'main'
 i64[] 1, 2, 3
 ```
 
-<!-- disabled-test: rdata-non-constant-array-uses-heap -->
+<!-- test: rdata-non-constant-array-uses-heap -->
 ```maxon
 function main() returns ExitCode
   var x = 5
@@ -430,7 +430,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: managed-string-heap-string-generates-cleanup -->
+<!-- test: managed-string-heap-string-generates-cleanup -->
 ```maxon
 function main() returns ExitCode
   var s = "this is a heap allocated string!"
@@ -438,13 +438,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-31
+32
 ```
 ```RequiredRdata
 utf8 "this is a heap allocated string!\0"
 ```
 
-<!-- disabled-test: managed-string-reassignment-handles-old-value -->
+<!-- test: managed-string-reassignment-handles-old-value -->
 ```maxon
 function main() returns ExitCode
   var s = "first heap allocated value!!"
@@ -453,7 +453,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-27
+28
 ```
 ```RequiredRdata
 utf8 "first heap allocated value!!\0"
@@ -472,7 +472,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: managed-string-print-heap-string -->
+<!-- test: managed-string-print-heap-string -->
 ```maxon
 function main() returns ExitCode
   var s = "heap allocated string here!!"
@@ -480,13 +480,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-27
+28
 ```
 ```RequiredRdata
 utf8 "heap allocated string here!!\0"
 ```
 
-<!-- disabled-test: managed-string-short-string-sso -->
+<!-- test: managed-string-short-string-sso -->
 ```maxon
 function main() returns ExitCode
   var s = "short"
@@ -500,7 +500,7 @@ end 'main'
 utf8 "short\0"
 ```
 
-<!-- disabled-test: managed-string-loop-concatenation-cleanup -->
+<!-- test: managed-string-loop-concatenation-cleanup -->
 ```maxon
 function main() returns ExitCode
   var s = ""

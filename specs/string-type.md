@@ -1184,7 +1184,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: bytes-count-multibyte -->
+<!-- test: bytes-count-multibyte -->
 ### bytes().count() with Multi-byte Characters
 ```maxon
 function main() returns ExitCode
@@ -1200,7 +1200,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: count-graphemes -->
+<!-- test: count-graphemes -->
 ### count Returns Grapheme Count
 ```maxon
 function main() returns ExitCode
