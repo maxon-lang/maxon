@@ -34,6 +34,7 @@ export function queryTokens(project Project, path String) returns TokenArray thr
         if memo.computedAt > 0 'hasValue'
             if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
                 logDebug(LogCategory.compiler, message: "queryTokens cache hit for {path}")
+                project.db.tokenHits = project.db.tokenHits + 1
                 let verified = TokenMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision}
                 project.db.tokenCache.insert(path, value: verified)
                 return memo.value
@@ -42,6 +43,7 @@ export function queryTokens(project Project, path String) returns TokenArray thr
     end 'checkCache'
 
     logDebug(LogCategory.compiler, message: "queryTokens computing for {path}")
+    project.db.tokenMisses = project.db.tokenMisses + 1
 
     // Compute
     pushQuery(project, key: key)
@@ -73,6 +75,7 @@ export function queryParseOps(project Project, path String) returns MaxonOpArray
         if memo.computedAt > 0 'hasValue'
             if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
                 logDebug(LogCategory.compiler, message: "queryParseOps cache hit for {path}")
+                project.db.parseHits = project.db.parseHits + 1
                 let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: memo.nextValueIdAfterParse}
                 project.db.parseCache.insert(path, value: verified)
                 return memo.value
@@ -81,6 +84,7 @@ export function queryParseOps(project Project, path String) returns MaxonOpArray
     end 'checkCache'
 
     logDebug(LogCategory.compiler, message: "queryParseOps computing for {path}")
+    project.db.parseMisses = project.db.parseMisses + 1
 
     // Compute
     pushQuery(project, key: key)
@@ -109,12 +113,14 @@ export function queryAllMaxonOps(project Project) returns MaxonOpArray throws Co
     if project.db.allMaxonOpsCache.computedAt > 0 'hasCache'
         if areDepsValid(project, key: key, computedAt: project.db.allMaxonOpsCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryAllMaxonOps cache hit")
+            project.db.allMaxonOpsHits = project.db.allMaxonOpsHits + 1
             project.db.allMaxonOpsCache.verifiedAt = project.db.currentRevision
             return project.db.allMaxonOpsCache.value
         end 'valid'
     end 'hasCache'
 
     logDebug(LogCategory.compiler, message: "queryAllMaxonOps computing")
+    project.db.allMaxonOpsMisses = project.db.allMaxonOpsMisses + 1
 
     // Compute
     pushQuery(project, key: key)
@@ -169,12 +175,14 @@ export function queryAllStdOps(project Project) returns StdOpArray throws Compil
     if project.db.allStdOpsCache.computedAt > 0 'hasCache'
         if areDepsValid(project, key: key, computedAt: project.db.allStdOpsCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryAllStdOps cache hit")
+            project.db.allStdOpsHits = project.db.allStdOpsHits + 1
             project.db.allStdOpsCache.verifiedAt = project.db.currentRevision
             return project.db.allStdOpsCache.value
         end 'valid'
     end 'hasCache'
 
     logDebug(LogCategory.compiler, message: "queryAllStdOps computing")
+    project.db.allStdOpsMisses = project.db.allStdOpsMisses + 1
 
     // Compute
     pushQuery(project, key: key)
@@ -201,12 +209,14 @@ export function queryAllX86Ops(project Project) returns X86OpArray throws Compil
     if project.db.allX86OpsCache.computedAt > 0 'hasCache'
         if areDepsValid(project, key: key, computedAt: project.db.allX86OpsCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryAllX86Ops cache hit")
+            project.db.allX86OpsHits = project.db.allX86OpsHits + 1
             project.db.allX86OpsCache.verifiedAt = project.db.currentRevision
             return project.db.allX86OpsCache.value
         end 'valid'
     end 'hasCache'
 
     logDebug(LogCategory.compiler, message: "queryAllX86Ops computing")
+    project.db.allX86OpsMisses = project.db.allX86OpsMisses + 1
 
     // Compute
     pushQuery(project, key: key)
@@ -233,12 +243,14 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
     if project.db.codeCache.computedAt > 0 'hasCache'
         if areDepsValid(project, key: key, computedAt: project.db.codeCache.computedAt) 'valid'
             logDebug(LogCategory.compiler, message: "queryCodeResult cache hit")
+            project.db.codeHits = project.db.codeHits + 1
             project.db.codeCache.verifiedAt = project.db.currentRevision
             return project.db.codeCache.value
         end 'valid'
     end 'hasCache'
 
     logDebug(LogCategory.compiler, message: "queryCodeResult computing")
+    project.db.codeMisses = project.db.codeMisses + 1
 
     // Compute
     pushQuery(project, key: key)

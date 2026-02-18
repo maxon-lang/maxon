@@ -1,0 +1,229 @@
+// Incremental compilation test runner.
+// Verifies that the Salsa-style query cache correctly hits/misses
+// across multiple compilations.
+
+export function runIncrementalTests() returns ExitCode
+    logInfo(LogCategory.testing, message: "Running incremental compilation tests...")
+
+    let projectRoot = try findIncrTestRoot() otherwise 'noRoot'
+        print("Could not find project root\n")
+        return 1
+    end 'noRoot'
+
+    let tempDir = "{projectRoot}/temp"
+    let sourcePath = "{tempDir}/incr_test.maxon"
+    let exePath = "{tempDir}/incr_test.exe"
+
+    var totalPassed = 0
+    var totalFailed = 0
+
+    // --- Scenario A: Fresh compilation (all misses) ---
+    logInfo(LogCategory.testing, message: "Scenario A: Fresh compilation...")
+
+    let sourceV1 = "function main() returns ExitCode\n    return 10\nend 'main'\n"
+
+    try File.writeText(sourcePath, content: sourceV1) otherwise 'writeErr1'
+        print("Could not write test source\n")
+        return 1
+    end 'writeErr1'
+
+    var project = createProject(sourcePath, isSingleFile: true)
+    print("  project rootPath: {project.rootPath}\n")
+    print("  project isSingleFile: {project.isSingleFile}\n")
+    print("  about to compileProject...\n")
+    let outputA = try compileProject(project) otherwise 'compErrA'
+        print("Scenario A: Compilation failed\n")
+        cleanupIncrTest(sourcePath, exePath: exePath)
+        return 1
+    end 'compErrA'
+    print("  outputA: {outputA}\n")
+
+    var scenarioAPassed = true
+    scenarioAPassed = assertCounter("A tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioAPassed
+    scenarioAPassed = assertCounter("A tokenMisses", actual: project.db.tokenMisses, expected: 1) and scenarioAPassed
+    scenarioAPassed = assertCounter("A parseHits", actual: project.db.parseHits, expected: 0) and scenarioAPassed
+    scenarioAPassed = assertCounter("A parseMisses", actual: project.db.parseMisses, expected: 1) and scenarioAPassed
+    scenarioAPassed = assertCounter("A allMaxonOpsHits", actual: project.db.allMaxonOpsHits, expected: 0) and scenarioAPassed
+    scenarioAPassed = assertCounter("A allMaxonOpsMisses", actual: project.db.allMaxonOpsMisses, expected: 1) and scenarioAPassed
+    scenarioAPassed = assertCounter("A allStdOpsHits", actual: project.db.allStdOpsHits, expected: 0) and scenarioAPassed
+    scenarioAPassed = assertCounter("A allStdOpsMisses", actual: project.db.allStdOpsMisses, expected: 1) and scenarioAPassed
+    scenarioAPassed = assertCounter("A allX86OpsHits", actual: project.db.allX86OpsHits, expected: 0) and scenarioAPassed
+    scenarioAPassed = assertCounter("A allX86OpsMisses", actual: project.db.allX86OpsMisses, expected: 1) and scenarioAPassed
+    scenarioAPassed = assertCounter("A codeHits", actual: project.db.codeHits, expected: 0) and scenarioAPassed
+    scenarioAPassed = assertCounter("A codeMisses", actual: project.db.codeMisses, expected: 1) and scenarioAPassed
+    scenarioAPassed = verifyExeExitCode(exePath, expectedEc: 10) and scenarioAPassed
+
+    if scenarioAPassed 'passA'
+        print("[PASS] Scenario A: Fresh compilation\n")
+        totalPassed = totalPassed + 1
+    end 'passA' else 'failA'
+        print("[FAIL] Scenario A: Fresh compilation\n")
+        totalFailed = totalFailed + 1
+    end 'failA'
+
+    // --- Scenario B: No-change recompile (all hits) ---
+    logInfo(LogCategory.testing, message: "Scenario B: No-change recompile...")
+
+    resetCounters(project)
+    let outputB = try compileProject(project) otherwise 'compErrB'
+        print("Scenario B: Compilation failed\n")
+        cleanupIncrTest(sourcePath, exePath: exePath)
+        return 1
+    end 'compErrB'
+
+    var scenarioBPassed = true
+    scenarioBPassed = assertCounter("B tokenHits", actual: project.db.tokenHits, expected: 1) and scenarioBPassed
+    scenarioBPassed = assertCounter("B tokenMisses", actual: project.db.tokenMisses, expected: 0) and scenarioBPassed
+    scenarioBPassed = assertCounter("B parseHits", actual: project.db.parseHits, expected: 1) and scenarioBPassed
+    scenarioBPassed = assertCounter("B parseMisses", actual: project.db.parseMisses, expected: 0) and scenarioBPassed
+    scenarioBPassed = assertCounter("B allMaxonOpsHits", actual: project.db.allMaxonOpsHits, expected: 1) and scenarioBPassed
+    scenarioBPassed = assertCounter("B allMaxonOpsMisses", actual: project.db.allMaxonOpsMisses, expected: 0) and scenarioBPassed
+    scenarioBPassed = assertCounter("B allStdOpsHits", actual: project.db.allStdOpsHits, expected: 1) and scenarioBPassed
+    scenarioBPassed = assertCounter("B allStdOpsMisses", actual: project.db.allStdOpsMisses, expected: 0) and scenarioBPassed
+    scenarioBPassed = assertCounter("B allX86OpsHits", actual: project.db.allX86OpsHits, expected: 1) and scenarioBPassed
+    scenarioBPassed = assertCounter("B allX86OpsMisses", actual: project.db.allX86OpsMisses, expected: 0) and scenarioBPassed
+    scenarioBPassed = assertCounter("B codeHits", actual: project.db.codeHits, expected: 1) and scenarioBPassed
+    scenarioBPassed = assertCounter("B codeMisses", actual: project.db.codeMisses, expected: 0) and scenarioBPassed
+
+    if scenarioBPassed 'passB'
+        print("[PASS] Scenario B: No-change recompile\n")
+        totalPassed = totalPassed + 1
+    end 'passB' else 'failB'
+        print("[FAIL] Scenario B: No-change recompile\n")
+        totalFailed = totalFailed + 1
+    end 'failB'
+
+    // --- Scenario C: Modify file (all misses) ---
+    logInfo(LogCategory.testing, message: "Scenario C: Modify file...")
+
+    resetCounters(project)
+
+    let sourceV2 = "function main() returns ExitCode\n    return 42\nend 'main'\n"
+    try File.writeText(sourcePath, content: sourceV2) otherwise 'writeErr2'
+        print("Could not overwrite test source\n")
+        cleanupIncrTest(sourcePath, exePath: exePath)
+        return 1
+    end 'writeErr2'
+
+    let outputC = try compileProject(project) otherwise 'compErrC'
+        print("Scenario C: Compilation failed\n")
+        cleanupIncrTest(sourcePath, exePath: exePath)
+        return 1
+    end 'compErrC'
+
+    var scenarioCPassed = true
+    scenarioCPassed = assertCounter("C tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioCPassed
+    scenarioCPassed = assertCounter("C tokenMisses", actual: project.db.tokenMisses, expected: 1) and scenarioCPassed
+    scenarioCPassed = assertCounter("C parseHits", actual: project.db.parseHits, expected: 0) and scenarioCPassed
+    scenarioCPassed = assertCounter("C parseMisses", actual: project.db.parseMisses, expected: 1) and scenarioCPassed
+    scenarioCPassed = assertCounter("C allMaxonOpsHits", actual: project.db.allMaxonOpsHits, expected: 0) and scenarioCPassed
+    scenarioCPassed = assertCounter("C allMaxonOpsMisses", actual: project.db.allMaxonOpsMisses, expected: 1) and scenarioCPassed
+    scenarioCPassed = assertCounter("C allStdOpsHits", actual: project.db.allStdOpsHits, expected: 0) and scenarioCPassed
+    scenarioCPassed = assertCounter("C allStdOpsMisses", actual: project.db.allStdOpsMisses, expected: 1) and scenarioCPassed
+    scenarioCPassed = assertCounter("C allX86OpsHits", actual: project.db.allX86OpsHits, expected: 0) and scenarioCPassed
+    scenarioCPassed = assertCounter("C allX86OpsMisses", actual: project.db.allX86OpsMisses, expected: 1) and scenarioCPassed
+    scenarioCPassed = assertCounter("C codeHits", actual: project.db.codeHits, expected: 0) and scenarioCPassed
+    scenarioCPassed = assertCounter("C codeMisses", actual: project.db.codeMisses, expected: 1) and scenarioCPassed
+    scenarioCPassed = verifyExeExitCode(exePath, expectedEc: 42) and scenarioCPassed
+
+    if scenarioCPassed 'passC'
+        print("[PASS] Scenario C: Modify file\n")
+        totalPassed = totalPassed + 1
+    end 'passC' else 'failC'
+        print("[FAIL] Scenario C: Modify file\n")
+        totalFailed = totalFailed + 1
+    end 'failC'
+
+    // --- Scenario D: Same-content rewrite (all hits, byte-compare optimization) ---
+    logInfo(LogCategory.testing, message: "Scenario D: Same-content rewrite...")
+
+    resetCounters(project)
+    let outputD = try compileProject(project) otherwise 'compErrD'
+        print("Scenario D: Compilation failed\n")
+        cleanupIncrTest(sourcePath, exePath: exePath)
+        return 1
+    end 'compErrD'
+
+    var scenarioDPassed = true
+    scenarioDPassed = assertCounter("D tokenHits", actual: project.db.tokenHits, expected: 1) and scenarioDPassed
+    scenarioDPassed = assertCounter("D tokenMisses", actual: project.db.tokenMisses, expected: 0) and scenarioDPassed
+    scenarioDPassed = assertCounter("D parseHits", actual: project.db.parseHits, expected: 1) and scenarioDPassed
+    scenarioDPassed = assertCounter("D parseMisses", actual: project.db.parseMisses, expected: 0) and scenarioDPassed
+    scenarioDPassed = assertCounter("D allMaxonOpsHits", actual: project.db.allMaxonOpsHits, expected: 1) and scenarioDPassed
+    scenarioDPassed = assertCounter("D allMaxonOpsMisses", actual: project.db.allMaxonOpsMisses, expected: 0) and scenarioDPassed
+    scenarioDPassed = assertCounter("D allStdOpsHits", actual: project.db.allStdOpsHits, expected: 1) and scenarioDPassed
+    scenarioDPassed = assertCounter("D allStdOpsMisses", actual: project.db.allStdOpsMisses, expected: 0) and scenarioDPassed
+    scenarioDPassed = assertCounter("D allX86OpsHits", actual: project.db.allX86OpsHits, expected: 1) and scenarioDPassed
+    scenarioDPassed = assertCounter("D allX86OpsMisses", actual: project.db.allX86OpsMisses, expected: 0) and scenarioDPassed
+    scenarioDPassed = assertCounter("D codeHits", actual: project.db.codeHits, expected: 1) and scenarioDPassed
+    scenarioDPassed = assertCounter("D codeMisses", actual: project.db.codeMisses, expected: 0) and scenarioDPassed
+
+    if scenarioDPassed 'passD'
+        print("[PASS] Scenario D: Same-content rewrite\n")
+        totalPassed = totalPassed + 1
+    end 'passD' else 'failD'
+        print("[FAIL] Scenario D: Same-content rewrite\n")
+        totalFailed = totalFailed + 1
+    end 'failD'
+
+    // Cleanup
+    cleanupIncrTest(sourcePath, exePath: exePath)
+
+    // Summary
+    print("\nIncremental tests: {totalPassed} passed, {totalFailed} failed\n")
+
+    if totalFailed > 0 'hasFail'
+        return 1
+    end 'hasFail'
+    return 0
+end 'runIncrementalTests'
+
+function assertCounter(name String, actual Revision, expected Revision) returns bool
+    if actual != expected 'mismatch'
+        print("  FAIL: {name} expected {expected}, got {actual}\n")
+        return false
+    end 'mismatch'
+    return true
+end 'assertCounter'
+
+function cleanupIncrTest(sourcePath String, exePath String)
+    if File.exists(sourcePath) 'src'
+        try File.delete(sourcePath) otherwise 'delSrc'
+        end 'delSrc'
+    end 'src'
+    if File.exists(exePath) 'exe'
+        try File.delete(exePath) otherwise 'delExe'
+        end 'delExe'
+    end 'exe'
+end 'cleanupIncrTest'
+
+function verifyExeExitCode(exePath String, expectedEc ExitCode) returns bool
+    let ec = Process.execute(exePath, timeoutMs: 5000)
+    if ec != expectedEc 'mismatch'
+        print("  expected exit code {expectedEc}, got {ec}\n")
+        return false
+    end 'mismatch'
+    return true
+end 'verifyExeExitCode'
+
+function findIncrTestRoot() returns String throws CompileError
+    var dir = Directory.currentDirectory()
+    var attempts = 0
+    while attempts < 10 'search'
+        let specsPath = "{dir}/specs"
+        if Directory.exists(specsPath) 'found'
+            return dir
+        end 'found'
+        let lastSlash = try dir.findLast("/") otherwise 'tryBackslash'
+            let lastBs = try dir.findLast("\\") otherwise 'noParent'
+                throw CompileError.directoryNotFound
+            end 'noParent'
+            dir = dir.slice(dir.startIndex(), endIndex: lastBs)
+            attempts = attempts + 1
+            continue
+        end 'tryBackslash'
+        dir = dir.slice(dir.startIndex(), endIndex: lastSlash)
+        attempts = attempts + 1
+    end 'search'
+    throw CompileError.directoryNotFound
+end 'findIncrTestRoot'
