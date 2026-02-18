@@ -4379,7 +4379,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     // Default value form: otherwise <expression>
-    return EmitTryOtherwiseDefault(tryCallOp);
+    return EmitTryOtherwiseDefault(tryCallOp, tryToken);
   }
 
   /// <summary>
@@ -4513,12 +4513,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
-  private ExprResult.Direct EmitTryOtherwiseDefault(MaxonTryCallOp tryCallOp) {
+  private ExprResult.Direct EmitTryOtherwiseDefault(MaxonTryCallOp tryCallOp, Token tryToken) {
     var defaultExpr = ParseExpression();
     var defaultValue = ResolveExprValue(defaultExpr);
 
     var resultVarName = $"__try_result_{_blockCounter++}";
-    var resultKind = DetermineValueKind(defaultValue);
+    var defaultKind = DetermineValueKind(defaultValue);
+    var expectedKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
+
+    // Type-check: otherwise expression must match the success type
+    // Allow numeric coercions (int literal to byte/short) and generic type parameters
+    if (defaultKind != expectedKind
+        && expectedKind != MaxonValueKind.TypeParameter
+        && !(IsNumericKind(defaultKind) && IsNumericKind(expectedKind))) {
+      var defaultTypeName = defaultValue is MaxonStruct ds ? ds.TypeName : KindToTypeName(defaultKind);
+      var expectedTypeName = tryCallOp.ResultStructTypeName ?? KindToTypeName(expectedKind);
+      throw new CompileError(ErrorCode.SemanticErrorTypeMismatch,
+        $"type mismatch: 'otherwise type '{defaultTypeName}' does not match expected type '{expectedTypeName}''",
+        tryToken.Line, tryToken.Column);
+    }
+
+    var resultKind = defaultKind;
     var structTypeName = tryCallOp.ResultStructTypeName
       ?? (defaultValue is MaxonStruct s ? s.TypeName : null)
       ?? (defaultValue is MaxonEnum e ? e.TypeName : null);
@@ -6310,6 +6325,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _ => throw new InvalidOperationException($"Unknown range bound type: {bound.GetType().Name}")
     };
   }
+
+  private static bool IsNumericKind(MaxonValueKind kind) =>
+    kind is MaxonValueKind.Integer or MaxonValueKind.Float or MaxonValueKind.Float32
+        or MaxonValueKind.Byte or MaxonValueKind.Short;
 
   private static string KindToTypeName(MaxonValueKind kind) => kind switch {
     MaxonValueKind.Integer => "int",
@@ -9855,6 +9874,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return type;
   }
 
+  /// Validates that a throwing function is called within a try context.
+  private void ValidateThrowingCallContext(MlirFunction<MaxonOp> callee, Token functionNameToken, string displayName) {
+    if (callee.ThrowsType == null || _inTryContext) return;
+
+    if (Check(TokenType.Otherwise)) {
+      throw new CompileError(ErrorCode.SemanticOtherwiseRequiresTry,
+        "otherwise requires try expression",
+        Current().Line, Current().Column);
+    }
+    throw new CompileError(ErrorCode.SemanticThrowingFunctionRequiresTry,
+      $"throwing function requires try: '{displayName}'",
+      functionNameToken.Line, functionNameToken.Column);
+  }
+
   /// <summary>
   /// Creates a function call operation, validating the function exists and determining the result type.
   /// Handles struct return types by setting ResultStructTypeName.
@@ -9863,12 +9896,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var functionName = functionNameToken.Value;
     var callee = ResolveFunctionName(functionName, functionNameToken);
 
-    // E057: calling a throwing function without try
-    if (callee.ThrowsType != null && !_inTryContext) {
-      throw new CompileError(ErrorCode.SemanticThrowingFunctionRequiresTry,
-        $"throwing function requires try: '{functionName}'",
-        functionNameToken.Line, functionNameToken.Column);
-    }
+    ValidateThrowingCallContext(callee, functionNameToken, functionName);
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
@@ -9889,12 +9917,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MaxonCallOp CreateFunctionCall(Token functionNameToken, List<MaxonValue> args, MlirFunction<MaxonOp> callee) {
     var functionName = functionNameToken.Value;
 
-    // E057: calling a throwing function without try
-    if (callee.ThrowsType != null && !_inTryContext) {
-      throw new CompileError(ErrorCode.SemanticThrowingFunctionRequiresTry,
-        $"throwing function requires try: '{UnmangleName(functionName)}'",
-        functionNameToken.Line, functionNameToken.Column);
-    }
+    ValidateThrowingCallContext(callee, functionNameToken, UnmangleName(functionName));
 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {

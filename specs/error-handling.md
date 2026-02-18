@@ -406,7 +406,7 @@ end 'main'
 error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: main cannot throw: 'main'
 ```
 
-<!-- disabled-test: error.otherwise-type-mismatch -->
+<!-- test: error.otherwise-type-mismatch -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -426,7 +426,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling.error.otherwise-type-mismatch.1.test:15:5: type mismatch: 'otherwise type 'String' does not match expected type 'int''
+error E3059: specs/fragments/error-handling/error.otherwise-type-mismatch.test:15:13: type mismatch: 'otherwise type 'String' does not match expected type 'int''
 ```
 
 <!-- test: error.throwing-function-requires-try -->
@@ -501,7 +501,7 @@ end 'main'
 error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:7:13: try requires a throwing function: ''stdlib.Array.count' does not throw'
 ```
 
-<!-- disabled-test: error.otherwise-without-try -->
+<!-- test: error.otherwise-without-try -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -513,7 +513,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3058: specs/fragments/error-handling.error.otherwise-without-try.1.test:7:26: otherwise requires try expression
+error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:7:24: otherwise requires try expression
 ```
 
 <!-- test: error.otherwise-ignore-in-assignment -->

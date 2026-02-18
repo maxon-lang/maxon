@@ -45,8 +45,8 @@ Checks if any element satisfies a predicate closure. Works on all iterable types
 var numbers = [1, 2, 3, 4, 5]
 numbers.contains(predicate: (n int) gives n > 3)   // true
 
-var dict = ["a": 1, "b": 2] as Map
-dict.contains(predicate: (e Entry) gives e.key == "a")   // true
+var dict = ["a": 1, "b": 2]
+dict.contains(predicate: (e (String, int)) gives e.0 == "a")   // true
 ```
 
 ## Tests
@@ -339,11 +339,14 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: map-predicate-key -->
+<!-- test: map-predicate-key -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias MapEntry = (String, Integer)
+
 function main() returns ExitCode
-  var dict = ["a": 1, "b": 2, "c": 3] as Map
-  if dict.contains(predicate: (e Entry) gives e.key == "b") 'check'
+  var dict = ["a": 1, "b": 2, "c": 3]
+  if dict.contains(predicate: (e MapEntry) gives e.0 == "b") 'check'
     return 1
   end 'check'
   return 0
@@ -353,11 +356,14 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: map-predicate-value -->
+<!-- test: map-predicate-value -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias MapEntry = (String, Integer)
+
 function main() returns ExitCode
-  var dict = ["a": 1, "b": 2, "c": 3] as Map
-  if dict.contains(predicate: (e Entry) gives e.value == 2) 'check'
+  var dict = ["a": 1, "b": 2, "c": 3]
+  if dict.contains(predicate: (e MapEntry) gives e.1 == 2) 'check'
     return 1
   end 'check'
   return 0
@@ -367,11 +373,14 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: map-predicate-not-found -->
+<!-- test: map-predicate-not-found -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias MapEntry = (String, Integer)
+
 function main() returns ExitCode
-  var dict = ["a": 1, "b": 2, "c": 3] as Map
-  if dict.contains(predicate: (e Entry) gives e.value > 10) 'check'
+  var dict = ["a": 1, "b": 2, "c": 3]
+  if dict.contains(predicate: (e MapEntry) gives e.1 > 10) 'check'
     return 1
   end 'check'
   return 0

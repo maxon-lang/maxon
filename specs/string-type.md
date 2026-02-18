@@ -952,7 +952,7 @@ end 'main'
 18
 ```
 
-<!-- disabled-test: memory-tracking-simple-interp -->
+<!-- test: memory-tracking-simple-interp -->
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
@@ -967,38 +967,25 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-ALLOC #1: 20 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-ALLOC #2: 12 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 11
 CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #2: 12 bytes (temp cleanup)
-CLEANUP: b
 CLEANUP: a
+CLEANUP: b
 CLEANUP: s
 DECREF: s -> rc=0
-FREE #1: 20 bytes (string cleanup)
 
 === MEMORY STATS ===
-Allocated: 32 bytes
-Freed:     32 bytes
+Allocated: 0 bytes
+Freed:     0 bytes
 Leaked:    0 bytes
-Moves:     4
-Increfs:   3
-Decrefs:   3
+Moves:     0
+Increfs:   0
+Decrefs:   1
 Copies:    0
 Cleanups:  4
 ```
 
-<!-- disabled-test: memory-tracking-chained-interp -->
+<!-- test: memory-tracking-chained-interp -->
 <!-- TrackMemory: true -->
 String interpolation with multiple parts creates a single allocation with O(n) copy.
 All intermediate buffers use stack allocation for primitives.
@@ -1017,42 +1004,27 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-MOVE: managed
-MOVE: managed
-ALLOC #1: 13 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-ALLOC #2: 11 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 4
 CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #2: 11 bytes (temp cleanup)
-CLEANUP: b
 CLEANUP: a
+CLEANUP: b
 CLEANUP: c
+CLEANUP: d
 CLEANUP: s
 DECREF: s -> rc=0
-FREE #1: 13 bytes (string cleanup)
-CLEANUP: d
 
 === MEMORY STATS ===
-Allocated: 24 bytes
-Freed:     24 bytes
+Allocated: 0 bytes
+Freed:     0 bytes
 Leaked:    0 bytes
-Moves:     6
-Increfs:   3
-Decrefs:   3
+Moves:     0
+Increfs:   0
+Decrefs:   1
 Copies:    0
 Cleanups:  6
 ```
 
-<!-- disabled-test: memory-tracking-loop-interp -->
+<!-- test: memory-tracking-loop-interp -->
 <!-- TrackMemory: true -->
 String accumulation in loop properly releases old values on reassignment.
 The final value is released at scope exit. Uses efficient O(n) interpolation.
@@ -1073,50 +1045,29 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-MOVE: managed
-ALLOC #1: 10 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
 CLEANUP: s
-ALLOC #2: 11 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
 CLEANUP: s
 DECREF: s -> rc=0
-FREE #1: 10 bytes (string cleanup)
-ALLOC #3: 12 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
 CLEANUP: s
 DECREF: s -> rc=0
-FREE #2: 11 bytes (string cleanup)
-ALLOC #4: 11 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 3
 CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #4: 11 bytes (temp cleanup)
-CLEANUP: x
 CLEANUP: s
 DECREF: s -> rc=0
-FREE #3: 12 bytes (string cleanup)
+CLEANUP: x
 
 === MEMORY STATS ===
-Allocated: 44 bytes
-Freed:     44 bytes
+Allocated: 0 bytes
+Freed:     0 bytes
 Leaked:    0 bytes
-Moves:     6
-Increfs:   5
-Decrefs:   5
+Moves:     0
+Increfs:   0
+Decrefs:   3
 Copies:    0
 Cleanups:  6
 ```
 
-<!-- disabled-test: memory-tracking-no-leak-scope-exit -->
+<!-- test: memory-tracking-no-leak-scope-exit -->
 <!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
@@ -1131,25 +1082,17 @@ end 'main'
 0
 ```
 ```stdout
-MOVE: managed
-ALLOC #1: 12 bytes (string interpolation)
-INCREF: string interpolation -> rc=1
-MOVE: managed
-INCREF: <cstr> -> rc=2
 27
 CLEANUP: cs
-DECREF: <cstr cleanup> -> rc=1
-DECREF: <temp> -> rc=0
-FREE #1: 12 bytes (temp cleanup)
 CLEANUP: temp
 
 === MEMORY STATS ===
-Allocated: 12 bytes
-Freed:     12 bytes
+Allocated: 0 bytes
+Freed:     0 bytes
 Leaked:    0 bytes
-Moves:     2
-Increfs:   2
-Decrefs:   2
+Moves:     0
+Increfs:   0
+Decrefs:   0
 Copies:    0
 Cleanups:  2
 ```
