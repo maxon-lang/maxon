@@ -389,7 +389,8 @@ s.isEmpty()                            // check empty
 
 s.startsWith("prefix")
 s.endsWith("suffix")
-s.contains("needle")
+s.contains("text")
+s.contains('x')
 try s.find("needle") otherwise -1      // find index
 
 s.toLower()

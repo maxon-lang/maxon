@@ -27,6 +27,10 @@ public static class MonomorphizationPass {
 
       var newFunctions = new List<MlirFunction<MaxonOp>>();
       foreach (var spec in specializations) {
+        if (spec.SourceFunc.Body.Blocks.Count == 0) {
+          Logger.Debug(LogCategory.Mlir, $"  WARNING: Source function {spec.SourceFunc.Name} has empty body, skipping monomorphization to {spec.ConcreteTypeName}");
+          continue;
+        }
         var clonedFunc = new FunctionCloner(spec.SourceFunc, spec.ConcreteTypeName, spec.TypeSubstitution).Clone();
         newFunctions.Add(clonedFunc);
         Logger.Debug(LogCategory.Mlir, $"Monomorphized {spec.SourceFunc.Name} -> {clonedFunc.Name}");

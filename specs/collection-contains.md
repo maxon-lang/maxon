@@ -34,7 +34,7 @@ arr.contains(sequence: [2, 3, 4])   // true
 arr.contains(sequence: [1, 3])      // false (not contiguous)
 
 var s = "hello world"
-s.contains(sequence: "lo wo")       // true (substring search)
+s.contains("lo wo")                 // true (substring search)
 ```
 
 ### Predicate (Iterable)
@@ -67,7 +67,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-int-not-found -->
+<!-- test: array-int-not-found -->
 ```maxon
 function main() returns ExitCode
   var arr = [10, 20, 30]
@@ -81,7 +81,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: array-string-found -->
+<!-- test: array-string-found -->
 ```maxon
 function main() returns ExitCode
   var arr = ["apple", "banana", "cherry"]
@@ -95,7 +95,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-string-not-found -->
+<!-- test: array-string-not-found -->
 ```maxon
 function main() returns ExitCode
   var arr = ["apple", "banana", "cherry"]
@@ -109,7 +109,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: string-char-found -->
+<!-- test: string-char-found -->
 ```maxon
 function main() returns ExitCode
   var s = "hello world"
@@ -123,7 +123,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: string-char-not-found -->
+<!-- test: string-char-not-found -->
 ```maxon
 function main() returns ExitCode
   var s = "hello world"
@@ -137,7 +137,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: array-empty -->
+<!-- test: array-empty -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -153,7 +153,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: array-first-element -->
+<!-- test: array-first-element -->
 ```maxon
 function main() returns ExitCode
   var arr = [5, 10, 15]
@@ -167,7 +167,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-last-element -->
+<!-- test: array-last-element -->
 ```maxon
 function main() returns ExitCode
   var arr = [5, 10, 15]
@@ -181,10 +181,10 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: set-contains -->
+<!-- test: set-contains -->
 ```maxon
 function main() returns ExitCode
-  var s = [1, 2, 3, 4, 5] as Set
+  var s = Set from [1, 2, 3, 4, 5]
   if s.contains(3) 'check'
     print("found\n")
   end 'check'
@@ -203,7 +203,7 @@ found
 
 ### Subsequence
 
-<!-- disabled-test: array-subsequence-found -->
+<!-- test: array-subsequence-found -->
 ```maxon
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]
@@ -217,7 +217,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-subsequence-not-found -->
+<!-- test: array-subsequence-not-found -->
 ```maxon
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]
@@ -231,7 +231,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: array-subsequence-at-start -->
+<!-- test: array-subsequence-at-start -->
 ```maxon
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]
@@ -245,7 +245,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-subsequence-at-end -->
+<!-- test: array-subsequence-at-end -->
 ```maxon
 function main() returns ExitCode
   var arr = [1, 2, 3, 4, 5]
@@ -259,7 +259,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-subsequence-empty -->
+<!-- test: array-subsequence-empty -->
 ```maxon
 typealias IntArray = Array with int
 
@@ -275,11 +275,11 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: string-substring-found -->
+<!-- test: string-substring-found -->
 ```maxon
 function main() returns ExitCode
   var s = "hello world"
-  if s.contains(sequence: "lo wo") 'check'
+  if s.contains("lo wo") 'check'
     return 1
   end 'check'
   return 0
@@ -289,11 +289,11 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: string-substring-not-found -->
+<!-- test: string-substring-not-found -->
 ```maxon
 function main() returns ExitCode
   var s = "hello world"
-  if s.contains(sequence: "xyz") 'check'
+  if s.contains("xyz") 'check'
     return 1
   end 'check'
   return 0
@@ -305,7 +305,7 @@ end 'main'
 
 ### Predicate
 
-<!-- disabled-test: array-predicate-found -->
+<!-- test: array-predicate-found -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -322,7 +322,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: array-predicate-not-found -->
+<!-- test: array-predicate-not-found -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

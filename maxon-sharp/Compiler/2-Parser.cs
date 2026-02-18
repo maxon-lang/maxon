@@ -2190,10 +2190,52 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (pos + 1 >= _tokens.Count) return true;
       var methodName = _tokens[pos + 1].Value;
       var fullName = $"{qualifiedTypeName}.{methodName}";
-      // Only filter if a function with an actual body exists — bodyless stubs from pre-scan should not block parsing
-      return !module.Functions.Any(f => (f.Name == fullName || f.Name.StartsWith(fullName + "$"))
+      var peekedParamNames = PeekExtensionMethodParamNames(pos);
+      var mangledName = MangleOverloadName(fullName, peekedParamNames);
+      // Skip this extension method if the same specific overload already has a body
+      // (prevents a different extension's overload from blocking this one)
+      var hasExistingBody = module.Functions.Any(f => (f.Name == fullName || f.Name == mangledName)
           && f.Body.Blocks.Count > 0);
+      if (hasExistingBody) {
+        Logger.Debug(LogCategory.Parser, $"Filtering extension method {mangledName}: already has a body on {typeName}");
+      }
+      return !hasExistingBody;
     })];
+  }
+
+  /// Peek at parameter names from a function token position without advancing the parser.
+  /// Saves and restores parser position. Returns names including "self" for instance methods.
+  private List<string> PeekExtensionMethodParamNames(int pos) {
+    int savedPos = _pos;
+    _pos = pos;
+    Advance(); // consume 'function'
+    Advance(); // consume method name
+    Expect(TokenType.LeftParen);
+    var names = new List<string> { "self" };
+    if (!Check(TokenType.RightParen)) {
+      do {
+        var paramName = ExpectIdentifierLike();
+        names.Add(paramName.Value);
+        // Skip the type reference (consume until comma or closing paren at depth 0)
+        int depth = 0;
+        while (!IsAtEnd()) {
+          if (Check(TokenType.LeftParen)) depth++;
+          else if (Check(TokenType.RightParen)) {
+            if (depth == 0) break;
+            depth--;
+          } else if (Check(TokenType.Comma) && depth == 0) break;
+          else if (Check(TokenType.Equals) && depth == 0) {
+            // Skip default value
+            Advance();
+            while (!IsAtEnd() && !Check(TokenType.Comma) && !Check(TokenType.RightParen)) Advance();
+            break;
+          }
+          Advance();
+        }
+      } while (Check(TokenType.Comma) && Advance() != null);
+    }
+    _pos = savedPos;
+    return names;
   }
 
   /// Tag newly-added functions with where constraints and clean up injected constraints.
@@ -9220,17 +9262,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // When multiple overloads still match, disambiguate by the first positional
     // argument's compatibility with each candidate's parameter type.
-    // Array literals prefer collection-typed params; scalars prefer non-collection params.
     if (matching.Count > 1 && _pos < _tokens.Count) {
       bool argIsCollection = Current().Type == TokenType.LeftBracket;
+      bool argIsClosure = Current().Type == TokenType.LeftParen;
+      bool argIsCharLiteral = Current().Type == TokenType.CharacterLiteral;
+
+      // Closure args match function-typed params; non-closure args exclude them.
+      // Array literal args prefer generic collection params; scalars prefer non-collection params.
+      // Character literal args prefer Character-typed params.
+      // A "generic collection" is a struct with unresolved type parameters (e.g., Array with Element).
       var narrowed = matching.Where(c => {
         int firstParamIdx = c.ParamNames.Contains("self") ? 1 : 0;
         if (firstParamIdx >= c.ParamTypes.Count) return true;
-        bool paramIsCollection = c.ParamTypes[firstParamIdx] is MlirStructType st && st.TypeParams.Count > 0;
+        var paramType = c.ParamTypes[firstParamIdx];
+        bool paramIsCollection = paramType is MlirStructType st
+          && st.TypeParams.Count > 0
+          && st.TypeParams.Values.Any(v => v is MlirTypeParameterType);
+        bool paramIsFunction = paramType is MlirFunctionType;
+        bool paramIsCharacter = paramType is MlirStructType cs && cs.Name == "Character";
+
+        if (paramIsFunction != argIsClosure) return false;
+        if (argIsCharLiteral && !paramIsCharacter) return false;
+        if (!argIsCharLiteral && paramIsCharacter) return false;
+
         return paramIsCollection == argIsCollection;
       }).ToList();
       if (narrowed.Count >= 1 && narrowed.Count < matching.Count) {
-        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {narrowed.Count} by first arg type (collection={argIsCollection})");
+        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {narrowed.Count} by first arg type (collection={argIsCollection}, closure={argIsClosure}, charLiteral={argIsCharLiteral})");
         matching = narrowed;
       }
     }

@@ -35,7 +35,8 @@ var empty = s.isEmpty()       // Returns false
 var s = "hello world"
 s.startsWith("hello")      // true
 s.endsWith("world")        // true
-s.contains("lo wo")        // true
+s.contains("lo wo")        // true (substring search)
+s.contains('o')            // true (character search)
 s.findFirst("world")            // 6 (index, or -1 if not found)
 ```
 
