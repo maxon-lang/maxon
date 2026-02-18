@@ -6,6 +6,13 @@ export typealias IatFixupArray = Array with IatFixup
 export typealias StackSize = int(0 to u64.max)
 export typealias CodeOffset = int(0 to u64.max)
 export typealias MachineWord = int(0 to u64.max)
+typealias CodeOffsetArray = Array with CodeOffset
+
+type CallFixup
+    export var codeOffset CodeOffset
+    export var targetName String
+end 'CallFixup'
+typealias CallFixupArray = Array with CallFixup
 
 // Runtime stub offsets are returned from emitWriteStdout/emitI64ToString
 // and threaded to call sites as parameters.
@@ -575,6 +582,9 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops")
     var code = ByteBuffer.create(1024)
     var iatFixups = IatFixupArray{}
+    var labelNames = StringArray{}
+    var labelOffsets = CodeOffsetArray{}
+    var callFixups = CallFixupArray{}
 
     // Emit _start wrapper first (entry point at offset 0)
     // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
@@ -583,9 +593,10 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     code.push(0xEC)
     code.push(0x28)
 
-    // call main (relative call, patched later)
+    // call main (relative call, patched by label resolution)
     code.push(0xE8)
     let mainCallFixupOffset = code.count()
+    callFixups.push({codeOffset: mainCallFixupOffset, targetName: "main"})
     code.push(0x00)
     code.push(0x00)
     code.push(0x00)
@@ -607,18 +618,17 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     // int3 (unreachable)
     code.push(0xCC)
 
-    // Emit runtime stubs (before main, so offsets are known)
+    // Emit runtime stubs (before user functions, so offsets are known)
     logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
     let writeStdoutOff = emitWriteStdout(code, iatFixups: iatFixups)
     let i64ToStringOff = emitI64ToString(code)
 
-    // Emit main function body
-    let mainOffset = code.count()
-    logTrace(LogCategory.codegen, message: "Main function at code offset {mainOffset}")
-
+    // Emit all function bodies
     logTrace(LogCategory.codegen, message: "{x86Ops.count()} x86 ops to emit")
     for op in x86Ops 'opLoop'
         match op 'emit'
+            funcLabel(name) then recordLabel(labelNames, labelOffsets: labelOffsets, name: name, offset: code.count())
+            callDirect(target) then emitCallFixup(code, callFixups: callFixups, target: target)
             prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
             epilogue then emitEpilogue(code)
             movRegImm(dest, value) then emitMovRegImm(code, value: value)
@@ -634,11 +644,54 @@ export function emit(x86Ops X86OpArray) returns CodeResult
         end 'emit'
     end 'opLoop'
 
-    // Patch the relative call to main
-    let callEndOffset = mainCallFixupOffset + 4
-    let relOffset = mainOffset - callEndOffset
-    code.patchDword(mainCallFixupOffset, value: relOffset)
+    // Resolve all call fixups using recorded labels
+    resolveCallFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups)
 
     logDebug(LogCategory.codegen, message: "Emitted {code.count()} bytes of machine code")
     return {code: code, mainCallFixupOffset: mainCallFixupOffset, iatFixups: iatFixups}
 end 'emit'
+
+function recordLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String, offset CodeOffset)
+    logTrace(LogCategory.codegen, message: "Label '{name}' at code offset {offset}")
+    labelNames.push(name)
+    labelOffsets.push(offset)
+end 'recordLabel'
+
+// Emit call rel32 placeholder — resolved after all functions are emitted.
+// Safe for zero-arg calls where stack is aligned by caller's prologue.
+function emitCallFixup(code ByteBuffer, callFixups CallFixupArray, target String)
+    logTrace(LogCategory.codegen, message: "Call fixup to '{target}' at offset {code.count()}")
+    code.push(0xE8)
+    let fixupOffset = code.count()
+    callFixups.push({codeOffset: fixupOffset, targetName: target})
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+end 'emitCallFixup'
+
+function resolveCallFixups(code ByteBuffer, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
+    logTrace(LogCategory.codegen, message: "Resolving {callFixups.count()} call fixups")
+    for fixup in callFixups 'resolve'
+        let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
+        let callEnd = fixup.codeOffset + 4
+        let rel = targetOffset - callEnd
+        code.patchDword(fixup.codeOffset, value: rel)
+    end 'resolve'
+end 'resolveCallFixups'
+
+function lookupLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String) returns CodeOffset
+    var i = 0
+    while i < labelNames.count() 'search'
+        let labelName = try labelNames.get(i) otherwise 'next'
+            i = i + 1
+            continue
+        end 'next'
+        if labelName == name 'found'
+            return try labelOffsets.get(i) otherwise 0
+        end 'found'
+        i = i + 1
+    end 'search'
+    logError(LogCategory.codegen, message: "Unresolved label '{name}' — call will jump to offset 0")
+    return 0
+end 'lookupLabel'

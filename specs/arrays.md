@@ -465,6 +465,76 @@ end 'main'
 60
 ```
 
+### String Array Literals
+
+<!-- test: string-array-literal-basic -->
+```maxon
+function main() returns ExitCode
+  var arr = ["hello", "world"]
+  var s = try arr.get(0) otherwise ""
+  if s == "hello" 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: string-array-literal-iterate -->
+```maxon
+function main() returns ExitCode
+  var arr = ["aaa", "bbb", "ccc"]
+  var count = 0
+  for s in arr 'loop'
+    count = count + 1
+  end 'loop'
+  return count
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: string-array-literal-top-level -->
+```maxon
+var names = ["alice", "bob"]
+
+function main() returns ExitCode
+  var count = 0
+  for name in names 'loop'
+    count = count + 1
+  end 'loop'
+  return count
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: string-array-literal-top-level-pass-to-function -->
+```maxon
+var items = ["hello"]
+
+function useString(s String) returns ExitCode
+  if s == "hello" 'check'
+    return 42
+  end 'check'
+  return 0
+end 'useString'
+
+function main() returns ExitCode
+  for item in items 'loop'
+    return useString(item)
+  end 'loop'
+  return 1
+end 'main'
+```
+```exitcode
+42
+```
+
 ### Slice
 
 <!-- test: slice-basic -->

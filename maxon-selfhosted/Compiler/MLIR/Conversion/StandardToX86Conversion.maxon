@@ -6,63 +6,18 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     logDebug(LogCategory.mlir, message: "Lowering {stdOps.count()} Standard ops to X86 dialect")
     var ops = X86OpArray{}
 
-    // First pass: count max slot index to compute stack size
-    var maxSlot = 0 - 1
-    for sOp in stdOps 'countSlots'
-        match sOp 'countSlot'
-            storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
-            loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
-            constI64(resultId, value) then maxSlot = maxSlot
-            returnOp(retValId) then maxSlot = maxSlot
-            addI64(resultId, leftId, rightId) then maxSlot = maxSlot
-            subI64(resultId, leftId, rightId) then maxSlot = maxSlot
-            mulI64(resultId, leftId, rightId) then maxSlot = maxSlot
-            pushValue then maxSlot = maxSlot
-            popToRcx then maxSlot = maxSlot
-            printLiteral(data) then maxSlot = maxSlot
-            printInt(valueId) then maxSlot = maxSlot
-        end 'countSlot'
-    end 'countSlots'
+    var i = 0
+    while i < stdOps.count() 'opLoop'
+        let sOp = try stdOps.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
 
-    // Stack layout: each slot is 8 bytes, plus 32 bytes for i64_to_string buffer
-    // Align to 16 bytes
-    var stackSize = 0
-    if maxSlot >= 0 'hasSlots'
-        stackSize = (maxSlot + 1) * 8 + 32
-    end 'hasSlots'
-    // Check for print ops that need buffer space
-    var hasPrint = false
-    for sOp in stdOps 'checkPrint'
-        match sOp 'checkP'
-            printInt(valueId) then hasPrint = true
-            printLiteral(data) then hasPrint = true
-            constI64(resultId, value) then hasPrint = hasPrint
-            returnOp(retValId) then hasPrint = hasPrint
-            storeSlot(slotId, valueId) then hasPrint = hasPrint
-            loadSlot(resultId, slotId) then hasPrint = hasPrint
-            addI64(resultId, leftId, rightId) then hasPrint = hasPrint
-            subI64(resultId, leftId, rightId) then hasPrint = hasPrint
-            mulI64(resultId, leftId, rightId) then hasPrint = hasPrint
-            pushValue then hasPrint = hasPrint
-            popToRcx then hasPrint = hasPrint
-        end 'checkP'
-    end 'checkPrint'
-    if hasPrint and stackSize == 0 'needPrintBuf'
-        stackSize = 32
-    end 'needPrintBuf'
-    // Align to 16
-    if stackSize mod 16 != 0 'align'
-        stackSize = stackSize + (16 - (stackSize mod 16))
-    end 'align'
-
-    // Prologue with computed stack size
-    ops.push(X86Op.prologue(stackSize))
-
-    // Second pass: lower ops
-    for sOp in stdOps 'opLoop'
         match sOp 'lower'
+            funcBegin(name) then lowerFuncBegin(stdOps, x86Ops: ops, name: name, startIndex: i)
+            funcEnd then i = i  // no-op: prologue/epilogue handled by funcBegin/returnOp
             constI64(resultId, value) then ops.push(X86Op.movRegImm(X86Register.rax, value))
-            returnOp(retValId) then break 'opLoop'
+            returnOp(retValId) then ops.push(X86Op.epilogue)
             storeSlot(slotId, valueId) then ops.push(X86Op.movSlot(slotId, X86Register.rax))
             loadSlot(resultId, slotId) then ops.push(X86Op.loadSlot(X86Register.rax, slotId))
             addI64(resultId, leftId, rightId) then ops.push(X86Op.addRegReg(X86Register.rax, X86Register.rcx))
@@ -72,17 +27,65 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
             popToRcx then ops.push(X86Op.popRcx)
             printLiteral(data) then ops.push(X86Op.printLiteral(data))
             printInt(valueId) then ops.push(X86Op.printInt)
+            call(resultId, callee) then ops.push(X86Op.callDirect(callee))
         end 'lower'
+
+        i = i + 1
     end 'opLoop'
 
-    // Epilogue
-    ops.push(X86Op.epilogue)
-
-    logDebug(LogCategory.mlir, message: "Std->X86 lowering complete: {ops.count()} X86 ops, stack size {stackSize}")
+    logDebug(LogCategory.mlir, message: "Std->X86 lowering complete: {ops.count()} X86 ops")
     return ops
 end 'lowerStdOpsToX86'
 
+// Scan ahead to funcEnd to compute per-function stack size, then emit funcLabel + prologue.
+function lowerFuncBegin(stdOps StdOpArray, x86Ops X86OpArray, name String, startIndex StdOpIndex)
+    logTrace(LogCategory.mlir, message: "Lowering funcBegin '{name}'")
+    var maxSlot = 0 - 1
+    var hasPrint = false
+
+    var j = startIndex + 1
+    while j < stdOps.count() 'scan'
+        let op = try stdOps.get(j) otherwise 'scanSkip'
+            j = j + 1
+            continue
+        end 'scanSkip'
+        match op 'countSlot'
+            funcEnd then break 'scan'
+            storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
+            loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
+            printInt(valueId) then hasPrint = true
+            printLiteral(data) then hasPrint = true
+            constI64(resultId, value) then maxSlot = maxSlot
+            returnOp(retValId) then maxSlot = maxSlot
+            addI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            subI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            mulI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            pushValue then maxSlot = maxSlot
+            popToRcx then maxSlot = maxSlot
+            funcBegin(n) then maxSlot = maxSlot
+            call(resultId, callee) then maxSlot = maxSlot
+        end 'countSlot'
+        j = j + 1
+    end 'scan'
+
+    var stackSize = 0
+    if maxSlot >= 0 'hasSlots'
+        stackSize = (maxSlot + 1) * 8 + 32
+    end 'hasSlots'
+    if hasPrint and stackSize == 0 'needPrintBuf'
+        stackSize = 32
+    end 'needPrintBuf'
+    // Align to 16
+    if stackSize mod 16 != 0 'align'
+        stackSize = stackSize + (16 - (stackSize mod 16))
+    end 'align'
+
+    x86Ops.push(X86Op.funcLabel(name))
+    x86Ops.push(X86Op.prologue(stackSize))
+end 'lowerFuncBegin'
+
 typealias SlotIndex = int(i64.min to i64.max)
+typealias StdOpIndex = int(0 to u64.max)
 
 function maxOf(a SlotIndex, b SlotIndex) returns SlotIndex
     if a > b 'aGreater'

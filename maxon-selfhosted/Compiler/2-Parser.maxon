@@ -1,6 +1,5 @@
 // Recursive descent parser.
-// Consumes tokens and emits Maxon dialect ops (no separate AST).
-// Returns a flat array of ops for the main function body.
+// Consumes tokens and emits Maxon dialect ops with funcBegin/funcEnd markers.
 
 export typealias MaxonOpArray = Array with MaxonOp
 export typealias StringArray = Array with String
@@ -9,6 +8,11 @@ export typealias VarSlot = int(0 to u64.max)
 export typealias ParsedInt = int(i64.min to i64.max)
 typealias TokenIndex = int(0 to u64.max)
 export typealias VarSlotArray = Array with VarSlot
+
+type ParseFunctionResult
+    export var ops MaxonOpArray
+    export var nextPos TokenIndex
+end 'ParseFunctionResult'
 
 function resetSymbolTable(project Project)
     project.parserVarNames = StringArray{}
@@ -40,6 +44,7 @@ end 'lookupVariable'
 export function parse(project Project, tokens TokenArray, filePath String) returns MaxonOpArray throws CompileError
     logDebug(LogCategory.parser, message: "Starting parser")
     var pos = 0
+    var allOps = MaxonOpArray{}
 
     pos = skipNewlines(tokens, startPos: pos)
 
@@ -50,27 +55,26 @@ export function parse(project Project, tokens TokenArray, filePath String) retur
         end 'isEof'
         if token.kind == TokenKind.kwFunction 'isFunction'
             let result = try parseFunction(project, tokens: tokens, startPos: pos, filePath: filePath)
-            logDebug(LogCategory.parser, message: "Parser complete: {result.count()} ops")
-            return result
+            allOps.append(result.ops)
+            pos = result.nextPos
         end 'isFunction' else 'notFunction'
             pos = pos + 1
         end 'notFunction'
         pos = skipNewlines(tokens, startPos: pos)
     end 'parseLoop'
 
-    var empty = MaxonOpArray{}
-    logDebug(LogCategory.parser, message: "Parser complete: 0 ops")
-    return empty
+    logDebug(LogCategory.parser, message: "Parser complete: {allOps.count()} ops")
+    return allOps
 end 'parse'
 
 // --- Function parsing ---
 
-function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, filePath String) returns MaxonOpArray throws CompileError
+function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, filePath String) returns ParseFunctionResult throws CompileError
     var pos = startPos
     pos = pos + 1  // skip 'function'
 
-    // Function name
     let nameToken = tokenAt(tokens, pos: pos)
+    logTrace(LogCategory.parser, message: "Parsing function '{nameToken.value}'")
     pos = pos + 1
 
     // Expect '(' ')'
@@ -91,6 +95,8 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
     var ops = MaxonOpArray{}
     resetValueIds(project)
     resetSymbolTable(project)
+
+    ops.push(MaxonOp.funcBegin(nameToken.value))
 
     while pos < tokens.count() 'body'
         let stmtToken = tokenAt(tokens, pos: pos)
@@ -113,7 +119,16 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
         pos = skipNewlines(tokens, startPos: pos)
     end 'body'
 
-    return ops
+    ops.push(MaxonOp.funcEnd)
+
+    // Skip 'end' and optional label string
+    pos = pos + 1  // skip 'end'
+    let afterEnd = tokenAt(tokens, pos: pos)
+    if afterEnd.kind == TokenKind.stringLiteral 'hasLabel'
+        pos = pos + 1  // skip label
+    end 'hasLabel'
+
+    return {ops: ops, nextPos: pos}
 end 'parseFunction'
 
 // --- Statement parsing ---
@@ -318,6 +333,13 @@ function parsePrimary(project Project, tokens TokenArray, startPos TokenIndex, o
     end 'isInt'
 
     if token.kind == TokenKind.identifier 'isIdent'
+        let peekToken = tokenAt(tokens, pos: startPos + 1)
+        if peekToken.kind == TokenKind.leftParen 'isCall'
+            // Function call: name()
+            let callId = nextValueId(project)
+            ops.push(MaxonOp.call(callId, token.value))
+            return {valueId: callId, nextPos: startPos + 3}
+        end 'isCall'
         let slot = try lookupVariable(project, name: token.value, token: token, filePath: filePath)
         let id = nextValueId(project)
         ops.push(MaxonOp.varLoad(id, slot))

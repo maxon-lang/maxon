@@ -777,7 +777,28 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return _tokens[deferred.TokenStart].Value;
     if (_tokens[deferred.TokenStart].Type == TokenType.LeftBracket && IsMapLiteralAt(deferred.TokenStart))
       return InferMapTypeAlias(deferred.TokenStart);
+    if (_tokens[deferred.TokenStart].Type == TokenType.LeftBracket)
+      return InferArrayTypeAlias(deferred.TokenStart);
     return "Array";
+  }
+
+  /// <summary>
+  /// Infer the concrete Array type alias for an array literal by peeking at the first element.
+  /// Returns the appropriate alias (e.g., "StringArray", "__Array_String") so that
+  /// for-in loops can resolve the correct element type.
+  /// </summary>
+  private string InferArrayTypeAlias(int bracketPos) {
+    int pos = bracketPos + 1; // skip '['
+    while (pos < _tokens.Count && _tokens[pos].Type == TokenType.Newline) pos++;
+
+    var elementType = InferTypeFromTokens(pos, out _);
+    var elementKind = elementType.ToValueKind();
+    string? elementStructTypeName = elementType is MlirStructType st ? st.Name
+      : elementType is MlirEnumType en ? en.Name : null;
+
+    var alias = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
+    Logger.Debug(LogCategory.Parser, $"Inferred array type alias '{alias}' from element type '{elementType.Name}'");
+    return alias;
   }
 
   /// <summary>

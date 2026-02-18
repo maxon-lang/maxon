@@ -1,6 +1,9 @@
 // Spec test runner for the self-hosted compiler.
 // Parses spec files and runs tests by invoking the C# compiler.
 
+// Whitelisted specs to run (only specs the self-hosted compiler cares about)
+var specWhitelist = ["selfhosted-basics"]
+
 // Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
 function trimWhitespace(s String) returns String
   // Walk string with charAt + indexAfter to find trim boundaries
@@ -99,9 +102,6 @@ function parseInteger(s String) returns ParsedInt throws CompileError
   end 'neg'
   return result
 end 'parseInteger'
-
-// Whitelisted specs to run (only specs the self-hosted compiler cares about)
-var specWhitelist = StringArray{}
 
 type TestExpectation
   export var exitCode ParsedInt
@@ -310,13 +310,9 @@ function skipCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNu
   return i
 end 'skipCodeBlock'
 
-function initWhitelist()
-  specWhitelist.push("selfhosted-basics")
-end 'initWhitelist'
 
 // Run all whitelisted spec tests. Returns (passed, failed).
 export function runAllSpecTests(filter String) returns ExitCode
-  initWhitelist()
   let root = try findProjectRoot() otherwise 'noRoot'
     logError(LogCategory.testing, message: "Could not find project root (no specs/ directory found)")
     return 1
