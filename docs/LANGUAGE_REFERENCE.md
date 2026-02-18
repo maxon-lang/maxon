@@ -1004,6 +1004,8 @@ let name = "Maxon"
 - Type is always inferred from the initializer
 - Scope is block-scoped
 - Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
+- All variables must be used; unused variables cause a compile error (E3012)
+- Prefix a variable name with `_` to suppress the unused variable error
 
 ### Top-Level Variables
 

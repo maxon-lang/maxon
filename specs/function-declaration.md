@@ -143,7 +143,7 @@ end 'main'
 <!-- test: void-return-type -->
 ```maxon
 function doNothing()
-  var x = 1
+  var _x = 1
 end 'doNothing'
 
 function main() returns ExitCode

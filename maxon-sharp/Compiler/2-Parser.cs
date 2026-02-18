@@ -350,6 +350,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   // Tracks parameter locations for unused parameter error reporting
   private readonly List<(string Name, int Line, int Column)> _paramLocations = [];
+  private readonly List<(string Name, int Line, int Column)> _localVarLocations = [];
 
   /// <summary>
   /// Derives the namespace from the source file path.
@@ -3558,6 +3559,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _variables.Clear();
     _referencedVars.Clear();
     _paramLocations.Clear();
+    _localVarLocations.Clear();
     _blockCounter = 0;
 
     return func;
@@ -3609,6 +3611,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     foreach (var (paramName, paramLine, paramCol) in _paramLocations) {
       if (!_referencedVars.Contains(paramName)) {
         throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{paramName}'", paramLine, paramCol);
+      }
+    }
+
+    // Check for unused local variables (skip stdlib)
+    if (!_isStdlib) {
+      foreach (var (varName, varLine, varCol) in _localVarLocations) {
+        if (!_referencedVars.Contains(varName)) {
+          throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{varName}'", varLine, varCol);
+        }
       }
     }
 
@@ -4589,6 +4600,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
+    if (!name.StartsWith('_')) {
+      _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
+    }
     Expect(TokenType.Equals);
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
@@ -4628,6 +4642,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (Check(TokenType.Comma)) Advance();
       var nameToken = Expect(TokenType.Identifier);
       names.Add(nameToken.Value);
+      if (!nameToken.Value.StartsWith('_')) {
+        _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
+      }
     } while (Check(TokenType.Comma));
     Expect(TokenType.RightParen);
     Expect(TokenType.Equals);

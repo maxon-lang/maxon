@@ -79,11 +79,14 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 ```maxon
 let x = 42          // immutable (type inferred)
 var y = 10          // mutable (type inferred)
+var _z = sideEffect()  // _ prefix: unused variable OK
 
 // Top-level variables (outside functions)
 var globalCounter = 0   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
 ```
+
+All variables must be used. Prefix with `_` to suppress unused variable errors.
 
 ## Functions
 

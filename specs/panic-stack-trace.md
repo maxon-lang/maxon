@@ -24,7 +24,7 @@ function dangerous(value Integer) returns Byte
 end
 
 function main() returns ExitCode
-  let result = dangerous(Integer{300})
+  let _result = dangerous(Integer{300})
   return 0 as ExitCode
 end
 ```
@@ -59,7 +59,7 @@ function caller(n Integer) returns SmallInt
 end
 
 function main() returns ExitCode
-  let result = caller(Integer{999})
+  let _result = caller(Integer{999})
   return 0 as ExitCode
 end
 ```
@@ -88,7 +88,7 @@ function getVal() returns Integer
 end
 
 function main() returns ExitCode
-  let x = Bounded{getVal()}
+  let _x = Bounded{getVal()}
   return 0 as ExitCode
 end
 ```
