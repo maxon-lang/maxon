@@ -9218,6 +9218,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         callToken.Line, callToken.Column);
     }
 
+    // When multiple overloads still match, disambiguate by the first positional
+    // argument's compatibility with each candidate's parameter type.
+    // Array literals prefer collection-typed params; scalars prefer non-collection params.
+    if (matching.Count > 1 && _pos < _tokens.Count) {
+      bool argIsCollection = Current().Type == TokenType.LeftBracket;
+      var narrowed = matching.Where(c => {
+        int firstParamIdx = c.ParamNames.Contains("self") ? 1 : 0;
+        if (firstParamIdx >= c.ParamTypes.Count) return true;
+        bool paramIsCollection = c.ParamTypes[firstParamIdx] is MlirStructType st && st.TypeParams.Count > 0;
+        return paramIsCollection == argIsCollection;
+      }).ToList();
+      if (narrowed.Count >= 1 && narrowed.Count < matching.Count) {
+        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {narrowed.Count} by first arg type (collection={argIsCollection})");
+        matching = narrowed;
+      }
+    }
+
+    if (matching.Count == 1) return matching[0];
+
     var matchInfo = string.Join(", ", matching.Select(c =>
       $"({string.Join(", ", c.ParamNames.Where(n => n != "self"))})"));
     throw new CompileError(ErrorCode.SemanticAmbiguousFunctionCall,

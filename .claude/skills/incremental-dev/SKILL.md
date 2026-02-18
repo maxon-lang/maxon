@@ -17,11 +17,17 @@ Run the spec tests and fix any failures by modifying the compiler code.
 7. Fix any problems reported by the IDE
 8. review the X86 MLIR for that test and ensure registers are handled correctly.
 9. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be review to ensure they are ok.
-10. If any compiler code was changed then review any code changes to see if you can refactor to eliminate duplicated code.
-11. If any compiler code was changed then review any code changes to check that the code does not use default cases. When handling 
-multiple cases if there is not a specific match it should throw an error. Check 'switch' and also the use of 'else'. 
-
-12. Write a git commit message for these changes.
+10. Review all code changes:
+    - Eliminate duplicated code — refactor shared logic into helper methods.
+    - Ensure no `switch` statements use `default` cases — all cases must be handled explicitly.
+    - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
+    - Ensure comments explain "why" not "what".
+    - Fix any problems reported by the IDE
+    - Ensure you have not duplicated any helpers
+    - typealias should describe its purpose, not its type
+    - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit.
+    - if it makes sense add logging statements in the compiler code to help with debugging and future maintenance, using appropriate log levels and categories
+11. Write a git commit message for these changes.
 
 ## Guidelines
 

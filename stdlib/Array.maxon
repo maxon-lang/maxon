@@ -240,9 +240,25 @@ end 'Array'
 export extension Array where Element is Equatable
   typealias ElementArray = Array with Element
 
-  function contains(elements ElementArray) returns bool
+  function contains(element Element) returns bool
+    var i = 0
+    let len = count()
+    while i < len 'scan'
+      let item = try get(i) otherwise 'skip'
+        i = i + 1
+        continue
+      end 'skip'
+      if item == element 'found'
+        return true
+      end 'found'
+      i = i + 1
+    end 'scan'
+    return false
+  end 'contains'
+
+  function contains(sequence ElementArray) returns bool
     let selfLen = count()
-    let elemLen = elements.count()
+    let elemLen = sequence.count()
 
     if elemLen == 0 'empty'
       return true
@@ -256,7 +272,7 @@ export extension Array where Element is Equatable
         let a = try get(i + j) otherwise 'a'
           break
         end 'a'
-        let b = try elements.get(j) otherwise 'b'
+        let b = try sequence.get(j) otherwise 'b'
           break
         end 'b'
         if a != b 'ne'

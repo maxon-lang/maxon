@@ -53,7 +53,7 @@ dict.contains(predicate: (e Entry) gives e.key == "a")   // true
 
 ### Single Element
 
-<!-- disabled-test: array-int-found -->
+<!-- test: array-int-found -->
 ```maxon
 function main() returns ExitCode
   var arr = [10, 20, 30, 40, 50]
