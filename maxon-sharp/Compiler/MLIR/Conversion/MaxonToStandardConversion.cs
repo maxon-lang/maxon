@@ -7,6 +7,7 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static bool _trackAllocs;
   [ThreadStatic] private static MlirModule<StandardOp>? _resultModule;
   [ThreadStatic] private static Dictionary<string, string>? _rdataTagCache;
+  [ThreadStatic] private static Dictionary<string, string>? _rdataStringCache;
   [ThreadStatic] private static Dictionary<string, HashSet<string>>? _mutatingParams;
   // Maps param name -> ref pointer var name for the current function being lowered
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
@@ -14,6 +15,7 @@ public static partial class MaxonToStandardConversion {
   public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module, bool trackAllocs = false) {
     _trackAllocs = trackAllocs;
     _rdataTagCache = [];
+    _rdataStringCache = [];
     var result = new MlirModule<StandardOp>();
     _resultModule = result;
     result.RdataEntries.AddRange(module.RdataEntries);

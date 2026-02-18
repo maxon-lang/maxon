@@ -6,20 +6,26 @@ description: Run spec tests and fix any failures in the compiler
 Run the spec tests and fix any failures by modifying the compiler code.
 
 ## Steps
-
-1. Run the spec tests: `./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test`
+1. Run the spec tests: `./maxon-selfhosted/main.exe spec-test`
 2. Analyze the output to identify which tests are failing and why.
-3. Fix the compiler code in `maxon-sharp/` to make the failing tests pass.
+3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass.
 4. Rebuild and re-run spec tests to verify the fixes.
 5. Repeat until all tests pass.
-6. If any compiler code was changed then review any code changes to see if you can refactor to eliminate duplicated code.
-7. If any compiler code was changed then review any code changes to check that the code does not use default cases. When handling multiple cases if there is not a specific match it should throw an error. Check 'switch' and also the use of 'else'. 
-8. Fix any problems reported by the IDE
-9. Write a git commit message for these changes
+6. Review all code changes:
+    - Eliminate duplicated code — refactor shared logic into helper methods.
+    - Ensure no `switch` statements use `default` cases — all cases must be handled explicitly.
+    - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
+    - Ensure comments explain "why" not "what".
+    - Fix any problems reported by the IDE
+    - Ensure you have not duplicated any helpers
+    - typealias should describe its purpose, not its type
+    - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit.
+7. Fix any problems reported by the IDE
+8. Write a git commit message for these changes
 
 ## Guidelines
-
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.
 - Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=mlir:debug`).
 - Fix root causes, not symptoms. No workarounds.
 - Any old 3 digit error codes (ie E022) in the spec files need to updated to the new 4 digit error codes.
+- It is possible that any bugs encountered could be in the c# bootrap compiler. If this is the case then you will need to fix the c# compiler in `maxon-selfhosted/`

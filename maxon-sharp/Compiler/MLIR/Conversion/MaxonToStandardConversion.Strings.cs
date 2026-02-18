@@ -13,9 +13,15 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  MlirModule<StandardOp> result) {
 		var utf8Bytes = System.Text.Encoding.UTF8.GetBytes(value);
-		var nullTerminated = new byte[utf8Bytes.Length + 1];
-		Array.Copy(utf8Bytes, nullTerminated, utf8Bytes.Length);
-		result.RdataEntries.Add((rdataLabel, nullTerminated, 1));
+
+		if (_rdataStringCache!.TryGetValue(value, out var existingLabel)) {
+			rdataLabel = existingLabel;
+		} else {
+			var nullTerminated = new byte[utf8Bytes.Length + 1];
+			Array.Copy(utf8Bytes, nullTerminated, utf8Bytes.Length);
+			result.RdataEntries.Add((rdataLabel, nullTerminated, 1));
+			_rdataStringCache[value] = rdataLabel;
+		}
 
 		var leaOp = new StdLeaRdataOp(rdataLabel);
 		block.AddOp(leaOp);

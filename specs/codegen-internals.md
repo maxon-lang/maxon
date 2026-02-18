@@ -38,10 +38,7 @@ String literals are stored in `.rdata` with null termination. The compiler handl
 
 ## Tests
 
-<!-- disabled-test: stack-probing-large-struct-recursive -->
-<!-- NOTE: This test requires runtime execution with a struct that has 2000 fields.
-     The source is generated programmatically and cannot be expressed inline.
-     See docs/SPECS.md documentation section on stack probing. -->
+0<!-- disabled-test: stack-probing-large-struct-recursive -->
 ```maxon
 function main() returns ExitCode
   return 0
@@ -460,18 +457,6 @@ utf8 "first heap allocated value!!\0"
 utf8 "second heap allocated here!!\0"
 ```
 
-<!-- disabled-test: managed-string-substring-retains-parent -->
-```maxon
-function main() returns ExitCode
-  var s = "hello world from heap!!"
-  var subManaged = __managed_memory_slice(s._managed, 0, 5)
-  return __managed_memory_len(subManaged)
-end 'main'
-```
-```exitcode
-5
-```
-
 <!-- test: managed-string-print-heap-string -->
 ```maxon
 function main() returns ExitCode
@@ -517,7 +502,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: managed-string-literal-deduplication -->
+<!-- test: managed-string-literal-deduplication -->
 ```maxon
 function main() returns ExitCode
   var a = "hello world"
