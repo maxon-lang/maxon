@@ -1,5 +1,5 @@
 // Spec test runner for the self-hosted compiler.
-// Parses spec files and runs tests by invoking the C# compiler.
+// Parses spec files and compiles tests using the self-hosted compiler.
 
 // Whitelisted specs to run (only specs the self-hosted compiler cares about)
 var specWhitelist = ["selfhosted-basics"]
@@ -116,6 +116,7 @@ type SpecTest
   export var name String
   export var source String
   export var expectation TestExpectation
+  export var args String
 end 'SpecTest'
 
 typealias SpecTestArray = Array with SpecTest
@@ -203,6 +204,7 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
       // Now scan for code blocks after this marker
       var source = ""
       var expectation = TestExpectation{}
+      var testArgs = ""
       i = i + 1
 
       while i < lineCount 'blocks'
@@ -215,6 +217,31 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
           // Hit next test marker, stop parsing this test
           break
         end 'nextTest'
+
+        if blockLine.contains("<!-- Args:") 'isArgs'
+          // Extract args value between "Args: " and " -->"
+          let argsStart = try blockLine.findFirst("Args: ") otherwise 'skipArgs'
+            i = i + 1
+            continue
+          end 'skipArgs'
+          // Skip past "Args: " (6 chars)
+          var argsIdx = argsStart
+          var skipCount = 0
+          while skipCount < 6 'skipPrefix'
+            argsIdx = try blockLine.indexAfter(argsIdx) otherwise 'skipArgs2'
+              i = i + 1
+              continue
+            end 'skipArgs2'
+            skipCount = skipCount + 1
+          end 'skipPrefix'
+          let argsEnd = try blockLine.findFirst(" -->") otherwise 'skipArgs3'
+            i = i + 1
+            continue
+          end 'skipArgs3'
+          testArgs = blockLine.slice(argsIdx, endIndex: argsEnd)
+          i = i + 1
+          continue
+        end 'isArgs'
 
         if blockLine.startsWith("```maxon") 'isMaxon'
           i = i + 1
@@ -261,6 +288,7 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
         test.name = "{specName}/{testName}"
         test.source = source
         test.expectation = expectation
+        test.args = testArgs
         tests.push(test)
       end 'hasSource'
       continue
@@ -318,8 +346,6 @@ export function runAllSpecTests(filter String) returns ExitCode
     return 1
   end 'noRoot'
 
-  let compilerPath = "{root}/maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe"
-
   var totalPassed = 0
   var totalFailed = 0
   var totalTests = 0
@@ -342,7 +368,7 @@ export function runAllSpecTests(filter String) returns ExitCode
       end 'hasFilter'
 
       totalTests = totalTests + 1
-      let passed = runSingleTest(test, compilerPath: compilerPath, projectRoot: root)
+      let passed = runSingleTest(test, projectRoot: root)
       if passed 'pass'
         totalPassed = totalPassed + 1
       end 'pass' else 'fail'
@@ -369,7 +395,7 @@ export function runAllSpecTests(filter String) returns ExitCode
 end 'runAllSpecTests'
 
 // Run a single test. Returns true if passed.
-function runSingleTest(test SpecTest, compilerPath String, projectRoot String) returns bool
+function runSingleTest(test SpecTest, projectRoot String) returns bool
   let tempDir = "{projectRoot}/temp"
   let tempSource = "{tempDir}/spectest_temp.maxon"
   let tempExe = "{tempDir}/spectest_temp.exe"
@@ -380,46 +406,28 @@ function runSingleTest(test SpecTest, compilerPath String, projectRoot String) r
     return false
   end 'writeErr'
 
-  if test.expectation.hasStderr 'isCompilerError'
-    // Compiler error test: compilation should fail with expected stderr
-    let cap = Process.captureStart("{compilerPath} compile {tempSource}")
-    let stdout = Process.captureStdout(cap)
-    let stderr = Process.captureStderr(cap)
-    let ec = Process.captureWait(cap, timeoutMs: 10000)
-
-    // Normalize stderr: trim, replace backslashes, remove temp path prefix
-    let normalizedStderr = normalizeStderr(stderr, tempSource: tempSource)
-    let expectedStderr = trimWhitespace(test.expectation.stderr)
-
-    if normalizedStderr == expectedStderr 'match'
-      logDebug(LogCategory.testing, message: "[PASS] {test.name}")
-      cleanup(tempSource, tempExe: tempExe)
-      return true
-    end 'match' else 'noMatch'
-      logError(LogCategory.testing, message: "[FAIL] {test.name}")
-      logError(LogCategory.testing, message: "  Expected stderr: {expectedStderr}")
-      logError(LogCategory.testing, message: "  Actual stderr:   {normalizedStderr}")
-      cleanup(tempSource, tempExe: tempExe)
-      return false
-    end 'noMatch'
-  end 'isCompilerError'
-
-  // Success test: compilation should succeed
-  let compileCap = Process.captureStart("{compilerPath} compile {tempSource}")
-  let compileStdout = Process.captureStdout(compileCap)
-  let compileStderr = Process.captureStderr(compileCap)
-  let compileEc = Process.captureWait(compileCap, timeoutMs: 10000)
-
-  if compileEc != 0 'compileFailed'
+  // Compile using the self-hosted compiler
+  let outputPath = try compile(tempSource) otherwise 'compileFailed'
     logError(LogCategory.testing, message: "[FAIL] {test.name}")
-    logError(LogCategory.testing, message: "  Compilation failed with exit code {compileEc}")
-    logError(LogCategory.testing, message: "  stderr: {compileStderr}")
+    logError(LogCategory.testing, message: "  Compilation failed")
     cleanup(tempSource, tempExe: tempExe)
     return false
   end 'compileFailed'
 
-  // Run the compiled executable
-  let runCap = Process.captureStart(tempExe)
+  if test.expectation.hasStderr 'isCompilerError'
+    // Expected a compiler error but compilation succeeded
+    logError(LogCategory.testing, message: "[FAIL] {test.name}")
+    logError(LogCategory.testing, message: "  Expected compilation error but compilation succeeded")
+    cleanup(tempSource, tempExe: tempExe)
+    return false
+  end 'isCompilerError'
+
+  // Run the compiled executable, with args if specified
+  var runCommand = outputPath
+  if not test.args.isEmpty() 'hasArgs'
+    runCommand = "{outputPath} {test.args}"
+  end 'hasArgs'
+  let runCap = Process.captureStart(runCommand)
   let runStdout = Process.captureStdout(runCap)
   let runStderr = Process.captureStderr(runCap)
   let runEc = Process.captureWait(runCap, timeoutMs: 5000)
@@ -456,16 +464,6 @@ function runSingleTest(test SpecTest, compilerPath String, projectRoot String) r
   cleanup(tempSource, tempExe: tempExe)
   return passed
 end 'runSingleTest'
-
-function normalizeStderr(stderr String, tempSource String) returns String
-  // Replace backslashes with forward slashes, trim, remove temp file path
-  var result = trimWhitespace(stderr)
-  result = result.replace("\\", with: "/")
-  // Remove the temp source path prefix if present
-  result = result.replace(tempSource, with: "")
-  result = result.replace(tempSource.replace("\\", with: "/"), with: "")
-  return result
-end 'normalizeStderr'
 
 function cleanup(tempSource String, tempExe String)
   if File.exists(tempSource) 'src'

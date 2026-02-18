@@ -8,7 +8,8 @@ Run the spec tests and fix any failures by modifying the compiler code.
 ## Steps
 1. Run the spec tests: `./maxon-selfhosted/main.exe spec-test`
 2. Analyze the output to identify which tests are failing and why.
-3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass.
+3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass. If new features need to be implemented you
+can use the maxon-sharp compiler for reference.
 4. Rebuild and re-run spec tests to verify the fixes.
 5. Repeat until all tests pass.
 6. Review all code changes:
