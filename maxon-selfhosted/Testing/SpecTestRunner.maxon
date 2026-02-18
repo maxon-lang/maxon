@@ -2,7 +2,7 @@
 // Parses spec files and compiles tests using the self-hosted compiler.
 
 // Whitelisted specs to run (only specs the self-hosted compiler cares about)
-var specWhitelist = ["selfhosted-basics"]
+var specWhitelist = ["selfhosted-basics", "basics"]
 
 // Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
 function trimWhitespace(s String) returns String
@@ -243,6 +243,16 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
           continue
         end 'isArgs'
 
+        // Check maxoncstderr before maxon since "```maxoncstderr" also startsWith "```maxon"
+        if blockLine.startsWith("```maxoncstderr") 'isStderr'
+          i = i + 1
+          let stderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.stderr = stderrBlock
+          expectation.hasStderr = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isStderr'
+
         if blockLine.startsWith("```maxon") 'isMaxon'
           i = i + 1
           source = readCodeBlock(lines, startLine: i, lineCount: lineCount)
@@ -270,15 +280,6 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
           i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
           continue
         end 'isStdout'
-
-        if blockLine.startsWith("```maxoncstderr") 'isStderr'
-          i = i + 1
-          let stderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-          expectation.stderr = stderrBlock
-          expectation.hasStderr = true
-          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-          continue
-        end 'isStderr'
 
         i = i + 1
       end 'blocks'
@@ -406,13 +407,33 @@ function runSingleTest(test SpecTest, projectRoot String) returns bool
     return false
   end 'writeErr'
 
-  // Compile using the self-hosted compiler
+  // Compile using the self-hosted compiler, capturing any error output
+  startCapturingErrors()
   let outputPath = try compile(tempSource) otherwise 'compileFailed'
+    let capturedErrors = stopCapturingErrors()
+
+    if test.expectation.hasStderr 'expectedError'
+      // Compilation failed as expected — validate the error message
+      let expectedStderr = normalizeStderr(test.expectation.stderr)
+      let actualStderr = normalizeStderr(capturedErrors)
+      if actualStderr != expectedStderr 'stderrMismatch'
+        logError(LogCategory.testing, message: "[FAIL] {test.name}")
+        logError(LogCategory.testing, message: "  Expected stderr: {expectedStderr}")
+        logError(LogCategory.testing, message: "  Actual stderr:   {actualStderr}")
+        cleanup(tempSource, tempExe: tempExe)
+        return false
+      end 'stderrMismatch'
+      logDebug(LogCategory.testing, message: "[PASS] {test.name}")
+      cleanup(tempSource, tempExe: tempExe)
+      return true
+    end 'expectedError'
+
     logError(LogCategory.testing, message: "[FAIL] {test.name}")
-    logError(LogCategory.testing, message: "  Compilation failed")
+    logError(LogCategory.testing, message: "  Compilation failed unexpectedly: {capturedErrors}")
     cleanup(tempSource, tempExe: tempExe)
     return false
   end 'compileFailed'
+  let _discardCapture = stopCapturingErrors()
 
   if test.expectation.hasStderr 'isCompilerError'
     // Expected a compiler error but compilation succeeded
@@ -464,6 +485,14 @@ function runSingleTest(test SpecTest, projectRoot String) returns bool
   cleanup(tempSource, tempExe: tempExe)
   return passed
 end 'runSingleTest'
+
+// Normalize stderr for comparison: trim, CRLF to LF, backslash to forward slash.
+function normalizeStderr(s String) returns String
+  var result = trimWhitespace(s)
+  result = result.replace("\r\n", with: "\n")
+  result = result.replace("\\", with: "/")
+  return result
+end 'normalizeStderr'
 
 function cleanup(tempSource String, tempExe String)
   if File.exists(tempSource) 'src'

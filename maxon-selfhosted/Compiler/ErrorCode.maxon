@@ -10,6 +10,8 @@
 // - 6xxx: PE writer errors
 export enum ErrorCode
     parserExpectedExpression = 2004
+    semanticNoMain = 3001
+    semanticMainWrongReturnType = 3002
     semanticUndefinedVariable = 3003
 end 'ErrorCode'
 
@@ -22,6 +24,13 @@ export function raiseCompileError(code ErrorCode, message String, line ErrorLine
     logError(LogCategory.compiler, message: "error E{code.rawValue:04}: {filePath}:{line}:{column}: {message}")
     throw CompileError.compileError
 end 'raiseCompileError'
+
+// Raises a semantic error without source location.
+// Format: "error E3001: message"
+export function raiseSemanticError(code ErrorCode, message String) throws CompileError
+    logError(LogCategory.compiler, message: "error E{code.rawValue:04}: {message}")
+    throw CompileError.compileError
+end 'raiseSemanticError'
 
 export enum CompileError implements Error
     fileNotFound

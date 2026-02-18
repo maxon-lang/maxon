@@ -14,7 +14,7 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
         end 'skip'
 
         match sOp 'lower'
-            funcBegin(name) then lowerFuncBegin(stdOps, x86Ops: ops, name: name, startIndex: i)
+            funcBegin(name, returnType) then lowerFuncBegin(stdOps, x86Ops: ops, name: name, startIndex: i)
             funcEnd then i = i  // no-op: prologue/epilogue handled by funcBegin/returnOp
             constI64(resultId, value) then ops.push(X86Op.movRegImm(X86Register.rax, value))
             returnOp(retValId) then ops.push(X86Op.epilogue)
@@ -62,7 +62,7 @@ function lowerFuncBegin(stdOps StdOpArray, x86Ops X86OpArray, name String, start
             mulI64(resultId, leftId, rightId) then maxSlot = maxSlot
             pushValue then maxSlot = maxSlot
             popToRcx then maxSlot = maxSlot
-            funcBegin(n) then maxSlot = maxSlot
+            funcBegin(n, rt) then maxSlot = maxSlot
             call(resultId, callee) then maxSlot = maxSlot
         end 'countSlot'
         j = j + 1

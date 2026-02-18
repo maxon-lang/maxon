@@ -1,0 +1,68 @@
+// Semantic validation pass over Maxon dialect ops.
+// Checks program structure requirements before lowering.
+
+// Sentinel returned by findMainReturnType when main exists but has no return type.
+function noReturnTypeSentinel() returns String
+    return "__none__"
+end 'noReturnTypeSentinel'
+
+export function runSemanticChecks(ops MaxonOpArray) throws CompileError
+    let mainReturnType = findMainReturnType(ops)
+
+    if mainReturnType.isEmpty() 'noMain'
+        try raiseSemanticError(ErrorCode.semanticNoMain, message: "No 'main' function found")
+    end 'noMain' else 'hasMain'
+        if mainReturnType != "ExitCode" 'wrongType'
+            try raiseSemanticError(ErrorCode.semanticMainWrongReturnType, message: "Function 'main' must return ExitCode")
+        end 'wrongType'
+    end 'hasMain'
+end 'runSemanticChecks'
+
+// Scans ops for a funcBegin named "main" and returns its return type.
+// Returns empty string if no main function found.
+function findMainReturnType(ops MaxonOpArray) returns String
+    var i = 0
+    while i < ops.count() 'scan'
+        let op = try ops.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+        let result = getMainReturnType(op)
+        if not result.isEmpty() 'found'
+            return result
+        end 'found'
+        i = i + 1
+    end 'scan'
+    return ""
+end 'findMainReturnType'
+
+// If op is a funcBegin for "main", returns its return type (or sentinel if none).
+// Returns empty string for non-main or non-funcBegin ops.
+function getMainReturnType(op MaxonOp) returns String
+    match op 'check'
+        funcBegin(name, returnType) then return matchMainFunc(name, returnType: returnType)
+        literal(resultId, value) then return ""
+        returnOp(retValId) then return ""
+        varDecl(slotId, valueId) then return ""
+        varLoad(resultId, slotId) then return ""
+        add(resultId, leftId, rightId) then return ""
+        sub(resultId, leftId, rightId) then return ""
+        mul(resultId, leftId, rightId) then return ""
+        pushValue then return ""
+        popToRcx then return ""
+        printLiteral(data) then return ""
+        printInt(valueId) then return ""
+        funcEnd then return ""
+        call(resultId, callee) then return ""
+    end 'check'
+end 'getMainReturnType'
+
+function matchMainFunc(name String, returnType String) returns String
+    if name == "main" or name.endsWith(".main") 'isMain'
+        if returnType.isEmpty() 'noReturn'
+            return noReturnTypeSentinel()
+        end 'noReturn'
+        return returnType
+    end 'isMain'
+    return ""
+end 'matchMainFunc'

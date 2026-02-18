@@ -82,9 +82,12 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
     pos = pos + 1  // skip ')'
 
     // Parse 'returns' type
+    var returnTypeName = ""
     let nextToken = tokenAt(tokens, pos: pos)
     if nextToken.kind == TokenKind.kwReturns 'hasReturns'
         pos = pos + 1  // skip 'returns'
+        let typeToken = tokenAt(tokens, pos: pos)
+        returnTypeName = typeToken.value
         pos = pos + 1  // skip type name
     end 'hasReturns'
 
@@ -96,7 +99,7 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
     resetValueIds(project)
     resetSymbolTable(project)
 
-    ops.push(MaxonOp.funcBegin(nameToken.value))
+    ops.push(MaxonOp.funcBegin(nameToken.value, returnTypeName))
 
     while pos < tokens.count() 'body'
         let stmtToken = tokenAt(tokens, pos: pos)

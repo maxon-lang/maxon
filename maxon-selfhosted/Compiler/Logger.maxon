@@ -21,6 +21,31 @@ end 'LogCategory'
 
 var globalLogLevel = 2
 
+// When true, error messages are appended to capturedErrors instead of only going to stderr.
+var capturingErrors = false
+var capturedErrors = StringArray{}
+
+export function startCapturingErrors()
+    capturingErrors = true
+    capturedErrors = StringArray{}
+end 'startCapturingErrors'
+
+export function stopCapturingErrors() returns String
+    capturingErrors = false
+    var result = ""
+    var first = true
+    for line in capturedErrors 'join'
+        if first 'isFirst'
+            result = line
+            first = false
+        end 'isFirst' else 'notFirst'
+            result = "{result}\n{line}"
+        end 'notFirst'
+    end 'join'
+    capturedErrors = StringArray{}
+    return result
+end 'stopCapturingErrors'
+
 // Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
 // Ranges kept at i64-width because Array with ranged types smaller than i64 has a sizing bug.
 typealias StoredLevel = int(0 to u64.max)
@@ -154,6 +179,11 @@ end 'parseLogOption'
 function log(category LogCategory, level LogLevel, message String)
     let effectiveLevel = effectiveLogLevel(category)
     if level.rawValue <= effectiveLevel 'check'
+        if capturingErrors 'capturing'
+            if level.rawValue <= 1 'isError'
+                capturedErrors.push(message)
+            end 'isError'
+        end 'capturing'
         printError("[{category.rawValue}] {level.name}: {message}\n")
     end 'check'
 end 'log'
