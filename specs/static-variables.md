@@ -575,3 +575,20 @@ end 'main'
 ```maxoncstderr
 error E2013: specs/fragments/static-variables/top-level-let-struct-reassign-error.test:12:5: cannot assign to immutable variable: 'origin'
 ```
+
+<!-- test: top-level-var-function-call-error -->
+Function calls are not allowed in module-level `var` initializers.
+```maxon
+fn getDefault() -> Int
+  return 42
+end
+
+var value = getDefault()
+
+fn main()
+  println(value)
+end
+```
+```maxoncstderr
+error E2045: specs/fragments/static-variables/top-level-var-function-call-error.test:6:13: Function calls are not allowed in global variable initializers; 'getDefault()' is not a constant expression
+```

@@ -227,6 +227,23 @@ end 'main'
 20
 ```
 
+<!-- test: function-call-in-constant-error -->
+Function calls are not allowed in constant expressions.
+```maxon
+fn compute() -> Int
+  return 42
+end
+
+let RESULT = compute()
+
+fn main()
+  println(RESULT)
+end
+```
+```maxoncstderr
+error E2045: specs/fragments/top-level-let/function-call-in-constant-error.test:6:14: Function calls are not allowed in global variable initializers; 'compute()' is not a constant expression
+```
+
 <!-- test: circular-dependency-error -->
 ```maxon
 let A = B + 1

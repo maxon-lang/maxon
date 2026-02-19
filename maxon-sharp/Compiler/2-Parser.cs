@@ -2855,6 +2855,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             $"unknown enum case: '{caseToken.Value}'", caseToken.Line, caseToken.Column);
         return new EnumConstantValue(token.Value, caseToken.Value, enumCase.Ordinal);
       }
+      if (Check(TokenType.LeftParen)) {
+        throw new CompileError(ErrorCode.ParserNonConstantInitializer,
+          $"Function calls are not allowed in global variable initializers; '{token.Value}()' is not a constant expression",
+          token.Line, token.Column);
+      }
       return EvaluateConstant(token.Value, decls, evaluated, evaluating, token.Line, token.Column);
     }
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected constant expression, got '{Current().Value}'", Current().Line, Current().Column);
