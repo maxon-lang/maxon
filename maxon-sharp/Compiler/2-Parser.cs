@@ -871,6 +871,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       endPos = pos + 3;
       if (_typeRegistry.TryGetValue(token.Value, out var type)) return type;
     }
+    // Struct constructor: TypeName{...}
+    if (token.Type == TokenType.Identifier && pos + 1 < _tokens.Count
+        && _tokens[pos + 1].Type == TokenType.LeftBrace
+        && _typeRegistry.TryGetValue(token.Value, out var ctorType)
+        && ctorType is MlirStructType) {
+      endPos = pos + 1;
+      return ctorType;
+    }
     return MlirType.I64;
   }
 
@@ -2600,8 +2608,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void SkipToMatchingEnd() {
     SkipNewlines();
     int depth = 1;
+    bool prevWasDot = false;
     while (!IsAtEnd() && depth > 0) {
-      if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) || Check(TokenType.Match)) {
+      if (prevWasDot) {
+        // Keywords after '.' are member names, not block openers/closers
+      } else if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) || Check(TokenType.Match)) {
         depth++;
       } else if (Check(TokenType.Else)) {
         // 'else if' is a single construct — the 'if' will increment depth, so 'else' should not.
@@ -2619,6 +2630,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       } else if (Check(TokenType.End)) {
         depth--;
       }
+      prevWasDot = Check(TokenType.Dot);
       Advance();
     }
     // Skip end label if present

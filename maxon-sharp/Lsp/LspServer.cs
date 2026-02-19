@@ -688,8 +688,8 @@ public class LspServer {
             ? afterWord[..afterWord.IndexOf("//")].TrimEnd() : afterWord.TrimEnd();
           strippedAfter = strippedAfter.TrimStart();
           var isEnumCaseContext = strippedAfter.Length == 0
-            || strippedAfter.StartsWith("=")
-            || strippedAfter.StartsWith("(");
+            || strippedAfter.StartsWith('=')
+            || strippedAfter.StartsWith('(');
           if (isEnumCaseContext) {
             var enclosingEnum = GetEnclosingEnumName(fileLines, i);
             // If we have a dot-qualifier (e.g. "TokenKind"), only match enum cases
