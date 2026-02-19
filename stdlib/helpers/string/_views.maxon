@@ -4,11 +4,11 @@
 // ByteView - iterate over raw UTF-8 bytes
 // ============================================
 
-export type ByteView implements Iterable with byte
+export type ByteView implements Iterable with Utf8Byte
   var _managed __ManagedMemory
   var _pos Index
 
-  function next() returns byte throws IterationError
+  export function next() returns Utf8Byte throws IterationError
     if _pos >= __managed_memory_len(_managed) 'at_end'
       throw IterationError.exhausted
     end 'at_end'
@@ -27,11 +27,11 @@ end 'ByteView'
 // CodepointView - iterate over Unicode codepoints
 // ============================================
 
-export type CodepointView implements Iterable with int
+export type CodepointView implements Iterable with Codepoint
   var _managed __ManagedMemory
   var _pos Index
 
-  function next() returns int throws IterationError
+  export function next() returns Codepoint throws IterationError
     if _pos >= __managed_memory_len(_managed) 'at_end'
       throw IterationError.exhausted
     end 'at_end'
@@ -59,12 +59,12 @@ end 'CodepointView'
 // UTF16View - iterate over UTF-16 code units
 // ============================================
 
-export type UTF16View implements Iterable with int
+export type UTF16View implements Iterable with CodeUnit16
   var _managed __ManagedMemory
   var _bytePos Index
   var _pendingCodepoint Codepoint  // Codepoint pending its low surrogate (0 if none)
 
-  function next() returns int throws IterationError
+  export function next() returns CodeUnit16 throws IterationError
     // If we have a pending codepoint, return its low surrogate
     if _pendingCodepoint != 0 'has_pending'
       var low = utf16TrailSurrogate(_pendingCodepoint)

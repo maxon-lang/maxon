@@ -2,6 +2,7 @@
 /// @category System
 
 typealias Duration = int(0 to u64.max)
+typealias ProcessHandle = int(0 to u64.max)
 
 /// Process execution errors
 export enum ProcessError implements Error
@@ -30,7 +31,7 @@ export type Process
   /// @param command The command to execute (will be passed to cmd.exe on Windows)
   /// @param timeoutMs Timeout in milliseconds (0 = wait forever)
   /// @returns The process exit code, or -1 on error
-  export static function execute(command String, timeoutMs Duration) returns int
+  export static function execute(command String, timeoutMs Duration) returns Offset
     var cmdCstr = command.cstr()
     var cwdCstr = "".cstr()
     let handle = __process_create(cmdCstr, cwdCstr)
@@ -47,26 +48,26 @@ export type Process
 
   /// Start a process with stdout/stderr capture, returning a capture handle.
   /// Use captureStdout/captureStderr to read output, then captureWait to finish.
-  export static function captureStart(command String) returns int
+  export static function captureStart(command String) returns ProcessHandle
     var cmdCstr = command.cstr()
     var cwdCstr = "".cstr()
     return __process_create_with_capture(cmdCstr, cwdCstr)
   end 'captureStart'
 
   /// Read all stdout from a capture handle as a String. Must call before captureWait.
-  export static function captureStdout(capturePtr int) returns String
+  export static function captureStdout(capturePtr ProcessHandle) returns String
     let cstr = __process_read_stdout(capturePtr)
     return String.fromCString(cstr)
   end 'captureStdout'
 
   /// Read all stderr from a capture handle as a String. Must call before captureWait.
-  export static function captureStderr(capturePtr int) returns String
+  export static function captureStderr(capturePtr ProcessHandle) returns String
     let cstr = __process_read_stderr(capturePtr)
     return String.fromCString(cstr)
   end 'captureStderr'
 
   /// Wait for a captured process to complete and return its exit code.
-  export static function captureWait(capturePtr int, timeoutMs Duration) returns int
+  export static function captureWait(capturePtr ProcessHandle, timeoutMs Duration) returns Offset
     let hProcess = __process_get_handle(capturePtr)
     __process_wait(hProcess, timeoutMs)
     let ec = __process_get_exit_code(hProcess)

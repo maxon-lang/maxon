@@ -2053,7 +2053,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Primitive type extensions: process methods directly for the named type
     if (interfaceName is "int" or "float" or "bool" or "byte") {
       _currentTypeName = interfaceName;
+      _parsingExtension = true;
       processFunction(module, functionPositions, interfaceName);
+      _parsingExtension = false;
       _currentTypeName = null;
       if (primitiveConformances.Count > 0) {
         validateConformance?.Invoke(module, interfaceName, primitiveConformances, interfaceNameToken);
@@ -3636,7 +3638,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void CheckUnusedTypeAliases() {
-    if (_isStdlib) return;
     foreach (var aliasName in _localTypeAliases) {
       if (_exportedTypeAliases.Contains(aliasName)) continue;
       if (_usedTypeAliases.Contains(aliasName)) continue;
@@ -3779,18 +3780,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var typeNamePos = _pos;
     var typeName = ExpectTypeName();
     return typeName switch {
-      "int" => _parsingTypeAliasRhs || _parsingExtension || _isStdlib
+      "int" => _parsingTypeAliasRhs || _parsingExtension
         ? MlirType.I64
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
 
-      "float" => _parsingTypeAliasRhs || _parsingExtension || _isStdlib
+      "float" => _parsingTypeAliasRhs || _parsingExtension
         ? MlirType.F64
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
-      "byte" => _parsingTypeAliasRhs || _parsingExtension || _isStdlib
+      "byte" => _parsingTypeAliasRhs || _parsingExtension
         ? MlirType.I8
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
             "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to 255)",
@@ -3851,29 +3852,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private MaxonValueKind ParseTypeKeyword() {
-    if (Check(TokenType.Int)) {
-      if (!_isStdlib)
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          "Cannot use bare 'int' as a type. Define a typealias with range constraints, e.g., typealias MyInt = int(0 to 100)",
-          Current().Line, Current().Column);
-      Advance(); return MaxonValueKind.Integer;
-    }
-
-    if (Check(TokenType.Float)) {
-      if (!_isStdlib)
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          "Cannot use bare 'float' as a type. Define a typealias with range constraints, e.g., typealias MyFloat = float(0.0 to 1.0)",
-          Current().Line, Current().Column);
-      Advance(); return MaxonValueKind.Float;
-    }
+    if (Check(TokenType.Int)) { Advance(); return MaxonValueKind.Integer; }
+    if (Check(TokenType.Float)) { Advance(); return MaxonValueKind.Float; }
     if (Check(TokenType.Bool)) { Advance(); return MaxonValueKind.Bool; }
-    if (Check(TokenType.Byte)) {
-      if (!_isStdlib)
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to 255)",
-          Current().Line, Current().Column);
-      Advance(); return MaxonValueKind.Byte;
-    }
+    if (Check(TokenType.Byte)) { Advance(); return MaxonValueKind.Byte; }
     // Accept ranged typealias names (e.g., "value as Age")
     if (Check(TokenType.Identifier)) {
       var name = Current().Value;
@@ -9216,8 +9198,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   ///   - If multiple matches exist, it's ambiguous and errors
   /// </summary>
   private bool IsFunctionVisible(MlirFunction<MaxonOp> func) {
-    if (_isStdlib) return true;
-    if (func.IsStdlib || func.IsExported) return true;
+    if (func.IsExported) return true;
     if (func.SourceFilePath == null || _sourceFilePath == null) return true;
     return func.SourceFilePath == _sourceFilePath;
   }

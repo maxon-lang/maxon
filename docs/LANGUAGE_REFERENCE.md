@@ -2150,7 +2150,7 @@ Without `export`, types and enums are only usable within the file where they are
 export typealias Score = int(0 to 100)
 ```
 
-Non-exported typealiases are only visible within their file. The standard library exports purpose-specific aliases like `Count`, `Index`, `ExitCode`, etc.
+Non-exported typealiases are only visible within their file.
 
 **Exporting top-level variables:**
 
