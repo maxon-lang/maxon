@@ -2,14 +2,14 @@
 // Checks program structure requirements before lowering.
 
 // Sentinel returned by findMainReturnType when main exists but has no return type.
-function noReturnTypeSentinel() returns String
+function noReturnTypeSentinel() returns ByteArray
     return "__none__"
 end 'noReturnTypeSentinel'
 
 export function runSemanticChecks(ops MaxonOpArray) throws CompileError
     let mainReturnType = findMainReturnType(ops)
 
-    if mainReturnType.isEmpty() 'noMain'
+    if mainReturnType.count() == 0 'noMain'
         try raiseSemanticError(ErrorCode.semanticNoMain, message: "No 'main' function found")
     end 'noMain' else 'hasMain'
         if mainReturnType != "ExitCode" 'wrongType'
@@ -19,8 +19,8 @@ export function runSemanticChecks(ops MaxonOpArray) throws CompileError
 end 'runSemanticChecks'
 
 // Scans ops for a funcBegin named "main" and returns its return type.
-// Returns empty string if no main function found.
-function findMainReturnType(ops MaxonOpArray) returns String
+// Returns empty ByteArray if no main function found.
+function findMainReturnType(ops MaxonOpArray) returns ByteArray
     var i = 0
     while i < ops.count() 'scan'
         let op = try ops.get(i) otherwise 'skip'
@@ -28,52 +28,52 @@ function findMainReturnType(ops MaxonOpArray) returns String
             continue
         end 'skip'
         let result = getMainReturnType(op)
-        if not result.isEmpty() 'found'
+        if result.count() > 0 'found'
             return result
         end 'found'
         i = i + 1
     end 'scan'
-    return ""
+    return ByteArray{}
 end 'findMainReturnType'
 
 // If op is a funcBegin for "main", returns its return type (or sentinel if none).
-// Returns empty string for non-main or non-funcBegin ops.
-function getMainReturnType(op MaxonOp) returns String
+// Returns empty ByteArray for non-main or non-funcBegin ops.
+function getMainReturnType(op MaxonOp) returns ByteArray
     match op 'check'
         funcBegin(name, returnType) then return matchMainFunc(name, returnType: returnType)
-        literal(resultId, value) then return ""
-        floatLiteral(resultId, rawBits) then return ""
-        returnOp(retValId) then return ""
-        varDecl(slotId, valueId) then return ""
-        varLoad(resultId, slotId) then return ""
-        add(resultId, leftId, rightId) then return ""
-        sub(resultId, leftId, rightId) then return ""
-        mul(resultId, leftId, rightId) then return ""
-        cmpEq(resultId, leftId, rightId) then return ""
-        cmpNe(resultId, leftId, rightId) then return ""
-        cmpLt(resultId, leftId, rightId) then return ""
-        cmpLe(resultId, leftId, rightId) then return ""
-        cmpGt(resultId, leftId, rightId) then return ""
-        cmpGe(resultId, leftId, rightId) then return ""
-        floatCmpEq(resultId, leftId, rightId) then return ""
-        condBr(condId, thenLabel, elseLabel) then return ""
-        br(targetLabel) then return ""
-        label(name) then return ""
-        pushValue then return ""
-        popToRcx then return ""
-        printLiteral(data) then return ""
-        printInt(valueId) then return ""
-        funcEnd then return ""
-        call(resultId, callee) then return ""
+        literal(resultId, value) then return ByteArray{}
+        floatLiteral(resultId, rawBits) then return ByteArray{}
+        returnOp(retValId) then return ByteArray{}
+        varDecl(slotId, valueId) then return ByteArray{}
+        varLoad(resultId, slotId) then return ByteArray{}
+        add(resultId, leftId, rightId) then return ByteArray{}
+        sub(resultId, leftId, rightId) then return ByteArray{}
+        mul(resultId, leftId, rightId) then return ByteArray{}
+        cmpEq(resultId, leftId, rightId) then return ByteArray{}
+        cmpNe(resultId, leftId, rightId) then return ByteArray{}
+        cmpLt(resultId, leftId, rightId) then return ByteArray{}
+        cmpLe(resultId, leftId, rightId) then return ByteArray{}
+        cmpGt(resultId, leftId, rightId) then return ByteArray{}
+        cmpGe(resultId, leftId, rightId) then return ByteArray{}
+        floatCmpEq(resultId, leftId, rightId) then return ByteArray{}
+        condBr(condId, thenLabel, elseLabel) then return ByteArray{}
+        br(targetLabel) then return ByteArray{}
+        label(name) then return ByteArray{}
+        pushValue then return ByteArray{}
+        popToRcx then return ByteArray{}
+        printLiteral(data) then return ByteArray{}
+        printInt(valueId) then return ByteArray{}
+        funcEnd then return ByteArray{}
+        call(resultId, callee) then return ByteArray{}
     end 'check'
 end 'getMainReturnType'
 
-function matchMainFunc(name String, returnType String) returns String
-    if name == "main" or name.endsWith(".main") 'isMain'
-        if returnType.isEmpty() 'noReturn'
+function matchMainFunc(name ByteArray, returnType ByteArray) returns ByteArray
+    if name == "main" or String.from(name).endsWith(".main") 'isMain'
+        if returnType.count() == 0 'noReturn'
             return noReturnTypeSentinel()
         end 'noReturn'
         return returnType
     end 'isMain'
-    return ""
+    return ByteArray{}
 end 'matchMainFunc'

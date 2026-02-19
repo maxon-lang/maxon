@@ -16,7 +16,7 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
 
         // funcBegin needs multiple pushes; handle before match to avoid grow-desync
         let fbName = getFuncBeginName(sOp)
-        if not fbName.isEmpty() 'isFuncBegin'
+        if fbName.count() > 0 'isFuncBegin'
             let stackSize = computeStackSize(stdOps, startIndex: i)
             ops.push(X86Op.funcLabel(fbName))
             ops.push(X86Op.prologue(stackSize))
@@ -26,7 +26,7 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
 
         // condBr needs a read-only scan then a push of the right jump type
         let elseLabel = getCondBrElseLabel(sOp)
-        if not elseLabel.isEmpty() 'isCondBr'
+        if elseLabel.count() > 0 'isCondBr'
             let jumpKind = determineJumpKind(stdOps, condIndex: i)
             if jumpKind == "eq" 'jEq'
                 ops.push(X86Op.jne(elseLabel))
@@ -94,65 +94,65 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     return ops
 end 'lowerStdOpsToX86'
 
-// Extract function name from a funcBegin op; returns empty string for other ops.
-function getFuncBeginName(op StdOp) returns String
+// Extract function name from a funcBegin op; returns empty ByteArray for other ops.
+function getFuncBeginName(op StdOp) returns ByteArray
     match op 'check'
         funcBegin(name, returnType) then return name
-        funcEnd then return ""
-        constI64(resultId, value) then return ""
-        constF64(resultId, rawBits) then return ""
-        returnOp(retValId) then return ""
-        storeSlot(slotId, valueId) then return ""
-        loadSlot(resultId, slotId) then return ""
-        addI64(resultId, leftId, rightId) then return ""
-        subI64(resultId, leftId, rightId) then return ""
-        mulI64(resultId, leftId, rightId) then return ""
-        cmpI64Eq(resultId, leftId, rightId) then return ""
-        cmpI64Ne(resultId, leftId, rightId) then return ""
-        cmpI64Lt(resultId, leftId, rightId) then return ""
-        cmpI64Le(resultId, leftId, rightId) then return ""
-        cmpI64Gt(resultId, leftId, rightId) then return ""
-        cmpI64Ge(resultId, leftId, rightId) then return ""
-        cmpF64Eq(resultId, leftId, rightId) then return ""
-        condBr(condId, thenLabel, elseLabel) then return ""
-        br(targetLabel) then return ""
-        label(name) then return ""
-        pushValue then return ""
-        popToRcx then return ""
-        printLiteral(data) then return ""
-        printInt(valueId) then return ""
-        call(resultId, callee) then return ""
+        funcEnd then return ByteArray{}
+        constI64(resultId, value) then return ByteArray{}
+        constF64(resultId, rawBits) then return ByteArray{}
+        returnOp(retValId) then return ByteArray{}
+        storeSlot(slotId, valueId) then return ByteArray{}
+        loadSlot(resultId, slotId) then return ByteArray{}
+        addI64(resultId, leftId, rightId) then return ByteArray{}
+        subI64(resultId, leftId, rightId) then return ByteArray{}
+        mulI64(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Eq(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Ne(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Lt(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Le(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Gt(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Ge(resultId, leftId, rightId) then return ByteArray{}
+        cmpF64Eq(resultId, leftId, rightId) then return ByteArray{}
+        condBr(condId, thenLabel, elseLabel) then return ByteArray{}
+        br(targetLabel) then return ByteArray{}
+        label(name) then return ByteArray{}
+        pushValue then return ByteArray{}
+        popToRcx then return ByteArray{}
+        printLiteral(data) then return ByteArray{}
+        printInt(valueId) then return ByteArray{}
+        call(resultId, callee) then return ByteArray{}
     end 'check'
 end 'getFuncBeginName'
 
-// Extract else label from a condBr op; returns empty string for other ops.
-function getCondBrElseLabel(op StdOp) returns String
+// Extract else label from a condBr op; returns empty ByteArray for other ops.
+function getCondBrElseLabel(op StdOp) returns ByteArray
     match op 'check'
         condBr(condId, thenLabel, elseLabel) then return elseLabel
-        funcBegin(name, returnType) then return ""
-        funcEnd then return ""
-        constI64(resultId, value) then return ""
-        constF64(resultId, rawBits) then return ""
-        returnOp(retValId) then return ""
-        storeSlot(slotId, valueId) then return ""
-        loadSlot(resultId, slotId) then return ""
-        addI64(resultId, leftId, rightId) then return ""
-        subI64(resultId, leftId, rightId) then return ""
-        mulI64(resultId, leftId, rightId) then return ""
-        cmpI64Eq(resultId, leftId, rightId) then return ""
-        cmpI64Ne(resultId, leftId, rightId) then return ""
-        cmpI64Lt(resultId, leftId, rightId) then return ""
-        cmpI64Le(resultId, leftId, rightId) then return ""
-        cmpI64Gt(resultId, leftId, rightId) then return ""
-        cmpI64Ge(resultId, leftId, rightId) then return ""
-        cmpF64Eq(resultId, leftId, rightId) then return ""
-        br(targetLabel) then return ""
-        label(name) then return ""
-        pushValue then return ""
-        popToRcx then return ""
-        printLiteral(data) then return ""
-        printInt(valueId) then return ""
-        call(resultId, callee) then return ""
+        funcBegin(name, returnType) then return ByteArray{}
+        funcEnd then return ByteArray{}
+        constI64(resultId, value) then return ByteArray{}
+        constF64(resultId, rawBits) then return ByteArray{}
+        returnOp(retValId) then return ByteArray{}
+        storeSlot(slotId, valueId) then return ByteArray{}
+        loadSlot(resultId, slotId) then return ByteArray{}
+        addI64(resultId, leftId, rightId) then return ByteArray{}
+        subI64(resultId, leftId, rightId) then return ByteArray{}
+        mulI64(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Eq(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Ne(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Lt(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Le(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Gt(resultId, leftId, rightId) then return ByteArray{}
+        cmpI64Ge(resultId, leftId, rightId) then return ByteArray{}
+        cmpF64Eq(resultId, leftId, rightId) then return ByteArray{}
+        br(targetLabel) then return ByteArray{}
+        label(name) then return ByteArray{}
+        pushValue then return ByteArray{}
+        popToRcx then return ByteArray{}
+        printLiteral(data) then return ByteArray{}
+        printInt(valueId) then return ByteArray{}
+        call(resultId, callee) then return ByteArray{}
     end 'check'
 end 'getCondBrElseLabel'
 

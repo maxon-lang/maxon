@@ -8,6 +8,7 @@ export typealias ParsedInt = int(i64.min to i64.max)
 typealias TokenIndex = int(0 to u64.max)
 export typealias VarSlotArray = Array with VarSlot
 export typealias BoolArray = Array with bool
+export typealias ByteArrayArray = Array with ByteArray
 
 type ParseFunctionResult
     export var ops MaxonOpArray
@@ -15,13 +16,13 @@ type ParseFunctionResult
 end 'ParseFunctionResult'
 
 function resetSymbolTable(project Project)
-    project.parserVarNames = Utf8ByteArrayArray{}
+    project.parserVarNames = ByteArrayArray{}
     project.parserVarSlots = VarSlotArray{}
     project.parserVarIsFloat = BoolArray{}
     project.parserNextSlot = 0
 end 'resetSymbolTable'
 
-function defineVariable(project Project, name String, isFloat bool) returns VarSlot
+function defineVariable(project Project, name ByteArray, isFloat bool) returns VarSlot
     let slot = project.parserNextSlot
     project.parserVarNames.push(name)
     project.parserVarSlots.push(slot)
@@ -30,24 +31,24 @@ function defineVariable(project Project, name String, isFloat bool) returns VarS
     return slot
 end 'defineVariable'
 
-function lookupVariable(project Project, name String, token Token, filePath String) returns VarSlot throws CompileError
+function lookupVariable(project Project, name ByteArray, token Token, filePath String) returns VarSlot throws CompileError
     var i = project.parserVarNames.count() - 1
     while i >= 0 'lookup'
-        let vn = try project.parserVarNames.get(i) otherwise ""
+        let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
         if vn == name 'found'
             return try project.parserVarSlots.get(i) otherwise 0
         end 'found'
         i = i - 1
     end 'lookup'
-    try raiseCompileError(ErrorCode.semanticUndefinedVariable, message: "Undefined variable '{name}'", line: token.line, column: token.column, filePath: filePath)
+    try raiseCompileError(ErrorCode.semanticUndefinedVariable, message: "Undefined variable '{String.from(name)}'", line: token.line, column: token.column, filePath: filePath)
     return 0
 end 'lookupVariable'
 
 // Look up a compile-time string constant. Returns empty string if not found.
-function lookupStringConst(project Project, name String) returns String
+function lookupStringConst(project Project, name ByteArray) returns String
     var i = 0
     while i < project.stringConstNames.count() 'lookup'
-        let cn = try project.stringConstNames.get(i) otherwise ""
+        let cn = try project.stringConstNames.get(i) otherwise ByteArray{}
         if cn == name 'found'
             return try project.stringConstValues.get(i) otherwise ""
         end 'found'
@@ -56,10 +57,10 @@ function lookupStringConst(project Project, name String) returns String
     return ""
 end 'lookupStringConst'
 
-function isVariableFloat(project Project, name String) returns bool
+function isVariableFloat(project Project, name ByteArray) returns bool
     var i = project.parserVarNames.count() - 1
     while i >= 0 'lookup'
-        let vn = try project.parserVarNames.get(i) otherwise ""
+        let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
         if vn == name 'found'
             return try project.parserVarIsFloat.get(i) otherwise false
         end 'found'
@@ -105,7 +106,7 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
     pos = pos + 1  // skip 'function'
 
     let nameToken = tokenAt(tokens, pos: pos)
-    logTrace(LogCategory.parser, message: "Parsing function '{nameToken.value}'")
+    logTrace(LogCategory.parser, message: "Parsing function '{String.from(nameToken.value)}'")
     pos = pos + 1
 
     // Expect '(' ')'
@@ -113,7 +114,7 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
     pos = pos + 1  // skip ')'
 
     // Parse 'returns' type
-    var returnTypeName = ""
+    var returnTypeName = ByteArray{}
     let nextToken = tokenAt(tokens, pos: pos)
     if nextToken.kind == TokenKind.returns 'hasReturns'
         pos = pos + 1  // skip 'returns'
@@ -169,7 +170,7 @@ function parseStatements(project Project, tokens TokenArray, startPos TokenIndex
                     if stmtToken.kind == TokenKind.if 'isIf'
                         pos = try parseIfStatement(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
                     end 'isIf' else 'notIf'
-                        try raiseCompileError(ErrorCode.parserExpectedToken, message: "Unexpected token '{stmtToken.value}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+                        try raiseCompileError(ErrorCode.parserExpectedToken, message: "Unexpected token '{String.from(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
                     end 'notIf'
                 end 'notPrint'
             end 'notVarDecl'
@@ -186,7 +187,7 @@ function parseTopLevelLet(project Project, tokens TokenArray, startPos TokenInde
     pos = pos + 1  // skip name
     let equalsToken = tokenAt(tokens, pos: pos)
     if equalsToken.kind != TokenKind.equals 'notEquals'
-        try raiseCompileError(ErrorCode.parserExpectedToken, message: "Expected '=' but got '{equalsToken.value}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
+        try raiseCompileError(ErrorCode.parserExpectedToken, message: "Expected '=' but got '{String.from(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
     end 'notEquals'
     pos = pos + 1  // skip '='
     let valueToken = tokenAt(tokens, pos: pos)
@@ -195,8 +196,8 @@ function parseTopLevelLet(project Project, tokens TokenArray, startPos TokenInde
     end 'notString'
     pos = pos + 1  // skip string value
     project.stringConstNames.push(nameToken.value)
-    project.stringConstValues.push(valueToken.value)
-    logTrace(LogCategory.parser, message: "Registered top-level string constant '{nameToken.value}'")
+    project.stringConstValues.push(String.from(valueToken.value))
+    logTrace(LogCategory.parser, message: "Registered top-level string constant '{String.from(nameToken.value)}'")
     return pos
 end 'parseTopLevelLet'
 
@@ -326,11 +327,51 @@ function isReturnOp(op MaxonOp) returns bool
     end 'check'
 end 'isReturnOp'
 
-function nextLabelName(project Project, prefix String) returns String
+function nextLabelName(project Project, prefix ByteArray) returns ByteArray
     let id = project.nextLabelId_
     project.nextLabelId_ = project.nextLabelId_ + 1
-    return "__label_{prefix}_{id}"
+    var buf = ByteArray{}
+    // "__label_"
+    buf.push(95)
+    buf.push(95)
+    buf.push(108)
+    buf.push(97)
+    buf.push(98)
+    buf.push(101)
+    buf.push(108)
+    buf.push(95)
+    appendBytes(buf, src: prefix)
+    buf.push(95)
+    appendIntBytes(buf, n: id)
+    return buf
 end 'nextLabelName'
+
+function appendBytes(dst ByteArray, src ByteArray)
+    var i = 0
+    while i < src.count() 'copy'
+        dst.push(try src.get(i) otherwise 0)
+        i = i + 1
+    end 'copy'
+end 'appendBytes'
+
+function appendIntBytes(dst ByteArray, n ParsedInt)
+    if n == 0 'zero'
+        dst.push(48)
+        return
+    end 'zero'
+    // Compute digits in reverse, then append in order
+    var digits = ByteArray{}
+    var remaining = n
+    while remaining > 0 'digitLoop'
+        digits.push(48 + (remaining mod 10))
+        remaining = remaining / 10
+    end 'digitLoop'
+    var i = digits.count() - 1
+    while i >= 0 'reverse'
+        dst.push(try digits.get(i) otherwise 48)
+        i = i - 1
+    end 'reverse'
+end 'appendIntBytes'
 
 function parseVarDecl(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
     var pos = startPos + 1  // skip 'var'/'let'
@@ -338,7 +379,7 @@ function parseVarDecl(project Project, tokens TokenArray, startPos TokenIndex, o
     pos = pos + 1  // skip name
     let equalsToken = tokenAt(tokens, pos: pos)
     if equalsToken.kind != TokenKind.equals 'notEquals'
-        try raiseCompileError(ErrorCode.parserExpectedToken, message: "Expected '=' but got '{equalsToken.value}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
+        try raiseCompileError(ErrorCode.parserExpectedToken, message: "Expected '=' but got '{String.from(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
     end 'notEquals'
     pos = pos + 1  // skip '='
     let exprResult = try parseExpression(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
@@ -356,7 +397,7 @@ function parsePrintStatement(project Project, tokens TokenArray, startPos TokenI
     pos = pos + 1  // skip ')'
 
     // Parse the double-quoted string for interpolation segments
-    try parseStringInterpolation(project, str: strToken.value, ops: ops, filePath: filePath)
+    try parseStringInterpolation(project, str: String.from(strToken.value), ops: ops, filePath: filePath)
 
     return pos
 end 'parsePrintStatement'
@@ -659,7 +700,7 @@ function parsePrimary(project Project, tokens TokenArray, startPos TokenIndex, o
     // String literal in expression position — treated as compile-time constant
     if token.kind == TokenKind.doubleStringLiteral 'isStrLit'
         let id = nextValueId(project)
-        return {valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: true, stringConstValue: token.value}
+        return {valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: true, stringConstValue: String.from(token.value)}
     end 'isStrLit'
 
     if token.kind == TokenKind.leftParen 'isParen'
@@ -694,8 +735,8 @@ function stringCharAt(s String, pos CharOffset) returns AsciiValue
     return 0
 end 'stringCharAt'
 
-function stringToByteArray(s String) returns Utf8ByteArray
-    var arr = Utf8ByteArray{}
+function stringToByteArray(s String) returns ByteArray
+    var arr = ByteArray{}
     for ch in s 'convert'
         arr.push(try ch.asciiValue() otherwise 0)
     end 'convert'
@@ -718,21 +759,22 @@ function skipNewlines(tokens TokenArray, startPos TokenIndex) returns TokenIndex
 end 'skipNewlines'
 
 function tokenAt(tokens TokenArray, pos TokenIndex) returns Token
-    return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: "", line: 0, column: 0}
+    return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: ByteArray{}, line: 0, column: 0}
 end 'tokenAt'
 
 // Convert a decimal float string (e.g. "3.14") to IEEE 754 double raw bits.
 // Uses integer-only arithmetic: parses into integer/fraction parts,
 // then constructs the IEEE 754 representation manually.
-function parseFloatBits(s String) returns ParsedInt
+function parseFloatBits(s ByteArray) returns ParsedInt
     // Parse integer and fractional parts as integers
     var intPart = 0
     var fracPart = 0
     var fracDigits = 0
     var pastDot = false
 
-    for ch in s 'parse'
-        let b = try ch.asciiValue() otherwise 0
+    var pi = 0
+    while pi < s.count() 'parse'
+        let b = try s.get(pi) otherwise 0
         if b == 46 'isDot'
             pastDot = true
         end 'isDot' else 'notDot'
@@ -745,6 +787,7 @@ function parseFloatBits(s String) returns ParsedInt
                 end 'int'
             end 'isDigit'
         end 'notDot'
+        pi = pi + 1
     end 'parse'
 
     // Compute fracDivisor = 10^fracDigits
@@ -802,13 +845,15 @@ function parseFloatBits(s String) returns ParsedInt
     return (biasedExp shl 52) + mantissa
 end 'parseFloatBits'
 
-function parseInt(s String) returns ParsedInt
+function parseInt(s ByteArray) returns ParsedInt
     var result = 0
-    for ch in s 'digits'
-        let b = try ch.asciiValue() otherwise 0
+    var pi = 0
+    while pi < s.count() 'digits'
+        let b = try s.get(pi) otherwise 0
         if b >= 48 and b <= 57 'digit'
             result = result * 10 + (b - 48)
         end 'digit'
+        pi = pi + 1
     end 'digits'
     return result
 end 'parseInt'

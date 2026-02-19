@@ -10,7 +10,7 @@ typealias CodeOffsetArray = Array with CodeOffset
 
 type CallFixup
     export var codeOffset CodeOffset
-    export var targetName String
+    export var targetName ByteArray
 end 'CallFixup'
 typealias CallFixupArray = Array with CallFixup
 
@@ -154,27 +154,27 @@ end 'emitUcomisd'
 // Conditional and unconditional jumps with label fixup
 type JumpFixup
     export var codeOffset CodeOffset
-    export var targetLabel String
+    export var targetLabel ByteArray
 end 'JumpFixup'
 typealias JumpFixupArray = Array with JumpFixup
 typealias CondJumpOpcode = int(0x80 to 0x8F)
 
 // Emit a 2-byte conditional jump (0F xx) with rel32 fixup.
-function emitCondJump(code Utf8ByteBuffer, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel String)
+function emitCondJump(code Utf8ByteBuffer, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel ByteArray)
     code.push(0x0F)
     code.push(opcode)
     jumpFixups.push({codeOffset: code.count(), targetLabel: targetLabel})
     emitDword(code, value: 0)
 end 'emitCondJump'
 
-function emitJmp(code Utf8ByteBuffer, jumpFixups JumpFixupArray, targetLabel String)
+function emitJmp(code Utf8ByteBuffer, jumpFixups JumpFixupArray, targetLabel ByteArray)
     // jmp rel32  =>  E9 <rel32>
     code.push(0xE9)
     jumpFixups.push({codeOffset: code.count(), targetLabel: targetLabel})
     emitDword(code, value: 0)
 end 'emitJmp'
 
-function resolveJumpFixups(code Utf8ByteBuffer, labelNames StringArray, labelOffsets CodeOffsetArray, jumpFixups JumpFixupArray)
+function resolveJumpFixups(code Utf8ByteBuffer, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, jumpFixups JumpFixupArray)
     for fixup in jumpFixups 'resolve'
         let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetLabel)
         let jumpEnd = fixup.codeOffset + 4
@@ -640,7 +640,7 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops")
     var code = Utf8ByteBuffer.create(1024)
     var iatFixups = IatFixupArray{}
-    var labelNames = StringArray{}
+    var labelNames = ByteArrayArray{}
     var labelOffsets = CodeOffsetArray{}
     var callFixups = CallFixupArray{}
     var jumpFixups = JumpFixupArray{}
@@ -724,16 +724,16 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     return {code: code, mainCallFixupOffset: mainCallFixupOffset, iatFixups: iatFixups}
 end 'emit'
 
-function recordLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String, offset CodeOffset)
-    logTrace(LogCategory.codegen, message: "Label '{name}' at code offset {offset}")
+function recordLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray, offset CodeOffset)
+    logTrace(LogCategory.codegen, message: "Label '{String.from(name)}' at code offset {offset}")
     labelNames.push(name)
     labelOffsets.push(offset)
 end 'recordLabel'
 
 // Emit call rel32 placeholder — resolved after all functions are emitted.
 // Safe for zero-arg calls where stack is aligned by caller's prologue.
-function emitCallFixup(code Utf8ByteBuffer, callFixups CallFixupArray, target String)
-    logTrace(LogCategory.codegen, message: "Call fixup to '{target}' at offset {code.count()}")
+function emitCallFixup(code Utf8ByteBuffer, callFixups CallFixupArray, target ByteArray)
+    logTrace(LogCategory.codegen, message: "Call fixup to '{String.from(target)}' at offset {code.count()}")
     code.push(0xE8)
     let fixupOffset = code.count()
     callFixups.push({codeOffset: fixupOffset, targetName: target})
@@ -743,7 +743,7 @@ function emitCallFixup(code Utf8ByteBuffer, callFixups CallFixupArray, target St
     code.push(0x00)
 end 'emitCallFixup'
 
-function resolveCallFixups(code Utf8ByteBuffer, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
+function resolveCallFixups(code Utf8ByteBuffer, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
     logTrace(LogCategory.codegen, message: "Resolving {callFixups.count()} call fixups")
     for fixup in callFixups 'resolve'
         let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
@@ -753,7 +753,7 @@ function resolveCallFixups(code Utf8ByteBuffer, labelNames StringArray, labelOff
     end 'resolve'
 end 'resolveCallFixups'
 
-function lookupLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String) returns CodeOffset
+function lookupLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray) returns CodeOffset
     var i = 0
     while i < labelNames.count() 'search'
         let labelName = try labelNames.get(i) otherwise 'next'
@@ -765,6 +765,6 @@ function lookupLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name 
         end 'found'
         i = i + 1
     end 'search'
-    logError(LogCategory.codegen, message: "Unresolved label '{name}' — call will jump to offset 0")
+    logError(LogCategory.codegen, message: "Unresolved label '{String.from(name)}' -- call will jump to offset 0")
     return 0
 end 'lookupLabel'
