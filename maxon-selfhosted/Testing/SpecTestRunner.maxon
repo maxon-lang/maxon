@@ -2,7 +2,7 @@
 // Parses spec files and compiles tests using the self-hosted compiler.
 
 // Whitelisted specs to run (only specs the self-hosted compiler cares about)
-var specWhitelist = ["basics", "print-function"]
+var specWhitelist = ["basics", "print-function", "variables"]
 
 // Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
 function trimWhitespace(s String) returns String
@@ -412,8 +412,10 @@ function runSingleTest(test SpecTest, projectRoot String) returns bool
   let tempSource = "{tempDir}/spectest_temp.maxon"
   let tempExe = "{tempDir}/spectest_temp.exe"
 
+  // Prepend "// Test:" header so line numbers match the spec fragment files
+  let sourceWithHeader = "// Test: {test.name}\n{test.source}"
   // Write source to temp file
-  try File.writeText(tempSource, content: test.source) otherwise 'writeErr'
+  try File.writeText(tempSource, content: sourceWithHeader) otherwise 'writeErr'
     logError(LogCategory.testing, message: "[FAIL] {test.name} - could not write temp file")
     return false
   end 'writeErr'
@@ -511,13 +513,87 @@ function runSingleTest(test SpecTest, projectRoot String) returns bool
   return passed
 end 'runSingleTest'
 
-// Normalize stderr for comparison: trim, CRLF to LF, backslash to forward slash.
+// Normalize stderr for comparison: trim, CRLF→LF, backslash→forward slash,
+// and strip file paths from error messages so temp paths match fragment paths.
 function normalizeStderr(s String) returns String
   var result = trimWhitespace(s)
   result = result.replace("\r\n", with: "\n")
   result = result.replace("\\", with: "/")
-  return result
+  // Strip file paths from error lines: "error EXXXX: /path/file:L:C: msg" → "error EXXXX: msg"
+  let errorLines = splitLines(result)
+  var normalized = ""
+  var first = true
+  for errLine in errorLines 'eachLine'
+    let stripped = stripFilePathFromError(errLine)
+    if first 'isFirst'
+      normalized = stripped
+      first = false
+    end 'isFirst' else 'notFirst'
+      normalized = "{normalized}\n{stripped}"
+    end 'notFirst'
+  end 'eachLine'
+  return normalized
 end 'normalizeStderr'
+
+// Strip file path from an error line.
+// Input:  "error E2010: /some/path/file.maxon:3:8: Expected '=' but got ':'"
+// Output: "error E2010: Expected '=' but got ':'"
+function stripFilePathFromError(line String) returns String
+  // Look for "error E" prefix
+  if not line.contains("error E") 'notError'
+    return line
+  end 'notError'
+  // Find the first ": " after "error E" — this starts the file path or message
+  try line.findFirst("error E") otherwise 'noE'
+    return line
+  end 'noE'
+  // Find the ": " after the error code (e.g., after "error E2010")
+  let firstColon = try line.findFirst(": ") otherwise 'noColon'
+    return line
+  end 'noColon'
+  let afterFirstColon = try line.indexAfter(firstColon) otherwise 'noAfter'
+    return line
+  end 'noAfter'
+  let afterFirstColonSpace = try line.indexAfter(afterFirstColon) otherwise 'noAfter2'
+    return line
+  end 'noAfter2'
+  // The rest could be "filepath:line:col: message" or just "message"
+  let rest = line.slice(afterFirstColonSpace, endIndex: line.endIndex())
+  // Check if rest looks like a file path (contains "/" or "\" before a ": ")
+  if not rest.contains("/") 'noPath'
+    return line
+  end 'noPath'
+  // Find the message after "line:col: " — look for ": " pattern after digits
+  // Strategy: find the last colon-space-uppercase pattern that starts a message
+  // Simpler: count colons in rest — filepath:line:col: has 3 colons before message
+  let prefix = line.slice(line.startIndex(), endIndex: afterFirstColonSpace)
+  // Find third ": " in rest (after filepath:line:col)
+  let c1 = try rest.findFirst(":") otherwise 'simple'
+    return line
+  end 'simple'
+  let afterC1 = try rest.indexAfter(c1) otherwise 'simple2'
+    return line
+  end 'simple2'
+  let restAfterC1 = rest.slice(afterC1, endIndex: rest.endIndex())
+  let c2 = try restAfterC1.findFirst(":") otherwise 'simple3'
+    return line
+  end 'simple3'
+  let afterC2 = try restAfterC1.indexAfter(c2) otherwise 'simple4'
+    return line
+  end 'simple4'
+  let restAfterC2 = restAfterC1.slice(afterC2, endIndex: restAfterC1.endIndex())
+  let c3 = try restAfterC2.findFirst(": ") otherwise 'simple5'
+    return line
+  end 'simple5'
+  let afterC3 = try restAfterC2.indexAfter(c3) otherwise 'simple6'
+    return line
+  end 'simple6'
+  let afterC3Space = try restAfterC2.indexAfter(afterC3) otherwise 'simple7'
+    return line
+  end 'simple7'
+  let message = restAfterC2.slice(afterC3Space, endIndex: restAfterC2.endIndex())
+  return "{prefix}{message}"
+end 'stripFilePathFromError'
 
 function cleanup(tempSource String, tempExe String)
   if File.exists(tempSource) 'src'

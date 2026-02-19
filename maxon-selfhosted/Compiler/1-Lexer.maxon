@@ -70,13 +70,76 @@ export function tokenize(source ByteArray) returns TokenArray
             continue
         end 'rb'
 
-        // Equals
+        // Equals or EqualsEquals
         if ch == EQUALS 'eq'
-            tokens.push({kind: TokenKind.equals, value: "=", line: line, column: column})
+            let startCol = column
+            pos = pos + 1
+            column = column + 1
+            if pos < len 'peekNext'
+                let next = try source.get(pos) otherwise 0
+                if next == EQUALS 'isEqEq'
+                    pos = pos + 1
+                    column = column + 1
+                    tokens.push({kind: TokenKind.equalsEquals, value: "==", line: line, column: startCol})
+                    continue
+                end 'isEqEq'
+            end 'peekNext'
+            tokens.push({kind: TokenKind.equals, value: "=", line: line, column: startCol})
+            continue
+        end 'eq'
+
+        // Not equals (!=)
+        if ch == BANG 'bang'
+            let startCol = column
+            if pos + 1 < len 'peekNextBang'
+                let next = try source.get(pos + 1) otherwise 0
+                if next == EQUALS 'isBangEq'
+                    pos = pos + 2
+                    column = column + 2
+                    tokens.push({kind: TokenKind.bangEquals, value: "!=", line: line, column: startCol})
+                    continue
+                end 'isBangEq'
+            end 'peekNextBang'
             pos = pos + 1
             column = column + 1
             continue
-        end 'eq'
+        end 'bang'
+
+        // Less than / Less than or equal
+        if ch == LESS_THAN 'lt'
+            let startCol = column
+            if pos + 1 < len 'peekNextLt'
+                let next = try source.get(pos + 1) otherwise 0
+                if next == EQUALS 'isLtEq'
+                    pos = pos + 2
+                    column = column + 2
+                    tokens.push({kind: TokenKind.lessEquals, value: "<=", line: line, column: startCol})
+                    continue
+                end 'isLtEq'
+            end 'peekNextLt'
+            pos = pos + 1
+            column = column + 1
+            tokens.push({kind: TokenKind.lessThan, value: "<", line: line, column: startCol})
+            continue
+        end 'lt'
+
+        // Greater than / Greater than or equal
+        if ch == GREATER_THAN 'gt'
+            let startCol = column
+            if pos + 1 < len 'peekNextGt'
+                let next = try source.get(pos + 1) otherwise 0
+                if next == EQUALS 'isGtEq'
+                    pos = pos + 2
+                    column = column + 2
+                    tokens.push({kind: TokenKind.greaterEquals, value: ">=", line: line, column: startCol})
+                    continue
+                end 'isGtEq'
+            end 'peekNextGt'
+            pos = pos + 1
+            column = column + 1
+            tokens.push({kind: TokenKind.greaterThan, value: ">", line: line, column: startCol})
+            continue
+        end 'gt'
 
         // Plus
         if ch == PLUS 'pl'
@@ -101,6 +164,14 @@ export function tokenize(source ByteArray) returns TokenArray
             column = column + 1
             continue
         end 'st'
+
+        // Colon
+        if ch == COLON 'col'
+            tokens.push({kind: TokenKind.colon, value: ":", line: line, column: column})
+            pos = pos + 1
+            column = column + 1
+            continue
+        end 'col'
 
         // String literal (single-quoted for end labels): 'xxx'
         if ch == QUOTE 'str'
@@ -148,7 +219,7 @@ export function tokenize(source ByteArray) returns TokenArray
             continue
         end 'dstr'
 
-        // Integer literal: digit sequence
+        // Number literal: integer or float
         if isDigit(ch) 'num'
             let startCol = column
             let numStart = pos
@@ -160,8 +231,30 @@ export function tokenize(source ByteArray) returns TokenArray
                 pos = pos + 1
                 column = column + 1
             end 'digits'
+            // Check for decimal point (float literal)
+            var isFloat = false
+            if pos < len 'checkDot'
+                let dotCh = try source.get(pos) otherwise 0
+                if dotCh == DOT 'hasDot'
+                    isFloat = true
+                    pos = pos + 1
+                    column = column + 1
+                    while pos < len 'fracDigits'
+                        let fc = try source.get(pos) otherwise 0
+                        if not isDigit(fc) 'endFrac'
+                            break
+                        end 'endFrac'
+                        pos = pos + 1
+                        column = column + 1
+                    end 'fracDigits'
+                end 'hasDot'
+            end 'checkDot'
             let numVal = sliceToString(source, startPos: numStart, endPos: pos)
-            tokens.push({kind: TokenKind.intLiteral, value: numVal, line: line, column: startCol})
+            if isFloat 'emitFloat'
+                tokens.push({kind: TokenKind.floatLiteral, value: numVal, line: line, column: startCol})
+            end 'emitFloat' else 'emitInt'
+                tokens.push({kind: TokenKind.intLiteral, value: numVal, line: line, column: startCol})
+            end 'emitInt'
             continue
         end 'num'
 
@@ -239,14 +332,19 @@ end 'sliceToString'
 
 function classifyIdentifier(name String) returns TokenKind
     match name 'kw'
-        "function" then return TokenKind.kwFunction
-        "returns" then return TokenKind.kwReturns
-        "return" then return TokenKind.kwReturn
-        "end" then return TokenKind.kwEnd
-        "int" then return TokenKind.kwInt
-        "var" then return TokenKind.kwVar
-        "let" then return TokenKind.kwLet
-        "print" then return TokenKind.kwPrint
+        "function" then return TokenKind.function
+        "returns" then return TokenKind.returns
+        "return" then return TokenKind.return
+        "end" then return TokenKind.end
+        "int" then return TokenKind.int
+        "var" then return TokenKind.var
+        "let" then return TokenKind.let
+        "print" then return TokenKind.print
+        "if" then return TokenKind.if
+        "else" then return TokenKind.else
+        "not" then return TokenKind.not
+        "and" then return TokenKind.and
+        "or" then return TokenKind.or
         default then return TokenKind.identifier
     end 'kw'
 end 'classifyIdentifier'
@@ -254,15 +352,21 @@ end 'classifyIdentifier'
 export typealias TokenArray = Array with Token
 
 export enum TokenKind
-    kwFunction
-    kwReturns
-    kwReturn
-    kwEnd
-    kwInt
-    kwVar
-    kwLet
-    kwPrint
+    function
+    returns
+    return
+    end
+    int
+    var
+    let
+    print
+    if
+    else
+    not
+    and
+    or
     intLiteral
+    floatLiteral
     stringLiteral
     doubleStringLiteral
     identifier
@@ -271,9 +375,16 @@ export enum TokenKind
     leftBrace
     rightBrace
     equals
+    equalsEquals
+    bangEquals
+    lessThan
+    lessEquals
+    greaterThan
+    greaterEquals
     plus
     minus
     star
+    colon
     newline
     eof
 end 'TokenKind'
@@ -302,3 +413,8 @@ let PLUS = 43
 let MINUS = 45
 let STAR = 42
 let SLASH = 47
+let COLON = 58
+let DOT = 46
+let BANG = 33
+let LESS_THAN = 60
+let GREATER_THAN = 62

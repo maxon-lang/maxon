@@ -9980,7 +9980,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return callOp;
   }
 
-  private void MarkDiscardedResult(MaxonCallOp callOp, Token callToken) {
+  private static void MarkDiscardedResult(MaxonCallOp callOp, Token callToken) {
     if (callOp.Result != null) {
       callOp.IsDiscardedResult = true;
       callOp.CallLine = callToken.Line;

@@ -4,6 +4,7 @@
 
 export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     logDebug(LogCategory.mlir, message: "Lowering {stdOps.count()} Standard ops to X86 dialect")
+    // All pushes to ops happen in this function to avoid grow-desync
     var ops = X86OpArray{}
 
     var i = 0
@@ -13,16 +14,72 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
             continue
         end 'skip'
 
+        // funcBegin needs multiple pushes; handle before match to avoid grow-desync
+        let fbName = getFuncBeginName(sOp)
+        if not fbName.isEmpty() 'isFuncBegin'
+            let stackSize = computeStackSize(stdOps, startIndex: i)
+            ops.push(X86Op.funcLabel(fbName))
+            ops.push(X86Op.prologue(stackSize))
+            i = i + 1
+            continue
+        end 'isFuncBegin'
+
+        // condBr needs a read-only scan then a push of the right jump type
+        let elseLabel = getCondBrElseLabel(sOp)
+        if not elseLabel.isEmpty() 'isCondBr'
+            let jumpKind = determineJumpKind(stdOps, condIndex: i)
+            if jumpKind == "eq" 'jEq'
+                ops.push(X86Op.jne(elseLabel))
+            end 'jEq' else 'jNotEq'
+                if jumpKind == "ne" 'jNe'
+                    ops.push(X86Op.je(elseLabel))
+                end 'jNe' else 'jNotNe'
+                    if jumpKind == "lt" 'jLt'
+                        ops.push(X86Op.jge(elseLabel))
+                    end 'jLt' else 'jNotLt'
+                        if jumpKind == "le" 'jLe'
+                            ops.push(X86Op.jg(elseLabel))
+                        end 'jLe' else 'jNotLe'
+                            if jumpKind == "gt" 'jGt'
+                                ops.push(X86Op.jle(elseLabel))
+                            end 'jGt' else 'jNotGt'
+                                if jumpKind == "ge" 'jGe'
+                                    ops.push(X86Op.jl(elseLabel))
+                                end 'jGe' else 'jFeq'
+                                    // "feq" (float equality) — jne covers unordered (NaN) and not-equal
+                                    ops.push(X86Op.jne(elseLabel))
+                                end 'jFeq'
+                            end 'jNotGt'
+                        end 'jNotLe'
+                    end 'jNotLt'
+                end 'jNotNe'
+            end 'jNotEq'
+            i = i + 1
+            continue
+        end 'isCondBr'
+
+        // All other ops are 1:1 mappings (single push each)
         match sOp 'lower'
-            funcBegin(name, returnType) then lowerFuncBegin(stdOps, x86Ops: ops, name: name, startIndex: i)
+            funcBegin(name, returnType) then i = i  // handled above
             funcEnd then i = i  // no-op: prologue/epilogue handled by funcBegin/returnOp
             constI64(resultId, value) then ops.push(X86Op.movRegImm(X86Register.rax, value))
+            constF64(resultId, rawBits) then ops.push(X86Op.movRegImm(X86Register.rax, rawBits))
             returnOp(retValId) then ops.push(X86Op.epilogue)
             storeSlot(slotId, valueId) then ops.push(X86Op.movSlot(slotId, X86Register.rax))
             loadSlot(resultId, slotId) then ops.push(X86Op.loadSlot(X86Register.rax, slotId))
             addI64(resultId, leftId, rightId) then ops.push(X86Op.addRegReg(X86Register.rax, X86Register.rcx))
             subI64(resultId, leftId, rightId) then ops.push(X86Op.subRegReg(X86Register.rax, X86Register.rcx))
             mulI64(resultId, leftId, rightId) then ops.push(X86Op.imulRegReg(X86Register.rax, X86Register.rcx))
+            cmpI64Eq(resultId, leftId, rightId) then ops.push(X86Op.cmpRaxRcx)
+            cmpI64Ne(resultId, leftId, rightId) then ops.push(X86Op.cmpRaxRcx)
+            cmpI64Lt(resultId, leftId, rightId) then ops.push(X86Op.cmpRaxRcx)
+            cmpI64Le(resultId, leftId, rightId) then ops.push(X86Op.cmpRaxRcx)
+            cmpI64Gt(resultId, leftId, rightId) then ops.push(X86Op.cmpRaxRcx)
+            cmpI64Ge(resultId, leftId, rightId) then ops.push(X86Op.cmpRaxRcx)
+            cmpF64Eq(resultId, leftId, rightId) then ops.push(X86Op.ucomisd)
+            condBr(condId, thenLabel, elseLabel) then i = i  // handled above
+            br(targetLabel) then ops.push(X86Op.jmp(targetLabel))
+            label(name) then ops.push(X86Op.label(name))
             pushValue then ops.push(X86Op.pushRax)
             popToRcx then ops.push(X86Op.popRcx)
             printLiteral(data) then ops.push(X86Op.printLiteral(data))
@@ -37,9 +94,70 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     return ops
 end 'lowerStdOpsToX86'
 
-// Scan ahead to funcEnd to compute per-function stack size, then emit funcLabel + prologue.
-function lowerFuncBegin(stdOps StdOpArray, x86Ops X86OpArray, name String, startIndex StdOpIndex)
-    logTrace(LogCategory.mlir, message: "Lowering funcBegin '{name}'")
+// Extract function name from a funcBegin op; returns empty string for other ops.
+function getFuncBeginName(op StdOp) returns String
+    match op 'check'
+        funcBegin(name, returnType) then return name
+        funcEnd then return ""
+        constI64(resultId, value) then return ""
+        constF64(resultId, rawBits) then return ""
+        returnOp(retValId) then return ""
+        storeSlot(slotId, valueId) then return ""
+        loadSlot(resultId, slotId) then return ""
+        addI64(resultId, leftId, rightId) then return ""
+        subI64(resultId, leftId, rightId) then return ""
+        mulI64(resultId, leftId, rightId) then return ""
+        cmpI64Eq(resultId, leftId, rightId) then return ""
+        cmpI64Ne(resultId, leftId, rightId) then return ""
+        cmpI64Lt(resultId, leftId, rightId) then return ""
+        cmpI64Le(resultId, leftId, rightId) then return ""
+        cmpI64Gt(resultId, leftId, rightId) then return ""
+        cmpI64Ge(resultId, leftId, rightId) then return ""
+        cmpF64Eq(resultId, leftId, rightId) then return ""
+        condBr(condId, thenLabel, elseLabel) then return ""
+        br(targetLabel) then return ""
+        label(name) then return ""
+        pushValue then return ""
+        popToRcx then return ""
+        printLiteral(data) then return ""
+        printInt(valueId) then return ""
+        call(resultId, callee) then return ""
+    end 'check'
+end 'getFuncBeginName'
+
+// Extract else label from a condBr op; returns empty string for other ops.
+function getCondBrElseLabel(op StdOp) returns String
+    match op 'check'
+        condBr(condId, thenLabel, elseLabel) then return elseLabel
+        funcBegin(name, returnType) then return ""
+        funcEnd then return ""
+        constI64(resultId, value) then return ""
+        constF64(resultId, rawBits) then return ""
+        returnOp(retValId) then return ""
+        storeSlot(slotId, valueId) then return ""
+        loadSlot(resultId, slotId) then return ""
+        addI64(resultId, leftId, rightId) then return ""
+        subI64(resultId, leftId, rightId) then return ""
+        mulI64(resultId, leftId, rightId) then return ""
+        cmpI64Eq(resultId, leftId, rightId) then return ""
+        cmpI64Ne(resultId, leftId, rightId) then return ""
+        cmpI64Lt(resultId, leftId, rightId) then return ""
+        cmpI64Le(resultId, leftId, rightId) then return ""
+        cmpI64Gt(resultId, leftId, rightId) then return ""
+        cmpI64Ge(resultId, leftId, rightId) then return ""
+        cmpF64Eq(resultId, leftId, rightId) then return ""
+        br(targetLabel) then return ""
+        label(name) then return ""
+        pushValue then return ""
+        popToRcx then return ""
+        printLiteral(data) then return ""
+        printInt(valueId) then return ""
+        call(resultId, callee) then return ""
+    end 'check'
+end 'getCondBrElseLabel'
+
+// Read-only scan: compute stack frame size by finding max slot and print usage.
+function computeStackSize(stdOps StdOpArray, startIndex StdOpIndex) returns StackSize
     var maxSlot = 0 - 1
     var hasPrint = false
 
@@ -56,10 +174,21 @@ function lowerFuncBegin(stdOps StdOpArray, x86Ops X86OpArray, name String, start
             printInt(valueId) then hasPrint = true
             printLiteral(data) then hasPrint = true
             constI64(resultId, value) then maxSlot = maxSlot
+            constF64(resultId, rawBits) then maxSlot = maxSlot
             returnOp(retValId) then maxSlot = maxSlot
             addI64(resultId, leftId, rightId) then maxSlot = maxSlot
             subI64(resultId, leftId, rightId) then maxSlot = maxSlot
             mulI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Eq(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Ne(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Lt(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Le(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Gt(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Ge(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpF64Eq(resultId, leftId, rightId) then maxSlot = maxSlot
+            condBr(condId, thenLabel, elseLabel) then maxSlot = maxSlot
+            br(targetLabel) then maxSlot = maxSlot
+            label(name) then maxSlot = maxSlot
             pushValue then maxSlot = maxSlot
             popToRcx then maxSlot = maxSlot
             funcBegin(n, rt) then maxSlot = maxSlot
@@ -79,10 +208,47 @@ function lowerFuncBegin(stdOps StdOpArray, x86Ops X86OpArray, name String, start
     if stackSize mod 16 != 0 'align'
         stackSize = stackSize + (16 - (stackSize mod 16))
     end 'align'
+    return stackSize
+end 'computeStackSize'
 
-    x86Ops.push(X86Op.funcLabel(name))
-    x86Ops.push(X86Op.prologue(stackSize))
-end 'lowerFuncBegin'
+// Read-only scan: look back from condBr to find the comparison that produced the condition.
+function determineJumpKind(stdOps StdOpArray, condIndex StdOpIndex) returns String
+    var j = condIndex - 1
+    while j >= 0 'scanBack'
+        let prevOp = try stdOps.get(j) otherwise 'scanSkip'
+            j = j - 1
+            continue
+        end 'scanSkip'
+        match prevOp 'checkCmp'
+            cmpI64Eq(resultId, leftId, rightId) then return "eq"
+            cmpI64Ne(resultId, leftId, rightId) then return "ne"
+            cmpI64Lt(resultId, leftId, rightId) then return "lt"
+            cmpI64Le(resultId, leftId, rightId) then return "le"
+            cmpI64Gt(resultId, leftId, rightId) then return "gt"
+            cmpI64Ge(resultId, leftId, rightId) then return "ge"
+            cmpF64Eq(resultId, leftId, rightId) then return "feq"
+            constI64(resultId, value) then j = j - 1
+            constF64(resultId, rawBits) then j = j - 1
+            returnOp(retValId) then j = j - 1
+            storeSlot(slotId, valueId) then j = j - 1
+            loadSlot(resultId, slotId) then j = j - 1
+            addI64(resultId, leftId, rightId) then j = j - 1
+            subI64(resultId, leftId, rightId) then j = j - 1
+            mulI64(resultId, leftId, rightId) then j = j - 1
+            condBr(cId, tl, el) then j = j - 1
+            br(targetLabel) then j = j - 1
+            label(name) then j = j - 1
+            pushValue then j = j - 1
+            popToRcx then j = j - 1
+            printLiteral(data) then j = j - 1
+            printInt(valueId) then j = j - 1
+            funcBegin(name, returnType) then j = j - 1
+            funcEnd then j = j - 1
+            call(resultId, callee) then j = j - 1
+        end 'checkCmp'
+    end 'scanBack'
+    return "eq"
+end 'determineJumpKind'
 
 typealias SlotIndex = int(i64.min to i64.max)
 typealias StdOpIndex = int(0 to u64.max)

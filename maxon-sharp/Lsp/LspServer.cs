@@ -609,9 +609,24 @@ public class LspServer {
     var filePath = uri.GetFileSystemPath() ?? uri.ToString();
     var project = ProjectManager.FindProjectForFile(filePath);
 
+    // If the cursor word is preceded by "EnumName." on the same line, capture the qualifier
+    // so enum case search can be restricted to that specific enum (avoids cross-enum collisions).
+    string? dotQualifier = null;
+    {
+      var wordStart = (int)position.Character;
+      while (wordStart > 0 && IsWordChar(line[wordStart - 1])) wordStart--;
+      if (wordStart > 0 && line[wordStart - 1] == '.') {
+        var qualEnd = wordStart - 1;
+        var qualStart = qualEnd;
+        while (qualStart > 0 && IsWordChar(line[qualStart - 1])) qualStart--;
+        if (qualStart < qualEnd)
+          dotQualifier = line[qualStart..qualEnd];
+      }
+    }
+
     // Text-based search for type/typealias/enum/interface/function declarations
     // across the current file, project files, and stdlib
-    var textDef = FindDefinitionByTextSearch(word, project);
+    var textDef = FindDefinitionByTextSearch(word, project, dotQualifier);
     if (textDef != null)
       return textDef;
 
@@ -620,9 +635,12 @@ public class LspServer {
 
   /// <summary>
   /// Search project files and stdlib source for declarations of the given name.
-  /// Looks for: type NAME, typealias NAME, enum NAME, interface NAME, function NAME(
+  /// Looks for: type NAME, typealias NAME, enum NAME, interface NAME, function NAME(,
+  /// and enum case declarations (bare NAME, NAME = value, NAME(type...))
+  /// When <paramref name="dotQualifier"/> is non-null (e.g. "TokenKind" from "TokenKind.floatLiteral"),
+  /// enum case hits are only accepted when the enclosing enum has that name.
   /// </summary>
-  private static Location? FindDefinitionByTextSearch(string word, Project? project) {
+  private static Location? FindDefinitionByTextSearch(string word, Project? project, string? dotQualifier = null) {
     // Collect all files to search: project files first, then stdlib
     var filesToSearch = new List<(string path, string content)>();
 
@@ -649,20 +667,79 @@ public class LspServer {
         var indent = fileLines[i].Length - fileLines[i].TrimStart().Length;
         var isTopLevel = indent == 0;
         var col = FindDeclarationOfName(decl, word, isTopLevel);
-        if (col < 0) continue;
-        var exportOffset = trimmed.StartsWith("export ") ? 7 : 0;
-        var finalCol = indent + exportOffset + col;
+        if (col >= 0) {
+          var exportOffset = trimmed.StartsWith("export ") ? 7 : 0;
+          var finalCol = indent + exportOffset + col;
+          return new Location {
+            Uri = DocumentUri.FromFileSystemPath(path),
+            Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+              new Position(i, finalCol),
+              new Position(i, finalCol + word.Length)
+            )
+          };
+        }
 
-        return new Location {
-          Uri = DocumentUri.FromFileSystemPath(path),
-          Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
-            new Position(i, finalCol),
-            new Position(i, finalCol + word.Length)
-          )
-        };
+        // Check enum case declarations:
+        // A line inside an enum body that starts with the word as a bare identifier,
+        // optionally followed by '= value' (raw value) or '(...)' (associated values).
+        if (!trimmed.StartsWith("//") && MatchesName(trimmed, 0, word)) {
+          var afterWord = trimmed[word.Length..];
+          var strippedAfter = afterWord.Contains("//")
+            ? afterWord[..afterWord.IndexOf("//")].TrimEnd() : afterWord.TrimEnd();
+          strippedAfter = strippedAfter.TrimStart();
+          var isEnumCaseContext = strippedAfter.Length == 0
+            || strippedAfter.StartsWith("=")
+            || strippedAfter.StartsWith("(");
+          if (isEnumCaseContext) {
+            var enclosingEnum = GetEnclosingEnumName(fileLines, i);
+            // If we have a dot-qualifier (e.g. "TokenKind"), only match enum cases
+            // inside the enum with that name; otherwise accept any enum.
+            var enumMatches = enclosingEnum != null
+              && (dotQualifier == null || enclosingEnum == dotQualifier);
+            if (enumMatches) {
+              return new Location {
+                Uri = DocumentUri.FromFileSystemPath(path),
+                Range = new OmniSharp.Extensions.LanguageServer.Protocol.Models.Range(
+                  new Position(i, indent),
+                  new Position(i, indent + word.Length)
+                )
+              };
+            }
+          }
+        }
       }
     }
 
+    return null;
+  }
+
+  /// <summary>
+  /// If the line at <paramref name="lineIndex"/> is inside an enum body, returns the enum's
+  /// name; otherwise returns null.
+  /// Scans upward for the first line with strictly less indentation and checks whether it
+  /// is an enum declaration.
+  /// </summary>
+  private static string? GetEnclosingEnumName(string[] lines, int lineIndex) {
+    var lineIndent = lines[lineIndex].Length - lines[lineIndex].TrimStart().Length;
+    if (lineIndent == 0) return null; // top-level lines are never enum cases
+
+    for (int i = lineIndex - 1; i >= 0; i--) {
+      var rawLine = lines[i];
+      var curIndent = rawLine.Length - rawLine.TrimStart().Length;
+      if (curIndent >= lineIndent) continue; // same or deeper indentation — skip
+
+      var t = rawLine.TrimStart();
+      if (t.Length == 0 || t.StartsWith("//")) continue;
+
+      // Strip optional export prefix
+      var d = t.StartsWith("export ") ? t[7..] : t;
+      if (!d.StartsWith("enum ")) return null;
+      // Extract the enum name (word after "enum ")
+      var nameStart = 5;
+      var nameEnd = nameStart;
+      while (nameEnd < d.Length && IsWordChar(d[nameEnd])) nameEnd++;
+      return nameEnd > nameStart ? d[nameStart..nameEnd] : null;
+    }
     return null;
   }
 
