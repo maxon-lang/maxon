@@ -7,10 +7,10 @@ typealias Rva = int(0 to u64.max)
 typealias IatSlotIndex = int(0 to u64.max)
 typealias SectionFlags = int(0 to u64.max)
 
-// ByteBuffer wraps __ManagedMemory for efficient byte-level building.
+// Utf8ByteBuffer wraps __ManagedMemory for efficient byte-level building.
 // All write operations are methods to ensure self-mutation propagates.
 
-export type ByteBuffer
+export type Utf8ByteBuffer
     var managed __ManagedMemory
     var len ByteCount
 
@@ -18,7 +18,7 @@ export type ByteBuffer
         return {managed: __managed_memory_create(capacity, 1), len: 0}
     end 'create'
 
-    export function push(value Byte)
+    export function push(value Utf8Byte)
         if len >= __managed_memory_capacity(managed) 'grow'
             var newCap = __managed_memory_capacity(managed) * 2
             if newCap < 16 'min'
@@ -31,11 +31,11 @@ export type ByteBuffer
         __managed_memory_set_length(managed, len)
     end 'push'
 
-    export function getByte(index ByteOffset) returns Byte
+    export function getByte(index ByteOffset) returns Utf8Byte
         return __managed_memory_byte_at(managed, index)
     end 'getByte'
 
-    export function setByte(index ByteOffset, value Byte)
+    export function setByte(index ByteOffset, value Utf8Byte)
         __managed_memory_set_byte(managed, index, value)
     end 'setByte'
 
@@ -49,7 +49,7 @@ export type ByteBuffer
         end 'grow'
     end 'reserve'
 
-    export function toByteArray() returns ByteArray
+    export function toByteArray() returns Utf8ByteArray
         let sliced = __managed_memory_slice(managed, 0, len)
         return {managed: sliced, iterIndex: 0}
     end 'toByteArray'
@@ -99,7 +99,7 @@ export type ByteBuffer
         end 'pad'
     end 'padTo'
 
-    export function appendFrom(source ByteBuffer)
+    export function appendFrom(source Utf8ByteBuffer)
         var i = 0
         while i < source.count() 'copy'
             push(source.getByte(i))
@@ -113,7 +113,7 @@ export type ByteBuffer
         setByte(offset + 2, value: (value shr 16) and 0xFF)
         setByte(offset + 3, value: (value shr 24) and 0xFF)
     end 'patchDword'
-end 'ByteBuffer'
+end 'Utf8Utf8ByteBuffer'
 
 let FILE_ALIGNMENT = 512
 let SECTION_ALIGNMENT = 4096
@@ -129,7 +129,7 @@ let IAT_SLOT_GET_STD_HANDLE = 1
 let IAT_SLOT_WRITE_FILE = 2
 
 type ImportSection
-    export var data ByteBuffer
+    export var data Utf8ByteBuffer
     export var iatRva Rva
     export var importDirRva Rva
     export var importDirSize ByteCount
@@ -142,7 +142,7 @@ end 'IatFixup'
 
 
 function buildImportSection(idataRva Rva) returns ImportSection
-    var data = ByteBuffer.create(256)
+    var data = Utf8ByteBuffer.create(256)
 
     // Layout for 3 imports from kernel32.dll:
     // IAT: 3 entries + null = 32 bytes (offset 0)
@@ -210,7 +210,7 @@ end 'buildImportSection'
 
 // --- Section header writer ---
 
-function writeSectionName(buf ByteBuffer, name String)
+function writeSectionName(buf Utf8ByteBuffer, name String)
     var written = 0
     for ch in name 'chars'
         let b = try ch.asciiValue() otherwise 0
@@ -223,7 +223,7 @@ function writeSectionName(buf ByteBuffer, name String)
     end 'pad'
 end 'writeSectionName'
 
-function writeSectionHeader(buf ByteBuffer, name String, virtualSize ByteCount, virtualAddress Rva, rawDataSize ByteCount, rawDataPointer ByteOffset, characteristics SectionFlags)
+function writeSectionHeader(buf Utf8ByteBuffer, name String, virtualSize ByteCount, virtualAddress Rva, rawDataSize ByteCount, rawDataPointer ByteOffset, characteristics SectionFlags)
     writeSectionName(buf, name: name)
     buf.writeDword(virtualSize)
     buf.writeDword(virtualAddress)
@@ -239,14 +239,14 @@ end 'writeSectionHeader'
 // --- Main PE writer ---
 
 export type CodeResult
-    export var code ByteBuffer
+    export var code Utf8ByteBuffer
     export var mainCallFixupOffset CodeOffset
     export var iatFixups IatFixupArray
 end 'CodeResult'
 
 export function writePe(outputPath String, codeResult CodeResult)
     logDebug(LogCategory.pe, message: "Writing PE file: {outputPath}")
-    var pe = ByteBuffer.create(4096)
+    var pe = Utf8ByteBuffer.create(4096)
 
     var code = codeResult.code
     let codeSize = code.count()

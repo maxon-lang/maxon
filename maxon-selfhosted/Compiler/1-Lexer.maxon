@@ -197,7 +197,7 @@ end 'emitFixedToken'
 
 // --- Main tokenize function ---
 
-export function tokenize(source ByteArray) returns TokenArray
+export function tokenize(source Utf8ByteArray) returns TokenArray
     logDebug(LogCategory.lexer, message: "Starting lexer")
 
     var tokens = TokenArray{}
@@ -304,7 +304,7 @@ end 'tokenize'
 // --- Sub-scanner functions ---
 
 // Opening quote already consumed by main loop.
-function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+function scanSingleQuoteString(source Utf8ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
     let len = source.count()
     let strStart = state.pos
     while state.pos < len 'strBody'
@@ -323,7 +323,7 @@ function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenA
 end 'scanSingleQuoteString'
 
 // Opening double-quote already consumed by main loop.
-function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+function scanDoubleQuoteString(source Utf8ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
     let len = source.count()
     let dstrStart = state.pos
     while state.pos < len 'dstrBody'
@@ -346,7 +346,7 @@ function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenA
 end 'scanDoubleQuoteString'
 
 // pos points to the first digit (not yet consumed by this scanner).
-function scanNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+function scanNumber(source Utf8ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
     let len = source.count()
     let numStart = state.pos
     while state.pos < len 'digits'
@@ -384,7 +384,7 @@ function scanNumber(source ByteArray, state LexerState, tokens TokenArray, start
 end 'scanNumber'
 
 // pos points to the first alpha/underscore (not yet consumed by this scanner).
-function scanIdentifier(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+function scanIdentifier(source Utf8ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
     let len = source.count()
     let startPos = state.pos
     while state.pos < len 'identBody'
@@ -401,7 +401,7 @@ function scanIdentifier(source ByteArray, state LexerState, tokens TokenArray, s
 end 'scanIdentifier'
 
 // Both '/' characters already consumed. Advances to (but not past) the newline.
-function scanComment(source ByteArray, state LexerState)
+function scanComment(source Utf8ByteArray, state LexerState)
     let len = source.count()
     while state.pos < len 'skipComment'
         let cc = try source.get(state.pos) otherwise 0
@@ -414,21 +414,21 @@ end 'scanComment'
 
 // --- Helpers ---
 
-function isDigit(b Byte) returns bool
+function isDigit(b Utf8Byte) returns bool
     return b >= 48 and b <= 57
 end 'isDigit'
 
 // Valid identifier start: letter (A-Z, a-z) or underscore
-function isAlpha(b Byte) returns bool
+function isAlpha(b Utf8Byte) returns bool
     return (b >= 65 and b <= 90) or (b >= 97 and b <= 122) or b == 95
 end 'isAlpha'
 
 // Valid identifier continuation: letter, digit, or underscore
-function isAlphaNum(b Byte) returns bool
+function isAlphaNum(b Utf8Byte) returns bool
     return isAlpha(b) or isDigit(b)
 end 'isAlphaNum'
 
-function sliceToString(source ByteArray, startPos CharOffset, endPos CharOffset) returns String
+function sliceToString(source Utf8ByteArray, startPos CharOffset, endPos CharOffset) returns String
     return String.from(source.slice(startPos, endIndex: endPos))
 end 'sliceToString'
 

@@ -365,7 +365,7 @@ end 'parsePrintStatement'
 // --- String Interpolation ---
 
 function parseStringInterpolation(project Project, str String, ops MaxonOpArray, filePath String) throws CompileError
-    var buf = ByteBuffer.create(64)
+    var buf = Utf8ByteBuffer.create(64)
     var i = 0
     let len = stringLength(str)
 
@@ -407,7 +407,7 @@ function parseStringInterpolation(project Project, str String, ops MaxonOpArray,
             // Flush literal buffer
             if buf.count() > 0 'flushBuf'
                 ops.push(MaxonOp.printLiteral(buf))
-                buf = ByteBuffer.create(64)
+                buf = Utf8ByteBuffer.create(64)
             end 'flushBuf'
 
             // Extract expression between braces
@@ -428,7 +428,7 @@ function parseStringInterpolation(project Project, str String, ops MaxonOpArray,
             end 'findClose'
 
             // Tokenize and parse the expression between braces
-            let exprStr = stringSlice(str, startPos: exprStart, endPos: i)
+            let exprStr = str.slice(exprStart, i)
             let exprTokens = tokenize(stringToByteArray(exprStr))
             let exprResult = try parseExpression(project, tokens: exprTokens, startPos: 0, ops: ops, filePath: filePath)
             ops.push(MaxonOp.printInt(exprResult.valueId))
@@ -695,38 +695,13 @@ function stringCharAt(s String, pos CharOffset) returns AsciiValue
     return 0
 end 'stringCharAt'
 
-function stringSlice(s String, startPos CharOffset, endPos CharOffset) returns String
-    var result = ByteBuffer.create(endPos - startPos)
-    var i = 0
-    for ch in s 'slice'
-        if i >= startPos and i < endPos 'inRange'
-            result.push(try ch.asciiValue() otherwise 0)
-        end 'inRange'
-        i = i + 1
-    end 'slice'
-    return bufferToString(result)
-end 'stringSlice'
-
-function stringToByteArray(s String) returns ByteArray
-    var arr = ByteArray{}
+function stringToByteArray(s String) returns Utf8ByteArray
+    var arr = Utf8ByteArray{}
     for ch in s 'convert'
         arr.push(try ch.asciiValue() otherwise 0)
     end 'convert'
     return arr
 end 'stringToByteArray'
-
-function bufferToString(buf ByteBuffer) returns String
-    let len = buf.count()
-    var mem = __managed_memory_create(len, 1)
-    var i = 0
-    while i < len 'copy'
-        let b = buf.getByte(i)
-        __managed_memory_set_byte(mem, i, b)
-        i = i + 1
-    end 'copy'
-    __managed_memory_set_length(mem, len)
-    return {_managed: mem, _iterPos: 0}
-end 'bufferToString'
 
 // --- Helpers ---
 

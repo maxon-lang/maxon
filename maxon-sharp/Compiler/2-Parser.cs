@@ -9458,7 +9458,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: selected by best type score ({maxScore})");
             return best[0].Candidate;
           }
-          matching = best.Select(s => s.Candidate).ToList();
+          matching = [.. best.Select(s => s.Candidate)];
         }
       }
     }

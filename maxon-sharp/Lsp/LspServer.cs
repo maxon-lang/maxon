@@ -350,9 +350,16 @@ public class LspServer {
 
     // Detect dot-receiver (e.g. `arr.contains`) and resolve its type to narrow hover results
     var receiverName = GetReceiverName(line, (int)position.Character, word);
-    var receiverTypeName = receiverName != null
-      ? ResolveReceiverType(enclosingFunc, receiverName)
-      : null;
+    string? receiverTypeName = null;
+    if (receiverName != null) {
+      receiverTypeName = ResolveReceiverType(enclosingFunc, receiverName);
+      // Fallback: scan source text directly for variable declarations
+      if (receiverTypeName == null) {
+        var content = GetDocument(uri);
+        if (content != null)
+          receiverTypeName = ResolveReceiverTypeFromSource(content, receiverName);
+      }
+    }
 
     // Check if it's a function name — show signature, filtered by receiver type when known
     var funcHover = GetFunctionHover(info, word, position, line, receiverTypeName);
@@ -421,6 +428,73 @@ public class LspServer {
 
     // Check local variables
     return FindVariableTypeInFunction(enclosingFunc, receiverName)?.typeName;
+  }
+
+  /// <summary>
+  /// Source-text fallback: scan for `var name = Type{`, `let name = Type(`, `var name Type`,
+  /// or parameter declarations like `name Type` in function signatures.
+  /// </summary>
+  private static string? ResolveReceiverTypeFromSource(string content, string receiverName) {
+    var lines = content.Split('\n');
+    foreach (var srcLine in lines) {
+      var trimmed = srcLine.TrimStart();
+
+      // Match: var/let name = TypeName{ or TypeName( or TypeName.
+      if (trimmed.StartsWith("var ") || trimmed.StartsWith("let ")) {
+        var rest = trimmed[4..].TrimStart();
+        if (!rest.StartsWith(receiverName)) continue;
+        var afterName = rest[receiverName.Length..];
+
+        // `var name = TypeName{...}` or `var name = TypeName(...)`
+        if (afterName.Length > 0 && (afterName[0] == ' ' || afterName[0] == '\t')) {
+          var afterEq = afterName.TrimStart();
+          if (afterEq.StartsWith("= ") || afterEq.StartsWith("=")) {
+            afterEq = afterEq[(afterEq[1] == ' ' ? 2 : 1)..].TrimStart();
+            var typeName = ExtractTypeNameToken(afterEq);
+            if (typeName != null) return typeName;
+          }
+          // `var name TypeName` (typed declaration without =)
+          else {
+            var typeName = ExtractTypeNameToken(afterEq);
+            if (typeName != null) return typeName;
+          }
+        }
+      }
+
+      // Match function parameter: `name TypeName` in a function signature line
+      if (trimmed.StartsWith("function ")) {
+        var parenStart = trimmed.IndexOf('(');
+        var parenEnd = trimmed.LastIndexOf(')');
+        if (parenStart >= 0 && parenEnd > parenStart) {
+          var paramsStr = trimmed[(parenStart + 1)..parenEnd];
+          var paramParts = paramsStr.Split(',');
+          foreach (var param in paramParts) {
+            var p = param.Trim();
+            var spaceIdx = p.IndexOf(' ');
+            if (spaceIdx > 0) {
+              var pName = p[..spaceIdx];
+              if (pName == receiverName) {
+                var pType = p[(spaceIdx + 1)..].Trim();
+                if (pType.Length > 0 && char.IsUpper(pType[0]))
+                  return ExtractTypeNameToken(pType);
+              }
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /// <summary>
+  /// Extract a type name identifier from the start of a string (uppercase-leading word).
+  /// Stops at `{`, `(`, `.`, whitespace, or end of string.
+  /// </summary>
+  private static string? ExtractTypeNameToken(string text) {
+    if (text.Length == 0 || !char.IsUpper(text[0])) return null;
+    var end = 0;
+    while (end < text.Length && IsWordChar(text[end])) end++;
+    return end > 0 ? text[..end] : null;
   }
 
   /// <summary>
@@ -502,7 +576,6 @@ public class LspServer {
     // Also resolve through type aliases: e.g. IntArray -> Array so that
     // generic stdlib methods (Array.contains) match an IntArray receiver.
     if (receiverTypeName != null && matchingFuncs.Count > 1) {
-      // Build the set of type names to accept: the direct type plus its alias source chain
       var acceptableTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { receiverTypeName };
       var cursor = receiverTypeName;
       while (info.TypeAliasSources != null && info.TypeAliasSources.TryGetValue(cursor, out var aliasInfo)) {
@@ -510,11 +583,14 @@ public class LspServer {
         cursor = aliasInfo.SourceTypeName;
       }
 
+      // Match function names containing ".TypeName." (handles namespace prefixes like "stdlib.Array.contains")
       var narrowed = matchingFuncs.Where(f => {
-        var dotIdx = f.Name.LastIndexOf('.');
-        if (dotIdx < 0) return false;
-        var typePart = f.Name[..dotIdx];
-        return acceptableTypes.Contains(typePart);
+        foreach (var typeName in acceptableTypes) {
+          var dotType = $".{typeName}.";
+          var prefixType = $"{typeName}.";
+          if (f.Name.Contains(dotType) || f.Name.StartsWith(prefixType)) return true;
+        }
+        return false;
       }).ToList();
       if (narrowed.Count > 0) matchingFuncs = narrowed;
     }

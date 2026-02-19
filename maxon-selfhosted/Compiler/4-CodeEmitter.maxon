@@ -17,7 +17,7 @@ typealias CallFixupArray = Array with CallFixup
 // Runtime stub offsets are returned from emitWriteStdout/emitI64ToString
 // and threaded to call sites as parameters.
 
-function emitPrologue(code ByteBuffer, stackSize StackSize)
+function emitPrologue(code Utf8ByteBuffer, stackSize StackSize)
     // push rbp
     code.push(0x55)
     // mov rbp, rsp
@@ -33,7 +33,7 @@ function emitPrologue(code ByteBuffer, stackSize StackSize)
     end 'hasSub'
 end 'emitPrologue'
 
-function emitEpilogue(code ByteBuffer)
+function emitEpilogue(code Utf8ByteBuffer)
     // mov rsp, rbp
     code.push(0x48)
     code.push(0x89)
@@ -44,7 +44,7 @@ function emitEpilogue(code ByteBuffer)
     code.push(0xC3)
 end 'emitEpilogue'
 
-function emitMovRegImm(code ByteBuffer, value MachineWord)
+function emitMovRegImm(code Utf8ByteBuffer, value MachineWord)
     // mov rax, imm32 (sign-extended)
     code.push(0x48)
     code.push(0xC7)
@@ -57,7 +57,7 @@ function emitMovRegImm(code ByteBuffer, value MachineWord)
 end 'emitMovRegImm'
 
 // Store RAX to stack slot: mov [rbp - (slotIndex+1)*8], rax
-function emitMovSlot(code ByteBuffer, slotIndex VarSlot)
+function emitMovSlot(code Utf8ByteBuffer, slotIndex VarSlot)
     let offset = (slotIndex + 1) * 8
     // mov [rbp - offset], rax  =>  48 89 45 <disp8>
     code.push(0x48)
@@ -67,7 +67,7 @@ function emitMovSlot(code ByteBuffer, slotIndex VarSlot)
 end 'emitMovSlot'
 
 // Load stack slot to RAX: mov rax, [rbp - (slotIndex+1)*8]
-function emitLoadSlot(code ByteBuffer, slotIndex VarSlot)
+function emitLoadSlot(code Utf8ByteBuffer, slotIndex VarSlot)
     let offset = (slotIndex + 1) * 8
     // mov rax, [rbp - offset]  =>  48 8B 45 <disp8>
     code.push(0x48)
@@ -77,31 +77,31 @@ function emitLoadSlot(code ByteBuffer, slotIndex VarSlot)
 end 'emitLoadSlot'
 
 // Save RAX to RCX before loading second operand
-function emitMovRcxRax(code ByteBuffer)
+function emitMovRcxRax(code Utf8ByteBuffer)
     // mov rcx, rax  =>  48 89 C1
     code.push(0x48)
     code.push(0x89)
     code.push(0xC1)
 end 'emitMovRcxRax'
 
-function emitPushRax(code ByteBuffer)
+function emitPushRax(code Utf8ByteBuffer)
     // push rax  =>  50
     code.push(0x50)
 end 'emitPushRax'
 
-function emitPopRcx(code ByteBuffer)
+function emitPopRcx(code Utf8ByteBuffer)
     // pop rcx  =>  59
     code.push(0x59)
 end 'emitPopRcx'
 
-function emitAddRegReg(code ByteBuffer)
+function emitAddRegReg(code Utf8ByteBuffer)
     // add rax, rcx  =>  48 01 C8
     code.push(0x48)
     code.push(0x01)
     code.push(0xC8)
 end 'emitAddRegReg'
 
-function emitSubRegReg(code ByteBuffer)
+function emitSubRegReg(code Utf8ByteBuffer)
     // After push/pop: rcx=left, rax=right. We want left-right.
     // xchg rax, rcx  =>  48 91
     code.push(0x48)
@@ -112,7 +112,7 @@ function emitSubRegReg(code ByteBuffer)
     code.push(0xC8)
 end 'emitSubRegReg'
 
-function emitImulRegReg(code ByteBuffer)
+function emitImulRegReg(code Utf8ByteBuffer)
     // imul rax, rcx  =>  48 0F AF C1
     code.push(0x48)
     code.push(0x0F)
@@ -121,7 +121,7 @@ function emitImulRegReg(code ByteBuffer)
 end 'emitImulRegReg'
 
 // cmp rcx, rax (compare left in rcx against right in rax)
-function emitCmpRaxRcx(code ByteBuffer)
+function emitCmpRaxRcx(code Utf8ByteBuffer)
     // cmp rcx, rax  =>  48 39 C1
     code.push(0x48)
     code.push(0x39)
@@ -131,7 +131,7 @@ end 'emitCmpRaxRcx'
 // ucomisd xmm0, xmm1 (compare float in xmm0 vs xmm1)
 // After push/pop: rcx=left raw bits, rax=right raw bits
 // We need to move them to xmm registers first
-function emitUcomisd(code ByteBuffer)
+function emitUcomisd(code Utf8ByteBuffer)
     // movq xmm0, rcx  =>  66 48 0F 6E C1
     code.push(0x66)
     code.push(0x48)
@@ -160,21 +160,21 @@ typealias JumpFixupArray = Array with JumpFixup
 typealias CondJumpOpcode = int(0x80 to 0x8F)
 
 // Emit a 2-byte conditional jump (0F xx) with rel32 fixup.
-function emitCondJump(code ByteBuffer, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel String)
+function emitCondJump(code Utf8ByteBuffer, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel String)
     code.push(0x0F)
     code.push(opcode)
     jumpFixups.push({codeOffset: code.count(), targetLabel: targetLabel})
     emitDword(code, value: 0)
 end 'emitCondJump'
 
-function emitJmp(code ByteBuffer, jumpFixups JumpFixupArray, targetLabel String)
+function emitJmp(code Utf8ByteBuffer, jumpFixups JumpFixupArray, targetLabel String)
     // jmp rel32  =>  E9 <rel32>
     code.push(0xE9)
     jumpFixups.push({codeOffset: code.count(), targetLabel: targetLabel})
     emitDword(code, value: 0)
 end 'emitJmp'
 
-function resolveJumpFixups(code ByteBuffer, labelNames StringArray, labelOffsets CodeOffsetArray, jumpFixups JumpFixupArray)
+function resolveJumpFixups(code Utf8ByteBuffer, labelNames StringArray, labelOffsets CodeOffsetArray, jumpFixups JumpFixupArray)
     for fixup in jumpFixups 'resolve'
         let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetLabel)
         let jumpEnd = fixup.codeOffset + 4
@@ -184,7 +184,7 @@ function resolveJumpFixups(code ByteBuffer, labelNames StringArray, labelOffsets
 end 'resolveJumpFixups'
 
 // Emit a relative call: call <rel32>
-function emitRelativeCall(code ByteBuffer, targetOffset CodeOffset)
+function emitRelativeCall(code Utf8ByteBuffer, targetOffset CodeOffset)
     code.push(0xE8)
     let callEnd = code.count() + 4
     let rel = targetOffset - callEnd
@@ -195,7 +195,7 @@ function emitRelativeCall(code ByteBuffer, targetOffset CodeOffset)
 end 'emitRelativeCall'
 
 // Emit dword placeholder (4 zero bytes)
-function emitDword(code ByteBuffer, value MachineWord)
+function emitDword(code Utf8ByteBuffer, value MachineWord)
     code.push(value and 0xFF)
     code.push((value shr 8) and 0xFF)
     code.push((value shr 16) and 0xFF)
@@ -206,7 +206,7 @@ end 'emitDword'
 
 // write_stdout(ptr_in_rcx, len_in_rdx)
 // Stack: [rbp-8]=ptr, [rbp-16]=len, [rbp-24]=handle, [rbp-32]=bytesWritten
-function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray) returns CodeOffset
+function emitWriteStdout(code Utf8ByteBuffer, iatFixups IatFixupArray) returns CodeOffset
     let offset = code.count()
 
     // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x40
@@ -312,7 +312,7 @@ end 'emitWriteStdout'
 
 // i64_to_string(value_in_rcx, buffer_in_rdx) -> length in RAX
 // Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=is_negative/length
-function emitI64ToString(code ByteBuffer) returns CodeOffset
+function emitI64ToString(code Utf8ByteBuffer) returns CodeOffset
     let offset = code.count()
 
     // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x30
@@ -561,7 +561,7 @@ end 'emitI64ToString'
 // --- Print Operations ---
 
 // Emit printLiteral: jump over data island, then call write_stdout
-function emitPrintLiteral(code ByteBuffer, data ByteBuffer, writeStdoutOffset CodeOffset)
+function emitPrintLiteral(code Utf8ByteBuffer, data Utf8ByteBuffer, writeStdoutOffset CodeOffset)
     let dataLen = data.count()
     if dataLen == 0 'empty'
         return
@@ -604,7 +604,7 @@ end 'emitPrintLiteral'
 
 // Emit printInt: value assumed in RAX, convert to string then print
 // Uses stack buffer at [rbp-<high offset>] for the conversion buffer
-function emitPrintInt(code ByteBuffer, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
+function emitPrintInt(code Utf8ByteBuffer, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
     // Save rax (the value) to rcx for i64_to_string arg1
     // mov rcx, rax
     code.push(0x48)
@@ -640,7 +640,7 @@ end 'emitPrintInt'
 // Returns a CodeResult with the code bytes and fixup offsets.
 export function emit(x86Ops X86OpArray) returns CodeResult
     logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops")
-    var code = ByteBuffer.create(1024)
+    var code = Utf8ByteBuffer.create(1024)
     var iatFixups = IatFixupArray{}
     var labelNames = StringArray{}
     var labelOffsets = CodeOffsetArray{}
@@ -734,7 +734,7 @@ end 'recordLabel'
 
 // Emit call rel32 placeholder — resolved after all functions are emitted.
 // Safe for zero-arg calls where stack is aligned by caller's prologue.
-function emitCallFixup(code ByteBuffer, callFixups CallFixupArray, target String)
+function emitCallFixup(code Utf8ByteBuffer, callFixups CallFixupArray, target String)
     logTrace(LogCategory.codegen, message: "Call fixup to '{target}' at offset {code.count()}")
     code.push(0xE8)
     let fixupOffset = code.count()
@@ -745,7 +745,7 @@ function emitCallFixup(code ByteBuffer, callFixups CallFixupArray, target String
     code.push(0x00)
 end 'emitCallFixup'
 
-function resolveCallFixups(code ByteBuffer, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
+function resolveCallFixups(code Utf8ByteBuffer, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
     logTrace(LogCategory.codegen, message: "Resolving {callFixups.count()} call fixups")
     for fixup in callFixups 'resolve'
         let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
