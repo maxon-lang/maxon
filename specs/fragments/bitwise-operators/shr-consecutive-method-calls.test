@@ -1,37 +1,15 @@
 // Test: shr-consecutive-method-calls
-
-typealias Integer = int(i64.min to i64.max)
-
-type ShrBuf2
-  var managed __ManagedMemory
-  var len Integer
-
-  static function create(capacity Integer) returns Self
-    return {managed: __managed_memory_create(capacity, 1), len: 0}
-  end 'create'
-
-  export function push(value Integer)
-    __managed_memory_set_byte(managed, len, value)
-    len = len + 1
-    __managed_memory_set_length(managed, len)
-  end 'push'
-
-  export function getByte(index Integer) returns Integer
-    return __managed_memory_byte_at(managed, index)
-  end 'getByte'
-end 'ShrBuf2'
-
 function main() returns ExitCode
-  var buf = ShrBuf2.create(16)
+  var buf = [0]
   let value = 0xAABBCCDD
   buf.push(value and 0xFF)
   buf.push((value shr 8) and 0xFF)
   buf.push((value shr 16) and 0xFF)
   buf.push((value shr 24) and 0xFF)
-  let b0 = buf.getByte(0)
-  let b1 = buf.getByte(1)
-  let b2 = buf.getByte(2)
-  let b3 = buf.getByte(3)
+  let b0 = try buf.get(1) otherwise 0
+  let b1 = try buf.get(2) otherwise 0
+  let b2 = try buf.get(3) otherwise 0
+  let b3 = try buf.get(4) otherwise 0
   if b0 != 0xDD 'c0'
     return 10
   end 'c0'
@@ -50,137 +28,60 @@ end 'main'
 ExitCode: 0
 ---
 module {
-  func @ShrBuf2.create(capacity: i64) -> i64 {
+  func @bitwise-operators.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov eax, 1
-    x86.mov edx, ecx
-    x86.imul edx, eax
-    x86.mov [rbp-24], ecx
-    x86.mov rcx, rdx
-    x86.call maxon_alloc
-    x86.mov ecx, 32
-    x86.mov [rbp-32], eax
+    x86.prologue stack_size=112
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.xor edx, edx
+    x86.mov ebx, 8
+    x86.mov esi, 32
+    x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-8], eax
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [rbp-32]
-    x86.mov [edx+0], ebx
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-24]
-    x86.mov [esi+8], edi
-    x86.mov r8, [rbp-8]
-    x86.mov [r8+16], edi
+    x86.mov edi, [rbp-8]
+    x86.xor r8, r8
+    x86.mov [edi+0], r8
     x86.mov r9, [rbp-8]
     x86.mov eax, 1
-    x86.mov [r9+24], eax
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
     x86.xor eax, eax
     x86.mov ecx, 16
     x86.call maxon_alloc
     x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
     x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
-    x86.mov [eax+8], ecx
-    x86.mov eax, [rbp-16]
-    x86.epilogue
-    x86.ret
-  }
-  func @ShrBuf2.push(__self_ptr: i64, value: i64) {
-  entry:
-    x86.prologue stack_size=48
-    x86.mov [rbp-8], ecx
+    x86.mov [eax+0], ecx
     x86.mov eax, [rbp-8]
-    x86.mov ebx, [eax+8]
-    x86.mov eax, [rbp-8]
-    x86.mov esi, [eax+0]
-    x86.mov [rbp-16], esi
-    x86.mov eax, [rbp-16]
-    x86.mov esi, [eax+24]
-    x86.mov eax, [rbp-16]
-    x86.mov edi, [eax+0]
-    x86.mov eax, [rbp-16]
-    x86.mov r8, [eax+16]
-    x86.mov eax, [rbp-16]
-    x86.mov r9, [eax+8]
-    x86.mov [rbp-24], r9
-    x86.mov [rbp-32], edx
-    x86.mov [rbp-40], ebx
-    x86.mov [rbp-48], r8
-    x86.mov rcx, rdi
-    x86.mov rdx, r8
-    x86.mov r8, r9
-    x86.mov r9, rsi
-    x86.call maxon_cow_check
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
-    x86.xor edx, edx
-    x86.mov ebx, [rbp-48]
-    x86.cmp ebx, edx
-    x86.sete esi
-    x86.movzx esi, esib
-    x86.mov edi, [rbp-24]
-    x86.test esi, esi
-    x86.mov r8, ebx
-    x86.cmovne r8, edi
-    x86.mov r9, [rbp-16]
-    x86.mov [r9+16], r8
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov eax, [rbp-40]
-    x86.add ecx, eax
-    x86.mov edx, [rbp-32]
-    x86.mov byte ptr [ecx+0], edxb
-    x86.mov ecx, 1
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-8]
-    x86.mov [ecx+8], eax
     x86.mov ecx, [rbp-16]
     x86.mov [ecx+8], eax
-    x86.epilogue
-    x86.ret
-  }
-  func @ShrBuf2.getByte(__self_ptr: i64, index: i64) -> i64 {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ebx, [eax+0]
-    x86.mov [rbp-16], ebx
-    x86.mov eax, [rbp-16]
-    x86.mov ebx, [eax+0]
-    x86.add ebx, edx
-    x86.movzx eax, byte ptr [ebx+0]
-    x86.epilogue
-    x86.ret
-  }
-  func @bitwise-operators.main() -> u32 {
-  entry:
-    x86.prologue stack_size=48
-    x86.mov eax, 16
+    x86.lea_rdata rax, [__const_array_bitwise-operators.main_buf]
     x86.mov rcx, rax
-    x86.call ShrBuf2.create
-    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.mov rax, 2864434397
+    x86.mov ecx, 255
+    x86.mov edx, eax
+    x86.and edx, ecx
+    x86.mov ecx, [rbp-16]
+    x86.call IntArray.push
+    x86.mov eax, 8
     x86.mov rcx, 2864434397
-    x86.mov edx, 255
-    x86.mov ebx, ecx
-    x86.and ebx, edx
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, rbx
-    x86.call ShrBuf2.push
-    x86.mov edi, 8
-    x86.mov r8, 2864434397
-    x86.mov ecx, edi
-    x86.mov r9, r8
-    x86.sar r9, cl
+    x86.mov edx, ecx
+    x86.mov ecx, eax
+    x86.sar edx, cl
     x86.mov eax, 255
-    x86.and r9, eax
-    x86.mov eax, [rbp-8]
+    x86.and edx, eax
+    x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.mov rdx, r9
-    x86.call ShrBuf2.push
+    x86.call IntArray.push
     x86.mov eax, 16
     x86.mov rcx, 2864434397
     x86.mov edx, ecx
@@ -188,9 +89,9 @@ module {
     x86.sar edx, cl
     x86.mov eax, 255
     x86.and edx, eax
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call ShrBuf2.push
+    x86.call IntArray.push
     x86.mov eax, 24
     x86.mov rcx, 2864434397
     x86.mov edx, ecx
@@ -198,65 +99,113 @@ module {
     x86.sar edx, cl
     x86.mov eax, 255
     x86.and edx, eax
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call ShrBuf2.push
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
+    x86.call IntArray.push
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
     x86.mov rdx, rax
-    x86.call ShrBuf2.getByte
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-8]
-    x86.mov [rbp-40], eax
-    x86.xchg rdx, rcx
-    x86.call ShrBuf2.getByte
-    x86.mov [rbp-16], eax
-    x86.mov eax, 2
-    x86.mov ecx, [rbp-8]
-    x86.mov rdx, rax
-    x86.call ShrBuf2.getByte
-    x86.mov [rbp-24], eax
-    x86.mov eax, 3
-    x86.mov ecx, [rbp-8]
-    x86.mov rdx, rax
-    x86.call ShrBuf2.getByte
+    x86.call IntArray.get
+    x86.xor ecx, ecx
+    x86.mov [rbp-24], ecx
     x86.mov [rbp-32], eax
-    x86.mov eax, 221
-    x86.mov ecx, [rbp-40]
-    x86.cmp ecx, eax
-    x86.je bitwise-operators.main.c0_0.after
-  c0_0:
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je bitwise-operators.main.otherwise_default_continue_4
+  otherwise_default_error_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.jmp bitwise-operators.main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
+    x86.mov ecx, 2
+    x86.mov edx, [rbp-16]
+    x86.xchg rdx, rcx
+    x86.call IntArray.get
+    x86.xor ebx, ebx
+    x86.mov [rbp-48], ebx
+    x86.mov [rbp-56], eax
+    x86.xor esi, esi
+    x86.cmp edx, esi
+    x86.je bitwise-operators.main.otherwise_default_continue_8
+  otherwise_default_error_7:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
+    x86.jmp bitwise-operators.main.otherwise_default_continue_8
+  otherwise_default_continue_8:
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-64], eax
+    x86.mov ecx, 3
+    x86.mov edx, [rbp-16]
+    x86.xchg rdx, rcx
+    x86.call IntArray.get
+    x86.xor ebx, ebx
+    x86.mov [rbp-72], ebx
+    x86.mov [rbp-80], eax
+    x86.xor esi, esi
+    x86.cmp edx, esi
+    x86.je bitwise-operators.main.otherwise_default_continue_12
+  otherwise_default_error_11:
+    x86.mov eax, [rbp-72]
+    x86.mov [rbp-80], eax
+    x86.jmp bitwise-operators.main.otherwise_default_continue_12
+  otherwise_default_continue_12:
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-88], eax
+    x86.mov ecx, 4
+    x86.mov edx, [rbp-16]
+    x86.xchg rdx, rcx
+    x86.call IntArray.get
+    x86.xor ebx, ebx
+    x86.mov [rbp-96], ebx
+    x86.mov [rbp-104], eax
+    x86.xor esi, esi
+    x86.cmp edx, esi
+    x86.je bitwise-operators.main.otherwise_default_continue_16
+  otherwise_default_error_15:
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-104], eax
+    x86.jmp bitwise-operators.main.otherwise_default_continue_16
+  otherwise_default_continue_16:
+    x86.mov eax, [rbp-104]
+    x86.mov [rbp-112], eax
+    x86.mov ecx, 221
+    x86.mov edx, [rbp-40]
+    x86.cmp edx, ecx
+    x86.je bitwise-operators.main.c0_17.after
+  c0_17:
     x86.mov eax, 10
     x86.epilogue
     x86.ret
-  c0_0.after:
+  c0_17.after:
     x86.mov eax, 204
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-64]
     x86.cmp ecx, eax
-    x86.je bitwise-operators.main.c1_1.after
-  c1_1:
+    x86.je bitwise-operators.main.c1_18.after
+  c1_18:
     x86.mov eax, 20
     x86.epilogue
     x86.ret
-  c1_1.after:
+  c1_18.after:
     x86.mov eax, 187
-    x86.mov ecx, [rbp-24]
+    x86.mov ecx, [rbp-88]
     x86.cmp ecx, eax
-    x86.je bitwise-operators.main.c2_2.after
-  c2_2:
+    x86.je bitwise-operators.main.c2_19.after
+  c2_19:
     x86.mov eax, 30
     x86.epilogue
     x86.ret
-  c2_2.after:
+  c2_19.after:
     x86.mov eax, 170
-    x86.mov ecx, [rbp-32]
+    x86.mov ecx, [rbp-112]
     x86.cmp ecx, eax
-    x86.je bitwise-operators.main.c3_3.after
-  c3_3:
+    x86.je bitwise-operators.main.c3_20.after
+  c3_20:
     x86.mov eax, 40
     x86.epilogue
     x86.ret
-  c3_3.after:
+  c3_20.after:
     x86.xor eax, eax
     x86.epilogue
     x86.ret

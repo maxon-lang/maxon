@@ -51,16 +51,33 @@ public class LspServer {
   }
 
   public void UpdateDocument(DocumentUri uri, string content) {
+    // Only process real .maxon/.test files — skip virtual/temporary buffers (e.g. Copilot response files)
+    if (!IsMaxonFile(uri)) return;
+
     _documents[uri] = content;
-    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
-    var project = ProjectManager.GetOrCreateProject(filePath);
+    var filePath = uri.GetFileSystemPath()!;
+    // .test files are always single-file projects, never part of a multi-file build
+    var forceSingleFile = filePath.EndsWith(".test", StringComparison.OrdinalIgnoreCase);
+    var project = ProjectManager.GetOrCreateProject(filePath, forceSingleFile);
     project.NotifyFileChanged(filePath, content);
   }
 
   public void RemoveDocument(DocumentUri uri) {
+    if (!IsMaxonFile(uri)) return;
+
     _documents.TryRemove(uri, out _);
-    var filePath = uri.GetFileSystemPath() ?? uri.ToString();
+    var filePath = uri.GetFileSystemPath()!;
     ProjectManager.RemoveFileFromProject(filePath);
+  }
+
+  private static bool IsMaxonFile(DocumentUri uri) {
+    // Must be a real file:// URI with a .maxon or .test extension
+    if (!string.Equals(uri.Scheme, "file", StringComparison.OrdinalIgnoreCase)) return false;
+    var path = uri.GetFileSystemPath();
+    return path != null && (
+      path.EndsWith(".maxon", StringComparison.OrdinalIgnoreCase) ||
+      path.EndsWith(".test", StringComparison.OrdinalIgnoreCase)
+    );
   }
 
   public string? GetDocument(DocumentUri uri) {
@@ -116,7 +133,7 @@ public class LspServer {
 
     // Extract parameter types from parsed functions (no re-lexing needed)
     var variableTypes = ExtractParamTypes(info.Functions);
-    info = new CompletionInfo(info.TypeDefs, info.Functions, variableTypes);
+    info = new CompletionInfo(info.TypeDefs, info.Functions, variableTypes, info.TypeAliasSources);
 
     return BuildMemberCompletionList(info, targetName);
   }
@@ -328,12 +345,18 @@ public class LspServer {
       return MakeTypeHover(mlirType, word, position, line);
     }
 
-    // Check if it's a function name — show signature
-    var funcHover = GetFunctionHover(info, word, position, line);
-    if (funcHover != null) return funcHover;
-
-    // Find the enclosing function at the cursor position using compiler data
+    // Find the enclosing function first so we can resolve the receiver type for method calls
     var enclosingFunc = FindEnclosingFunction(info.Functions, normalizedPath, (int)position.Line + 1);
+
+    // Detect dot-receiver (e.g. `arr.contains`) and resolve its type to narrow hover results
+    var receiverName = GetReceiverName(line, (int)position.Character, word);
+    var receiverTypeName = receiverName != null
+      ? ResolveReceiverType(enclosingFunc, receiverName)
+      : null;
+
+    // Check if it's a function name — show signature, filtered by receiver type when known
+    var funcHover = GetFunctionHover(info, word, position, line, receiverTypeName);
+    if (funcHover != null) return funcHover;
 
     // Check function parameters
     if (enclosingFunc != null) {
@@ -360,6 +383,44 @@ public class LspServer {
     }
 
     return null;
+  }
+
+  /// <summary>
+  /// If the word at the cursor is immediately preceded by '.identifier.', return that identifier.
+  /// E.g., for 'arr.contains(', hovering on 'contains' returns 'arr'.
+  /// </summary>
+  private static string? GetReceiverName(string line, int cursorChar, string word) {
+    // Find the start of the word at the cursor
+    var wordStart = Math.Min(cursorChar, line.Length);
+    while (wordStart > 0 && IsWordChar(line[wordStart - 1])) wordStart--;
+
+    // Must have a dot immediately before the word
+    if (wordStart <= 0 || line[wordStart - 1] != '.') return null;
+
+    // Extract the identifier before the dot
+    var dotPos = wordStart - 1;
+    var end = dotPos;
+    var start = dotPos - 1;
+    while (start >= 0 && IsWordChar(line[start])) start--;
+    start++;
+
+    return start < end ? line[start..end] : null;
+  }
+
+  /// <summary>
+  /// Resolve the type name of a receiver variable from the enclosing function's params and locals.
+  /// </summary>
+  private static string? ResolveReceiverType(MlirFunction<MaxonOp>? enclosingFunc, string receiverName) {
+    if (enclosingFunc == null) return null;
+
+    // Check parameters
+    for (int i = 0; i < enclosingFunc.ParamNames.Count && i < enclosingFunc.ParamTypes.Count; i++) {
+      if (enclosingFunc.ParamNames[i] == receiverName)
+        return enclosingFunc.ParamTypes[i].Name;
+    }
+
+    // Check local variables
+    return FindVariableTypeInFunction(enclosingFunc, receiverName)?.typeName;
   }
 
   /// <summary>
@@ -424,7 +485,7 @@ public class LspServer {
     return null;
   }
 
-  private static Hover? GetFunctionHover(CompletionInfo info, string word, Position position, string line) {
+  private static Hover? GetFunctionHover(CompletionInfo info, string word, Position position, string line, string? receiverTypeName = null) {
     var matchingFuncs = info.Functions.Where(f => {
       if (f.Name == word) return true;
       var dotIdx = f.Name.LastIndexOf('.');
@@ -436,6 +497,27 @@ public class LspServer {
       }
       return false;
     }).ToList();
+
+    // If we know the receiver type, narrow to that type's methods.
+    // Also resolve through type aliases: e.g. IntArray -> Array so that
+    // generic stdlib methods (Array.contains) match an IntArray receiver.
+    if (receiverTypeName != null && matchingFuncs.Count > 1) {
+      // Build the set of type names to accept: the direct type plus its alias source chain
+      var acceptableTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { receiverTypeName };
+      var cursor = receiverTypeName;
+      while (info.TypeAliasSources != null && info.TypeAliasSources.TryGetValue(cursor, out var aliasInfo)) {
+        acceptableTypes.Add(aliasInfo.SourceTypeName);
+        cursor = aliasInfo.SourceTypeName;
+      }
+
+      var narrowed = matchingFuncs.Where(f => {
+        var dotIdx = f.Name.LastIndexOf('.');
+        if (dotIdx < 0) return false;
+        var typePart = f.Name[..dotIdx];
+        return acceptableTypes.Contains(typePart);
+      }).ToList();
+      if (narrowed.Count > 0) matchingFuncs = narrowed;
+    }
 
     if (matchingFuncs.Count == 0) return null;
 
@@ -1247,5 +1329,6 @@ public class LspServer {
 public record CompletionInfo(
   Dictionary<string, MlirType> TypeDefs,
   List<MlirFunction<MaxonOp>> Functions,
-  Dictionary<string, string> VariableTypes
+  Dictionary<string, string> VariableTypes,
+  Dictionary<string, TypeAliasInfo>? TypeAliasSources = null
 );

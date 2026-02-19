@@ -7,39 +7,26 @@ category: dev
 
 ## Documentation
 
-The `__managed_memory_create` intrinsic takes an element_size parameter that determines
-the size of each element in the buffer. This is used to calculate the total byte size
-when allocating memory: `byte_size = count * element_size`.
-
-When element_size=1 (for byte buffers), allocating N elements should allocate N bytes.
-When element_size=8 (for int buffers), allocating N elements should allocate N*8 bytes.
+Arrays internally use managed memory with element sizes that determine how much space
+each element occupies. The runtime correctly handles element sizing when creating and
+growing arrays, ensuring elements are stored and retrieved at the correct positions.
 
 ## Tests
 
 <!-- test: element-size-respected-in-create -->
-Test that __managed_memory_create respects the element_size parameter.
-When we create a buffer with element_size=1 and grow it, the allocation
-should be based on 1-byte elements, not 8-byte elements.
-
-This test creates a byte buffer, writes sequential byte values at specific
-positions, then reads them back. If element_size is incorrectly hardcoded to 8,
-the byte positions would be calculated wrong (multiplied by 8 instead of 1).
+Test that element sizes are respected when creating arrays.
+Array elements should be stored and retrieved correctly at their positions.
 ```maxon
 function main() returns ExitCode
-  // Create a managed memory for 10 bytes (element_size=1)
-  var managed = __managed_memory_create(10, 1)
+  var arr = [0]
+  arr.push(65)
+  arr.push(66)
+  arr.push(67)
 
-  // Write bytes at positions 0, 1, 2
-  __managed_memory_set_byte(managed, 0, 65)  // 'A'
-  __managed_memory_set_byte(managed, 1, 66)  // 'B'
-  __managed_memory_set_byte(managed, 2, 67)  // 'C'
+  let b0 = try arr.get(1) otherwise 0
+  let b1 = try arr.get(2) otherwise 0
+  let b2 = try arr.get(3) otherwise 0
 
-  // Read them back
-  var b0 = __managed_memory_byte_at(managed, 0)
-  var b1 = __managed_memory_byte_at(managed, 1)
-  var b2 = __managed_memory_byte_at(managed, 2)
-
-  // Verify values
   if b0 != 65 'check0'
     return 1
   end 'check0'
@@ -58,31 +45,21 @@ end 'main'
 ```
 
 <!-- test: element-size-in-grow -->
-Test that __managed_memory_grow uses the correct element_size.
-This tests a scenario where we need to grow a byte buffer.
+Test that growing an array preserves existing elements and allows new ones.
 ```maxon
 function main() returns ExitCode
-  // Create a small byte buffer
-  var managed = __managed_memory_create(4, 1)
+  var arr = [0]
+  arr.push(10)
+  arr.push(20)
+  arr.push(30)
+  arr.push(40)
+  arr.push(50)
 
-  // Write initial bytes
-  __managed_memory_set_byte(managed, 0, 10)
-  __managed_memory_set_byte(managed, 1, 20)
-  __managed_memory_set_byte(managed, 2, 30)
-
-  // Grow the buffer (should allocate 8 bytes, not 64)
-  __managed_memory_grow(managed, 8)
-
-  // Write more bytes after grow
-  __managed_memory_set_byte(managed, 3, 40)
-  __managed_memory_set_byte(managed, 4, 50)
-
-  // Verify all bytes
-  var sum = __managed_memory_byte_at(managed, 0)
-  sum = sum + __managed_memory_byte_at(managed, 1)
-  sum = sum + __managed_memory_byte_at(managed, 2)
-  sum = sum + __managed_memory_byte_at(managed, 3)
-  sum = sum + __managed_memory_byte_at(managed, 4)
+  var sum = try arr.get(1) otherwise 0
+  sum = sum + (try arr.get(2) otherwise 0)
+  sum = sum + (try arr.get(3) otherwise 0)
+  sum = sum + (try arr.get(4) otherwise 0)
+  sum = sum + (try arr.get(5) otherwise 0)
 
   // 10 + 20 + 30 + 40 + 50 = 150
   return sum

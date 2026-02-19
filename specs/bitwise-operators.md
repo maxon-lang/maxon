@@ -322,34 +322,12 @@ end 'main'
 
 <!-- test: shr-in-method-call-arg -->
 ```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-type ShrBuf
-  var managed __ManagedMemory
-  var len Integer
-
-  static function create(capacity Integer) returns Self
-    return {managed: __managed_memory_create(capacity, 1), len: 0}
-  end 'create'
-
-  export function push(value Integer)
-    __managed_memory_set_byte(managed, len, value)
-    len = len + 1
-    __managed_memory_set_length(managed, len)
-  end 'push'
-
-  export function getByte(index Integer) returns Integer
-    return __managed_memory_byte_at(managed, index)
-  end 'getByte'
-end 'ShrBuf'
-
 function main() returns ExitCode
-  var buf = ShrBuf.create(16)
+  var buf = [0, 0]
   buf.push(42)
   let x = 0xABCD
   buf.push(x shr 8)
-  return buf.getByte(1)
+  return try buf.get(3) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -358,39 +336,17 @@ end 'main'
 
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-type ShrBuf2
-  var managed __ManagedMemory
-  var len Integer
-
-  static function create(capacity Integer) returns Self
-    return {managed: __managed_memory_create(capacity, 1), len: 0}
-  end 'create'
-
-  export function push(value Integer)
-    __managed_memory_set_byte(managed, len, value)
-    len = len + 1
-    __managed_memory_set_length(managed, len)
-  end 'push'
-
-  export function getByte(index Integer) returns Integer
-    return __managed_memory_byte_at(managed, index)
-  end 'getByte'
-end 'ShrBuf2'
-
 function main() returns ExitCode
-  var buf = ShrBuf2.create(16)
+  var buf = [0]
   let value = 0xAABBCCDD
   buf.push(value and 0xFF)
   buf.push((value shr 8) and 0xFF)
   buf.push((value shr 16) and 0xFF)
   buf.push((value shr 24) and 0xFF)
-  let b0 = buf.getByte(0)
-  let b1 = buf.getByte(1)
-  let b2 = buf.getByte(2)
-  let b3 = buf.getByte(3)
+  let b0 = try buf.get(1) otherwise 0
+  let b1 = try buf.get(2) otherwise 0
+  let b2 = try buf.get(3) otherwise 0
+  let b3 = try buf.get(4) otherwise 0
   if b0 != 0xDD 'c0'
     return 10
   end 'c0'

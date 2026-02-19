@@ -131,7 +131,8 @@ public class Project(
         _lastSuccessfulCompletionInfo = new CompletionInfo(
           module.TypeDefs,
           module.Functions,
-          []
+          [],
+          module.TypeAliasSources
         );
       } catch (CompileError ex) {
         // Record error for the appropriate file

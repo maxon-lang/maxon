@@ -1105,6 +1105,48 @@ greet("Smith", title: "Dr.")      // Override default
 - Default values are evaluated at call site
 - Arguments may be omitted if they have defaults
 
+### Function Overloads
+
+Maxon supports function overloading — multiple functions with the same name but different signatures.
+
+#### Disambiguation by Parameter Types
+
+When overloads differ in their parameter types, the compiler automatically selects the correct overload based on the argument types at the call site:
+
+```maxon
+function process(value int) returns int
+    return value * 2
+end 'process'
+
+function process(value String) returns int
+    return value.count()
+end 'process'
+
+process(42)        // calls process(value int)
+process("hello")   // calls process(value String)
+```
+
+#### Disambiguation by Parameter Names
+
+When overloads have different parameter names, the caller uses named arguments to select the correct overload:
+
+```maxon
+function create(name String) returns String
+    return name
+end 'create'
+
+function create(label String) returns String
+    return label
+end 'create'
+
+create(name: "foo")    // calls first overload
+create(label: "bar")   // calls second overload
+```
+
+#### Ambiguous Calls
+
+If the compiler cannot determine which overload to call based on argument types alone, it requires named arguments. Calling an ambiguous overload without named arguments produces error **E3007**.
+
 ### Examples
 
 **No Parameters**

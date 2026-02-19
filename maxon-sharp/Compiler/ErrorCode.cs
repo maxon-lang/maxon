@@ -32,6 +32,7 @@ public enum ErrorCode {
   ParserLiteralOverflow = 2011,
   ParserCircularDependency = 2012,
   ParserImmutableVariable = 2013,
+  ParserCompilerBuiltinNotInStdlib = 2014,
   ParserMatchFallthroughWithReturn = 2025,
   ParserMatchNotExhaustive = 2026,
   ParserMatchDuplicatePattern = 2027,

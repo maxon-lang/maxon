@@ -106,6 +106,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Creates a mangled name that includes both parameter names and types,
+  /// used when name-only mangling produces a collision (same param names, different types).
+  /// Example: process(value int) -> baseName$value_i64, process(value String) -> baseName$value_String
+  /// </summary>
+  private static string MangleOverloadNameWithTypes(string baseName, List<string> paramNames, List<MlirType> paramTypes) {
+    var parts = new List<string>();
+    for (int i = 0; i < paramNames.Count; i++) {
+      if (paramNames[i] == "self") continue;
+      parts.Add($"{paramNames[i]}_{TypeMangledSuffix(paramTypes[i])}");
+    }
+    if (parts.Count == 0) return baseName;
+    return $"{baseName}${string.Join("_", parts)}";
+  }
+
+  private static string TypeMangledSuffix(MlirType type) => type switch {
+    MlirStructType st => st.Name,
+    MlirEnumType et => et.Name,
+    MlirFunctionType => "fn",
+    MlirTypeParameterType tp => tp.ParameterName,
+    MlirRangedPrimitiveType rpt => rpt.BaseType.Name,
+    _ => type.Name
+  };
+
+  /// <summary>
   /// Extracts the base function name from a potentially mangled overload name.
   /// "stdlib.String.slice$endIndex" -> "stdlib.String.slice"
   /// </summary>
@@ -119,22 +143,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// If existing functions with the same base name exist, retroactively mangles them
   /// and returns a mangled name for the new function. Updates _functionDefaults
   /// dictionary when renaming existing functions.
+  /// Supports both name-based and type-based disambiguation.
   /// </summary>
-  private string ResolveOverloadRegistrationName(MlirModule<MaxonOp> module, string baseName, List<string> paramNames) {
+  private string ResolveOverloadRegistrationName(MlirModule<MaxonOp> module, string baseName, List<string> paramNames, List<MlirType> paramTypes) {
     var existingOverloads = module.Functions.Where(f => f.Name == baseName || UnmangleName(f.Name) == baseName).ToList();
 
     if (existingOverloads.Count == 0) {
       return baseName;
     }
 
-    // If the only existing match has the exact same param names, it's the same function
+    // If the only existing match has the exact same signature, it's the same function
     // (e.g., re-registration during full parse after pre-scan)
     if (existingOverloads.Count == 1 && existingOverloads[0].Name == baseName
-        && existingOverloads[0].ParamNames.SequenceEqual(paramNames)) {
+        && existingOverloads[0].ParamNames.SequenceEqual(paramNames)
+        && ParamTypesMatch(existingOverloads[0].ParamTypes, paramTypes)) {
       return baseName;
     }
 
     var registrationName = MangleOverloadName(baseName, paramNames);
+
+    // Check if this exact function was already registered under a type-augmented name
+    var typeMangledForNew = MangleOverloadNameWithTypes(baseName, paramNames, paramTypes);
+    var existingTypeMangled = existingOverloads.FirstOrDefault(f => f.Name == typeMangledForNew);
+    if (existingTypeMangled != null) {
+      // Same function re-registered (e.g., during full parse after pre-scan)
+      if (existingTypeMangled.ParamNames.SequenceEqual(paramNames)
+          && ParamTypesMatch(existingTypeMangled.ParamTypes, paramTypes))
+        return typeMangledForNew;
+    }
 
     // Retroactively mangle any existing function that still has the unmangled name
     foreach (var existing in existingOverloads) {
@@ -142,21 +178,58 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var mangledExisting = MangleOverloadName(baseName, existing.ParamNames);
         if (mangledExisting == registrationName) {
           // Same function re-registered (e.g., from pre-scan)
-          if (existing.ParamNames.SequenceEqual(paramNames))
+          if (existing.ParamNames.SequenceEqual(paramNames)
+              && ParamTypesMatch(existing.ParamTypes, paramTypes))
             return registrationName;
-          throw new InvalidOperationException(
-            $"Overload name collision: '{baseName}' has two overloads that mangle to the same name '{registrationName}'. " +
-            $"Overloads must differ in their named parameter names (not just types).");
+
+          // Name-based collision but different types — use type-augmented mangling
+          var typeMangledExisting = MangleOverloadNameWithTypes(baseName, existing.ParamNames, existing.ParamTypes);
+          if (typeMangledExisting == typeMangledForNew)
+            throw new InvalidOperationException(
+              $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
+
+          var oldName = existing.Name;
+          existing.Name = typeMangledExisting;
+          if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
+            _functionDefaults[typeMangledExisting] = existingDefaults;
+          }
+          return typeMangledForNew;
         }
-        var oldName = existing.Name;
+        var oldExistingName = existing.Name;
         existing.Name = mangledExisting;
-        if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
-          _functionDefaults[mangledExisting] = existingDefaults;
+        if (_functionDefaults.Remove(oldExistingName, out var defaults)) {
+          _functionDefaults[mangledExisting] = defaults;
         }
+      } else if (existing.Name == registrationName) {
+        // Already mangled with same name — check if it's a re-registration or type collision
+        if (existing.ParamNames.SequenceEqual(paramNames)
+            && ParamTypesMatch(existing.ParamTypes, paramTypes))
+          return registrationName;
+
+        // Name-based collision on already-mangled function — re-mangle both with types
+        var typeMangledExisting = MangleOverloadNameWithTypes(baseName, existing.ParamNames, existing.ParamTypes);
+        if (typeMangledExisting == typeMangledForNew)
+          throw new InvalidOperationException(
+            $"Duplicate overload: '{baseName}' already has an overload with the same signature.");
+
+        var oldName = existing.Name;
+        existing.Name = typeMangledExisting;
+        if (_functionDefaults.Remove(oldName, out var existingDefaults)) {
+          _functionDefaults[typeMangledExisting] = existingDefaults;
+        }
+        return typeMangledForNew;
       }
     }
 
     return registrationName;
+  }
+
+  private static bool ParamTypesMatch(List<MlirType> a, List<MlirType> b) {
+    if (a.Count != b.Count) return false;
+    for (int i = 0; i < a.Count; i++) {
+      if (TypeMangledSuffix(a[i]) != TypeMangledSuffix(b[i])) return false;
+    }
+    return true;
   }
 
   /// <summary>
@@ -981,7 +1054,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var throwsType = ParseThrowsClause();
 
-    var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames);
+    var registrationName = ResolveOverloadRegistrationName(module, funcName, paramNames, paramTypes);
 
     if (!module.Functions.Any(f => f.Name == registrationName)) {
       var func = new MlirFunction<MaxonOp>(registrationName, paramNames, paramTypes, returnType, throwsType) {
@@ -2569,7 +2642,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var allParamTypes = new List<MlirType> { selfType };
     allParamTypes.AddRange(paramTypes);
 
-    var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames);
+    var registrationName = ResolveOverloadRegistrationName(module, methodName, allParamNames, allParamTypes);
 
     // Register if not already present (by mangled name)
     if (!module.Functions.Any(f => f.Name == registrationName)) {
@@ -3551,6 +3624,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var mangledName = MangleOverloadName(funcName, paramNames);
     if (module.Functions.Any(f => f.Name == mangledName)) {
       registrationName = mangledName;
+    }
+    // Also check type-augmented mangled name for same-name-different-type overloads
+    var typeMangledName = MangleOverloadNameWithTypes(funcName, paramNames, paramTypes);
+    if (module.Functions.Any(f => f.Name == typeMangledName)) {
+      registrationName = typeMangledName;
     }
 
     // Replace pre-registered stub with full function (or create new one)
@@ -4835,6 +4913,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Handle compiler builtins (__managed_memory_*, __cstring_*, __make_char_*)
     if (IsCompilerBuiltin(token.Value)) {
+      if (!_isStdlib)
+        throw new CompileError(ErrorCode.ParserCompilerBuiltinNotInStdlib,
+          $"Compiler builtin '{token.Value}' can only be used in stdlib",
+          token.Line, token.Column);
       Advance(); // consume '('
       TryEmitManagedMemoryBuiltin(token);
       return;
@@ -7578,6 +7660,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
         // Handle compiler builtins in expression context
         if (IsCompilerBuiltin(token.Value)) {
+          if (!_isStdlib)
+            throw new CompileError(ErrorCode.ParserCompilerBuiltinNotInStdlib,
+              $"Compiler builtin '{token.Value}' can only be used in stdlib",
+              token.Line, token.Column);
           Advance(); // consume '('
           var builtinResult = TryEmitManagedMemoryBuiltin(token);
           if (builtinResult != null)
@@ -9321,7 +9407,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var namedArgNames = PeekNamedArgNames();
-
     // Filter candidates: a candidate matches if all named args from the call site
     // correspond to parameter names in the candidate
     var matching = candidates.Where(c => {
@@ -9334,23 +9419,56 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (matching.Count == 1) return matching[0];
     if (matching.Count == 0) {
       var candidateInfo = string.Join(", ", candidates.Select(c =>
-        $"({string.Join(", ", c.ParamNames.Where(n => n != "self"))})"));
+        FormatOverloadSignature(c)));
       throw new CompileError(ErrorCode.SemanticAmbiguousFunctionCall,
         $"No overload of '{UnmangleName(callToken.Value)}' matches the named arguments. Candidates: {candidateInfo}",
         callToken.Line, callToken.Column);
     }
 
-    // When multiple overloads still match, disambiguate by the first positional
-    // argument's compatibility with each candidate's parameter type.
+    // Disambiguate by peeked argument types against each candidate's parameter types
+    if (matching.Count > 1 && _pos < _tokens.Count) {
+      var argTypes = PeekArgTypes();
+      if (argTypes.Count > 0 && argTypes.Any(t => t != null)) {
+        var scored = matching.Select(c => {
+          int firstParamIdx = c.ParamNames.Contains("self") ? 1 : 0;
+          int score = 0;
+          bool compatible = true;
+          for (int i = 0; i < argTypes.Count && (firstParamIdx + i) < c.ParamTypes.Count; i++) {
+            var argType = argTypes[i];
+            var paramType = c.ParamTypes[firstParamIdx + i];
+            if (argType == null) continue; // unknown arg type — compatible with anything
+            if (!IsOverloadArgTypeCompatible(argType, paramType)) { compatible = false; break; }
+            if (paramType is MlirTypeParameterType) score += 0; // generic match
+            else if (TypeMangledSuffix(argType) == TypeMangledSuffix(paramType)) score += 2; // exact match
+            else score += 1; // widening/compatible match
+          }
+          return (Candidate: c, Score: score, Compatible: compatible);
+        }).ToList();
+
+        var compatibleCandidates = scored.Where(s => s.Compatible).ToList();
+        if (compatibleCandidates.Count == 1) {
+          Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: selected by argument types");
+          return compatibleCandidates[0].Candidate;
+        }
+        if (compatibleCandidates.Count > 1) {
+          // Pick highest-scoring candidate if there's a clear winner
+          var maxScore = compatibleCandidates.Max(s => s.Score);
+          var best = compatibleCandidates.Where(s => s.Score == maxScore).ToList();
+          if (best.Count == 1) {
+            Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: selected by best type score ({maxScore})");
+            return best[0].Candidate;
+          }
+          matching = best.Select(s => s.Candidate).ToList();
+        }
+      }
+    }
+
+    // Legacy fallback: disambiguate by first arg's token structure (collection, closure, char)
     if (matching.Count > 1 && _pos < _tokens.Count) {
       bool argIsCollection = Current().Type == TokenType.LeftBracket;
       bool argIsClosure = Current().Type == TokenType.LeftParen;
       bool argIsCharLiteral = Current().Type == TokenType.CharacterLiteral;
 
-      // Closure args match function-typed params; non-closure args exclude them.
-      // Array literal args prefer generic collection params; scalars prefer non-collection params.
-      // Character literal args prefer Character-typed params.
-      // A "generic collection" is a struct with unresolved type parameters (e.g., Array with Element).
       var narrowed = matching.Where(c => {
         int firstParamIdx = c.ParamNames.Contains("self") ? 1 : 0;
         if (firstParamIdx >= c.ParamTypes.Count) return true;
@@ -9368,7 +9486,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return paramIsCollection == argIsCollection;
       }).ToList();
       if (narrowed.Count >= 1 && narrowed.Count < matching.Count) {
-        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {narrowed.Count} by first arg type (collection={argIsCollection}, closure={argIsClosure}, charLiteral={argIsCharLiteral})");
+        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {narrowed.Count} by first arg token type (collection={argIsCollection}, closure={argIsClosure}, charLiteral={argIsCharLiteral})");
         matching = narrowed;
       }
     }
@@ -9376,10 +9494,119 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (matching.Count == 1) return matching[0];
 
     var matchInfo = string.Join(", ", matching.Select(c =>
-      $"({string.Join(", ", c.ParamNames.Where(n => n != "self"))})"));
+      FormatOverloadSignature(c)));
     throw new CompileError(ErrorCode.SemanticAmbiguousFunctionCall,
       $"Ambiguous overload for '{UnmangleName(callToken.Value)}': multiple overloads match. Candidates: {matchInfo}",
       callToken.Line, callToken.Column);
+  }
+
+  private static string FormatOverloadSignature(MlirFunction<MaxonOp> func) {
+    var paramParts = func.ParamNames.Zip(func.ParamTypes)
+      .Where(p => p.First != "self")
+      .Select(p => $"{p.First} {TypeMangledSuffix(p.Second)}");
+    return $"({string.Join(", ", paramParts)})";
+  }
+
+  /// <summary>
+  /// Checks if an inferred argument type is compatible with a parameter type for overload selection.
+  /// </summary>
+  private bool IsOverloadArgTypeCompatible(MlirType argType, MlirType paramType) {
+    if (paramType is MlirTypeParameterType) return true;
+    if (TypeMangledSuffix(argType) == TypeMangledSuffix(paramType)) return true;
+    // Struct compatibility: check if arg type conforms to param type's interface or is a subtype
+    if (argType is MlirStructType argStruct && paramType is MlirStructType paramStruct) {
+      return IsStructTypeCompatible(argStruct.Name, paramStruct.Name);
+    }
+    // Widening: i8/i16 -> i64
+    if (paramType == MlirType.I64 && (argType == MlirType.I8 || argType == MlirType.I16)) return true;
+    // Ranged primitives match their base type
+    if (argType is MlirRangedPrimitiveType argRanged)
+      return IsOverloadArgTypeCompatible(argRanged.BaseType, paramType);
+    if (paramType is MlirRangedPrimitiveType paramRanged)
+      return IsOverloadArgTypeCompatible(argType, paramRanged.BaseType);
+    return false;
+  }
+
+  /// <summary>
+  /// Peeks at argument expressions in the token stream to infer their types without consuming tokens.
+  /// Returns a list of inferred types (null for unknown/uninferable).
+  /// </summary>
+  private List<MlirType?> PeekArgTypes() {
+    var types = new List<MlirType?>();
+    var savedPos = _pos;
+    int parenDepth = 1;
+
+    while (_pos < _tokens.Count && parenDepth > 0) {
+      // Skip named arg labels (name: value)
+      if ((Current().Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(Current().Value))
+          && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.Colon) {
+        _pos += 2; // skip name and colon
+        continue;
+      }
+
+      var argType = InferArgTypeFromToken();
+      types.Add(argType);
+
+      // Skip to next comma at depth 1 or closing paren
+      SkipToNextArgBoundary(ref parenDepth);
+    }
+
+    _pos = savedPos;
+    return types;
+  }
+
+  private MlirType? InferArgTypeFromToken() {
+    if (_pos >= _tokens.Count) return null;
+    var token = Current();
+    return token.Type switch {
+      TokenType.IntegerLiteral => MlirType.I64,
+      TokenType.FloatLiteral => MlirType.F64,
+      TokenType.StringLiteral or TokenType.StringInterp =>
+        _typeRegistry.TryGetValue("String", out var strType) ? strType : null,
+      TokenType.CharacterLiteral =>
+        _typeRegistry.TryGetValue("Character", out var charType) ? charType : null,
+      TokenType.True or TokenType.False => MlirType.I1,
+      TokenType.LeftBracket => null, // collection — handled by legacy fallback
+      TokenType.LeftParen => null, // closure — handled by legacy fallback
+      TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.IntegerLiteral => MlirType.I64,
+      TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.FloatLiteral => MlirType.F64,
+      TokenType.Identifier => InferIdentifierType(token.Value),
+      _ => null
+    };
+  }
+
+  private MlirType? InferIdentifierType(string name) {
+    // Check if it's a known variable
+    if (_variables.TryGetValue(name, out var varInfo)) {
+      return varInfo.Kind switch {
+        MaxonValueKind.Integer => MlirType.I64,
+        MaxonValueKind.Float => MlirType.F64,
+        MaxonValueKind.Bool => MlirType.I1,
+        MaxonValueKind.Byte => MlirType.I8,
+        MaxonValueKind.Short => MlirType.I16,
+        MaxonValueKind.Struct => varInfo.StructTypeName != null && _typeRegistry.TryGetValue(varInfo.StructTypeName, out var st) ? st : null,
+        MaxonValueKind.Enum => varInfo.StructTypeName != null && _typeRegistry.TryGetValue(varInfo.StructTypeName, out var et) ? et : null,
+        MaxonValueKind.Function => varInfo.FnTypeName,
+        _ => null
+      };
+    }
+    return null;
+  }
+
+  private void SkipToNextArgBoundary(ref int parenDepth) {
+    while (_pos < _tokens.Count && parenDepth > 0) {
+      var t = Current().Type;
+      if (t == TokenType.LeftParen || t == TokenType.LeftBracket || t == TokenType.LeftBrace) parenDepth++;
+      if (t == TokenType.RightParen || t == TokenType.RightBracket || t == TokenType.RightBrace) {
+        parenDepth--;
+        if (parenDepth == 0) break;
+      }
+      if (t == TokenType.Comma && parenDepth == 1) {
+        _pos++; // skip the comma
+        return;
+      }
+      _pos++;
+    }
   }
 
   /// <summary>

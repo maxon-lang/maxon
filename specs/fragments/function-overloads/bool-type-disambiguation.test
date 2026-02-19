@@ -1,0 +1,62 @@
+// Test: bool-type-disambiguation
+typealias Integer = int(i64.min to i64.max)
+
+function check(value Integer) returns Integer
+  return value
+end 'check'
+
+function check(value bool) returns Integer
+  if value 'branch'
+    return 1
+  end 'branch' else 'other'
+    return 0
+  end 'other'
+end 'check'
+
+function main() returns ExitCode
+  return check(true)
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @function-overloads.check$value_i1(value: i1) -> i64 {
+  entry:
+    x86.test ecx, ecx
+    x86.je function-overloads.check$value_i1.other_1
+  branch_0:
+    x86.mov eax, 1
+    x86.ret
+  other_1:
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @function-overloads.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 1
+    x86.mov rcx, rax
+    x86.call function-overloads.check$value_i1
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je function-overloads.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

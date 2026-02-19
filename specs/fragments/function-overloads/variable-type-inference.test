@@ -1,0 +1,55 @@
+// Test: variable-type-inference
+typealias Integer = int(i64.min to i64.max)
+
+function process(value Integer) returns Integer
+  return value * 2
+end 'process'
+
+function process(value String) returns Integer
+  return value.count()
+end 'process'
+
+function main() returns ExitCode
+  let x = 21
+  return process(x)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @function-overloads.process$value_i64(value: i64) -> i64 {
+  entry:
+    x86.mov eax, 2
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.ret
+  }
+  func @function-overloads.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 21
+    x86.mov rcx, rax
+    x86.call function-overloads.process$value_i64
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je function-overloads.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_13]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

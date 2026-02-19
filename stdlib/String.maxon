@@ -11,11 +11,18 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     return {_managed: managed, _iterPos: 0}
   end 'init'
 
+  typealias Utf8Bytes = Array with Utf8Byte
+
   /// Create a String from a raw null-terminated C string pointer
-  export static function fromCString(cstr cstring) returns String
+  export static function from(cstr cstring) returns String
     var managed = __cstring_to_managed(cstr)
     return {_managed: managed, _iterPos: 0}
-  end 'fromCString'
+  end 'from'
+
+  /// Create a String from a byte array (zero-copy slice of the array's backing memory)
+  export static function from(bytes Utf8Bytes) returns String
+    return {_managed: bytes.managed, _iterPos: 0}
+  end 'from'
 
   export function byteLength() returns Count
     return __managed_memory_len(_managed)

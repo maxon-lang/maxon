@@ -1,0 +1,62 @@
+// Test: method-type-disambiguation
+typealias Integer = int(i64.min to i64.max)
+
+type Converter
+  function convert(value Integer) returns Integer
+    return value * 2
+  end 'convert'
+
+  function convert(value String) returns Integer
+    return value.count()
+  end 'convert'
+end 'Converter'
+
+function main() returns ExitCode
+  let c = Converter{}
+  return c.convert(21)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @Converter.convert$value_i64(__self_ptr: i64, value: i64) -> i64 {
+  entry:
+    x86.mov eax, 2
+    x86.imul edx, eax
+    x86.mov eax, edx
+    x86.ret
+  }
+  func @function-overloads.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 21
+    x86.mov edx, [rbp-8]
+    x86.xchg rdx, rcx
+    x86.call Converter.convert$value_i64
+    x86.mov [rbp-16], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je function-overloads.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_17]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

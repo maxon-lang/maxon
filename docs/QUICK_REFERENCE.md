@@ -109,6 +109,8 @@ greet("Smith", title: "Dr.")
 
 **Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `let _ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
+**Function overloads:** Multiple functions can share the same name if they differ by parameter types or parameter names. The compiler auto-selects by argument types when unambiguous. When signatures are identical, named arguments are required (E3007).
+
 ## Closures
 
 ```maxon

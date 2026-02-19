@@ -1,26 +1,17 @@
 // Test: element-size-in-grow
 function main() returns ExitCode
-  // Create a small byte buffer
-  var managed = __managed_memory_create(4, 1)
+  var arr = [0]
+  arr.push(10)
+  arr.push(20)
+  arr.push(30)
+  arr.push(40)
+  arr.push(50)
 
-  // Write initial bytes
-  __managed_memory_set_byte(managed, 0, 10)
-  __managed_memory_set_byte(managed, 1, 20)
-  __managed_memory_set_byte(managed, 2, 30)
-
-  // Grow the buffer (should allocate 8 bytes, not 64)
-  __managed_memory_grow(managed, 8)
-
-  // Write more bytes after grow
-  __managed_memory_set_byte(managed, 3, 40)
-  __managed_memory_set_byte(managed, 4, 50)
-
-  // Verify all bytes
-  var sum = __managed_memory_byte_at(managed, 0)
-  sum = sum + __managed_memory_byte_at(managed, 1)
-  sum = sum + __managed_memory_byte_at(managed, 2)
-  sum = sum + __managed_memory_byte_at(managed, 3)
-  sum = sum + __managed_memory_byte_at(managed, 4)
+  var sum = try arr.get(1) otherwise 0
+  sum = sum + (try arr.get(2) otherwise 0)
+  sum = sum + (try arr.get(3) otherwise 0)
+  sum = sum + (try arr.get(4) otherwise 0)
+  sum = sum + (try arr.get(5) otherwise 0)
 
   // 10 + 20 + 30 + 40 + 50 = 150
   return sum
@@ -31,295 +22,169 @@ ExitCode: 150
 module {
   func @managed-memory-element-size.main() -> u32 {
   entry:
-    x86.prologue stack_size=144
-    x86.mov eax, 4
+    x86.prologue stack_size=112
+    x86.xor eax, eax
     x86.mov ecx, 1
-    x86.mov edx, eax
-    x86.imul edx, ecx
-    x86.mov rcx, rdx
-    x86.call maxon_alloc
-    x86.mov ebx, 32
-    x86.mov [rbp-80], eax
-    x86.mov rcx, rbx
+    x86.xor edx, edx
+    x86.mov ebx, 8
+    x86.mov esi, 32
+    x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-8], eax
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-80]
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-8]
-    x86.mov r9, 4
-    x86.mov [r8+8], r9
-    x86.mov ecx, [rbp-8]
-    x86.mov [ecx+16], r9
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, 1
-    x86.mov [ecx+24], edx
-    x86.mov [rbp-16], eax
-    x86.xor eax, eax
-    x86.mov ecx, 10
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+24]
-    x86.mov edx, [rbp-16]
-    x86.mov esi, [edx+0]
-    x86.mov edx, [rbp-16]
-    x86.mov edi, [edx+16]
-    x86.mov edx, [rbp-16]
-    x86.mov r8, [edx+8]
-    x86.mov [rbp-24], r8
-    x86.mov [rbp-88], edi
-    x86.mov rcx, rsi
-    x86.mov rdx, rdi
-    x86.mov r9, rbx
-    x86.call maxon_cow_check
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-88]
-    x86.cmp ecx, eax
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.mov edx, [rbp-24]
-    x86.test eax, eax
-    x86.mov ebx, ecx
-    x86.cmovne ebx, edx
-    x86.mov eax, [rbp-16]
-    x86.mov [eax+16], ebx
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.xor eax, eax
-    x86.add ecx, eax
-    x86.mov eax, 10
-    x86.mov byte ptr [ecx+0], eaxb
+    x86.mov edi, [rbp-8]
+    x86.xor r8, r8
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-8]
     x86.mov eax, 1
-    x86.mov ecx, 20
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+24]
-    x86.mov edx, [rbp-16]
-    x86.mov esi, [edx+0]
-    x86.mov edx, [rbp-16]
-    x86.mov edi, [edx+16]
-    x86.mov edx, [rbp-16]
-    x86.mov r8, [edx+8]
-    x86.mov [rbp-32], r8
-    x86.mov [rbp-96], edi
-    x86.mov rcx, rsi
-    x86.mov rdx, rdi
-    x86.mov r9, rbx
-    x86.call maxon_cow_check
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-96]
-    x86.cmp ecx, eax
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.mov edx, [rbp-32]
-    x86.test eax, eax
-    x86.mov ebx, ecx
-    x86.cmovne ebx, edx
-    x86.mov eax, [rbp-16]
-    x86.mov [eax+16], ebx
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov eax, 1
-    x86.add ecx, eax
-    x86.mov eax, 20
-    x86.mov byte ptr [ecx+0], eaxb
-    x86.mov eax, 2
-    x86.mov ecx, 30
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+24]
-    x86.mov edx, [rbp-16]
-    x86.mov esi, [edx+0]
-    x86.mov edx, [rbp-16]
-    x86.mov edi, [edx+16]
-    x86.mov edx, [rbp-16]
-    x86.mov r8, [edx+8]
-    x86.mov [rbp-40], r8
-    x86.mov [rbp-104], edi
-    x86.mov rcx, rsi
-    x86.mov rdx, rdi
-    x86.mov r9, rbx
-    x86.call maxon_cow_check
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-104]
-    x86.cmp ecx, eax
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.mov edx, [rbp-40]
-    x86.test eax, eax
-    x86.mov ebx, ecx
-    x86.cmovne ebx, edx
-    x86.mov eax, [rbp-16]
-    x86.mov [eax+16], ebx
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov eax, 2
-    x86.add ecx, eax
-    x86.mov eax, 30
-    x86.mov byte ptr [ecx+0], eaxb
-    x86.mov eax, 8
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+24]
-    x86.mov ecx, [rbp-16]
-    x86.mov ebx, [ecx+0]
-    x86.mov ecx, [rbp-16]
-    x86.mov esi, [ecx+16]
-    x86.mov ecx, [rbp-16]
-    x86.mov edi, [ecx+8]
-    x86.mov [rbp-48], edi
-    x86.mov [rbp-112], edx
-    x86.mov [rbp-120], esi
-    x86.mov rcx, rbx
-    x86.mov r8, rdi
-    x86.mov r9, rdx
-    x86.mov rdx, rsi
-    x86.call maxon_cow_check
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-120]
-    x86.cmp ecx, eax
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.mov edx, [rbp-48]
-    x86.test eax, eax
-    x86.mov ebx, ecx
-    x86.cmovne ebx, edx
-    x86.mov eax, [rbp-16]
-    x86.mov [eax+16], ebx
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov eax, [rbp-112]
-    x86.mov edx, 8
-    x86.mov ebx, edx
-    x86.imul ebx, eax
-    x86.mov rdx, rbx
-    x86.call maxon_realloc
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, 8
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
     x86.mov [eax+16], ecx
-    x86.mov eax, 3
-    x86.mov ecx, 40
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+24]
-    x86.mov edx, [rbp-16]
-    x86.mov esi, [edx+0]
-    x86.mov edx, [rbp-16]
-    x86.mov edi, [edx+16]
-    x86.mov edx, [rbp-16]
-    x86.mov r8, [edx+8]
-    x86.mov [rbp-56], r8
-    x86.mov [rbp-128], edi
-    x86.mov rcx, rsi
-    x86.mov rdx, rdi
-    x86.mov r9, rbx
-    x86.call maxon_cow_check
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
     x86.xor eax, eax
-    x86.mov ecx, [rbp-128]
-    x86.cmp ecx, eax
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.mov edx, [rbp-56]
-    x86.test eax, eax
-    x86.mov ebx, ecx
-    x86.cmovne ebx, edx
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
     x86.mov eax, [rbp-16]
-    x86.mov [eax+16], ebx
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.lea_rdata rax, [__const_array_managed-memory-element-size.main_arr]
+    x86.mov rcx, rax
     x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov eax, 3
-    x86.add ecx, eax
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
+    x86.call IntArray.push
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
+    x86.call IntArray.push
+    x86.mov eax, 30
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
+    x86.call IntArray.push
     x86.mov eax, 40
-    x86.mov byte ptr [ecx+0], eaxb
-    x86.mov eax, 4
-    x86.mov ecx, 50
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+24]
-    x86.mov edx, [rbp-16]
-    x86.mov esi, [edx+0]
-    x86.mov edx, [rbp-16]
-    x86.mov edi, [edx+16]
-    x86.mov edx, [rbp-16]
-    x86.mov r8, [edx+8]
-    x86.mov [rbp-64], r8
-    x86.mov [rbp-136], edi
-    x86.mov rcx, rsi
-    x86.mov rdx, rdi
-    x86.mov r9, rbx
-    x86.call maxon_cow_check
     x86.mov ecx, [rbp-16]
-    x86.mov [ecx+0], eax
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-136]
-    x86.cmp ecx, eax
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.mov edx, [rbp-64]
-    x86.test eax, eax
-    x86.mov ebx, ecx
-    x86.cmovne ebx, edx
-    x86.mov eax, [rbp-16]
-    x86.mov [eax+16], ebx
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov eax, 4
-    x86.add ecx, eax
+    x86.mov rdx, rax
+    x86.call IntArray.push
     x86.mov eax, 50
-    x86.mov byte ptr [ecx+0], eaxb
-    x86.xor eax, eax
     x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+0]
-    x86.add edx, eax
-    x86.movzx eax, byte ptr [edx+0]
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+0]
-    x86.add ebx, ecx
-    x86.movzx ecx, byte ptr [ebx+0]
-    x86.add eax, ecx
+    x86.mov rdx, rax
+    x86.call IntArray.push
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
+    x86.call IntArray.get
+    x86.xor ecx, ecx
+    x86.mov [rbp-24], ecx
+    x86.mov [rbp-32], eax
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je managed-memory-element-size.main.otherwise_default_continue_4
+  otherwise_default_error_3:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.jmp managed-memory-element-size.main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
     x86.mov ecx, 2
     x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+0]
-    x86.add ebx, ecx
-    x86.movzx ecx, byte ptr [ebx+0]
-    x86.add eax, ecx
-    x86.mov ecx, 3
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+0]
-    x86.add ebx, ecx
-    x86.movzx ecx, byte ptr [ebx+0]
-    x86.add eax, ecx
-    x86.mov ecx, 4
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+0]
-    x86.add ebx, ecx
-    x86.movzx ecx, byte ptr [ebx+0]
-    x86.add eax, ecx
+    x86.xchg rdx, rcx
+    x86.call IntArray.get
+    x86.xor ebx, ebx
+    x86.mov [rbp-48], ebx
+    x86.mov [rbp-56], eax
+    x86.xor esi, esi
+    x86.cmp edx, esi
+    x86.je managed-memory-element-size.main.otherwise_default_continue_8
+  otherwise_default_error_7:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
+    x86.jmp managed-memory-element-size.main.otherwise_default_continue_8
+  otherwise_default_continue_8:
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-40]
+    x86.add ecx, eax
+    x86.mov [rbp-40], ecx
+    x86.mov edx, 3
+    x86.mov rcx, [rbp-16]
+    x86.call IntArray.get
+    x86.xor esi, esi
+    x86.mov [rbp-64], esi
     x86.mov [rbp-72], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl ecx
-    x86.movzx ecx, ecxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
-    x86.je managed-memory-element-size.main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_43]
+    x86.xor edi, edi
+    x86.cmp edx, edi
+    x86.je managed-memory-element-size.main.otherwise_default_continue_12
+  otherwise_default_error_11:
+    x86.mov eax, [rbp-64]
+    x86.mov [rbp-72], eax
+    x86.jmp managed-memory-element-size.main.otherwise_default_continue_12
+  otherwise_default_continue_12:
+    x86.mov eax, [rbp-72]
+    x86.mov ecx, [rbp-40]
+    x86.add ecx, eax
+    x86.mov [rbp-40], ecx
+    x86.mov edx, 4
+    x86.mov rcx, [rbp-16]
+    x86.call IntArray.get
+    x86.xor esi, esi
+    x86.mov [rbp-80], esi
+    x86.mov [rbp-88], eax
+    x86.xor edi, edi
+    x86.cmp edx, edi
+    x86.je managed-memory-element-size.main.otherwise_default_continue_16
+  otherwise_default_error_15:
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-88], eax
+    x86.jmp managed-memory-element-size.main.otherwise_default_continue_16
+  otherwise_default_continue_16:
+    x86.mov eax, [rbp-88]
+    x86.mov ecx, [rbp-40]
+    x86.add ecx, eax
+    x86.mov [rbp-40], ecx
+    x86.mov edx, 5
+    x86.mov rcx, [rbp-16]
+    x86.call IntArray.get
+    x86.xor esi, esi
+    x86.mov [rbp-96], esi
+    x86.mov [rbp-104], eax
+    x86.xor edi, edi
+    x86.cmp edx, edi
+    x86.je managed-memory-element-size.main.otherwise_default_continue_20
+  otherwise_default_error_19:
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-104], eax
+    x86.jmp managed-memory-element-size.main.otherwise_default_continue_20
+  otherwise_default_continue_20:
+    x86.mov eax, [rbp-104]
+    x86.mov ecx, [rbp-40]
+    x86.add ecx, eax
+    x86.mov [rbp-112], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je managed-memory-element-size.main.__range_ok_21
+  __range_panic_21:
+    x86.lea_symdata rax, [__panic_msg_76]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_0:
-    x86.mov eax, [rbp-72]
+  __range_ok_21:
+    x86.mov eax, [rbp-112]
     x86.epilogue
     x86.ret
   }

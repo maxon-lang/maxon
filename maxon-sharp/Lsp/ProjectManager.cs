@@ -8,24 +8,26 @@ public class ProjectManager(Action<DocumentUri, Container<Diagnostic>> publishDi
   private readonly ConcurrentDictionary<string, Project> _projects = new();
   private readonly Action<DocumentUri, Container<Diagnostic>> _publishDiagnostics = publishDiagnostics;
 
-  public Project GetOrCreateProject(string filePath) {
+  public Project GetOrCreateProject(string filePath, bool forceSingleFile = false) {
     // Check existing projects first
     var existing = FindProjectForFile(filePath);
     if (existing != null) return existing;
 
-    // Discover project root by walking up looking for build.maxon
-    var projectRoot = FindProjectRoot(filePath);
+    if (!forceSingleFile) {
+      // Discover project root by walking up looking for build.maxon
+      var projectRoot = FindProjectRoot(filePath);
 
-    if (projectRoot != null) {
-      var normalizedRoot = Project.NormalizePath(projectRoot);
-      return _projects.GetOrAdd(normalizedRoot, _ => {
-        var project = new Project(projectRoot, false, _publishDiagnostics);
-        project.LoadFilesFromDisk();
-        return project;
-      });
+      if (projectRoot != null) {
+        var normalizedRoot = Project.NormalizePath(projectRoot);
+        return _projects.GetOrAdd(normalizedRoot, _ => {
+          var project = new Project(projectRoot, false, _publishDiagnostics);
+          project.LoadFilesFromDisk();
+          return project;
+        });
+      }
     }
 
-    // No build.maxon found — single-file project
+    // No build.maxon found (or single-file forced) — single-file project
     var normalizedFile = Project.NormalizePath(filePath);
     return _projects.GetOrAdd(normalizedFile, _ =>
       new Project(filePath, true, _publishDiagnostics));

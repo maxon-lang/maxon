@@ -201,22 +201,20 @@ export function tokenize(source ByteArray) returns TokenArray
     logDebug(LogCategory.lexer, message: "Starting lexer")
 
     var tokens = TokenArray{}
-    var pos = 0
-    var line = 1
-    var column = 1
+    var s = LexerState{pos: 0, line: 1, column: 1}
     let len = source.count()
 
-    while pos < len 'scan'
-        let ch = try source.get(pos) otherwise 0
-        let startLine = line
-        let startCol = column
+    while s.pos < len 'scan'
+        let ch = try source.get(s.pos) otherwise 0
+        let startLine = s.line
+        let startCol = s.column
 
         // Look up character class
         let charClass = try charClassTable.get(ch) otherwise CC_OTHER
 
         // Consume the first character
-        pos = pos + 1
-        column = column + 1
+        s.pos = s.pos + 1
+        s.column = s.column + 1
 
         // Look up first transition from START
         var state = try transitionTable.get(S_START * NUM_CHAR_CLASSES + charClass) otherwise S_DONE_SKIP_OTHER
@@ -224,8 +222,8 @@ export function tokenize(source ByteArray) returns TokenArray
         // If we reached a live state (1-5), peek at the next character for a second transition
         if state >= 1 and state <= 5 'live'
             var nextClass = CC_EOF
-            if pos < len 'hasNext'
-                let nextCh = try source.get(pos) otherwise 0
+            if s.pos < len 'hasNext'
+                let nextCh = try source.get(s.pos) otherwise 0
                 nextClass = try charClassTable.get(nextCh) otherwise CC_OTHER
             end 'hasNext'
             state = try transitionTable.get(state * NUM_CHAR_CLASSES + nextClass) otherwise S_DONE_SKIP_OTHER
@@ -240,14 +238,14 @@ export function tokenize(source ByteArray) returns TokenArray
 
         if action == ACT_SKIP_CR 'doCr'
             // CR does not advance column
-            column = column - 1
+            s.column = s.column - 1
             continue
         end 'doCr'
 
         if action == ACT_NEWLINE 'doNewline'
             tokens.push({kind: TokenKind.newline, value: "", line: startLine, column: startCol})
-            line = line + 1
-            column = 1
+            s.line = s.line + 1
+            s.column = 1
             continue
         end 'doNewline'
 
@@ -257,68 +255,48 @@ export function tokenize(source ByteArray) returns TokenArray
         end 'doEmit'
 
         if action == ACT_EMIT_2 'doEmit2'
-            pos = pos + 1
-            column = column + 1
+            s.pos = s.pos + 1
+            s.column = s.column + 1
             emitFixedToken(state, tokens: tokens, line: startLine, column: startCol)
             continue
         end 'doEmit2'
 
         if action == ACT_ENTER_STR_SQ 'doSQ'
-            var st = LexerState{pos: pos, line: line, column: column}
-            scanSingleQuoteString(source, state: st, tokens: tokens, startLine: startLine, startCol: startCol)
-            pos = st.pos
-            line = st.line
-            column = st.column
+            scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
             continue
         end 'doSQ'
 
         if action == ACT_ENTER_STR_DQ 'doDQ'
-            var st2 = LexerState{pos: pos, line: line, column: column}
-            scanDoubleQuoteString(source, state: st2, tokens: tokens, startLine: startLine, startCol: startCol)
-            pos = st2.pos
-            line = st2.line
-            column = st2.column
+            scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
             continue
         end 'doDQ'
 
         if action == ACT_ENTER_NUMBER 'doNum'
             // Undo advance — scanNumber scans from the first digit
-            pos = pos - 1
-            column = column - 1
-            var st3 = LexerState{pos: pos, line: line, column: column}
-            scanNumber(source, state: st3, tokens: tokens, startLine: startLine, startCol: startCol)
-            pos = st3.pos
-            line = st3.line
-            column = st3.column
+            s.pos = s.pos - 1
+            s.column = s.column - 1
+            scanNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
             continue
         end 'doNum'
 
         if action == ACT_ENTER_IDENT 'doIdent'
             // Undo advance — scanIdentifier scans from the first alpha char
-            pos = pos - 1
-            column = column - 1
-            var st4 = LexerState{pos: pos, line: line, column: column}
-            scanIdentifier(source, state: st4, tokens: tokens, startLine: startLine, startCol: startCol)
-            pos = st4.pos
-            line = st4.line
-            column = st4.column
+            s.pos = s.pos - 1
+            s.column = s.column - 1
+            scanIdentifier(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
             continue
         end 'doIdent'
 
         if action == ACT_ENTER_COMMENT 'doComment'
             // Both '/' characters have been consumed (first by main loop, second needs consuming)
-            pos = pos + 1
-            column = column + 1
-            var st5 = LexerState{pos: pos, line: line, column: column}
-            scanComment(source, state: st5)
-            pos = st5.pos
-            line = st5.line
-            column = st5.column
+            s.pos = s.pos + 1
+            s.column = s.column + 1
+            scanComment(source, state: s)
             continue
         end 'doComment'
     end 'scan'
 
-    tokens.push({kind: TokenKind.eof, value: "", line: line, column: column})
+    tokens.push({kind: TokenKind.eof, value: "", line: s.line, column: s.column})
     logDebug(LogCategory.lexer, message: "Lexer complete: {tokens.count()} tokens")
     return tokens
 end 'tokenize'
@@ -451,16 +429,7 @@ function isAlphaNum(b Byte) returns bool
 end 'isAlphaNum'
 
 function sliceToString(source ByteArray, startPos CharOffset, endPos CharOffset) returns String
-    let sliceLen = endPos - startPos
-    var mem = __managed_memory_create(sliceLen, 1)
-    var i = 0
-    while i < sliceLen 'copy'
-        let ch = try source.get(startPos + i) otherwise 0
-        __managed_memory_set_byte(mem, i, ch)
-        i = i + 1
-    end 'copy'
-    __managed_memory_set_length(mem, sliceLen)
-    return {_managed: mem, _iterPos: 0}
+    return String.from(source.slice(startPos, endIndex: endPos))
 end 'sliceToString'
 
 export enum KeywordCategory
