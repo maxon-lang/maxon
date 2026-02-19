@@ -234,7 +234,7 @@ interface_method
 
 ```
 extension_block
-              = 'extension' IDENTIFIER [ where_clause ] NEWLINE
+              = 'extension' IDENTIFIER [ conformance_clause ] [ where_clause ] NEWLINE
                 { method_decl }
                 'end' LABEL
 ```

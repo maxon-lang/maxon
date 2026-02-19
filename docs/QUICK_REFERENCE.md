@@ -268,6 +268,12 @@ extension Iterable where Element is Equatable
     // only available when Element implements Equatable
   end 'contains'
 end 'Iterable'
+
+// Conditional conformance: add interface conformance when constraints are met
+extension Array implements Hashable, Equatable where Element is Hashable and Equatable
+  function hash() returns HashValue ... end 'hash'
+  function equals(other Self) returns bool ... end 'equals'
+end 'Array'
 ```
 
 ## Enums

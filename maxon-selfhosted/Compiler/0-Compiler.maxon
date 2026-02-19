@@ -23,7 +23,7 @@ export function compileProject(project Project) returns String throws CompileErr
             allMaxonOpsCache: MaxonOpsMemo{value: MaxonOpArray{}, computedAt: 0, verifiedAt: 0},
             allStdOpsCache: StdOpsMemo{value: StdOpArray{}, computedAt: 0, verifiedAt: 0},
             allX86OpsCache: X86OpsMemo{value: X86OpArray{}, computedAt: 0, verifiedAt: 0},
-            codeCache: CodeMemo{value: CodeResult{code: ByteBuffer.create(0), mainCallFixupOffset: 0, iatFixups: IatFixupArray{}}, computedAt: 0, verifiedAt: 0},
+            codeCache: CodeMemo{value: CodeResult{code: Utf8ByteBuffer.create(0), mainCallFixupOffset: 0, iatFixups: IatFixupArray{}}, computedAt: 0, verifiedAt: 0},
             dependencies: DependencyArray{},
             activeQueryStack: QueryKeyArray{},
             tokenHits: 0, tokenMisses: 0,
@@ -62,13 +62,18 @@ end 'fileChanged'
 
 // --- Source file loading ---
 
+// ByteBuffer (Array with Byte) and ByteArray (Array with Utf8Byte) share the same memory layout
+function bytesToByteArray(buf ByteBuffer) returns ByteArray
+    return {managed: buf.managed}
+end 'bytesToByteArray'
+
 function loadSourceFiles(project Project, path String) throws CompileError
     if File.exists(path) 'isFile'
         logTrace(LogCategory.compiler, message: "Loading single file: {path}")
         let bytes = try File.readBinary(path) otherwise 'readErr'
             throw CompileError.readError
         end 'readErr'
-        setSourceFile(project, path: path, content: bytes)
+        setSourceFile(project, path: path, content: bytesToByteArray(bytes))
     end 'isFile' else if Directory.exists(path) 'isDir'
         logTrace(LogCategory.compiler, message: "Loading directory: {path}")
         let dirEntries = try Directory.list(path) otherwise 'listErr'
@@ -82,7 +87,7 @@ function loadSourceFiles(project Project, path String) throws CompileError
                 let bytes = try File.readBinary(filePath) otherwise 'skip'
                     continue
                 end 'skip'
-                setSourceFile(project, path: filePath, content: bytes)
+                setSourceFile(project, path: filePath, content: bytesToByteArray(bytes))
             end 'isMaxon'
         end 'loop'
     end 'isDir' else 'notFound'

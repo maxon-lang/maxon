@@ -288,3 +288,36 @@ export extension Array where Element is Equatable
     return false
   end 'contains'
 end 'Array'
+
+// Conditional conformance: Array implements Hashable and Equatable when Element does
+// Uses raw byte-level hashing (djb2) over the managed memory buffer
+export extension Array implements Hashable, Equatable where Element is Hashable and Equatable
+  export function hash() returns HashValue
+    var byteLen = __managed_memory_len(managed) * __managed_memory_element_size(managed)
+    var h = 5381
+    var i = 0
+    while i < byteLen 'hash_loop'
+      var b = __managed_memory_byte_at(managed, i)
+      h = h * 33 + b
+      i = i + 1
+    end 'hash_loop'
+    return h and 0xFFFFFFFF
+  end 'hash'
+
+  export function equals(other Self) returns bool
+    var selfLen = __managed_memory_len(managed)
+    var otherLen = __managed_memory_len(other.managed)
+    if selfLen != otherLen 'len'
+      return false
+    end 'len'
+    var byteLen = selfLen * __managed_memory_element_size(managed)
+    var i = 0
+    while i < byteLen 'cmp'
+      if __managed_memory_byte_at(managed, i) != __managed_memory_byte_at(other.managed, i) 'ne'
+        return false
+      end 'ne'
+      i = i + 1
+    end 'cmp'
+    return true
+  end 'equals'
+end 'Array'

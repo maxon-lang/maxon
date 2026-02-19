@@ -17,6 +17,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 4. [Types (Composite)](#types-composite)
    - [Interface Extensions](#interface-extensions)
    - [Conditional Extensions](#conditional-extensions)
+   - [Conditional Interface Conformance](#conditional-interface-conformance)
 5. [Enums](#enums)
 6. [Variables](#variables)
 7. [Functions](#functions)
@@ -746,6 +747,30 @@ end 'Seq'
 ```
 
 In this example, all types conforming to `Seq` get `countItems()`, but only those whose `Element` implements `Equatable` get `includes()`.
+
+### Conditional Interface Conformance
+
+Extensions can add interface conformance conditionally using both `implements` and `where` clauses. When a concrete type alias satisfies the `where` constraints, the type gains the declared interface conformance.
+
+**Syntax:**
+
+```maxon
+extension Array implements Hashable, Equatable where Element is Hashable and Equatable
+  function hash() returns HashValue
+    // ...
+  end 'hash'
+
+  function equals(other Self) returns bool
+    // ...
+  end 'equals'
+end 'Array'
+```
+
+**Behavior:**
+
+When a concrete type alias is created (e.g., `typealias IntArr = Array with Integer`), the compiler checks whether the element type satisfies the `where` constraints. If `Integer` implements both `Hashable` and `Equatable`, then `IntArr` automatically conforms to `Hashable` and `Equatable`, enabling it to be used as a `Map` key or `Set` element.
+
+This applies both to explicit `typealias` declarations and to auto-generated type aliases created during monomorphization.
 
 ---
 

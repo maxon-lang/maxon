@@ -145,7 +145,7 @@ public static class MonomorphizationPass {
     return true;
   }
 
-  private static bool TypeConformsToInterface(string typeName, string interfaceName, MlirModule<MaxonOp> module) {
+  internal static bool TypeConformsToInterface(string typeName, string interfaceName, MlirModule<MaxonOp> module) {
     if (module.TypeDefs.TryGetValue(typeName, out var typeEntry)) {
       if (typeEntry is MlirStructType st && st.ConformingInterfaces.Contains(interfaceName))
         return true;

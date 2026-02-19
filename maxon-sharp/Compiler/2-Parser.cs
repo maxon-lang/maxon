@@ -86,6 +86,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly Dictionary<string, List<string>> _primitiveConformances = seedModule != null
     ? new(seedModule.PrimitiveConformances.Select(kv => new KeyValuePair<string, List<string>>(kv.Key, [.. kv.Value]))) : [];
 
+  // Conditional conformances from extension blocks on generic types
+  // e.g., "extension Array implements Hashable where Element is Hashable" -> ("Array", ["Hashable"], {"Element": ["Hashable"]})
+  private readonly List<(string SourceTypeName, List<string> Interfaces, Dictionary<string, List<string>> WhereConstraints)> _conditionalConformances = seedModule != null
+    ? [.. seedModule.ConditionalConformances] : [];
+
   // Tracks conditional extension methods skipped due to unsatisfied where-constraints
   // Key: "TypeName.methodName", Value: (paramName, requiredInterface, concreteTypeName)
   private readonly Dictionary<string, (string ParamName, string RequiredInterface, string ConcreteTypeName)> _skippedConditionalExtensions = [];
@@ -683,6 +688,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.InterfaceAssociatedTypes.TryAdd(name, assocTypes);
     foreach (var (name, interfaces) in _primitiveConformances)
       module.PrimitiveConformances[name] = [.. interfaces];
+    foreach (var cc in _conditionalConformances)
+      if (!module.ConditionalConformances.Any(e => e.SourceTypeName == cc.SourceTypeName
+          && e.Interfaces.SequenceEqual(cc.Interfaces)))
+        module.ConditionalConformances.Add(cc);
   }
 
   // ============================================================================
@@ -2083,10 +2092,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _parsingExtension = false;
     var interfaceName = interfaceNameToken.Value;
 
-    // Parse optional conformance clause for primitive type extensions
-    List<string> primitiveConformances = [];
-    if (interfaceName is "int" or "float" or "bool" or "byte" && Check(TokenType.Implements)) {
-      (primitiveConformances, _) = ParseConformanceClause();
+    // Parse optional conformance clause for extension blocks (primitives and generic struct types)
+    List<string> extensionConformances = [];
+    if (Check(TokenType.Implements)) {
+      (extensionConformances, _) = ParseConformanceClause();
     }
 
     // Parse optional where clause for conditional extensions
@@ -2138,12 +2147,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       processFunction(module, functionPositions, interfaceName);
       _parsingExtension = false;
       _currentTypeName = null;
-      if (primitiveConformances.Count > 0) {
-        validateConformance?.Invoke(module, interfaceName, primitiveConformances, interfaceNameToken);
+      if (extensionConformances.Count > 0) {
+        validateConformance?.Invoke(module, interfaceName, extensionConformances, interfaceNameToken);
         if (!_primitiveConformances.TryGetValue(interfaceName, out var existing))
-          _primitiveConformances[interfaceName] = [.. primitiveConformances];
+          _primitiveConformances[interfaceName] = [.. extensionConformances];
         else
-          existing.AddRange(primitiveConformances.Where(c => !existing.Contains(c)));
+          existing.AddRange(extensionConformances.Where(c => !existing.Contains(c)));
       }
       _pos = endPos;
       return;
@@ -2176,6 +2185,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       TagAndCleanupConditionalExtension(
         module, funcCountBefore, extensionWhereConstraints, targetStruct, addedConstraints);
+
+      // Record conditional conformances for later application to concrete type aliases
+      if (extensionConformances.Count > 0 && extensionWhereConstraints.Count > 0) {
+        _conditionalConformances.Add((interfaceName, [.. extensionConformances], new(extensionWhereConstraints)));
+      }
 
       RemoveAssociatedTypePlaceholders(registeredParams);
       _currentTypeName = null;
@@ -2355,8 +2369,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private bool HasCircularTypeAlias(string name, HashSet<string> visited) {
     if (!visited.Add(name)) return true;
-    if (!_typeRegistry.TryGetValue(name, out var type)) return false;
-    if (type is not MlirStructType st) return false;
+    if (!_typeRegistry.TryGetValue(name, out var type)) { visited.Remove(name); return false; }
+    if (type is not MlirStructType st) { visited.Remove(name); return false; }
     foreach (var (_, paramType) in st.TypeParams) {
       if (IsTypeAlias(paramType.Name) && HasCircularTypeAlias(paramType.Name, visited))
         return true;
@@ -2559,6 +2573,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
       constParams: constParams,
       typeParams: substitution.Count > 0 ? substitution : null);
+
+    // Apply conditional conformances from extension blocks (e.g., Array implements Hashable where Element is Hashable)
+    var newStruct = (MlirStructType)_typeRegistry[aliasName];
+    foreach (var (sourceType, interfaces, whereConstraints) in _conditionalConformances) {
+      if (sourceType != sourceName) continue;
+      if (TypeSatisfiesWhereConstraints(newStruct, whereConstraints)) {
+        foreach (var iface in interfaces)
+          if (!newStruct.ConformingInterfaces.Contains(iface))
+            newStruct.ConformingInterfaces.Add(iface);
+      }
+    }
+
     Logger.Debug(LogCategory.Parser, $"Registering type alias: {aliasName} -> {sourceName}");
     _typeAliasSources[aliasName] = sourceName;
   }
@@ -4979,6 +5005,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var managed = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
         var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["__managed_memory_element_size"] = new(
+      "Returns the element size (in bytes) of a managed memory buffer.\n\n`__managed_memory_element_size(memory) returns int`",
+      p => {
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "element_size", MaxonValueKind.Integer);
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
@@ -9355,6 +9390,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // No exact matches - try suffix matches
     if (suffixMatches.Count == 0) {
+      // Try alias fallback: ByteArray.equals → Array.equals
+      var dotIdx = functionName.IndexOf('.');
+      if (dotIdx > 0) {
+        var typePart = functionName[..dotIdx];
+        var methodPart = functionName[(dotIdx + 1)..];
+        if (_typeAliasSources.TryGetValue(typePart, out var sourceType)) {
+          var aliasedName = $"{sourceType}.{methodPart}";
+          var aliased = ResolveMethodName(aliasedName);
+          if (aliased != null) {
+            var match = _currentModule!.Functions.FirstOrDefault(f => f.Name == aliased);
+            if (match != null) return match;
+          }
+        }
+      }
       // Check if there's a non-visible match to give a better error message
       var hiddenExact = _currentModule!.Functions.FirstOrDefault(f => f.Name == functionName && !IsFunctionVisible(f));
       var hiddenSuffix = _currentModule!.Functions.FirstOrDefault(f => f.Name.EndsWith(suffixPattern) && !IsFunctionVisible(f));
@@ -9591,9 +9640,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       TokenType.LeftParen => null, // closure — handled by legacy fallback
       TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.IntegerLiteral => MlirType.I64,
       TokenType.Minus when _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.FloatLiteral => MlirType.F64,
-      TokenType.Identifier => InferIdentifierType(token.Value),
+      TokenType.Identifier => InferIdentifierArgType(token.Value),
       _ => null
     };
+  }
+
+  /// Infer the type of an identifier-starting argument, including dotted field access (e.g., nameToken.value).
+  private MlirType? InferIdentifierArgType(string name) {
+    // Check for dotted field access: identifier.field
+    if (_pos + 2 < _tokens.Count
+        && _tokens[_pos + 1].Type == TokenType.Dot
+        && _tokens[_pos + 2].Type == TokenType.Identifier) {
+      var baseType = InferIdentifierType(name);
+      if (baseType is MlirStructType st) {
+        var fieldName = _tokens[_pos + 2].Value;
+        var field = st.Fields.FirstOrDefault(f => f.Name == fieldName);
+        if (field != null) return field.Type;
+      }
+    }
+    return InferIdentifierType(name);
   }
 
   private MlirType? InferIdentifierType(string name) {

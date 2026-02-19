@@ -41,6 +41,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Primitive type conformances from extension blocks (e.g., "int" -> ["Hashable", "Equatable"])
   public Dictionary<string, List<string>> PrimitiveConformances { get; } = [];
 
+  // Conditional conformances from extension blocks on generic types
+  // e.g., "extension Array implements Hashable where Element is Hashable"
+  public List<(string SourceTypeName, List<string> Interfaces, Dictionary<string, List<string>> WhereConstraints)> ConditionalConformances { get; } = [];
+
   // Deferred global var/let initializations from all source files, emitted at start of main()
   public List<DeferredGlobalInit> DeferredGlobalInits { get; } = [];
 
@@ -75,6 +79,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in ConstantArrayLiterals) clone.ConstantArrayLiterals[k] = v;
     foreach (var (k, v) in InterfaceAssociatedTypes) clone.InterfaceAssociatedTypes[k] = v;
     foreach (var (k, v) in PrimitiveConformances) clone.PrimitiveConformances[k] = [.. v];
+    clone.ConditionalConformances.AddRange(ConditionalConformances);
     clone.DeferredGlobalInits.AddRange(DeferredGlobalInits);
     foreach (var n in NonExportedTypeNames) clone.NonExportedTypeNames.Add(n);
     foreach (var (k, v) in GlobalVarInfos) clone.GlobalVarInfos[k] = v;

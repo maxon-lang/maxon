@@ -155,6 +155,27 @@ internal class TypeSubstitution {
     var newType = new MlirStructType(autoAliasName, concreteFields,
       conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
       typeParams: resolvedParams);
+
+    // Apply conditional conformances from extension blocks
+    foreach (var (ccSourceType, interfaces, whereConstraints) in module.ConditionalConformances) {
+      if (ccSourceType != sourceTypeName) continue;
+      bool satisfied = true;
+      foreach (var (paramName, requiredInterfaces) in whereConstraints) {
+        if (!resolvedParams.TryGetValue(paramName, out var ccConcreteType)) { satisfied = false; break; }
+        if (ccConcreteType is MlirTypeParameterType) { satisfied = false; break; }
+        var concreteTypeName = MlirType.FormatAsSourceName(ccConcreteType);
+        foreach (var iface in requiredInterfaces) {
+          if (!MonomorphizationPass.TypeConformsToInterface(concreteTypeName, iface, module)) { satisfied = false; break; }
+        }
+        if (!satisfied) break;
+      }
+      if (satisfied) {
+        foreach (var iface in interfaces)
+          if (!newType.ConformingInterfaces.Contains(iface))
+            newType.ConformingInterfaces.Add(iface);
+      }
+    }
+
     module.TypeDefs[autoAliasName] = newType;
     module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
     return newType;

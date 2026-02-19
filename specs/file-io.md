@@ -243,14 +243,12 @@ File not found
 <!-- test: write-and-read-binary -->
 ```maxon
 
-typealias ByteArray = Array with Utf8Byte
-
 function main() returns ExitCode
   // Create a byte array with known values
-  var data = ByteArray{}
-  data.push(65 as Utf8Byte)
-  data.push(66 as Utf8Byte)
-  data.push(67 as Utf8Byte)
+  var data = ByteBuffer{}
+  data.push(65 as Byte)
+  data.push(66 as Byte)
+  data.push(67 as Byte)
 
   // Write binary file
   try File.writeBinary("test_binary.bin", content: data) otherwise 'write_err'
@@ -280,7 +278,7 @@ function main() returns ExitCode
     return 10
   end 'e0'
 
-  if b0 != 65 as Utf8Byte 'check0'
+  if b0 != 65 as Byte 'check0'
     print("Wrong value")
     return 20
   end 'check0'

@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Implement a new language feature in the Maxon compiler using spec-driven development
+description: Conduct a code review of the recent changes in the project, ensuring code quality and consistency.
 ---
 
 Review the changes that have been made in the project.

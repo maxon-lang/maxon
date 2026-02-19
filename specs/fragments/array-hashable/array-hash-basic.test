@@ -1,0 +1,69 @@
+// Test: array-hash-basic
+function main() returns ExitCode
+  var arr = [10, 20, 30]
+  var h = arr.hash()
+  if h != 0 'nonzero'
+    return 1
+  end 'nonzero'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @array-hashable.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov ecx, 3
+    x86.xor edx, edx
+    x86.mov ebx, 8
+    x86.mov esi, 32
+    x86.mov rcx, rsi
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edi, [rbp-8]
+    x86.xor r8, r8
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-8]
+    x86.mov eax, 3
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.lea_rdata rax, [__const_array_array-hashable.main_arr]
+    x86.mov rcx, rax
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call stdlib.Array.hash
+    x86.mov ecx, eax
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.je array-hashable.main.nonzero_1.after
+  nonzero_1:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  nonzero_1.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---
