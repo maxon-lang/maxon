@@ -14,6 +14,9 @@ public class MlirPipeline {
 
     StringBuilder? irBuilder = returnIr ? new() : null;
 
+    // Purity analysis (before semantic checks which validate discarded results)
+    PurityAnalysisPass.Run(module);
+
     // Semantic checks
     SemanticCheckPass.Run(module);
 

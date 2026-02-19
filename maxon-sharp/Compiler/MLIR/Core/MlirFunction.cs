@@ -16,4 +16,6 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   // When set, monomorphization should skip cloning this method for concrete types
   // whose associated type bindings don't satisfy these constraints.
   public Dictionary<string, List<string>>? ExtensionWhereConstraints { get; set; }
+  // Purity: true if the function has no side effects (set by PurityAnalysisPass)
+  public bool IsPure { get; set; } = true;
 }

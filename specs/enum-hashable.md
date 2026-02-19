@@ -206,7 +206,7 @@ function main() returns ExitCode
   var m = ColorMap{}
   m.insert(Color.red, value: 10)
   m.insert(Color.green, value: 20)
-  m.remove(Color.red)
+  let _ = m.remove(Color.red)
   if m.contains(Color.red) 'check'
     return 1
   end 'check'

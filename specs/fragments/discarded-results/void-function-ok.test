@@ -1,0 +1,25 @@
+// Test: void-function-ok
+
+function doNothing()
+end 'doNothing'
+
+function main() returns ExitCode
+  doNothing()
+  return 0
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @discarded-results.doNothing() {
+  entry:
+    x86.ret
+  }
+  func @discarded-results.main() -> u32 {
+  entry:
+    x86.call discarded-results.doNothing
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

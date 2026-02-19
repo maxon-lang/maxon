@@ -91,7 +91,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, int)
 
 function main() returns ExitCode
-    var _m = MyKeyMap{}
+    let _ = MyKeyMap{}
     return 1
 end 'main'
 ```

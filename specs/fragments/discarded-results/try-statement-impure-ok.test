@@ -1,0 +1,44 @@
+// Test: try-statement-impure-ok
+
+typealias Integer = int(i64.min to i64.max)
+
+var counter = 0 as Integer
+
+enum MyError implements Error
+  failed
+end 'MyError'
+
+function doWork() returns Integer throws MyError
+  counter = counter + 1
+  throw MyError.failed
+end 'doWork'
+
+function main() returns ExitCode
+  try doWork() otherwise ignore
+  return 0
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @discarded-results.doWork() -> i64 {
+  entry:
+    x86.mov eax, qword [rip+counter]
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov qword [rip+counter], eax
+    x86.xor edx, edx
+    x86.mov ebx, 1
+    x86.add edx, ebx
+    x86.xor eax, eax
+    x86.ret
+  }
+  func @discarded-results.main() -> u32 {
+  entry:
+    x86.call discarded-results.doWork
+    x86.xor ecx, ecx
+    x86.mov eax, ecx
+    x86.ret
+  }
+}
+---

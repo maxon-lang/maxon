@@ -348,6 +348,12 @@ public class MaxonCallOp : MaxonOp {
   public List<bool>? ArgMutabilities { get; set; }
   // The variable name each argument came from (null for literals/expressions)
   public List<string?>? ArgVarNames { get; set; }
+  // Set when a call appears as a statement with its result unused
+  public bool IsDiscardedResult { get; set; }
+  // Set when a call result is explicitly discarded via `let _ = func()`
+  public bool IsLetDiscardResult { get; set; }
+  public int? CallLine { get; set; }
+  public int? CallColumn { get; set; }
 
   public MaxonCallOp(string callee, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
     Callee = callee;

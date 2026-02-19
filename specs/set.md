@@ -184,7 +184,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = Set from [1, 2, 3]
-  s.remove(2)
+  let _ = s.remove(2)
   if s.contains(2) 'check'
     return 1
   end 'check'
@@ -229,7 +229,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = Set from [1, 2, 3]
-  s.remove(2)
+  let _ = s.remove(2)
   s.insert(2)
   if s.contains(2) 'check'
     return s.count()

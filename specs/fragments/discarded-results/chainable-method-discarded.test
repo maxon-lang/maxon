@@ -1,0 +1,73 @@
+// Test: chainable-method-discarded
+
+typealias Count = int(i64.min to i64.max)
+
+type Counter
+  export var value Count
+
+  function increment() returns Counter
+    value = value + 1
+    return self
+  end 'increment'
+end 'Counter'
+
+function main() returns ExitCode
+  var c = Counter{value: 0}
+  c.increment()
+  return c.value
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Counter.increment(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, 1
+    x86.add edx, eax
+    x86.mov eax, [rbp-8]
+    x86.mov [eax+0], edx
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @discarded-results.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.xor ebx, ebx
+    x86.mov [edx+0], ebx
+    x86.mov rcx, [rbp-8]
+    x86.call Counter.increment
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [edi+0]
+    x86.mov [rbp-16], r8
+    x86.xor r9, r9
+    x86.cmp r8, r9
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp r8, rdx
+    x86.setg edx
+    x86.movzx edx, edxb
+    x86.or ecx, edx
+    x86.test ecx, ecx
+    x86.je discarded-results.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_15]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

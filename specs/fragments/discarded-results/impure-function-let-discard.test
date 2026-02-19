@@ -1,0 +1,37 @@
+// Test: impure-function-let-discard
+
+typealias Integer = int(i64.min to i64.max)
+
+var counter = 0 as Integer
+
+function incrementAndGet() returns Integer
+  counter = counter + 1
+  return counter
+end 'incrementAndGet'
+
+function main() returns ExitCode
+  let _ = incrementAndGet()
+  return 0
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @discarded-results.incrementAndGet() -> i64 {
+  entry:
+    x86.mov eax, qword [rip+counter]
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov qword [rip+counter], eax
+    x86.mov eax, qword [rip+counter]
+    x86.ret
+  }
+  func @discarded-results.main() -> u32 {
+  entry:
+    x86.call discarded-results.incrementAndGet
+    x86.xor ecx, ecx
+    x86.mov eax, ecx
+    x86.ret
+  }
+}
+---

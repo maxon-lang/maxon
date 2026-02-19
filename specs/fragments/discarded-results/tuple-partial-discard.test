@@ -1,0 +1,65 @@
+// Test: tuple-partial-discard
+
+typealias Small = int(0 to 100)
+
+function makePair() returns (Small, Small)
+  return (10, 20)
+end 'makePair'
+
+function main() returns ExitCode
+  var (a, _) = makePair()
+  return a
+end 'main'
+---
+ExitCode: 10
+---
+module {
+  func @discarded-results.makePair() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 10
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 20
+    x86.mov [edi+8], r8
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @discarded-results.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call discarded-results.makePair
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-16], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je discarded-results.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

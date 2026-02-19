@@ -243,7 +243,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
-  m.remove(2)
+  let _ = m.remove(2)
   if m.contains(2) 'check'
     return 1
   end 'check'
@@ -297,7 +297,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var m = [1: 10, 2: 20, 3: 30]
-  m.remove(2)
+  let _ = m.remove(2)
   m.insert(2, value: 200)
   var result = try m.get(2) otherwise 0
   return result
@@ -595,7 +595,7 @@ Cleanups:  20
 ```maxon
 function main() returns ExitCode
   var m = ["alpha": 1, "beta": 2, "gamma": 3]
-  m.remove("beta")
+  let _ = m.remove("beta")
   if m.contains("beta") 'check'
     return 1
   end 'check'

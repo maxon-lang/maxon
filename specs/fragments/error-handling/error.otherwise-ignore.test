@@ -7,7 +7,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail() returns Integer throws MyError
+  counter = counter + 1
   throw MyError.failed
 end 'mayFail'
 
@@ -21,10 +24,13 @@ ExitCode: 42
 module {
   func @error-handling.mayFail() -> i64 {
   entry:
-    x86.xor eax, eax
+    x86.mov eax, qword [rip+counter]
     x86.mov ecx, 1
     x86.add eax, ecx
-    x86.mov edx, eax
+    x86.mov qword [rip+counter], eax
+    x86.xor edx, edx
+    x86.mov ebx, 1
+    x86.add edx, ebx
     x86.xor eax, eax
     x86.ret
   }

@@ -9,7 +9,10 @@ enum MyError implements Error
   notFound
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail(code Integer) returns Integer throws MyError
+  counter = counter + 1
   if code == 1 'c1'
     throw MyError.failed
   end 'c1'
@@ -38,6 +41,10 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
+    x86.mov eax, qword [rip+counter]
+    x86.mov edx, 1
+    x86.add eax, edx
+    x86.mov qword [rip+counter], eax
     x86.mov eax, 1
     x86.cmp ecx, eax
     x86.jne error-handling.mayFail.c1_0.after
@@ -131,7 +138,7 @@ module {
     x86.test edx, edx
     x86.je error-handling.main.__range_ok_5
   __range_panic_5:
-    x86.lea_symdata rax, [__panic_msg_47]
+    x86.lea_symdata rax, [__panic_msg_50]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:

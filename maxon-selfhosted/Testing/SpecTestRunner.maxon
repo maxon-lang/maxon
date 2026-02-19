@@ -2,7 +2,7 @@
 // Parses spec files and compiles tests using the self-hosted compiler.
 
 // Whitelisted specs to run (only specs the self-hosted compiler cares about)
-var specWhitelist = ["selfhosted-basics", "basics"]
+var specWhitelist = ["basics", "print-function"]
 
 // Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
 function trimWhitespace(s String) returns String
@@ -110,6 +110,8 @@ type TestExpectation
   export var hasStdout bool
   export var stderr String
   export var hasStderr bool
+  export var runtimeStderr String
+  export var hasRuntimeStderr bool
 end 'TestExpectation'
 
 type SpecTest
@@ -178,7 +180,7 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
 
     // Look for test markers: <!-- test: name -->
     if line.contains("<!-- test:") 'isTestMarker'
-      let markerStart = try line.findFirst("<!-- test:") otherwise 'skipMarker'
+      try line.findFirst("<!-- test:") otherwise 'skipMarker'
         i = i + 1
         continue
       end 'skipMarker'
@@ -259,6 +261,15 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
           i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
           continue
         end 'isMaxon'
+
+        if blockLine.startsWith("```stderr") 'isRuntimeStderr'
+          i = i + 1
+          let runtimeStderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.runtimeStderr = runtimeStderrBlock
+          expectation.hasRuntimeStderr = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isRuntimeStderr'
 
         if blockLine.startsWith("```exitcode") 'isExitCode'
           i = i + 1
@@ -477,6 +488,20 @@ function runSingleTest(test SpecTest, projectRoot String) returns bool
       passed = false
     end 'stdoutMismatch'
   end 'checkStdout'
+
+  // Check runtime stderr
+  if test.expectation.hasRuntimeStderr 'checkStderr'
+    let expectedErr = trimWhitespace(test.expectation.runtimeStderr)
+    let actualErr = trimWhitespace(runStderr)
+    if actualErr != expectedErr 'stderrMismatch'
+      if passed 'firstFailStderr'
+        logError(LogCategory.testing, message: "[FAIL] {test.name}")
+      end 'firstFailStderr'
+      logError(LogCategory.testing, message: "  Expected stderr: {expectedErr}")
+      logError(LogCategory.testing, message: "  Actual stderr:   {actualErr}")
+      passed = false
+    end 'stderrMismatch'
+  end 'checkStderr'
 
   if passed 'didPass'
     logDebug(LogCategory.testing, message: "[PASS] {test.name}")

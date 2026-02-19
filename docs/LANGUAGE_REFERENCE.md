@@ -22,6 +22,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 7. [Functions](#functions)
    - [Parameter Passing](#parameter-passing)
    - [Closures](#closures)
+   - [Function Purity and Discarded Results](#function-purity-and-discarded-results)
 8. [Expressions](#expressions)
 9. [Statements](#statements)
 10. [Error Handling](#error-handling)
@@ -1005,7 +1006,7 @@ let name = "Maxon"
 - Scope is block-scoped
 - Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
 - All variables must be used; unused variables cause a compile error (E3012)
-- Prefix a variable name with `_` to suppress the unused variable error
+- The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks.
 
 ### Top-Level Variables
 
@@ -1232,6 +1233,87 @@ end 'main'
 - Closure parameters may optionally omit the type annotation when the type can be inferred from context.
 - Closures can only appear where a function-type value is expected.
 - Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
+
+### Function Purity and Discarded Results
+
+Maxon requires function return values to be used. The compiler infers whether each function is **pure** or **impure** and enforces different rules for discarding results.
+
+#### Pure vs Impure Functions
+
+A function is **pure** if it has no side effects: it does not write to stdout/stderr, does not modify global state, does not mutate parameters, and only calls other pure functions. Purity is inferred automatically by the compiler -- there is no annotation.
+
+A function is **impure** if it performs any side effect, either directly or by calling another impure function. Examples of impure operations include:
+- Writing to stdout or stderr (e.g., `print`)
+- Modifying global or static variables
+- Mutating parameters
+- Calling runtime functions
+- Calling other impure functions (transitively)
+
+Functions with no return type are always considered impure (their result cannot be discarded because there is no result).
+
+#### Discarding Pure Function Results
+
+Pure function results **must** be used -- they cannot be discarded, even with `let _ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
+
+```maxon
+function double(x int) returns int
+    return x * 2
+end 'double'
+
+double(5)               // Error E3064: result of pure function 'double' must be used
+let _ = double(5)       // Error E3064: result of pure function 'double' must be used
+let result = double(5)  // OK: result is used
+```
+
+#### Discarding Impure Function Results
+
+Impure function results **must** be explicitly acknowledged. A bare statement-level call that ignores the result is an error. To intentionally discard the result, use `let _ =`:
+
+```maxon
+var counter = 0
+function incrementAndGet() returns int
+    counter = counter + 1
+    return counter
+end 'incrementAndGet'
+
+incrementAndGet()               // Error E3065: result of 'incrementAndGet' is not used
+let _ = incrementAndGet()       // OK: explicitly discarded
+let count = incrementAndGet()   // OK: result is used
+```
+
+#### Chainable Methods
+
+Methods that take `self` as their first parameter and return the same type are **chainable**. Their results can be freely discarded without `let _ =`, since the common pattern is to call them for their side effect on the receiver:
+
+```maxon
+type Counter
+    var value int
+
+    function increment() returns Counter
+        value = value + 1
+        return self
+    end 'increment'
+end 'Counter'
+
+var c = Counter{value: 0}
+c.increment()  // OK: chainable method, result can be discarded
+```
+
+#### Discarding Tuple Elements
+
+When destructuring a tuple, individual elements can be discarded with `_`. If the function is pure, at least one element must be used:
+
+```maxon
+var (result, _) = pureFunc()   // OK: one element used
+var (_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
+```
+
+#### Error Codes
+
+| Code | Meaning |
+|------|---------|
+| E3064 | Result of a pure function must be used (cannot be discarded) |
+| E3065 | Result of an impure function is not used (assign to `_` to discard) |
 
 ### Extern Functions
 

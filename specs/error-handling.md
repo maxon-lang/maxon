@@ -297,7 +297,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail() returns Integer throws MyError
+  counter = counter + 1
   throw MyError.failed
 end 'mayFail'
 
@@ -320,7 +323,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail() returns Integer throws MyError
+  counter = counter + 1
   throw MyError.failed
 end 'mayFail'
 
@@ -346,7 +352,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail(shouldFail bool) returns Integer throws MyError
+  counter = counter + 1
   if shouldFail 'check'
     throw MyError.failed
   end 'check'
@@ -375,7 +384,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail() returns Integer throws MyError
+  counter = counter + 1
   throw MyError.failed
 end 'mayFail'
 
@@ -571,7 +583,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail() returns Integer throws MyError
+  counter = counter + 1
   throw MyError.failed
 end 'mayFail'
 
@@ -601,7 +616,10 @@ enum MyError implements Error
   notFound
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail(code Integer) returns Integer throws MyError
+  counter = counter + 1
   if code == 1 'c1'
     throw MyError.failed
   end 'c1'
@@ -637,7 +655,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail(shouldFail bool) returns Integer throws MyError
+  counter = counter + 1
   if shouldFail 'check'
     throw MyError.failed
   end 'check'
@@ -667,7 +688,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail() returns Integer throws MyError
+  counter = counter + 1
   throw MyError.notFound(404)
 end 'mayFail'
 
@@ -697,7 +721,10 @@ enum MyError implements Error
   failed
 end 'MyError'
 
+var counter = 0 as Integer
+
 function mayFail() returns Integer throws MyError
+  counter = counter + 1
   throw MyError.notFound(42)
 end 'mayFail'
 

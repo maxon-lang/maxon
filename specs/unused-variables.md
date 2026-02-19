@@ -23,13 +23,13 @@ end 'main'
 error E3012: specs/fragments/unused-variables/docs-example-1.test:3:7: unused variable: 'x'
 ```
 
-### Suppressing the Error
+### Discarding Values
 
-Prefix the variable name with `_` to indicate it is intentionally unused:
+Use `_` as the variable name to discard a value:
 
 ```maxon
 function main() returns ExitCode
-  var _x = 42  // OK: underscore prefix suppresses
+  let _ = 42  // OK: underscore discards
   return 0
 end 'main'
 ```
@@ -84,11 +84,11 @@ end 'main'
 10
 ```
 
-<!-- test: underscore-suppression -->
+<!-- test: underscore-discard -->
 ```maxon
 
 function main() returns ExitCode
-  var _x = 42
+  let _ = 42
   return 0
 end 'main'
 ```

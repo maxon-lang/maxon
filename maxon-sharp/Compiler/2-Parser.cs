@@ -33,6 +33,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Stack<MatchContext> _matchStack = new();
   private bool _inTryContext;
+  private MaxonCallOp? _lastExprCallOp;
   private bool _parsingTypeAliasRhs;
   private bool _parsingExtension;
   private bool _skipWhereValidation;
@@ -3571,7 +3572,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private void EmitParameters(List<string> paramNames, List<MlirType> paramTypes, List<Token> paramTokens, int paramOffset = 0) {
     for (int i = 0; i < paramNames.Count; i++) {
-      if (!paramNames[i].StartsWith('_')) {
+      if (paramNames[i] != "_") {
         _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
       }
       var paramType = paramTypes[i];
@@ -3614,12 +3615,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
-    // Check for unused local variables (skip stdlib)
-    if (!_isStdlib) {
-      foreach (var (varName, varLine, varCol) in _localVarLocations) {
-        if (!_referencedVars.Contains(varName)) {
-          throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{varName}'", varLine, varCol);
-        }
+    // Check for unused local variables
+    foreach (var (varName, varLine, varCol) in _localVarLocations) {
+      if (!_referencedVars.Contains(varName)) {
+        throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{varName}'", varLine, varCol);
       }
     }
 
@@ -4155,7 +4154,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Advance(); // consume '('
         var qualifiedToken = new Token(TokenType.Identifier, resolvedName, fieldToken.Line, fieldToken.Column);
         var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, currentValue);
-        CreateFunctionCall(qualifiedToken, args, callee);
+        var callOp = CreateFunctionCall(qualifiedToken, args, callee);
+        MarkDiscardedResult(callOp, fieldToken);
         return;
       }
 
@@ -4190,7 +4190,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var structVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
       var qualifiedToken = new Token(TokenType.Identifier, resolvedName, selfToken.Line, selfToken.Column);
       var (allArgs, selfCallee) = ParseInstanceMethodCallArgs(qualifiedToken, structVal);
-      CreateFunctionCall(qualifiedToken, allArgs, selfCallee);
+      var callOp = CreateFunctionCall(qualifiedToken, allArgs, selfCallee);
+      MarkDiscardedResult(callOp, fieldToken);
     } else {
       throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"Expected '=' or '(' after 'self.{fieldToken.Value}'", fieldToken.Line, fieldToken.Column);
     }
@@ -4308,6 +4309,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private void ParseTryStatement() {
     var tryToken = Advance(); // consume 'try'
+    _lastExprCallOp = null;
     ParseTryExpression(tryToken, isStatementContext: true);
   }
 
@@ -4343,6 +4345,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ArgVarNames = callOp.ArgVarNames
     };
     _currentBlock!.AddOp(tryCallOp);
+    _lastExprCallOp = tryCallOp;
 
     // Void-returning functions can't be used as values in assignments
     if (!isStatementContext && tryCallOp.Result == null) {
@@ -4600,26 +4603,36 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
-    if (!name.StartsWith('_')) {
+    var isDiscard = name == "_";
+    if (!isDiscard) {
       _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
     }
     Expect(TokenType.Equals);
+    _lastExprCallOp = null;
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
+
+    // Mark the underlying call as let-discarded for purity checking
+    if (isDiscard) {
+      MarkLetDiscardResult(nameToken);
+    }
 
     if (initValue is MaxonStruct structVal) {
       var kind = MaxonValueKind.Struct;
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, structVal.TypeName);
+      if (!isDiscard)
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, structVal.TypeName);
     } else if (initValue is MaxonEnum enumVal) {
       var kind = MaxonValueKind.Enum;
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, enumVal.TypeName);
+      if (!isDiscard)
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, enumVal.TypeName);
     } else if (initValue is MaxonFunctionPtr) {
       var kind = MaxonValueKind.Function;
       var fnType = GetFunctionTypeFromLastOp();
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, FnTypeName: fnType);
+      if (!isDiscard)
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, FnTypeName: fnType);
     } else {
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
@@ -4631,7 +4644,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         kind = MaxonValueKind.Float32;
       }
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName);
+      if (!isDiscard)
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName);
     }
   }
 
@@ -4642,13 +4656,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (Check(TokenType.Comma)) Advance();
       var nameToken = Expect(TokenType.Identifier);
       names.Add(nameToken.Value);
-      if (!nameToken.Value.StartsWith('_')) {
+      if (nameToken.Value != "_") {
         _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
       }
     } while (Check(TokenType.Comma));
     Expect(TokenType.RightParen);
     Expect(TokenType.Equals);
 
+    _lastExprCallOp = null;
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr)
       ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -4667,6 +4682,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         $"Tuple has {tupleType.Fields.Count} elements but destructuring has {names.Count} bindings",
         parenToken.Line, parenToken.Column);
 
+    // If all tuple elements are discarded, mark the underlying call for purity checking
+    if (names.All(n => n == "_")) {
+      MarkLetDiscardResult(parenToken);
+    }
+
     // Assign the tuple to a temp variable
     var tempName = $"__destruct_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(tempName, initValue, true, false, MaxonValueKind.Struct));
@@ -4677,6 +4697,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void EmitTupleFieldBindings(string sourceName, MlirStructType tupleType, List<string> names, bool isMutable) {
     for (int i = 0; i < names.Count; i++) {
+      if (names[i] == "_") continue;
       var field = tupleType.Fields[i];
       var fieldKind = field.Type.ToValueKind();
       string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
@@ -4820,12 +4841,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return;
     }
 
-    if (TrySiblingMethodCall(token) != null)
+    var siblingCall = TrySiblingMethodCall(token);
+    if (siblingCall != null) {
+      MarkDiscardedResult(siblingCall, token);
       return;
+    }
 
     Advance(); // consume '('
     var (args, callee) = ParseCallArgs(token);
-    CreateFunctionCall(token, args, callee);
+    var callOp = CreateFunctionCall(token, args, callee);
+    MarkDiscardedResult(callOp, token);
   }
 
   private static bool IsCompilerBuiltin(string name) => CompilerBuiltins.ContainsKey(name);
@@ -5304,6 +5329,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (args, callee) = ParseCallArgs(qualifiedToken);
     var callOp = CreateFunctionCall(qualifiedToken, args, callee);
     OverrideCalleeForTypeAlias(callOp, typeToken.Value, qualifiedName);
+    MarkDiscardedResult(callOp, methodToken);
   }
 
   private void ParseInstanceMethodCallStatement(string name, ResolvedVar resolved, string methodName) {
@@ -5327,7 +5353,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var qualifiedToken = new Token(TokenType.Identifier, methodName, methodToken.Line, methodToken.Column);
     var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, structVal);
-    CreateFunctionCall(qualifiedToken, args, callee);
+    var callOp = CreateFunctionCall(qualifiedToken, args, callee);
+    MarkDiscardedResult(callOp, methodToken);
   }
 
   private void ParseIf() {
@@ -9965,6 +9992,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.AddOp(callOp);
     _lastRangedTypeName = null;
     return callOp;
+  }
+
+  private void MarkDiscardedResult(MaxonCallOp callOp, Token callToken) {
+    if (callOp.Result != null) {
+      callOp.IsDiscardedResult = true;
+      callOp.CallLine = callToken.Line;
+      callOp.CallColumn = callToken.Column;
+    }
+  }
+
+  // Marks the last call op as explicitly discarded via `let _ = func()`
+  private void MarkLetDiscardResult(Token discardToken) {
+    // Check the last op in the current block first (simple case: `let _ = func()`)
+    if (_currentBlock!.Operations.Count > 0) {
+      var lastOp = _currentBlock!.Operations[^1];
+      if (lastOp is MaxonCallOp callOp && callOp.Result != null) {
+        callOp.IsLetDiscardResult = true;
+        callOp.CallLine = discardToken.Line;
+        callOp.CallColumn = discardToken.Column;
+        return;
+      }
+    }
+    // Fall back to the last try call op (handles try...otherwise which spans blocks)
+    if (_lastExprCallOp is MaxonTryCallOp && _lastExprCallOp.Result != null) {
+      _lastExprCallOp.IsLetDiscardResult = true;
+      _lastExprCallOp.CallLine = discardToken.Line;
+      _lastExprCallOp.CallColumn = discardToken.Column;
+    }
   }
 
   // ============================================================================

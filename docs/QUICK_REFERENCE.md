@@ -79,14 +79,16 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 ```maxon
 let x = 42          // immutable (type inferred)
 var y = 10          // mutable (type inferred)
-var _z = sideEffect()  // _ prefix: unused variable OK
+let _ = sideEffect()  // discard: no binding, no unused check
 
 // Top-level variables (outside functions)
 var globalCounter = 0   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
 ```
 
-All variables must be used. Prefix with `_` to suppress unused variable errors.
+All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used.
+
+Function return values must be used. Pure functions (no side effects) cannot have their results discarded at all. Impure functions can have results explicitly discarded with `let _ = func()`. Chainable methods (returning own type) may be freely discarded.
 
 ## Functions
 
@@ -103,7 +105,9 @@ end 'greet'
 greet("Smith", title: "Dr.")
 ```
 
-**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference — mutations propagate back to the caller's `var` variable. Passing a `let` variable to a mutating parameter is a compile error (E3063). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
+**Parameter passing:** Parameters are passed by value when only read. Parameters that are assigned to inside the function body are passed by reference -- mutations propagate back to the caller's `var` variable. Passing a `let` variable to a mutating parameter is a compile error (E3063). Literals and expressions create a temporary stack slot; their mutations are not visible to the caller.
+
+**Purity and discarded results:** The compiler infers function purity (no side effects). Pure function results must always be used (E3064). Impure function results require `let _ =` to explicitly discard (E3065). Chainable methods (returning own type via `self`) can be freely discarded.
 
 ## Closures
 

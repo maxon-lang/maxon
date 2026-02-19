@@ -175,7 +175,10 @@ end 'multiply'
 
 function main() returns ExitCode
   let args = CommandLine.args()
-  let _a = try int.fromString(try args.get(0) otherwise "") otherwise 0
+  let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
+  if parsed > 1000 'guard'
+    return 99
+  end 'guard'
   return multiply(3)
 end 'main'
 ```
@@ -224,21 +227,28 @@ module {
     maxon.br otherwise_default_continue_7
   otherwise_default_continue_7:
     %21 = maxon.var_ref {var = __try_result_4} {type = i64}
-    maxon.assign %21 {var = _a} {kind = i64} {decl = 1 : i1}
-    %22 = maxon.literal {value = 3 : i64}
-    %23 = maxon.call @advent.multiply %22
-    maxon.assign %23 {var = __range_val_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %24 = maxon.literal {value = 0 : i64}
-    %25 = maxon.binop %23, %24 {op = lt}
-    %26 = maxon.literal {value = 4294967295 : i64}
-    %27 = maxon.binop %23, %26 {op = gt}
-    %28 = maxon.binop %25, %27 {op = or}
-    maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
-    maxon.panic "panic at day4a.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
-  __range_ok_8:
-    %30 = maxon.var_ref {var = __range_val_8} {type = i64}
-    maxon.return %30
+    maxon.assign %21 {var = parsed} {kind = i64} {decl = 1 : i1}
+    %22 = maxon.literal {value = 1000 : i64}
+    %23 = maxon.binop %21, %22 {op = gt}
+    maxon.cond_br %23 [then: guard_8, else: guard_8.after]
+  guard_8:
+    %24 = maxon.literal {value = 99 : i64}
+    maxon.return %24
+  guard_8.after:
+    %25 = maxon.literal {value = 3 : i64}
+    %26 = maxon.call @advent.multiply %25
+    maxon.assign %26 {var = __range_val_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %27 = maxon.literal {value = 0 : i64}
+    %28 = maxon.binop %26, %27 {op = lt}
+    %29 = maxon.literal {value = 4294967295 : i64}
+    %30 = maxon.binop %26, %29 {op = gt}
+    %31 = maxon.binop %28, %30 {op = or}
+    maxon.cond_br %31 [then: __range_panic_9, else: __range_ok_9]
+  __range_panic_9:
+    maxon.panic "panic at day4a.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_9:
+    %33 = maxon.var_ref {var = __range_val_9} {type = i64}
+    maxon.return %33
   }
 }
 === standard
@@ -303,22 +313,30 @@ module {
     memref.store %36, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %38 = arith.constant {value = 3 : i64}
-    %39 = func.call @advent.multiply %38
-    memref.store %39, __range_val_8
-    %40 = arith.constant {value = 0 : i64}
-    %41 = arith.cmpi lt %39, %40
-    %42 = arith.constant {value = 4294967295 : i64}
-    %43 = arith.cmpi gt %39, %42
-    %44 = arith.ori1 %41, %43
-    cf.cond_br %44 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
-    %45 = memref.lea_symdata __panic_msg_29
-    %46 = std.ptr_to_i64 %45
-    std.call_runtime @maxon_panic %46
-  __range_ok_8:
-    %47 = memref.load __range_val_8 : i64
-    func.return %47
+    %37 = memref.load __try_result_4 : i64
+    %38 = arith.constant {value = 1000 : i64}
+    %39 = arith.cmpi gt %37, %38
+    cf.cond_br %39 [then: guard_8, else: guard_8.after]
+  guard_8:
+    %40 = arith.constant {value = 99 : i64}
+    func.return %40
+  guard_8.after:
+    %41 = arith.constant {value = 3 : i64}
+    %42 = func.call @advent.multiply %41
+    memref.store %42, __range_val_9
+    %43 = arith.constant {value = 0 : i64}
+    %44 = arith.cmpi lt %42, %43
+    %45 = arith.constant {value = 4294967295 : i64}
+    %46 = arith.cmpi gt %42, %45
+    %47 = arith.ori1 %44, %46
+    cf.cond_br %47 [then: __range_panic_9, else: __range_ok_9]
+  __range_panic_9:
+    %48 = memref.lea_symdata __panic_msg_32
+    %49 = std.ptr_to_i64 %48
+    std.call_runtime @maxon_panic %49
+  __range_ok_9:
+    %50 = memref.load __range_val_9 : i64
+    func.return %50
   }
 }
 === x86
@@ -330,7 +348,7 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=96
     x86.call stdlib.CommandLine.args
     x86.mov [rbp-8], eax
     x86.xor eax, eax
@@ -341,14 +359,14 @@ module {
     x86.mov rbx, rcx
     x86.xor ecx, ecx
     x86.mov esi, 32
-    x86.mov [rbp-64], eax
-    x86.mov [rbp-72], edx
-    x86.mov [rbp-80], ebx
+    x86.mov [rbp-72], eax
+    x86.mov [rbp-80], edx
+    x86.mov [rbp-88], ebx
     x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-16], eax
     x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-80]
+    x86.mov ebx, [rbp-88]
     x86.mov [edx+0], ebx
     x86.mov esi, [rbp-16]
     x86.xor edi, edi
@@ -370,10 +388,10 @@ module {
     x86.mov edx, [rbp-24]
     x86.mov [edx+8], ecx
     x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-64]
+    x86.mov eax, [rbp-72]
     x86.mov [rbp-40], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-72]
+    x86.mov ecx, [rbp-80]
     x86.cmp ecx, eax
     x86.je advent.main.otherwise_default_continue_3
   otherwise_default_error_2:
@@ -386,17 +404,28 @@ module {
     x86.call stdlib.Parsing.__int_fromString
     x86.xor ecx, ecx
     x86.mov [rbp-48], ecx
+    x86.mov [rbp-56], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je advent.main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
     x86.jmp advent.main.otherwise_default_continue_7
   otherwise_default_continue_7:
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, 1000
+    x86.cmp eax, ecx
+    x86.jle advent.main.guard_8.after
+  guard_8:
+    x86.mov eax, 99
+    x86.epilogue
+    x86.ret
+  guard_8.after:
     x86.mov eax, 3
     x86.mov rcx, rax
     x86.call advent.multiply
-    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -407,13 +436,13 @@ module {
     x86.movzx esi, esib
     x86.or edx, esi
     x86.test edx, edx
-    x86.je advent.main.__range_ok_8
-  __range_panic_8:
-    x86.lea_symdata rax, [__panic_msg_29]
+    x86.je advent.main.__range_ok_9
+  __range_panic_9:
+    x86.lea_symdata rax, [__panic_msg_32]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_8:
-    x86.mov eax, [rbp-56]
+  __range_ok_9:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }
@@ -432,7 +461,10 @@ end 'multiply'
 
 function main() returns ExitCode
   let args = CommandLine.args()
-  let _a = try int.fromString(try args.get(0) otherwise "") otherwise 0
+  let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
+  if parsed > 1000 'guard'
+    return 99
+  end 'guard'
   return multiply(3)
 end 'main'
 ```
@@ -481,21 +513,28 @@ module {
     maxon.br otherwise_default_continue_7
   otherwise_default_continue_7:
     %21 = maxon.var_ref {var = __try_result_4} {type = i64}
-    maxon.assign %21 {var = _a} {kind = i64} {decl = 1 : i1}
-    %22 = maxon.literal {value = 3 : i64}
-    %23 = maxon.call @advent.multiply %22
-    maxon.assign %23 {var = __range_val_8} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %24 = maxon.literal {value = 0 : i64}
-    %25 = maxon.binop %23, %24 {op = lt}
-    %26 = maxon.literal {value = 4294967295 : i64}
-    %27 = maxon.binop %23, %26 {op = gt}
-    %28 = maxon.binop %25, %27 {op = or}
-    maxon.cond_br %28 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
-    maxon.panic "panic at day4b.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
-  __range_ok_8:
-    %30 = maxon.var_ref {var = __range_val_8} {type = i64}
-    maxon.return %30
+    maxon.assign %21 {var = parsed} {kind = i64} {decl = 1 : i1}
+    %22 = maxon.literal {value = 1000 : i64}
+    %23 = maxon.binop %21, %22 {op = gt}
+    maxon.cond_br %23 [then: guard_8, else: guard_8.after]
+  guard_8:
+    %24 = maxon.literal {value = 99 : i64}
+    maxon.return %24
+  guard_8.after:
+    %25 = maxon.literal {value = 3 : i64}
+    %26 = maxon.call @advent.multiply %25
+    maxon.assign %26 {var = __range_val_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %27 = maxon.literal {value = 0 : i64}
+    %28 = maxon.binop %26, %27 {op = lt}
+    %29 = maxon.literal {value = 4294967295 : i64}
+    %30 = maxon.binop %26, %29 {op = gt}
+    %31 = maxon.binop %28, %30 {op = or}
+    maxon.cond_br %31 [then: __range_panic_9, else: __range_ok_9]
+  __range_panic_9:
+    maxon.panic "panic at day4b.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_9:
+    %33 = maxon.var_ref {var = __range_val_9} {type = i64}
+    maxon.return %33
   }
 }
 === standard
@@ -562,22 +601,30 @@ module {
     memref.store %37, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %39 = arith.constant {value = 3 : i64}
-    %40 = func.call @advent.multiply %39
-    memref.store %40, __range_val_8
-    %41 = arith.constant {value = 0 : i64}
-    %42 = arith.cmpi lt %40, %41
-    %43 = arith.constant {value = 4294967295 : i64}
-    %44 = arith.cmpi gt %40, %43
-    %45 = arith.ori1 %42, %44
-    cf.cond_br %45 [then: __range_panic_8, else: __range_ok_8]
-  __range_panic_8:
-    %46 = memref.lea_symdata __panic_msg_29
-    %47 = std.ptr_to_i64 %46
-    std.call_runtime @maxon_panic %47
-  __range_ok_8:
-    %48 = memref.load __range_val_8 : i64
-    func.return %48
+    %38 = memref.load __try_result_4 : i64
+    %39 = arith.constant {value = 1000 : i64}
+    %40 = arith.cmpi gt %38, %39
+    cf.cond_br %40 [then: guard_8, else: guard_8.after]
+  guard_8:
+    %41 = arith.constant {value = 99 : i64}
+    func.return %41
+  guard_8.after:
+    %42 = arith.constant {value = 3 : i64}
+    %43 = func.call @advent.multiply %42
+    memref.store %43, __range_val_9
+    %44 = arith.constant {value = 0 : i64}
+    %45 = arith.cmpi lt %43, %44
+    %46 = arith.constant {value = 4294967295 : i64}
+    %47 = arith.cmpi gt %43, %46
+    %48 = arith.ori1 %45, %47
+    cf.cond_br %48 [then: __range_panic_9, else: __range_ok_9]
+  __range_panic_9:
+    %49 = memref.lea_symdata __panic_msg_32
+    %50 = std.ptr_to_i64 %49
+    std.call_runtime @maxon_panic %50
+  __range_ok_9:
+    %51 = memref.load __range_val_9 : i64
+    func.return %51
   }
 }
 === x86
@@ -591,7 +638,7 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=96
     x86.call stdlib.CommandLine.args
     x86.mov [rbp-8], eax
     x86.xor eax, eax
@@ -602,14 +649,14 @@ module {
     x86.mov rbx, rcx
     x86.xor ecx, ecx
     x86.mov esi, 32
-    x86.mov [rbp-64], eax
-    x86.mov [rbp-72], edx
-    x86.mov [rbp-80], ebx
+    x86.mov [rbp-72], eax
+    x86.mov [rbp-80], edx
+    x86.mov [rbp-88], ebx
     x86.mov rcx, rsi
     x86.call maxon_alloc
     x86.mov [rbp-16], eax
     x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-80]
+    x86.mov ebx, [rbp-88]
     x86.mov [edx+0], ebx
     x86.mov esi, [rbp-16]
     x86.xor edi, edi
@@ -631,10 +678,10 @@ module {
     x86.mov edx, [rbp-24]
     x86.mov [edx+8], ecx
     x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-64]
+    x86.mov eax, [rbp-72]
     x86.mov [rbp-40], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-72]
+    x86.mov ecx, [rbp-80]
     x86.cmp ecx, eax
     x86.je advent.main.otherwise_default_continue_3
   otherwise_default_error_2:
@@ -647,17 +694,28 @@ module {
     x86.call stdlib.Parsing.__int_fromString
     x86.xor ecx, ecx
     x86.mov [rbp-48], ecx
+    x86.mov [rbp-56], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je advent.main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
     x86.jmp advent.main.otherwise_default_continue_7
   otherwise_default_continue_7:
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, 1000
+    x86.cmp eax, ecx
+    x86.jle advent.main.guard_8.after
+  guard_8:
+    x86.mov eax, 99
+    x86.epilogue
+    x86.ret
+  guard_8.after:
     x86.mov eax, 3
     x86.mov rcx, rax
     x86.call advent.multiply
-    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -668,13 +726,13 @@ module {
     x86.movzx esi, esib
     x86.or edx, esi
     x86.test edx, edx
-    x86.je advent.main.__range_ok_8
-  __range_panic_8:
-    x86.lea_symdata rax, [__panic_msg_29]
+    x86.je advent.main.__range_ok_9
+  __range_panic_9:
+    x86.lea_symdata rax, [__panic_msg_32]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_8:
-    x86.mov eax, [rbp-56]
+  __range_ok_9:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

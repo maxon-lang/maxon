@@ -1,0 +1,75 @@
+// Test: impure-print-discarded
+
+typealias Integer = int(i64.min to i64.max)
+
+function computeAndPrint(x Integer) returns Integer
+  print("computing")
+  return x * 2
+end 'computeAndPrint'
+
+function main() returns ExitCode
+  let _ = computeAndPrint(5)
+  return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+computing
+```
+---
+module {
+  func @discarded-results.computeAndPrint(x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.lea_rdata rax, [__str_1]
+    x86.mov rdx, rax
+    x86.mov eax, 9
+    x86.mov ebx, 32
+    x86.mov [rbp-24], ecx
+    x86.mov [rbp-32], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-32]
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 9
+    x86.mov [ebx+8], esi
+    x86.xor edi, edi
+    x86.mov r8, [rbp-8]
+    x86.mov [r8+16], edi
+    x86.mov r9, 1
+    x86.mov eax, [rbp-8]
+    x86.mov [eax+24], r9
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call stdlib.Print.print
+    x86.mov eax, 2
+    x86.mov ecx, [rbp-24]
+    x86.imul ecx, eax
+    x86.mov eax, ecx
+    x86.epilogue
+    x86.ret
+  }
+  func @discarded-results.main() -> u32 {
+  entry:
+    x86.mov eax, 5
+    x86.mov rcx, rax
+    x86.call discarded-results.computeAndPrint
+    x86.xor ecx, ecx
+    x86.mov eax, ecx
+    x86.ret
+  }
+}
+---
