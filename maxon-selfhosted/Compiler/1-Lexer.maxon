@@ -1,12 +1,205 @@
-// Tokenizer for Maxon source code.
+// Table-driven DFA lexer for Maxon source code.
 // Operates on a byte array (UTF-8 source) for efficient byte-level scanning.
+// The DFA handles single-char and two-char operator tokens via transition tables,
+// while sub-scanners handle variable-length tokens (strings, numbers, identifiers, comments).
 
 export typealias LineNumber = int(0 to u64.max)
 export typealias ColumnNumber = int(0 to u64.max)
 export typealias CharOffset = int(0 to u64.max)
 
+typealias DfaIndex = int(0 to 1024)
+
+type LexerState
+    export var pos CharOffset
+    export var line LineNumber
+    export var column ColumnNumber
+end 'LexerState'
+
+// --- Character classes (25) ---
+let CC_OTHER = 0
+let CC_SPACE = 1
+let CC_TAB = 2
+let CC_CR = 3
+let CC_LF = 4
+let CC_LPAREN = 5
+let CC_RPAREN = 6
+let CC_LBRACE = 7
+let CC_RBRACE = 8
+let CC_EQUALS = 9
+let CC_BANG = 10
+let CC_LESS = 11
+let CC_GREATER = 12
+let CC_PLUS = 13
+let CC_MINUS = 14
+let CC_STAR = 15
+let CC_COLON = 16
+let CC_SLASH = 17
+let CC_SQUOTE = 18
+let CC_DQUOTE = 19
+let CC_BACKSLASH = 20
+let CC_DOT = 21
+let CC_DIGIT = 22
+let CC_ALPHA = 23
+let CC_EOF = 24
+let NUM_CHAR_CLASSES = 25
+
+// --- DFA states (32) ---
+// Live states (need more input)
+let S_START = 0
+let S_SAW_EQ = 1
+let S_SAW_BANG = 2
+let S_SAW_LT = 3
+let S_SAW_GT = 4
+let S_SAW_SLASH = 5
+
+// Terminal states
+let S_DONE_SKIP_WS = 6
+let S_DONE_SKIP_CR = 7
+let S_DONE_NEWLINE = 8
+let S_DONE_LPAREN = 9
+let S_DONE_RPAREN = 10
+let S_DONE_LBRACE = 11
+let S_DONE_RBRACE = 12
+let S_DONE_PLUS = 13
+let S_DONE_MINUS = 14
+let S_DONE_STAR = 15
+let S_DONE_COLON = 16
+let S_DONE_EQ = 17
+let S_DONE_EQ_EQ = 18
+let S_DONE_BANG_EQ = 19
+let S_DONE_LT = 20
+let S_DONE_LT_EQ = 21
+let S_DONE_GT = 22
+let S_DONE_GT_EQ = 23
+let S_DONE_SKIP_BANG = 24
+let S_ENTER_SQUOTE = 25
+let S_ENTER_DQUOTE = 26
+let S_ENTER_DIGIT = 27
+let S_ENTER_ALPHA = 28
+let S_ENTER_COMMENT = 29
+let S_DONE_SKIP_SLASH = 30
+let S_DONE_SKIP_OTHER = 31
+let NUM_STATES = 32
+
+// --- Action codes ---
+let ACT_SKIP = 1
+let ACT_SKIP_CR = 2
+let ACT_NEWLINE = 3
+let ACT_EMIT = 4
+let ACT_EMIT_2 = 5
+let ACT_ENTER_STR_SQ = 6
+let ACT_ENTER_STR_DQ = 7
+let ACT_ENTER_NUMBER = 8
+let ACT_ENTER_IDENT = 9
+let ACT_ENTER_COMMENT = 10
+
+// --- Table variables ---
+// Static lookup: byte value → character class (256 entries, O(1) index)
+let charClassTable = [
+    // 0-15
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 0, 0, 3, 0, 0,
+    // 16-31
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    // 32-47: space ! " # $ % & ' ( ) * + , - . /
+    1, 10, 19, 0, 0, 0, 0, 18, 5, 6, 15, 13, 0, 14, 21, 17,
+    // 48-63: 0-9 : ; < = > ?
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 16, 0, 11, 9, 12, 0,
+    // 64-79: @ A-O
+    0, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    // 80-95: P-Z [ \ ] ^ _
+    23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 0, 20, 0, 0, 23,
+    // 96-111: ` a-o
+    0, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23,
+    // 112-127: p-z { | } ~ DEL
+    23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 7, 0, 8, 0, 0,
+    // 128-255: extended ASCII (all CC_OTHER)
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ]
+
+// transitionTable: 32 states x 25 char classes = 800 entries
+// Index as: state * NUM_CHAR_CLASSES + charClass
+let transitionTable = [
+    // S_START: dispatch on first character
+    31, 6, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 13, 14, 15, 16, 5, 25, 26, 31, 31, 27, 28, 31,
+    // S_SAW_EQ: '=' seen, looking for '='
+    17, 17, 17, 17, 17, 17, 17, 17, 17, 18, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17, 17,
+    // S_SAW_BANG: '!' seen, looking for '='
+    24, 24, 24, 24, 24, 24, 24, 24, 24, 19, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24,
+    // S_SAW_LT: '<' seen, looking for '='
+    20, 20, 20, 20, 20, 20, 20, 20, 20, 21, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
+    // S_SAW_GT: '>' seen, looking for '='
+    22, 22, 22, 22, 22, 22, 22, 22, 22, 23, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22,
+    // S_SAW_SLASH: '/' seen, looking for '/'
+    30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 30, 29, 30, 30, 30, 30, 30, 30, 30,
+    // Terminal states (rows 6-31) — never transitioned from
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31,
+    31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31, 31
+    ]
+
+// actionTable: 32 entries indexed by state → action to perform
+let actionTable = [
+    // States 0-7: live states default to skip, then skip_ws(6), skip_cr(7)
+    1, 1, 1, 1, 1, 1, 1, 2,
+    // States 8-15: newline(8), then single-char emits (lparen..star)
+    3, 4, 4, 4, 4, 4, 4, 4,
+    // States 16-23: colon, eq, eq_eq, bang_eq, lt, lt_eq, gt, gt_eq
+    4, 4, 5, 5, 4, 5, 4, 5,
+    // States 24-31: skip_bang, str_sq, str_dq, number, ident, comment, skip_slash, skip_other
+    1, 6, 7, 8, 9, 10, 1, 1
+    ]
+
+// Single dispatch point for all fixed-text tokens (operators, punctuation).
+function emitFixedToken(state DfaIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
+    match state 'dispatch'
+        9 then tokens.push({kind: TokenKind.leftParen, value: "(", line: line, column: column})
+        10 then tokens.push({kind: TokenKind.rightParen, value: ")", line: line, column: column})
+        11 then tokens.push({kind: TokenKind.leftBrace, value: "lbrace", line: line, column: column})
+        12 then tokens.push({kind: TokenKind.rightBrace, value: "rbrace", line: line, column: column})
+        13 then tokens.push({kind: TokenKind.plus, value: "+", line: line, column: column})
+        14 then tokens.push({kind: TokenKind.minus, value: "-", line: line, column: column})
+        15 then tokens.push({kind: TokenKind.star, value: "*", line: line, column: column})
+        16 then tokens.push({kind: TokenKind.colon, value: ":", line: line, column: column})
+        17 then tokens.push({kind: TokenKind.equals, value: "=", line: line, column: column})
+        18 then tokens.push({kind: TokenKind.equalsEquals, value: "==", line: line, column: column})
+        19 then tokens.push({kind: TokenKind.bangEquals, value: "!=", line: line, column: column})
+        20 then tokens.push({kind: TokenKind.lessThan, value: "<", line: line, column: column})
+        21 then tokens.push({kind: TokenKind.lessEquals, value: "<=", line: line, column: column})
+        22 then tokens.push({kind: TokenKind.greaterThan, value: ">", line: line, column: column})
+        23 then tokens.push({kind: TokenKind.greaterEquals, value: ">=", line: line, column: column})
+        default then break
+    end 'dispatch'
+end 'emitFixedToken'
+
+// --- Main tokenize function ---
+
 export function tokenize(source ByteArray) returns TokenArray
     logDebug(LogCategory.lexer, message: "Starting lexer")
+
     var tokens = TokenArray{}
     var pos = 0
     var line = 1
@@ -15,291 +208,231 @@ export function tokenize(source ByteArray) returns TokenArray
 
     while pos < len 'scan'
         let ch = try source.get(pos) otherwise 0
+        let startLine = line
+        let startCol = column
 
-        // Skip spaces and tabs
-        if ch == SPACE or ch == TAB 'ws'
-            pos = pos + 1
-            column = column + 1
+        // Look up character class
+        let charClass = try charClassTable.get(ch) otherwise CC_OTHER
+
+        // Consume the first character
+        pos = pos + 1
+        column = column + 1
+
+        // Look up first transition from START
+        var state = try transitionTable.get(S_START * NUM_CHAR_CLASSES + charClass) otherwise S_DONE_SKIP_OTHER
+
+        // If we reached a live state (1-5), peek at the next character for a second transition
+        if state >= 1 and state <= 5 'live'
+            var nextClass = CC_EOF
+            if pos < len 'hasNext'
+                let nextCh = try source.get(pos) otherwise 0
+                nextClass = try charClassTable.get(nextCh) otherwise CC_OTHER
+            end 'hasNext'
+            state = try transitionTable.get(state * NUM_CHAR_CLASSES + nextClass) otherwise S_DONE_SKIP_OTHER
+        end 'live'
+
+        // Look up the action for the terminal state
+        let action = try actionTable.get(state) otherwise ACT_SKIP
+
+        if action == ACT_SKIP 'doSkip'
             continue
-        end 'ws'
+        end 'doSkip'
 
-        // Skip carriage return
-        if ch == CR 'cr'
-            pos = pos + 1
+        if action == ACT_SKIP_CR 'doCr'
+            // CR does not advance column
+            column = column - 1
             continue
-        end 'cr'
+        end 'doCr'
 
-        // Newline
-        if ch == LF 'nl'
-            tokens.push({kind: TokenKind.newline, value: "", line: line, column: column})
-            pos = pos + 1
+        if action == ACT_NEWLINE 'doNewline'
+            tokens.push({kind: TokenKind.newline, value: "", line: startLine, column: startCol})
             line = line + 1
             column = 1
             continue
-        end 'nl'
+        end 'doNewline'
 
-        // Left paren
-        if ch == LPAREN 'lp'
-            tokens.push({kind: TokenKind.leftParen, value: "(", line: line, column: column})
+        if action == ACT_EMIT 'doEmit'
+            emitFixedToken(state, tokens: tokens, line: startLine, column: startCol)
+            continue
+        end 'doEmit'
+
+        if action == ACT_EMIT_2 'doEmit2'
             pos = pos + 1
             column = column + 1
+            emitFixedToken(state, tokens: tokens, line: startLine, column: startCol)
             continue
-        end 'lp'
+        end 'doEmit2'
 
-        // Right paren
-        if ch == RPAREN 'rp'
-            tokens.push({kind: TokenKind.rightParen, value: ")", line: line, column: column})
+        if action == ACT_ENTER_STR_SQ 'doSQ'
+            var st = LexerState{pos: pos, line: line, column: column}
+            scanSingleQuoteString(source, state: st, tokens: tokens, startLine: startLine, startCol: startCol)
+            pos = st.pos
+            line = st.line
+            column = st.column
+            continue
+        end 'doSQ'
+
+        if action == ACT_ENTER_STR_DQ 'doDQ'
+            var st2 = LexerState{pos: pos, line: line, column: column}
+            scanDoubleQuoteString(source, state: st2, tokens: tokens, startLine: startLine, startCol: startCol)
+            pos = st2.pos
+            line = st2.line
+            column = st2.column
+            continue
+        end 'doDQ'
+
+        if action == ACT_ENTER_NUMBER 'doNum'
+            // Undo advance — scanNumber scans from the first digit
+            pos = pos - 1
+            column = column - 1
+            var st3 = LexerState{pos: pos, line: line, column: column}
+            scanNumber(source, state: st3, tokens: tokens, startLine: startLine, startCol: startCol)
+            pos = st3.pos
+            line = st3.line
+            column = st3.column
+            continue
+        end 'doNum'
+
+        if action == ACT_ENTER_IDENT 'doIdent'
+            // Undo advance — scanIdentifier scans from the first alpha char
+            pos = pos - 1
+            column = column - 1
+            var st4 = LexerState{pos: pos, line: line, column: column}
+            scanIdentifier(source, state: st4, tokens: tokens, startLine: startLine, startCol: startCol)
+            pos = st4.pos
+            line = st4.line
+            column = st4.column
+            continue
+        end 'doIdent'
+
+        if action == ACT_ENTER_COMMENT 'doComment'
+            // Both '/' characters have been consumed (first by main loop, second needs consuming)
             pos = pos + 1
             column = column + 1
+            var st5 = LexerState{pos: pos, line: line, column: column}
+            scanComment(source, state: st5)
+            pos = st5.pos
+            line = st5.line
+            column = st5.column
             continue
-        end 'rp'
-
-        // Left brace
-        if ch == LBRACE 'lb'
-            tokens.push({kind: TokenKind.leftBrace, value: "lbrace", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'lb'
-
-        // Right brace
-        if ch == RBRACE 'rb'
-            tokens.push({kind: TokenKind.rightBrace, value: "rbrace", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'rb'
-
-        // Equals or EqualsEquals
-        if ch == EQUALS 'eq'
-            let startCol = column
-            pos = pos + 1
-            column = column + 1
-            if pos < len 'peekNext'
-                let next = try source.get(pos) otherwise 0
-                if next == EQUALS 'isEqEq'
-                    pos = pos + 1
-                    column = column + 1
-                    tokens.push({kind: TokenKind.equalsEquals, value: "==", line: line, column: startCol})
-                    continue
-                end 'isEqEq'
-            end 'peekNext'
-            tokens.push({kind: TokenKind.equals, value: "=", line: line, column: startCol})
-            continue
-        end 'eq'
-
-        // Not equals (!=)
-        if ch == BANG 'bang'
-            let startCol = column
-            if pos + 1 < len 'peekNextBang'
-                let next = try source.get(pos + 1) otherwise 0
-                if next == EQUALS 'isBangEq'
-                    pos = pos + 2
-                    column = column + 2
-                    tokens.push({kind: TokenKind.bangEquals, value: "!=", line: line, column: startCol})
-                    continue
-                end 'isBangEq'
-            end 'peekNextBang'
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'bang'
-
-        // Less than / Less than or equal
-        if ch == LESS_THAN 'lt'
-            let startCol = column
-            if pos + 1 < len 'peekNextLt'
-                let next = try source.get(pos + 1) otherwise 0
-                if next == EQUALS 'isLtEq'
-                    pos = pos + 2
-                    column = column + 2
-                    tokens.push({kind: TokenKind.lessEquals, value: "<=", line: line, column: startCol})
-                    continue
-                end 'isLtEq'
-            end 'peekNextLt'
-            pos = pos + 1
-            column = column + 1
-            tokens.push({kind: TokenKind.lessThan, value: "<", line: line, column: startCol})
-            continue
-        end 'lt'
-
-        // Greater than / Greater than or equal
-        if ch == GREATER_THAN 'gt'
-            let startCol = column
-            if pos + 1 < len 'peekNextGt'
-                let next = try source.get(pos + 1) otherwise 0
-                if next == EQUALS 'isGtEq'
-                    pos = pos + 2
-                    column = column + 2
-                    tokens.push({kind: TokenKind.greaterEquals, value: ">=", line: line, column: startCol})
-                    continue
-                end 'isGtEq'
-            end 'peekNextGt'
-            pos = pos + 1
-            column = column + 1
-            tokens.push({kind: TokenKind.greaterThan, value: ">", line: line, column: startCol})
-            continue
-        end 'gt'
-
-        // Plus
-        if ch == PLUS 'pl'
-            tokens.push({kind: TokenKind.plus, value: "+", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'pl'
-
-        // Minus
-        if ch == MINUS 'mi'
-            tokens.push({kind: TokenKind.minus, value: "-", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'mi'
-
-        // Star
-        if ch == STAR 'st'
-            tokens.push({kind: TokenKind.star, value: "*", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'st'
-
-        // Colon
-        if ch == COLON 'col'
-            tokens.push({kind: TokenKind.colon, value: ":", line: line, column: column})
-            pos = pos + 1
-            column = column + 1
-            continue
-        end 'col'
-
-        // String literal (single-quoted for end labels): 'xxx'
-        if ch == QUOTE 'str'
-            let startCol = column
-            pos = pos + 1
-            column = column + 1
-            let strStart = pos
-            while pos < len 'strBody'
-                let sc = try source.get(pos) otherwise 0
-                if sc == QUOTE 'endStr'
-                    break
-                end 'endStr'
-                pos = pos + 1
-                column = column + 1
-            end 'strBody'
-            let strVal = sliceToString(source, startPos: strStart, endPos: pos)
-            pos = pos + 1
-            column = column + 1
-            tokens.push({kind: TokenKind.stringLiteral, value: strVal, line: line, column: startCol})
-            continue
-        end 'str'
-
-        // Double-quoted string literal: "xxx" (with escape sequences)
-        if ch == DQUOTE 'dstr'
-            let startCol = column
-            pos = pos + 1
-            column = column + 1
-            let dstrStart = pos
-            while pos < len 'dstrBody'
-                let dc = try source.get(pos) otherwise 0
-                if dc == DQUOTE 'endDstr'
-                    break
-                end 'endDstr'
-                if dc == BACKSLASH 'esc'
-                    pos = pos + 1
-                    column = column + 1
-                end 'esc'
-                pos = pos + 1
-                column = column + 1
-            end 'dstrBody'
-            let dstrVal = sliceToString(source, startPos: dstrStart, endPos: pos)
-            pos = pos + 1
-            column = column + 1
-            tokens.push({kind: TokenKind.doubleStringLiteral, value: dstrVal, line: line, column: startCol})
-            continue
-        end 'dstr'
-
-        // Number literal: integer or float
-        if isDigit(ch) 'num'
-            let startCol = column
-            let numStart = pos
-            while pos < len 'digits'
-                let dc = try source.get(pos) otherwise 0
-                if not isDigit(dc) 'endNum'
-                    break
-                end 'endNum'
-                pos = pos + 1
-                column = column + 1
-            end 'digits'
-            // Check for decimal point (float literal)
-            var isFloat = false
-            if pos < len 'checkDot'
-                let dotCh = try source.get(pos) otherwise 0
-                if dotCh == DOT 'hasDot'
-                    isFloat = true
-                    pos = pos + 1
-                    column = column + 1
-                    while pos < len 'fracDigits'
-                        let fc = try source.get(pos) otherwise 0
-                        if not isDigit(fc) 'endFrac'
-                            break
-                        end 'endFrac'
-                        pos = pos + 1
-                        column = column + 1
-                    end 'fracDigits'
-                end 'hasDot'
-            end 'checkDot'
-            let numVal = sliceToString(source, startPos: numStart, endPos: pos)
-            if isFloat 'emitFloat'
-                tokens.push({kind: TokenKind.floatLiteral, value: numVal, line: line, column: startCol})
-            end 'emitFloat' else 'emitInt'
-                tokens.push({kind: TokenKind.intLiteral, value: numVal, line: line, column: startCol})
-            end 'emitInt'
-            continue
-        end 'num'
-
-        // Identifier or keyword: starts with letter or underscore, continues with alphanumeric or underscore
-        if isAlpha(ch) 'ident'
-            let startCol = column
-            let startPos = pos
-            while pos < len 'identBody'
-                let ic = try source.get(pos) otherwise 0
-                if not isAlphaNum(ic) 'endIdent'
-                    break
-                end 'endIdent'
-                pos = pos + 1
-                column = column + 1
-            end 'identBody'
-            let identVal = sliceToString(source, startPos: startPos, endPos: pos)
-            let kind = classifyIdentifier(identVal)
-            tokens.push({kind: kind, value: identVal, line: line, column: startCol})
-            continue
-        end 'ident'
-
-        // Skip comment lines (// ...)
-        if ch == SLASH and pos + 1 < len 'comment'
-            let nextByte = try source.get(pos + 1) otherwise 0
-            if nextByte == SLASH 'lineComment'
-                while pos < len 'skipComment'
-                    let cc = try source.get(pos) otherwise 0
-                    if cc == LF 'endComment'
-                        break
-                    end 'endComment'
-                    pos = pos + 1
-                end 'skipComment'
-                continue
-            end 'lineComment'
-        end 'comment'
-
-        // Unknown character, skip
-        pos = pos + 1
-        column = column + 1
+        end 'doComment'
     end 'scan'
 
     tokens.push({kind: TokenKind.eof, value: "", line: line, column: column})
     logDebug(LogCategory.lexer, message: "Lexer complete: {tokens.count()} tokens")
     return tokens
 end 'tokenize'
+
+// --- Sub-scanner functions ---
+
+// Opening quote already consumed by main loop.
+function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+    let len = source.count()
+    let strStart = state.pos
+    while state.pos < len 'strBody'
+        let sc = try source.get(state.pos) otherwise 0
+        if sc == QUOTE 'endStr'
+            break
+        end 'endStr'
+        state.pos = state.pos + 1
+        state.column = state.column + 1
+    end 'strBody'
+    let strVal = sliceToString(source, startPos: strStart, endPos: state.pos)
+    // Consume the closing quote
+    state.pos = state.pos + 1
+    state.column = state.column + 1
+    tokens.push({kind: TokenKind.stringLiteral, value: strVal, line: startLine, column: startCol})
+end 'scanSingleQuoteString'
+
+// Opening double-quote already consumed by main loop.
+function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+    let len = source.count()
+    let dstrStart = state.pos
+    while state.pos < len 'dstrBody'
+        let dc = try source.get(state.pos) otherwise 0
+        if dc == DQUOTE 'endDstr'
+            break
+        end 'endDstr'
+        if dc == BACKSLASH 'esc'
+            state.pos = state.pos + 1
+            state.column = state.column + 1
+        end 'esc'
+        state.pos = state.pos + 1
+        state.column = state.column + 1
+    end 'dstrBody'
+    let dstrVal = sliceToString(source, startPos: dstrStart, endPos: state.pos)
+    // Consume the closing double-quote
+    state.pos = state.pos + 1
+    state.column = state.column + 1
+    tokens.push({kind: TokenKind.doubleStringLiteral, value: dstrVal, line: startLine, column: startCol})
+end 'scanDoubleQuoteString'
+
+// pos points to the first digit (not yet consumed by this scanner).
+function scanNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+    let len = source.count()
+    let numStart = state.pos
+    while state.pos < len 'digits'
+        let dc = try source.get(state.pos) otherwise 0
+        if not isDigit(dc) 'endNum'
+            break
+        end 'endNum'
+        state.pos = state.pos + 1
+        state.column = state.column + 1
+    end 'digits'
+    // Check for decimal point (float literal)
+    var isFloat = false
+    if state.pos < len 'checkDot'
+        let dotCh = try source.get(state.pos) otherwise 0
+        if dotCh == DOT 'hasDot'
+            isFloat = true
+            state.pos = state.pos + 1
+            state.column = state.column + 1
+            while state.pos < len 'fracDigits'
+                let fc = try source.get(state.pos) otherwise 0
+                if not isDigit(fc) 'endFrac'
+                    break
+                end 'endFrac'
+                state.pos = state.pos + 1
+                state.column = state.column + 1
+            end 'fracDigits'
+        end 'hasDot'
+    end 'checkDot'
+    let numVal = sliceToString(source, startPos: numStart, endPos: state.pos)
+    if isFloat 'emitFloat'
+        tokens.push({kind: TokenKind.floatLiteral, value: numVal, line: startLine, column: startCol})
+    end 'emitFloat' else 'emitInt'
+        tokens.push({kind: TokenKind.intLiteral, value: numVal, line: startLine, column: startCol})
+    end 'emitInt'
+end 'scanNumber'
+
+// pos points to the first alpha/underscore (not yet consumed by this scanner).
+function scanIdentifier(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+    let len = source.count()
+    let startPos = state.pos
+    while state.pos < len 'identBody'
+        let ic = try source.get(state.pos) otherwise 0
+        if not isAlphaNum(ic) 'endIdent'
+            break
+        end 'endIdent'
+        state.pos = state.pos + 1
+        state.column = state.column + 1
+    end 'identBody'
+    let identVal = sliceToString(source, startPos: startPos, endPos: state.pos)
+    let kind = classifyIdentifier(identVal)
+    tokens.push({kind: kind, value: identVal, line: startLine, column: startCol})
+end 'scanIdentifier'
+
+// Both '/' characters already consumed. Advances to (but not past) the newline.
+function scanComment(source ByteArray, state LexerState)
+    let len = source.count()
+    while state.pos < len 'skipComment'
+        let cc = try source.get(state.pos) otherwise 0
+        if cc == LF 'endComment'
+            break
+        end 'endComment'
+        state.pos = state.pos + 1
+    end 'skipComment'
+end 'scanComment'
 
 // --- Helpers ---
 
@@ -345,7 +478,7 @@ export type KeywordInfo
     export var canHaveBlockLabel bool
 end 'KeywordInfo'
 
-// Keyword map: maps keyword text → KeywordInfo, matching the maxon-sharp KeywordMap.
+// Keyword map: maps keyword text -> KeywordInfo, matching the maxon-sharp KeywordMap.
 export typealias KeywordMap = Map with (String, KeywordInfo)
 
 let keywordMap = [
