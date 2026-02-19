@@ -33,7 +33,8 @@ var x = try constants.get(1) otherwise 0  // Can read elements
 Create an array with preallocated capacity and length using `.resize()`:
 
 ```text
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 var buffer = IntArray{}
 buffer.resize(10)   // Length is now 10, elements are zero-initialized
@@ -43,7 +44,8 @@ buffer.set(0, value: 42)
 Use `.reserve()` to allocate capacity without changing length (for performance when appending):
 
 ```text
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 var buffer = IntArray{}
 buffer.reserve(100)  // Capacity is 100, length is still 0
@@ -244,7 +246,8 @@ end 'main'
 <!-- test: array-with-reserve -->
 Test that arrays can be created with `.reserve()` for preallocated capacity.
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -259,7 +262,8 @@ end 'main'
 <!-- test: array-with-resize -->
 Test that arrays can be created with `.resize()` for preallocated length.
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
     var arr = IntArray{}
@@ -275,7 +279,8 @@ end 'main'
 <!-- test: array-growth-realloc -->
 Test that arrays grow correctly when pushing many elements (triggers multiple reallocs).
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
     var arr = IntArray{}
@@ -299,7 +304,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
-typealias ByteArray = Array with byte
+typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
   var arr = ByteArray{}
@@ -326,7 +331,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
-typealias ByteArray = Array with byte
+typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
   var arr = ByteArray{}
@@ -353,7 +358,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
-typealias ByteArray = Array with byte
+typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
   var arr = ByteArray{}
@@ -379,7 +384,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
-typealias ByteArray = Array with byte
+typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
   var arr = ByteArray{}
@@ -415,7 +420,7 @@ end 'main'
 
 typealias Byte = byte(0 to u8.max)
 
-typealias ByteArray = Array with byte
+typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
   var arr = ByteArray{}
@@ -434,6 +439,9 @@ end 'main'
 
 <!-- test: array-literal-constant -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
 let numbers = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
@@ -450,6 +458,9 @@ end 'main'
 
 <!-- test: array-literal-with-dependency -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
 let FIRST = 10
 let SECOND = 20
 let values = [FIRST, SECOND, 30]
@@ -628,7 +639,8 @@ end 'main'
 
 <!-- test: append-empty-to-nonempty -->
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
   var a = [1, 2, 3]
@@ -643,7 +655,8 @@ end 'main'
 
 <!-- test: append-nonempty-to-empty -->
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
   var a = IntArray{}
@@ -722,8 +735,15 @@ end 'main'
 
 <!-- test: array-literal-return-from-function -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
 function makeNumbers() returns IntArray
-  return [10, 20, 30]
+  var arr = IntArray{}
+  arr.push(10)
+  arr.push(20)
+  arr.push(30)
+  return arr
 end 'makeNumbers'
 
 function main() returns ExitCode
@@ -741,11 +761,13 @@ end 'main'
 <!-- test: array-literal-return-push-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-
 typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function makeNumbers(a Integer, b Integer) returns IntArray
-  var arr = [a, b]
+  var arr = IntArray{}
+  arr.push(a)
+  arr.push(b)
   arr.push(a + b)
   return arr
 end 'makeNumbers'
@@ -760,23 +782,19 @@ end 'main'
 30
 ```
 ```stdout
-ALLOC #1: 16 bytes (array literal)
-INCREF: array literal -> rc=1
-DECREF: array grow -> rc=0
-FREE #1: 16 bytes (array grow)
-ALLOC #2: 32 bytes (array grow)
+ALLOC #1: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: nums
 DECREF: nums -> rc=0
-FREE #2: 32 bytes (array cleanup)
+FREE #1: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 32 bytes
+Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   2
-Decrefs:   2
+Increfs:   1
+Decrefs:   1
 Copies:    0
 Cleanups:  1
 ```

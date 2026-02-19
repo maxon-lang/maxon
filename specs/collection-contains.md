@@ -139,7 +139,8 @@ end 'main'
 
 <!-- test: array-empty -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -261,7 +262,8 @@ end 'main'
 
 <!-- test: array-subsequence-empty -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = [1, 2, 3]

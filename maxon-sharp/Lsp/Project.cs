@@ -118,9 +118,21 @@ public class Project(
     foreach (var source in sources)
       newDiagnostics[source.Path] = [];
 
-    // Stdlib files are already compiled in the cached stdlib — skip recompilation
+    // Stdlib files are already compiled in the cached stdlib — use cached module for completion info
     if (_isStdlibProject) {
-      // just fall through to publish empty diagnostics
+      if (_lastSuccessfulCompletionInfo == null) {
+        try {
+          var stdlibModule = StdlibLoader.GetStdlibModule();
+          _lastSuccessfulCompletionInfo = new CompletionInfo(
+            stdlibModule.TypeDefs,
+            stdlibModule.Functions,
+            [],
+            stdlibModule.TypeAliasSources
+          );
+        } catch {
+          // Stdlib compilation failure — fall through with no completion info
+        }
+      }
     } else {
       try {
         var module = StdlibLoader.GetStdlibModule();

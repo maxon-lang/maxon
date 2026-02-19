@@ -254,7 +254,8 @@ end 'main'
 
 <!-- test: non-export-typealias-in-same-file -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}

@@ -35,7 +35,8 @@ end 'main'
 <!-- test: module-struct-nested-method-call -->
 Module-level struct var nested field method call.
 ```maxon
-typealias ByteArray = Array with byte
+typealias Byte = byte(0 to u8.max)
+typealias ByteArray = Array with Byte
 
 type State
     export var items ByteArray

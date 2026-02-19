@@ -340,6 +340,12 @@ public class LspServer {
 
     var normalizedPath = Project.NormalizePath(filePath);
 
+    // Check if it's a type alias — show the typealias definition
+    if (info.TypeAliasSources != null && info.TypeAliasSources.TryGetValue(word, out var aliasInfo)) {
+      info.TypeDefs.TryGetValue(word, out var aliasType);
+      return MakeTypeAliasHover(aliasInfo, aliasType, word, position, line);
+    }
+
     // Check if it's a type name
     if (info.TypeDefs.TryGetValue(word, out var mlirType)) {
       return MakeTypeHover(mlirType, word, position, line);
@@ -649,6 +655,61 @@ public class LspServer {
       ),
       Range = GetWordRange(position, line, word)
     };
+  }
+
+  private static Hover MakeTypeAliasHover(TypeAliasInfo aliasInfo, MlirType? resolvedType, string word, Position position, string line) {
+    string rhs;
+    if (resolvedType is MlirRangedPrimitiveType ranged) {
+      // Show the full ranged definition: int(0 to u64.max)
+      rhs = FormatRangedType(ranged);
+    } else {
+      rhs = aliasInfo.SourceTypeName;
+      if (aliasInfo.TypeParams is { Count: > 0 }) {
+        rhs += " with " + string.Join(", ", aliasInfo.TypeParams.Keys);
+      }
+    }
+    return new Hover {
+      Contents = new MarkedStringsOrMarkupContent(
+        new MarkupContent {
+          Kind = MarkupKind.Markdown,
+          Value = $"```maxon\ntypealias {word} = {rhs}\n```"
+        }
+      ),
+      Range = GetWordRange(position, line, word)
+    };
+  }
+
+  private static string FormatRangedType(MlirRangedPrimitiveType ranged) {
+    var baseName = ranged.BaseType.Name;
+    var lower = FormatRangeBound(ranged.LowerBound);
+    var upper = FormatRangeBound(ranged.UpperBound);
+    return $"{baseName}({lower} to {upper})";
+  }
+
+  private static string FormatRangeBound(double value) {
+    // Show well-known bounds as type qualifiers
+    if (value == 0) return "0";
+    if (value == 255) return "u8.max";
+    if (value == 127) return "i8.max";
+    if (value == -128) return "i8.min";
+    if (value == 65535) return "u16.max";
+    if (value == 32767) return "i16.max";
+    if (value == -32768) return "i16.min";
+    if (value == 4294967295) return "u32.max";
+    if (value == 2147483647) return "i32.max";
+    if (value == -2147483648) return "i32.min";
+    if (value == 18446744073709551615.0) return "u64.max";
+    if (value == 9223372036854775807.0) return "i64.max";
+    if (value == -9223372036854775808.0) return "i64.min";
+    // For float bounds
+    if (value == double.MaxValue) return "f64.max";
+    if (value == double.MinValue) return "f64.min";
+    if (value == float.MaxValue) return "f32.max";
+    if (value == float.MinValue) return "f32.min";
+    // Fallback: format as integer if whole number, else as float
+    if (value == Math.Floor(value) && !double.IsInfinity(value))
+      return ((long)value).ToString();
+    return value.ToString();
   }
 
   private static Hover MakeHover(string code, Position position, string line, string word) {

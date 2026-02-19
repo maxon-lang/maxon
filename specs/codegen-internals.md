@@ -40,7 +40,8 @@ String literals are stored in `.rdata` with null termination. The compiler handl
 
 <!-- test: stack-probing-large-struct -->
 ```maxon
-typealias BigVec = Vector with 2048 int
+typealias Integer = int(i64.min to i64.max)
+typealias BigVec = Vector with 2048 Integer
 typealias Depth = int(-1 to 50)
 
 function recurse(n Depth) returns Depth
@@ -62,7 +63,8 @@ end 'main'
 
 <!-- test: managed-memory-heap-array-generates-free -->
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -77,7 +79,8 @@ end 'main'
 
 <!-- test: managed-memory-scope-cleanup-generates-free -->
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
   if true 'outer'
@@ -97,7 +100,8 @@ end 'main'
 
 <!-- test: managed-memory-loop-growth-generates-realloc -->
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -192,6 +196,9 @@ i8[] 10, 20, 30
 
 <!-- test: rdata-cow-mutation-copies-to-heap -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
 function main() returns ExitCode
   var arr = [42]
   arr.set(0, value: 77)
@@ -245,7 +252,7 @@ module {
     %24 = maxon.binop %21, %23 {op = or}
     maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:5: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
     %26 = maxon.var_ref {var = __range_val_5} {type = i64}
     maxon.return %26

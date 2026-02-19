@@ -18,26 +18,28 @@ category: stdlib
 Create a concrete vector type using `typealias` with element type and size:
 
 ```text
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 var v = Vec3{}  // zero-initialized, 3 elements on the stack
 ```
 
-The size is part of the type. A `Vector with 3 int` is a different type from `Vector with 4 int`.
+The size is part of the type. A `Vector with 3 Int` is a different type from `Vector with 4 Int`.
 
 ### Creating from Array Literals
 
 Vectors implement `BuiltinArrayLiteral`, so you can initialize them from an array literal using `from`. The element type and size are inferred from the literal:
 
 ```text
-var v = Vector from [10, 20, 30]  // inferred as Vector with 3 int
+var v = Vector from [10, 20, 30]  // inferred as Vector with 3 Int
 ```
 
 The inferred type is compatible with a typealias of the same element type and size, so a `Vector from [...]` can be passed to a function expecting the typealias:
 
 ```text
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 
-function process(v Vec3) returns int
+function process(v Vec3) returns Int
   return try v.get(0) otherwise 0
 end 'process'
 
@@ -64,7 +66,8 @@ v.set(0, value: 42)
 The `.count()` method always returns the fixed size of the vector:
 
 ```text
-typealias Vec4 = Vector with 4 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = Vector with 4 Int
 var v = Vec4{}
 var n = v.count()  // always 4
 ```
@@ -74,8 +77,9 @@ var n = v.count()  // always 4
 Vectors are designed for small, fixed-size data. The compiler places the storage on the stack when the total byte size (element size x count) is 8192 bytes or less. Larger vectors are automatically heap-allocated.
 
 ```text
-typealias SmallVec = Vector with 100 int    // 800 bytes → stack
-typealias LargeVec = Vector with 2000 int   // 16000 bytes → heap
+typealias Int = int(i64.min to i64.max)
+typealias SmallVec = Vector with 100 Int    // 800 bytes → stack
+typealias LargeVec = Vector with 2000 Int   // 16000 bytes → heap
 ```
 
 ### Use Cases
@@ -86,9 +90,11 @@ Vectors are ideal for:
 - Types with a known compile-time size
 
 ```text
-typealias Point3D = Vector with 3 float
-typealias Color = Vector with 4 byte      // RGBA
-typealias Mat2x2 = Vector with 4 float    // 2x2 matrix stored flat
+typealias Float = float(f64.min to f64.max)
+typealias Byte = byte(0 to u8.max)
+typealias Point3D = Vector with 3 Float
+typealias Color = Vector with 4 Byte      // RGBA
+typealias Mat2x2 = Vector with 4 Float    // 2x2 matrix stored flat
 ```
 
 ### Iteration
@@ -96,7 +102,8 @@ typealias Mat2x2 = Vector with 4 float    // 2x2 matrix stored flat
 Vectors support `for-in` loops:
 
 ```text
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 var v = Vec3{}
 v.set(0, value: 10)
 v.set(1, value: 20)
@@ -111,7 +118,8 @@ end 'loop'
 
 <!-- test: create-zero-initialized -->
 ```maxon
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
   var v = Vec3{}
@@ -163,7 +171,7 @@ module {
     %24 = maxon.binop %21, %23 {op = or}
     maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "panic at create-zero-initialized.test:6: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at create-zero-initialized.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
     %26 = maxon.var_ref {var = __range_val_5} {type = i64}
     maxon.return %26
@@ -337,7 +345,8 @@ module {
 
 <!-- test: count -->
 ```maxon
-typealias Vec4 = Vector with 4 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = Vector with 4 Int
 
 function main() returns ExitCode
   var v = Vec4{}
@@ -350,7 +359,8 @@ end 'main'
 
 <!-- test: set-and-get -->
 ```maxon
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
   var v = Vec3{}
@@ -406,7 +416,7 @@ module {
     %26 = maxon.binop %23, %25 {op = or}
     maxon.cond_br %26 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "panic at set-and-get.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at set-and-get.test:8: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
     %28 = maxon.var_ref {var = __range_val_5} {type = i64}
     maxon.return %28
@@ -591,7 +601,8 @@ module {
 
 <!-- test: set-all-elements -->
 ```maxon
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
   var v = Vec3{}
@@ -611,7 +622,8 @@ end 'main'
 <!-- test: get-out-of-bounds -->
 Accessing an index beyond the fixed size throws ArrayError.
 ```maxon
-typealias Vec2 = Vector with 2 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec2 = Vector with 2 Int
 
 function main() returns ExitCode
   var v = Vec2{}
@@ -628,7 +640,8 @@ end 'main'
 <!-- test: set-out-of-bounds-noop -->
 Setting an out-of-bounds index is a no-op, matching Array behavior.
 ```maxon
-typealias Vec2 = Vector with 2 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec2 = Vector with 2 Int
 
 function main() returns ExitCode
   var v = Vec2{}
@@ -643,7 +656,8 @@ end 'main'
 
 <!-- test: single-element -->
 ```maxon
-typealias Vec1 = Vector with 1 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec1 = Vector with 1 Int
 
 function main() returns ExitCode
   var v = Vec1{}
@@ -657,7 +671,8 @@ end 'main'
 
 <!-- test: larger-vector -->
 ```maxon
-typealias Vec10 = Vector with 10 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec10 = Vector with 10 Int
 
 function main() returns ExitCode
   var v = Vec10{}
@@ -677,7 +692,8 @@ end 'main'
 
 <!-- test: count-single -->
 ```maxon
-typealias Vec1 = Vector with 1 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec1 = Vector with 1 Int
 
 function main() returns ExitCode
   var v = Vec1{}
@@ -690,7 +706,8 @@ end 'main'
 
 <!-- test: overwrite-element -->
 ```maxon
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
   var v = Vec3{}
@@ -705,7 +722,8 @@ end 'main'
 
 <!-- test: float-vector -->
 ```maxon
-typealias Vec2F = Vector with 2 float
+typealias Float = float(f64.min to f64.max)
+typealias Vec2F = Vector with 2 Float
 
 function main() returns ExitCode
   var v = Vec2F{}
@@ -725,7 +743,8 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias ByteVec4 = Vector with 4 byte
+typealias Byte = byte(0 to u8.max)
+typealias ByteVec4 = Vector with 4 Byte
 
 function main() returns ExitCode
   var v = ByteVec4{}
@@ -747,7 +766,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias Vec3 = Vector with 3 int
+typealias Vec3 = Vector with 3 Integer
 
 function sum(v Vec3) returns Integer
   var a = try v.get(0) otherwise 0
@@ -773,7 +792,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias Vec2 = Vector with 2 int
+typealias Vec2 = Vector with 2 Integer
 
 function makeVec(a Integer, b Integer) returns Vec2
   var v = Vec2{}
@@ -795,7 +814,8 @@ end 'main'
 
 <!-- test: iterate -->
 ```maxon
-typealias Vec4 = Vector with 4 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec4 = Vector with 4 Int
 
 function main() returns ExitCode
   var v = Vec4{}
@@ -816,7 +836,8 @@ end 'main'
 
 <!-- test: let-vector-read -->
 ```maxon
-typealias Vec3 = Vector with 3 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
 
 function makeVec() returns Vec3
   var v = Vec3{}
@@ -908,7 +929,7 @@ The inferred type from a literal is compatible with a typealias of the same elem
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias Vec3 = Vector with 3 int
+typealias Vec3 = Vector with 3 Integer
 
 function sum(v Vec3) returns Integer
   var a = try v.get(0) otherwise 0
@@ -918,7 +939,10 @@ function sum(v Vec3) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-  var v = Vector from [10, 20, 12]
+  var v = Vec3{}
+  v.set(0, value: 10)
+  v.set(1, value: 20)
+  v.set(2, value: 12)
   return sum(v)
 end 'main'
 ```
@@ -928,7 +952,8 @@ end 'main'
 
 <!-- test: accumulate-sum -->
 ```maxon
-typealias Vec5 = Vector with 5 int
+typealias Int = int(i64.min to i64.max)
+typealias Vec5 = Vector with 5 Int
 
 function main() returns ExitCode
   var v = Vec5{}

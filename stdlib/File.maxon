@@ -17,10 +17,10 @@ export enum FileDeleteError implements Error
 end 'FileDeleteError'
 
 export typealias FileHandle = int(0 to u32.max)
+export typealias Byte = byte(0 to 255)
+export typealias ByteBuffer = Array with Byte
 
 export type File
-  typealias Buffer = Array with byte
-
   /// Open file for reading, throwing if not found
   static function openForRead(path String) returns FileHandle throws FileReadError
     let handle = __file_open_read(path.cstr())
@@ -50,7 +50,7 @@ export type File
   end 'readText'
 
   /// Read file content as raw bytes
-  export static function readBinary(path String) returns Buffer throws FileReadError
+  export static function readBinary(path String) returns ByteBuffer throws FileReadError
     var managed = try readFileData(path, extraBytes: 0)
     return {managed: managed, iterIndex: 0}
   end 'readBinary'
@@ -64,7 +64,7 @@ export type File
   end 'writeText'
 
   /// Write binary content to a file
-  export static function writeBinary(path String, content Buffer) throws FileWriteError
+  export static function writeBinary(path String, content ByteBuffer) throws FileWriteError
     let res = __write_file_binary(path.cstr(), content)
     if res != 0 'failed'
       throw FileWriteError.failed

@@ -28,7 +28,8 @@ enum Color
   blue
 end 'Color'
 
-typealias ColorMap = Map with (Color, int)
+typealias Int = int(i64.min to i64.max)
+typealias ColorMap = Map with (Color, Int)
 var scores = ColorMap{}
 scores.insert(Color.red, value: 100)
 ```
@@ -43,7 +44,8 @@ enum Color
   blue
 end 'Color'
 
-typealias ColorMap = Map with (Color, int)
+typealias Int = int(i64.min to i64.max)
+typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
   var m = ColorMap{}
@@ -90,7 +92,8 @@ enum Planet
   venus = "Venus"
 end 'Planet'
 
-typealias PlanetMap = Map with (Planet, int)
+typealias Int = int(i64.min to i64.max)
+typealias PlanetMap = Map with (Planet, Int)
 
 function main() returns ExitCode
   var m = PlanetMap{}
@@ -159,7 +162,7 @@ enum Container
   value(n Integer)
 end 'Container'
 
-typealias ContainerMap = Map with (Container, int)
+typealias ContainerMap = Map with (Container, Integer)
 
 function main() returns ExitCode
   var m = ContainerMap{}
@@ -178,7 +181,8 @@ enum Grade
   average = 'C'
 end 'Grade'
 
-typealias GradeMap = Map with (Grade, int)
+typealias Int = int(i64.min to i64.max)
+typealias GradeMap = Map with (Grade, Int)
 
 function main() returns ExitCode
   var m = GradeMap{}
@@ -200,7 +204,8 @@ enum Color
   blue
 end 'Color'
 
-typealias ColorMap = Map with (Color, int)
+typealias Int = int(i64.min to i64.max)
+typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
   var m = ColorMap{}

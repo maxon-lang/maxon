@@ -34,7 +34,7 @@ The `where` clause follows the same syntax as type-level where clauses: `where T
 
 When a type conforms to the extended interface, the compiler checks whether the type's associated type bindings satisfy the where constraints. If they do, the extension methods are synthesized for that type. If they don't, the methods are silently skipped.
 
-For example, `Array with int` conforms to `Iterable with int`. Since `int` implements `Equatable`, the `contains` method is available on `Array with int`. A hypothetical `Array with SomeNonEquatableType` would not receive the `contains` method.
+For example, `Array with Int` conforms to `Iterable with int`. Since `int` implements `Equatable`, the `contains` method is available on `Array with Int`. A hypothetical `Array with SomeNonEquatableType` would not receive the `contains` method.
 
 ### Multiple Constraints
 
@@ -70,10 +70,10 @@ extension HasItems where Element is Equatable
   end 'has'
 end 'HasItems'
 
-typealias IntArray = Array with int
+typealias IntegerArray = Array with Integer
 
 type IntList implements HasItems with Integer
-  var data IntArray
+  var data IntegerArray
   var idx Integer
 
   function next() returns Integer throws IterationError
@@ -158,7 +158,8 @@ extension Box where Item is Equatable
   end 'matches'
 end 'Box'
 
-typealias IntBox = Box with int
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
 
 function main() returns ExitCode
   var b = IntBox{item: 42}

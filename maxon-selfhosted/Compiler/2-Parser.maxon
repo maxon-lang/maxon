@@ -2,7 +2,6 @@
 // Consumes tokens and emits Maxon dialect ops with funcBegin/funcEnd markers.
 
 export typealias MaxonOpArray = Array with MaxonOp
-export typealias StringArray = Array with String
 export typealias ValueId = int(0 to u64.max)
 export typealias VarSlot = int(0 to u64.max)
 export typealias ParsedInt = int(i64.min to i64.max)
@@ -16,7 +15,7 @@ type ParseFunctionResult
 end 'ParseFunctionResult'
 
 function resetSymbolTable(project Project)
-    project.parserVarNames = StringArray{}
+    project.parserVarNames = Utf8ByteArrayArray{}
     project.parserVarSlots = VarSlotArray{}
     project.parserVarIsFloat = BoolArray{}
     project.parserNextSlot = 0
@@ -365,7 +364,7 @@ end 'parsePrintStatement'
 // --- String Interpolation ---
 
 function parseStringInterpolation(project Project, str String, ops MaxonOpArray, filePath String) throws CompileError
-    var buf = Utf8ByteBuffer.create(64)
+    var buf = ""
     var i = 0
     let len = stringLength(str)
 
@@ -377,27 +376,27 @@ function parseStringInterpolation(project Project, str String, ops MaxonOpArray,
             if i + 1 < len 'hasNext'
                 let next = stringCharAt(str, pos: i + 1)
                 if next == 110 'escN'
-                    buf.push(10)
+                    buf = buf.concat(Character._fromCodepoint(10).toString())
                     i = i + 2
                     continue
                 end 'escN'
                 if next == 116 'escT'
-                    buf.push(9)
+                    buf = buf.concat(Character._fromCodepoint(9).toString())
                     i = i + 2
                     continue
                 end 'escT'
                 if next == 92 'escBS'
-                    buf.push(92)
+                    buf = buf.concat(Character._fromCodepoint(92).toString())
                     i = i + 2
                     continue
                 end 'escBS'
                 if next == 34 'escDQ'
-                    buf.push(34)
+                    buf = buf.concat(Character._fromCodepoint(34).toString())
                     i = i + 2
                     continue
                 end 'escDQ'
             end 'hasNext'
-            buf.push(ch)
+            buf = buf.concat(Character._fromCodepoint(ch).toString())
             i = i + 1
             continue
         end 'backslash'
@@ -405,9 +404,9 @@ function parseStringInterpolation(project Project, str String, ops MaxonOpArray,
         // Interpolation: { ... }
         if ch == 123 'openBrace'
             // Flush literal buffer
-            if buf.count() > 0 'flushBuf'
+            if not buf.isEmpty() 'flushBuf'
                 ops.push(MaxonOp.printLiteral(buf))
-                buf = Utf8ByteBuffer.create(64)
+                buf = ""
             end 'flushBuf'
 
             // Extract expression between braces
@@ -428,7 +427,7 @@ function parseStringInterpolation(project Project, str String, ops MaxonOpArray,
             end 'findClose'
 
             // Tokenize and parse the expression between braces
-            let exprStr = str.slice(exprStart, i)
+            let exprStr = str.slice(exprStart, length: i)
             let exprTokens = tokenize(stringToByteArray(exprStr))
             let exprResult = try parseExpression(project, tokens: exprTokens, startPos: 0, ops: ops, filePath: filePath)
             ops.push(MaxonOp.printInt(exprResult.valueId))
@@ -437,12 +436,12 @@ function parseStringInterpolation(project Project, str String, ops MaxonOpArray,
             continue
         end 'openBrace'
 
-        buf.push(ch)
+        buf = buf.concat(Character._fromCodepoint(ch).toString())
         i = i + 1
     end 'scan'
 
     // Flush remaining literal buffer
-    if buf.count() > 0 'flushRemaining'
+    if not buf.isEmpty() 'flushRemaining'
         ops.push(MaxonOp.printLiteral(buf))
     end 'flushRemaining'
 end 'parseStringInterpolation'

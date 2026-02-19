@@ -17,7 +17,8 @@ The `Array` type is a generic, dynamically-sized collection that can hold elemen
 
 Define a concrete type alias for your array:
 ```text
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 ```
 
 Create an empty array:
@@ -34,7 +35,8 @@ var arr = [1, 2, 3]
 
 Use `push` to add elements to the end:
 ```text
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 var arr = IntArray{}
 arr.push(10)
@@ -108,7 +110,8 @@ end 'loop'
 Create an empty array and verify it starts empty.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -129,7 +132,8 @@ end 'main'
 Push a single element and retrieve it.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -149,7 +153,8 @@ end 'main'
 Push multiple elements and verify count.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -170,7 +175,8 @@ end 'main'
 Push multiple elements and get each one.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -204,7 +210,8 @@ end 'main'
 Set an element and verify the change.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -229,7 +236,8 @@ end 'main'
 Test first() and last() methods.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -258,7 +266,8 @@ end 'main'
 Pop elements and verify they are removed.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -308,7 +317,8 @@ end 'main'
 Iterate over array using for-in loop.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -336,7 +346,8 @@ end 'main'
 Verify isEmpty changes with push/pop.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -368,7 +379,8 @@ end 'main'
 Clear an array and verify it's empty.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -397,7 +409,8 @@ end 'main'
 Get throws error for out of bounds index.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -418,7 +431,8 @@ end 'main'
 Get on an empty array throws error and is caught by otherwise.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -438,7 +452,8 @@ end 'main'
 Get on an empty module-level array throws error and is caught by otherwise.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 var arr = IntArray{}
 
 function main() returns ExitCode
@@ -457,7 +472,8 @@ end 'main'
 Reserve capacity for efficiency.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -660,7 +676,8 @@ This pattern was previously broken due to incorrect refcount handling when the
 same variable appears on both sides of an assignment with a mutating method call.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}

@@ -177,7 +177,8 @@ end 'main'
 <!-- test: if-scope-cleanup -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var outer = IntArray{}

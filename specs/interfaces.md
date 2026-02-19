@@ -128,7 +128,8 @@ interface Container uses Element
   function get(index Score) returns Element
 end 'Container'
 
-typealias InternalIntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias InternalIntArray = Array with Int
 
 type IntArray implements Container with Score
   var data InternalIntArray

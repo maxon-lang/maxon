@@ -20,7 +20,8 @@ The most common internal type is `__ManagedMemory`, which provides the underlyin
 User code should use the public `Array` type from the standard library with a type alias:
 
 ```text
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 var arr = IntArray{}
 arr.push(42)
@@ -33,7 +34,8 @@ The internal `__ManagedMemory` type is used internally by the `Array` implementa
 
 <!-- test: array-public-api -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}

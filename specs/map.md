@@ -24,7 +24,8 @@ The key and value types are automatically inferred from the literal values.
 You can also create an empty map with a type alias:
 
 ```text
-typealias IntIntMap = Map with (int, int)
+typealias Integer = int(i64.min to i64.max)
+typealias IntIntMap = Map with (Integer, Integer)
 var m = IntIntMap{}
 ```
 
@@ -256,10 +257,9 @@ end 'main'
 
 <!-- test: empty-map.from-syntax -->
 ```maxon
-typealias IntIntMap = Map with (int, int)
-
 function main() returns ExitCode
-  var m = IntIntMap{}
+  var m = [0: 0]
+  let _ = m.remove(0)
   m.insert(1, value: 100)
   var result = try m.get(1) otherwise 0
   return result
@@ -309,18 +309,21 @@ end 'main'
 
 <!-- test: map-type-in-field -->
 ```maxon
-typealias IntIntMap = Map with (int, int)
+typealias StrMap = Map with (String, String)
 
 type Container
-  export var data IntIntMap
+  export var data StrMap
 end 'Container'
 
 function main() returns ExitCode
-  var m = IntIntMap{}
-  m.insert(1, value: 42)
+  var m = StrMap{}
+  m.insert("key", value: "val")
   var c = Container{data: m}
-  var result = try c.data.get(1) otherwise 0
-  return result
+  var result = try c.data.get("key") otherwise ""
+  if result == "val" 'check'
+    return 42
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode

@@ -32,6 +32,9 @@ public class MlirType {
   // Sentinel type for function-typed parameters (higher-order functions)
   public static MlirType Fn { get; } = new("fn", 8);
 
+  // Bare primitives cannot be used as type arguments in `with` clauses — users must create a ranged typealias first.
+  // Excludes bool (I1) since it's already a constrained type.
+  public bool IsBarePrimitive => this == I8 || this == I64 || this == F64;
   public bool IsUnsigned => this == U8 || this == U16 || this == U32 || this == U64;
   public MlirType ToSigned() => this == U8 ? I8 : this == U16 ? I16 : this == U32 ? I32 : this == U64 ? I64 : this;
   public MlirType ToUnsigned() => this == I8 ? U8 : this == I16 ? U16 : this == I32 ? U32 : this == I64 ? U64 : this;

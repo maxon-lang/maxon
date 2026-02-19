@@ -41,7 +41,8 @@ When creating a type alias that binds concrete types to constrained parameters, 
 
 ```text
 // OK: String implements Hashable
-typealias StringMap = Map with (String, int)
+typealias Int = int(i64.min to i64.max)
+typealias StringMap = Map with (String, Int)
 
 // Error: a type that doesn't implement Hashable cannot be used as Key
 ```
@@ -88,7 +89,7 @@ type MyKey implements Hashable, Equatable
     end 'equals'
 end 'MyKey'
 
-typealias MyKeyMap = Map with (MyKey, int)
+typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
     let _ = MyKeyMap{}
@@ -112,7 +113,7 @@ type NotHashable
     var x Integer
 end 'NotHashable'
 
-typealias BadMap = Map with (NotHashable, int)
+typealias BadMap = Map with (NotHashable, Integer)
 
 function main() returns ExitCode
     return 0
@@ -275,7 +276,8 @@ type Box uses T where T is Equatable
     end 'eq'
 end 'Box'
 
-typealias IntBox = Box with int
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
 
 function main() returns ExitCode
     var b = IntBox{item: 42}

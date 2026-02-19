@@ -2474,6 +2474,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           ifaceConcreteTypes.Add(ParseTypeRef());
         }
 
+        RejectBarePrimitiveTypeArgs(ifaceConcreteTypes, aliasNameToken);
+
         if (ifaceConcreteTypes.Count != assocTypeNames.Count)
           throw new CompileError(ErrorCode.ParserExpectedType,
             $"Interface '{sourceName}' expects {assocTypeNames.Count} type argument(s), got {ifaceConcreteTypes.Count}",
@@ -2518,6 +2520,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
         concreteTypes.Add(ParseTypeRef());
       }
+
+      RejectBarePrimitiveTypeArgs(concreteTypes, aliasNameToken);
 
       if (concreteTypes.Count != sourceStruct.AssociatedTypeNames.Count)
         throw new CompileError(ErrorCode.ParserExpectedType,
@@ -3842,6 +3846,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     Expect(TokenType.RightParen);
     return (names, types, defaults, paramTokens);
+  }
+
+  private void RejectBarePrimitiveTypeArgs(List<MlirType> typeArgs, Token errorToken) {
+    foreach (var ct in typeArgs) {
+      if (ct.IsBarePrimitive)
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          $"Cannot use bare type '{MlirType.FormatAsSourceName(ct)}' as a type argument; use a ranged typealias instead (e.g. typealias MyType = {MlirType.FormatAsSourceName(ct)}(...))",
+          errorToken.Line, errorToken.Column);
+    }
   }
 
   private MlirType ParseTypeRef() {
@@ -8431,9 +8444,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (sourceTypeName != "Array") continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
           && aliasType is MlirStructType st
-          && st.TypeParams.TryGetValue("Element", out var elemType)
-          && elemType.Name == elementTypeName) {
-        return aliasName;
+          && st.TypeParams.TryGetValue("Element", out var elemType)) {
+        // Direct match (e.g., Element is "String" and we're looking for "String")
+        if (elemType.Name == elementTypeName) return aliasName;
+        // Ranged type match (e.g., Element is "Int" which is int(min..max), we're looking for "i64")
+        if (elemType is MlirRangedPrimitiveType rpt && rpt.BaseType.Name == elementTypeName)
+          return aliasName;
       }
     }
     return null;
@@ -9450,7 +9466,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: selected by argument types");
           return compatibleCandidates[0].Candidate;
         }
-        if (compatibleCandidates.Count > 1) {
+        else if (compatibleCandidates.Count > 1) {
           // Pick highest-scoring candidate if there's a clear winner
           var maxScore = compatibleCandidates.Max(s => s.Score);
           var best = compatibleCandidates.Where(s => s.Score == maxScore).ToList();
@@ -9459,6 +9475,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             return best[0].Candidate;
           }
           matching = [.. best.Select(s => s.Candidate)];
+        }
+        else {
+          // No overload matches arg types — pick first and let call-site type checking report the real error
+          Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: no compatible candidate, picking first");
+          return scored[0].Candidate;
         }
       }
     }

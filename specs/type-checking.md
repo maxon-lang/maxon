@@ -28,7 +28,8 @@ error E3005: specs/fragments/type-checking/method-call-wrong-self-type.test:6:7:
 
 <!-- test: method-call-wrong-element-type -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
@@ -37,7 +38,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/method-call-wrong-element-type.test:6:7: argument type mismatch for 'value': expected 'int', got 'String'
+error E3005: specs/fragments/type-checking/method-call-wrong-element-type.test:7:7: argument type mismatch for 'value': expected 'Int', got 'String'
 ```
 
 <!-- test: function-call-string-where-int-expected -->
@@ -63,9 +64,9 @@ error E3005: specs/fragments/type-checking/function-call-string-where-int-expect
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias IntArray = Array with int
+typealias IntegerArray = Array with Integer
 
-function takeArray(arr IntArray) returns Integer
+function takeArray(arr IntegerArray) returns Integer
   return arr.count()
 end 'takeArray'
 
@@ -75,7 +76,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-expected.test:12:3: argument type mismatch for 'arr': expected 'IntArray', got 'int'
+error E3005: specs/fragments/type-checking/function-call-primitive-where-struct-expected.test:12:3: argument type mismatch for 'arr': expected 'IntegerArray', got 'int'
 ```
 
 <!-- test: function-call-wrong-struct-type -->
@@ -120,7 +121,8 @@ error E3005: specs/fragments/type-checking/stdlib-function-call-wrong-type.test:
 
 <!-- test: implicit-method-call-wrong-type -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 type Container
   var items IntArray
@@ -135,12 +137,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/implicit-method-call-wrong-type.test:8:9: argument type mismatch for 'value': expected 'int', got 'String'
+error E3005: specs/fragments/type-checking/implicit-method-call-wrong-type.test:9:9: argument type mismatch for 'value': expected 'Int', got 'String'
 ```
 
 <!-- test: array-of-different-element-types -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 typealias StringArray = Array with String
 
 function main() returns ExitCode
@@ -151,7 +154,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/array-of-different-element-types.test:8:8: argument type mismatch for 'other': expected 'IntArray', got 'StringArray'
+error E3005: specs/fragments/type-checking/array-of-different-element-types.test:9:8: argument type mismatch for 'other': expected 'IntArray', got 'StringArray'
 ```
 
 <!-- test: typealias-forward-reference -->

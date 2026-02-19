@@ -243,8 +243,9 @@ interface Container uses Element       // associated type
     function get(index int) returns Element
 end 'Container'
 
-type IntBox implements Container with int      // specify associated type
-    function get(index int) returns int
+typealias Integer = int(i64.min to i64.max)
+type IntBox implements Container with Integer  // specify associated type
+    function get(index int) returns Integer
         // ...
     end 'get'
 end 'IntBox'

@@ -274,6 +274,19 @@ var i4 = ceil(f)   // 4 (up)
 
 Every use of `int`, `float`, and `byte` in type positions must go through a `typealias` with mandatory range constraints. This creates a stronger type system where every numeric value has a documented domain. `bool` is exempt from this requirement.
 
+**Restriction in `with` clauses:** Bare primitive types (`int`, `float`, `byte`) cannot be used as type arguments in `with` clauses on `typealias` or `type` declarations. You must create a ranged typealias first. `bool`, `String`, and other struct types are not affected.
+
+```maxon
+// INVALID — bare primitives in with clauses
+typealias IntArray = Array with int          // ERROR
+type IntBox implements Container with int    // ERROR
+
+// VALID — use a ranged typealias
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer      // OK
+type IntBox implements Container with Integer // OK
+```
+
 **Declaration:**
 
 ```maxon
@@ -610,7 +623,8 @@ type Pair uses A, B where A is Hashable, B is Cloneable
 When creating a type alias, the compiler checks that concrete types satisfy the constraints:
 
 ```maxon
-typealias StringMap = Map with (String, int)  // OK: String implements Hashable
+typealias Integer = int(i64.min to i64.max)
+typealias StringMap = Map with (String, Integer)  // OK: String implements Hashable
 ```
 
 ### Interface Extensions
@@ -653,7 +667,7 @@ extension Container
 end 'Container'
 ```
 
-When called on a type like `IntArray implements Container with int`, the return type `Element` becomes `int`.
+When called on a type like `IntArray implements Container with Integer` (where `Integer` is a ranged typealias for `int`), the return type `Element` becomes `Integer`.
 
 **Extension Method Synthesis:**
 
@@ -692,7 +706,7 @@ When a type conforms to the extended interface, the compiler checks whether the 
 - If they do, the extension methods are synthesized for that type
 - If they don't, the methods are silently skipped (no error)
 
-For example, `Array with int` conforms to `Iterable`. Since `int` implements `Equatable`, the `contains` method is available on `Array with int`. A hypothetical `Array with SomeNonEquatableType` would not receive the `contains` method.
+For example, `Array with Integer` (where `Integer` is a ranged typealias for `int`) conforms to `Iterable`. Since `Integer` implements `Equatable`, the `contains` method is available on `Array with Integer`. A hypothetical `Array with SomeNonEquatableType` would not receive the `contains` method.
 
 **Multiple Constraints:**
 
@@ -1183,7 +1197,8 @@ var result = divide(dividend: 10, divisor: 2)
 
 **Array Parameters**
 ```maxon
-type IntArray is Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function sum(numbers IntArray) returns int
     var total = 0
@@ -1463,7 +1478,8 @@ arr.set(0, value: 100)  // First positional, second named
 
 Create an empty typed array using a type alias:
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 var numbers = IntArray{}         // Empty array
 numbers.push(42)                 // Add elements with push
@@ -1471,7 +1487,8 @@ numbers.push(42)                 // Add elements with push
 
 To preallocate with a specific length (elements zero-initialized):
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 var buffer = IntArray{}
 buffer.resize(100)               // Length is now 100
@@ -1480,7 +1497,8 @@ buffer.set(0, value: 42)         // Can set any index 0-99
 
 To preallocate capacity without changing length (for performance):
 ```maxon
-typealias IntArray = Array with int
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 var buffer = IntArray{}
 buffer.reserve(100)              // Capacity is 100, length is 0

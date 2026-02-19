@@ -23,7 +23,8 @@ maxon compile --track-allocs myprogram.maxon
 <!-- test: dynamic-array-no-leak -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   let size = 10
@@ -80,7 +81,8 @@ Cleanups:  0
 <!-- test: multiple-arrays -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   let size1 = 5
@@ -125,7 +127,8 @@ Cleanups:  2
 <!-- test: array-early-return-true -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   let size = 5
@@ -162,7 +165,8 @@ Cleanups:  1
 <!-- test: array-early-return-false -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   let size = 5
@@ -202,15 +206,15 @@ Cleanups:  1
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias IntArray = Array with int
+typealias IntegerArray = Array with Integer
 
-function sum_first(arr IntArray) returns Integer
+function sum_first(arr IntegerArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'sum_first'
 
 function main() returns ExitCode
   let size = 5
-  var arr = IntArray{}
+  var arr = IntegerArray{}
   arr.resize(size)
   arr.set(0, value: 99)
   return sum_first(arr)
@@ -240,7 +244,8 @@ Cleanups:  1
 <!-- test: array-computed-size -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   let a = 2
@@ -278,15 +283,15 @@ Cleanups:  1
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias IntArray = Array with int
+typealias IntegerArray = Array with Integer
 
-function readFirst(arr IntArray) returns Integer
+function readFirst(arr IntegerArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'readFirst'
 
 function main() returns ExitCode
   let size = 5
-  var arr = IntArray{}
+  var arr = IntegerArray{}
   arr.resize(size)
   arr.set(0, value: 42)
   let result = readFirst(arr)
@@ -320,16 +325,15 @@ Cleanups:  1
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias IntegerArray = Array with Integer
 
-typealias IntArray = Array with int
-
-function getElement(arr IntArray, idx Integer) returns Integer
+function getElement(arr IntegerArray, idx Integer) returns Integer
   return try arr.get(idx) otherwise 0
 end 'getElement'
 
 function main() returns ExitCode
   let size = 5
-  var arr = IntArray{}
+  var arr = IntegerArray{}
   arr.resize(size)
   arr.set(0, value: 10)
   arr.set(1, value: 20)
@@ -364,7 +368,8 @@ Cleanups:  1
 <!-- test: array-in-loop -->
 <!-- TrackMemory: true -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var i = 0
@@ -458,16 +463,16 @@ Cleanups:  4
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias IntArray = Array with int
+typealias IntegerArray = Array with Integer
 
-function mutateFirst(arr IntArray) returns Integer
+function mutateFirst(arr IntegerArray) returns Integer
   arr.set(0, value: 100)
   return try arr.get(0) otherwise 0
 end 'mutateFirst'
 
 function main() returns ExitCode
   let size = 5
-  var arr = IntArray{}
+  var arr = IntegerArray{}
   arr.resize(size)
   arr.set(0, value: 42)
   return mutateFirst(arr)
@@ -501,15 +506,15 @@ Cleanups:  1
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias IntArray = Array with int
+typealias IntegerArray = Array with Integer
 
-function addTen(arr IntArray) returns Integer
+function addTen(arr IntegerArray) returns Integer
   var val = try arr.get(0) otherwise 0
   arr.set(0, value: val + 10)
   return try arr.get(0) otherwise 0
 end 'addTen'
 
-function doubleAddTen(arr IntArray) returns Integer
+function doubleAddTen(arr IntegerArray) returns Integer
   var val = try arr.get(0) otherwise 0
   arr.set(0, value: val * 2)
   return addTen(arr)
@@ -517,7 +522,7 @@ end 'doubleAddTen'
 
 function main() returns ExitCode
   let size = 5
-  var arr = IntArray{}
+  var arr = IntegerArray{}
   arr.resize(size)
   arr.set(0, value: 5)
   return doubleAddTen(arr)
@@ -551,22 +556,22 @@ Cleanups:  1
 
 typealias Integer = int(i64.min to i64.max)
 
-typealias IntArray = Array with int
+typealias IntegerArray = Array with Integer
 
-function readIt(arr IntArray) returns Integer
+function readIt(arr IntegerArray) returns Integer
   return try arr.get(0) otherwise 0
 end 'readIt'
 
-function writeIt(arr IntArray) returns Integer
+function writeIt(arr IntegerArray) returns Integer
   arr.set(0, value: 99)
   return try arr.get(0) otherwise 0
 end 'writeIt'
 
 function main() returns ExitCode
   let size = 5
-  var arr1 = IntArray{}
+  var arr1 = IntegerArray{}
   arr1.resize(size)
-  var arr2 = IntArray{}
+  var arr2 = IntegerArray{}
   arr2.resize(size)
   arr1.set(0, value: 10)
   arr2.set(0, value: 20)
@@ -607,7 +612,8 @@ Cleanups:  2
 Zero-size arrays don't allocate memory.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   let size = 0
@@ -641,7 +647,8 @@ Cleanups:  1
 Reassigning a heap array frees the old memory and allocates new memory.
 
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 function main() returns ExitCode
   let size = 5

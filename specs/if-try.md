@@ -421,7 +421,8 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 type MultiManaged
   export var numbers IntArray
@@ -512,7 +513,8 @@ enum MyError implements Error
   failed
 end 'MyError'
 
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 typealias StringArray = Array with String
 
 type Inner

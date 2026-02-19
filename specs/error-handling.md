@@ -466,7 +466,8 @@ error E3057: specs/fragments/error-handling/error.throwing-function-requires-try
 
 <!-- test: error.throwing-method-requires-try -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 // Calling a throwing method without try is an error
 function main() returns ExitCode
@@ -476,7 +477,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:7:17: throwing function requires try: 'stdlib.Array.get'
+error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.test:8:17: throwing function requires try: 'stdlib.Array.get'
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
@@ -500,7 +501,8 @@ error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.t
 
 <!-- test: error.try-on-non-throwing-method -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 // Using try on a non-throwing method is an error
 function main() returns ExitCode
@@ -510,12 +512,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:7:13: try requires a throwing function: ''stdlib.Array.count' does not throw'
+error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.test:8:13: try requires a throwing function: ''stdlib.Array.count' does not throw'
 ```
 
 <!-- test: error.otherwise-without-try -->
 ```maxon
-typealias IntArray = Array with int
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
 
 // Using otherwise without try is an error
 function main() returns ExitCode
@@ -525,7 +528,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:7:24: otherwise requires try expression
+error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:8:24: otherwise requires try expression
 ```
 
 <!-- test: error.otherwise-ignore-in-assignment -->

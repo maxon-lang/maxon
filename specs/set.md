@@ -259,7 +259,8 @@ end 'main'
 Create an empty set and verify it starts empty.
 
 ```maxon
-typealias IntSet = Set with int
+typealias Int = int(i64.min to i64.max)
+typealias IntSet = Set with Int
 
 function main() returns ExitCode
   var s = IntSet{}

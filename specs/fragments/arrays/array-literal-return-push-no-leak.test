@@ -1,9 +1,11 @@
 // Test: array-literal-return-push-no-leak
-
 typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function makeNumbers(a Integer, b Integer) returns IntArray
-  var arr = [a, b]
+  var arr = IntArray{}
+  arr.push(a)
+  arr.push(b)
   arr.push(a + b)
   return arr
 end 'makeNumbers'
@@ -17,23 +19,19 @@ end 'main'
 TrackMemory: true
 ExitCode: 30
 Stdout: ```
-ALLOC #1: 16 bytes (array literal)
-INCREF: array literal -> rc=1
-DECREF: array grow -> rc=0
-FREE #1: 16 bytes (array grow)
-ALLOC #2: 32 bytes (array grow)
+ALLOC #1: 32 bytes (array grow)
 INCREF: array grow -> rc=1
 CLEANUP: nums
 DECREF: nums -> rc=0
-FREE #2: 32 bytes (array cleanup)
+FREE #1: 32 bytes (array cleanup)
 
 === MEMORY STATS ===
-Allocated: 48 bytes
-Freed:     48 bytes
+Allocated: 32 bytes
+Freed:     32 bytes
 Leaked:    0 bytes
 Moves:     0
-Increfs:   2
-Decrefs:   2
+Increfs:   1
+Decrefs:   1
 Copies:    0
 Cleanups:  1
 ```
@@ -41,89 +39,56 @@ Cleanups:  1
 module {
   func @arrays.makeNumbers(a: i64, b: i64) -> i64 {
   entry:
-    x86.prologue stack_size=80
-    x86.mov [rbp-8], edx
-    x86.mov [rbp-16], ecx
+    x86.prologue stack_size=32
     x86.xor eax, eax
-    x86.mov ebx, 2
+    x86.xor ebx, ebx
     x86.xor esi, esi
-    x86.mov edi, 8
-    x86.mov r8, 32
-    x86.mov rcx, r8
+    x86.xor edi, edi
+    x86.mov r8, 8
+    x86.mov r9, 32
+    x86.mov [rbp-24], ecx
+    x86.mov [rbp-32], edx
+    x86.mov rcx, r9
     x86.call maxon_alloc
-    x86.mov [rbp-24], eax
-    x86.mov ecx, [rbp-24]
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
     x86.xor edx, edx
     x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-24]
-    x86.mov esi, 2
+    x86.mov ebx, [rbp-8]
+    x86.xor esi, esi
     x86.mov [ebx+8], esi
-    x86.mov edi, [rbp-24]
+    x86.mov edi, [rbp-8]
     x86.xor r8, r8
     x86.mov [edi+16], r8
-    x86.mov r9, [rbp-24]
+    x86.mov r9, [rbp-8]
     x86.mov eax, 8
     x86.mov [r9+24], eax
-    x86.xor eax, eax
-    x86.mov ecx, 16
+    x86.mov eax, 16
+    x86.mov rcx, rax
     x86.call maxon_alloc
-    x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-32]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
     x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-32]
-    x86.mov [ecx+8], eax
-    x86.lea rax, [rbp-16]
-    x86.mov rcx, rax
-    x86.mov eax, [rbp-32]
-    x86.mov edx, [eax+8]
-    x86.mov eax, [edx+24]
-    x86.mov edx, 2
-    x86.imul edx, eax
-    x86.mov [rbp-56], ecx
-    x86.mov [rbp-64], edx
-    x86.mov rcx, rdx
-    x86.call maxon_alloc
-    x86.mov [rbp-72], eax
-    x86.mov rcx, rax
-    x86.mov rdx, [rbp-56]
-    x86.mov r8, [rbp-64]
-    x86.call maxon_memcpy
-    x86.mov ecx, [rbp-72]
-    x86.mov [rbp-40], ecx
-    x86.mov ecx, [rbp-64]
-    x86.mov [rbp-48], ecx
-    x86.mov ecx, [rbp-40]
-    x86.mov edx, [rbp-48]
-    x86.lea_rdata rbx, [__track_tag_0]
-    x86.mov rsi, rbx
-    x86.mov ebx, 13
-    x86.mov [rbp-80], eax
-    x86.mov r8, rsi
-    x86.mov r9, rbx
-    x86.call maxon_track_alloc
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 13
-    x86.mov edx, 1
-    x86.mov r8, rdx
-    x86.mov rdx, rax
-    x86.call maxon_track_incref
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-32]
-    x86.mov edx, [ecx+8]
-    x86.mov [edx+0], eax
-    x86.mov eax, 2
-    x86.mov [edx+16], eax
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
-    x86.add ecx, eax
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.mov rdx, [rbp-24]
+    x86.call IntArray.push
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.mov rdx, [rbp-32]
+    x86.call IntArray.push
     x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-24]
+    x86.add ecx, eax
+    x86.mov eax, [rbp-16]
     x86.mov rdx, rcx
     x86.mov rcx, rax
     x86.call IntArray.push
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -177,7 +142,7 @@ module {
     x86.mov esi, [ebx+16]
     x86.mov edi, [rbp-48]
     x86.mov r8, [edi+0]
-    x86.lea_rdata r9, [__track_tag_1]
+    x86.lea_rdata r9, [__track_tag_0]
     x86.mov rax, r9
     x86.mov ecx, 4
     x86.mov rdx, r8

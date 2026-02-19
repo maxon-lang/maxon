@@ -79,7 +79,7 @@ Read the entire contents of a file as raw bytes.
 
 **Signature:** `static function readBinary(path string) returns ByteArray throws FileReadError`
 
-where `type ByteArray implements Array with byte`
+where `type ByteArray implements Array with Byte`
 
 **Parameters:**
 - `path`: File path as a string
@@ -107,7 +107,7 @@ Write binary data to a file.
 
 **Signature:** `static function writeBinary(path string, content ByteArray) throws FileWriteError`
 
-where `type ByteArray implements Array with byte`
+where `type ByteArray implements Array with Byte`
 
 **Parameters:**
 - `path`: File path as a string
@@ -243,16 +243,14 @@ File not found
 <!-- test: write-and-read-binary -->
 ```maxon
 
-typealias Byte = byte(0 to u8.max)
-
-typealias ByteArray = Array with byte
+typealias ByteArray = Array with Utf8Byte
 
 function main() returns ExitCode
   // Create a byte array with known values
   var data = ByteArray{}
-  data.push(65 as Byte)
-  data.push(66 as Byte)
-  data.push(67 as Byte)
+  data.push(65 as Utf8Byte)
+  data.push(66 as Utf8Byte)
+  data.push(67 as Utf8Byte)
 
   // Write binary file
   try File.writeBinary("test_binary.bin", content: data) otherwise 'write_err'
@@ -282,7 +280,7 @@ function main() returns ExitCode
     return 10
   end 'e0'
 
-  if b0 != 65 as Byte 'check0'
+  if b0 != 65 as Utf8Byte 'check0'
     print("Wrong value")
     return 20
   end 'check0'

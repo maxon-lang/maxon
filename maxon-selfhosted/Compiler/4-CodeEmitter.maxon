@@ -561,8 +561,8 @@ end 'emitI64ToString'
 // --- Print Operations ---
 
 // Emit printLiteral: jump over data island, then call write_stdout
-function emitPrintLiteral(code Utf8ByteBuffer, data Utf8ByteBuffer, writeStdoutOffset CodeOffset)
-    let dataLen = data.count()
+function emitPrintLiteral(code Utf8ByteBuffer, data String, writeStdoutOffset CodeOffset)
+    let dataLen = data.byteLength()
     if dataLen == 0 'empty'
         return
     end 'empty'
@@ -574,10 +574,8 @@ function emitPrintLiteral(code Utf8ByteBuffer, data Utf8ByteBuffer, writeStdoutO
 
     // Data island
     let dataOffset = code.count()
-    var i = 0
-    while i < dataLen 'copyData'
-        code.push(data.getByte(i))
-        i = i + 1
+    for b in data.bytes() 'copyData'
+        code.push(b)
     end 'copyData'
 
     // Patch jump

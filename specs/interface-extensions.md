@@ -59,7 +59,7 @@ When called on a type like `IntArray implements Container with int`, the return 
 
 ### Extension Method Synthesis
 
-When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `type IntArray implements Array with int` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `IntArray`.
+When a type conforms to an interface that has extensions, the compiler synthesizes concrete methods for that type. For example, if `type IntArray implements Array with Int` conforms to `Iterable`, calling `myArray.count()` invokes a method specialized for `IntArray`.
 
 ### Transitive Extensions
 
@@ -271,18 +271,18 @@ end 'main'
 
 <!-- test: stdlib-map-on-array -->
 ```maxon
-
 typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 function main() returns ExitCode
   var nums = [1, 2, 3, 4, 5]
   var doubled = nums.map((x Integer) gives x * 2)
-  
+
   var sum = 0
   for n in doubled 'loop'
     sum = sum + n
   end 'loop'
-  
+
   // 2 + 4 + 6 + 8 + 10 = 30
   return sum
 end 'main'
@@ -294,16 +294,10 @@ end 'main'
 
 <!-- test: stdlib-map-on-set -->
 ```maxon
-
 typealias Integer = int(i64.min to i64.max)
 
-typealias IntSet = Set with int
-
 function main() returns ExitCode
-  var s = IntSet{}
-  s.insert(10)
-  s.insert(20)
-  s.insert(30)
+  var s = Set from [10, 20, 30]
   var mapped = s.map((x Integer) gives x + 1)
 
   var sum = 0
