@@ -3,8 +3,53 @@
 
 // Sentinel returned by findMainReturnType when main exists but has no return type.
 function noReturnTypeSentinel() returns ByteArray
-    return "__none__"
+    var s = ByteArray{}
+    // "__none__"
+    s.push(95)
+    s.push(95)
+    s.push(110)
+    s.push(111)
+    s.push(110)
+    s.push(101)
+    s.push(95)
+    s.push(95)
+    return s
 end 'noReturnTypeSentinel'
+
+function exitCodeBytes() returns ByteArray
+    var s = ByteArray{}
+    // "ExitCode"
+    s.push(69)
+    s.push(120)
+    s.push(105)
+    s.push(116)
+    s.push(67)
+    s.push(111)
+    s.push(100)
+    s.push(101)
+    return s
+end 'exitCodeBytes'
+
+function mainBytes() returns ByteArray
+    var s = ByteArray{}
+    // "main"
+    s.push(109)
+    s.push(97)
+    s.push(105)
+    s.push(110)
+    return s
+end 'mainBytes'
+
+function dotMainBytes() returns ByteArray
+    var s = ByteArray{}
+    // ".main"
+    s.push(46)
+    s.push(109)
+    s.push(97)
+    s.push(105)
+    s.push(110)
+    return s
+end 'dotMainBytes'
 
 export function runSemanticChecks(ops MaxonOpArray) throws CompileError
     let mainReturnType = findMainReturnType(ops)
@@ -12,7 +57,8 @@ export function runSemanticChecks(ops MaxonOpArray) throws CompileError
     if mainReturnType.count() == 0 'noMain'
         try raiseSemanticError(ErrorCode.semanticNoMain, message: "No 'main' function found")
     end 'noMain' else 'hasMain'
-        if mainReturnType != "ExitCode" 'wrongType'
+        let expected = exitCodeBytes()
+        if not bytesEqual(mainReturnType, b: expected) 'wrongType'
             try raiseSemanticError(ErrorCode.semanticMainWrongReturnType, message: "Function 'main' must return ExitCode")
         end 'wrongType'
     end 'hasMain'
@@ -33,47 +79,71 @@ function findMainReturnType(ops MaxonOpArray) returns ByteArray
         end 'found'
         i = i + 1
     end 'scan'
-    return ByteArray{}
+    var empty = ByteArray{}
+    return empty
 end 'findMainReturnType'
 
 // If op is a funcBegin for "main", returns its return type (or sentinel if none).
 // Returns empty ByteArray for non-main or non-funcBegin ops.
 function getMainReturnType(op MaxonOp) returns ByteArray
+    var result = ByteArray{}
     match op 'check'
-        funcBegin(name, returnType) then return matchMainFunc(name, returnType: returnType)
-        literal(resultId, value) then return ByteArray{}
-        floatLiteral(resultId, rawBits) then return ByteArray{}
-        returnOp(retValId) then return ByteArray{}
-        varDecl(slotId, valueId) then return ByteArray{}
-        varLoad(resultId, slotId) then return ByteArray{}
-        add(resultId, leftId, rightId) then return ByteArray{}
-        sub(resultId, leftId, rightId) then return ByteArray{}
-        mul(resultId, leftId, rightId) then return ByteArray{}
-        cmpEq(resultId, leftId, rightId) then return ByteArray{}
-        cmpNe(resultId, leftId, rightId) then return ByteArray{}
-        cmpLt(resultId, leftId, rightId) then return ByteArray{}
-        cmpLe(resultId, leftId, rightId) then return ByteArray{}
-        cmpGt(resultId, leftId, rightId) then return ByteArray{}
-        cmpGe(resultId, leftId, rightId) then return ByteArray{}
-        floatCmpEq(resultId, leftId, rightId) then return ByteArray{}
-        condBr(condId, thenLabel, elseLabel) then return ByteArray{}
-        br(targetLabel) then return ByteArray{}
-        label(name) then return ByteArray{}
-        pushValue then return ByteArray{}
-        popToRcx then return ByteArray{}
-        printLiteral(data) then return ByteArray{}
-        printInt(valueId) then return ByteArray{}
-        funcEnd then return ByteArray{}
-        call(resultId, callee) then return ByteArray{}
+        funcBegin(name, returnType) then result = matchMainFunc(name, returnType: returnType)
+        literal(resultId, value) then result = result
+        floatLiteral(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        varDecl(slotId, valueId) then result = result
+        varLoad(resultId, slotId) then result = result
+        add(resultId, leftId, rightId) then result = result
+        sub(resultId, leftId, rightId) then result = result
+        mul(resultId, leftId, rightId) then result = result
+        cmpEq(resultId, leftId, rightId) then result = result
+        cmpNe(resultId, leftId, rightId) then result = result
+        cmpLt(resultId, leftId, rightId) then result = result
+        cmpLe(resultId, leftId, rightId) then result = result
+        cmpGt(resultId, leftId, rightId) then result = result
+        cmpGe(resultId, leftId, rightId) then result = result
+        floatCmpEq(resultId, leftId, rightId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        pushValue then result = result
+        popToRcx then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        funcEnd then result = result
+        call(resultId, callee) then result = result
     end 'check'
+    return result
 end 'getMainReturnType'
 
 function matchMainFunc(name ByteArray, returnType ByteArray) returns ByteArray
-    if name == "main" or String.from(name).endsWith(".main") 'isMain'
+    let mn = mainBytes()
+    let dm = dotMainBytes()
+    if bytesEqual(name, b: mn) or endsWithBytes(name, suffix: dm) 'isMain'
         if returnType.count() == 0 'noReturn'
             return noReturnTypeSentinel()
         end 'noReturn'
         return returnType
     end 'isMain'
-    return ByteArray{}
+    var empty = ByteArray{}
+    return empty
 end 'matchMainFunc'
+
+function endsWithBytes(haystack ByteArray, suffix ByteArray) returns bool
+    let hLen = haystack.count()
+    let sLen = suffix.count()
+    if sLen > hLen 'tooShort'
+        return false
+    end 'tooShort'
+    var i = 0
+    while i < sLen 'cmp'
+        let hByte = try haystack.get(hLen - sLen + i) otherwise 0
+        let sByte = try suffix.get(i) otherwise 1
+        if hByte != sByte 'mismatch'
+            return false
+        end 'mismatch'
+        i = i + 1
+    end 'cmp'
+    return true
+end 'endsWithBytes'

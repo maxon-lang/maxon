@@ -173,24 +173,39 @@ let actionTable = [
     1, 6, 7, 8, 9, 10, 1, 1
     ]
 
+function singleByte(b Byte) returns ByteArray
+    var arr = ByteArray{}
+    arr.push(b)
+    return arr
+end 'singleByte'
+
+function twoBytes(a Byte, b Byte) returns ByteArray
+    var arr = ByteArray{}
+    arr.push(a)
+    arr.push(b)
+    return arr
+end 'twoBytes'
+
 // Single dispatch point for all fixed-text tokens (operators, punctuation).
+// Token values are built as ByteArray directly — String literals assigned to
+// ByteArray fields in struct literals cause memory corruption in the self-hosted binary.
 function emitFixedToken(state DfaIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
     match state 'dispatch'
-        9 then tokens.push({kind: TokenKind.leftParen, value: "(", line: line, column: column})
-        10 then tokens.push({kind: TokenKind.rightParen, value: ")", line: line, column: column})
-        11 then tokens.push({kind: TokenKind.leftBrace, value: "lbrace", line: line, column: column})
-        12 then tokens.push({kind: TokenKind.rightBrace, value: "rbrace", line: line, column: column})
-        13 then tokens.push({kind: TokenKind.plus, value: "+", line: line, column: column})
-        14 then tokens.push({kind: TokenKind.minus, value: "-", line: line, column: column})
-        15 then tokens.push({kind: TokenKind.star, value: "*", line: line, column: column})
-        16 then tokens.push({kind: TokenKind.colon, value: ":", line: line, column: column})
-        17 then tokens.push({kind: TokenKind.equals, value: "=", line: line, column: column})
-        18 then tokens.push({kind: TokenKind.equalsEquals, value: "==", line: line, column: column})
-        19 then tokens.push({kind: TokenKind.bangEquals, value: "!=", line: line, column: column})
-        20 then tokens.push({kind: TokenKind.lessThan, value: "<", line: line, column: column})
-        21 then tokens.push({kind: TokenKind.lessEquals, value: "<=", line: line, column: column})
-        22 then tokens.push({kind: TokenKind.greaterThan, value: ">", line: line, column: column})
-        23 then tokens.push({kind: TokenKind.greaterEquals, value: ">=", line: line, column: column})
+        9 then tokens.push({kind: TokenKind.leftParen, value: singleByte(40), line: line, column: column})
+        10 then tokens.push({kind: TokenKind.rightParen, value: singleByte(41), line: line, column: column})
+        11 then tokens.push({kind: TokenKind.leftBrace, value: singleByte(123), line: line, column: column})
+        12 then tokens.push({kind: TokenKind.rightBrace, value: singleByte(125), line: line, column: column})
+        13 then tokens.push({kind: TokenKind.plus, value: singleByte(43), line: line, column: column})
+        14 then tokens.push({kind: TokenKind.minus, value: singleByte(45), line: line, column: column})
+        15 then tokens.push({kind: TokenKind.star, value: singleByte(42), line: line, column: column})
+        16 then tokens.push({kind: TokenKind.colon, value: singleByte(58), line: line, column: column})
+        17 then tokens.push({kind: TokenKind.equals, value: singleByte(61), line: line, column: column})
+        18 then tokens.push({kind: TokenKind.equalsEquals, value: twoBytes(61, b: 61), line: line, column: column})
+        19 then tokens.push({kind: TokenKind.bangEquals, value: twoBytes(33, b: 61), line: line, column: column})
+        20 then tokens.push({kind: TokenKind.lessThan, value: singleByte(60), line: line, column: column})
+        21 then tokens.push({kind: TokenKind.lessEquals, value: twoBytes(60, b: 61), line: line, column: column})
+        22 then tokens.push({kind: TokenKind.greaterThan, value: singleByte(62), line: line, column: column})
+        23 then tokens.push({kind: TokenKind.greaterEquals, value: twoBytes(62, b: 61), line: line, column: column})
         default then break
     end 'dispatch'
 end 'emitFixedToken'
@@ -243,7 +258,7 @@ export function tokenize(source ByteArray) returns TokenArray
         end 'doCr'
 
         if action == ACT_NEWLINE 'doNewline'
-            tokens.push({kind: TokenKind.newline, value: "", line: startLine, column: startCol})
+            tokens.push({kind: TokenKind.newline, value: ByteArray{}, line: startLine, column: startCol})
             s.line = s.line + 1
             s.column = 1
             continue
@@ -296,7 +311,7 @@ export function tokenize(source ByteArray) returns TokenArray
         end 'doComment'
     end 'scan'
 
-    tokens.push({kind: TokenKind.eof, value: "", line: s.line, column: s.column})
+    tokens.push({kind: TokenKind.eof, value: ByteArray{}, line: s.line, column: s.column})
     logDebug(LogCategory.lexer, message: "Lexer complete: {tokens.count()} tokens")
     return tokens
 end 'tokenize'
@@ -429,10 +444,32 @@ function isAlphaNum(b Byte) returns bool
     return isAlpha(b) or isDigit(b)
 end 'isAlphaNum'
 
-function sliceBytes(source ByteArray, startPos CharOffset, endPos CharOffset) returns ByteArray
+export function sliceBytes(source ByteArray, startPos CharOffset, endPos CharOffset) returns ByteArray
     var sliced = source.slice(startPos, endIndex: endPos)
     return {managed: sliced.managed}
 end 'sliceBytes'
+
+export function bytesToByteArray(src ByteBuffer) returns ByteArray
+    return {managed: src.managed}
+end 'bytesToByteArray'
+
+// Element-wise comparison for ByteArrays (== does pointer comparison in self-hosted binary).
+export function bytesEqual(a ByteArray, b ByteArray) returns bool
+    let aLen = a.count()
+    if aLen != b.count() 'lenMismatch'
+        return false
+    end 'lenMismatch'
+    var i = 0
+    while i < aLen 'cmp'
+        let ab = try a.get(i) otherwise 0
+        let bb = try b.get(i) otherwise 1
+        if ab != bb 'ne'
+            return false
+        end 'ne'
+        i = i + 1
+    end 'cmp'
+    return true
+end 'bytesEqual'
 
 export enum KeywordCategory
     control

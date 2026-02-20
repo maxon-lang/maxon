@@ -2,6 +2,16 @@
 
 // Uses StdOpArray from MaxonToStandardConversion, X86OpArray from CodeEmitter
 
+enum JumpKind
+    eq
+    ne
+    lt
+    le
+    gt
+    ge
+    feq
+end 'JumpKind'
+
 export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
     logDebug(LogCategory.mlir, message: "Lowering {stdOps.count()} Standard ops to X86 dialect")
     // All pushes to ops happen in this function to avoid grow-desync
@@ -28,25 +38,24 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
         let elseLabel = getCondBrElseLabel(sOp)
         if elseLabel.count() > 0 'isCondBr'
             let jumpKind = determineJumpKind(stdOps, condIndex: i)
-            if jumpKind == "eq" 'jEq'
+            if jumpKind == JumpKind.eq 'jEq'
                 ops.push(X86Op.jne(elseLabel))
             end 'jEq' else 'jNotEq'
-                if jumpKind == "ne" 'jNe'
+                if jumpKind == JumpKind.ne 'jNe'
                     ops.push(X86Op.je(elseLabel))
                 end 'jNe' else 'jNotNe'
-                    if jumpKind == "lt" 'jLt'
+                    if jumpKind == JumpKind.lt 'jLt'
                         ops.push(X86Op.jge(elseLabel))
                     end 'jLt' else 'jNotLt'
-                        if jumpKind == "le" 'jLe'
+                        if jumpKind == JumpKind.le 'jLe'
                             ops.push(X86Op.jg(elseLabel))
                         end 'jLe' else 'jNotLe'
-                            if jumpKind == "gt" 'jGt'
+                            if jumpKind == JumpKind.gt 'jGt'
                                 ops.push(X86Op.jle(elseLabel))
                             end 'jGt' else 'jNotGt'
-                                if jumpKind == "ge" 'jGe'
+                                if jumpKind == JumpKind.ge 'jGe'
                                     ops.push(X86Op.jl(elseLabel))
                                 end 'jGe' else 'jFeq'
-                                    // "feq" (float equality) — jne covers unordered (NaN) and not-equal
                                     ops.push(X86Op.jne(elseLabel))
                                 end 'jFeq'
                             end 'jNotGt'
@@ -96,64 +105,68 @@ end 'lowerStdOpsToX86'
 
 // Extract function name from a funcBegin op; returns empty ByteArray for other ops.
 function getFuncBeginName(op StdOp) returns ByteArray
+    var result = ByteArray{}
     match op 'check'
-        funcBegin(name, returnType) then return name
-        funcEnd then return ByteArray{}
-        constI64(resultId, value) then return ByteArray{}
-        constF64(resultId, rawBits) then return ByteArray{}
-        returnOp(retValId) then return ByteArray{}
-        storeSlot(slotId, valueId) then return ByteArray{}
-        loadSlot(resultId, slotId) then return ByteArray{}
-        addI64(resultId, leftId, rightId) then return ByteArray{}
-        subI64(resultId, leftId, rightId) then return ByteArray{}
-        mulI64(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Eq(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Ne(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Lt(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Le(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Gt(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Ge(resultId, leftId, rightId) then return ByteArray{}
-        cmpF64Eq(resultId, leftId, rightId) then return ByteArray{}
-        condBr(condId, thenLabel, elseLabel) then return ByteArray{}
-        br(targetLabel) then return ByteArray{}
-        label(name) then return ByteArray{}
-        pushValue then return ByteArray{}
-        popToRcx then return ByteArray{}
-        printLiteral(data) then return ByteArray{}
-        printInt(valueId) then return ByteArray{}
-        call(resultId, callee) then return ByteArray{}
+        funcBegin(name, returnType) then result = name
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        pushValue then result = result
+        popToRcx then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
     end 'check'
+    return result
 end 'getFuncBeginName'
 
 // Extract else label from a condBr op; returns empty ByteArray for other ops.
 function getCondBrElseLabel(op StdOp) returns ByteArray
+    var result = ByteArray{}
     match op 'check'
-        condBr(condId, thenLabel, elseLabel) then return elseLabel
-        funcBegin(name, returnType) then return ByteArray{}
-        funcEnd then return ByteArray{}
-        constI64(resultId, value) then return ByteArray{}
-        constF64(resultId, rawBits) then return ByteArray{}
-        returnOp(retValId) then return ByteArray{}
-        storeSlot(slotId, valueId) then return ByteArray{}
-        loadSlot(resultId, slotId) then return ByteArray{}
-        addI64(resultId, leftId, rightId) then return ByteArray{}
-        subI64(resultId, leftId, rightId) then return ByteArray{}
-        mulI64(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Eq(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Ne(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Lt(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Le(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Gt(resultId, leftId, rightId) then return ByteArray{}
-        cmpI64Ge(resultId, leftId, rightId) then return ByteArray{}
-        cmpF64Eq(resultId, leftId, rightId) then return ByteArray{}
-        br(targetLabel) then return ByteArray{}
-        label(name) then return ByteArray{}
-        pushValue then return ByteArray{}
-        popToRcx then return ByteArray{}
-        printLiteral(data) then return ByteArray{}
-        printInt(valueId) then return ByteArray{}
-        call(resultId, callee) then return ByteArray{}
+        condBr(condId, thenLabel, elseLabel) then result = elseLabel
+        funcBegin(name, returnType) then result = result
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        pushValue then result = result
+        popToRcx then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
     end 'check'
+    return result
 end 'getCondBrElseLabel'
 
 // Read-only scan: compute stack frame size by finding max slot and print usage.
@@ -212,7 +225,7 @@ function computeStackSize(stdOps StdOpArray, startIndex StdOpIndex) returns Stac
 end 'computeStackSize'
 
 // Read-only scan: look back from condBr to find the comparison that produced the condition.
-function determineJumpKind(stdOps StdOpArray, condIndex StdOpIndex) returns String
+function determineJumpKind(stdOps StdOpArray, condIndex StdOpIndex) returns JumpKind
     var j = condIndex - 1
     while j >= 0 'scanBack'
         let prevOp = try stdOps.get(j) otherwise 'scanSkip'
@@ -220,13 +233,13 @@ function determineJumpKind(stdOps StdOpArray, condIndex StdOpIndex) returns Stri
             continue
         end 'scanSkip'
         match prevOp 'checkCmp'
-            cmpI64Eq(resultId, leftId, rightId) then return "eq"
-            cmpI64Ne(resultId, leftId, rightId) then return "ne"
-            cmpI64Lt(resultId, leftId, rightId) then return "lt"
-            cmpI64Le(resultId, leftId, rightId) then return "le"
-            cmpI64Gt(resultId, leftId, rightId) then return "gt"
-            cmpI64Ge(resultId, leftId, rightId) then return "ge"
-            cmpF64Eq(resultId, leftId, rightId) then return "feq"
+            cmpI64Eq(resultId, leftId, rightId) then return JumpKind.eq
+            cmpI64Ne(resultId, leftId, rightId) then return JumpKind.ne
+            cmpI64Lt(resultId, leftId, rightId) then return JumpKind.lt
+            cmpI64Le(resultId, leftId, rightId) then return JumpKind.le
+            cmpI64Gt(resultId, leftId, rightId) then return JumpKind.gt
+            cmpI64Ge(resultId, leftId, rightId) then return JumpKind.ge
+            cmpF64Eq(resultId, leftId, rightId) then return JumpKind.feq
             constI64(resultId, value) then j = j - 1
             constF64(resultId, rawBits) then j = j - 1
             returnOp(retValId) then j = j - 1
@@ -247,7 +260,7 @@ function determineJumpKind(stdOps StdOpArray, condIndex StdOpIndex) returns Stri
             call(resultId, callee) then j = j - 1
         end 'checkCmp'
     end 'scanBack'
-    return "eq"
+    return JumpKind.eq
 end 'determineJumpKind'
 
 typealias SlotIndex = int(i64.min to i64.max)

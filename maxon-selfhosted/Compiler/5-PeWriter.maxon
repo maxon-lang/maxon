@@ -7,113 +7,59 @@ typealias Rva = int(0 to u64.max)
 typealias IatSlotIndex = int(0 to u64.max)
 typealias SectionFlags = int(0 to u64.max)
 
-// Utf8ByteBuffer wraps __ManagedMemory for efficient byte-level building.
-// All write operations are methods to ensure self-mutation propagates.
+// --- ByteBuffer multi-byte write helpers ---
 
-export type Utf8ByteBuffer
-    var managed __ManagedMemory
-    var len ByteCount
+export function writeWord(buf ByteBuffer, value MachineWord)
+    buf.push(value and 0xFF)
+    buf.push((value shr 8) and 0xFF)
+end 'writeWord'
 
-    export static function create(capacity ByteCount) returns Self
-        return {managed: __managed_memory_create(capacity, 1), len: 0}
-    end 'create'
+export function writeDword(buf ByteBuffer, value MachineWord)
+    buf.push(value and 0xFF)
+    buf.push((value shr 8) and 0xFF)
+    buf.push((value shr 16) and 0xFF)
+    buf.push((value shr 24) and 0xFF)
+end 'writeDword'
 
-    export function push(value Utf8Byte)
-        if len >= __managed_memory_capacity(managed) 'grow'
-            var newCap = __managed_memory_capacity(managed) * 2
-            if newCap < 16 'min'
-                newCap = 16
-            end 'min'
-            __managed_memory_grow(managed, newCap)
-        end 'grow'
-        __managed_memory_set_byte(managed, len, value)
-        len = len + 1
-        __managed_memory_set_length(managed, len)
-    end 'push'
+export function writeQword(buf ByteBuffer, value MachineWord)
+    buf.push(value and 0xFF)
+    buf.push((value shr 8) and 0xFF)
+    buf.push((value shr 16) and 0xFF)
+    buf.push((value shr 24) and 0xFF)
+    buf.push((value shr 32) and 0xFF)
+    buf.push((value shr 40) and 0xFF)
+    buf.push((value shr 48) and 0xFF)
+    buf.push((value shr 56) and 0xFF)
+end 'writeQword'
 
-    export function getByte(index ByteOffset) returns Utf8Byte
-        return __managed_memory_byte_at(managed, index)
-    end 'getByte'
+export function writeZeros(buf ByteBuffer, n ByteCount)
+    var i = 0
+    while i < n 'zeros'
+        buf.push(0)
+        i = i + 1
+    end 'zeros'
+end 'writeZeros'
 
-    export function setByte(index ByteOffset, value Utf8Byte)
-        __managed_memory_set_byte(managed, index, value)
-    end 'setByte'
+export function writeAscii(buf ByteBuffer, text String)
+    for ch in text 'chars'
+        let b = try ch.asciiValue() otherwise 0
+        buf.push(b)
+    end 'chars'
+    buf.push(0)
+end 'writeAscii'
 
-    export function count() returns ByteCount
-        return len
-    end 'count'
+export function padTo(buf ByteBuffer, size ByteCount)
+    while buf.count() < size 'pad'
+        buf.push(0)
+    end 'pad'
+end 'padTo'
 
-    export function reserve(capacity ByteCount)
-        if capacity > __managed_memory_capacity(managed) 'grow'
-            __managed_memory_grow(managed, capacity)
-        end 'grow'
-    end 'reserve'
-
-    export function toByteArray() returns ByteArray
-        let sliced = __managed_memory_slice(managed, 0, len)
-        return {managed: sliced, iterIndex: 0}
-    end 'toByteArray'
-
-    export function writeWord(value MachineWord)
-        push(value and 0xFF)
-        push((value shr 8) and 0xFF)
-    end 'writeWord'
-
-    export function writeDword(value MachineWord)
-        push(value and 0xFF)
-        push((value shr 8) and 0xFF)
-        push((value shr 16) and 0xFF)
-        push((value shr 24) and 0xFF)
-    end 'writeDword'
-
-    export function writeQword(value MachineWord)
-        push(value and 0xFF)
-        push((value shr 8) and 0xFF)
-        push((value shr 16) and 0xFF)
-        push((value shr 24) and 0xFF)
-        push((value shr 32) and 0xFF)
-        push((value shr 40) and 0xFF)
-        push((value shr 48) and 0xFF)
-        push((value shr 56) and 0xFF)
-    end 'writeQword'
-
-    export function writeZeros(n ByteCount)
-        var i = 0
-        while i < n 'zeros'
-            push(0)
-            i = i + 1
-        end 'zeros'
-    end 'writeZeros'
-
-    export function writeAscii(text String)
-        for ch in text 'chars'
-            let b = try ch.asciiValue() otherwise 0
-            push(b)
-        end 'chars'
-        push(0)
-    end 'writeAscii'
-
-    export function padTo(size ByteCount)
-        while len < size 'pad'
-            push(0)
-        end 'pad'
-    end 'padTo'
-
-    export function appendFrom(source Utf8ByteBuffer)
-        var i = 0
-        while i < source.count() 'copy'
-            push(source.getByte(i))
-            i = i + 1
-        end 'copy'
-    end 'appendFrom'
-
-    export function patchDword(offset ByteOffset, value MachineWord)
-        setByte(offset, value: value and 0xFF)
-        setByte(offset + 1, value: (value shr 8) and 0xFF)
-        setByte(offset + 2, value: (value shr 16) and 0xFF)
-        setByte(offset + 3, value: (value shr 24) and 0xFF)
-    end 'patchDword'
-end 'Utf8Utf8ByteBuffer'
+export function patchDword(buf ByteBuffer, offset ByteOffset, value MachineWord)
+    buf.set(offset, value: value and 0xFF)
+    buf.set(offset + 1, value: (value shr 8) and 0xFF)
+    buf.set(offset + 2, value: (value shr 16) and 0xFF)
+    buf.set(offset + 3, value: (value shr 24) and 0xFF)
+end 'patchDword'
 
 let FILE_ALIGNMENT = 512
 let SECTION_ALIGNMENT = 4096
@@ -129,7 +75,7 @@ let IAT_SLOT_GET_STD_HANDLE = 1
 let IAT_SLOT_WRITE_FILE = 2
 
 type ImportSection
-    export var data Utf8ByteBuffer
+    export var data ByteBuffer
     export var iatRva Rva
     export var importDirRva Rva
     export var importDirSize ByteCount
@@ -142,17 +88,9 @@ end 'IatFixup'
 
 
 function buildImportSection(idataRva Rva) returns ImportSection
-    var data = Utf8ByteBuffer.create(256)
+    var data = ByteBuffer{}
+    data.reserve(256)
 
-    // Layout for 3 imports from kernel32.dll:
-    // IAT: 3 entries + null = 32 bytes (offset 0)
-    // ILT: 3 entries + null = 32 bytes (offset 32)
-    // Import Dir: 1 entry + null = 40 bytes (offset 64)
-    // Hint/Name table (offset 104): entries must be on even boundaries
-    //   ExitProcess:  2 hint + "ExitProcess\0"  (12) = 14 bytes
-    //   GetStdHandle: 2 hint + "GetStdHandle\0" (13) = 15 bytes + 1 pad = 16
-    //   WriteFile:    2 hint + "WriteFile\0"    (10) = 12 bytes
-    // DLL name (offset 146): "kernel32.dll\0"
     let iatOffset = 0
     let iltOffset = 32
     let importDirOffset = 64
@@ -163,42 +101,40 @@ function buildImportSection(idataRva Rva) returns ImportSection
     let dllNameOffset = hintWriteFile + 12
 
     // IAT entries: point to hint/name table entries
-    data.writeQword(idataRva + hintExitProcess)    // slot 0: ExitProcess
-    data.writeQword(idataRva + hintGetStdHandle)   // slot 1: GetStdHandle
-    data.writeQword(idataRva + hintWriteFile)      // slot 2: WriteFile
-    data.writeQword(0)                              // null terminator
+    writeQword(data, value: idataRva + hintExitProcess)
+    writeQword(data, value: idataRva + hintGetStdHandle)
+    writeQword(data, value: idataRva + hintWriteFile)
+    writeQword(data, value: 0)
 
     // ILT entries: same as IAT
-    data.writeQword(idataRva + hintExitProcess)
-    data.writeQword(idataRva + hintGetStdHandle)
-    data.writeQword(idataRva + hintWriteFile)
-    data.writeQword(0)
+    writeQword(data, value: idataRva + hintExitProcess)
+    writeQword(data, value: idataRva + hintGetStdHandle)
+    writeQword(data, value: idataRva + hintWriteFile)
+    writeQword(data, value: 0)
 
     // Import Directory entry
-    data.writeDword(idataRva + iltOffset)       // OriginalFirstThunk (ILT RVA)
-    data.writeDword(0)                           // TimeDateStamp
-    data.writeDword(0)                           // ForwarderChain
-    data.writeDword(idataRva + dllNameOffset)   // Name RVA
-    data.writeDword(idataRva + iatOffset)       // FirstThunk (IAT RVA)
+    writeDword(data, value: idataRva + iltOffset)
+    writeDword(data, value: 0)
+    writeDword(data, value: 0)
+    writeDword(data, value: idataRva + dllNameOffset)
+    writeDword(data, value: idataRva + iatOffset)
 
     // Import Directory null terminator
-    data.writeZeros(20)
+    writeZeros(data, n: 20)
 
-    // Hint/Name table (entries must start on even boundaries)
-    data.writeWord(0)
-    data.writeAscii("ExitProcess")
-    // 14 bytes total, ends on even boundary
+    // Hint/Name table
+    writeWord(data, value: 0)
+    writeAscii(data, text: "ExitProcess")
 
-    data.writeWord(0)
-    data.writeAscii("GetStdHandle")
-    data.push(0) // pad to even boundary (15 -> 16 bytes)
+    writeWord(data, value: 0)
+    writeAscii(data, text: "GetStdHandle")
+    data.push(0) // pad to even boundary
 
-    data.writeWord(0)
-    data.writeAscii("WriteFile")
-    // 12 bytes total, ends on even boundary
+    writeWord(data, value: 0)
+    writeAscii(data, text: "WriteFile")
 
     // DLL name
-    data.writeAscii("kernel32.dll")
+    writeAscii(data, text: "kernel32.dll")
 
     return {
         data: data,
@@ -210,7 +146,7 @@ end 'buildImportSection'
 
 // --- Section header writer ---
 
-function writeSectionName(buf Utf8ByteBuffer, name String)
+function writeSectionName(buf ByteBuffer, name String)
     var written = 0
     for ch in name 'chars'
         let b = try ch.asciiValue() otherwise 0
@@ -223,30 +159,31 @@ function writeSectionName(buf Utf8ByteBuffer, name String)
     end 'pad'
 end 'writeSectionName'
 
-function writeSectionHeader(buf Utf8ByteBuffer, name String, virtualSize ByteCount, virtualAddress Rva, rawDataSize ByteCount, rawDataPointer ByteOffset, characteristics SectionFlags)
+function writeSectionHeader(buf ByteBuffer, name String, virtualSize ByteCount, virtualAddress Rva, rawDataSize ByteCount, rawDataPointer ByteOffset, characteristics SectionFlags)
     writeSectionName(buf, name: name)
-    buf.writeDword(virtualSize)
-    buf.writeDword(virtualAddress)
-    buf.writeDword(rawDataSize)
-    buf.writeDword(rawDataPointer)
-    buf.writeDword(0)  // PointerToRelocations
-    buf.writeDword(0)  // PointerToLinenumbers
-    buf.writeWord(0)   // NumberOfRelocations
-    buf.writeWord(0)   // NumberOfLinenumbers
-    buf.writeDword(characteristics)
+    writeDword(buf, value: virtualSize)
+    writeDword(buf, value: virtualAddress)
+    writeDword(buf, value: rawDataSize)
+    writeDword(buf, value: rawDataPointer)
+    writeDword(buf, value: 0)
+    writeDword(buf, value: 0)
+    writeWord(buf, value: 0)
+    writeWord(buf, value: 0)
+    writeDword(buf, value: characteristics)
 end 'writeSectionHeader'
 
 // --- Main PE writer ---
 
 export type CodeResult
-    export var code Utf8ByteBuffer
+    export var code ByteBuffer
     export var mainCallFixupOffset CodeOffset
     export var iatFixups IatFixupArray
 end 'CodeResult'
 
 export function writePe(outputPath String, codeResult CodeResult)
     logDebug(LogCategory.pe, message: "Writing PE file: {outputPath}")
-    var pe = Utf8ByteBuffer.create(4096)
+    var pe = ByteBuffer{}
+    pe.reserve(4096)
 
     var code = codeResult.code
     let codeSize = code.count()
@@ -278,93 +215,93 @@ export function writePe(outputPath String, codeResult CodeResult)
         let ripAtFixup = textRva + fixup.codeOffset + 4
         let iatEntryRva = idataRva + (fixup.iatSlotIndex * 8)
         let iatRel = iatEntryRva - ripAtFixup
-        code.patchDword(fixup.codeOffset, value: iatRel)
+        patchDword(code, offset: fixup.codeOffset, value: iatRel)
     end 'patchIat'
 
     // IAT directory size: 3 entries + null terminator = 32 bytes
     let iatDirSize = 32
 
     // === DOS Header (64 bytes) ===
-    pe.writeWord(0x5A4D)      // MZ magic
-    pe.writeZeros(58)          // rest of DOS header
-    pe.writeDword(64)          // e_lfanew = offset to PE signature
+    writeWord(pe, value: 0x5A4D)
+    writeZeros(pe, n: 58)
+    writeDword(pe, value: 64)
 
     // === PE Signature ===
-    pe.writeDword(0x00004550)  // "PE\0\0"
+    writeDword(pe, value: 0x00004550)
 
     // === COFF Header (20 bytes) ===
-    pe.writeWord(0x8664)       // Machine: AMD64
-    pe.writeWord(numSections)  // NumberOfSections
-    pe.writeDword(0)           // TimeDateStamp
-    pe.writeDword(0)           // PointerToSymbolTable
-    pe.writeDword(0)           // NumberOfSymbols
-    pe.writeWord(240)          // SizeOfOptionalHeader
-    pe.writeWord(0x22)         // Characteristics: EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE
+    writeWord(pe, value: 0x8664)
+    writeWord(pe, value: numSections)
+    writeDword(pe, value: 0)
+    writeDword(pe, value: 0)
+    writeDword(pe, value: 0)
+    writeWord(pe, value: 240)
+    writeWord(pe, value: 0x22)
 
     // === Optional Header PE32+ (240 bytes) ===
-    pe.writeWord(0x20B)        // Magic: PE32+
-    pe.push(14)                // MajorLinkerVersion
-    pe.push(0)                 // MinorLinkerVersion
-    pe.writeDword(codeSizeAligned)    // SizeOfCode
-    pe.writeDword(idataSizeAligned)   // SizeOfInitializedData
-    pe.writeDword(0)                  // SizeOfUninitializedData
-    pe.writeDword(textRva)            // AddressOfEntryPoint
-    pe.writeDword(textRva)            // BaseOfCode
+    writeWord(pe, value: 0x20B)
+    pe.push(14)
+    pe.push(0)
+    writeDword(pe, value: codeSizeAligned)
+    writeDword(pe, value: idataSizeAligned)
+    writeDword(pe, value: 0)
+    writeDword(pe, value: textRva)
+    writeDword(pe, value: textRva)
 
     // PE32+ additional fields
-    pe.writeQword(0x140000000)        // ImageBase
-    pe.writeDword(SECTION_ALIGNMENT)  // SectionAlignment
-    pe.writeDword(FILE_ALIGNMENT)     // FileAlignment
-    pe.writeWord(6)                   // MajorOperatingSystemVersion
-    pe.writeWord(0)                   // MinorOperatingSystemVersion
-    pe.writeWord(0)                   // MajorImageVersion
-    pe.writeWord(0)                   // MinorImageVersion
-    pe.writeWord(6)                   // MajorSubsystemVersion
-    pe.writeWord(0)                   // MinorSubsystemVersion
-    pe.writeDword(0)                  // Win32VersionValue
-    pe.writeDword(imageSize)          // SizeOfImage
-    pe.writeDword(headersAligned)     // SizeOfHeaders
-    pe.writeDword(0)                  // CheckSum
-    pe.writeWord(3)                   // Subsystem: CONSOLE
-    pe.writeWord(0x8160)              // DllCharacteristics
-    pe.writeQword(0x100000)           // SizeOfStackReserve
-    pe.writeQword(0x1000)             // SizeOfStackCommit
-    pe.writeQword(0x100000)           // SizeOfHeapReserve
-    pe.writeQword(0x1000)             // SizeOfHeapCommit
-    pe.writeDword(0)                  // LoaderFlags
-    pe.writeDword(16)                 // NumberOfRvaAndSizes
+    writeQword(pe, value: 0x140000000)
+    writeDword(pe, value: SECTION_ALIGNMENT)
+    writeDword(pe, value: FILE_ALIGNMENT)
+    writeWord(pe, value: 6)
+    writeWord(pe, value: 0)
+    writeWord(pe, value: 0)
+    writeWord(pe, value: 0)
+    writeWord(pe, value: 6)
+    writeWord(pe, value: 0)
+    writeDword(pe, value: 0)
+    writeDword(pe, value: imageSize)
+    writeDword(pe, value: headersAligned)
+    writeDword(pe, value: 0)
+    writeWord(pe, value: 3)
+    writeWord(pe, value: 0x8160)
+    writeQword(pe, value: 0x100000)
+    writeQword(pe, value: 0x1000)
+    writeQword(pe, value: 0x100000)
+    writeQword(pe, value: 0x1000)
+    writeDword(pe, value: 0)
+    writeDword(pe, value: 16)
 
     // Data directories (16 entries, 8 bytes each)
     // 0: Export Table
-    pe.writeDword(0)
-    pe.writeDword(0)
+    writeDword(pe, value: 0)
+    writeDword(pe, value: 0)
     // 1: Import Table
-    pe.writeDword(idata.importDirRva)
-    pe.writeDword(idata.importDirSize)
-    // 2-11: zeros (10 entries x 8 bytes)
-    pe.writeZeros(80)
+    writeDword(pe, value: idata.importDirRva)
+    writeDword(pe, value: idata.importDirSize)
+    // 2-11: zeros
+    writeZeros(pe, n: 80)
     // 12: IAT
-    pe.writeDword(idata.iatRva)
-    pe.writeDword(iatDirSize)
-    // 13-15: zeros (3 entries x 8 bytes)
-    pe.writeZeros(24)
+    writeDword(pe, value: idata.iatRva)
+    writeDword(pe, value: iatDirSize)
+    // 13-15: zeros
+    writeZeros(pe, n: 24)
 
     // === Section Headers ===
     writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned, characteristics: 0x60000020)
     writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: headersAligned + codeSizeAligned, characteristics: 0xC0000040)
 
     // Pad headers to alignment
-    pe.padTo(headersAligned)
+    padTo(pe, size: headersAligned)
 
     // === .text section ===
-    pe.appendFrom(code)
-    pe.padTo(headersAligned + codeSizeAligned)
+    pe.append(code)
+    padTo(pe, size: headersAligned + codeSizeAligned)
 
     // === .idata section ===
-    pe.appendFrom(idata.data)
-    pe.padTo(headersAligned + codeSizeAligned + idataSizeAligned)
+    pe.append(idata.data)
+    padTo(pe, size: headersAligned + codeSizeAligned + idataSizeAligned)
 
     // Write to file
-    try File.writeBinary(outputPath, content: pe.toByteArray()) otherwise ignore
+    try File.writeBinary(outputPath, content: pe) otherwise ignore
     logDebug(LogCategory.pe, message: "PE write complete: {pe.count()} bytes total")
 end 'writePe'

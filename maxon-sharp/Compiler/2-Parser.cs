@@ -8808,7 +8808,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           continue;
         }
 
-        _ = structType.GetField(fieldNameToken.Value) ?? throw new CompileError(ErrorCode.SemanticUnknownField,
+        var field = structType.GetField(fieldNameToken.Value) ?? throw new CompileError(ErrorCode.SemanticUnknownField,
             $"Type '{typeName}' has no field '{fieldNameToken.Value}'",
             fieldNameToken.Line, fieldNameToken.Column);
 
@@ -8819,6 +8819,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
         Expect(TokenType.Colon);
         var value = ResolveExprValue(ParseExpression());
+
+        // Type-check: struct field must match value's struct type
+        if (field.Type is MlirStructType fieldStructType && value is MaxonStruct valueStruct) {
+          if (valueStruct.TypeName != fieldStructType.Name) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"Type mismatch: field '{fieldNameToken.Value}' expects '{fieldStructType.Name}' but got '{valueStruct.TypeName}'",
+              fieldNameToken.Line, fieldNameToken.Column);
+          }
+        }
+
         fieldValues.Add((fieldNameToken.Value, value));
       } while (Check(TokenType.Comma) && Advance() != null);
     }
