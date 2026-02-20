@@ -202,22 +202,22 @@ end 'queryAllStdOps'
 
 // --- Whole-program derived query: x86 ops ---
 
-export function queryAllX86Ops(project Project) returns X86OpArray throws CompileError
-    let key = QueryKey.allX86Ops
+export function queryAllTargetOps(project Project) returns X86OpArray throws CompileError
+    let key = QueryKey.allTargetOps
     recordDependency(project, dependency: key)
 
     // Check cache
-    if project.db.allX86OpsCache.computedAt > 0 'hasCache'
-        if areDepsValid(project, key: key, computedAt: project.db.allX86OpsCache.computedAt) 'valid'
-            logDebug(LogCategory.compiler, message: "queryAllX86Ops cache hit")
-            project.db.allX86OpsHits = project.db.allX86OpsHits + 1
-            project.db.allX86OpsCache.verifiedAt = project.db.currentRevision
-            return project.db.allX86OpsCache.value
+    if project.db.targetOpsCache.computedAt > 0 'hasCache'
+        if areDepsValid(project, key: key, computedAt: project.db.targetOpsCache.computedAt) 'valid'
+            logDebug(LogCategory.compiler, message: "queryAllTargetOps cache hit")
+            project.db.targetOpsHits = project.db.targetOpsHits + 1
+            project.db.targetOpsCache.verifiedAt = project.db.currentRevision
+            return project.db.targetOpsCache.value
         end 'valid'
     end 'hasCache'
 
-    logDebug(LogCategory.compiler, message: "queryAllX86Ops computing")
-    project.db.allX86OpsMisses = project.db.allX86OpsMisses + 1
+    logDebug(LogCategory.compiler, message: "queryAllTargetOps computing")
+    project.db.targetOpsMisses = project.db.targetOpsMisses + 1
 
     // Compute
     pushQuery(project, key: key)
@@ -229,10 +229,10 @@ export function queryAllX86Ops(project Project) returns X86OpArray throws Compil
     popQuery(project)
 
     // Store
-    project.db.allX86OpsCache = X86OpsMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+    project.db.targetOpsCache = TargetOpsMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
 
     return result
-end 'queryAllX86Ops'
+end 'queryAllTargetOps'
 
 // --- Whole-program derived query: code emission ---
 
@@ -258,8 +258,11 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
     pushQuery(project, key: key)
     clearDepsFor(project, key: key)
 
-    let x86Ops = try queryAllX86Ops(project)
-    let result = emit(x86Ops)
+    var result = CodeResult{code: ByteBuffer{}, mainCallFixupOffset: 0, iatFixups: IatFixupArray{}}
+    match project.target.cpu 'dispatch'
+        CpuArch.x86_64 then result = try emitX86Target(project)
+        CpuArch.aarch64 then result = try emitArm64Target(project)
+    end 'dispatch'
 
     popQuery(project)
 
@@ -268,3 +271,16 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 
     return result
 end 'queryCodeResult'
+
+// x86 target: lower Std→X86 then emit x86 machine code
+function emitX86Target(project Project) returns CodeResult throws CompileError
+    let x86Ops = try queryAllTargetOps(project)
+    return emit(x86Ops, target: project.target)
+end 'emitX86Target'
+
+// ARM64 target: lower Std→Arm64 then emit ARM64 machine code
+function emitArm64Target(project Project) returns CodeResult throws CompileError
+    let stdOps = try queryAllStdOps(project)
+    let arm64Ops = lowerStdOpsToArm64(stdOps)
+    return emitArm64(arm64Ops, target: project.target)
+end 'emitArm64Target'

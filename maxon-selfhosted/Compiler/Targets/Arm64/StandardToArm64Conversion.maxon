@@ -1,0 +1,447 @@
+// Standard dialect -> ARM64 dialect conversion.
+
+// Mirrors the structure of StandardToX86Conversion but emits ARM64 ops.
+// Helper functions and types are duplicated here because the x86 versions
+// are not exported and thus not accessible from other files.
+
+enum Arm64JumpKind
+    eq
+    ne
+    lt
+    le
+    gt
+    ge
+    feq
+end 'Arm64JumpKind'
+
+typealias Arm64ValueSlotMap = Array with VarSlot
+typealias Arm64SlotIndex = int(i64.min to i64.max)
+typealias Arm64StdOpIndex = int(0 to u64.max)
+
+function arm64ValueSlotMapGet(m Arm64ValueSlotMap, valueId ValueId) returns VarSlot
+    let result = try m.get(valueId) otherwise 0 - 1
+    return result
+end 'arm64ValueSlotMapGet'
+
+function arm64ValueSlotMapSet(m Arm64ValueSlotMap, valueId ValueId, slot VarSlot)
+    while m.count() <= valueId 'grow'
+        m.push(0 - 1)
+    end 'grow'
+    m.set(valueId, value: slot)
+end 'arm64ValueSlotMapSet'
+
+function arm64MaxOf(a Arm64SlotIndex, b Arm64SlotIndex) returns Arm64SlotIndex
+    if a > b 'aGreater'
+        return a
+    end 'aGreater'
+    return b
+end 'arm64MaxOf'
+
+export function lowerStdOpsToArm64(stdOps StdOpArray) returns Arm64OpArray
+    logDebug(LogCategory.mlir, message: "Lowering {stdOps.count()} Standard ops to ARM64 dialect")
+    // All pushes to ops happen in this function to avoid grow-desync
+    var ops = Arm64OpArray{}
+
+    // Track which slot each SSA value was stored to.
+    var valueSlots = Arm64ValueSlotMap{}
+
+    // Temp slot counter for intermediate values (constI64/binary op results).
+    // Starts after the highest parser-allocated slot.
+    var nextTempSlot = 0
+
+    var i = 0
+    while i < stdOps.count() 'opLoop'
+        let sOp = try stdOps.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+
+        // funcBegin needs multiple pushes; handle before match to avoid grow-desync
+        let fbName = arm64GetFuncBeginName(sOp)
+        if fbName.count() > 0 'isFuncBegin'
+            let stackSize = arm64ComputeStackSize(stdOps, startIndex: i)
+            ops.push(Arm64Op.funcLabel(fbName))
+            ops.push(Arm64Op.prologue(stackSize))
+            // Reset temp slot counter to start after max parser slot
+            nextTempSlot = arm64ComputeMaxParserSlot(stdOps, startIndex: i) + 1
+            i = i + 1
+            continue
+        end 'isFuncBegin'
+
+        // condBr needs a read-only scan then a push of the right jump type
+        let elseLabel = arm64GetCondBrElseLabel(sOp)
+        if elseLabel.count() > 0 'isCondBr'
+            let jumpKind = arm64DetermineJumpKind(stdOps, condIndex: i)
+            // Branch to ELSE on false (inverted condition)
+            match jumpKind 'emitJump'
+                Arm64JumpKind.eq then ops.push(Arm64Op.condBranch(Arm64CondCode.ne, elseLabel))
+                Arm64JumpKind.ne then ops.push(Arm64Op.condBranch(Arm64CondCode.eq, elseLabel))
+                Arm64JumpKind.lt then ops.push(Arm64Op.condBranch(Arm64CondCode.ge, elseLabel))
+                Arm64JumpKind.le then ops.push(Arm64Op.condBranch(Arm64CondCode.gt, elseLabel))
+                Arm64JumpKind.gt then ops.push(Arm64Op.condBranch(Arm64CondCode.le, elseLabel))
+                Arm64JumpKind.ge then ops.push(Arm64Op.condBranch(Arm64CondCode.lt, elseLabel))
+                Arm64JumpKind.feq then ops.push(Arm64Op.condBranch(Arm64CondCode.ne, elseLabel))
+            end 'emitJump'
+            i = i + 1
+            continue
+        end 'isCondBr'
+
+        // Constants: emit mov + store to temp slot (multiple pushes, must be before match).
+        let constInfo = arm64GetConstInfo(sOp)
+        if constInfo.isConst 'isConst'
+            let tempSlot = nextTempSlot
+            nextTempSlot = nextTempSlot + 1
+            ops.push(Arm64Op.movImm(Arm64Register.x0, constInfo.value))
+            ops.push(Arm64Op.strToSlot(tempSlot, Arm64Register.x0))
+            arm64ValueSlotMapSet(valueSlots, valueId: constInfo.resultId, slot: tempSlot)
+            i = i + 1
+            continue
+        end 'isConst'
+
+        // Binary ops: load left into X0, load right into X1, then operate.
+        // ARM64 uses three-operand form: dest = src1 op src2
+        // Handled before match to avoid grow-desync (multiple pushes).
+        let binOp = arm64GetBinaryOp(sOp)
+        if binOp.isBinary 'isBinOp'
+            let leftSlot = arm64ValueSlotMapGet(valueSlots, valueId: binOp.leftId)
+            let rightSlot = arm64ValueSlotMapGet(valueSlots, valueId: binOp.rightId)
+            // Load right operand into X1 first (so X0 load doesn't clobber it)
+            if rightSlot >= 0 'hasRightSlot'
+                ops.push(Arm64Op.ldrFromSlot(Arm64Register.x1, rightSlot))
+            end 'hasRightSlot'
+            // Load left operand into X0
+            if leftSlot >= 0 'hasLeftSlot'
+                ops.push(Arm64Op.ldrFromSlot(Arm64Register.x0, leftSlot))
+            end 'hasLeftSlot'
+            // Emit the operation
+            ops.push(binOp.arm64Op)
+            // Store the result to a temp slot so it can be used by subsequent ops
+            let tempSlot = nextTempSlot
+            nextTempSlot = nextTempSlot + 1
+            ops.push(Arm64Op.strToSlot(tempSlot, Arm64Register.x0))
+            arm64ValueSlotMapSet(valueSlots, valueId: binOp.resultId, slot: tempSlot)
+            i = i + 1
+            continue
+        end 'isBinOp'
+
+        // All other ops are 1:1 mappings (single push each)
+        match sOp 'lower'
+            funcBegin(name, returnType) then i = i  // handled above
+            funcEnd then i = i  // no-op: prologue/epilogue handled by funcBegin/returnOp
+            constI64(resultId, value) then i = i  // handled above
+            constF64(resultId, rawBits) then i = i  // handled above
+            returnOp(retValId) then ops.push(Arm64Op.epilogue)
+            storeSlot(slotId, valueId) then emitArm64StoreSlot(ops, valueSlots: valueSlots, slotId: slotId, valueId: valueId)
+            loadSlot(resultId, slotId) then emitArm64LoadSlot(ops, valueSlots: valueSlots, resultId: resultId, slotId: slotId)
+            addI64(resultId, leftId, rightId) then i = i  // handled above
+            subI64(resultId, leftId, rightId) then i = i  // handled above
+            mulI64(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Eq(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Ne(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Lt(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Le(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Gt(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Ge(resultId, leftId, rightId) then i = i  // handled above
+            cmpF64Eq(resultId, leftId, rightId) then i = i  // handled above
+            condBr(condId, thenLabel, elseLabel) then i = i  // handled above
+            br(targetLabel) then ops.push(Arm64Op.branch(targetLabel))
+            label(name) then ops.push(Arm64Op.label(name))
+            printLiteral(data) then ops.push(Arm64Op.printLiteral(data))
+            printInt(valueId) then ops.push(Arm64Op.printInt)
+            call(resultId, callee) then ops.push(Arm64Op.branchLink(callee))
+        end 'lower'
+
+        i = i + 1
+    end 'opLoop'
+
+    logDebug(LogCategory.mlir, message: "Std->ARM64 lowering complete: {ops.count()} ARM64 ops")
+    return ops
+end 'lowerStdOpsToArm64'
+
+// Store to slot and record the value->slot mapping.
+function emitArm64StoreSlot(ops Arm64OpArray, valueSlots Arm64ValueSlotMap, slotId VarSlot, valueId ValueId)
+    ops.push(Arm64Op.strToSlot(slotId, Arm64Register.x0))
+    arm64ValueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
+end 'emitArm64StoreSlot'
+
+// Load from slot and record the result value->slot mapping.
+function emitArm64LoadSlot(ops Arm64OpArray, valueSlots Arm64ValueSlotMap, resultId ValueId, slotId VarSlot)
+    ops.push(Arm64Op.ldrFromSlot(Arm64Register.x0, slotId))
+    arm64ValueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+end 'emitArm64LoadSlot'
+
+// ARM64-specific binary op info (uses Arm64Op instead of X86Op).
+type Arm64BinaryOpInfo
+    export var isBinary bool
+    export var resultId ValueId
+    export var leftId ValueId
+    export var rightId ValueId
+    export var arm64Op Arm64Op
+end 'Arm64BinaryOpInfo'
+
+// Extract binary op info for ARM64; returns isBinary=false for non-binary ops.
+// ARM64 uses three-operand form: addRegs(dest, src1, src2) with result in X0.
+// CMP ops don't write a dest register, they just set flags.
+function arm64GetBinaryOp(op StdOp) returns Arm64BinaryOpInfo
+    var result = Arm64BinaryOpInfo{isBinary: false, resultId: 0 - 1, leftId: 0, rightId: 0, arm64Op: Arm64Op.epilogue}
+    match op 'check'
+        addI64(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.addRegs(Arm64Register.x0, Arm64Register.x0, Arm64Register.x1)}
+        subI64(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.subRegs(Arm64Register.x0, Arm64Register.x0, Arm64Register.x1)}
+        mulI64(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.mulRegs(Arm64Register.x0, Arm64Register.x0, Arm64Register.x1)}
+        cmpI64Eq(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.cmpRegs(Arm64Register.x0, Arm64Register.x1)}
+        cmpI64Ne(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.cmpRegs(Arm64Register.x0, Arm64Register.x1)}
+        cmpI64Lt(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.cmpRegs(Arm64Register.x0, Arm64Register.x1)}
+        cmpI64Le(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.cmpRegs(Arm64Register.x0, Arm64Register.x1)}
+        cmpI64Gt(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.cmpRegs(Arm64Register.x0, Arm64Register.x1)}
+        cmpI64Ge(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.cmpRegs(Arm64Register.x0, Arm64Register.x1)}
+        cmpF64Eq(resultId, leftId, rightId) then result = Arm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: Arm64Op.cmpRegs(Arm64Register.x0, Arm64Register.x1)}
+        funcBegin(name, returnType) then result = result
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'arm64GetBinaryOp'
+
+// Info about a constant operation for SSA temp slot allocation.
+type Arm64ConstInfo
+    export var isConst bool
+    export var resultId ValueId
+    export var value ParsedInt
+end 'Arm64ConstInfo'
+
+// Extract constant info; returns isConst=false for non-constant ops.
+function arm64GetConstInfo(op StdOp) returns Arm64ConstInfo
+    var result = Arm64ConstInfo{isConst: false, resultId: 0, value: 0}
+    match op 'check'
+        constI64(resultId, value) then result = Arm64ConstInfo{isConst: true, resultId: resultId, value: value}
+        constF64(resultId, rawBits) then result = Arm64ConstInfo{isConst: true, resultId: resultId, value: rawBits}
+        funcBegin(name, returnType) then result = result
+        funcEnd then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'arm64GetConstInfo'
+
+// Extract function name from a funcBegin op; returns empty ByteArray for other ops.
+function arm64GetFuncBeginName(op StdOp) returns ByteArray
+    var result = ByteArray{}
+    match op 'check'
+        funcBegin(name, returnType) then result = name
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'arm64GetFuncBeginName'
+
+// Extract else label from a condBr op; returns empty ByteArray for other ops.
+function arm64GetCondBrElseLabel(op StdOp) returns ByteArray
+    var result = ByteArray{}
+    match op 'check'
+        condBr(condId, thenLabel, elseLabel) then result = elseLabel
+        funcBegin(name, returnType) then result = result
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'arm64GetCondBrElseLabel'
+
+// Read-only scan: compute stack frame size by finding max slot, temp slots, and print usage.
+function arm64ComputeStackSize(stdOps StdOpArray, startIndex Arm64StdOpIndex) returns StackSize
+    var maxSlot = 0 - 1
+    var hasPrint = false
+    var tempSlotCount = 0
+
+    var j = startIndex + 1
+    while j < stdOps.count() 'scan'
+        let op = try stdOps.get(j) otherwise 'scanSkip'
+            j = j + 1
+            continue
+        end 'scanSkip'
+        match op 'countSlot'
+            funcEnd then break 'scan'
+            storeSlot(slotId, valueId) then maxSlot = arm64MaxOf(maxSlot, b: slotId)
+            loadSlot(resultId, slotId) then maxSlot = arm64MaxOf(maxSlot, b: slotId)
+            printInt(valueId) then hasPrint = true
+            printLiteral(data) then hasPrint = true
+            constI64(resultId, value) then tempSlotCount = tempSlotCount + 1
+            constF64(resultId, rawBits) then tempSlotCount = tempSlotCount + 1
+            addI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            subI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            mulI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Eq(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Ne(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Lt(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Le(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Gt(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Ge(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpF64Eq(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            returnOp(retValId) then maxSlot = maxSlot
+            condBr(condId, thenLabel, elseLabel) then maxSlot = maxSlot
+            br(targetLabel) then maxSlot = maxSlot
+            label(name) then maxSlot = maxSlot
+            funcBegin(n, rt) then maxSlot = maxSlot
+            call(resultId, callee) then maxSlot = maxSlot
+        end 'countSlot'
+        j = j + 1
+    end 'scan'
+
+    // Total slots = parser slots + temp slots for intermediate values
+    let totalMaxSlot = maxSlot + tempSlotCount
+
+    var stackSize = 0
+    if totalMaxSlot >= 0 'hasSlots'
+        // ARM64: 16 bytes for saved FP/LR + 8 bytes per slot
+        stackSize = (totalMaxSlot + 1) * 8 + 16
+    end 'hasSlots'
+    if hasPrint and stackSize == 0 'needPrintBuf'
+        stackSize = 16
+    end 'needPrintBuf'
+    // Align to 16 (ARM64 requires 16-byte stack alignment)
+    if stackSize mod 16 != 0 'align'
+        stackSize = stackSize + (16 - (stackSize mod 16))
+    end 'align'
+    return stackSize
+end 'arm64ComputeStackSize'
+
+// Find the max parser-allocated slot in a function body (from storeSlot/loadSlot ops).
+function arm64ComputeMaxParserSlot(stdOps StdOpArray, startIndex Arm64StdOpIndex) returns Arm64SlotIndex
+    var maxSlot = 0 - 1
+    var j = startIndex + 1
+    while j < stdOps.count() 'scan'
+        let op = try stdOps.get(j) otherwise 'scanSkip'
+            j = j + 1
+            continue
+        end 'scanSkip'
+        match op 'check'
+            funcEnd then break 'scan'
+            storeSlot(slotId, valueId) then maxSlot = arm64MaxOf(maxSlot, b: slotId)
+            loadSlot(resultId, slotId) then maxSlot = arm64MaxOf(maxSlot, b: slotId)
+            constI64(resultId, value) then maxSlot = maxSlot
+            constF64(resultId, rawBits) then maxSlot = maxSlot
+            returnOp(retValId) then maxSlot = maxSlot
+            addI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            subI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            mulI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Eq(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Ne(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Lt(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Le(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Gt(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Ge(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpF64Eq(resultId, leftId, rightId) then maxSlot = maxSlot
+            condBr(condId, thenLabel, elseLabel) then maxSlot = maxSlot
+            br(targetLabel) then maxSlot = maxSlot
+            label(name) then maxSlot = maxSlot
+            funcBegin(n, rt) then maxSlot = maxSlot
+            printLiteral(data) then maxSlot = maxSlot
+            printInt(valueId) then maxSlot = maxSlot
+            call(resultId, callee) then maxSlot = maxSlot
+        end 'check'
+        j = j + 1
+    end 'scan'
+    return maxSlot
+end 'arm64ComputeMaxParserSlot'
+
+// Read-only scan: look back from condBr to find the comparison that produced the condition.
+function arm64DetermineJumpKind(stdOps StdOpArray, condIndex Arm64StdOpIndex) returns Arm64JumpKind
+    var j = condIndex - 1
+    while j >= 0 'scanBack'
+        let prevOp = try stdOps.get(j) otherwise 'scanSkip'
+            j = j - 1
+            continue
+        end 'scanSkip'
+        match prevOp 'checkCmp'
+            cmpI64Eq(resultId, leftId, rightId) then return Arm64JumpKind.eq
+            cmpI64Ne(resultId, leftId, rightId) then return Arm64JumpKind.ne
+            cmpI64Lt(resultId, leftId, rightId) then return Arm64JumpKind.lt
+            cmpI64Le(resultId, leftId, rightId) then return Arm64JumpKind.le
+            cmpI64Gt(resultId, leftId, rightId) then return Arm64JumpKind.gt
+            cmpI64Ge(resultId, leftId, rightId) then return Arm64JumpKind.ge
+            cmpF64Eq(resultId, leftId, rightId) then return Arm64JumpKind.feq
+            constI64(resultId, value) then j = j - 1
+            constF64(resultId, rawBits) then j = j - 1
+            returnOp(retValId) then j = j - 1
+            storeSlot(slotId, valueId) then j = j - 1
+            loadSlot(resultId, slotId) then j = j - 1
+            addI64(resultId, leftId, rightId) then j = j - 1
+            subI64(resultId, leftId, rightId) then j = j - 1
+            mulI64(resultId, leftId, rightId) then j = j - 1
+            condBr(cId, tl, el) then j = j - 1
+            br(targetLabel) then j = j - 1
+            label(name) then j = j - 1
+            printLiteral(data) then j = j - 1
+            printInt(valueId) then j = j - 1
+            funcBegin(name, returnType) then j = j - 1
+            funcEnd then j = j - 1
+            call(resultId, callee) then j = j - 1
+        end 'checkCmp'
+    end 'scanBack'
+    return Arm64JumpKind.eq
+end 'arm64DetermineJumpKind'

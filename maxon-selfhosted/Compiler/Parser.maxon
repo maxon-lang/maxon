@@ -326,8 +326,6 @@ function isReturnOp(op MaxonOp) returns bool
         condBr(condId, tl, el) then return false
         br(targetLabel) then return false
         label(name) then return false
-        pushValue then return false
-        popToRcx then return false
         printLiteral(data) then return false
         printInt(valueId) then return false
         funcBegin(name, returnType) then return false
@@ -535,18 +533,14 @@ function parseComparison(project Project, tokens TokenArray, startPos TokenIndex
             end 'strNeq'
             let leftLitId = nextValueId(project)
             ops.push(MaxonOp.literal(leftLitId, foldedLeft))
-            ops.push(MaxonOp.pushValue)
             let rightLitId = nextValueId(project)
             ops.push(MaxonOp.literal(rightLitId, 1))
-            ops.push(MaxonOp.popToRcx)
             let resultId = nextValueId(project)
             ops.push(MaxonOp.cmpEq(resultId, leftLitId, rightLitId))
             return {valueId: resultId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
         end 'leftIsStr'
-        ops.push(MaxonOp.pushValue)
         let right = try parseAddSub(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
         pos = right.nextPos
-        ops.push(MaxonOp.popToRcx)
         let resultId = nextValueId(project)
         if leftIsFloat or right.isFloat 'floatCmp'
             ops.push(MaxonOp.floatCmpEq(resultId, leftId, right.valueId))
@@ -557,50 +551,40 @@ function parseComparison(project Project, tokens TokenArray, startPos TokenIndex
     end 'isEqEq'
     if opToken.kind == TokenKind.bangEquals 'isNeq'
         pos = pos + 1
-        ops.push(MaxonOp.pushValue)
         let right = try parseAddSub(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
         pos = right.nextPos
-        ops.push(MaxonOp.popToRcx)
         let resultId = nextValueId(project)
         ops.push(MaxonOp.cmpNe(resultId, leftId, right.valueId))
         return {valueId: resultId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
     end 'isNeq'
     if opToken.kind == TokenKind.lessThan 'isLt'
         pos = pos + 1
-        ops.push(MaxonOp.pushValue)
         let right = try parseAddSub(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
         pos = right.nextPos
-        ops.push(MaxonOp.popToRcx)
         let resultId = nextValueId(project)
         ops.push(MaxonOp.cmpLt(resultId, leftId, right.valueId))
         return {valueId: resultId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
     end 'isLt'
     if opToken.kind == TokenKind.lessEquals 'isLe'
         pos = pos + 1
-        ops.push(MaxonOp.pushValue)
         let right = try parseAddSub(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
         pos = right.nextPos
-        ops.push(MaxonOp.popToRcx)
         let resultId = nextValueId(project)
         ops.push(MaxonOp.cmpLe(resultId, leftId, right.valueId))
         return {valueId: resultId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
     end 'isLe'
     if opToken.kind == TokenKind.greaterThan 'isGt'
         pos = pos + 1
-        ops.push(MaxonOp.pushValue)
         let right = try parseAddSub(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
         pos = right.nextPos
-        ops.push(MaxonOp.popToRcx)
         let resultId = nextValueId(project)
         ops.push(MaxonOp.cmpGt(resultId, leftId, right.valueId))
         return {valueId: resultId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
     end 'isGt'
     if opToken.kind == TokenKind.greaterEquals 'isGe'
         pos = pos + 1
-        ops.push(MaxonOp.pushValue)
         let right = try parseAddSub(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
         pos = right.nextPos
-        ops.push(MaxonOp.popToRcx)
         let resultId = nextValueId(project)
         ops.push(MaxonOp.cmpGe(resultId, leftId, right.valueId))
         return {valueId: resultId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
@@ -619,20 +603,16 @@ function parseAddSub(project Project, tokens TokenArray, startPos TokenIndex, op
         let opToken = tokenAt(tokens, pos: pos)
         if opToken.kind == TokenKind.plus 'isAdd'
             pos = pos + 1
-            ops.push(MaxonOp.pushValue)
             let right = try parseMulDiv(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
             pos = right.nextPos
-            ops.push(MaxonOp.popToRcx)
             let resultId = nextValueId(project)
             ops.push(MaxonOp.add(resultId, leftId, right.valueId))
             leftId = resultId
         end 'isAdd' else 'notAdd'
             if opToken.kind == TokenKind.minus 'isSub'
                 pos = pos + 1
-                ops.push(MaxonOp.pushValue)
                 let right = try parseMulDiv(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
                 pos = right.nextPos
-                ops.push(MaxonOp.popToRcx)
                 let resultId = nextValueId(project)
                 ops.push(MaxonOp.sub(resultId, leftId, right.valueId))
                 leftId = resultId
@@ -655,10 +635,8 @@ function parseMulDiv(project Project, tokens TokenArray, startPos TokenIndex, op
         let opToken = tokenAt(tokens, pos: pos)
         if opToken.kind == TokenKind.star 'isMul'
             pos = pos + 1
-            ops.push(MaxonOp.pushValue)
             let right = try parsePrimary(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
             pos = right.nextPos
-            ops.push(MaxonOp.popToRcx)
             let resultId = nextValueId(project)
             ops.push(MaxonOp.mul(resultId, leftId, right.valueId))
             leftId = resultId

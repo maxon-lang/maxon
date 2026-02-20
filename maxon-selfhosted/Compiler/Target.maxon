@@ -1,0 +1,85 @@
+// Target triple: CPU architecture, operating system, and ABI.
+
+export enum CpuArch
+    x86_64
+    aarch64
+end 'CpuArch'
+
+export enum Os
+    windows
+    linux
+end 'Os'
+
+export enum Abi
+    msvc
+    gnu
+end 'Abi'
+
+export type TargetTriple
+    export var cpu CpuArch
+    export var os Os
+    export var abi Abi
+end 'TargetTriple'
+
+export function detectHostTriple() returns TargetTriple
+    // Self-hosted compiler currently only runs on Windows x86_64
+    return {cpu: CpuArch.x86_64, os: Os.windows, abi: Abi.msvc}
+end 'detectHostTriple'
+
+export function parseTargetTriple(s String) returns TargetTriple
+    var cpu = CpuArch.x86_64
+    var os = Os.windows
+    var abi = Abi.msvc
+
+    // Parse "cpu-os-abi" format
+    if s.startsWith("x86_64") 'isX86'
+        cpu = CpuArch.x86_64
+    end 'isX86' else if s.startsWith("aarch64") 'isArm'
+        cpu = CpuArch.aarch64
+    end 'isArm'
+
+    if s.contains("linux") 'isLinux'
+        os = Os.linux
+    end 'isLinux' else if s.contains("windows") 'isWindows'
+        os = Os.windows
+    end 'isWindows'
+
+    if s.contains("gnu") 'isGnu'
+        abi = Abi.gnu
+    end 'isGnu' else if s.contains("msvc") 'isMsvc'
+        abi = Abi.msvc
+    end 'isMsvc'
+
+    return {cpu: cpu, os: os, abi: abi}
+end 'parseTargetTriple'
+
+export function tripleToString(t TargetTriple) returns String
+    var cpuStr = ""
+    match t.cpu 'cpu'
+        CpuArch.x86_64 then cpuStr = "x86_64"
+        CpuArch.aarch64 then cpuStr = "aarch64"
+    end 'cpu'
+
+    var osStr = ""
+    match t.os 'os'
+        Os.windows then osStr = "windows"
+        Os.linux then osStr = "linux"
+    end 'os'
+
+    var abiStr = ""
+    match t.abi 'abi'
+        Abi.msvc then abiStr = "msvc"
+        Abi.gnu then abiStr = "gnu"
+    end 'abi'
+
+    return "{cpuStr}-{osStr}-{abiStr}"
+end 'tripleToString'
+
+export function executableExtension(t TargetTriple) returns String
+    var ext = ""
+    match t.os 'os'
+        Os.windows then ext = ".exe"
+        Os.linux then ext = ""
+    end 'os'
+    return ext
+end 'executableExtension'

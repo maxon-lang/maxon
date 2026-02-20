@@ -1,0 +1,98 @@
+// ELF64 file writer for Linux x86_64 executables.
+// Produces a minimal static ELF with a single PT_LOAD segment containing the code.
+// Linux x86_64 targets use raw syscalls, so no dynamic linking is needed.
+
+let ELF_LOAD_ADDR = 0x400000
+let ELF_HEADER_SIZE = 64
+let ELF_PHDR_SIZE = 56
+let ELF_PAGE_SIZE = 0x1000
+
+export function writeElf(outputPath String, codeResult CodeResult, target TargetTriple)
+    let headerSize = ELF_HEADER_SIZE + ELF_PHDR_SIZE
+    let codeSize = codeResult.code.count()
+    let totalSize = headerSize + codeSize
+    let entryPoint = ELF_LOAD_ADDR + headerSize
+
+    logDebug(LogCategory.pe, message: "Writing ELF file: {outputPath}")
+    logDebug(LogCategory.pe, message: "Code size: {codeSize} bytes, entry point: {entryPoint}")
+
+    var elf = ByteBuffer{}
+    elf.reserve(totalSize)
+
+    // === ELF Header (64 bytes) ===
+
+    // e_ident[0..4]: magic number
+    elf.push(0x7F)
+    elf.push(0x45) // 'E'
+    elf.push(0x4C) // 'L'
+    elf.push(0x46) // 'F'
+
+    // e_ident[4]: class = ELFCLASS64
+    elf.push(2)
+    // e_ident[5]: data = ELFDATA2LSB (little-endian)
+    elf.push(1)
+    // e_ident[6]: version = EV_CURRENT
+    elf.push(1)
+    // e_ident[7]: OS/ABI = ELFOSABI_NONE (System V)
+    elf.push(0)
+    // e_ident[8..16]: padding
+    writeZeros(elf, n: 8)
+
+    // e_type: ET_EXEC (executable)
+    writeWord(elf, value: 2)
+    // e_machine: EM_X86_64=0x3E, EM_AARCH64=0xB7
+    var eMachine = 0x3E
+    match target.cpu 'cpuMachine'
+        CpuArch.x86_64 then eMachine = 0x3E
+        CpuArch.aarch64 then eMachine = 0xB7
+    end 'cpuMachine'
+    writeWord(elf, value: eMachine)
+    // e_version: EV_CURRENT
+    writeDword(elf, value: 1)
+    // e_entry: entry point virtual address
+    writeQword(elf, value: entryPoint)
+    // e_phoff: program header table offset (immediately after ELF header)
+    writeQword(elf, value: ELF_HEADER_SIZE)
+    // e_shoff: section header table offset (none)
+    writeQword(elf, value: 0)
+    // e_flags
+    writeDword(elf, value: 0)
+    // e_ehsize: ELF header size
+    writeWord(elf, value: ELF_HEADER_SIZE)
+    // e_phentsize: program header entry size
+    writeWord(elf, value: ELF_PHDR_SIZE)
+    // e_phnum: number of program header entries
+    writeWord(elf, value: 1)
+    // e_shentsize: section header entry size (none)
+    writeWord(elf, value: 0)
+    // e_shnum: number of section header entries
+    writeWord(elf, value: 0)
+    // e_shstrndx: section name string table index
+    writeWord(elf, value: 0)
+
+    // === Program Header (56 bytes) ===
+
+    // p_type: PT_LOAD
+    writeDword(elf, value: 1)
+    // p_flags: PF_R | PF_X (read + execute)
+    writeDword(elf, value: 5)
+    // p_offset: file offset of segment (load entire file)
+    writeQword(elf, value: 0)
+    // p_vaddr: virtual address
+    writeQword(elf, value: ELF_LOAD_ADDR)
+    // p_paddr: physical address (same as vaddr)
+    writeQword(elf, value: ELF_LOAD_ADDR)
+    // p_filesz: size of segment in file
+    writeQword(elf, value: totalSize)
+    // p_memsz: size of segment in memory
+    writeQword(elf, value: totalSize)
+    // p_align: alignment
+    writeQword(elf, value: ELF_PAGE_SIZE)
+
+    // === Code ===
+    elf.append(codeResult.code)
+
+    // Write to file
+    try File.writeBinary(outputPath, content: elf) otherwise ignore
+    logDebug(LogCategory.pe, message: "ELF write complete: {elf.count()} bytes total")
+end 'writeElf'

@@ -1,0 +1,446 @@
+// Standard dialect -> X86 dialect conversion.
+
+// Uses StdOpArray from MaxonToStandardConversion, X86OpArray from CodeEmitter
+
+enum JumpKind
+    eq
+    ne
+    lt
+    le
+    gt
+    ge
+    feq
+end 'JumpKind'
+
+// Value location tracking for SSA-based register management.
+// Maps ValueId -> VarSlot so binary ops can load operands from the right slots.
+// ValueIds and VarSlots are both small non-negative integers, so we use parallel
+// arrays indexed by ValueId.
+typealias ValueSlotMap = Array with VarSlot
+
+function valueSlotMapGet(m ValueSlotMap, valueId ValueId) returns VarSlot
+    let result = try m.get(valueId) otherwise 0 - 1
+    return result
+end 'valueSlotMapGet'
+
+function valueSlotMapSet(m ValueSlotMap, valueId ValueId, slot VarSlot)
+    while m.count() <= valueId 'grow'
+        m.push(0 - 1)
+    end 'grow'
+    m.set(valueId, value: slot)
+end 'valueSlotMapSet'
+
+export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
+    logDebug(LogCategory.mlir, message: "Lowering {stdOps.count()} Standard ops to X86 dialect")
+    // All pushes to ops happen in this function to avoid grow-desync
+    var ops = X86OpArray{}
+
+    // Track which slot each SSA value was stored to.
+    // Binary ops use this to load their operands into the correct registers.
+    var valueSlots = ValueSlotMap{}
+
+    // Temp slot counter for intermediate values (constI64/binary op results).
+    // Starts after the highest parser-allocated slot.
+    var nextTempSlot = 0
+
+    var i = 0
+    while i < stdOps.count() 'opLoop'
+        let sOp = try stdOps.get(i) otherwise 'skip'
+            i = i + 1
+            continue
+        end 'skip'
+
+        // funcBegin needs multiple pushes; handle before match to avoid grow-desync
+        let fbName = getFuncBeginName(sOp)
+        if fbName.count() > 0 'isFuncBegin'
+            let stackSize = computeStackSize(stdOps, startIndex: i)
+            ops.push(X86Op.funcLabel(fbName))
+            ops.push(X86Op.prologue(stackSize))
+            // Reset temp slot counter to start after max parser slot
+            nextTempSlot = computeMaxParserSlot(stdOps, startIndex: i) + 1
+            i = i + 1
+            continue
+        end 'isFuncBegin'
+
+        // condBr needs a read-only scan then a push of the right jump type
+        let elseLabel = getCondBrElseLabel(sOp)
+        if elseLabel.count() > 0 'isCondBr'
+            let jumpKind = determineJumpKind(stdOps, condIndex: i)
+            match jumpKind 'emitJump'
+                JumpKind.eq then ops.push(X86Op.condJump(JumpCondition.ne, elseLabel))
+                JumpKind.ne then ops.push(X86Op.condJump(JumpCondition.e, elseLabel))
+                JumpKind.lt then ops.push(X86Op.condJump(JumpCondition.ge, elseLabel))
+                JumpKind.le then ops.push(X86Op.condJump(JumpCondition.g, elseLabel))
+                JumpKind.gt then ops.push(X86Op.condJump(JumpCondition.le, elseLabel))
+                JumpKind.ge then ops.push(X86Op.condJump(JumpCondition.l, elseLabel))
+                JumpKind.feq then ops.push(X86Op.condJump(JumpCondition.ne, elseLabel))
+            end 'emitJump'
+            i = i + 1
+            continue
+        end 'isCondBr'
+
+        // Constants: emit mov + store to temp slot (multiple pushes, must be before match).
+        let constInfo = getConstInfo(sOp)
+        if constInfo.isConst 'isConst'
+            let tempSlot = nextTempSlot
+            nextTempSlot = nextTempSlot + 1
+            ops.push(X86Op.movRegImm(X86Register.rax, constInfo.value))
+            ops.push(X86Op.movSlot(tempSlot, X86Register.rax))
+            valueSlotMapSet(valueSlots, valueId: constInfo.resultId, slot: tempSlot)
+            i = i + 1
+            continue
+        end 'isConst'
+
+        // Binary ops: load left into RAX, load right into RCX, then operate.
+        // Handled before match to avoid grow-desync (multiple pushes).
+        let binInfo = getBinaryOpInfo(sOp)
+        if binInfo.isBinary 'isBinOp'
+            let leftSlot = valueSlotMapGet(valueSlots, valueId: binInfo.leftId)
+            let rightSlot = valueSlotMapGet(valueSlots, valueId: binInfo.rightId)
+            // Load right operand into RCX first (so RAX load doesn't clobber it)
+            if rightSlot >= 0 'hasRightSlot'
+                ops.push(X86Op.loadSlot(X86Register.rcx, rightSlot))
+            end 'hasRightSlot'
+            // Load left operand into RAX (add/sub/imul operate as rax = rax op rcx)
+            if leftSlot >= 0 'hasLeftSlot'
+                ops.push(X86Op.loadSlot(X86Register.rax, leftSlot))
+            end 'hasLeftSlot'
+            // Emit the operation
+            ops.push(binInfo.x86Op)
+            // Store the result to a temp slot so it can be used by subsequent ops
+            let tempSlot = nextTempSlot
+            nextTempSlot = nextTempSlot + 1
+            ops.push(X86Op.movSlot(tempSlot, X86Register.rax))
+            valueSlotMapSet(valueSlots, valueId: binInfo.resultId, slot: tempSlot)
+            i = i + 1
+            continue
+        end 'isBinOp'
+
+        // All other ops are 1:1 mappings (single push each)
+        match sOp 'lower'
+            funcBegin(name, returnType) then i = i  // handled above
+            funcEnd then i = i  // no-op: prologue/epilogue handled by funcBegin/returnOp
+            constI64(resultId, value) then i = i  // handled above
+            constF64(resultId, rawBits) then i = i  // handled above
+            returnOp(retValId) then ops.push(X86Op.epilogue)
+            storeSlot(slotId, valueId) then emitStoreSlot(ops, valueSlots: valueSlots, slotId: slotId, valueId: valueId)
+            loadSlot(resultId, slotId) then emitLoadSlot(ops, valueSlots: valueSlots, resultId: resultId, slotId: slotId)
+            addI64(resultId, leftId, rightId) then i = i  // handled above
+            subI64(resultId, leftId, rightId) then i = i  // handled above
+            mulI64(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Eq(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Ne(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Lt(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Le(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Gt(resultId, leftId, rightId) then i = i  // handled above
+            cmpI64Ge(resultId, leftId, rightId) then i = i  // handled above
+            cmpF64Eq(resultId, leftId, rightId) then i = i  // handled above
+            condBr(condId, thenLabel, elseLabel) then i = i  // handled above
+            br(targetLabel) then ops.push(X86Op.jmp(targetLabel))
+            label(name) then ops.push(X86Op.label(name))
+            printLiteral(data) then ops.push(X86Op.printLiteral(data))
+            printInt(valueId) then ops.push(X86Op.printInt)
+            call(resultId, callee) then ops.push(X86Op.callDirect(callee))
+        end 'lower'
+
+        i = i + 1
+    end 'opLoop'
+
+    logDebug(LogCategory.mlir, message: "Std->X86 lowering complete: {ops.count()} X86 ops")
+    return ops
+end 'lowerStdOpsToX86'
+
+// Store to slot and record the value→slot mapping.
+function emitStoreSlot(ops X86OpArray, valueSlots ValueSlotMap, slotId VarSlot, valueId ValueId)
+    ops.push(X86Op.movSlot(slotId, X86Register.rax))
+    valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
+end 'emitStoreSlot'
+
+// Load from slot and record the result value→slot mapping.
+function emitLoadSlot(ops X86OpArray, valueSlots ValueSlotMap, resultId ValueId, slotId VarSlot)
+    ops.push(X86Op.loadSlot(X86Register.rax, slotId))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+end 'emitLoadSlot'
+
+// Info about a constant operation for SSA temp slot allocation.
+type ConstInfo
+    export var isConst bool
+    export var resultId ValueId
+    export var value ParsedInt
+end 'ConstInfo'
+
+// Extract constant info; returns isConst=false for non-constant ops.
+function getConstInfo(op StdOp) returns ConstInfo
+    var result = ConstInfo{isConst: false, resultId: 0, value: 0}
+    match op 'check'
+        constI64(resultId, value) then result = ConstInfo{isConst: true, resultId: resultId, value: value}
+        constF64(resultId, rawBits) then result = ConstInfo{isConst: true, resultId: resultId, value: rawBits}
+        funcBegin(name, returnType) then result = result
+        funcEnd then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'getConstInfo'
+
+// Find the max parser-allocated slot in a function body (from storeSlot/loadSlot ops).
+function computeMaxParserSlot(stdOps StdOpArray, startIndex StdOpIndex) returns SlotIndex
+    var maxSlot = 0 - 1
+    var j = startIndex + 1
+    while j < stdOps.count() 'scan'
+        let op = try stdOps.get(j) otherwise 'scanSkip'
+            j = j + 1
+            continue
+        end 'scanSkip'
+        match op 'check'
+            funcEnd then break 'scan'
+            storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
+            loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
+            constI64(resultId, value) then maxSlot = maxSlot
+            constF64(resultId, rawBits) then maxSlot = maxSlot
+            returnOp(retValId) then maxSlot = maxSlot
+            addI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            subI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            mulI64(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Eq(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Ne(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Lt(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Le(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Gt(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpI64Ge(resultId, leftId, rightId) then maxSlot = maxSlot
+            cmpF64Eq(resultId, leftId, rightId) then maxSlot = maxSlot
+            condBr(condId, thenLabel, elseLabel) then maxSlot = maxSlot
+            br(targetLabel) then maxSlot = maxSlot
+            label(name) then maxSlot = maxSlot
+            funcBegin(n, rt) then maxSlot = maxSlot
+            printLiteral(data) then maxSlot = maxSlot
+            printInt(valueId) then maxSlot = maxSlot
+            call(resultId, callee) then maxSlot = maxSlot
+        end 'check'
+        j = j + 1
+    end 'scan'
+    return maxSlot
+end 'computeMaxParserSlot'
+
+// Info about a binary operation for SSA-based lowering.
+type BinaryOpInfo
+    export var isBinary bool
+    export var resultId ValueId
+    export var leftId ValueId
+    export var rightId ValueId
+    export var x86Op X86Op
+end 'BinaryOpInfo'
+
+// Extract binary op info; returns isBinary=false for non-binary ops.
+function getBinaryOpInfo(op StdOp) returns BinaryOpInfo
+    var result = BinaryOpInfo{isBinary: false, resultId: 0 - 1, leftId: 0, rightId: 0, x86Op: X86Op.epilogue}
+    match op 'check'
+        addI64(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.addRegReg(X86Register.rax, X86Register.rcx)}
+        subI64(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.subRegReg(X86Register.rax, X86Register.rcx)}
+        mulI64(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.imulRegReg(X86Register.rax, X86Register.rcx)}
+        cmpI64Eq(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
+        cmpI64Ne(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
+        cmpI64Lt(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
+        cmpI64Le(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
+        cmpI64Gt(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
+        cmpI64Ge(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
+        cmpF64Eq(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.ucomisd}
+        funcBegin(name, returnType) then result = result
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'getBinaryOpInfo'
+
+// Extract function name from a funcBegin op; returns empty ByteArray for other ops.
+function getFuncBeginName(op StdOp) returns ByteArray
+    var result = ByteArray{}
+    match op 'check'
+        funcBegin(name, returnType) then result = name
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        condBr(condId, thenLabel, elseLabel) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'getFuncBeginName'
+
+// Extract else label from a condBr op; returns empty ByteArray for other ops.
+function getCondBrElseLabel(op StdOp) returns ByteArray
+    var result = ByteArray{}
+    match op 'check'
+        condBr(condId, thenLabel, elseLabel) then result = elseLabel
+        funcBegin(name, returnType) then result = result
+        funcEnd then result = result
+        constI64(resultId, value) then result = result
+        constF64(resultId, rawBits) then result = result
+        returnOp(retValId) then result = result
+        storeSlot(slotId, valueId) then result = result
+        loadSlot(resultId, slotId) then result = result
+        addI64(resultId, leftId, rightId) then result = result
+        subI64(resultId, leftId, rightId) then result = result
+        mulI64(resultId, leftId, rightId) then result = result
+        cmpI64Eq(resultId, leftId, rightId) then result = result
+        cmpI64Ne(resultId, leftId, rightId) then result = result
+        cmpI64Lt(resultId, leftId, rightId) then result = result
+        cmpI64Le(resultId, leftId, rightId) then result = result
+        cmpI64Gt(resultId, leftId, rightId) then result = result
+        cmpI64Ge(resultId, leftId, rightId) then result = result
+        cmpF64Eq(resultId, leftId, rightId) then result = result
+        br(targetLabel) then result = result
+        label(name) then result = result
+        printLiteral(data) then result = result
+        printInt(valueId) then result = result
+        call(resultId, callee) then result = result
+    end 'check'
+    return result
+end 'getCondBrElseLabel'
+
+// Read-only scan: compute stack frame size by finding max slot, temp slots, and print usage.
+function computeStackSize(stdOps StdOpArray, startIndex StdOpIndex) returns StackSize
+    var maxSlot = 0 - 1
+    var hasPrint = false
+    var tempSlotCount = 0
+
+    var j = startIndex + 1
+    while j < stdOps.count() 'scan'
+        let op = try stdOps.get(j) otherwise 'scanSkip'
+            j = j + 1
+            continue
+        end 'scanSkip'
+        match op 'countSlot'
+            funcEnd then break 'scan'
+            storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
+            loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
+            printInt(valueId) then hasPrint = true
+            printLiteral(data) then hasPrint = true
+            constI64(resultId, value) then tempSlotCount = tempSlotCount + 1
+            constF64(resultId, rawBits) then tempSlotCount = tempSlotCount + 1
+            addI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            subI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            mulI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Eq(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Ne(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Lt(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Le(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Gt(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpI64Ge(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            cmpF64Eq(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
+            returnOp(retValId) then maxSlot = maxSlot
+            condBr(condId, thenLabel, elseLabel) then maxSlot = maxSlot
+            br(targetLabel) then maxSlot = maxSlot
+            label(name) then maxSlot = maxSlot
+            funcBegin(n, rt) then maxSlot = maxSlot
+            call(resultId, callee) then maxSlot = maxSlot
+        end 'countSlot'
+        j = j + 1
+    end 'scan'
+
+    // Total slots = parser slots + temp slots for intermediate values
+    let totalMaxSlot = maxSlot + tempSlotCount
+
+    var stackSize = 0
+    if totalMaxSlot >= 0 'hasSlots'
+        stackSize = (totalMaxSlot + 1) * 8 + 32
+    end 'hasSlots'
+    if hasPrint and stackSize == 0 'needPrintBuf'
+        stackSize = 32
+    end 'needPrintBuf'
+    // Align to 16
+    if stackSize mod 16 != 0 'align'
+        stackSize = stackSize + (16 - (stackSize mod 16))
+    end 'align'
+    return stackSize
+end 'computeStackSize'
+
+// Read-only scan: look back from condBr to find the comparison that produced the condition.
+function determineJumpKind(stdOps StdOpArray, condIndex StdOpIndex) returns JumpKind
+    var j = condIndex - 1
+    while j >= 0 'scanBack'
+        let prevOp = try stdOps.get(j) otherwise 'scanSkip'
+            j = j - 1
+            continue
+        end 'scanSkip'
+        match prevOp 'checkCmp'
+            cmpI64Eq(resultId, leftId, rightId) then return JumpKind.eq
+            cmpI64Ne(resultId, leftId, rightId) then return JumpKind.ne
+            cmpI64Lt(resultId, leftId, rightId) then return JumpKind.lt
+            cmpI64Le(resultId, leftId, rightId) then return JumpKind.le
+            cmpI64Gt(resultId, leftId, rightId) then return JumpKind.gt
+            cmpI64Ge(resultId, leftId, rightId) then return JumpKind.ge
+            cmpF64Eq(resultId, leftId, rightId) then return JumpKind.feq
+            constI64(resultId, value) then j = j - 1
+            constF64(resultId, rawBits) then j = j - 1
+            returnOp(retValId) then j = j - 1
+            storeSlot(slotId, valueId) then j = j - 1
+            loadSlot(resultId, slotId) then j = j - 1
+            addI64(resultId, leftId, rightId) then j = j - 1
+            subI64(resultId, leftId, rightId) then j = j - 1
+            mulI64(resultId, leftId, rightId) then j = j - 1
+            condBr(cId, tl, el) then j = j - 1
+            br(targetLabel) then j = j - 1
+            label(name) then j = j - 1
+            printLiteral(data) then j = j - 1
+            printInt(valueId) then j = j - 1
+            funcBegin(name, returnType) then j = j - 1
+            funcEnd then j = j - 1
+            call(resultId, callee) then j = j - 1
+        end 'checkCmp'
+    end 'scanBack'
+    return JumpKind.eq
+end 'determineJumpKind'
+
+typealias SlotIndex = int(i64.min to i64.max)
+typealias StdOpIndex = int(0 to u64.max)
+
+function maxOf(a SlotIndex, b SlotIndex) returns SlotIndex
+    if a > b 'aGreater'
+        return a
+    end 'aGreater'
+    return b
+end 'maxOf'

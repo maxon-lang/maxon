@@ -66,15 +66,40 @@ function emitMovSlot(code ByteBuffer, slotIndex VarSlot)
     code.push((0 - offset) and 0xFF)
 end 'emitMovSlot'
 
-// Load stack slot to RAX: mov rax, [rbp - (slotIndex+1)*8]
-function emitLoadSlot(code ByteBuffer, slotIndex VarSlot)
+// Load stack slot to a register: mov REG, [rbp - (slotIndex+1)*8]
+function emitLoadSlotToReg(code ByteBuffer, slotIndex VarSlot, dest X86Register)
     let offset = (slotIndex + 1) * 8
+    match dest 'pickReg'
+        X86Register.rax then emitLoadSlotRax(code, offset: offset)
+        X86Register.rcx then emitLoadSlotRcx(code, offset: offset)
+        X86Register.rdx then emitLoadSlotRax(code, offset: offset)
+        X86Register.rbx then emitLoadSlotRax(code, offset: offset)
+        X86Register.rsp then emitLoadSlotRax(code, offset: offset)
+        X86Register.rbp then emitLoadSlotRax(code, offset: offset)
+        X86Register.rsi then emitLoadSlotRax(code, offset: offset)
+        X86Register.rdi then emitLoadSlotRax(code, offset: offset)
+        X86Register.r8 then emitLoadSlotRax(code, offset: offset)
+        X86Register.r9 then emitLoadSlotRax(code, offset: offset)
+        X86Register.r10 then emitLoadSlotRax(code, offset: offset)
+        X86Register.r11 then emitLoadSlotRax(code, offset: offset)
+    end 'pickReg'
+end 'emitLoadSlotToReg'
+
+function emitLoadSlotRax(code ByteBuffer, offset VarSlot)
     // mov rax, [rbp - offset]  =>  48 8B 45 <disp8>
     code.push(0x48)
     code.push(0x8B)
     code.push(0x45)
     code.push((0 - offset) and 0xFF)
-end 'emitLoadSlot'
+end 'emitLoadSlotRax'
+
+function emitLoadSlotRcx(code ByteBuffer, offset VarSlot)
+    // mov rcx, [rbp - offset]  =>  48 8B 4D <disp8>
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x4D)
+    code.push((0 - offset) and 0xFF)
+end 'emitLoadSlotRcx'
 
 // Save RAX to RCX before loading second operand
 function emitMovRcxRax(code ByteBuffer)
@@ -83,16 +108,6 @@ function emitMovRcxRax(code ByteBuffer)
     code.push(0x89)
     code.push(0xC1)
 end 'emitMovRcxRax'
-
-function emitPushRax(code ByteBuffer)
-    // push rax  =>  50
-    code.push(0x50)
-end 'emitPushRax'
-
-function emitPopRcx(code ByteBuffer)
-    // pop rcx  =>  59
-    code.push(0x59)
-end 'emitPopRcx'
 
 function emitAddRegReg(code ByteBuffer)
     // add rax, rcx  =>  48 01 C8
@@ -654,19 +669,10 @@ function emitPrintInt(code ByteBuffer, writeStdoutOffset CodeOffset, i64ToString
     emitRelativeCall(code, targetOffset: writeStdoutOffset)
 end 'emitPrintInt'
 
-// Emit X86 ops to machine code.
-// Returns a CodeResult with the code bytes and fixup offsets.
-export function emit(x86Ops X86OpArray) returns CodeResult
-    logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops")
-    var code = ByteBuffer{}
-    code.reserve(1024)
-    var iatFixups = IatFixupArray{}
-    var labelNames = ByteArrayArray{}
-    var labelOffsets = CodeOffsetArray{}
-    var callFixups = CallFixupArray{}
-    var jumpFixups = JumpFixupArray{}
+// --- OS-specific _start wrappers ---
 
-    // Emit _start wrapper first (entry point at offset 0)
+// Windows _start: shadow space + call main + ExitProcess via IAT
+function emitStartWindows(code ByteBuffer, iatFixups IatFixupArray, callFixups CallFixupArray) returns CodeOffset
     // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
     code.push(0x48)
     code.push(0x83)
@@ -681,8 +687,7 @@ export function emit(x86Ops X86OpArray) returns CodeResult
     mainName.push(97)
     mainName.push(105)
     mainName.push(110)
-    var mainFixup = CallFixup{codeOffset: mainCallFixupOffset, targetName: mainName}
-    callFixups.push(mainFixup)
+    callFixups.push(CallFixup{codeOffset: mainCallFixupOffset, targetName: mainName})
     code.push(0x00)
     code.push(0x00)
     code.push(0x00)
@@ -703,10 +708,110 @@ export function emit(x86Ops X86OpArray) returns CodeResult
 
     // int3 (unreachable)
     code.push(0xCC)
+    return mainCallFixupOffset
+end 'emitStartWindows'
+
+// Linux _start: call main, then exit syscall (rax=60, rdi=return value)
+function emitStartLinux(code ByteBuffer, callFixups CallFixupArray) returns CodeOffset
+    // call main
+    code.push(0xE8)
+    let mainCallFixupOffset = code.count()
+    var mainName = ByteArray{}
+    mainName.push(109)
+    mainName.push(97)
+    mainName.push(105)
+    mainName.push(110)
+    callFixups.push(CallFixup{codeOffset: mainCallFixupOffset, targetName: mainName})
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // mov edi, eax (return value -> first arg for exit)
+    code.push(0x89)
+    code.push(0xC7)
+
+    // mov eax, 60 (sys_exit)
+    code.push(0xB8)
+    code.push(0x3C)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // syscall
+    code.push(0x0F)
+    code.push(0x05)
+
+    return mainCallFixupOffset
+end 'emitStartLinux'
+
+// Linux write_stdout using write syscall (rax=1, rdi=1, rsi=buf, rdx=len)
+// Args: rcx=ptr, rdx=len (same calling convention as Windows for caller convenience)
+function emitWriteStdoutLinux(code ByteBuffer) returns CodeOffset
+    let offset = code.count()
+
+    // Prologue
+    code.push(0x55)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xE5)
+
+    // System V ABI: rdi=fd, rsi=buf, rdx=count, rax=syscall#
+    // Caller passes ptr in rcx, len in rdx (matching internal convention)
+    // mov rsi, rcx (buf)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xCE)
+    // rdx already has length, keep it
+    // mov edi, 1 (stdout fd)
+    code.push(0xBF)
+    code.push(0x01)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    // mov eax, 1 (sys_write)
+    code.push(0xB8)
+    code.push(0x01)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    // syscall
+    code.push(0x0F)
+    code.push(0x05)
+
+    // Epilogue
+    code.push(0x5D)
+    code.push(0xC3)
+
+    return offset
+end 'emitWriteStdoutLinux'
+
+// Emit X86 ops to machine code.
+// Returns a CodeResult with the code bytes and fixup offsets.
+export function emit(x86Ops X86OpArray, target TargetTriple) returns CodeResult
+    logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops")
+    var code = ByteBuffer{}
+    code.reserve(1024)
+    var iatFixups = IatFixupArray{}
+    var labelNames = ByteArrayArray{}
+    var labelOffsets = CodeOffsetArray{}
+    var callFixups = CallFixupArray{}
+    var jumpFixups = JumpFixupArray{}
+
+    // Emit _start wrapper first (entry point at offset 0)
+    var mainCallFixupOffset = 0
+    match target.os 'emitStart'
+        Os.windows then mainCallFixupOffset = emitStartWindows(code, iatFixups: iatFixups, callFixups: callFixups)
+        Os.linux then mainCallFixupOffset = emitStartLinux(code, callFixups: callFixups)
+    end 'emitStart'
 
     // Emit runtime stubs (before user functions, so offsets are known)
     logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
-    let writeStdoutOff = emitWriteStdout(code, iatFixups: iatFixups)
+    var writeStdoutOff = 0
+    match target.os 'emitWriteStub'
+        Os.windows then writeStdoutOff = emitWriteStdout(code, iatFixups: iatFixups)
+        Os.linux then writeStdoutOff = emitWriteStdoutLinux(code)
+    end 'emitWriteStub'
     let i64ToStringOff = emitI64ToString(code)
 
     // Emit all function bodies
@@ -719,7 +824,7 @@ export function emit(x86Ops X86OpArray) returns CodeResult
             epilogue then emitEpilogue(code)
             movRegImm(dest, value) then emitMovRegImm(code, value: value)
             movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex)
-            loadSlot(destReg, slotIndex) then emitLoadSlot(code, slotIndex: slotIndex)
+            loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
             addRegReg(destReg, srcReg) then emitAddRegReg(code)
             subRegReg(destReg, srcReg) then emitSubRegReg(code)
             imulRegReg(destReg, srcReg) then emitImulRegReg(code)
@@ -728,11 +833,9 @@ export function emit(x86Ops X86OpArray) returns CodeResult
             jmp(targetLabel) then emitJmp(code, jumpFixups: jumpFixups, targetLabel: targetLabel)
             label(name) then recordLabel(labelNames, labelOffsets: labelOffsets, name: name, offset: code.count())
             movF64Slot(slotIndex) then emitMovSlot(code, slotIndex: slotIndex)
-            loadF64Slot(slotIndex) then emitLoadSlot(code, slotIndex: slotIndex)
+            loadF64Slot(slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: X86Register.rax)
             movF64Rdata(rdataOffset) then emitMovRegImm(code, value: rdataOffset)
             ucomisd then emitUcomisd(code)
-            pushRax then emitPushRax(code)
-            popRcx then emitPopRcx(code)
             printLiteral(data) then emitPrintLiteral(code, data: data, writeStdoutOffset: writeStdoutOff)
             printInt then emitPrintInt(code, writeStdoutOffset: writeStdoutOff, i64ToStringOffset: i64ToStringOff)
         end 'emit'

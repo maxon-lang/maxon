@@ -52,9 +52,31 @@ function printUsage()
 end 'printUsage'
 
 function runBuild(args StringArray) returns ExitCode
-    let path = try args.get(0) otherwise Directory.currentDirectory()
+    var path = ""
+    var target = detectHostTriple()
 
-    let outputPath = try compile(path) otherwise 'err'
+    // Parse args: positional path and --target= option
+    for arg in args 'parseArgs'
+        if arg.startsWith("--target=") 'isTarget'
+            let eqIdx = try arg.findFirst("=") otherwise 'bad'
+                continue
+            end 'bad'
+            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
+                continue
+            end 'bad2'
+            target = parseTargetTriple(arg.slice(afterEq, endIndex: arg.endIndex()))
+        end 'isTarget' else 'notTarget'
+            if not arg.startsWith("--") 'isPath'
+                path = arg
+            end 'isPath'
+        end 'notTarget'
+    end 'parseArgs'
+
+    if path.isEmpty() 'noPath'
+        path = Directory.currentDirectory()
+    end 'noPath'
+
+    let outputPath = try compile(path, target: target) otherwise 'err'
         return 1
     end 'err'
 
