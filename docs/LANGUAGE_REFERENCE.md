@@ -221,6 +221,15 @@ interface FormattedStringable
 end 'FormattedStringable'
 ```
 
+**Byte String Literals** (create a ByteArray from a string)
+```maxon
+let bytes = b"hello"           // ByteArray containing [104, 101, 108, 108, 111]
+let empty = b""                // Empty ByteArray
+let escaped = b"line\n"        // Supports escape sequences
+```
+
+Byte string literals use the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a UTF-8 encoded string. They support the same escape sequences as regular string literals. This is useful when working with raw bytes or APIs that expect byte arrays.
+
 **Boolean Literals**
 ```maxon
 true
@@ -293,7 +302,7 @@ type IntBox implements Container with Integer // OK
 ```maxon
 typealias Age = int(0 to 150)
 typealias Percentage = float(0.0 to 100.0)
-typealias Pixel = byte(0 to 255)
+typealias Pixel = byte(0 to u8.max)
 typealias Temperature = int(-273 to 1000)
 ```
 
@@ -314,7 +323,7 @@ typealias SmallSigned = int(i8.min to i8.max)
 
 Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`.
 
-When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`). A type-qualified bound paired with a literal must form a natural range — `0 to u32.max` is valid, but `0 to i64.max` is an error (use `i64.min to i64.max` or `0 to u64.max` instead). Byte ranges must have bounds within 0 to 255.
+When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`). A type-qualified bound paired with a literal must form a natural range — `0 to u32.max` is valid, but `0 to i64.max` is an error (use `i64.min to i64.max` or `0 to u64.max` instead). Byte ranges must have bounds within 0 to u8.max.
 
 **Construction:**
 
@@ -381,7 +390,7 @@ The compiler automatically selects the smallest x86-optimal integer width that c
 
 | Range fits in | Storage used |
 |---------------|-------------|
-| 0 to 255 | u8 (1 byte) |
+| 0 to u8.max | u8 (1 byte) |
 | -128 to 127 | i8 (1 byte) |
 | 0 to 65535 | u16 (2 bytes) |
 | -32768 to 32767 | i16 (2 bytes) |

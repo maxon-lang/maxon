@@ -70,6 +70,7 @@ public enum TokenType {
   FloatLiteral,
   StringLiteral,
   StringInterp,
+  ByteStringLiteral,
   CharacterLiteral,
 
   // Punctuation
@@ -376,6 +377,12 @@ public class Lexer(string source) {
       return ScanStringLiteral(startLine, startColumn);
     }
 
+    // Byte string literal: b"..."
+    if (c == 'b' && Peek(1) == '"') {
+      Advance(); // consume 'b'
+      return ScanByteStringLiteral(startLine, startColumn);
+    }
+
     // Integer or float literal
     if (char.IsDigit(c)) {
       return ScanNumber(startLine, startColumn);
@@ -504,6 +511,25 @@ public class Lexer(string source) {
 
     var type = hasInterpolation ? TokenType.StringInterp : TokenType.StringLiteral;
     return new Token(type, value, startLine, startColumn);
+  }
+
+  private Token ScanByteStringLiteral(int startLine, int startColumn) {
+    Advance(); // consume opening quote
+    var start = _pos;
+
+    while (!IsAtEnd() && Current() != '"') {
+      if (Current() == '\\' && !IsAtEnd(1)) {
+        Advance(); Advance(); // Skip escape sequence
+      } else {
+        Advance();
+      }
+    }
+    var value = _source[start.._pos];
+    if (!IsAtEnd()) {
+      Advance(); // consume closing quote
+    }
+
+    return new Token(TokenType.ByteStringLiteral, value, startLine, startColumn);
   }
 
   private char Current() => _source[_pos];

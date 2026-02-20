@@ -15,7 +15,7 @@ Matching on an enum with associated values that was loaded from a struct field.
 <!-- test: enum-struct-field-match-let -->
 Match enum with associated values from struct field via let binding.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 export enum Color
     red(intensity SmallInt)
@@ -51,7 +51,7 @@ end 'main'
 <!-- test: enum-struct-field-match-direct -->
 Match enum with associated values from struct field directly.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 export enum Shape
     circle(radius SmallInt)
@@ -85,7 +85,7 @@ end 'main'
 <!-- test: enum-struct-field-match-extract -->
 Extract associated value from enum struct field.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 export enum Value
     number(n SmallInt)

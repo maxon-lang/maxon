@@ -15,7 +15,7 @@ Module-level `var` declarations with struct types support field assignment and m
 <!-- test: module-struct-field-assign -->
 Module-level struct var field assignment.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 type Counter
     export var value SmallInt
@@ -57,7 +57,7 @@ end 'main'
 <!-- test: module-struct-nested-field-assign -->
 Module-level struct var nested field assignment through chain.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 type Inner
     export var x SmallInt

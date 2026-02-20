@@ -845,6 +845,15 @@ public class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// Byte string literal: stores UTF-8 bytes in rdata and creates a ByteArray (Array with Utf8Byte)
+public class MaxonByteStringLiteralOp(string value, string arrayTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.byte_string_literal \"{Value}\"";
+  public string Value { get; } = value;
+  public string ArrayTypeName { get; } = arrayTypeName;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), arrayTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
 // Character literal: stores UTF-8 bytes in rdata and creates a Character struct
 public class MaxonCharLiteralOp(string value, string charTypeName) : MaxonOp {
   public override string Mnemonic => $"maxon.char_literal '{Value}'";

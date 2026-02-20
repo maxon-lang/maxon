@@ -1,0 +1,68 @@
+// Test: byte-string-literal.field-access
+function main() returns ExitCode
+    let len = b"test".count()
+    return len
+end 'main'
+---
+ExitCode: 4
+---
+module {
+  func @byte-string-literal.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.lea_rdata rax, [__bstr_0]
+    x86.mov rcx, rax
+    x86.mov edx, 4
+    x86.mov ebx, 32
+    x86.mov [rbp-32], ecx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-32]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, 4
+    x86.mov [r8+8], r9
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call ByteBuffer.count
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je byte-string-literal.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_7]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

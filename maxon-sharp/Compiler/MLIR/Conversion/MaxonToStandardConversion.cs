@@ -1608,6 +1608,9 @@ public static partial class MaxonToStandardConversion {
             case MaxonStringLiteralOp stringLitOp:
               LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result);
               break;
+            case MaxonByteStringLiteralOp byteStringLitOp:
+              LowerByteStringLiteral(byteStringLitOp, newBlock, varTypes, structVarNames, result);
+              break;
             case MaxonCharLiteralOp charLitOp:
               LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result);
               break;

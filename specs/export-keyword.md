@@ -497,7 +497,7 @@ end 'main'
 Cross-file access to an exported module-level struct var.
 ```maxon
 // --- file: state.maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 export type Counter
     export var value SmallInt

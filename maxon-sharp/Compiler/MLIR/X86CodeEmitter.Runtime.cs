@@ -2648,7 +2648,7 @@ public partial class X86CodeEmitter {
     // Find empty slot in __track_table and store {ptr, size, id}
     // Load table base address into R10
     EmitGlobalLeaReg(X86Register.R10, "__track_table");
-    // R11 = loop counter (0 to 255)
+    // R11 = loop counter (0 to u8.max)
     EmitBytes(0x4D, 0x31, 0xDB); // XOR r11, r11
 
     DefineLabel("rt_track_alloc_find_slot");

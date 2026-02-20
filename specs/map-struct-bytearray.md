@@ -15,7 +15,7 @@ Storing and retrieving structs that contain ByteArray (Array with Byte) fields f
 <!-- test: map-struct-with-bytearray-field -->
 Map.get returns struct with ByteArray field intact.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 

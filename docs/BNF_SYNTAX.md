@@ -74,6 +74,8 @@ float_format  = ['0'] [width] '.' precision
 width         = digit { digit }
 precision     = digit { digit }
 
+BYTE_STRING   = 'b"' { string_char | escape_seq } '"'
+
 CHARACTER     = "'" ( grapheme_cluster | char_escape ) "'"
 grapheme_cluster = <any extended grapheme cluster>
 char_escape   = '\n' | '\t' | '\\' | '\''
@@ -270,7 +272,7 @@ sized_type_ref
 - When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`)
 - A signed type qualifier (`iN.max`) cannot be paired with a literal on the other side — use the full range (`iN.min to iN.max`) or an unsigned type (`0 to uN.max`)
 - Integer ranges cannot span both negative values and values above `i64.max`
-- `byte` ranges must have bounds within 0 to 255
+- `byte` ranges must have bounds within 0 to u8.max
 
 ```
 generic_type  = IDENTIFIER 'with' type_args
@@ -539,6 +541,7 @@ primary       = INTEGER
               | FLOAT
               | STRING
               | STRING_INTERP
+              | BYTE_STRING
               | CHARACTER
               | 'true'
               | 'false'

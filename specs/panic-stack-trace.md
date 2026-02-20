@@ -17,7 +17,7 @@ The stack trace is printed after the panic message and walks the RBP chain to re
 <!-- test: simple-panic -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Byte = int(0 to 255)
+typealias Byte = int(0 to u8.max)
 
 function dangerous(value Integer) returns Byte
   return Byte{value}

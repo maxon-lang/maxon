@@ -88,6 +88,49 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, iterConst.Result, tempName, 8, MlirType.I64, varTypes);
 	}
 
+	private static void LowerByteStringLiteral(
+	  MaxonByteStringLiteralOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<int, string> structVarNames,
+	  MlirModule<StandardOp> result) {
+		// Array layout: iterIndex (offset 0), managed (offset 8)
+		// EmitManagedMemoryLiteral stores managed at offset 0 (for String layout),
+		// so we build the ByteArray struct manually.
+		var rdataLabel = $"__bstr_{op.Result.Id}";
+		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result);
+
+		// Heap-allocate __ManagedMemory struct (32 bytes)
+		var managedName = $"__bstrtmp_managed_{op.Result.Id}";
+		var managedPtr = EmitAlloc(block, 32);
+		EmitStore(block, managedPtr, managedName, varTypes);
+
+		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, MlirType.I64, varTypes);
+		var capConst = new StdConstI64Op(0);
+		block.AddOp(capConst);
+		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		var elemSizeConst = new StdConstI64Op(1);
+		block.AddOp(elemSizeConst);
+		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+		// Heap-allocate outer Array struct (16 bytes: iterIndex at 0, managed at 8)
+		var tempName = $"__bstrtmp_{op.Result.Id}";
+		var outerPtr = EmitAlloc(block, 16);
+		EmitStore(block, outerPtr, tempName, varTypes);
+
+		// Store iterIndex = 0 at offset 0
+		var iterConst = new StdConstI64Op(0);
+		block.AddOp(iterConst);
+		EmitStructFieldStore(block, iterConst.Result, tempName, 0, MlirType.I64, varTypes);
+
+		// Store managed pointer at offset 8
+		var managedPtrReload = EmitLoad(block, managedName, varTypes);
+		EmitStructFieldStore(block, managedPtrReload, tempName, 8, MlirType.I64, varTypes);
+
+		structVarNames[op.Result.Id] = tempName;
+	}
+
 	private static void LowerCharLiteral(
 	  MaxonCharLiteralOp op,
 	  MlirBlock<StandardOp> block,

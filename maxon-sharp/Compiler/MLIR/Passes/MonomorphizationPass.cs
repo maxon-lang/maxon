@@ -170,12 +170,15 @@ public static class MonomorphizationPass {
   }
 
   private static string? ResolveCalleeRewrite(string callee, string? resultStructTypeName, List<MaxonValue> args, Dictionary<(string, string), string> calleeMap) {
-    if (resultStructTypeName != null) {
-      var key = (callee, resultStructTypeName);
-      if (calleeMap.TryGetValue(key, out var newCallee)) return newCallee;
-    }
+    // Prioritize self argument type over result type to avoid ambiguity when
+    // the return type is itself a specialized type (e.g., Array<ByteBuffer>.get()
+    // returns ByteBuffer, but should resolve to ByteBufferArray.get, not ByteBuffer.get).
     if (args.Count > 0 && args[0] is MaxonStruct selfStruct) {
       var key = (callee, selfStruct.TypeName);
+      if (calleeMap.TryGetValue(key, out var newCallee)) return newCallee;
+    }
+    if (resultStructTypeName != null) {
+      var key = (callee, resultStructTypeName);
       if (calleeMap.TryGetValue(key, out var newCallee)) return newCallee;
     }
     return null;

@@ -45,7 +45,7 @@ end 'main'
 <!-- test: map-get-try-otherwise-block-struct -->
 Map.get with try-otherwise block form returns correct struct type.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 type Entry
     export var name String

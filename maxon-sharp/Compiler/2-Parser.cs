@@ -2450,7 +2450,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: range {lower} to {upper} exceeds any representable integer type", primitiveToken.Line, primitiveToken.Column);
         // byte ranges must fit within 0..255
         if (baseType == MlirType.I8 && (lower < 0 || upper > 255))
-          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to 255", primitiveToken.Line, primitiveToken.Column);
+          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to u8.max", primitiveToken.Line, primitiveToken.Column);
         // When both bounds use type qualifiers, they must reference the same type (e.g. i64.min to i64.max, not i32.min to u64.max)
         if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
           throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
@@ -3928,7 +3928,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       "byte" => _parsingTypeAliasRhs || _parsingExtension
         ? MlirType.I8
         : throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to 255)",
+            "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to u8.max)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
       "bool" => MlirType.I1,
       "cstring" => MlirType.I64, // raw pointer type for FFI
@@ -7446,6 +7446,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return new ExprResult.Direct(result);
     }
 
+    if (Check(TokenType.ByteStringLiteral)) {
+      var token = Advance();
+      var result = EmitByteStringLiteral(token);
+      if (Check(TokenType.Dot)) {
+        return ParseFieldAccessChain(new ExprResult.Direct(result), token);
+      }
+      return new ExprResult.Direct(result);
+    }
+
     if (Check(TokenType.CharacterLiteral)) {
       var token = Advance();
       var result = EmitCharLiteral(token);
@@ -8184,6 +8193,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           $"{ex.Message} in character literal", token.Line, token.Column);
     }
     var op = new MaxonCharLiteralOp(value, charTypeName);
+    _currentBlock!.AddOp(op);
+    return op.Result;
+  }
+
+  private MaxonStruct EmitByteStringLiteral(Token token) {
+    string value;
+    try { value = StringUtils.ResolveEscapes(token.Value); } catch (InvalidEscapeException ex) {
+      throw new CompileError(ErrorCode.LexerInvalidEscape,
+          $"{ex.Message} in byte string literal", token.Line, token.Column);
+    }
+    var arrayTypeName = FindArrayTypeAliasForElement(MaxonValueKind.Byte);
+    _usedTypeAliases.Add(arrayTypeName);
+    var op = new MaxonByteStringLiteralOp(value, arrayTypeName);
     _currentBlock!.AddOp(op);
     return op.Result;
   }
@@ -9514,8 +9536,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (compatibleCandidates.Count == 1) {
           Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: selected by argument types");
           return compatibleCandidates[0].Candidate;
-        }
-        else if (compatibleCandidates.Count > 1) {
+        } else if (compatibleCandidates.Count > 1) {
           // Pick highest-scoring candidate if there's a clear winner
           var maxScore = compatibleCandidates.Max(s => s.Score);
           var best = compatibleCandidates.Where(s => s.Score == maxScore).ToList();
@@ -9524,8 +9545,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             return best[0].Candidate;
           }
           matching = [.. best.Select(s => s.Candidate)];
-        }
-        else {
+        } else {
           // No overload matches arg types — pick first and let call-site type checking report the real error
           Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: no compatible candidate, picking first");
           return scored[0].Candidate;
@@ -9633,6 +9653,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       TokenType.FloatLiteral => MlirType.F64,
       TokenType.StringLiteral or TokenType.StringInterp =>
         _typeRegistry.TryGetValue("String", out var strType) ? strType : null,
+      TokenType.ByteStringLiteral =>
+        _typeRegistry.TryGetValue(FindArrayTypeAliasForElement(MaxonValueKind.Byte), out var baType) ? baType : null,
       TokenType.CharacterLiteral =>
         _typeRegistry.TryGetValue("Character", out var charType) ? charType : null,
       TokenType.True or TokenType.False => MlirType.I1,

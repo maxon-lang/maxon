@@ -548,7 +548,7 @@ i8 1
 <!-- test: top-level-var-byte-ranged-type -->
 Module-level var with a byte-sized ranged type.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 var counter = SmallInt{42}
 
@@ -563,7 +563,7 @@ end 'main'
 <!-- test: top-level-let-struct-reassign-error -->
 Reassigning an immutable top-level `let` struct variable should error.
 ```maxon
-typealias SmallInt = int(0 to 255)
+typealias SmallInt = int(0 to u8.max)
 
 type Point
     export var x SmallInt

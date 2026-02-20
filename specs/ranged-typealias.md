@@ -23,7 +23,7 @@ Ranged typealiases require every use of `int`, `float`, and `byte` in type posit
 ```maxon
 typealias Age = int(0 to 150)
 typealias Percentage = float(0.0 to 100.0)
-typealias Pixel = byte(0 to 255)
+typealias Pixel = byte(0 to u8.max)
 typealias Temperature = int(-273 to 1000)
 ```
 
@@ -101,7 +101,7 @@ The compiler validates that ranges are representable:
 - When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`)
 - A type-qualified bound paired with a literal must form a natural range — `0 to u32.max` is valid, but `0 to i64.max` is an error (use `i64.min to i64.max` or `0 to u64.max` instead)
 - Integer ranges cannot span both negative and above `i64.max` (no single 64-bit type can represent this)
-- Byte ranges must have bounds within 0 to 255
+- Byte ranges must have bounds within 0 to u8.max
 
 
 ## Tests
@@ -672,14 +672,14 @@ error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2
 
 <!-- test: error.byte-range-negative -->
 ```maxon
-typealias BadByte = byte(-1 to 255)
+typealias BadByte = byte(-1 to u8.max)
 
 function main() returns ExitCode
   return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.byte-range-negative.test:2:21: Invalid byte range: bounds must be within 0 to 255
+error E3005: specs/fragments/ranged-typealias/error.byte-range-negative.test:2:21: Invalid byte range: bounds must be within 0 to u8.max
 ```
 
 ### Error: byte range above 255
@@ -693,7 +693,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.byte-range-overflow.test:2:21: Invalid byte range: bounds must be within 0 to 255
+error E3005: specs/fragments/ranged-typealias/error.byte-range-overflow.test:2:21: Invalid byte range: bounds must be within 0 to u8.max
 ```
 
 ### Error: literal with signed type max
