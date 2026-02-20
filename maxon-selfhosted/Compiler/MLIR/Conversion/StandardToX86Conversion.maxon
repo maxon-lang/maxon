@@ -38,31 +38,15 @@ export function lowerStdOpsToX86(stdOps StdOpArray) returns X86OpArray
         let elseLabel = getCondBrElseLabel(sOp)
         if elseLabel.count() > 0 'isCondBr'
             let jumpKind = determineJumpKind(stdOps, condIndex: i)
-            if jumpKind == JumpKind.eq 'jEq'
-                ops.push(X86Op.jne(elseLabel))
-            end 'jEq' else 'jNotEq'
-                if jumpKind == JumpKind.ne 'jNe'
-                    ops.push(X86Op.je(elseLabel))
-                end 'jNe' else 'jNotNe'
-                    if jumpKind == JumpKind.lt 'jLt'
-                        ops.push(X86Op.jge(elseLabel))
-                    end 'jLt' else 'jNotLt'
-                        if jumpKind == JumpKind.le 'jLe'
-                            ops.push(X86Op.jg(elseLabel))
-                        end 'jLe' else 'jNotLe'
-                            if jumpKind == JumpKind.gt 'jGt'
-                                ops.push(X86Op.jle(elseLabel))
-                            end 'jGt' else 'jNotGt'
-                                if jumpKind == JumpKind.ge 'jGe'
-                                    ops.push(X86Op.jl(elseLabel))
-                                end 'jGe' else 'jFeq'
-                                    ops.push(X86Op.jne(elseLabel))
-                                end 'jFeq'
-                            end 'jNotGt'
-                        end 'jNotLe'
-                    end 'jNotLt'
-                end 'jNotNe'
-            end 'jNotEq'
+            match jumpKind 'emitJump'
+                JumpKind.eq then ops.push(X86Op.condJump(JumpCondition.ne, elseLabel))
+                JumpKind.ne then ops.push(X86Op.condJump(JumpCondition.e, elseLabel))
+                JumpKind.lt then ops.push(X86Op.condJump(JumpCondition.ge, elseLabel))
+                JumpKind.le then ops.push(X86Op.condJump(JumpCondition.g, elseLabel))
+                JumpKind.gt then ops.push(X86Op.condJump(JumpCondition.le, elseLabel))
+                JumpKind.ge then ops.push(X86Op.condJump(JumpCondition.l, elseLabel))
+                JumpKind.feq then ops.push(X86Op.condJump(JumpCondition.ne, elseLabel))
+            end 'emitJump'
             i = i + 1
             continue
         end 'isCondBr'

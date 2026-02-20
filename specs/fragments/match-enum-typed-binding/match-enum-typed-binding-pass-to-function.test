@@ -1,0 +1,135 @@
+// Test: match-enum-typed-binding-pass-to-function
+enum Direction
+    north
+    south
+    east
+    west
+end 'Direction'
+
+enum Move
+    walk(dir Direction)
+    stay
+end 'Move'
+
+function directionValue(d Direction) returns ExitCode
+    match d 'check'
+        Direction.north then return 1
+        Direction.south then return 2
+        Direction.east then return 3
+        Direction.west then return 4
+    end 'check'
+end 'directionValue'
+
+function main() returns ExitCode
+    let m = Move.walk(Direction.east)
+    match m 'act'
+        walk(dir) then return directionValue(dir)
+        stay then return 0
+    end 'act'
+    return 0
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @match-enum-typed-binding.directionValue(d: i64) -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.jmp match-enum-typed-binding.directionValue.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne match-enum-typed-binding.directionValue.check_0.cmp1
+  check_0.case0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.cmp1:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne match-enum-typed-binding.directionValue.check_0.cmp2
+  check_0.case1:
+    x86.mov eax, 2
+    x86.epilogue
+    x86.ret
+  check_0.cmp2:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne match-enum-typed-binding.directionValue.check_0.cmp3
+  check_0.case2:
+    x86.mov eax, 3
+    x86.epilogue
+    x86.ret
+  check_0.cmp3:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
+    x86.jne match-enum-typed-binding.directionValue.check_0.merge
+  check_0.case3:
+    x86.mov eax, 4
+    x86.epilogue
+    x86.ret
+  check_0.merge:
+  }
+  func @match-enum-typed-binding.main() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 2
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.jmp match-enum-typed-binding.main.act_0.cmp0
+  act_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne match-enum-typed-binding.main.act_0.cmp1
+  act_0.case0:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-32], eax
+    x86.mov ecx, [rbp-32]
+    x86.call match-enum-typed-binding.directionValue
+    x86.mov edx, eax
+    x86.mov [rbp-40], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je match-enum-typed-binding.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_43]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-40]
+    x86.epilogue
+    x86.ret
+  act_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne match-enum-typed-binding.main.act_0.merge
+  act_0.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  act_0.merge:
+  __dead_2:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

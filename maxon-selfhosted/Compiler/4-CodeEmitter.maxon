@@ -159,6 +159,24 @@ end 'JumpFixup'
 typealias JumpFixupArray = Array with JumpFixup
 typealias CondJumpOpcode = int(0x80 to 0x8F)
 
+// Map a JumpCondition enum to its x86 Jcc opcode byte (second byte of 0F xx).
+function conditionToOpcode(cond JumpCondition) returns CondJumpOpcode
+    match cond 'map'
+        JumpCondition.e then return 0x84
+        JumpCondition.ne then return 0x85
+        JumpCondition.l then return 0x8C
+        JumpCondition.le then return 0x8E
+        JumpCondition.g then return 0x8F
+        JumpCondition.ge then return 0x8D
+        JumpCondition.b then return 0x82
+        JumpCondition.be then return 0x86
+        JumpCondition.a then return 0x87
+        JumpCondition.ae then return 0x83
+        JumpCondition.p then return 0x8A
+        JumpCondition.np then return 0x8B
+    end 'map'
+end 'conditionToOpcode'
+
 // Emit a 2-byte conditional jump (0F xx) with rel32 fixup.
 function emitCondJump(code ByteBuffer, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel ByteArray)
     code.push(0x0F)
@@ -706,12 +724,7 @@ export function emit(x86Ops X86OpArray) returns CodeResult
             subRegReg(destReg, srcReg) then emitSubRegReg(code)
             imulRegReg(destReg, srcReg) then emitImulRegReg(code)
             cmpRaxRcx then emitCmpRaxRcx(code)
-            je(targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: 0x84, targetLabel: targetLabel)
-            jne(targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: 0x85, targetLabel: targetLabel)
-            jl(targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: 0x8C, targetLabel: targetLabel)
-            jle(targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: 0x8E, targetLabel: targetLabel)
-            jg(targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: 0x8F, targetLabel: targetLabel)
-            jge(targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: 0x8D, targetLabel: targetLabel)
+            condJump(condition, targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: conditionToOpcode(condition), targetLabel: targetLabel)
             jmp(targetLabel) then emitJmp(code, jumpFixups: jumpFixups, targetLabel: targetLabel)
             label(name) then recordLabel(labelNames, labelOffsets: labelOffsets, name: name, offset: code.count())
             movF64Slot(slotIndex) then emitMovSlot(code, slotIndex: slotIndex)

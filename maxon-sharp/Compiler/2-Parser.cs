@@ -3894,7 +3894,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return (names, types, defaults, paramTokens);
   }
 
-  private void RejectBarePrimitiveTypeArgs(List<MlirType> typeArgs, Token errorToken) {
+  private static void RejectBarePrimitiveTypeArgs(List<MlirType> typeArgs, Token errorToken) {
     foreach (var ct in typeArgs) {
       if (ct.IsBarePrimitive)
         throw new CompileError(ErrorCode.ParserExpectedType,
@@ -6639,7 +6639,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var bindingName = bindings[i];
         var assocType = assocValues[i].Type;
         var bindingKind = assocType.ToValueKind();
-        string? structTypeName = assocType is MlirStructType st ? st.Name : null;
+        string? structTypeName = assocType is MlirStructType st ? st.Name
+          : assocType is MlirEnumType et ? et.Name : null;
 
         var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind, structTypeName);
         _currentBlock!.AddOp(payloadOp);
