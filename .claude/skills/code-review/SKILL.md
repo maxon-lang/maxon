@@ -11,6 +11,8 @@ Review the changes that have been made in the project.
     - Eliminate duplicated code — refactor shared logic into helper methods.
     - Ensure no `switch` or 'match' statements use `default` cases — all cases must be handled explicitly.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
+    - Ensure functions that handle multiple cases, for example a series of 'if' statements, but return 
+      a default value for unhandled cases, should be refactored to throw an error instead. This ensures that all cases are handled explicitly and prevents silent failures.
     - Ensure comments explain "why" not "what".
     - Fix any problems reported by the IDE
     - typealias should describe its purpose, not its type

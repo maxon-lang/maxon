@@ -355,7 +355,7 @@ public class LspServer {
     var enclosingFunc = FindEnclosingFunction(info.Functions, normalizedPath, (int)position.Line + 1);
 
     // Detect dot-receiver (e.g. `arr.contains`) and resolve its type to narrow hover results
-    var receiverName = GetReceiverName(line, (int)position.Character, word);
+    var receiverName = GetReceiverName(line, (int)position.Character);
     string? receiverTypeName = null;
     if (receiverName != null) {
       receiverTypeName = ResolveReceiverType(enclosingFunc, receiverName);
@@ -402,7 +402,7 @@ public class LspServer {
   /// If the word at the cursor is immediately preceded by '.identifier.', return that identifier.
   /// E.g., for 'arr.contains(', hovering on 'contains' returns 'arr'.
   /// </summary>
-  private static string? GetReceiverName(string line, int cursorChar, string word) {
+  private static string? GetReceiverName(string line, int cursorChar) {
     // Find the start of the word at the cursor
     var wordStart = Math.Min(cursorChar, line.Length);
     while (wordStart > 0 && IsWordChar(line[wordStart - 1])) wordStart--;
@@ -454,7 +454,7 @@ public class LspServer {
         // `var name = TypeName{...}` or `var name = TypeName(...)`
         if (afterName.Length > 0 && (afterName[0] == ' ' || afterName[0] == '\t')) {
           var afterEq = afterName.TrimStart();
-          if (afterEq.StartsWith("= ") || afterEq.StartsWith("=")) {
+          if (afterEq.StartsWith("= ") || afterEq.StartsWith('=')) {
             afterEq = afterEq[(afterEq[1] == ' ' ? 2 : 1)..].TrimStart();
             var typeName = ExtractTypeNameToken(afterEq);
             if (typeName != null) return typeName;

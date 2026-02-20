@@ -1,7 +1,7 @@
 ---
 feature: byte-string-literal
 status: experimental
-keywords: [byte, string, literal, bytearray, utf8]
+keywords: [byte, string, literal, bytebuffer]
 category: types
 ---
 
@@ -9,13 +9,13 @@ category: types
 
 ## Documentation
 
-A byte string literal uses the `b"..."` prefix to create a `ByteArray` (`Array with Utf8Byte`) directly from a string, without allocating a `String`. This is useful when working with raw bytes or APIs that expect byte arrays.
+A byte string literal uses the `b"..."` prefix to create a `ByteBuffer` (`Array with Byte`) directly from a string, without allocating a `String`. This is useful when working with raw bytes or APIs that expect byte arrays.
 
 ### Syntax
 
 ```text
-let bytes = b"hello"           // ByteArray containing [104, 101, 108, 108, 111]
-let empty = b""                // Empty ByteArray
+let bytes = b"hello"           // ByteBuffer containing [104, 101, 108, 108, 111]
+let empty = b""                // Empty ByteBuffer
 let escaped = b"line\n"        // Supports escape sequences
 ```
 
@@ -23,16 +23,16 @@ The byte string literal supports the same escape sequences as regular string lit
 
 ### Use Cases
 
-Byte string literals are particularly useful as map keys when the map uses `ByteArray` keys, avoiding the overhead of `String` construction and `toByteArray()` conversion:
+Byte string literals are particularly useful as map keys when the map uses `ByteBuffer` keys, avoiding the overhead of `String` construction and `toByteArray()` conversion:
 
 ```text
-typealias KeywordMap = Map with (ByteArray, int)
+typealias KeywordMap = Map with (ByteBuffer, int)
 let keywords = [b"if": 1, b"else": 2, b"while": 3]
 ```
 
 ### Methods
 
-Byte string literals produce a standard `ByteArray`, so all `Array` methods are available:
+Byte string literals produce a standard `ByteBuffer`, so all `Array` methods are available:
 
 ```text
 let data = b"hello"
@@ -112,6 +112,50 @@ end 'main'
 ```
 ```stdout
 1 2
+```
+
+<!-- test: byte-string-literal.top-level-map -->
+
+```maxon
+var m = [b"hello": 1, b"world": 2]
+
+function main() returns ExitCode
+    let v1 = try m.get(key: b"hello") otherwise 0
+    let v2 = try m.get(key: b"world") otherwise 0
+    print("{v1} {v2}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: byte-string-literal.top-level-map-struct -->
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Info
+    export var value Integer
+end 'Info'
+
+var m = [b"hello": Info{value: 10}, b"world": Info{value: 20}]
+
+function main() returns ExitCode
+    let v1 = try m.get(key: b"hello") otherwise Info{value: 0}
+    let v2 = try m.get(key: b"world") otherwise Info{value: 0}
+    print("{v1.value} {v2.value}")
+    return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10 20
 ```
 
 <!-- test: byte-string-literal.field-access -->

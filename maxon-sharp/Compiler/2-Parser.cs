@@ -863,7 +863,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return InferMapTypeAlias(deferred.TokenStart);
     if (_tokens[deferred.TokenStart].Type == TokenType.LeftBracket)
       return InferArrayTypeAlias(deferred.TokenStart);
-    return "Array";
+    var startToken = _tokens[deferred.TokenStart];
+    throw new CompileError(ErrorCode.ParserExpectedExpression,
+      $"Cannot infer type of global initializer from '{startToken.Type}' token",
+      startToken.Line, startToken.Column);
   }
 
   /// <summary>
@@ -930,38 +933,55 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// <summary>
   /// Infer the MlirType of a simple expression from tokens without parsing.
-  /// Handles: integer/float/string/char literals and Type.case enum references.
+  /// Used during pre-scanning to determine element types of top-level collection literals.
   /// </summary>
   private MlirType InferTypeFromTokens(int pos, out int endPos) {
     endPos = pos + 1;
-    if (pos >= _tokens.Count) return MlirType.I64;
+    if (pos >= _tokens.Count)
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "Expected expression in global initializer but reached end of tokens", null, null);
 
     var token = _tokens[pos];
-    if (token.Type == TokenType.IntegerLiteral) return MlirType.I64;
-    if (token.Type == TokenType.FloatLiteral) return MlirType.F64;
-    if (token.Type == TokenType.StringLiteral) {
-      if (_typeRegistry.TryGetValue("String", out var strType)) return strType;
-      return MlirType.I64;
+    switch (token.Type) {
+      case TokenType.IntegerLiteral:
+        return MlirType.I64;
+      case TokenType.FloatLiteral:
+        return MlirType.F64;
+      case TokenType.True:
+      case TokenType.False:
+        return MlirType.I1;
+      case TokenType.StringLiteral:
+      case TokenType.StringInterp:
+        if (_typeRegistry.TryGetValue("String", out var strType)) return strType;
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          "String type not found in type registry; is the standard library loaded?", token.Line, token.Column);
+      case TokenType.CharacterLiteral:
+        if (_typeRegistry.TryGetValue("Character", out var charType)) return charType;
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          "Character type not found in type registry; is the standard library loaded?", token.Line, token.Column);
+      case TokenType.ByteStringLiteral:
+        var alias = FindArrayTypeAliasForElement(MaxonValueKind.Byte);
+        if (_typeRegistry.TryGetValue(alias, out var bstrType)) return bstrType;
+        throw new CompileError(ErrorCode.ParserExpectedType,
+          $"ByteBuffer type alias '{alias}' not found in type registry; is the standard library loaded?", token.Line, token.Column);
+      case TokenType.Identifier:
+        // Enum/struct reference: Type.case
+        if (pos + 2 < _tokens.Count && _tokens[pos + 1].Type == TokenType.Dot) {
+          endPos = pos + 3;
+          if (_typeRegistry.TryGetValue(token.Value, out var enumType)) return enumType;
+        }
+        // Struct constructor: TypeName{...}
+        if (pos + 1 < _tokens.Count && _tokens[pos + 1].Type == TokenType.LeftBrace
+            && _typeRegistry.TryGetValue(token.Value, out var ctorType)
+            && ctorType is MlirStructType) {
+          endPos = pos + 1;
+          return ctorType;
+        }
+        // Bare variable reference — can't resolve type without full expression parsing
+        return MlirType.I64;
     }
-    if (token.Type == TokenType.CharacterLiteral) {
-      if (_typeRegistry.TryGetValue("Character", out var charType)) return charType;
-      return MlirType.I64;
-    }
-    // Enum/struct reference: Type.case
-    if (token.Type == TokenType.Identifier && pos + 2 < _tokens.Count
-        && _tokens[pos + 1].Type == TokenType.Dot) {
-      endPos = pos + 3;
-      if (_typeRegistry.TryGetValue(token.Value, out var type)) return type;
-    }
-    // Struct constructor: TypeName{...}
-    if (token.Type == TokenType.Identifier && pos + 1 < _tokens.Count
-        && _tokens[pos + 1].Type == TokenType.LeftBrace
-        && _typeRegistry.TryGetValue(token.Value, out var ctorType)
-        && ctorType is MlirStructType) {
-      endPos = pos + 1;
-      return ctorType;
-    }
-    return MlirType.I64;
+    throw new CompileError(ErrorCode.ParserExpectedExpression,
+      $"Cannot infer type of global initializer from '{token.Type}' token", token.Line, token.Column);
   }
 
   /// <summary>
@@ -8416,6 +8436,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       EnsureArrayTypeAliasForType(keyType);
       EnsureArrayTypeAliasForType(valueType);
     }
+    // Ensure alias source is tracked even if the type was already registered
+    // (e.g., from a prior parser pass via the shared type registry)
+    _typeAliasSources.TryAdd(autoAliasName, mapSourceTypeName);
     return autoAliasName;
   }
 
@@ -8461,7 +8484,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     else
       elementTypeName = KindToMlirType(elementKind)?.Name;
 
-    if (elementTypeName == null) return "Array";
+    if (elementTypeName == null)
+      throw new InvalidOperationException(
+        $"Cannot resolve element type name for kind '{elementKind}' (structTypeName={elementStructTypeName})");
 
     // Search for an existing typealias of Array with this element type
     var existing = FindArrayAliasByElementName(elementTypeName);

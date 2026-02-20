@@ -396,7 +396,8 @@ function scanIdentifier(source ByteArray, state LexerState, tokens TokenArray, s
         state.column = state.column + 1
     end 'identBody'
     let identVal = sliceBytes(source, startPos: startPos, endPos: state.pos)
-    let kind = classifyIdentifier(identVal)
+    let identBuf = ByteBuffer{managed: identVal.managed}
+    let kind = classifyIdentifier(identBuf)
     tokens.push({kind: kind, value: identVal, line: startLine, column: startCol})
 end 'scanIdentifier'
 
@@ -448,90 +449,67 @@ export type KeywordInfo
     export var canHaveBlockLabel bool
 end 'KeywordInfo'
 
-// Keyword map: maps keyword bytes -> KeywordInfo for direct ByteArray lookup without String conversion.
-export typealias KeywordMap = Map with (ByteArray, KeywordInfo)
+var keywordMap = [
+    b"if":          KeywordInfo{kind: TokenKind.if,          category: KeywordCategory.control,     helpText: "Conditional statement. Executes code if the condition is true.",                                                    canHaveBlockLabel: true},
+    b"else":        KeywordInfo{kind: TokenKind.else,        category: KeywordCategory.control,     helpText: "Alternative branch in an if statement. Executed when the condition is false.",                                      canHaveBlockLabel: true},
+    b"while":       KeywordInfo{kind: TokenKind.while,       category: KeywordCategory.control,     helpText: "Loop that continues while the condition is true.",                                                                   canHaveBlockLabel: true},
+    b"for":         KeywordInfo{kind: TokenKind.for,         category: KeywordCategory.control,     helpText: "Loop that iterates over a range or collection.",                                                                     canHaveBlockLabel: true},
+    b"in":          KeywordInfo{kind: TokenKind.in,          category: KeywordCategory.control,     helpText: "Used in for loops to specify the range or collection to iterate over.",                                             canHaveBlockLabel: false},
+    b"break":       KeywordInfo{kind: TokenKind.break,       category: KeywordCategory.control,     helpText: "Exits the current loop or match statement.",                                                                         canHaveBlockLabel: false},
+    b"continue":    KeywordInfo{kind: TokenKind.continue,    category: KeywordCategory.control,     helpText: "Skips the rest of the current loop iteration and continues with the next iteration.",                               canHaveBlockLabel: false},
+    b"return":      KeywordInfo{kind: TokenKind.return,      category: KeywordCategory.control,     helpText: "Returns a value from a function and exits the function.",                                                           canHaveBlockLabel: false},
+    b"end":         KeywordInfo{kind: TokenKind.end,         category: KeywordCategory.control,     helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.",            canHaveBlockLabel: true},
+    b"match":       KeywordInfo{kind: TokenKind.match,       category: KeywordCategory.control,     helpText: "Pattern matching statement for enums and values.",                                                                  canHaveBlockLabel: false},
+    b"then":        KeywordInfo{kind: TokenKind.then,        category: KeywordCategory.control,     helpText: "Used in match expressions to separate pattern from result.",                                                        canHaveBlockLabel: true},
+    b"fallthrough": KeywordInfo{kind: TokenKind.fallthrough, category: KeywordCategory.control,     helpText: "Falls through to the next case in a match statement.",                                                              canHaveBlockLabel: false},
+    b"default":     KeywordInfo{kind: TokenKind.default,     category: KeywordCategory.control,     helpText: "Default case in a match statement.",                                                                                canHaveBlockLabel: false},
+    b"upto":        KeywordInfo{kind: TokenKind.upto,        category: KeywordCategory.control,     helpText: "Exclusive upper bound in range patterns.",                                                                          canHaveBlockLabel: false},
+    b"gives":       KeywordInfo{kind: TokenKind.gives,       category: KeywordCategory.control,     helpText: "Used in iterator expressions.",                                                                                     canHaveBlockLabel: false},
+    b"try":         KeywordInfo{kind: TokenKind.try,         category: KeywordCategory.control,     helpText: "Attempts an operation that may throw an error.",                                                                    canHaveBlockLabel: false},
+    b"otherwise":   KeywordInfo{kind: TokenKind.otherwise,   category: KeywordCategory.control,     helpText: "Provides a fallback for try expressions when an error occurs.",                                                    canHaveBlockLabel: true},
+    b"throw":       KeywordInfo{kind: TokenKind.throw,       category: KeywordCategory.control,     helpText: "Throws an error that can be caught by a try-catch block.",                                                         canHaveBlockLabel: false},
+    b"ignore":      KeywordInfo{kind: TokenKind.ignore,      category: KeywordCategory.control,     helpText: "Used with otherwise to silently ignore errors.",                                                                    canHaveBlockLabel: false},
+    b"function":    KeywordInfo{kind: TokenKind.function,    category: KeywordCategory.other,       helpText: "Declares a function. Functions contain executable code and can return values.",                                    canHaveBlockLabel: false},
+    b"returns":     KeywordInfo{kind: TokenKind.returns,     category: KeywordCategory.other,       helpText: "Specifies the return type of a function.",                                                                          canHaveBlockLabel: false},
+    b"let":         KeywordInfo{kind: TokenKind.let,         category: KeywordCategory.other,       helpText: "Declares an immutable variable. The value cannot be changed after initialization.",                                canHaveBlockLabel: false},
+    b"var":         KeywordInfo{kind: TokenKind.var,         category: KeywordCategory.other,       helpText: "Declares a mutable variable. The value can be changed after initialization.",                                      canHaveBlockLabel: false},
+    b"type":        KeywordInfo{kind: TokenKind.type,        category: KeywordCategory.other,       helpText: "Declares a struct type with fields and methods.",                                                                   canHaveBlockLabel: false},
+    b"enum":        KeywordInfo{kind: TokenKind.enum,        category: KeywordCategory.other,       helpText: "Declares an enumeration type with a fixed set of cases.",                                                          canHaveBlockLabel: false},
+    b"typealias":   KeywordInfo{kind: TokenKind.typealias,   category: KeywordCategory.other,       helpText: "Declares a type alias for an existing type or associated type in an interface.",                                   canHaveBlockLabel: false},
+    b"export":      KeywordInfo{kind: TokenKind.export,      category: KeywordCategory.other,       helpText: "Makes a function or type visible to other modules.",                                                                canHaveBlockLabel: false},
+    b"static":      KeywordInfo{kind: TokenKind.static,      category: KeywordCategory.other,       helpText: "Declares a static method that doesn't require an instance.",                                                       canHaveBlockLabel: false},
+    b"interface":   KeywordInfo{kind: TokenKind.interface,   category: KeywordCategory.other,       helpText: "Declares an interface that types can conform to.",                                                                  canHaveBlockLabel: false},
+    b"extension":   KeywordInfo{kind: TokenKind.extension,   category: KeywordCategory.other,       helpText: "Defines extension methods for an interface.",                                                                       canHaveBlockLabel: false},
+    b"extends":     KeywordInfo{kind: TokenKind.extends,     category: KeywordCategory.other,       helpText: "Indicates interface inheritance.",                                                                                  canHaveBlockLabel: false},
+    b"uses":        KeywordInfo{kind: TokenKind.uses,        category: KeywordCategory.other,       helpText: "Declares associated types in an interface.",                                                                        canHaveBlockLabel: false},
+    b"with":        KeywordInfo{kind: TokenKind.with,        category: KeywordCategory.other,       helpText: "Specifies interface conformance requirements.",                                                                     canHaveBlockLabel: false},
+    b"where":       KeywordInfo{kind: TokenKind.where,       category: KeywordCategory.other,       helpText: "Constrains type parameters to require interface conformance.",                                                     canHaveBlockLabel: false},
+    b"self":        KeywordInfo{kind: TokenKind.self,        category: KeywordCategory.other,       helpText: "Refers to the current instance in a method.",                                                                       canHaveBlockLabel: false},
+    b"Self":        KeywordInfo{kind: TokenKind.selfType,    category: KeywordCategory.other,       helpText: "Refers to the current type in a method signature.",                                                                 canHaveBlockLabel: false},
+    b"throws":      KeywordInfo{kind: TokenKind.throws,      category: KeywordCategory.other,       helpText: "Indicates that a function may throw an error.",                                                                     canHaveBlockLabel: false},
+    b"from":        KeywordInfo{kind: TokenKind.from,        category: KeywordCategory.other,       helpText: "Used in range expressions (from X to Y).",                                                                         canHaveBlockLabel: false},
+    b"to":          KeywordInfo{kind: TokenKind.to,          category: KeywordCategory.other,       helpText: "Used in range expressions (from X to Y).",                                                                         canHaveBlockLabel: false},
+    b"mod":         KeywordInfo{kind: TokenKind.mod,         category: KeywordCategory.other,       helpText: "Modulo operator. Returns the remainder of integer division.",                                                      canHaveBlockLabel: false},
+    b"and":         KeywordInfo{kind: TokenKind.and,         category: KeywordCategory.logical,     helpText: "AND operator. Logical AND on bools, bitwise AND on integers.",                                                     canHaveBlockLabel: false},
+    b"or":          KeywordInfo{kind: TokenKind.or,          category: KeywordCategory.logical,     helpText: "OR operator. Logical OR on bools, bitwise OR on integers.",                                                        canHaveBlockLabel: true},
+    b"not":         KeywordInfo{kind: TokenKind.not,         category: KeywordCategory.logical,     helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.",                                                     canHaveBlockLabel: false},
+    b"xor":         KeywordInfo{kind: TokenKind.xor,         category: KeywordCategory.logical,     helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.",                                                    canHaveBlockLabel: false},
+    b"shl":         KeywordInfo{kind: TokenKind.shl,         category: KeywordCategory.logical,     helpText: "Shift left operator. Shifts integer bits to the left.",                                                            canHaveBlockLabel: false},
+    b"shr":         KeywordInfo{kind: TokenKind.shr,         category: KeywordCategory.logical,     helpText: "Shift right operator. Shifts integer bits to the right.",                                                          canHaveBlockLabel: false},
+    b"as":          KeywordInfo{kind: TokenKind.as,          category: KeywordCategory.logical,     helpText: "Type cast operator. Converts a value to a different type.",                                                        canHaveBlockLabel: false},
+    b"implements":  KeywordInfo{kind: TokenKind.implements,  category: KeywordCategory.logical,     helpText: "Specifies that a type conforms to an interface.",                                                                   canHaveBlockLabel: false},
+    b"true":        KeywordInfo{kind: TokenKind.true,        category: KeywordCategory.constant,    helpText: "Boolean literal representing true.",                                                                                canHaveBlockLabel: false},
+    b"false":       KeywordInfo{kind: TokenKind.false,       category: KeywordCategory.constant,    helpText: "Boolean literal representing false.",                                                                               canHaveBlockLabel: false},
+    b"int":         KeywordInfo{kind: TokenKind.int,         category: KeywordCategory.typeKeyword, helpText: "Primitive integer type (64-bit signed).",                                                                           canHaveBlockLabel: false},
+    b"float":       KeywordInfo{kind: TokenKind.float,       category: KeywordCategory.typeKeyword, helpText: "Primitive floating-point type (64-bit double precision).",                                                         canHaveBlockLabel: false},
+    b"bool":        KeywordInfo{kind: TokenKind.bool,        category: KeywordCategory.typeKeyword, helpText: "Primitive boolean type (true or false).",                                                                           canHaveBlockLabel: false},
+    b"byte":        KeywordInfo{kind: TokenKind.byte,        category: KeywordCategory.typeKeyword, helpText: "Primitive byte type (8-bit unsigned integer).",                                                                    canHaveBlockLabel: false},
+    b"array":       KeywordInfo{kind: TokenKind.array,       category: KeywordCategory.typeKeyword, helpText: "Used in array type declarations (array of int).",                                                                   canHaveBlockLabel: false},
+    b"of":          KeywordInfo{kind: TokenKind.of,          category: KeywordCategory.typeKeyword, helpText: "Used in array type declarations (array of int).",                                                                   canHaveBlockLabel: false},
+    b"print":       KeywordInfo{kind: TokenKind.print,       category: KeywordCategory.other,       helpText: "Built-in function for printing to the console. Not a real keyword.",                                               canHaveBlockLabel: false}
+]
 
-// Helper to insert a keyword entry, converting the string key to ByteArray
-function addKeyword(m KeywordMap, key String, info KeywordInfo)
-    m.insert(key: key.toByteArray(), value: info)
-end 'addKeyword'
-
-function initKeywordMap() returns KeywordMap
-    var m = KeywordMap{}
-    // Control flow
-    addKeyword(m, key: "if",          info: KeywordInfo{kind: TokenKind.if,          category: KeywordCategory.control,     helpText: "Conditional statement. Executes code if the condition is true.",                                                    canHaveBlockLabel: true})
-    addKeyword(m, key: "else",        info: KeywordInfo{kind: TokenKind.else,         category: KeywordCategory.control,     helpText: "Alternative branch in an if statement. Executed when the condition is false.",                                      canHaveBlockLabel: true})
-    addKeyword(m, key: "while",       info: KeywordInfo{kind: TokenKind.while,        category: KeywordCategory.control,     helpText: "Loop that continues while the condition is true.",                                                                   canHaveBlockLabel: true})
-    addKeyword(m, key: "for",         info: KeywordInfo{kind: TokenKind.for,          category: KeywordCategory.control,     helpText: "Loop that iterates over a range or collection.",                                                                     canHaveBlockLabel: true})
-    addKeyword(m, key: "in",          info: KeywordInfo{kind: TokenKind.in,           category: KeywordCategory.control,     helpText: "Used in for loops to specify the range or collection to iterate over.",                                             canHaveBlockLabel: false})
-    addKeyword(m, key: "break",       info: KeywordInfo{kind: TokenKind.break,        category: KeywordCategory.control,     helpText: "Exits the current loop or match statement.",                                                                         canHaveBlockLabel: false})
-    addKeyword(m, key: "continue",    info: KeywordInfo{kind: TokenKind.continue,     category: KeywordCategory.control,     helpText: "Skips the rest of the current loop iteration and continues with the next iteration.",                               canHaveBlockLabel: false})
-    addKeyword(m, key: "return",      info: KeywordInfo{kind: TokenKind.return,       category: KeywordCategory.control,     helpText: "Returns a value from a function and exits the function.",                                                           canHaveBlockLabel: false})
-    addKeyword(m, key: "end",         info: KeywordInfo{kind: TokenKind.end,          category: KeywordCategory.control,     helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.",            canHaveBlockLabel: true})
-    addKeyword(m, key: "match",       info: KeywordInfo{kind: TokenKind.match,        category: KeywordCategory.control,     helpText: "Pattern matching statement for enums and values.",                                                                  canHaveBlockLabel: false})
-    addKeyword(m, key: "then",        info: KeywordInfo{kind: TokenKind.then,         category: KeywordCategory.control,     helpText: "Used in match expressions to separate pattern from result.",                                                        canHaveBlockLabel: true})
-    addKeyword(m, key: "fallthrough", info: KeywordInfo{kind: TokenKind.fallthrough,  category: KeywordCategory.control,     helpText: "Falls through to the next case in a match statement.",                                                              canHaveBlockLabel: false})
-    addKeyword(m, key: "default",     info: KeywordInfo{kind: TokenKind.default,      category: KeywordCategory.control,     helpText: "Default case in a match statement.",                                                                                canHaveBlockLabel: false})
-    addKeyword(m, key: "upto",        info: KeywordInfo{kind: TokenKind.upto,         category: KeywordCategory.control,     helpText: "Exclusive upper bound in range patterns.",                                                                          canHaveBlockLabel: false})
-    addKeyword(m, key: "gives",       info: KeywordInfo{kind: TokenKind.gives,        category: KeywordCategory.control,     helpText: "Used in iterator expressions.",                                                                                     canHaveBlockLabel: false})
-    addKeyword(m, key: "try",         info: KeywordInfo{kind: TokenKind.try,          category: KeywordCategory.control,     helpText: "Attempts an operation that may throw an error.",                                                                    canHaveBlockLabel: false})
-    addKeyword(m, key: "otherwise",   info: KeywordInfo{kind: TokenKind.otherwise,    category: KeywordCategory.control,     helpText: "Provides a fallback for try expressions when an error occurs.",                                                    canHaveBlockLabel: true})
-    addKeyword(m, key: "throw",       info: KeywordInfo{kind: TokenKind.throw,        category: KeywordCategory.control,     helpText: "Throws an error that can be caught by a try-catch block.",                                                         canHaveBlockLabel: false})
-    addKeyword(m, key: "ignore",      info: KeywordInfo{kind: TokenKind.ignore,       category: KeywordCategory.control,     helpText: "Used with otherwise to silently ignore errors.",                                                                    canHaveBlockLabel: false})
-    // Declarations
-    addKeyword(m, key: "function",    info: KeywordInfo{kind: TokenKind.function,     category: KeywordCategory.other,       helpText: "Declares a function. Functions contain executable code and can return values.",                                    canHaveBlockLabel: false})
-    addKeyword(m, key: "returns",     info: KeywordInfo{kind: TokenKind.returns,      category: KeywordCategory.other,       helpText: "Specifies the return type of a function.",                                                                          canHaveBlockLabel: false})
-    addKeyword(m, key: "let",         info: KeywordInfo{kind: TokenKind.let,          category: KeywordCategory.other,       helpText: "Declares an immutable variable. The value cannot be changed after initialization.",                                canHaveBlockLabel: false})
-    addKeyword(m, key: "var",         info: KeywordInfo{kind: TokenKind.var,          category: KeywordCategory.other,       helpText: "Declares a mutable variable. The value can be changed after initialization.",                                      canHaveBlockLabel: false})
-    addKeyword(m, key: "type",        info: KeywordInfo{kind: TokenKind.type,         category: KeywordCategory.other,       helpText: "Declares a struct type with fields and methods.",                                                                   canHaveBlockLabel: false})
-    addKeyword(m, key: "enum",        info: KeywordInfo{kind: TokenKind.enum,         category: KeywordCategory.other,       helpText: "Declares an enumeration type with a fixed set of cases.",                                                          canHaveBlockLabel: false})
-    addKeyword(m, key: "typealias",   info: KeywordInfo{kind: TokenKind.typealias,    category: KeywordCategory.other,       helpText: "Declares a type alias for an existing type or associated type in an interface.",                                   canHaveBlockLabel: false})
-    addKeyword(m, key: "export",      info: KeywordInfo{kind: TokenKind.export,       category: KeywordCategory.other,       helpText: "Makes a function or type visible to other modules.",                                                                canHaveBlockLabel: false})
-    addKeyword(m, key: "static",      info: KeywordInfo{kind: TokenKind.static,       category: KeywordCategory.other,       helpText: "Declares a static method that doesn't require an instance.",                                                       canHaveBlockLabel: false})
-    addKeyword(m, key: "interface",   info: KeywordInfo{kind: TokenKind.interface,    category: KeywordCategory.other,       helpText: "Declares an interface that types can conform to.",                                                                  canHaveBlockLabel: false})
-    addKeyword(m, key: "extension",   info: KeywordInfo{kind: TokenKind.extension,    category: KeywordCategory.other,       helpText: "Defines extension methods for an interface.",                                                                       canHaveBlockLabel: false})
-    addKeyword(m, key: "extends",     info: KeywordInfo{kind: TokenKind.extends,      category: KeywordCategory.other,       helpText: "Indicates interface inheritance.",                                                                                  canHaveBlockLabel: false})
-    addKeyword(m, key: "uses",        info: KeywordInfo{kind: TokenKind.uses,         category: KeywordCategory.other,       helpText: "Declares associated types in an interface.",                                                                        canHaveBlockLabel: false})
-    addKeyword(m, key: "with",        info: KeywordInfo{kind: TokenKind.with,         category: KeywordCategory.other,       helpText: "Specifies interface conformance requirements.",                                                                     canHaveBlockLabel: false})
-    addKeyword(m, key: "where",       info: KeywordInfo{kind: TokenKind.where,        category: KeywordCategory.other,       helpText: "Constrains type parameters to require interface conformance.",                                                     canHaveBlockLabel: false})
-    addKeyword(m, key: "self",        info: KeywordInfo{kind: TokenKind.self,         category: KeywordCategory.other,       helpText: "Refers to the current instance in a method.",                                                                       canHaveBlockLabel: false})
-    addKeyword(m, key: "Self",        info: KeywordInfo{kind: TokenKind.selfType,     category: KeywordCategory.other,       helpText: "Refers to the current type in a method signature.",                                                                 canHaveBlockLabel: false})
-    addKeyword(m, key: "throws",      info: KeywordInfo{kind: TokenKind.throws,       category: KeywordCategory.other,       helpText: "Indicates that a function may throw an error.",                                                                     canHaveBlockLabel: false})
-    addKeyword(m, key: "from",        info: KeywordInfo{kind: TokenKind.from,         category: KeywordCategory.other,       helpText: "Used in range expressions (from X to Y).",                                                                         canHaveBlockLabel: false})
-    addKeyword(m, key: "to",          info: KeywordInfo{kind: TokenKind.to,           category: KeywordCategory.other,       helpText: "Used in range expressions (from X to Y).",                                                                         canHaveBlockLabel: false})
-    addKeyword(m, key: "mod",         info: KeywordInfo{kind: TokenKind.mod,          category: KeywordCategory.other,       helpText: "Modulo operator. Returns the remainder of integer division.",                                                      canHaveBlockLabel: false})
-    // Logical / bitwise operators
-    addKeyword(m, key: "and",         info: KeywordInfo{kind: TokenKind.and,          category: KeywordCategory.logical,     helpText: "AND operator. Logical AND on bools, bitwise AND on integers.",                                                     canHaveBlockLabel: false})
-    addKeyword(m, key: "or",          info: KeywordInfo{kind: TokenKind.or,           category: KeywordCategory.logical,     helpText: "OR operator. Logical OR on bools, bitwise OR on integers.",                                                        canHaveBlockLabel: true})
-    addKeyword(m, key: "not",         info: KeywordInfo{kind: TokenKind.not,          category: KeywordCategory.logical,     helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.",                                                     canHaveBlockLabel: false})
-    addKeyword(m, key: "xor",         info: KeywordInfo{kind: TokenKind.xor,          category: KeywordCategory.logical,     helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.",                                                    canHaveBlockLabel: false})
-    addKeyword(m, key: "shl",         info: KeywordInfo{kind: TokenKind.shl,          category: KeywordCategory.logical,     helpText: "Shift left operator. Shifts integer bits to the left.",                                                            canHaveBlockLabel: false})
-    addKeyword(m, key: "shr",         info: KeywordInfo{kind: TokenKind.shr,          category: KeywordCategory.logical,     helpText: "Shift right operator. Shifts integer bits to the right.",                                                          canHaveBlockLabel: false})
-    addKeyword(m, key: "as",          info: KeywordInfo{kind: TokenKind.as,           category: KeywordCategory.logical,     helpText: "Type cast operator. Converts a value to a different type.",                                                        canHaveBlockLabel: false})
-    addKeyword(m, key: "implements",  info: KeywordInfo{kind: TokenKind.implements,   category: KeywordCategory.logical,     helpText: "Specifies that a type conforms to an interface.",                                                                   canHaveBlockLabel: false})
-    // Constants
-    addKeyword(m, key: "true",        info: KeywordInfo{kind: TokenKind.true,         category: KeywordCategory.constant,    helpText: "Boolean literal representing true.",                                                                                canHaveBlockLabel: false})
-    addKeyword(m, key: "false",       info: KeywordInfo{kind: TokenKind.false,        category: KeywordCategory.constant,    helpText: "Boolean literal representing false.",                                                                               canHaveBlockLabel: false})
-    // Primitive types
-    addKeyword(m, key: "int",         info: KeywordInfo{kind: TokenKind.int,          category: KeywordCategory.typeKeyword, helpText: "Primitive integer type (64-bit signed).",                                                                           canHaveBlockLabel: false})
-    addKeyword(m, key: "float",       info: KeywordInfo{kind: TokenKind.float,        category: KeywordCategory.typeKeyword, helpText: "Primitive floating-point type (64-bit double precision).",                                                         canHaveBlockLabel: false})
-    addKeyword(m, key: "bool",        info: KeywordInfo{kind: TokenKind.bool,         category: KeywordCategory.typeKeyword, helpText: "Primitive boolean type (true or false).",                                                                           canHaveBlockLabel: false})
-    addKeyword(m, key: "byte",        info: KeywordInfo{kind: TokenKind.byte,         category: KeywordCategory.typeKeyword, helpText: "Primitive byte type (8-bit unsigned integer).",                                                                    canHaveBlockLabel: false})
-    addKeyword(m, key: "array",       info: KeywordInfo{kind: TokenKind.array,        category: KeywordCategory.typeKeyword, helpText: "Used in array type declarations (array of int).",                                                                   canHaveBlockLabel: false})
-    addKeyword(m, key: "of",          info: KeywordInfo{kind: TokenKind.of,           category: KeywordCategory.typeKeyword, helpText: "Used in array type declarations (array of int).",                                                                   canHaveBlockLabel: false})
-    // temporary for bootstrapping
-    addKeyword(m, key: "print",       info: KeywordInfo{kind: TokenKind.print,        category: KeywordCategory.other,       helpText: "Built-in function for printing to the console. Not a real keyword.",                                               canHaveBlockLabel: false})
-    return m
-end 'initKeywordMap'
-
-var keywordMap = KeywordMap{}
-var keywordMapInitialized = false
-
-function classifyIdentifier(name ByteArray) returns TokenKind
-    if not keywordMapInitialized 'init'
-        keywordMap = initKeywordMap()
-        keywordMapInitialized = true
-    end 'init'
+function classifyIdentifier(name ByteBuffer) returns TokenKind
     let info = try keywordMap.get(key: name) otherwise 'notFound'
         return TokenKind.identifier
     end 'notFound'

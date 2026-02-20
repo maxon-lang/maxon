@@ -21,6 +21,8 @@ Run the spec tests and fix any failures by modifying the compiler code.
     - Eliminate duplicated code — refactor shared logic into helper methods.
     - Ensure no `switch` statements use `default` cases — all cases must be handled explicitly.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
+    - Ensure functions that handle multiple cases, for example a series of 'if' statements, but return 
+      a default value for unhandled cases, should be refactored to throw an error instead. This ensures that all cases are handled explicitly and prevents silent failures.
     - Ensure comments explain "why" not "what".
     - Fix any problems reported by the IDE
     - Ensure you have not duplicated any helpers
