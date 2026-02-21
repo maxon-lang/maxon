@@ -1,0 +1,147 @@
+// Windows-specific X86 runtime stubs: _start wrapper and write_stdout via Win32 API.
+
+// Windows _start: shadow space + call main + ExitProcess via IAT
+export function emitStartWindows(code ByteBuffer, iatFixups IatFixupArray, callFixups CallFixupArray) returns CodeOffset
+    // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0xEC)
+    code.push(0x28)
+
+    // call main (relative call, patched by label resolution)
+    code.push(0xE8)
+    let mainCallFixupOffset = code.count()
+    var mainName = ByteArray{}
+    mainName.push(109)
+    mainName.push(97)
+    mainName.push(105)
+    mainName.push(110)
+    callFixups.push(CallFixup{codeOffset: mainCallFixupOffset, targetName: mainName})
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // mov ecx, eax (return value -> first arg for ExitProcess)
+    code.push(0x89)
+    code.push(0xC1)
+
+    // call [rip+disp32] ExitProcess (indirect through IAT)
+    code.push(0xFF)
+    code.push(0x15)
+    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: 0})
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // int3 (unreachable)
+    code.push(0xCC)
+    return mainCallFixupOffset
+end 'emitStartWindows'
+
+// write_stdout(ptr_in_rcx, len_in_rdx)
+// Stack: [rbp-8]=ptr, [rbp-16]=len, [rbp-24]=handle, [rbp-32]=bytesWritten
+export function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray) returns CodeOffset
+    let offset = code.count()
+
+    // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x40
+    code.push(0x55)
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xE5)
+    code.push(0x48)
+    code.push(0x83)
+    code.push(0xEC)
+    code.push(0x40)
+
+    // Save args: [rbp-8] = rcx (ptr), [rbp-16] = rdx (len)
+    // mov [rbp-8], rcx
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x4D)
+    code.push(0xF8)
+    // mov [rbp-16], rdx
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x55)
+    code.push(0xF0)
+
+    // Zero bytesWritten: mov qword [rbp-32], 0
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0x45)
+    code.push(0xE0)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // GetStdHandle(-11): mov ecx, -11
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0xC1)
+    code.push(0xF5)
+    code.push(0xFF)
+    code.push(0xFF)
+    code.push(0xFF)
+
+    // call [rip+disp32] GetStdHandle (IAT slot 1)
+    code.push(0xFF)
+    code.push(0x15)
+    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: 1})
+    emitDword(code, value: 0)
+
+    // Save handle: mov [rbp-24], rax
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0x45)
+    code.push(0xE8)
+
+    // WriteFile(handle, buffer, length, &bytesWritten, NULL)
+    // arg1: mov rcx, [rbp-24] (handle)
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x4D)
+    code.push(0xE8)
+    // arg2: mov rdx, [rbp-8] (buffer ptr)
+    code.push(0x48)
+    code.push(0x8B)
+    code.push(0x55)
+    code.push(0xF8)
+    // arg3: mov r8, [rbp-16] (length)
+    code.push(0x4C)
+    code.push(0x8B)
+    code.push(0x45)
+    code.push(0xF0)
+    // arg4: lea r9, [rbp-32] (&bytesWritten)
+    code.push(0x4C)
+    code.push(0x8D)
+    code.push(0x4D)
+    code.push(0xE0)
+    // arg5: mov qword [rsp+0x20], 0 (lpOverlapped = NULL)
+    code.push(0x48)
+    code.push(0xC7)
+    code.push(0x44)
+    code.push(0x24)
+    code.push(0x20)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+    code.push(0x00)
+
+    // call [rip+disp32] WriteFile (IAT slot 2)
+    code.push(0xFF)
+    code.push(0x15)
+    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: 2})
+    emitDword(code, value: 0)
+
+    // Epilogue: mov rsp, rbp; pop rbp; ret
+    code.push(0x48)
+    code.push(0x89)
+    code.push(0xEC)
+    code.push(0x5D)
+    code.push(0xC3)
+
+    return offset
+end 'emitWriteStdout'

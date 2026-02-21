@@ -604,8 +604,9 @@ end 'arm64HandleBranchLink'
 
 // --- Main emitter ---
 
-export function emitArm64(arm64Ops Arm64OpArray, target TargetTriple) returns CodeResult
-    logDebug(LogCategory.codegen, message: "ARM64: Emitting machine code for {arm64Ops.count()} ops, target={tripleToString(target)}")
+export function emitArm64Linux(stdOps StdOpArray) returns CodeResult
+    let arm64Ops = lowerStdOpsToArm64(stdOps)
+    logDebug(LogCategory.codegen, message: "ARM64: Emitting machine code for {arm64Ops.count()} ops (Linux)")
     var code = ByteBuffer{}
     code.reserve(1024)
     var iatFixups = IatFixupArray{}
@@ -656,4 +657,4 @@ export function emitArm64(arm64Ops Arm64OpArray, target TargetTriple) returns Co
 
     logDebug(LogCategory.codegen, message: "ARM64: Emitted {code.count()} bytes of machine code")
     return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, iatFixups: iatFixups}
-end 'emitArm64'
+end 'emitArm64Linux'

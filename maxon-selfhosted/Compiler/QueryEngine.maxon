@@ -50,8 +50,6 @@ export function resetCounters(project Project)
     project.db.allMaxonOpsMisses = 0
     project.db.allStdOpsHits = 0
     project.db.allStdOpsMisses = 0
-    project.db.targetOpsHits = 0
-    project.db.targetOpsMisses = 0
     project.db.codeHits = 0
     project.db.codeMisses = 0
 end 'resetCounters'
@@ -97,7 +95,6 @@ export function queryKeysEqual(a QueryKey, b QueryKey) returns bool
         parseOps(path) then return matchParseOps(b, path: path)
         allMaxonOps then return matchAllMaxonOps(b)
         allStdOps then return matchAllStdOps(b)
-        allTargetOps then return matchAllTargetOps(b)
         codeResult then return matchCodeResult(b)
     end 'matchA'
     return false
@@ -110,7 +107,6 @@ function matchSourceFile(b QueryKey, path String) returns bool
         parseOps(bPath) then return false
         allMaxonOps then return false
         allStdOps then return false
-        allTargetOps then return false
         codeResult then return false
     end 'matchB'
     return false
@@ -123,7 +119,6 @@ function matchTokens(b QueryKey, path String) returns bool
         parseOps(bPath) then return false
         allMaxonOps then return false
         allStdOps then return false
-        allTargetOps then return false
         codeResult then return false
     end 'matchB'
     return false
@@ -136,7 +131,6 @@ function matchParseOps(b QueryKey, path String) returns bool
         parseOps(bPath) then return path == bPath
         allMaxonOps then return false
         allStdOps then return false
-        allTargetOps then return false
         codeResult then return false
     end 'matchB'
     return false
@@ -149,7 +143,6 @@ function matchAllMaxonOps(b QueryKey) returns bool
         parseOps(bPath) then return false
         allMaxonOps then return true
         allStdOps then return false
-        allTargetOps then return false
         codeResult then return false
     end 'matchB'
     return false
@@ -162,24 +155,10 @@ function matchAllStdOps(b QueryKey) returns bool
         parseOps(bPath) then return false
         allMaxonOps then return false
         allStdOps then return true
-        allTargetOps then return false
         codeResult then return false
     end 'matchB'
     return false
 end 'matchAllStdOps'
-
-function matchAllTargetOps(b QueryKey) returns bool
-    match b 'matchB'
-        sourceFile(bPath) then return false
-        tokens(bPath) then return false
-        parseOps(bPath) then return false
-        allMaxonOps then return false
-        allStdOps then return false
-        allTargetOps then return true
-        codeResult then return false
-    end 'matchB'
-    return false
-end 'matchAllTargetOps'
 
 function matchCodeResult(b QueryKey) returns bool
     match b 'matchB'
@@ -188,7 +167,6 @@ function matchCodeResult(b QueryKey) returns bool
         parseOps(bPath) then return false
         allMaxonOps then return false
         allStdOps then return false
-        allTargetOps then return false
         codeResult then return true
     end 'matchB'
     return false
@@ -234,7 +212,6 @@ function isDependencyValid(project Project, dep QueryKey, since Revision) return
         parseOps(path) then return isParseCacheValidDeep(project, path: path)
         allMaxonOps then return isAllMaxonOpsCacheValidDeep(project)
         allStdOps then return isAllStdOpsCacheValidDeep(project)
-        allTargetOps then return isAllTargetOpsCacheValidDeep(project)
         codeResult then return isCodeCacheValidDeep(project)
     end 'matchDep'
     return false
@@ -301,19 +278,6 @@ function isAllStdOpsCacheValidDeep(project Project) returns bool
     end 'has'
     return false
 end 'isAllStdOpsCacheValidDeep'
-
-function isAllTargetOpsCacheValidDeep(project Project) returns bool
-    if project.db.targetOpsCache.computedAt > 0 'has'
-        if project.db.targetOpsCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
-            return true
-        end 'recentlyVerified'
-        if areDepsValid(project, key: QueryKey.allTargetOps, computedAt: project.db.targetOpsCache.computedAt) 'depsOk'
-            project.db.targetOpsCache.verifiedAt = project.db.currentRevision
-            return true
-        end 'depsOk'
-    end 'has'
-    return false
-end 'isAllTargetOpsCacheValidDeep'
 
 function isCodeCacheValidDeep(project Project) returns bool
     if project.db.codeCache.computedAt > 0 'has'
