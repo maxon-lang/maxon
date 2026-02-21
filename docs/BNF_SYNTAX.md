@@ -41,7 +41,7 @@ IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
 ### 1.3 Keywords
 
 ```
-KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'constants' | 'continue'
+KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
               | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'extern' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
@@ -49,7 +49,8 @@ KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'constants' | 'contin
               | 'mod' | 'not' | 'or' | 'otherwise' | 'return' | 'self'
               | 'Self' | 'shl' | 'shr' | 'static' | 'then' | 'throw'
               | 'throws' | 'to' | 'true' | 'try' | 'type' | 'typealias'
-              | 'upto' | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
+              | 'union' | 'upto' | 'uses' | 'var' | 'where' | 'while'
+              | 'with' | 'xor'
 ```
 
 ### 1.4 Literals
@@ -118,8 +119,8 @@ top_level_decl
               = function_decl
               | extern_decl
               | type_decl
+              | union_decl
               | enum_decl
-              | constants_decl
               | interface_decl
               | extension_block
               | typealias_decl
@@ -192,18 +193,18 @@ static_method_decl
                 'end' LABEL
 ```
 
-### 3.4 Enum Declaration
+### 3.4 Union Declaration
 
 ```
-enum_decl     = export_prefix 'enum' IDENTIFIER [ backing_type ]
+union_decl    = export_prefix 'union' IDENTIFIER [ backing_type ]
                 [ conformance_clause ] NEWLINE
-                { enum_case NEWLINE }
+                { union_case NEWLINE }
                 { method_decl }
                 'end' LABEL
 
 backing_type  = 'int' | 'float' | 'String'
 
-enum_case     = IDENTIFIER                                          (* simple case *)
+union_case    = IDENTIFIER                                          (* simple case *)
               | IDENTIFIER '=' raw_value                            (* raw-value case *)
               | IDENTIFIER '(' assoc_fields ')'                     (* associated-value case *)
 
@@ -214,26 +215,26 @@ raw_value     = [ '-' ] INTEGER
 
 ```
 
-### 3.5 Constants Declaration
+### 3.5 Enum Declaration
 
 ```
-constants_decl = export_prefix 'constants' IDENTIFIER NEWLINE
-                 { constants_case NEWLINE }
-                 'end' LABEL
+enum_decl     = export_prefix 'enum' IDENTIFIER NEWLINE
+                { enum_case NEWLINE }
+                'end' LABEL
 
-constants_case = IDENTIFIER                  (* auto-increment from 0; integer-backed only *)
-               | IDENTIFIER '=' raw_value    (* explicit value *)
+enum_case     = IDENTIFIER                  (* auto-increment from 0; integer-backed only *)
+              | IDENTIFIER '=' raw_value    (* explicit value *)
 
-raw_value      = [ '-' ] INTEGER
-               | [ '-' ] FLOAT
-               | STRING
-               | CHARACTER
+raw_value     = [ '-' ] INTEGER
+              | [ '-' ] FLOAT
+              | STRING
+              | CHARACTER
 
 assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref
 ```
 
-### 3.5 Interface Declaration
+### 3.6 Interface Declaration
 
 ```
 interface_decl
@@ -250,7 +251,7 @@ interface_method
                 '(' [ param_list ] ')' [ 'returns' type_ref ] [ throws_clause ]
 ```
 
-### 3.6 Extension Block
+### 3.7 Extension Block
 
 ```
 extension_block
@@ -259,7 +260,7 @@ extension_block
                 'end' LABEL
 ```
 
-### 3.7 Type Alias Declaration
+### 3.8 Type Alias Declaration
 
 ```
 typealias_decl
@@ -298,7 +299,7 @@ generic_type  = IDENTIFIER 'with' type_args
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```
 
-### 3.8 Top-Level Variables
+### 3.9 Top-Level Variables
 
 ```
 top_level_var = export_prefix 'var' IDENTIFIER '=' expression NEWLINE
@@ -441,7 +442,7 @@ match_stmt    = 'match' expression LABEL NEWLINE
 
 match_arm     = match_patterns 'then' match_action
               | 'default' 'then' match_action
-              | 'default' 'throws' expression                   (* enum-only: throws error for unmatched cases *)
+              | 'default' 'throws' expression                   (* union-only: throws error for unmatched cases *)
 
 match_action  = statement [ 'and' 'fallthrough' ]
               | 'break' [ LABEL ]
@@ -450,7 +451,7 @@ match_patterns
               = match_pattern { 'or' match_pattern }
 
 match_pattern = literal_pattern
-              | enum_pattern
+              | union_pattern
               | range_pattern
 
 literal_pattern
@@ -460,7 +461,7 @@ literal_pattern
               | CHARACTER
               | BOOL
 
-enum_pattern  = IDENTIFIER [ '(' binding_list ')' ]
+union_pattern = IDENTIFIER [ '(' binding_list ')' ]
 
 binding_list  = IDENTIFIER { ',' IDENTIFIER }
 
@@ -571,7 +572,7 @@ primary       = INTEGER
               | paren_expr
               | struct_literal
               | ranged_construction
-              | enum_access
+              | union_access
               | static_access
               | closure
               | match_expr
@@ -595,7 +596,7 @@ field_init    = IDENTIFIER ':' expression
 ranged_construction
               = IDENTIFIER '{' expression '}'               (* e.g., Age{25} *)
 
-enum_access   = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
+union_access  = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
 
 static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
 
@@ -617,7 +618,7 @@ match_expr    = 'match' expression LABEL NEWLINE
 match_expr_arm
               = match_patterns 'gives' expression
               | 'default' 'gives' expression
-              | 'default' 'throws' expression                   (* enum-only: throws error for unmatched cases *)
+              | 'default' 'throws' expression                   (* union-only: throws error for unmatched cases *)
 ```
 
 ### 6.5 Try Expression
@@ -659,11 +660,12 @@ try <expr> otherwise 'label'  ...  end 'label'
 else 'label'  ...  end 'label'
 ```
 
-Type, enum, interface, and extension bodies also end with a matching label:
+Type, union, enum, interface, and extension bodies also end with a matching label:
 
 ```
 type Point  ...  end 'Point'
-enum Color  ...  end 'Color'
+union Color  ...  end 'Color'
+enum Status  ...  end 'Status'
 interface Hashable  ...  end 'Hashable'
 extension Iterable  ...  end 'Iterable'
 function main()  ...  end 'main'

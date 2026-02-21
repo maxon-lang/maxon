@@ -6,7 +6,7 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Result of fragment generation.
 /// </summary>
-public record FragmentGenerationResult(int Generated, int Errors);
+public record FragmentGenerationResult(int Generated, int TotalExpected, int Errors);
 
 /// <summary>
 /// Generates .test fragment files from spec files.
@@ -103,7 +103,7 @@ public static partial class FragmentGenerator {
   public static FragmentGenerationResult GenerateFragments(string specDir, string fragmentDir, bool force = false, string? filter = null) {
     if (!Directory.Exists(specDir)) {
       Logger.Error(LogCategory.Testing, $"Spec directory not found: {specDir}");
-      return new FragmentGenerationResult(0, 1);
+      return new FragmentGenerationResult(0, 0, 1);
     }
 
     Directory.CreateDirectory(fragmentDir);
@@ -135,7 +135,7 @@ public static partial class FragmentGenerator {
       }
     }
     if (!errors.IsEmpty) {
-      return new FragmentGenerationResult(0, errors.Count);
+      return new FragmentGenerationResult(0, totalTests, errors.Count);
     }
 
     Parallel.ForEach(specs, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, spec => {
@@ -187,7 +187,7 @@ public static partial class FragmentGenerator {
       WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
     }
 
-    return new FragmentGenerationResult(generated, errors.Count);
+    return new FragmentGenerationResult(generated, totalTests, errors.Count);
   }
 
   private static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath) {

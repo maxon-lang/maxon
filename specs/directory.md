@@ -16,7 +16,7 @@ Directory operations using the `Directory` type.
 Directory operations use function-specific error types:
 
 ```maxon
-enum DirectoryListError implements Error
+union DirectoryListError implements Error
   notFound
 end 'DirectoryListError'
 ```

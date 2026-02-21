@@ -1,0 +1,38 @@
+// Test: raw-value-int-comparison
+enum Priority
+  low = 1
+  medium = 5
+  high = 10
+end 'Priority'
+
+function main() returns ExitCode
+  var p = Priority.high
+  if p.rawValue > 5 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 10
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, 5
+    x86.cmp ecx, edx
+    x86.jle constants.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -7532,7 +7532,7 @@ module {
 
 typealias Integer = int(i64.min to i64.max)
 
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -7605,7 +7605,7 @@ module {
 
 typealias Integer = int(i64.min to i64.max)
 
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -7758,7 +7758,7 @@ module {
 
 typealias Integer = int(i64.min to i64.max)
 
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -7964,7 +7964,7 @@ module {
 
 typealias Integer = int(i64.min to i64.max)
 
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -8252,7 +8252,7 @@ module {
 
 typealias Integer = int(i64.min to i64.max)
 
-enum MyError implements Error
+union MyError implements Error
   invalidInput
   notFound
 end 'MyError'

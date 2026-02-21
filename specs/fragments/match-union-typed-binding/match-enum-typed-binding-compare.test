@@ -1,0 +1,190 @@
+// Test: match-enum-typed-binding-compare
+union Color
+    red
+    green
+    blue
+end 'Color'
+
+union Pixel
+    colored(c Color)
+    transparent
+end 'Pixel'
+
+function isGreen(p Pixel) returns ExitCode
+    match p 'check'
+        colored(c) then return checkColor(c)
+        transparent then return 0
+    end 'check'
+end 'isGreen'
+
+function checkColor(c Color) returns ExitCode
+    var result = match c 'g'
+        Color.green gives 1
+        Color.red gives 0
+        Color.blue gives 0
+    end 'g'
+    return result
+end 'checkColor'
+
+function main() returns ExitCode
+    let p = Pixel.colored(Color.green)
+    return isGreen(p)
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @match-union-typed-binding.isGreen(p: i64) -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+8]
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], eax
+    x86.jmp match-union-typed-binding.isGreen.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne match-union-typed-binding.isGreen.check_0.cmp1
+  check_0.case0:
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-40]
+    x86.call match-union-typed-binding.checkColor
+    x86.mov edx, eax
+    x86.mov [rbp-48], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
+    x86.je match-union-typed-binding.isGreen.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_23]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-48]
+    x86.epilogue
+    x86.ret
+  check_0.cmp1:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne match-union-typed-binding.isGreen.check_0.merge
+  check_0.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.merge:
+  }
+  func @match-union-typed-binding.checkColor(c: i64) -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.xor edx, edx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], eax
+    x86.jmp match-union-typed-binding.checkColor.g_0.cmp0
+  g_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne match-union-typed-binding.checkColor.g_0.cmp1
+  g_0.case0:
+    x86.mov eax, 1
+    x86.mov [rbp-16], eax
+    x86.jmp match-union-typed-binding.checkColor.g_0.merge
+  g_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne match-union-typed-binding.checkColor.g_0.cmp2
+  g_0.case1:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp match-union-typed-binding.checkColor.g_0.merge
+  g_0.cmp2:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne match-union-typed-binding.checkColor.g_0.merge
+  g_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp match-union-typed-binding.checkColor.g_0.merge
+  g_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je match-union-typed-binding.checkColor.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_51]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+  func @match-union-typed-binding.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 1
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov ebx, [rbp-8]
+    x86.mov [eax+0], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov [eax+8], esi
+    x86.mov rcx, rax
+    x86.call match-union-typed-binding.isGreen
+    x86.mov edi, eax
+    x86.mov [rbp-24], edi
+    x86.xor r8, r8
+    x86.cmp edi, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rax, 4294967295
+    x86.cmp rdi, rax
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or r9, eax
+    x86.test r9, r9
+    x86.je match-union-typed-binding.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_62]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

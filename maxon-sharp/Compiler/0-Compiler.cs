@@ -199,10 +199,10 @@ public class Compiler {
           module.NonExportedTypeNames.Add(name);
         if (source.Path != null) module.TypeDefSourceFiles[name] = source.Path;
         i += 1;
-      } else if ((t.Type == TokenType.Enum || t.Type == TokenType.Constants) && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
+      } else if ((t.Type == TokenType.Union || t.Type == TokenType.Enum) && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];
         var typeName = nameToken.Value;
-        MlirType namedType = t.Type == TokenType.Enum
+        MlirType namedType = t.Type == TokenType.Union
           ? new MlirEnumType(typeName, [], null, [])
           : new MlirConstantsType(typeName, []);
         SetSourceLocation(namedType, source, nameToken);

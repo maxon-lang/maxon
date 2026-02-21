@@ -278,7 +278,7 @@ end 'main'
 
 <!-- test: top-level-var-enum-initializer -->
 ```maxon
-enum Color
+union Color
     Red
     Green
     Blue

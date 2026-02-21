@@ -11,25 +11,25 @@ category: error-handling
 
 ### Defining Error Types
 
-Error types must be enums that conform to the `Error` interface:
+Error types must be unions that conform to the `Error` interface:
 
 ```maxon
-// Simple enum error
-enum FileError implements Error
+// Simple union error
+union FileError implements Error
   notFound
   permissionDenied
   alreadyExists
 end 'FileError'
 
-// Int-backed enum error (for error codes)
-enum HttpError implements Error
+// Int-backed union error (for error codes)
+union HttpError implements Error
   badRequest = 400
   notFound = 404
   serverError = 500
 end 'HttpError'
 
-// String-backed enum error (for messages)
-enum ValidationError implements Error
+// String-backed union error (for messages)
+union ValidationError implements Error
   emptyField = "Field cannot be empty"
   invalidFormat = "Invalid format"
 end 'ValidationError'
@@ -99,12 +99,12 @@ try readFile("config.json") otherwise (e) 'handler'
 end 'handler'
 ```
 
-The error is bound to `e` as a typed enum value within the block. You can use `match` to dispatch on specific error cases. For error enums with associated values, you can extract the payload:
+The error is bound to `e` as a typed union value within the block. You can use `match` to dispatch on specific error cases. For error unions with associated values, you can extract the payload:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
 
-enum MyError implements Error
+union MyError implements Error
   notFound(code Score)
   failed
 end 'MyError'
@@ -132,8 +132,8 @@ end 'loadConfig'
 
 <!-- test: error.enum-simple-error -->
 ```maxon
-// Simple enum error type
-enum MyError implements Error
+// Simple union error type
+union MyError implements Error
   invalidInput
   notFound
 end 'MyError'
@@ -148,8 +148,8 @@ end 'main'
 
 <!-- test: error.enum-int-backed-error -->
 ```maxon
-// Int-backed enum error type (type inferred from values)
-enum MyError implements Error
+// Int-backed union error type (type inferred from values)
+union MyError implements Error
   invalidInput = 1
   notFound = 404
 end 'MyError'
@@ -168,7 +168,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Functions can declare they throw a specific error type
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -191,7 +191,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test that throwing function can return success value
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -216,7 +216,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test error propagation: inner function throws, middle propagates, outer handles with otherwise
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -244,7 +244,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise with default value
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -267,7 +267,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise when no error occurs
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -293,7 +293,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise ignore
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -319,7 +319,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise block handler
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -348,7 +348,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise block when no error
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -380,7 +380,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test try otherwise block with error binding - block is entered on error
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -406,7 +406,7 @@ end 'main'
 <!-- test: error.main-cannot-throw -->
 ```maxon
 // main cannot be declared with throws
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -424,7 +424,7 @@ error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: m
 typealias Integer = int(i64.min to i64.max)
 
 // otherwise expression type must match the success type
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -447,7 +447,7 @@ error E3059: specs/fragments/error-handling/error.otherwise-type-mismatch.test:1
 typealias Integer = int(i64.min to i64.max)
 
 // Calling a throwing function without try is an error
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -537,7 +537,7 @@ error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:8:2
 typealias Integer = int(i64.min to i64.max)
 
 // Using 'otherwise ignore' in an assignment is an error
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -557,7 +557,7 @@ error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment
 <!-- test: error.void-try-in-assignment -->
 ```maxon
 // Assigning from a void-returning try call is an error
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -582,7 +582,7 @@ error E3059: specs/fragments/error-handling/error.void-try-in-assignment.test:12
 typealias Integer = int(i64.min to i64.max)
 
 // Test matching on typed error binding
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -613,7 +613,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test matching on error binding with multiple cases
-enum MyError implements Error
+union MyError implements Error
   failed
   timeout
   notFound
@@ -654,7 +654,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Test that error binding block is skipped on success
-enum MyError implements Error
+union MyError implements Error
   failed
 end 'MyError'
 
@@ -685,8 +685,8 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-// Test error enum with associated value - throw and catch
-enum MyError implements Error
+// Test error union with associated value - throw and catch
+union MyError implements Error
   notFound(code Integer)
   failed
 end 'MyError'
@@ -718,8 +718,8 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-// Test error enum with associated value - second case
-enum MyError implements Error
+// Test error union with associated value - second case
+union MyError implements Error
   notFound(code Integer)
   failed
 end 'MyError'

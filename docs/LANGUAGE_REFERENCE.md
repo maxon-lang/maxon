@@ -18,7 +18,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
    - [Interface Extensions](#interface-extensions)
    - [Conditional Extensions](#conditional-extensions)
    - [Conditional Interface Conformance](#conditional-interface-conformance)
-5. [Enums](#enums)
+5. [Unions](#unions)
 6. [Variables](#variables)
 7. [Functions](#functions)
    - [Parameter Passing](#parameter-passing)
@@ -49,9 +49,9 @@ end 'main'
 The return value becomes the program's exit code (0-255 on Windows).
 
 ### File Structure
-- One or more function, type, enum, or typealias declarations
+- One or more function, type, union, enum, or typealias declarations
 - Namespace derived from file path
-- Use `export` keyword for cross-file visibility (applies to functions, types, enums, and typealiases)
+- Use `export` keyword for cross-file visibility (applies to functions, types, unions, enums, and typealiases)
 
 ---
 
@@ -81,7 +81,7 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 and, as, bool, break, continue, default, else, end, enum, export, extern,
 fallthrough, false, float, for, function, gives, if, ignore, implements, in, int, interface, let, match,
 mod, not, or, otherwise, return, shl, shr, static, then, throw, throws, true, try, type,
-typealias, var, where, while, xor
+typealias, union, var, where, while, xor
 ```
 
 ### Literals
@@ -783,16 +783,16 @@ This applies both to explicit `typealias` declarations and to auto-generated typ
 
 ---
 
-## Enums
+## Unions
 
-Enums define a type with a fixed set of named variants called cases. Maxon supports three kinds of enums: simple enums, raw value enums, and enums with associated values.
+Unions define a type with a fixed set of named variants called cases. Maxon supports two kinds of unions: simple unions and unions with associated values.
 
-### Simple Enums
+### Simple Unions
 
-The simplest form of enum defines named cases with no additional data:
+The simplest form of union defines named cases with no additional data:
 
 ```maxon
-enum Direction
+union Direction
     north
     south
     east
@@ -800,50 +800,10 @@ enum Direction
 end 'Direction'
 ```
 
-Create enum values using dot notation:
+Create union values using dot notation:
 
 ```maxon
 var dir = Direction.north
-```
-
-### Raw Value Enums
-
-Enums can have an underlying raw value type (`int` or `String`):
-
-```maxon
-enum HttpStatus int
-    ok = 200
-    notFound = 404
-    serverError = 500
-end 'HttpStatus'
-
-enum Planet String
-    earth = "Earth"
-    mars = "Mars"
-end 'Planet'
-```
-
-Access the raw value with `.rawValue`:
-
-```maxon
-var status = HttpStatus.ok
-var code = status.rawValue    // 200
-```
-
-Access the case name with `.name`:
-
-```maxon
-var status = HttpStatus.notFound
-var n = status.name       // "notFound"
-var code = status.rawValue    // 404
-```
-
-For string-backed enums, `.rawValue` returns the backing value while `.name` returns the case name:
-
-```maxon
-var p = Planet.mars
-var rawName = p.rawValue  // "Mars" (backing value)
-var caseName = p.name     // "mars" (case name)
 ```
 
 ### Associated Values
@@ -851,7 +811,7 @@ var caseName = p.name     // "mars" (case name)
 Cases can carry additional data called associated values:
 
 ```maxon
-enum Result
+union Result
     success(value int)
     failure(code int, message String)
     pending
@@ -868,7 +828,7 @@ var r3 = Result.pending
 
 ### Pattern Matching with Value Extraction
 
-Use `match` statements to extract associated values from enum cases. Each binding name becomes a local variable within the case body:
+Use `match` statements to extract associated values from union cases. Each binding name becomes a local variable within the case body:
 
 ```maxon
 match result 'handle'
@@ -901,13 +861,13 @@ end 'check'
 - Bindings are only in scope within the case body
 - Cases without associated values don't need parentheses
 
-### Comparing Enum Values
+### Comparing Union Values
 
-Enum values cannot be compared using `==` or `!=` (error E3066). The only way to inspect an enum value is through `match`. This restriction exists to prevent a class of bugs that happen when a new value is added to an enum that is unaccounted for and code that handles the enum either falls through or uses a default value that is wrong.
+Union values cannot be compared using `==` or `!=` (error E3066). The only way to inspect a union value is through `match`. This restriction exists to prevent a class of bugs that happen when a new value is added to a union that is unaccounted for and code that handles the union either falls through or uses a default value that is wrong.
 
 ```maxon
 var dir = Direction.north
-if dir == Direction.north 'check'    // ERROR E3066: Cannot compare enum values
+if dir == Direction.north 'check'    // ERROR E3066: Cannot compare union values
     print("Going north!")
 end 'check'
 
@@ -920,14 +880,14 @@ match dir 'check'
 end 'check'
 ```
 
-Enums still auto-conform to `Hashable` internally, so they can be used as `Map` keys and `Set` elements. However, users cannot call `==` or `!=` on enum values directly.
+Unions still auto-conform to `Hashable` internally, so they can be used as `Map` keys and `Set` elements. However, users cannot call `==` or `!=` on union values directly.
 
-### Creating Enums from Names (`fromName`)
+### Creating Unions from Names (`fromName`)
 
-The `fromName` static method creates an enum value from a string name. It returns an error union that throws `EnumError.invalidName` if the name doesn't match any case:
+The `fromName` static method creates a union value from a string name. It returns an error union that throws `UnionError.invalidName` if the name doesn't match any case:
 
 ```maxon
-enum Direction
+union Direction
     north
     south
     east
@@ -943,10 +903,10 @@ function getDirection(name String) returns Direction
 end 'getDirection'
 ```
 
-For enums with associated values, pass the values as additional arguments when the name is a compile-time literal:
+For unions with associated values, pass the values as additional arguments when the name is a compile-time literal:
 
 ```maxon
-enum Container
+union Container
     empty
     value(n int)
 end 'Container'
@@ -961,17 +921,17 @@ end 'getContainer'
 ```
 
 **Notes:**
-- Returns `throws EnumError`, use with `try...otherwise` or `try...catch`
+- Returns `throws UnionError`, use with `try...otherwise` or `try...catch`
 - Compile-time literal names are validated at compile time
 - Associated value types are validated at compile time
 - Runtime strings only support cases without associated values
 
-### Enum Methods
+### Union Methods
 
-Enums can have methods, similar to structs:
+Unions can have methods, similar to structs:
 
 ```maxon
-enum Direction
+union Direction
     north
     south
 
@@ -991,12 +951,12 @@ var dir = Direction.north
 var opp = Direction.opposite(self: dir)  // Direction.south
 ```
 
-### Enum as Function Parameter
+### Union as Function Parameter
 
-Enums can be used as function parameters and return types:
+Unions can be used as function parameters and return types:
 
 ```maxon
-enum Status
+union Status
     on
     off
 end 'Status'
@@ -1016,18 +976,18 @@ function toggle(s Status) returns Status
 end 'toggle'
 ```
 
-### Enum Interface Conformance
+### Union Interface Conformance
 
-Enums can conform to interfaces using the `implements` keyword, similar to types:
+Unions can conform to interfaces using the `implements` keyword, similar to types:
 
 ```maxon
-enum FileError implements Error
+union FileError implements Error
     notFound
     permissionDenied
     alreadyExists
 end 'FileError'
 
-enum HttpError int implements Error
+union HttpError int implements Error
     badRequest = 400
     notFound = 404
     serverError = 500
@@ -1036,8 +996,8 @@ end 'HttpError'
 
 **Notes:**
 - The `implements Interface` clause comes after the optional backing type
-- Multiple interfaces can be specified: `enum Foo implements A, B`
-- The `Error` interface can only be implemented by enums (not types/structs)
+- Multiple interfaces can be specified: `union Foo implements A, B`
+- The `Error` interface can only be implemented by unions (not types/structs)
 
 ---
 
@@ -1092,14 +1052,14 @@ end 'main'
 
 ---
 
-## Constants
+## Enums
 
-Constants define a named group of typed constant values. They are like enums but simpler: no methods, no `.rawValue`, no `.name`, no `fromRawValue()`, and no `fromName()`. Direct `==` and `!=` comparison is allowed.
+Enums define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `fromRawValue()`, and `fromName()`. Unlike unions, enums have no methods and no associated values.
 
 ### Declaration
 
 ```maxon
-constants HttpStatus
+enum HttpStatus
     ok = 200
     notFound = 404
     serverError = 500
@@ -1109,13 +1069,13 @@ end 'HttpStatus'
 Cases without explicit values auto-increment from 0 (or from the previous explicit value + 1):
 
 ```maxon
-constants Color
+enum Color
     red       // 0
     green     // 1
     blue      // 2
 end 'Color'
 
-constants Priority
+enum Priority
     low         // 0
     medium      // 1
     high = 10
@@ -1125,32 +1085,32 @@ end 'Priority'
 
 ### Backing Types
 
-Constants support the same backing types as enums: integer, float, String, and Character.
+Enums support the same backing types as unions: integer, float, String, and Character.
 
 ```maxon
-constants Threshold
+enum Threshold
     low = 0.1
     medium = 0.5
     high = 0.9
 end 'Threshold'
 
-constants ContentType
+enum ContentType
     json = "application/json"
     html = "text/html"
 end 'ContentType'
 
-constants Escape
+enum Escape
     newline = '\n'
     tab = '\t'
 end 'Escape'
 ```
 
-Auto-increment (bare case names with no explicit value) is only valid for integer-backed constants. Mixing bare names with non-integer explicit values is a compile error.
+Auto-increment (bare case names with no explicit value) is only valid for integer-backed enums. Mixing bare names with non-integer explicit values is a compile error.
 
 Negative integer values are supported:
 
 ```maxon
-constants Temperature
+enum Temperature
     freezing = 0
     cold = -10
     warm = 25
@@ -1159,7 +1119,7 @@ end 'Temperature'
 
 ### Comparison
 
-Unlike enums, constants allow direct `==` and `!=` comparison:
+Unlike unions, enums allow direct `==` and `!=` comparison:
 
 ```maxon
 var s = HttpStatus.notFound
@@ -1173,7 +1133,7 @@ end 'check2'
 
 ### Match
 
-Use `match` with a `default` arm. Exhaustiveness is not checked for constants since the set of valid values is not fully enumerable at compile time:
+Use `match` with a `default` arm. Exhaustiveness is not checked for enums since the set of valid values is not fully enumerable at compile time:
 
 ```maxon
 var result = match s 'handle'
@@ -1183,6 +1143,53 @@ var result = match s 'handle'
     default gives 0
 end 'handle'
 ```
+
+### Raw Value Access
+
+All enums support `.rawValue`. Simple enums return the case ordinal (0, 1, 2…); backed enums return the explicit value:
+
+```maxon
+var c = Color.green
+var ordinal = c.rawValue   // 1
+
+var s = HttpStatus.notFound
+var code = s.rawValue      // 404
+```
+
+### Name Access
+
+All enums have a `.name` property returning the case name as a `String`. For backed enums, `.name` always returns the case name, not the raw value:
+
+```maxon
+var s = HttpStatus.notFound
+var code = s.rawValue   // 404
+var n = s.name          // "notFound"
+```
+
+### Converting from Raw Value (`fromRawValue`)
+
+The `fromRawValue` static method converts a raw value to an enum case. It is only available on enums (not unions). It throws `EnumError.invalidRawValue` if no case matches:
+
+```maxon
+var s = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok  // HttpStatus.notFound
+```
+
+### Converting from Name (`fromName`)
+
+The `fromName` static method converts a string name to an enum case. It throws `EnumError.invalidName` if no case matches:
+
+```maxon
+var s = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok  // HttpStatus.notFound
+
+// Runtime string
+function getStatus(name String) returns HttpStatus
+    return try HttpStatus.fromName(name) otherwise HttpStatus.ok
+end 'getStatus'
+```
+
+**Notes:**
+- Both `fromRawValue` and `fromName` return an error union; use `try...otherwise` or `try...catch`
+- Compile-time literal arguments are validated at compile time
 
 ### As Function Parameters and Return Types
 
@@ -1201,10 +1208,10 @@ end 'getDefault'
 
 ### Keywords as Case Names
 
-Keywords can be used as case names (same as enums):
+Keywords can be used as case names (same as unions):
 
 ```maxon
-constants TokenKind
+enum TokenKind
     function
     return
     end
@@ -1215,7 +1222,7 @@ end 'TokenKind'
 ### Export
 
 ```maxon
-export constants Permission
+export enum Permission
     none = 0
     read = 1
     write = 2
@@ -1224,8 +1231,8 @@ end 'Permission'
 
 ### Error Conditions
 
-- **E3030**: Duplicate case name within the same constants block
-- **E3031**: Duplicate explicit value within the same constants block
+- **E3030**: Duplicate case name within the same enum block
+- **E3031**: Duplicate explicit value within the same enum block
 - **E3032**: Mixing backing types (e.g., int and String values in the same block)
 - **E3034**: Accessing an unknown case (`Color.purple` when `purple` is not defined)
 
@@ -1861,12 +1868,12 @@ end 'loop'
 
 `break` is not allowed in match expressions (with `gives`), since every arm must produce a value.
 
-**Enum Case Pattern Matching:**
+**Union Case Pattern Matching:**
 
-For enums with associated values, use `CaseName(bindings)` syntax to extract values:
+For unions with associated values, use `CaseName(bindings)` syntax to extract values:
 
 ```maxon
-enum Result
+union Result
     success(value int)
     failure(code int)
 end 'Result'
@@ -1885,10 +1892,10 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums, all cases must be covered explicitly (error E2026) — `default` with arbitrary code is not allowed (error E2046). Use `default throws` for non-exhaustive enum matching (see below).
-- `default` matches any non-enum value not matched by previous patterns
+- For unions, all cases must be covered explicitly (error E2026) — `default` with arbitrary code is not allowed (error E2046). Use `default throws` for non-exhaustive union matching (see below).
+- `default` matches any non-union value not matched by previous patterns
 - `default` must be the last case if present
-- Enum case patterns: `CaseName(binding1, binding2)` extracts associated values
+- Union case patterns: `CaseName(binding1, binding2)` extracts associated values
 
 **Range Patterns:**
 
@@ -1961,9 +1968,9 @@ let points = match grade 'convert'
 end 'convert'
 ```
 
-**Enum Case Extraction:**
+**Union Case Extraction:**
 ```maxon
-enum Container
+union Container
     empty
     value(n int)
 end 'Container'
@@ -1979,11 +1986,11 @@ end 'get'
 - All cases must return the same type
 - `and fallthrough` is NOT allowed in match expressions
 - Block identifier required
-- Enum bindings work the same as in match statements
+- Union bindings work the same as in match statements
 
-### Default Throws in Enum Match
+### Default Throws in Union Match
 
-When matching on an enum, all cases must normally be covered explicitly (exhaustive matching). To handle only a subset of cases, use `default throws` to specify an error to throw for unmatched cases. This makes non-exhaustive matching explicit and produces a catchable error rather than a silent panic.
+When matching on a union, all cases must normally be covered explicitly (exhaustive matching). To handle only a subset of cases, use `default throws` to specify an error to throw for unmatched cases. This makes non-exhaustive matching explicit and produces a catchable error rather than a silent panic.
 
 The `default throws` clause throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature.
 
@@ -2017,13 +2024,13 @@ end 'describeShape'
 **Example:**
 
 ```maxon
-enum Shape
+union Shape
     circle(radius float)
     square(side float)
     triangle(base float, height float)
 end 'Shape'
 
-enum ShapeError implements Error
+union ShapeError implements Error
     unsupported
 end 'ShapeError'
 
@@ -2044,12 +2051,12 @@ end 'main'
 ```
 
 **Notes:**
-- `default throws` is the only form of `default` allowed in enum matches -- `default` with arbitrary code on enums is forbidden (error E2046)
-- The error value must be a valid enum case of an `Error`-conforming type
+- `default throws` is the only form of `default` allowed in union matches -- `default` with arbitrary code on unions is forbidden (error E2046)
+- The error value must be a valid union case of an `Error`-conforming type
 - The enclosing function must declare `throws` with a matching error type
 - Callers must handle the thrown error using `try ... otherwise` or `try` propagation
 - Supports all the same features as regular match: associated value extraction, `and fallthrough`, `break`, etc.
-- For non-enum matches, `default` with arbitrary code remains valid as before
+- For non-union matches, `default` with arbitrary code remains valid as before
 
 ### Break Statement
 ```maxon
@@ -2078,35 +2085,35 @@ Skips to next iteration of the innermost loop, or continues to a specific labele
 
 ## Error Handling
 
-Maxon uses a unified error handling system based on typed errors. Functions either return a value or throw an error—there are no optional types or null values. Error types must be enums conforming to the `Error` interface.
+Maxon uses a unified error handling system based on typed errors. Functions either return a value or throw an error—there are no optional types or null values. Error types must be unions conforming to the `Error` interface.
 
 ### Defining Error Types
 
-Error types are enums that conform to the `Error` interface:
+Error types are unions that conform to the `Error` interface:
 
 ```maxon
-// Simple enum error
-enum FileError implements Error
+// Simple union error
+union FileError implements Error
     notFound
     permissionDenied
     alreadyExists
 end 'FileError'
 
-// Int-backed enum error (for error codes)
-enum HttpError int implements Error
+// Int-backed union error (for error codes)
+union HttpError int implements Error
     badRequest = 400
     notFound = 404
     serverError = 500
 end 'HttpError'
 
-// String-backed enum error (for messages)
-enum ValidationError String implements Error
+// String-backed union error (for messages)
+union ValidationError String implements Error
     emptyField = "Field cannot be empty"
     invalidFormat = "Invalid format"
 end 'ValidationError'
 ```
 
-**Note:** Only enums can conform to `Error`. Attempting to make a type (struct) conform to `Error` produces a compile error (E023).
+**Note:** Only unions can conform to `Error`. Attempting to make a type (struct) conform to `Error` produces a compile error (E023).
 
 ### Throwing Functions
 
@@ -2227,7 +2234,7 @@ end 'loadData'
 
 #### Block with Error Binding
 
-Capture the error as a typed enum for inspection:
+Capture the error as a typed union for inspection:
 
 ```maxon
 try readFile("config.json") otherwise (e) 'handler'
@@ -2239,7 +2246,7 @@ try readFile("config.json") otherwise (e) 'handler'
 end 'handler'
 ```
 
-The error is bound to the variable `e` as a typed enum value, allowing you to match on specific error cases. For error enums with associated values, you can extract the payload in the match arm.
+The error is bound to the variable `e` as a typed union value, allowing you to match on specific error cases. For error unions with associated values, you can extract the payload in the match arm.
 
 ```maxon
 function processFile(path String)
@@ -2327,17 +2334,17 @@ The standard library provides error types for built-in operations:
 
 ```maxon
 // Array bounds checking
-enum ArrayError implements Error
+union ArrayError implements Error
     indexOutOfBounds
 end 'ArrayError'
 
 // Map key lookup
-enum MapError implements Error
+union MapError implements Error
     keyNotFound
 end 'MapError'
 
 // Iterator exhaustion
-enum IterationError implements Error
+union IterationError implements Error
     exhausted
 end 'IterationError'
 ```
@@ -2367,13 +2374,13 @@ function readFile(path String) returns String throws FileError
 | tag(8) | value OR error ordinal         |
 +--------+--------------------------------+
    0=ok    success value
-   1=err   enum ordinal (8 bytes)
+   1=err   union ordinal (8 bytes)
 ```
 
 ### Complete Example
 
 ```maxon
-enum ParseError implements Error
+union ParseError implements Error
     invalidSyntax
     unexpectedEnd
 end 'ParseError'
@@ -2420,7 +2427,7 @@ Namespaces are derived from file paths:
 
 ### Export Keyword
 
-Functions, types, enums, typealiases, and top-level variables are file-scoped by default. Use the `export` keyword to make them visible to other files:
+Functions, types, unions, enums, typealiases, and top-level variables are file-scoped by default. Use the `export` keyword to make them visible to other files:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -2436,7 +2443,7 @@ end 'privateHelper'
 
 Only `publicAdd` can be called from other files.
 
-**Exporting types and enums:**
+**Exporting types and unions:**
 
 ```maxon
 typealias Coord = int(i64.min to i64.max)
@@ -2446,14 +2453,14 @@ export type Point
   export var y Coord
 end 'Point'
 
-export enum Color
+export union Color
   red
   green
   blue
 end 'Color'
 ```
 
-Without `export`, types and enums are only usable within the file where they are declared.
+Without `export`, types and unions are only usable within the file where they are declared.
 
 **Exporting typealiases:**
 

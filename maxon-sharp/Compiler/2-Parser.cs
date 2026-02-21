@@ -564,7 +564,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Advance();
       }
 
-      if (Check(TokenType.Type) || Check(TokenType.Enum) || Check(TokenType.Constants) || Check(TokenType.Interface)
+      if (Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum) || Check(TokenType.Interface)
           || Check(TokenType.Extension) || Check(TokenType.Function)) {
         Advance();
         SkipToMatchingEnd();
@@ -603,7 +603,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     int depth = 0;
     while (prePos < _tokens.Count && _tokens[prePos].Type != TokenType.Eof) {
       var t = _tokens[prePos];
-      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Enum || t.Type == TokenType.Constants || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
+      if (t.Type == TokenType.End) { if (depth > 0) depth--; prePos++; } else if (t.Type == TokenType.Type || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) { depth++; prePos++; } else if (depth == 0 && t.Type == TokenType.Export && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.TypeAlias) { prePos++; continue; } else if (depth == 0 && t.Type == TokenType.TypeAlias && prePos + 1 < _tokens.Count && _tokens[prePos + 1].Type == TokenType.Identifier) {
         var aliasName = _tokens[prePos + 1].Value;
         if (!_typeRegistry.ContainsKey(aliasName))
           _typeRegistry[aliasName] = new MlirStructType(aliasName, []);
@@ -749,9 +749,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         PreScanFunction(module, null, isExported);
       } else if (Check(TokenType.Type)) {
         PreScanType(module, isExported);
-      } else if (Check(TokenType.Enum)) {
+      } else if (Check(TokenType.Union)) {
         PreScanEnum(module, isExported);
-      } else if (Check(TokenType.Constants)) {
+      } else if (Check(TokenType.Enum)) {
         PreScanConstants(module, isExported);
       } else if (Check(TokenType.TypeAlias)) {
         PreScanTypeAlias(isExported);
@@ -1286,7 +1286,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         depth--;
         _pos++;
       } else if (t.Type == TokenType.Function || t.Type == TokenType.Type
-                 || t.Type == TokenType.Enum || t.Type == TokenType.Constants || t.Type == TokenType.Interface) {
+                 || t.Type == TokenType.Union || t.Type == TokenType.Enum || t.Type == TokenType.Interface) {
         depth++;
         _pos++;
       } else if (t.Type == TokenType.TypeAlias && _pos + 1 < _tokens.Count
@@ -1708,7 +1708,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void PreScanEnum(MlirModule<MaxonOp> module, bool isExported = false) {
-    Advance(); // consume 'enum'
+    Advance(); // consume 'union'
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
@@ -1744,7 +1744,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         if (!caseNames.Add(litName)) {
           throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
-            $"duplicate enum case: '{litName}'", litToken.Line, litToken.Column);
+            $"duplicate union case: '{litName}'", litToken.Line, litToken.Column);
         }
 
         MlirType expectedBacking = isString ? new MlirStringBackingType() : new MlirCharBackingType();
@@ -1774,7 +1774,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       if (!caseNames.Add(caseName)) {
         throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
-          $"duplicate enum case: '{caseName}'", caseToken.Line, caseToken.Column);
+          $"duplicate union case: '{caseName}'", caseToken.Line, caseToken.Column);
       }
 
       // Associated value syntax: caseName(paramName type, ...)
@@ -1939,7 +1939,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void PreScanConstants(MlirModule<MaxonOp> module, bool isExported = false) {
-    Advance(); // consume 'constants'
+    Advance(); // consume 'enum'
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
 
@@ -1966,7 +1966,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         if (!caseNames.Add(litName)) {
           throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
-            $"duplicate constants case: '{litName}'", litToken.Line, litToken.Column);
+            $"duplicate enum case: '{litName}'", litToken.Line, litToken.Column);
         }
 
         MlirType expectedBacking = isString ? new MlirStringBackingType() : new MlirCharBackingType();
@@ -1996,7 +1996,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       if (!caseNames.Add(caseName)) {
         throw new CompileError(ErrorCode.SemanticEnumDuplicateCase,
-          $"duplicate constants case: '{caseName}'", caseToken.Line, caseToken.Column);
+          $"duplicate enum case: '{caseName}'", caseToken.Line, caseToken.Column);
       }
 
       if (Check(TokenType.Equals)) {
@@ -2117,7 +2117,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SkipNewlines();
     }
 
-    _typeRegistry[name] = new MlirConstantsType(name, cases, backingType);
+    // Enums support Hashable and Equatable via rawValue comparison
+    var finalConstantsType = new MlirConstantsType(name, cases, backingType, ["Hashable", "Equatable"]);
+    _typeRegistry[name] = finalConstantsType;
+
+    PreRegisterSyntheticEnumMethods(module, name, finalConstantsType);
 
     if (isExported) _exportedTypes.Add(name);
 
@@ -2128,9 +2132,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void ParseConstantsDecl(MlirModule<MaxonOp> module) {
-    Advance(); // consume 'constants'
+    Advance(); // consume 'enum'
     var nameToken = Expect(TokenType.Identifier);
-    _currentTypeName = nameToken.Value;
+    var enumName = nameToken.Value;
+    _currentTypeName = enumName;
 
     SkipNewlines();
 
@@ -2142,8 +2147,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SkipNewlines();
     }
 
+    // Synthesize hash() and equals() for enum types
+    var enumType = (MlirConstantsType)_typeRegistry[enumName];
+    SynthesizeEnumHashAndEquals(module, enumName, enumType);
+
     _currentTypeName = null;
-    ExpectEndLabel(nameToken.Value);
+    ExpectEndLabel(enumName);
   }
 
   /// <summary>
@@ -3204,7 +3213,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var caseToken = Expect(TokenType.Identifier);
         var enumCase = constEnumType.GetCase(caseToken.Value)
           ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-            $"unknown enum case: '{caseToken.Value}'", caseToken.Line, caseToken.Column);
+            $"unknown union case: '{caseToken.Value}'", caseToken.Line, caseToken.Column);
         return new EnumConstantValue(token.Value, caseToken.Value, enumCase.Ordinal);
       }
       if (Check(TokenType.LeftParen)) {
@@ -3236,9 +3245,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ParseFunction(module);
     } else if (Check(TokenType.Type)) {
       ParseTypeDecl(module);
-    } else if (Check(TokenType.Enum)) {
+    } else if (Check(TokenType.Union)) {
       ParseEnumDecl(module);
-    } else if (Check(TokenType.Constants)) {
+    } else if (Check(TokenType.Enum)) {
       ParseConstantsDecl(module);
     } else if (Check(TokenType.Let) || Check(TokenType.Var)) {
       // Already handled in pre-scan; skip over
@@ -3383,7 +3392,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void ParseEnumDecl(MlirModule<MaxonOp> module) {
-    Advance(); // consume 'enum'
+    Advance(); // consume 'union'
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
@@ -3575,14 +3584,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     throw new InvalidOperationException($"Unknown enum static method: '{methodName}'");
   }
 
-  private ExprResult.Direct ParseEnumFromRawValue(MlirEnumType enumType, Token methodToken) {
-    // fromRawValue is not available for enums with associated values
-    if (enumType.HasAssociatedValues) {
-      throw new CompileError(ErrorCode.SemanticUndefinedVariable,
-        $"fromRawValue is not available for enums with associated values: '{enumType.Name}'",
-        methodToken.Line, methodToken.Column);
-    }
+  /// Source-level keyword ("enum" or "union") for error messages.
+  private static string EnumKeyword(MlirEnumType enumType) =>
+    enumType is MlirConstantsType ? "enum" : "union";
 
+  private ExprResult.Direct ParseEnumFromRawValue(MlirEnumType enumType, Token methodToken) {
     var argExpr = ParseExpression();
     var argVal = ResolveExprValue(argExpr);
     Expect(TokenType.RightParen);
@@ -3638,31 +3644,32 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (prevOp is not MaxonLiteralOp litOp) return;
 
     // For simple/int-backed enums, check if literal matches any case's raw value
+    var caseKind = EnumKeyword(enumType);
     if (enumType.BackingType == null) {
       // Simple enum: raw value is ordinal
       var ordinal = litOp.IntValue;
       if (ordinal < 0 || ordinal >= enumType.Cases.Count) {
         throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-          $"no enum case with raw value '{ordinal}': '{enumType.Name}'",
+          $"no {caseKind} case with raw value '{ordinal}': '{enumType.Name}'",
           methodToken.Line, methodToken.Column);
       }
     } else if (enumType.BackingType == MlirType.I64) {
       var intVal = litOp.IntValue;
       if (!enumType.Cases.Any(c => c.RawValue is long rv && rv == intVal)) {
         throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-          $"no enum case with raw value '{intVal}': '{enumType.Name}'",
+          $"no {caseKind} case with raw value '{intVal}': '{enumType.Name}'",
           methodToken.Line, methodToken.Column);
       }
     } else if (enumType.BackingType == MlirType.F64) {
       var floatVal = litOp.FloatValue;
       if (!enumType.Cases.Any(c => c.RawValue is double rv && rv == floatVal)) {
         throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-          $"no enum case with raw value '{floatVal}': '{enumType.Name}'",
+          $"no {caseKind} case with raw value '{floatVal}': '{enumType.Name}'",
           methodToken.Line, methodToken.Column);
       }
     }
-    // String/char-backed enums: literal arg would be a string/char literal, not MaxonLiteralOp
-    // Those are handled by MaxonStringLiteralOp/MaxonCharLiteralOp
+    // String/char-backed enums use MaxonStringLiteralOp/MaxonCharLiteralOp, not MaxonLiteralOp,
+    // so they never reach this validation path — runtime fromRawValue handles them.
   }
 
   private ExprResult.Direct ParseEnumFromName(MlirEnumType enumType, Token methodToken) {
@@ -3680,11 +3687,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         methodToken.Line, methodToken.Column);
     }
 
-    // Check if name is a compile-time string literal
+    // When the name argument is a compile-time literal, validate it now for a better error
+    // message than a runtime panic. Walk backwards to match the result id to its origin op.
     bool isLiteral = false;
     string? literalName = null;
     var lastOps = _currentBlock!.Operations;
-    // Walk backwards to find the string literal that produced this value
     for (int i = lastOps.Count - 1; i >= 0; i--) {
       if (lastOps[i] is MaxonStringLiteralOp strLitOp && strLitOp.Result.Id == nameVal.Id) {
         isLiteral = true;
@@ -3698,7 +3705,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (isLiteral && literalName != null) {
       // Validate the literal name against known cases
       var matchedCase = enumType.GetCase(literalName) ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-          $"no enum case named '{literalName}': '{enumType.Name}'",
+          $"no {EnumKeyword(enumType)} case named '{literalName}': '{enumType.Name}'",
           methodToken.Line, methodToken.Column);
 
       // For associated-value enums with a literal name, parse associated value args
@@ -4891,7 +4898,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var expectedKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
 
     // Coerce integer-backed constants to their backing type when the expected type is numeric.
-    if (defaultKind == MaxonValueKind.Enum && TryCoerceConstantsToBackingType(defaultValue, out var defaultCoerced, out var defaultBackingKind)) {
+    // Don't coerce when the try call itself returns an enum (e.g. fromRawValue), so the otherwise
+    // default stays as an enum value and the types remain compatible.
+    if (defaultKind == MaxonValueKind.Enum && expectedKind != MaxonValueKind.Enum
+        && TryCoerceConstantsToBackingType(defaultValue, out var defaultCoerced, out var defaultBackingKind)) {
       defaultValue = defaultCoerced!;
       defaultKind = defaultBackingKind;
     }
@@ -6482,7 +6492,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           && (PeekNext().Type == TokenType.LeftParen || PeekNext().Type == TokenType.Then || PeekNext().Type == TokenType.Gives)) {
         // Bare identifier in associated-value match that is NOT a valid case name
         throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-          $"unknown enum case: '{Current().Value}'",
+          $"unknown union case: '{Current().Value}'",
           patternLine, patternCol);
       } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
         // Enum pattern: Type.case
@@ -6499,7 +6509,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         var enumCase = enumType!.GetCase(caseNameToken.Value)
           ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-            $"unknown enum case: '{caseNameToken.Value}'",
+            $"unknown union case: '{caseNameToken.Value}'",
             caseNameToken.Line, caseNameToken.Column);
 
         var displayName = $"{patternEnumName}.{caseNameToken.Value}";
@@ -6756,7 +6766,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     MaxonValueKind.Byte => "byte",
     MaxonValueKind.Short => "int",
     MaxonValueKind.Struct => "struct",
-    MaxonValueKind.Enum => "enum",
+    MaxonValueKind.Enum => "union",
     MaxonValueKind.Function => "function",
     _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
   };
@@ -7252,7 +7262,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (enumType != null && enumType is not MlirConstantsType) {
           if (!Check(TokenType.Throws)) {
             throw new CompileError(ErrorCode.ParserMatchDefaultEnumMustThrow,
-              $"'default' in a match on enum '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              $"'default' in a match on union '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
               defaultToken.Line, defaultToken.Column);
           }
           ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough);
@@ -7415,7 +7425,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (enumType != null && enumType is not MlirConstantsType) {
           if (!Check(TokenType.Throws)) {
             throw new CompileError(ErrorCode.ParserMatchDefaultEnumMustThrow,
-              $"'default' in a match on enum '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              $"'default' in a match on union '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
               defaultToken.Line, defaultToken.Column);
           }
           ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null);
@@ -7564,7 +7574,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           if (!_isStdlib && _typeRegistry[lhsStruct.TypeName] is MlirEnumType enumT && enumT is not MlirConstantsType) {
             var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
             throw new CompileError(ErrorCode.SemanticEnumNotComparable,
-              $"cannot compare enum values with '{opStr}', use 'match' instead",
+              $"cannot compare union values with '{opStr}', use 'match' instead",
               opToken.Line, opToken.Column);
           }
           var equalsMethodName = $"{lhsStruct.TypeName}.equals";
@@ -7630,7 +7640,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           if (!(_typeRegistry.TryGetValue(enumTypeName2, out var enumTypeEntry2) && enumTypeEntry2 is MlirConstantsType)) {
             var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
             throw new CompileError(ErrorCode.SemanticEnumNotComparable,
-              $"cannot compare enum values with '{opStr}', use 'match' instead",
+              $"cannot compare union values with '{opStr}', use 'match' instead",
               opToken.Line, opToken.Column);
           }
         }
@@ -8000,26 +8010,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             _currentBlock!.AddOp(enumLitOp);
             return ParseFieldAccessChain(new ExprResult.Direct(enumLitOp.Result), token);
           }
-          // Not a valid case - but could be a static method call, so fall through
-          // If it's not a method either, report unknown case
+          // If not followed by '(', it can't be a method call, so it's an unknown case name.
           if (_pos + 2 >= _tokens.Count || _tokens[_pos + 2].Type != TokenType.LeftParen) {
             Advance(); // consume '.'
             Advance(); // consume member name
-            if (enumType is MlirConstantsType)
-              throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-                $"unknown constants case: '{memberName}'", token.Line, token.Column);
             throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-              $"unknown enum case: '{memberName}'", token.Line, token.Column);
+              $"unknown {EnumKeyword(enumType)} case: '{memberName}'", token.Line, token.Column);
           }
 
-          // Check for fromRawValue / fromName static methods on enum types
-          // (not available on constants types)
-          if (memberName is "fromRawValue" or "fromName") {
-            if (enumType is MlirConstantsType)
-              throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
-                $"unknown constants case: '{memberName}'", token.Line, token.Column);
+          // fromRawValue requires raw values, which only enum has; fromName works on union too since
+          // it constructs cases by name (including associated-value cases which have no rawValue).
+          if (memberName == "fromRawValue" && enumType is not MlirConstantsType)
+            throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+              $"unknown union case: 'fromRawValue'", token.Line, token.Column);
+          if (memberName is "fromRawValue" or "fromName")
             return ParseEnumStaticMethod(enumType, memberName);
-          }
         }
 
         // Check for qualified function call: TypeName.method(...)
@@ -8249,10 +8254,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Handle enum-specific access
       if (registeredType is MlirEnumType enumType) {
-        // Constants don't have .name or .rawValue
-        if (enumType is MlirConstantsType && fieldName is "name" or "rawValue") {
+        // Unions (non-enum) don't have .name or .rawValue — those belong to enum
+        if (enumType is not MlirConstantsType && fieldName is "name" or "rawValue") {
           throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
-            $"constants type '{userTypeName}' has no property '{fieldName}'",
+            $"union type '{userTypeName}' has no property '{fieldName}'",
             fieldToken.Line, fieldToken.Column);
         }
 
@@ -8302,7 +8307,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           }
         }
 
-        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Enum type '{userTypeName}' has no property or method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
+        var keyword = EnumKeyword(enumType);
+        throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"{char.ToUpper(keyword[0])}{keyword[1..]} type '{userTypeName}' has no property or method named '{fieldName}'", fieldToken.Line, fieldToken.Column);
       }
 
       // Type parameter: only method calls are allowed, resolved through where-constrained interfaces

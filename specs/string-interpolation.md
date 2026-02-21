@@ -67,13 +67,13 @@ To include literal braces, escape them with backslash:
 print("Use \{expr\} syntax")  // "Use {expr} syntax"
 ```
 
-### Enum Types
+### Union Types
 
-Enum values can be interpolated directly. For int-backed or simple enums, the numeric value is shown. For string-backed enums, the raw string value is displayed:
+Union values can be interpolated directly. For int-backed or simple unions, the numeric value is shown. For string-backed unions, the raw string value is displayed:
 
 ```maxon
-// Int-backed enum (type inferred from values)
-enum Color
+// Int-backed union (type inferred from values)
+union Color
   red = 1
   green = 2
   blue = 3
@@ -82,8 +82,8 @@ end 'Color'
 var c = Color.green
 print("Color value: {c}\n")  // "Color value: 2"
 
-// String-backed enum (type inferred from values)
-enum Status
+// String-backed union (type inferred from values)
+union Status
   active = "Active"
   inactive = "Inactive"
 end 'Status'
@@ -799,7 +799,7 @@ John Doe, 30 years old
 
 <!-- test: int-enum-interpolation -->
 ```maxon
-enum Color
+union Color
   red = 1
   green = 2
   blue = 3
@@ -822,7 +822,7 @@ Color value: green
 
 <!-- test: simple-enum-interpolation -->
 ```maxon
-enum Direction
+union Direction
   north
   south
   east
@@ -846,7 +846,7 @@ Direction: east
 
 <!-- test: string-enum-interpolation -->
 ```maxon
-enum Status
+union Status
   active = "Active"
   inactive = "Inactive"
   pending = "Pending"
@@ -869,7 +869,7 @@ Status: Active
 
 <!-- test: multiple-enum-interpolation -->
 ```maxon
-enum Priority
+union Priority
   low = 1
   medium = 2
   high = 3

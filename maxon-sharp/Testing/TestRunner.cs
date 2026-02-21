@@ -50,9 +50,9 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
     // Load all fragments
     var fragments = LoadAllFragments();
-    if (_filter == null && genResult.Generated > 0 && fragments.Count != genResult.Generated) {
+    if (_filter == null && genResult.TotalExpected > 0 && fragments.Count != genResult.TotalExpected) {
       throw new InvalidOperationException(
-        $"Fragment count mismatch: generated {genResult.Generated} but loaded {fragments.Count}. " +
+        $"Fragment count mismatch: expected {genResult.TotalExpected} but loaded {fragments.Count}. " +
         "Some fragments may have failed to parse.");
     }
     if (_filter != null) {

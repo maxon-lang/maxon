@@ -1,0 +1,77 @@
+// Test: enum-method
+union Direction
+  north
+  south
+
+  function isNorth() returns bool
+    var result = match self 'check'
+      Direction.north gives true
+      Direction.south gives false
+    end 'check'
+    return result
+  end 'isNorth'
+end 'Direction'
+
+function main() returns ExitCode
+  let d = Direction.north
+  if d.isNorth() 'test'
+    return 1
+  end 'test'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Direction.isNorth(self: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.xor edx, edx
+    x86.mov [rbp-16], edx
+    x86.mov [rbp-24], eax
+    x86.jmp Direction.isNorth.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne Direction.isNorth.check_0.cmp1
+  check_0.case0:
+    x86.mov eax, 1
+    x86.mov [rbp-16], eax
+    x86.jmp Direction.isNorth.check_0.merge
+  check_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne Direction.isNorth.check_0.merge
+  check_0.case1:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp Direction.isNorth.check_0.merge
+  check_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @union-full.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.call Direction.isNorth
+    x86.test eax, eax
+    x86.je union-full.main.test_0.after
+  test_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  test_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

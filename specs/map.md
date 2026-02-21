@@ -694,7 +694,7 @@ end 'main'
 
 <!-- test: map-literal-with-enum-values -->
 ```maxon
-enum TokenKind
+union TokenKind
   Function
   Var
 end 'TokenKind'

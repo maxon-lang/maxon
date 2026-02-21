@@ -131,7 +131,7 @@ export function publicFunc() returns Score     // visible to other files
 function privateFunc() returns Score           // only this file
 
 export type Point                               // visible to other files
-export enum Color                               // visible to other files
+export union Color                              // visible to other files
 export typealias Score = int(0 to 100)          // visible to other files
 export var sharedCounter = 0                    // visible to other files
 ```
@@ -189,7 +189,7 @@ break 'label'    // exits match (or loop) with that label
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
-Enum matches must be exhaustive -- all cases must be listed explicitly. Use `default throws` for non-exhaustive enum matching (see below).
+Union matches must be exhaustive -- all cases must be listed explicitly. Use `default throws` for non-exhaustive union matching (see below).
 
 ### Match Expression
 ```maxon
@@ -200,9 +200,9 @@ let result = match value 'label'
 end 'label'
 ```
 
-### Default Throws (non-exhaustive enum match)
+### Default Throws (non-exhaustive union match)
 ```maxon
-// Statement form: throws an error for unmatched cases
+// Statement form: throws an error for unmatched union cases
 // Enclosing function must declare 'throws ErrorType'
 match shape 'draw'
     circle(r) then drawCircle(r)
@@ -218,7 +218,7 @@ let desc = match shape 'describe'
 end 'describe'
 ```
 
-`default throws` is the only form of `default` allowed on enum matches (E2046). For non-enum matches, `default` with arbitrary code is still valid.
+`default throws` is the only form of `default` allowed on union matches (E2046). For non-union matches, `default` with arbitrary code is still valid.
 
 ## Types 
 
@@ -297,34 +297,17 @@ extension Array implements Hashable, Equatable where Element is Hashable and Equ
 end 'Array'
 ```
 
-## Enums
+## Unions
 
 ```maxon
 // Simple
-enum Direction
+union Direction
     north
     south
 end 'Direction'
 
-// Raw values
-enum HttpStatus
-    ok = 200
-    notFound = 404
-end 'HttpStatus'
-var code = HttpStatus.ok.rawValue  // 200
-var n = HttpStatus.ok.name         // "ok"
-
-// String-backed
-enum Planet
-    earth = "Earth"
-    mars = "Mars"
-end 'Planet'
-var p = Planet.mars
-var raw = p.rawValue   // "Mars" (backing value)
-var name = p.name      // "mars" (case name)
-
 // Associated values
-enum Result
+union Result
     success(value int)
     failure(code int, message String)
     pending
@@ -339,12 +322,12 @@ match result 'handle'
     pending then print("waiting")
 end 'handle'
 
-// Create from name (throws EnumError.invalidName on unknown name)
+// Create from name (throws UnionError.invalidName on unknown name)
 var dir = try Direction.fromName("north") otherwise Direction.south
 var c = try Result.fromName("success", 42) otherwise Result.pending
 
 // Methods
-enum Direction
+union Direction
     north
     south
     function opposite() returns Direction
@@ -356,36 +339,36 @@ enum Direction
 end 'Direction'
 ```
 
-Enum values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect enums. This prevents bugs when new cases are added to an enum. Enums auto-conform to `Hashable` internally for Map/Set usage.
+Union values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect unions. This prevents bugs when new cases are added to a union. Unions auto-conform to `Hashable` internally for Map/Set usage.
 
-## Constants
+## Enums
 
-Constants are like enums but simpler: no methods, no `.rawValue`, no `.name`, no `fromRawValue()`, no `fromName()`. Direct `==` and `!=` comparison is allowed. Use `match` with a `default` arm.
+Enums are like unions but simpler: no methods, no associated values. Direct `==` and `!=` comparison is allowed. Use `match` with a `default` arm. Enums support `.rawValue`, `.name`, `fromRawValue()`, and `fromName()`.
 
 ```maxon
 // Integer (auto-increment from 0)
-constants Color
+enum Color
     red       // 0
     green     // 1
     blue      // 2
 end 'Color'
 
 // Explicit integer values (mixed with auto-increment)
-constants HttpStatus
+enum HttpStatus
     ok = 200
     notFound = 404
     serverError = 500
 end 'HttpStatus'
 
 // Float-backed
-constants Threshold
+enum Threshold
     low = 0.1
     medium = 0.5
     high = 0.9
 end 'Threshold'
 
 // String-backed
-constants ContentType
+enum ContentType
     json = "application/json"
     html = "text/html"
 end 'ContentType'
@@ -402,7 +385,13 @@ var result = match s 'handle'
     default gives 0
 end 'handle'
 
-export constants Permission
+// rawValue, name, fromRawValue, fromName
+var code = s.rawValue      // 404
+var name = s.name          // "notFound"
+var s2 = try HttpStatus.fromRawValue(200) otherwise HttpStatus.ok    // HttpStatus.ok
+var s3 = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok // HttpStatus.notFound
+
+export enum Permission
     none = 0
     read = 1
     write = 2
@@ -412,8 +401,8 @@ end 'Permission'
 ## Error Handling
 
 ```maxon
-// Define error type (must be enum conforming to Error)
-enum FileError implements Error
+// Define error type (must be union conforming to Error)
+union FileError implements Error
     notFound
     permissionDenied
 end 'FileError'
@@ -598,7 +587,7 @@ try c.asciiValue()                   // throws CharacterError
 | `FormattedStringable` | `toString(format) -> String` |
 | `Iterable uses E` | `next() -> E throws IterationError` |
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
-| `Error` | (marker for throwable enums) |
+| `Error` | (marker for throwable unions) |
 
 ## Command Line
 

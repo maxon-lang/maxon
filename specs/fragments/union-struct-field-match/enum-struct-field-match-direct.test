@@ -1,0 +1,106 @@
+// Test: enum-struct-field-match-direct
+typealias SmallInt = int(0 to u8.max)
+
+export union Shape
+    circle(radius SmallInt)
+    square(side SmallInt)
+end 'Shape'
+
+export type Drawing
+    export var shape Shape
+end 'Drawing'
+
+function isCircle(d Drawing) returns bool
+    match d.shape 'ms'
+        circle(radius) then return true
+        square(side) then return false
+    end 'ms'
+    return false
+end 'isCircle'
+
+function main() returns ExitCode
+    let d = Drawing{shape: Shape.circle(10)}
+    if isCircle(d) 'ok'
+        return 1
+    end 'ok'
+    return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @union-struct-field-match.isCircle(d: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-24], edx
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+8]
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.jmp union-struct-field-match.isCircle.ms_0.cmp0
+  ms_0.cmp0:
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne union-struct-field-match.isCircle.ms_0.cmp1
+  ms_0.case0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  ms_0.cmp1:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne union-struct-field-match.isCircle.ms_0.merge
+  ms_0.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  ms_0.merge:
+  __dead_1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @union-struct-field-match.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, 8
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-24], eax
+    x86.mov ebx, 16
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov esi, [rbp-8]
+    x86.mov [eax+0], esi
+    x86.mov edi, [rbp-16]
+    x86.mov [eax+8], edi
+    x86.mov r8, [rbp-24]
+    x86.mov [r8+0], eax
+    x86.mov r9, [rbp-24]
+    x86.mov rcx, r9
+    x86.call union-struct-field-match.isCircle
+    x86.test eax, eax
+    x86.je union-struct-field-match.main.ok_0.after
+  ok_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  ok_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

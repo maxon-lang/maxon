@@ -99,12 +99,12 @@ When `role = 1`, the first case matches (adds 100), falls through to case 2 (add
 
 **Note:** Fallthrough is NOT allowed in match expressions since they must return a single value.
 
-## Exhaustiveness for Enums
+## Exhaustiveness for Unions
 
-When matching on enum values, all enum cases must be covered. The `default` keyword is not allowed when matching on enums — every case must be listed explicitly:
+When matching on union values, all union cases must be covered. The `default` keyword is not allowed when matching on unions — every case must be listed explicitly:
 
 ```maxon
-enum Direction
+union Direction
   north
   south
   east
@@ -125,7 +125,7 @@ end 'main'
 1
 ```
 
-If any enum case is missing, the compiler will report an error listing the missing cases.
+If any union case is missing, the compiler will report an error listing the missing cases.
 
 ## String Matching
 
@@ -298,7 +298,7 @@ end 'loop'
 - `and fallthrough` continues to the next case's statement
 - `and fallthrough` not allowed in match expressions
 - `and fallthrough` cannot be combined with `return`
-- For enums, all cases must be covered explicitly — `default` is not allowed
+- For unions, all cases must be covered explicitly — `default` is not allowed
 - `default` matches any value not matched by previous patterns (non-enum types only)
 - `default` must be the last case if present
 
@@ -561,7 +561,7 @@ end 'main'
 
 <!-- test: match-enum.exhaustive -->
 ```maxon
-enum Color
+union Color
   red
   green
   blue
@@ -582,7 +582,7 @@ end 'main'
 
 <!-- test: error.match-enum-default -->
 ```maxon
-enum Color
+union Color
   red
   green
   blue
@@ -597,12 +597,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-statements/error.match-enum-default.test:12:5: 'default' in a match on enum 'Color' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'
+error E2046: specs/fragments/match-statements/error.match-enum-default.test:12:5: 'default' in a match on union 'Color' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'
 ```
 
 <!-- test: match-enum.expression -->
 ```maxon
-enum Status
+union Status
   pending
   approved
   rejected
@@ -669,7 +669,7 @@ error E2025: specs/fragments/match-statements/error.match-fallthrough-with-retur
 
 <!-- test: error.match-enum-not-exhaustive -->
 ```maxon
-enum Color
+union Color
   red
   green
   blue

@@ -1,0 +1,66 @@
+// Test: enum-equals-direct
+union Color
+  red
+  green
+  blue
+end 'Color'
+
+function main() returns ExitCode
+  var a = Color.green
+  var b = Color.green
+  var c = Color.red
+  if a.equals(b) 'eq'
+    if a.equals(c) 'neq'
+      return 0
+    end 'neq'
+    return 1
+  end 'eq'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Color.equals(self: i64, other: i64) -> i1 {
+  entry:
+    x86.jmp stdlib.int.equals
+  }
+  func @union-hashable.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov [rbp-16], ecx
+    x86.xor edx, edx
+    x86.mov [rbp-24], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-16]
+    x86.mov rcx, rbx
+    x86.mov rdx, rsi
+    x86.call Color.equals
+    x86.test eax, eax
+    x86.je union-hashable.main.eq_0.after
+  eq_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Color.equals
+    x86.test eax, eax
+    x86.je union-hashable.main.neq_1.after
+  neq_1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  neq_1.after:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  eq_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

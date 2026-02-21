@@ -1,0 +1,51 @@
+// Test: enum-hash-direct
+union Direction
+  north
+  south
+  east
+  west
+end 'Direction'
+
+function main() returns ExitCode
+  var d = Direction.south
+  var h = d.hash()
+  return h
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Direction.hash(self: i64) -> i64 {
+  entry:
+    x86.jmp stdlib.int.hash
+  }
+  func @union-hashable.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.call Direction.hash
+    x86.mov [rbp-16], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je union-hashable.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_16]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

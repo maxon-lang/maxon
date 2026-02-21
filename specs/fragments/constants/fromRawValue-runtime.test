@@ -1,0 +1,88 @@
+// Test: fromRawValue-runtime
+
+typealias Integer = int(i64.min to i64.max)
+
+enum HttpStatus
+  ok = 200
+  notFound = 404
+end 'HttpStatus'
+
+function getCode() returns Integer
+  return 404
+end 'getCode'
+
+function main() returns ExitCode
+  var code = getCode()
+  var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
+  if status == HttpStatus.notFound 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.getCode() -> i64 {
+  entry:
+    x86.mov eax, 404
+    x86.ret
+  }
+  func @constants.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.call constants.getCode
+    x86.mov ecx, 1
+    x86.xor edx, edx
+    x86.mov ebx, 200
+    x86.cmp eax, ebx
+    x86.sete ebx
+    x86.movzx ebx, ebxb
+    x86.xor esi, esi
+    x86.test ebx, ebx
+    x86.mov edi, ecx
+    x86.cmovne edi, esi
+    x86.mov ecx, 200
+    x86.test ebx, ebx
+    x86.mov esi, edx
+    x86.cmovne esi, ecx
+    x86.mov ecx, 404
+    x86.cmp eax, ecx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.xor ecx, ecx
+    x86.test eax, eax
+    x86.mov edx, edi
+    x86.cmovne edx, ecx
+    x86.mov ebx, 404
+    x86.test eax, eax
+    x86.mov ecx, esi
+    x86.cmovne ecx, ebx
+    x86.mov esi, 200
+    x86.mov [rbp-8], esi
+    x86.mov [rbp-16], ecx
+    x86.xor edi, edi
+    x86.cmp edx, edi
+    x86.je constants.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
+    x86.jmp constants.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.mov ecx, 404
+    x86.mov edx, [rbp-24]
+    x86.cmp edx, ecx
+    x86.jne constants.main.check_4.after
+  check_4:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_4.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---
