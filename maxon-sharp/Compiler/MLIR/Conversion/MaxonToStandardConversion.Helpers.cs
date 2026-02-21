@@ -86,7 +86,7 @@ public static partial class MaxonToStandardConversion {
   /// Resolve the standard-level result value type for a call or try_call.
   /// </summary>
   private static StdValue? ResolveCallResultType(MaxonValueKind? resultKind, MlirType? calleeReturnType) {
-    if (resultKind == MaxonValueKind.Enum && calleeReturnType is MlirEnumType retEnumType) {
+    if (resultKind == MaxonValueKind.Enum && calleeReturnType is MlirUnionType retEnumType) {
       var backingType = ResolveEnumBackingMlirType(retEnumType);
       if (backingType == MlirType.F64) return new StdF64(MlirContext.Current.NextId());
       if (backingType == MlirType.F32) return new StdF32(MlirContext.Current.NextId());
@@ -374,7 +374,7 @@ public static partial class MaxonToStandardConversion {
   private static bool IsEnumInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"
-    && func.ParamTypes[0] is MlirEnumType;
+    && func.ParamTypes[0] is MlirUnionType;
 
   /// <summary>
   /// Counts the flat (leaf) fields in a type — 1 for scalars, recursive sum for structs.
@@ -390,7 +390,7 @@ public static partial class MaxonToStandardConversion {
   /// Calculates the max number of flat payload slots needed across all enum cases.
   /// Struct-typed associated values expand to their flat field count.
   /// </summary>
-  private static int GetMaxFlatPayloadSlots(MlirEnumType enumType, Dictionary<string, MlirType> typeDefs) {
+  private static int GetMaxFlatPayloadSlots(MlirUnionType enumType, Dictionary<string, MlirType> typeDefs) {
     int max = 0;
     foreach (var c in enumType.Cases) {
       if (c.AssociatedValues == null) continue;
@@ -405,7 +405,7 @@ public static partial class MaxonToStandardConversion {
   /// For example, if payload_0 is a struct with 2 fields, then payload_1 starts at slot 2.
   /// Uses the first case that has enough associated values to determine the types.
   /// </summary>
-  private static int GetFlatSlotOffset(MlirEnumType enumType, int payloadIndex, Dictionary<string, MlirType> typeDefs) {
+  private static int GetFlatSlotOffset(MlirUnionType enumType, int payloadIndex, Dictionary<string, MlirType> typeDefs) {
     // Find a case that has this payload index to determine preceding types
     foreach (var c in enumType.Cases) {
       if (c.AssociatedValues == null || payloadIndex >= c.AssociatedValues.Count) continue;
@@ -421,7 +421,7 @@ public static partial class MaxonToStandardConversion {
   /// Unpack an associated-value enum's heap pointer into flat __tag/__payload_N variables.
   /// Downstream code accesses enum values through these flat variables rather than indirection.
   private static void UnpackEnumHeapToFlatVars(
-    MlirBlock<StandardOp> block, string varName, MlirEnumType enumType,
+    MlirBlock<StandardOp> block, string varName, MlirUnionType enumType,
     Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
     var tagLoaded = EmitStructFieldLoad(block, varName, 0, MlirType.I64, varTypes);
     EmitStore(block, tagLoaded, $"{varName}.__tag", varTypes);
@@ -434,7 +434,7 @@ public static partial class MaxonToStandardConversion {
 
   /// Pack flat __tag/__payload_N variables into a new heap-allocated block for storage in struct fields.
   private static StdI64 PackEnumFlatVarsToHeap(
-    MlirBlock<StandardOp> block, string varName, MlirEnumType enumType,
+    MlirBlock<StandardOp> block, string varName, MlirUnionType enumType,
     Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
     int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
     int heapSize = 8 + maxPayload * 8;

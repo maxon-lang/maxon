@@ -203,8 +203,8 @@ public class Compiler {
         var nameToken = tokens[i + 1];
         var typeName = nameToken.Value;
         MlirType namedType = t.Type == TokenType.Union
-          ? new MlirEnumType(typeName, [], null, [])
-          : new MlirConstantsType(typeName, []);
+          ? new MlirUnionType(typeName, [], null, [])
+          : new MlirEnumType(typeName, []);
         SetSourceLocation(namedType, source, nameToken);
         module.TypeDefs.TryAdd(typeName, namedType);
         if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(typeName);
@@ -219,6 +219,20 @@ public class Compiler {
         var assocNames = ParseUsesClauseTokens(tokens, i + 2);
         if (assocNames.Count > 0)
           module.InterfaceAssociatedTypes.TryAdd(ifaceName, assocNames);
+        i += 1;
+      } else if (t.Type == TokenType.TypeAlias && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
+        // Pre-register typealias names as placeholders so cross-file references
+        // resolve regardless of file processing order during PreScanTypeAliasesOnly
+        var nameToken = tokens[i + 1];
+        var aliasName = nameToken.Value;
+        if (!module.TypeDefs.ContainsKey(aliasName)) {
+          var placeholder = new MlirStructType(aliasName, []);
+          SetSourceLocation(placeholder, source, nameToken);
+          module.TypeDefs[aliasName] = placeholder;
+        }
+        if (!isExported && !isStdlib)
+          module.NonExportedTypeNames.Add(aliasName);
+        if (source.Path != null) module.TypeDefSourceFiles[aliasName] = source.Path;
         i += 1;
       }
     }

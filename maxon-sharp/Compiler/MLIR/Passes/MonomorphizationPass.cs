@@ -149,7 +149,7 @@ public static class MonomorphizationPass {
     if (module.TypeDefs.TryGetValue(typeName, out var typeEntry)) {
       if (typeEntry is MlirStructType st && st.ConformingInterfaces.Contains(interfaceName))
         return true;
-      if (typeEntry is MlirEnumType et && et.ConformingInterfaces.Contains(interfaceName))
+      if (typeEntry is MlirUnionType et && et.ConformingInterfaces.Contains(interfaceName))
         return true;
     }
     if (module.PrimitiveConformances.TryGetValue(typeName, out var extInterfaces)
@@ -242,7 +242,7 @@ public static class MonomorphizationPass {
     var kind = newFunc.ReturnType.ToValueKind();
     var typeName = newFunc.ReturnType switch {
       MlirStructType s => s.Name,
-      MlirEnumType e => e.Name,
+      MlirUnionType e => e.Name,
       _ => (string?)null
     };
     return (kind, typeName);

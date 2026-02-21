@@ -11,9 +11,9 @@ public static partial class MaxonToStandardConversion {
   /// For string/char-backed enums: compares arg string against each case's string via memcmp.
   /// Sets error flag to 0 on match, 1 on no match. Result is the matched ordinal.
   /// </summary>
-  private static void LowerEnumFromRawValue(
+  private static void LowerUnionFromRawValue(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
+    MlirUnionType enumType,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
@@ -23,7 +23,7 @@ public static partial class MaxonToStandardConversion {
 
     if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
       // String/char-backed: input is a managed struct, compare against each case's string
-      LowerEnumFromRawValueString(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
+      LowerUnionFromRawValueString(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
     } else if (enumType.BackingType == MlirType.F64) {
       // Float-backed: compare float values, result is the input value itself
       var inputVal = (StdF64)valueMap[inputArg];
@@ -95,9 +95,9 @@ public static partial class MaxonToStandardConversion {
   /// Handles fromRawValue for string/char-backed enums.
   /// Compares input string against each case's string value using length check + memcmp.
   /// </summary>
-  private static void LowerEnumFromRawValueString(
+  private static void LowerUnionFromRawValueString(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
+    MlirUnionType enumType,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
@@ -149,9 +149,9 @@ public static partial class MaxonToStandardConversion {
   /// For associated-value enums with compile-time literal name: constructs the full enum.
   /// For associated-value enums with dynamic name: only matches cases without associated values.
   /// </summary>
-  private static void LowerEnumFromName(
+  private static void LowerUnionFromName(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
+    MlirUnionType enumType,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
@@ -172,17 +172,17 @@ public static partial class MaxonToStandardConversion {
 
     if (hasAssociatedValues) {
       // For associated-value enums, construct as flat struct (tag + payload)
-      LowerEnumFromNameAssociated(tryCallOp, enumType, block, valueMap, varTypes,
+      LowerUnionFromNameAssociated(tryCallOp, enumType, block, valueMap, varTypes,
         structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs);
     } else {
       // Simple/raw-value enum: result is an ordinal/raw value
-      LowerEnumFromNameSimple(tryCallOp, enumType, block, valueMap, varTypes, nameBuf, nameLen);
+      LowerUnionFromNameSimple(tryCallOp, enumType, block, valueMap, varTypes, nameBuf, nameLen);
     }
   }
 
-  private static void LowerEnumFromNameSimple(
+  private static void LowerUnionFromNameSimple(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
+    MlirUnionType enumType,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
@@ -247,9 +247,9 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
-  private static void LowerEnumFromNameAssociated(
+  private static void LowerUnionFromNameAssociated(
     MaxonTryCallOp tryCallOp,
-    MlirEnumType enumType,
+    MlirUnionType enumType,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
@@ -390,7 +390,7 @@ public static partial class MaxonToStandardConversion {
 
       if (calleeIsEnumInstance && i == 0) {
         newArgs.Add(valueMap[arg]);
-      } else if (calleeFunc.ParamTypes[i] is MlirEnumType enumArgType && enumArgType.HasAssociatedValues
+      } else if (calleeFunc.ParamTypes[i] is MlirUnionType enumArgType && enumArgType.HasAssociatedValues
                  && structVarNames.TryGetValue(arg.Id, out var enumPrefix)) {
         // Associated-value enum: pack tag + payload into a heap block
         int maxPayload = GetMaxFlatPayloadSlots(enumArgType, typeDefs);
@@ -408,7 +408,7 @@ public static partial class MaxonToStandardConversion {
         }
 
         newArgs.Add(heapPtr);
-      } else if (calleeFunc.ParamTypes[i] is MlirEnumType) {
+      } else if (calleeFunc.ParamTypes[i] is MlirUnionType) {
         if (valueMap.TryGetValue(arg, out var enumVal)) {
           newArgs.Add(enumVal);
         } else if (structVarNames.TryGetValue(arg.Id, out var enumTagPrefix)) {
@@ -438,7 +438,7 @@ public static partial class MaxonToStandardConversion {
           block.AddOp(zeroConst);
           newArgs.Add(zeroConst.Result);
         }
-      } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
+      } else if (calleeFunc.ParamTypes[i] is not MlirStructType and not MlirUnionType) {
         newArgs.Add(valueMap[arg]);
       } else {
         throw new InvalidOperationException($"Unhandled call argument type: {calleeFunc.ParamTypes[i].GetType().Name} for arg {i} in call to '{calleeName}'");

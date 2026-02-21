@@ -401,7 +401,7 @@ internal class FunctionCloner {
     var resultKind = originalResultKind.HasValue ? _typeSubstitution.SubstituteValueKind(originalResultKind.Value) : originalResultKind;
     if (resultKind == MaxonValueKind.Struct && resultStructTypeName == null && _concreteElementType is MlirStructType st)
       resultStructTypeName = st.Name;
-    if (resultKind == MaxonValueKind.Enum && resultStructTypeName == null && _concreteElementType is MlirEnumType en)
+    if (resultKind == MaxonValueKind.Enum && resultStructTypeName == null && _concreteElementType is MlirUnionType en)
       resultStructTypeName = en.Name;
     ResolveTypeParameterResult(originalResultKind, newArgs, ref resultKind, ref resultStructTypeName);
     return (resultKind, resultStructTypeName);
@@ -480,7 +480,7 @@ internal class FunctionCloner {
           if (elemType is MlirStructType elemStruct) {
             resultKind = MaxonValueKind.Struct;
             resultStructTypeName = elemStruct.Name;
-          } else if (elemType is MlirEnumType elemEnum) {
+          } else if (elemType is MlirUnionType elemEnum) {
             resultKind = MaxonValueKind.Enum;
             resultStructTypeName = elemEnum.Name;
           }

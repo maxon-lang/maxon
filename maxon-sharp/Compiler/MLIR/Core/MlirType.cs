@@ -185,7 +185,7 @@ public class MlirEnumCase(string name, int ordinal, object? rawValue = null,
   public List<(string Name, MlirType Type)>? AssociatedValues { get; } = associatedValues;
 }
 
-public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null) : MlirType(name) {
+public class MlirUnionType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null) : MlirType(name) {
   public List<MlirEnumCase> Cases { get; } = cases;
   public MlirType? BackingType { get; } = backingType;
   public List<string> ConformingInterfaces { get; } = conformingInterfaces ?? [];
@@ -202,11 +202,11 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }
 
-/// A named group of typed constant values. Unlike union (MlirEnumType), enums have no associated
+/// A named group of typed constant values. Unlike union (MlirUnionType), enums have no associated
 /// values and no instance methods. Direct == and != comparison is allowed. Supports rawValue,
 /// name, fromRawValue(), and fromName().
-public class MlirConstantsType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null)
-    : MlirEnumType(name, cases, backingType, conformingInterfaces);
+public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null)
+    : MlirUnionType(name, cases, backingType, conformingInterfaces);
 
 /// Marker type for string-backed enum backing types. At runtime, string-backed enums
 /// are stored as ordinals (i64), but their display value is the associated string.

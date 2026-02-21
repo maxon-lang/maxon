@@ -62,7 +62,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.I16 || type == MlirType.U16) return MaxonValueKind.Short;
     if (type == MlirType.I32 || type == MlirType.U32 || type == MlirType.U64) return MaxonValueKind.Integer;
     if (type is MlirRangedPrimitiveType rpt) return rpt.BaseType.ToValueKind();
-    if (type is MlirEnumType) return MaxonValueKind.Enum;
+    if (type is MlirUnionType) return MaxonValueKind.Enum;
     if (type is MlirTypeParameterType) return MaxonValueKind.TypeParameter;
     if (type is MlirStructType) return MaxonValueKind.Struct;
     if (type is MlirFunctionType) return MaxonValueKind.Function;

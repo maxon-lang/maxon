@@ -42,7 +42,7 @@ public enum ErrorCode {
   ParserMatchMismatchedBlockId = 2043,
   ParserMatchDefaultWithEnum = 2044,
   ParserNonConstantInitializer = 2045,
-  ParserMatchDefaultEnumMustThrow = 2046,
+  ParserMatchDefaultUnionMustThrow = 2046,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,
@@ -62,11 +62,11 @@ public enum ErrorCode {
   SemanticPartialInterfaceImpl = 3016,
   SemanticWhereConstraintViolation = 3017,
   SemanticUnknownField = 3018,
-  SemanticEnumDuplicateCase = 3030,
-  SemanticEnumDuplicateRawValue = 3031,
-  SemanticEnumRawValueTypeMismatch = 3032,
-  SemanticEnumUnknownCase = 3034,
-  SemanticEnumWrongBindingCount = 3035,
+  SemanticUnionDuplicateCase = 3030,
+  SemanticUnionDuplicateRawValue = 3031,
+  SemanticUnionRawValueTypeMismatch = 3032,
+  SemanticUnionUnknownCase = 3034,
+  SemanticUnionWrongBindingCount = 3035,
   SemanticWrongArgCount = 3036,
   SemanticMainCannotThrow = 3054,
   SemanticTryRequiresThrowingFunction = 3055,
@@ -79,7 +79,7 @@ public enum ErrorCode {
   SemanticImmutableRefToMutatingParam = 3063,
   SemanticDiscardedPureResult = 3064,
   SemanticDiscardedImpureResult = 3065,
-  SemanticEnumNotComparable = 3066,
+  SemanticUnionNotComparable = 3066,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

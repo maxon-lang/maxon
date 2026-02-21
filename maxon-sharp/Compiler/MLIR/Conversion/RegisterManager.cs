@@ -1387,7 +1387,7 @@ public class RegisterManager {
     } else if (fieldType == MlirType.I16 || fieldType == MlirType.U16) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovWordIndirectRegOp(baseReg, fieldOffset, srcReg));
-    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirEnumType) {
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirUnionType) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovIndirectMemRegOp(baseReg, fieldOffset, srcReg));
     } else {
@@ -1409,7 +1409,7 @@ public class RegisterManager {
     } else if (fieldType == MlirType.I16 || fieldType == MlirType.U16) {
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovzxRegWordIndirectOp(destGpr, baseReg, fieldOffset));
-    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirEnumType) {
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirUnionType) {
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovRegIndirectMemOp(destGpr, baseReg, fieldOffset));
     } else {

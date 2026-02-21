@@ -640,6 +640,8 @@ public class LspServer {
         details = "\n\n" + string.Join("\n", fields);
     } else if (mlirType is MlirEnumType) {
       kind = "enum";
+    } else if (mlirType is MlirUnionType) {
+      kind = "union";
     } else if (mlirType is MlirInterfaceType) {
       kind = "interface";
     } else {
@@ -725,7 +727,7 @@ public class LspServer {
   }
 
   /// <summary>
-  /// Returns true if the line is inside an enum body and looks like an enum case name
+  /// Returns true if the line is inside a union or enum body and looks like a case name
   /// (a single word on the line, possibly with = value, not a method body line).
   /// </summary>
   private static bool IsInsideEnumBody(string[] lines, int lineIndex) {
@@ -753,13 +755,14 @@ public class LspServer {
       var trimmed = lines[i].Trim();
       if (trimmed.Length == 0 || trimmed.StartsWith("//")) continue;
 
-      // Check for enum declaration (with optional 'export' prefix)
+      // Check for union/enum declaration (with optional 'export' prefix)
       var enumCheck = trimmed;
       if (enumCheck.StartsWith("export ")) enumCheck = enumCheck[7..];
-      if (enumCheck.StartsWith("enum ") && enumCheck.Length > 5 && char.IsUpper(enumCheck[5])) {
+      var nameOffset = enumCheck.StartsWith("union ") ? 6 : enumCheck.StartsWith("enum ") ? 5 : -1;
+      if (nameOffset >= 0 && enumCheck.Length > nameOffset && char.IsUpper(enumCheck[nameOffset])) {
         return true;
       }
-      // If we hit a top-level construct, we're not in an enum
+      // If we hit a top-level construct, we're not inside a union/enum
       if (trimmed.StartsWith("function ") || trimmed.StartsWith("type ") || trimmed.StartsWith("interface ")) {
         return false;
       }
@@ -854,10 +857,10 @@ public class LspServer {
 
   /// <summary>
   /// Search project files and stdlib source for declarations of the given name.
-  /// Looks for: type NAME, typealias NAME, enum NAME, interface NAME, function NAME(,
-  /// and enum case declarations (bare NAME, NAME = value, NAME(type...))
+  /// Looks for: type NAME, typealias NAME, union NAME, enum NAME, interface NAME, function NAME(,
+  /// and union/enum case declarations (bare NAME, NAME = value, NAME(type...))
   /// When <paramref name="dotQualifier"/> is non-null (e.g. "TokenKind" from "TokenKind.floatLiteral"),
-  /// enum case hits are only accepted when the enclosing enum has that name.
+  /// case hits are only accepted when the enclosing union/enum has that name.
   /// </summary>
   private static Location? FindDefinitionByTextSearch(string word, Project? project, string? dotQualifier = null) {
     // Collect all files to search: project files first, then stdlib
@@ -952,9 +955,10 @@ public class LspServer {
 
       // Strip optional export prefix
       var d = t.StartsWith("export ") ? t[7..] : t;
-      if (!d.StartsWith("enum ")) return null;
-      // Extract the enum name (word after "enum ")
-      var nameStart = 5;
+      int nameStart;
+      if (d.StartsWith("union ")) nameStart = 6;
+      else if (d.StartsWith("enum ")) nameStart = 5;
+      else return null;
       var nameEnd = nameStart;
       while (nameEnd < d.Length && IsWordChar(d[nameEnd])) nameEnd++;
       return nameEnd > nameStart ? d[nameStart..nameEnd] : null;
@@ -975,9 +979,11 @@ public class LspServer {
     // typealias NAME
     if (decl.StartsWith("typealias ") && MatchesName(decl, 10, word))
       return 10;
-    // enum NAME
+    // enum NAME / union NAME
     if (decl.StartsWith("enum ") && MatchesName(decl, 5, word))
       return 5;
+    if (decl.StartsWith("union ") && MatchesName(decl, 6, word))
+      return 6;
     // interface NAME
     if (decl.StartsWith("interface ") && MatchesName(decl, 10, word))
       return 10;

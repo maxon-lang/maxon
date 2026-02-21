@@ -234,7 +234,7 @@ internal class TypeSubstitution {
       { } t when t == MlirType.I1 => MaxonValueKind.Bool,
       { } t when t == MlirType.I8 => MaxonValueKind.Byte,
       { } t when t == MlirType.I16 || t == MlirType.U16 => MaxonValueKind.Short,
-      MlirStructType or MlirEnumType => MaxonValueKind.Integer,
+      MlirStructType or MlirUnionType => MaxonValueKind.Integer,
       MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
       MlirTypeParameterType => MaxonValueKind.TypeParameter,
       _ => throw new InvalidOperationException($"SubstituteValueKind: unsupported type '{concreteType}' for param '{paramKey}'")

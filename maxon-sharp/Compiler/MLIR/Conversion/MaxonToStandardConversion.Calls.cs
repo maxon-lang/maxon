@@ -4,7 +4,7 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 public static partial class MaxonToStandardConversion {
-  private static MlirType ResolveEnumBackingMlirType(MlirEnumType enumType) {
+  private static MlirType ResolveEnumBackingMlirType(MlirUnionType enumType) {
     if (enumType.BackingType == MlirType.F64) return MlirType.F64;
     if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) return MlirType.I64;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MlirType.I64;
@@ -158,7 +158,7 @@ public static partial class MaxonToStandardConversion {
     FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs, fnEnvVarNames, argVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
-    bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirEnumType cret && cret.HasAssociatedValues;
+    bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirUnionType cret && cret.HasAssociatedValues;
 
     // Emit call or try_call
     // Struct returns and associated-value enum returns are i64 heap pointers
@@ -186,7 +186,7 @@ public static partial class MaxonToStandardConversion {
         structValueTypes[result.Id] = calleeRetStructType.Name;
       } else if (calleeRetAssocEnum && callResult != null) {
         // Associated-value enum return: unpack heap pointer into flat vars
-        var retEnumType = (MlirEnumType)calleeFunc.ReturnType!;
+        var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;
         var retVarName = $"__callret_{result.Id}";
 
         if (isTryCall) {
@@ -249,7 +249,7 @@ public static partial class MaxonToStandardConversion {
         && structVarNames.TryGetValue(retOp.Value.Id, out var enumRetPrefix)
         && structValueTypes.TryGetValue(retOp.Value.Id, out var enumRetTypeName)
         && typeDefs.TryGetValue(enumRetTypeName, out var enumRetTypeDef)
-        && enumRetTypeDef is MlirEnumType enumRetType && enumRetType.HasAssociatedValues) {
+        && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
       var heapPtr = PackEnumFlatVarsToHeap(block, enumRetPrefix, enumRetType, varTypes, typeDefs);
       EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
       block.AddOp(new StdReturnOp(heapPtr));
@@ -325,7 +325,7 @@ public static partial class MaxonToStandardConversion {
     // Check if this is an associated-value error enum
     if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
-        && errorTypeDef is MlirEnumType errorEnumType && errorEnumType.HasAssociatedValues) {
+        && errorTypeDef is MlirUnionType errorEnumType && errorEnumType.HasAssociatedValues) {
       // Error return expects a heap pointer in RDX, not flat vars
       var heapPtr = PackEnumFlatVarsToHeap(block, enumPrefix, errorEnumType, varTypes, typeDefs);
       block.AddOp(new StdErrorReturnOp(heapPtr));
@@ -352,14 +352,14 @@ public static partial class MaxonToStandardConversion {
     // Intercept synthetic enum static method calls
     if (tryCallOp.Callee.StartsWith("__enum_fromRawValue:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromRawValue:".Length..];
-      var enumType = (MlirEnumType)typeDefs[enumTypeName];
-      LowerEnumFromRawValue(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
+      var enumType = (MlirUnionType)typeDefs[enumTypeName];
+      LowerUnionFromRawValue(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
       return;
     }
     if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
-      var enumType = (MlirEnumType)typeDefs[enumTypeName];
-      LowerEnumFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes);
+      var enumType = (MlirUnionType)typeDefs[enumTypeName];
+      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes);
       return;
     }
     LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
