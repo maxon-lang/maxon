@@ -196,14 +196,14 @@ end 'conditionToOpcode'
 function emitCondJump(code ByteBuffer, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel ByteArray)
     code.push(0x0F)
     code.push(opcode)
-    jumpFixups.push({codeOffset: code.count(), targetLabel: targetLabel})
+    jumpFixups.push(JumpFixup{codeOffset: code.count(), targetLabel: targetLabel})
     emitDword(code, value: 0)
 end 'emitCondJump'
 
 function emitJmp(code ByteBuffer, jumpFixups JumpFixupArray, targetLabel ByteArray)
     // jmp rel32  =>  E9 <rel32>
     code.push(0xE9)
-    jumpFixups.push({codeOffset: code.count(), targetLabel: targetLabel})
+    jumpFixups.push(JumpFixup{codeOffset: code.count(), targetLabel: targetLabel})
     emitDword(code, value: 0)
 end 'emitJmp'
 
@@ -286,7 +286,7 @@ function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray) returns CodeO
     // call [rip+disp32] GetStdHandle (IAT slot 1)
     code.push(0xFF)
     code.push(0x15)
-    iatFixups.push({codeOffset: code.count(), iatSlotIndex: 1})
+    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: 1})
     emitDword(code, value: 0)
 
     // Save handle: mov [rbp-24], rax
@@ -330,7 +330,7 @@ function emitWriteStdout(code ByteBuffer, iatFixups IatFixupArray) returns CodeO
     // call [rip+disp32] WriteFile (IAT slot 2)
     code.push(0xFF)
     code.push(0x15)
-    iatFixups.push({codeOffset: code.count(), iatSlotIndex: 2})
+    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: 2})
     emitDword(code, value: 0)
 
     // Epilogue: mov rsp, rbp; pop rbp; ret
@@ -700,7 +700,7 @@ function emitStartWindows(code ByteBuffer, iatFixups IatFixupArray, callFixups C
     // call [rip+disp32] ExitProcess (indirect through IAT)
     code.push(0xFF)
     code.push(0x15)
-    iatFixups.push({codeOffset: code.count(), iatSlotIndex: 0})
+    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: 0})
     code.push(0x00)
     code.push(0x00)
     code.push(0x00)
@@ -846,7 +846,7 @@ export function emit(x86Ops X86OpArray, target TargetTriple) returns CodeResult
     resolveJumpFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, jumpFixups: jumpFixups)
 
     logDebug(LogCategory.codegen, message: "Emitted {code.count()} bytes of machine code")
-    return {code: code, mainCallFixupOffset: mainCallFixupOffset, iatFixups: iatFixups}
+    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, iatFixups: iatFixups}
 end 'emit'
 
 function recordLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray, offset CodeOffset)
@@ -861,7 +861,7 @@ function emitCallFixup(code ByteBuffer, callFixups CallFixupArray, target ByteAr
     logTrace(LogCategory.codegen, message: "Call fixup to '{String.from(target)}' at offset {code.count()}")
     code.push(0xE8)
     let fixupOffset = code.count()
-    callFixups.push({codeOffset: fixupOffset, targetName: target})
+    callFixups.push(CallFixup{codeOffset: fixupOffset, targetName: target})
     code.push(0x00)
     code.push(0x00)
     code.push(0x00)

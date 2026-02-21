@@ -39,8 +39,8 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
   var items = ItemArray{}
-  items.push({name: "hello world that needs heap allocation", value: 1})
-  items.push({name: "another long string for heap allocation", value: 2})
+  items.push(Item{name: "hello world that needs heap allocation", value: 1})
+  items.push(Item{name: "another long string for heap allocation", value: 2})
   let first = try items.get(0) otherwise Item{name: "", value: 0}
   print("{first.name}\n")
   return first.value
@@ -92,7 +92,7 @@ typealias PairArray = Array with Pair
 
 function main() returns ExitCode
   var pairs = PairArray{}
-  pairs.push({first: "alpha string that is long for heap", second: "beta string that is long for heap"})
+  pairs.push(Pair{first: "alpha string that is long for heap", second: "beta string that is long for heap"})
   return 0
 end 'main'
 ```
@@ -143,7 +143,7 @@ typealias MultiArray = Array with MultiField
 
 function main() returns ExitCode
   var items = MultiArray{}
-  items.push({a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
+  items.push(MultiField{a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
   return 0
 end 'main'
 ```

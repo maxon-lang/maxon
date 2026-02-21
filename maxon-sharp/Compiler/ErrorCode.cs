@@ -59,7 +59,6 @@ public enum ErrorCode {
   SemanticUnusedVariable = 3012,
   SemanticMissingReturn = 3013,
   SemanticUnexportedFieldAccess = 3014,
-  SemanticRedundantTypeAnnotation = 3015,
   SemanticPartialInterfaceImpl = 3016,
   SemanticWhereConstraintViolation = 3017,
   SemanticUnknownField = 3018,

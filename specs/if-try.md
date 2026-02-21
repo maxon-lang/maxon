@@ -437,7 +437,7 @@ function mayFail(succeed bool) returns MultiManaged throws MyError
   var nums = IntArray{}
   nums.push(10)
   nums.push(20)
-  return {numbers: nums, text: "hello", tag: "world"}
+  return MultiManaged{numbers: nums, text: "hello", tag: "world"}
 end 'mayFail'
 
 function main() returns ExitCode

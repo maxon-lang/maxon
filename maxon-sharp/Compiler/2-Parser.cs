@@ -13,7 +13,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MlirModule<MaxonOp>? _currentModule;
   private MlirFunction<MaxonOp>? _currentFunction;
   private MlirBlock<MaxonOp>? _currentBlock;
-  private string? _anonymousStructTypeHint;
+
   // Tracks the ranged primitive type name from the most recent construction expression (e.g., Age{42})
   private string? _lastRangedTypeName;
   // Set by ResolveExprValue: true when the resolved expression was a mutable variable reference
@@ -4564,31 +4564,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Advance(); // consume 'return'
 
     if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
-      // Check for redundant type annotation: return TypeName{...} when return type is TypeName
-      if (Check(TokenType.Identifier) && _currentFunction?.ReturnType is MlirStructType retCheckType
-          && Current().Value == retCheckType.Name && PeekNext().Type == TokenType.LeftBrace) {
-        var typeToken = Current();
-        throw new CompileError(ErrorCode.SemanticRedundantTypeAnnotation,
-          $"redundant type annotation: '{retCheckType.Name}'",
-          typeToken.Line, typeToken.Column);
-      }
-      // Check for anonymous struct literal: return { field: value, ... }
-      if (Check(TokenType.LeftBrace) && _currentFunction?.ReturnType is MlirStructType retStructType) {
-        var structLiteral = ParseStructLiteral(retStructType.Name);
-        var value = ResolveExprValue(structLiteral);
-        _currentBlock!.AddOp(new MaxonReturnOp(value));
-      } else {
-        // Set anonymous struct hint for array literals with struct elements (e.g., return [{ field: value }])
-        var savedHint = _anonymousStructTypeHint;
-        if (_currentFunction?.ReturnType != null) {
-          _anonymousStructTypeHint = GetArrayElementStructTypeName(_currentFunction.ReturnType);
-        }
-        var value = ResolveExprValue(ParseExpression());
-        _anonymousStructTypeHint = savedHint;
-        CheckReturnType(value, returnToken);
-        value = CheckReturnRange(value, returnToken);
-        _currentBlock!.AddOp(new MaxonReturnOp(value));
-      }
+      var value = ResolveExprValue(ParseExpression());
+      CheckReturnType(value, returnToken);
+      value = CheckReturnRange(value, returnToken);
+      _currentBlock!.AddOp(new MaxonReturnOp(value));
     } else {
       _currentBlock!.AddOp(new MaxonReturnOp());
     }
@@ -7684,10 +7663,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private ExprResult ParsePrimary() {
-    if (Check(TokenType.LeftBrace) && _anonymousStructTypeHint != null) {
-      return ParseStructLiteral(_anonymousStructTypeHint);
-    }
-
     if (Check(TokenType.Match)) {
       return ParseMatchExpression();
     }
@@ -8620,11 +8595,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private ExprResult.Direct ParseArrayLiteralWithFirstElement(MaxonValue firstElement) {
     var elements = new List<MaxonValue> { firstElement };
-    // If first element is a struct, set hint so subsequent {..} elements infer the same type
-    var savedHint = _anonymousStructTypeHint;
-    if (firstElement is MaxonStruct firstStruct && _anonymousStructTypeHint == null) {
-      _anonymousStructTypeHint = firstStruct.TypeName;
-    }
     while (Check(TokenType.Comma)) {
       Advance();
       SkipNewlines();
@@ -8632,7 +8602,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       elements.Add(ResolveExprValue(ParseExpression()));
       SkipNewlines();
     }
-    _anonymousStructTypeHint = savedHint;
     Expect(TokenType.RightBracket);
 
     var (managedStruct, arrayTag, elementCount, elementKind, elementStructTypeName) =
@@ -8796,21 +8765,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       FindArrayTypeAliasForElement(MaxonValueKind.Struct, structType.Name);
     }
     // Primitive types (i64, f64, etc.) already have predefined aliases (IntArray, FloatArray, etc.)
-  }
-
-  /// <summary>
-  /// Returns the struct element type name if the given type is an Array type alias
-  /// with a struct/enum Element type parameter, otherwise null.
-  /// </summary>
-  private string? GetArrayElementStructTypeName(MlirType type) {
-    if (type is MlirStructType st
-        && _typeAliasSources.TryGetValue(st.Name, out var source) && source == "Array"
-        && st.TypeParams.TryGetValue("Element", out var elemType)
-        && _typeRegistry.TryGetValue(elemType.Name, out var elemRegistered)
-        && elemRegistered is MlirStructType) {
-      return elemType.Name;
-    }
-    return null;
   }
 
   /// <summary>
@@ -10350,20 +10304,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (resolvedType is MlirFunctionType ft && typeParams != null) {
       resolvedType = ResolveFunctionType(ft, typeParams);
     }
-    if (Check(TokenType.LeftBrace) && resolvedType is MlirStructType structType) {
-      var structLiteral = ParseStructLiteral(structType.Name);
-      return ResolveExprValue(structLiteral);
-    }
     // Untyped closure: when expecting a function type and tokens look like a closure
     if (resolvedType is MlirFunctionType expectedFnType && IsClosure()) {
       return ResolveExprValue(ParseClosure(expectedFnType));
     }
-    // Set anonymous struct hint for array literal args with struct elements
-    var savedHint = _anonymousStructTypeHint;
-    _anonymousStructTypeHint = GetArrayElementStructTypeName(resolvedType);
-    var result = ResolveExprValue(ParseExpression());
-    _anonymousStructTypeHint = savedHint;
-    return result;
+    return ResolveExprValue(ParseExpression());
   }
 
   /// <summary>
@@ -10973,19 +10918,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               Current().Line, Current().Column);
           }
         } else {
-          var typeToken = Current();
           var paramType = ParseTypeRef();
-          // Check for redundant struct/enum type annotation when type can be inferred from context
-          if (inferredFnType != null && paramIdx < inferredFnType.ParameterTypes.Count
-              && (paramType is MlirStructType || paramType is MlirEnumType)) {
-            var inferredType = inferredFnType.ParameterTypes[paramIdx];
-            if ((paramType is MlirStructType st && inferredType is MlirStructType ist && st.Name == ist.Name)
-                || (paramType is MlirEnumType et && inferredType is MlirEnumType iet && et.Name == iet.Name)) {
-              throw new CompileError(ErrorCode.SemanticRedundantTypeAnnotation,
-                $"redundant type annotation: '{typeToken.Value}'",
-                typeToken.Line, typeToken.Column);
-            }
-          }
           paramTypes.Add(paramType);
         }
         paramIdx++;
@@ -11047,20 +10980,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     // Parse the closure body expression
-    // Check for redundant type annotation: gives TypeName{...} when return type is TypeName
-    if (Check(TokenType.Identifier) && inferredReturnType is MlirStructType bodyCheckType
-        && Current().Value == bodyCheckType.Name && PeekNext().Type == TokenType.LeftBrace) {
-      var typeToken = Current();
-      throw new CompileError(ErrorCode.SemanticRedundantTypeAnnotation,
-        $"redundant type annotation: '{bodyCheckType.Name}'",
-        typeToken.Line, typeToken.Column);
-    }
-    ExprResult bodyExpr;
-    if (Check(TokenType.LeftBrace) && inferredReturnType is MlirStructType bodyStructType) {
-      bodyExpr = ParseStructLiteral(bodyStructType.Name);
-    } else {
-      bodyExpr = ParseExpression();
-    }
+    var bodyExpr = ParseExpression();
     var bodyValue = ResolveExprValue(bodyExpr);
 
     // Emit return

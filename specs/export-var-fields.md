@@ -79,7 +79,7 @@ type Value
   var private Integer
 
   static function create() returns Self
-    return {n: 42, private: 100}
+    return Value{n: 42, private: 100}
   end 'create'
 end 'Value'
 
@@ -101,7 +101,7 @@ type Value
   export var n Integer
 
   static function create() returns Self
-    return {n: 10}
+    return Value{n: 10}
   end 'create'
 end 'Value'
 
@@ -124,7 +124,7 @@ type Config
   export let version Integer
 
   static function create() returns Self
-    return {version: 42}
+    return Config{version: 42}
   end 'create'
 end 'Config'
 
@@ -175,7 +175,7 @@ type Box
   var secret Integer
 
   static function create(v Integer, s Integer) returns Self
-    return {value: v, secret: s}
+    return Box{value: v, secret: s}
   end 'create'
 
   function getSecret() returns Integer
@@ -201,7 +201,7 @@ type Value
   var private Integer
 
   static function create() returns Self
-    return {private: 42}
+    return Value{private: 42}
   end 'create'
 end 'Value'
 
@@ -223,7 +223,7 @@ type Value
   var private Integer
 
   static function create() returns Self
-    return {private: 0}
+    return Value{private: 0}
   end 'create'
 end 'Value'
 
@@ -247,7 +247,7 @@ type Simple
   var y Integer
 
   static function make(a Integer, b Integer) returns Self
-    return {x: a, y: b}
+    return Simple{x: a, y: b}
   end 'make'
 
   function sum() returns Integer

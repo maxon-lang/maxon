@@ -51,7 +51,7 @@ type Money implements Parsable
       throw MoneyParseError.NegativeValue
     end 'negative'
 
-    return {cents: input.byteLength()}
+    return Money{cents: input.byteLength()}
   end 'fromString'
 end 'Money'
 ```
@@ -94,7 +94,7 @@ type Value implements Parsable
   var n Integer
 
   static function fromString(input String) returns Self throws ParseError
-    return {n: input.byteLength()}
+    return Value{n: input.byteLength()}
   end 'fromString'
 end 'Value'
 
@@ -120,7 +120,7 @@ type Value implements Parsable
   export var n Integer
 
   static function fromString(input String) returns Self throws ParseError
-    return {n: input.byteLength()}
+    return Value{n: input.byteLength()}
   end 'fromString'
 end 'Value'
 
@@ -152,7 +152,7 @@ type Value implements Parsable
     if input.byteLength() == 0 'check'
       throw ParseError.Empty
     end 'check'
-    return {n: input.byteLength()}
+    return Value{n: input.byteLength()}
   end 'fromString'
 end 'Value'
 
@@ -190,7 +190,7 @@ type Money implements Parsable
       throw MoneyParseError.NegativeValue
     end 'negative'
 
-    return {cents: input.byteLength()}
+    return Money{cents: input.byteLength()}
   end 'fromString'
 end 'Money'
 
@@ -222,7 +222,7 @@ type Value implements Parsable
     if input.startsWith("x") 'check'
       throw ParseError.Invalid
     end 'check'
-    return {n: input.byteLength()}
+    return Value{n: input.byteLength()}
   end 'fromString'
 end 'Value'
 
@@ -258,7 +258,7 @@ type Value implements Parsable
   var n Integer
 
   static function fromString(input String) returns Self
-    return {n: input.byteLength()}
+    return Value{n: input.byteLength()}
   end 'fromString'
 end 'Value'
 
@@ -284,7 +284,7 @@ type Value implements Parsable
   var n Integer
 
   static function fromString(input String) returns Self throws NotAnError
-    return {n: input.byteLength()}
+    return Value{n: input.byteLength()}
   end 'fromString'
 end 'Value'
 

@@ -216,7 +216,7 @@ type Thing
 
   static function make(n Integer) returns Thing
     Thing.created = Thing.created + 1
-    return {id: n}
+    return Thing{id: n}
   end 'make'
 end 'Thing'
 

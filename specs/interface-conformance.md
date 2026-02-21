@@ -258,7 +258,7 @@ type MyCollection uses Element implements BuiltinArrayLiteral
   var managed __ManagedMemory
 
   static function init(managed __ManagedMemory) returns Self
-    return {managed: managed}
+    return MyCollection{managed: managed}
   end 'init'
 end 'MyCollection'
 

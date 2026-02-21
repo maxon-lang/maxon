@@ -112,7 +112,7 @@ type Point implements Cloneable
   var y Score
 
   function clone() returns Point
-    return {x: x, y: y}
+    return Point{x: x, y: y}
   end 'clone'
 end 'Point'
 ```
@@ -345,7 +345,7 @@ type Point implements Movable
   export var y Integer
 
   function move(dx Integer, dy Integer) returns Point
-    return {x: x + dx, y: y + dy}
+    return Point{x: x + dx, y: y + dy}
   end 'move'
 end 'Point'
 

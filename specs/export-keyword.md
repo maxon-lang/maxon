@@ -203,7 +203,7 @@ type Container
   export var items IntArray
 
   static function create() returns Self
-    return {items: IntArray{}}
+    return Container{items: IntArray{}}
   end 'create'
 
   function add(n Integer)

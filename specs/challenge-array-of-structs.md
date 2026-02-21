@@ -76,9 +76,9 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
   var items = ItemArray{}
-  items.push({color: Color.red})
-  items.push({color: Color.green})
-  items.push({color: Color.blue})
+  items.push(Item{color: Color.red})
+  items.push(Item{color: Color.green})
+  items.push(Item{color: Color.blue})
 
   // Verify union values are stored correctly (not pointers)
   var item0 = try items.get(0) otherwise Item{color: Color.blue}
@@ -110,9 +110,9 @@ typealias TaskArray = Array with Task
 
 function main() returns ExitCode
   var tasks = TaskArray{}
-  tasks.push({status: Status.pending})
-  tasks.push({status: Status.active})
-  tasks.push({status: Status.done})
+  tasks.push(Task{status: Status.pending})
+  tasks.push(Task{status: Status.active})
+  tasks.push(Task{status: Status.done})
 
   var activeCount = 0
   for task in tasks 'loop'

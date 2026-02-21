@@ -44,7 +44,7 @@ type ScoreArray implements Container with Score
 
   function set(index Index, value Score) returns ScoreArray
     data[index] = value
-    return {data: data, len: len}
+    return ScoreArray{data: data, len: len}
   end 'set'
 end 'ScoreArray'
 ```
@@ -289,7 +289,7 @@ type IntSum implements Accumulator with Integer
   var sum Integer
 
   function add(item Integer) returns IntSum
-    return {sum: sum + item}
+    return IntSum{sum: sum + item}
   end 'add'
 
   function total() returns Integer

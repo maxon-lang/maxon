@@ -10,7 +10,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
   // Default type for character literals - compiler discovers this via BuiltinCharLiteral interface
   static function init(managed __ManagedMemory) returns Character
-    return {_managed: managed}
+    return Character{_managed: managed}
   end 'init'
 
   // Basic properties
@@ -20,12 +20,12 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
   // View methods - returns ByteView for iterating over raw UTF-8 bytes
   export function bytes() returns ByteView
-    return {_managed: _managed, _pos: 0}
+    return ByteView{_managed: _managed, _pos: 0}
   end 'bytes'
 
   // View method - returns CodepointView for iterating over Unicode codepoints
   export function codepoints() returns CodepointView
-    return {_managed: _managed, _pos: 0}
+    return CodepointView{_managed: _managed, _pos: 0}
   end 'codepoints'
 
   // Equatable conformance
@@ -90,7 +90,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
 
   // Stringable conformance - convert Character to String
   export function toString() returns String
-    return {_managed: _managed, _iterPos: 0}
+    return String{_managed: _managed, _iterPos: 0}
   end 'toString'
 
   // Decode the first Unicode codepoint from the UTF-8 bytes
@@ -136,14 +136,14 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
       var m = __managed_memory_create(1, 1)
       __managed_memory_set_byte(m, 0, cp)
       __managed_memory_set_length(m, 1)
-      return {_managed: m}
+      return Character{_managed: m}
     end 'enc_ascii'
     if cp < 2048 'enc_two'
       var m = __managed_memory_create(2, 1)
       __managed_memory_set_byte(m, 0, 192 or (cp shr 6))
       __managed_memory_set_byte(m, 1, 128 or (cp and 63))
       __managed_memory_set_length(m, 2)
-      return {_managed: m}
+      return Character{_managed: m}
     end 'enc_two'
     if cp < 65536 'enc_three'
       var m = __managed_memory_create(3, 1)
@@ -151,7 +151,7 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
       __managed_memory_set_byte(m, 1, 128 or ((cp shr 6) and 63))
       __managed_memory_set_byte(m, 2, 128 or (cp and 63))
       __managed_memory_set_length(m, 3)
-      return {_managed: m}
+      return Character{_managed: m}
     end 'enc_three'
     var m = __managed_memory_create(4, 1)
     __managed_memory_set_byte(m, 0, 240 or (cp shr 18))
@@ -159,6 +159,6 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
     __managed_memory_set_byte(m, 2, 128 or ((cp shr 6) and 63))
     __managed_memory_set_byte(m, 3, 128 or (cp and 63))
     __managed_memory_set_length(m, 4)
-    return {_managed: m}
+    return Character{_managed: m}
   end '_fromCodepoint'
 end 'Character'

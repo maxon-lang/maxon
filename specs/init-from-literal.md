@@ -20,7 +20,7 @@ type MyString implements InitableFromStringLiteral
   var _value String
 
   static function init(value String) returns MyString
-    return {_value: value}
+    return MyString{_value: value}
   end 'init'
 
   export function len() returns Score
@@ -52,7 +52,7 @@ type MyChar implements InitableFromCharLiteral
   var _value Character
 
   static function init(value Character) returns MyChar
-    return {_value: value}
+    return MyChar{_value: value}
   end 'init'
 
   export function len() returns Score
@@ -85,7 +85,7 @@ type Wrapper implements InitableFromStringLiteral
   var _value String
 
   static function init(value String) returns Wrapper
-    return {_value: value}
+    return Wrapper{_value: value}
   end 'init'
 
   export function len() returns Integer
@@ -112,7 +112,7 @@ type Wrapper implements InitableFromStringLiteral
   var _value String
 
   static function init(value String) returns Wrapper
-    return {_value: value}
+    return Wrapper{_value: value}
   end 'init'
 
   export function len() returns Integer
@@ -139,7 +139,7 @@ type CharWrapper implements InitableFromCharLiteral
   var _value Character
 
   static function init(value Character) returns CharWrapper
-    return {_value: value}
+    return CharWrapper{_value: value}
   end 'init'
 
   export function len() returns Integer

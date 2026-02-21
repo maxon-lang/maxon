@@ -335,7 +335,7 @@ type Wrapper
 end 'Wrapper'
 
 function wrap(s String) returns Wrapper
-  return {data: s}
+  return Wrapper{data: s}
 end 'wrap'
 
 function main() returns int
@@ -357,7 +357,7 @@ type Token
 end 'Token'
 
 function tokenize(s String) returns Token
-  return {text: s}
+  return Token{text: s}
 end 'tokenize'
 
 function main() returns int
@@ -379,7 +379,7 @@ type Wrapper
 end 'Wrapper'
 
 function wrap(s String) returns Wrapper
-  return {data: s}
+  return Wrapper{data: s}
 end 'wrap'
 
 function main() returns int

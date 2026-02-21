@@ -18,7 +18,7 @@ type Counter
   var value int
 
   static function create() returns Counter
-    return {value: 0}
+    return Counter{value: 0}
   end 'create'
 
   function increment()
@@ -46,7 +46,7 @@ type Box
   export var value Integer
 
   static function make(v Integer) returns Box
-    return {value: v}
+    return Box{value: v}
   end 'make'
 end 'Box'
 
@@ -89,7 +89,7 @@ type Factory
   export var id Integer
 
   export static function create(val Integer) returns Factory
-    return {id: val}
+    return Factory{id: val}
   end 'create'
 
   export static function zero() returns Factory

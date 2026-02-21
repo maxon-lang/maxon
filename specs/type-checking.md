@@ -170,7 +170,7 @@ end 'Foo'
 
 function main() returns ExitCode
   var arr = FooArray{}
-  arr.push({value: 42})
+  arr.push(Foo{value: 42})
   return arr.count() - 1
 end 'main'
 ```
@@ -196,7 +196,7 @@ end 'Item'
 
 function main() returns ExitCode
   var c = Container{items: ItemArray{}}
-  c.items.push({value: 7})
+  c.items.push(Item{value: 7})
   return c.items.count()
 end 'main'
 ```

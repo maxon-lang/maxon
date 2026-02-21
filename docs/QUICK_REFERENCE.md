@@ -240,7 +240,7 @@ type Point implements Hashable, Describable   // interface conformance
     end 'magnitude'
 
     static function origin() returns Point  // static method
-        return {x: 0, y: 0}
+        return Point{x: 0, y: 0}
     end 'origin'
 end 'Point'
 
