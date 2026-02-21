@@ -1,0 +1,39 @@
+// Test: float-backed
+constants Threshold
+  low = 0.1
+  medium = 0.5
+  high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+  var t = Threshold.medium
+  if t == Threshold.medium 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_0.5]
+    x86.movsd [rbp-8], xmm0
+    x86.movsd xmm1, [rip+__float_0.5]
+    x86.movsd xmm2, [rbp-8]
+    x86.ucomisd xmm2, xmm1
+    x86.jne constants.main.check_0.after
+    x86.jp constants.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

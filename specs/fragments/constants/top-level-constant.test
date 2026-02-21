@@ -1,0 +1,34 @@
+// Test: top-level-constant
+constants Color
+  red
+  green
+  blue
+end 'Color'
+
+let DEFAULT_COLOR = Color.green
+
+function main() returns ExitCode
+  if DEFAULT_COLOR == Color.green 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x86.mov eax, 1
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne constants.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

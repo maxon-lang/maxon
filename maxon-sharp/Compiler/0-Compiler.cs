@@ -199,14 +199,16 @@ public class Compiler {
           module.NonExportedTypeNames.Add(name);
         if (source.Path != null) module.TypeDefSourceFiles[name] = source.Path;
         i += 1;
-      } else if (t.Type == TokenType.Enum && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
+      } else if ((t.Type == TokenType.Enum || t.Type == TokenType.Constants) && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];
-        var enumName = nameToken.Value;
-        var enumType = new MlirEnumType(enumName, [], null, []);
-        SetSourceLocation(enumType, source, nameToken);
-        module.TypeDefs.TryAdd(enumName, enumType);
-        if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(enumName);
-        if (source.Path != null) module.TypeDefSourceFiles[enumName] = source.Path;
+        var typeName = nameToken.Value;
+        MlirType namedType = t.Type == TokenType.Enum
+          ? new MlirEnumType(typeName, [], null, [])
+          : new MlirConstantsType(typeName, []);
+        SetSourceLocation(namedType, source, nameToken);
+        module.TypeDefs.TryAdd(typeName, namedType);
+        if (!isExported && !isStdlib) module.NonExportedTypeNames.Add(typeName);
+        if (source.Path != null) module.TypeDefSourceFiles[typeName] = source.Path;
         i += 1;
       } else if (t.Type == TokenType.Interface && i + 1 < tokens.Count && tokens[i + 1].Type == TokenType.Identifier) {
         var nameToken = tokens[i + 1];

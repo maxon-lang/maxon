@@ -1,0 +1,61 @@
+// Test: function-param
+constants Status
+  on
+  off
+end 'Status'
+
+function isOn(s Status) returns bool
+  if s == Status.on 'check'
+    return true
+  end 'check'
+  return false
+end 'isOn'
+
+function main() returns ExitCode
+  var status = Status.on
+  if isOn(status) 'test'
+    return 1
+  end 'test'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.isOn(s: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.mov edx, [rbp-8]
+    x86.cmp edx, eax
+    x86.jne constants.isOn.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @constants.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.call constants.isOn
+    x86.test eax, eax
+    x86.je constants.main.test_0.after
+  test_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  test_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

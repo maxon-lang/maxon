@@ -1,0 +1,82 @@
+// Test: negative-int
+constants Temperature
+  freezing = 0
+  cold = -10
+  warm = 25
+end 'Temperature'
+
+function main() returns ExitCode
+  var result = match Temperature.warm 'check'
+    Temperature.freezing gives 0
+    Temperature.cold gives -10
+    Temperature.warm gives 25
+    default gives 99
+  end 'check'
+  return result
+end 'main'
+---
+ExitCode: 25
+---
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 25
+    x86.mov [rbp-8], eax
+    x86.jmp constants.main.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne constants.main.check_0.cmp1
+  check_0.case0:
+    x86.xor eax, eax
+    x86.mov [rbp-16], eax
+    x86.jmp constants.main.check_0.merge
+  check_0.cmp1:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, -10
+    x86.cmp eax, ecx
+    x86.jne constants.main.check_0.cmp2
+  check_0.case1:
+    x86.mov eax, -10
+    x86.mov [rbp-16], eax
+    x86.jmp constants.main.check_0.merge
+  check_0.cmp2:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 25
+    x86.cmp eax, ecx
+    x86.jne constants.main.check_0.case3
+  check_0.case2:
+    x86.mov eax, 25
+    x86.mov [rbp-16], eax
+    x86.jmp constants.main.check_0.merge
+  check_0.case3:
+    x86.mov eax, 99
+    x86.mov [rbp-16], eax
+    x86.jmp constants.main.check_0.merge
+  check_0.merge:
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je constants.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_22]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

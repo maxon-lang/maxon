@@ -457,6 +457,11 @@ public static partial class MaxonToStandardConversion {
 		if (backingMlirType == MlirType.F64) {
 			return EmitF64ToString((StdF64)stdValue, block, varTypes);
 		}
+
+		// Constants interpolate as their backing value; enums interpolate as their case name
+		if (enumType is MlirConstantsType) {
+			return EmitI64ToString((StdI64)stdValue, block, varTypes);
+		}
 		return EmitEnumCaseNameToString(enumType, (StdI64)stdValue, block, result);
 	}
 

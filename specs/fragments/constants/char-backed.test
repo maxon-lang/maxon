@@ -1,0 +1,37 @@
+// Test: char-backed
+constants Escape
+  newline = '\n'
+  tab = '\t'
+end 'Escape'
+
+function main() returns ExitCode
+  var e = Escape.newline
+  if e == Escape.newline 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-8]
+    x86.cmp edx, ecx
+    x86.jne constants.main.check_0.after
+  check_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

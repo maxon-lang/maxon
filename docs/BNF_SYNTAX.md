@@ -41,7 +41,7 @@ IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
 ### 1.3 Keywords
 
 ```
-KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
+KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'constants' | 'continue'
               | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'extern' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
@@ -119,6 +119,7 @@ top_level_decl
               | extern_decl
               | type_decl
               | enum_decl
+              | constants_decl
               | interface_decl
               | extension_block
               | typealias_decl
@@ -210,6 +211,23 @@ raw_value     = [ '-' ] INTEGER
               | [ '-' ] FLOAT
               | STRING
               | CHARACTER
+
+```
+
+### 3.5 Constants Declaration
+
+```
+constants_decl = export_prefix 'constants' IDENTIFIER NEWLINE
+                 { constants_case NEWLINE }
+                 'end' LABEL
+
+constants_case = IDENTIFIER                  (* auto-increment from 0; integer-backed only *)
+               | IDENTIFIER '=' raw_value    (* explicit value *)
+
+raw_value      = [ '-' ] INTEGER
+               | [ '-' ] FLOAT
+               | STRING
+               | CHARACTER
 
 assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref

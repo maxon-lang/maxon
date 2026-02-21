@@ -358,6 +358,57 @@ end 'Direction'
 
 Enum values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect enums. This prevents bugs when new cases are added to an enum. Enums auto-conform to `Hashable` internally for Map/Set usage.
 
+## Constants
+
+Constants are like enums but simpler: no methods, no `.rawValue`, no `.name`, no `fromRawValue()`, no `fromName()`. Direct `==` and `!=` comparison is allowed. Use `match` with a `default` arm.
+
+```maxon
+// Integer (auto-increment from 0)
+constants Color
+    red       // 0
+    green     // 1
+    blue      // 2
+end 'Color'
+
+// Explicit integer values (mixed with auto-increment)
+constants HttpStatus
+    ok = 200
+    notFound = 404
+    serverError = 500
+end 'HttpStatus'
+
+// Float-backed
+constants Threshold
+    low = 0.1
+    medium = 0.5
+    high = 0.9
+end 'Threshold'
+
+// String-backed
+constants ContentType
+    json = "application/json"
+    html = "text/html"
+end 'ContentType'
+
+var s = HttpStatus.notFound
+if s == HttpStatus.notFound 'check'
+    // direct comparison allowed
+end 'check'
+
+var result = match s 'handle'
+    HttpStatus.ok gives 1
+    HttpStatus.notFound gives 2
+    HttpStatus.serverError gives 3
+    default gives 0
+end 'handle'
+
+export constants Permission
+    none = 0
+    read = 1
+    write = 2
+end 'Permission'
+```
+
 ## Error Handling
 
 ```maxon

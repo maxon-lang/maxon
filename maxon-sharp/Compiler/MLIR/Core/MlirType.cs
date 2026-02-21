@@ -202,6 +202,11 @@ public class MlirEnumType(string name, List<MlirEnumCase> cases, MlirType? backi
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }
 
+/// A named group of typed constant values. Unlike MlirEnumType, constants have no methods,
+/// no rawValue, no name, no fromRawValue, and no fromName. Direct == and != comparison is allowed.
+public class MlirConstantsType(string name, List<MlirEnumCase> cases, MlirType? backingType = null)
+    : MlirEnumType(name, cases, backingType);
+
 /// Marker type for string-backed enum backing types. At runtime, string-backed enums
 /// are stored as ordinals (i64), but their display value is the associated string.
 public class MlirStringBackingType() : MlirType("string_enum", 8);

@@ -1092,6 +1092,145 @@ end 'main'
 
 ---
 
+## Constants
+
+Constants define a named group of typed constant values. They are like enums but simpler: no methods, no `.rawValue`, no `.name`, no `fromRawValue()`, and no `fromName()`. Direct `==` and `!=` comparison is allowed.
+
+### Declaration
+
+```maxon
+constants HttpStatus
+    ok = 200
+    notFound = 404
+    serverError = 500
+end 'HttpStatus'
+```
+
+Cases without explicit values auto-increment from 0 (or from the previous explicit value + 1):
+
+```maxon
+constants Color
+    red       // 0
+    green     // 1
+    blue      // 2
+end 'Color'
+
+constants Priority
+    low         // 0
+    medium      // 1
+    high = 10
+    critical    // 11
+end 'Priority'
+```
+
+### Backing Types
+
+Constants support the same backing types as enums: integer, float, String, and Character.
+
+```maxon
+constants Threshold
+    low = 0.1
+    medium = 0.5
+    high = 0.9
+end 'Threshold'
+
+constants ContentType
+    json = "application/json"
+    html = "text/html"
+end 'ContentType'
+
+constants Escape
+    newline = '\n'
+    tab = '\t'
+end 'Escape'
+```
+
+Auto-increment (bare case names with no explicit value) is only valid for integer-backed constants. Mixing bare names with non-integer explicit values is a compile error.
+
+Negative integer values are supported:
+
+```maxon
+constants Temperature
+    freezing = 0
+    cold = -10
+    warm = 25
+end 'Temperature'
+```
+
+### Comparison
+
+Unlike enums, constants allow direct `==` and `!=` comparison:
+
+```maxon
+var s = HttpStatus.notFound
+if s == HttpStatus.notFound 'check'
+    // ...
+end 'check'
+if s != HttpStatus.ok 'check2'
+    // ...
+end 'check2'
+```
+
+### Match
+
+Use `match` with a `default` arm. Exhaustiveness is not checked for constants since the set of valid values is not fully enumerable at compile time:
+
+```maxon
+var result = match s 'handle'
+    HttpStatus.ok gives 1
+    HttpStatus.notFound gives 2
+    HttpStatus.serverError gives 3
+    default gives 0
+end 'handle'
+```
+
+### As Function Parameters and Return Types
+
+```maxon
+function isSuccess(s HttpStatus) returns bool
+    if s == HttpStatus.ok 'check'
+        return true
+    end 'check'
+    return false
+end 'isSuccess'
+
+function getDefault() returns HttpStatus
+    return HttpStatus.ok
+end 'getDefault'
+```
+
+### Keywords as Case Names
+
+Keywords can be used as case names (same as enums):
+
+```maxon
+constants TokenKind
+    function
+    return
+    end
+    if
+end 'TokenKind'
+```
+
+### Export
+
+```maxon
+export constants Permission
+    none = 0
+    read = 1
+    write = 2
+end 'Permission'
+```
+
+### Error Conditions
+
+- **E3030**: Duplicate case name within the same constants block
+- **E3031**: Duplicate explicit value within the same constants block
+- **E3032**: Mixing backing types (e.g., int and String values in the same block)
+- **E3034**: Accessing an unknown case (`Color.purple` when `purple` is not defined)
+
+---
+
 ## Functions
 
 ### Declaration Syntax

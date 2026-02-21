@@ -1,35 +1,17 @@
 ---
 feature: constants
 status: experimental
-keywords: [constants, named constants, integer constants]
+keywords: [constants, named constants]
 category: type-system
 ---
-
-# Constants
 
 ## Documentation
 
 # Constants
 
-Constants define a type with a fixed set of named integer values. Unlike enums, constants are integer-only, have no methods, no `.rawValue`, no `.name`, no `fromRawValue()`, and no `fromName()`. They are a distinct type — you cannot mix them with plain `int` without an explicit cast.
+Constants define a named group of typed constant values. Unlike enums, constants support direct `==` and `!=` comparison, and have no methods, no `.rawValue`, no `.name`, no `fromRawValue()`, and no `fromName()`.
 
-### Basic Constants
-
-```text
-constants HttpStatus
-  ok = 200
-  notFound = 404
-  serverError = 500
-end 'HttpStatus'
-```
-
-Create constant values using dot notation:
-
-```text
-var status = HttpStatus.ok
-```
-
-### Auto-Increment Values
+### Integer Constants
 
 Cases without explicit values auto-increment from 0 (or from the previous explicit value + 1):
 
@@ -39,11 +21,13 @@ constants Color
   green     // 1
   blue      // 2
 end 'Color'
-```
 
-### Mixed Explicit and Auto-Increment
+constants HttpStatus
+  ok = 200
+  notFound = 404
+  serverError = 500
+end 'HttpStatus'
 
-```text
 constants Priority
   low         // 0
   medium      // 1
@@ -52,42 +36,60 @@ constants Priority
 end 'Priority'
 ```
 
-### Type Safety
-
-Constants are a distinct type. Use `as int` to convert to an integer, and `as ConstantsType` to convert from an integer:
+### Float Constants
 
 ```text
-var status = HttpStatus.ok
-var code = status as int        // 200
-var s2 = 404 as HttpStatus      // HttpStatus.notFound
+constants Threshold
+  low = 0.1
+  medium = 0.5
+  high = 0.9
+end 'Threshold'
+```
+
+### String Constants
+
+```text
+constants ContentType
+  json = "application/json"
+  html = "text/html"
+  plain = "text/plain"
+end 'ContentType'
+```
+
+### Character Constants
+
+```text
+constants Escape
+  newline = '\n'
+  tab = '\t'
+  null = '\0'
+end 'Escape'
 ```
 
 ### Comparison
 
-Constants of the same type can be compared using `==` and `!=`:
+Constants support `==` and `!=` directly:
 
 ```text
 var status = HttpStatus.ok
-if status == HttpStatus.notFound 'check'
+if status == HttpStatus.ok 'check'
   // ...
 end 'check'
 ```
 
 ### Export
 
-Constants can be exported for cross-file visibility:
-
 ```text
-export constants Flags
+export constants Permission
   none = 0
   read = 1
   write = 2
-end 'Flags'
+end 'Permission'
 ```
 
 ## Tests
 
-<!-- disabled-test: simple-constants -->
+<!-- test: basic-int -->
 ```maxon
 constants Color
   red
@@ -107,7 +109,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-explicit-values -->
+<!-- test: explicit-int-values -->
 ```maxon
 constants HttpStatus
   ok = 200
@@ -127,7 +129,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-auto-increment -->
+<!-- test: auto-increment -->
 ```maxon
 constants Color
   red
@@ -137,14 +139,20 @@ end 'Color'
 
 function main() returns ExitCode
   var c = Color.blue
-  return c as int
+  var result = match c 'check'
+    Color.red gives 10
+    Color.green gives 20
+    Color.blue gives 30
+    default gives 0
+  end 'check'
+  return result
 end 'main'
 ```
 ```exitcode
-2
+30
 ```
 
-<!-- disabled-test: constants-mixed-values -->
+<!-- test: mixed-values -->
 ```maxon
 constants Priority
   low
@@ -154,14 +162,21 @@ constants Priority
 end 'Priority'
 
 function main() returns ExitCode
-  return Priority.critical as int
+  var result = match Priority.critical 'check'
+    Priority.low gives 0
+    Priority.medium gives 1
+    Priority.high gives 10
+    Priority.critical gives 11
+    default gives 99
+  end 'check'
+  return result
 end 'main'
 ```
 ```exitcode
 11
 ```
 
-<!-- disabled-test: constants-negative-values -->
+<!-- test: negative-int -->
 ```maxon
 constants Temperature
   freezing = 0
@@ -170,54 +185,20 @@ constants Temperature
 end 'Temperature'
 
 function main() returns ExitCode
-  var t = Temperature.warm
-  return t as int
+  var result = match Temperature.warm 'check'
+    Temperature.freezing gives 0
+    Temperature.cold gives -10
+    Temperature.warm gives 25
+    default gives 99
+  end 'check'
+  return result
 end 'main'
 ```
 ```exitcode
 25
 ```
 
-<!-- disabled-test: constants-cast-to-int -->
-```maxon
-constants HttpStatus
-  ok = 200
-  notFound = 404
-end 'HttpStatus'
-
-function main() returns ExitCode
-  var s = HttpStatus.ok
-  var code = s as int
-  if code == 200 'check'
-    return 1
-  end 'check'
-  return 0
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- disabled-test: constants-cast-from-int -->
-```maxon
-constants HttpStatus
-  ok = 200
-  notFound = 404
-end 'HttpStatus'
-
-function main() returns ExitCode
-  var s = 404 as HttpStatus
-  if s == HttpStatus.notFound 'check'
-    return 1
-  end 'check'
-  return 0
-end 'main'
-```
-```exitcode
-1
-```
-
-<!-- disabled-test: constants-not-equal -->
+<!-- test: not-equal -->
 ```maxon
 constants Color
   red
@@ -237,7 +218,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-assignment -->
+<!-- test: assignment -->
 ```maxon
 constants Direction
   north
@@ -259,7 +240,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-function-param -->
+<!-- test: function-param -->
 ```maxon
 constants Status
   on
@@ -285,7 +266,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-return-type -->
+<!-- test: return-type -->
 ```maxon
 constants Result
   success
@@ -311,7 +292,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-keyword-as-case-name -->
+<!-- test: keyword-as-case-name -->
 Keywords can be used as constants case names.
 ```maxon
 constants TokenKind
@@ -333,51 +314,66 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-match -->
-Constants can be used in match statements like integers.
+<!-- test: float-backed -->
 ```maxon
-constants Color
-  red
-  green
-  blue
-end 'Color'
+constants Threshold
+  low = 0.1
+  medium = 0.5
+  high = 0.9
+end 'Threshold'
 
 function main() returns ExitCode
-  var c = Color.green
-  var result = match c as int 'check'
-    0 gives 10
-    1 gives 20
-    2 gives 30
-    default gives 0
+  var t = Threshold.medium
+  if t == Threshold.medium 'check'
+    return 1
   end 'check'
-  return result
+  return 0
 end 'main'
 ```
 ```exitcode
-20
+1
 ```
 
-<!-- disabled-test: constants-in-arithmetic -->
-Constants can participate in arithmetic after casting to int.
+<!-- test: string-backed -->
 ```maxon
-constants Offset
-  small = 10
-  medium = 20
-  large = 30
-end 'Offset'
+constants ContentType
+  json = "application/json"
+  html = "text/html"
+  plain = "text/plain"
+end 'ContentType'
 
 function main() returns ExitCode
-  var o = Offset.medium
-  var result = (o as int) + 5
-  return result
+  var ct = ContentType.json
+  if ct == ContentType.json 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
-25
+1
 ```
 
-<!-- disabled-test: constants-top-level -->
-Constants can be used as top-level constant initializers.
+<!-- test: char-backed -->
+```maxon
+constants Escape
+  newline = '\n'
+  tab = '\t'
+end 'Escape'
+
+function main() returns ExitCode
+  var e = Escape.newline
+  if e == Escape.newline 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: top-level-constant -->
 ```maxon
 constants Color
   red
@@ -398,8 +394,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: constants-export -->
-Exported constants can be used from other files.
+<!-- test: export -->
 ```maxon
 // --- file: defs.maxon
 export constants Permission
@@ -411,14 +406,61 @@ end 'Permission'
 // --- file: main.maxon
 function main() returns ExitCode
   var p = Permission.read
-  return p as int
+  if p == Permission.read 'check'
+    return 1
+  end 'check'
+  return 0
 end 'main'
 ```
 ```exitcode
 1
 ```
 
-<!-- disabled-test: error.duplicate-case -->
+<!-- test: match-with-default -->
+```maxon
+constants HttpStatus
+  ok = 200
+  notFound = 404
+  serverError = 500
+end 'HttpStatus'
+
+function main() returns ExitCode
+  var s = HttpStatus.notFound
+  var result = match s 'check'
+    HttpStatus.ok gives 1
+    HttpStatus.notFound gives 2
+    HttpStatus.serverError gives 3
+    default gives 0
+  end 'check'
+  return result
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: string-interpolation -->
+Integer constants interpolate as their backing value, not their case name.
+```maxon
+constants HttpStatus
+  ok = 200
+  notFound = 404
+end 'HttpStatus'
+
+function main() returns ExitCode
+  var s = HttpStatus.notFound
+  var msg = "status: {s}"
+  if msg == "status: 404" 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: error.duplicate-case -->
 ```maxon
 constants Color
   red
@@ -433,7 +475,7 @@ end 'main'
 error E3030: specs/fragments/constants/error.duplicate-case.test:4:3: duplicate constants case: 'red'
 ```
 
-<!-- disabled-test: error.duplicate-value -->
+<!-- test: error.duplicate-value -->
 ```maxon
 constants Status
   ok = 200
@@ -448,35 +490,22 @@ end 'main'
 error E3031: specs/fragments/constants/error.duplicate-value.test:4:3: duplicate raw value: '200'
 ```
 
-<!-- disabled-test: error.non-integer-value-float -->
+<!-- test: error.mixed-backing-types -->
 ```maxon
-constants Weights
-  light = 1.5
-end 'Weights'
+constants Mixed
+  first = 1
+  second = "two"
+end 'Mixed'
 
 function main() returns ExitCode
   return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/constants/error.non-integer-value-float.test:3:3: constants only support integer values: 'got float'
+error E3032: specs/fragments/constants/error.mixed-backing-types.test:4:3: raw value type mismatch: 'expected int, got String'
 ```
 
-<!-- disabled-test: error.non-integer-value-string -->
-```maxon
-constants Names
-  first = "hello"
-end 'Names'
-
-function main() returns ExitCode
-  return 0
-end 'main'
-```
-```maxoncstderr
-error E3032: specs/fragments/constants/error.non-integer-value-string.test:3:3: constants only support integer values: 'got String'
-```
-
-<!-- disabled-test: error.unknown-case -->
+<!-- test: error.unknown-case -->
 ```maxon
 constants Color
   red
