@@ -505,6 +505,147 @@ end 'main'
 error E3032: specs/fragments/constants/error.mixed-backing-types.test:4:3: raw value type mismatch: 'expected int, got String'
 ```
 
+<!-- test: arithmetic-with-int -->
+Integer-backed constants can be used in arithmetic expressions with integers.
+```maxon
+constants Step
+  first
+  second
+  third
+end 'Step'
+
+function main() returns ExitCode
+  let stride = 10
+  let offset = Step.second * stride
+  return offset
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: arithmetic-as-array-index -->
+Integer-backed constants can be used to compute array indices.
+```maxon
+constants Slot
+  a
+  b
+  c
+end 'Slot'
+
+let NUM_SLOTS = 3
+
+function main() returns ExitCode
+  let idx = Slot.b * NUM_SLOTS + Slot.a
+  return idx
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: comparison-with-int -->
+Integer-backed constants can be compared with integer values.
+```maxon
+constants State
+  idle
+  running
+  done
+end 'State'
+
+function main() returns ExitCode
+  var s = State.running
+  if s >= State.idle and s <= State.done 'inRange'
+    return 1
+  end 'inRange'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: float-arithmetic -->
+Float-backed constants can be used in arithmetic with floats.
+```maxon
+constants Weight
+  light = 0.5
+  heavy = 2.0
+end 'Weight'
+
+function main() returns ExitCode
+  let scale = 4.0
+  let result = Weight.light * scale
+  if result == 2.0 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: float-comparison -->
+Float-backed constants can be compared with float values.
+```maxon
+constants Threshold
+  low = 0.1
+  high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+  let val = 0.5
+  if val > Threshold.low and val < Threshold.high 'inRange'
+    return 1
+  end 'inRange'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: string-comparison -->
+String-backed constants can be compared with string values.
+```maxon
+constants ContentType
+  json = "application/json"
+  html = "text/html"
+end 'ContentType'
+
+function main() returns ExitCode
+  let ct = "application/json"
+  if ct == ContentType.json 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: char-comparison -->
+Character-backed constants can be compared with character values.
+```maxon
+constants Escape
+  newline = '\n'
+  tab = '\t'
+end 'Escape'
+
+function main() returns ExitCode
+  let ch = '\n'
+  if ch == Escape.newline 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: error.unknown-case -->
 ```maxon
 constants Color

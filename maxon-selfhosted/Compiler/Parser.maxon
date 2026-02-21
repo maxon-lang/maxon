@@ -142,8 +142,8 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
 
     ops.push(MaxonOp.funcBegin(nameToken.value, returnTypeName))
 
-    pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
-
+    var bodyReturns = false
+    pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath, lastWasReturn: bodyReturns)
 
     ops.push(MaxonOp.funcEnd)
 
@@ -160,15 +160,19 @@ end 'parseFunction'
 // --- Statement parsing ---
 
 // Parse statements until 'end' is reached. Returns the position at the 'end' token.
-function parseStatements(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
+// Sets lastWasReturn to true if the last statement was a return.
+function parseStatements(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String, lastWasReturn bool) returns TokenIndex throws CompileError
     var pos = startPos
+    lastWasReturn = false
     while pos < tokens.count() 'body'
         let stmtToken = tokenAt(tokens, pos: pos)
         if stmtToken.kind == TokenKind.end 'isEnd'
             break
         end 'isEnd'
+        lastWasReturn = false
         if stmtToken.kind == TokenKind.return 'isReturn'
             pos = try parseReturnStatement(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+            lastWasReturn = true
         end 'isReturn' else 'notReturn'
             if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
                 pos = try parseVarDecl(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
@@ -243,10 +247,8 @@ function parseIfStatement(project Project, tokens TokenArray, startPos TokenInde
 
     // Emit then block
     ops.push(MaxonOp.label(thenLabel))
-    pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
-
-    let lastThenOp = try ops.get(ops.count() - 1) otherwise MaxonOp.funcEnd
-    let thenReturns = isReturnOp(lastThenOp)
+    var thenReturns = false
+    pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath, lastWasReturn: thenReturns)
 
     if not thenReturns 'thenNeedsMerge'
         ops.push(MaxonOp.br(mergeLabel))
@@ -276,10 +278,7 @@ function parseIfStatement(project Project, tokens TokenArray, startPos TokenInde
 
         // Emit else block
         ops.push(MaxonOp.label(elseLabel))
-        pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
-
-        let lastElseOp = try ops.get(ops.count() - 1) otherwise MaxonOp.funcEnd
-        elseReturns = isReturnOp(lastElseOp)
+        pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath, lastWasReturn: elseReturns)
 
         if not elseReturns 'elseNeedsMerge'
             ops.push(MaxonOp.br(mergeLabel))
@@ -305,34 +304,6 @@ function parseIfStatement(project Project, tokens TokenArray, startPos TokenInde
 
     return pos
 end 'parseIfStatement'
-
-function isReturnOp(op MaxonOp) returns bool
-    match op 'check'
-        returnOp(retValId) then return true
-        literal(resultId, value) then return false
-        floatLiteral(resultId, rawBits) then return false
-        varDecl(slotId, valueId) then return false
-        varLoad(resultId, slotId) then return false
-        add(resultId, leftId, rightId) then return false
-        sub(resultId, leftId, rightId) then return false
-        mul(resultId, leftId, rightId) then return false
-        cmpEq(resultId, leftId, rightId) then return false
-        cmpNe(resultId, leftId, rightId) then return false
-        cmpLt(resultId, leftId, rightId) then return false
-        cmpLe(resultId, leftId, rightId) then return false
-        cmpGt(resultId, leftId, rightId) then return false
-        cmpGe(resultId, leftId, rightId) then return false
-        floatCmpEq(resultId, leftId, rightId) then return false
-        condBr(condId, tl, el) then return false
-        br(targetLabel) then return false
-        label(name) then return false
-        printLiteral(data) then return false
-        printInt(valueId) then return false
-        funcBegin(name, returnType) then return false
-        funcEnd then return false
-        call(resultId, callee) then return false
-    end 'check'
-end 'isReturnOp'
 
 function nextLabelName(project Project, prefix ByteBuffer) returns ByteArray
     let id = project.nextLabelId_

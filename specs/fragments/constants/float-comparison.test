@@ -1,0 +1,40 @@
+// Test: float-comparison
+constants Threshold
+  low = 0.1
+  high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+  let val = 0.5
+  if val > Threshold.low and val < Threshold.high 'inRange'
+    return 1
+  end 'inRange'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x86.movsd xmm0, [rip+__float_0.5]
+    x86.movsd xmm1, [rip+__float_0.1]
+    x86.ucomisd xmm0, xmm1
+    x86.seta eax
+    x86.movzx eax, eaxb
+    x86.movsd xmm2, [rip+__float_0.9]
+    x86.ucomisd xmm0, xmm2
+    x86.setb ecx
+    x86.movzx ecx, ecxb
+    x86.and eax, ecx
+    x86.test eax, eax
+    x86.je constants.main.inRange_0.after
+  inRange_0:
+    x86.mov eax, 1
+    x86.ret
+  inRange_0.after:
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

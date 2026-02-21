@@ -800,8 +800,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.Globals.Add(new MlirGlobal(deferred.Name, fieldType, defaultValue));
       _globalVars[deferred.Name] = new GlobalVarInfo(kind, true, enumTypeName);
       module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(kind, true, enumTypeName);
-      if (!deferred.IsExported && !_isStdlib)
+      if (!deferred.IsExported && !_isStdlib) {
         module.NonExportedGlobalVarNames.Add(deferred.Name);
+      }
     }
 
     // Register deferred expression vars/lets as globals (initialized at runtime in main)
@@ -810,16 +811,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
       _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: typeName);
       module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName);
-      if (!deferred.IsExported && !_isStdlib)
+      if (!deferred.IsExported && !_isStdlib) {
         module.NonExportedGlobalVarNames.Add(deferred.Name);
+      }
     }
     foreach (var deferred in _deferredExprLets) {
       var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
       _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: typeName);
       module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName);
-      if (!deferred.IsExported && !_isStdlib)
+      if (!deferred.IsExported && !_isStdlib) {
         module.NonExportedGlobalVarNames.Add(deferred.Name);
+      }
     }
   }
 
@@ -970,7 +973,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // Enum/struct reference: Type.case
         if (pos + 2 < _tokens.Count && _tokens[pos + 1].Type == TokenType.Dot) {
           endPos = pos + 3;
-          if (_typeRegistry.TryGetValue(token.Value, out var enumType)) return enumType;
+          if (_typeRegistry.TryGetValue(token.Value, out var enumType)) {
+            // Constants are integer-backed; treat as int so array literals infer as IntArray
+            if (enumType is MlirConstantsType) return MlirType.I64;
+            return enumType;
+          }
         }
         // Struct constructor: TypeName{...}
         if (pos + 1 < _tokens.Count && _tokens[pos + 1].Type == TokenType.LeftBrace
@@ -1866,7 +1873,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               "cannot negate a character raw value", caseToken.Line, caseToken.Column);
           }
 
-          var rawVal = Advance().Value;
+          var rawVal = StringUtils.ResolveEscapes(Advance().Value);
 
           if (backingType == null) {
             backingType = new MlirCharBackingType();
@@ -2071,7 +2078,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           if (isNegative) throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
             "cannot negate a character raw value", caseToken.Line, caseToken.Column);
 
-          var rawVal = Advance().Value;
+          var rawVal = StringUtils.ResolveEscapes(Advance().Value);
 
           if (backingType == null) {
             backingType = new MlirCharBackingType();
@@ -4883,6 +4890,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var defaultKind = DetermineValueKind(defaultValue);
     var expectedKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
 
+    // Coerce integer-backed constants to their backing type when the expected type is numeric.
+    if (defaultKind == MaxonValueKind.Enum && TryCoerceConstantsToBackingType(defaultValue, out var defaultCoerced, out var defaultBackingKind)) {
+      defaultValue = defaultCoerced!;
+      defaultKind = defaultBackingKind;
+    }
+
     // Type-check: otherwise expression must match the success type
     // Allow numeric coercions (int literal to byte/short) and generic type parameters
     if (defaultKind != expectedKind
@@ -7536,6 +7549,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonValue lhsVal = ResolveExprValue(lhs);
       MaxonValue rhsVal = ResolveExprValue(rhs);
 
+      // Coerce string/char-backed constants to their backing struct type so struct
+      // equality/ordering checks below can match them against plain String/Character values.
+      if (lhsVal is MaxonEnum && TryCoerceConstantsToBackingType(lhsVal, out var lhsCoerced, out _) && lhsCoerced is MaxonStruct)
+        lhsVal = lhsCoerced!;
+      if (rhsVal is MaxonEnum && TryCoerceConstantsToBackingType(rhsVal, out var rhsCoerced, out _) && rhsCoerced is MaxonStruct)
+        rhsVal = rhsCoerced!;
+
       // Struct equality/inequality via Equatable interface
       if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne
           && lhsVal is MaxonStruct lhsStruct && rhsVal is MaxonStruct rhsStruct
@@ -9663,6 +9683,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return (lhsKind, lhs, rhs);
     }
 
+    // Integer-backed constants used with their backing type: coerce to raw value.
+    if (lhsKind == MaxonValueKind.Enum && TryCoerceConstantsToBackingType(lhs, out var lhsRaw, out var lhsBackingKind)) {
+      lhs = lhsRaw!; lhsKind = lhsBackingKind;
+    }
+    if (rhsKind == MaxonValueKind.Enum && TryCoerceConstantsToBackingType(rhs, out var rhsRaw, out var rhsBackingKind)) {
+      rhs = rhsRaw!; rhsKind = rhsBackingKind;
+    }
+
+    if (lhsKind == rhsKind) {
+      return (lhsKind, lhs, rhs);
+    }
+
     // Comparisons do not allow implicit int/float promotion
     if (IsComparisonOp(op)) {
       // Allow byte vs int-literal-in-range comparisons
@@ -9685,6 +9717,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     throw new CompileError(ErrorCode.ParserExpectedExpression,
       $"Cannot operate on {KindToTypeName(lhsKind)} and {KindToTypeName(rhsKind)}",
       opToken.Line, opToken.Column);
+  }
+
+  /// <summary>
+  /// If <paramref name="value"/> is a constants-type enum value, emits a raw value extraction
+  /// op and returns the backing kind. Returns false for regular enums.
+  /// String/char-backed constants return MaxonValueKind.Struct (the actual String/Character value).
+  /// </summary>
+  private bool TryCoerceConstantsToBackingType(MaxonValue value, out MaxonValue? raw, out MaxonValueKind backingKind) {
+    raw = null;
+    backingKind = MaxonValueKind.Integer;
+    if (value is not MaxonEnum me) return false;
+    if (!_typeRegistry.TryGetValue(me.TypeName, out var type)) return false;
+    if (type is not MlirConstantsType constantsType) return false;
+    if (constantsType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      backingKind = MaxonValueKind.Struct;
+      raw = EmitEnumRawValueExtraction(_currentBlock!, value, constantsType, me.TypeName, MaxonValueKind.Integer);
+    } else {
+      backingKind = GetEnumBackingKind(constantsType);
+      raw = EmitEnumRawValueExtraction(_currentBlock!, value, constantsType, me.TypeName, backingKind);
+    }
+    return true;
   }
 
   private bool IsSmallIntLiteral(MaxonValue value) {

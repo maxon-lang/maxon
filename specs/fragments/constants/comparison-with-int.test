@@ -1,0 +1,47 @@
+// Test: comparison-with-int
+constants State
+  idle
+  running
+  done
+end 'State'
+
+function main() returns ExitCode
+  var s = State.running
+  if s >= State.idle and s <= State.done 'inRange'
+    return 1
+  end 'inRange'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 1
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-8]
+    x86.cmp edx, ecx
+    x86.setge ebx
+    x86.movzx ebx, ebxb
+    x86.mov esi, 2
+    x86.mov edi, [rbp-8]
+    x86.cmp edi, esi
+    x86.setle r8
+    x86.movzx r8, r8b
+    x86.and ebx, r8
+    x86.test ebx, ebx
+    x86.je constants.main.inRange_0.after
+  inRange_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  inRange_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---
