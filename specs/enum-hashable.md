@@ -253,11 +253,19 @@ function main() returns ExitCode
   setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
   var compilerLevel = getCategoryLevel(LogCategory.compiler)
   var lexerLevel = getCategoryLevel(LogCategory.lexer)
-  if compilerLevel == LogLevel.INFO 'c'
-    if lexerLevel == LogLevel.ERROR 'l'
-      return 1
-    end 'l'
+  var r1 = match compilerLevel 'c'
+    LogLevel.INFO gives true
+    LogLevel.NONE gives false
+    LogLevel.ERROR gives false
   end 'c'
+  var r2 = match lexerLevel 'l'
+    LogLevel.ERROR gives true
+    LogLevel.NONE gives false
+    LogLevel.INFO gives false
+  end 'l'
+  if r1 and r2 'both'
+    return 1
+  end 'both'
   return 0
 end 'main'
 ```

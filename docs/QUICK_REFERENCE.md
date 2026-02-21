@@ -189,7 +189,7 @@ break 'label'    // exits match (or loop) with that label
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
-Enum matches must be exhaustive — `default` is not allowed, all cases must be listed explicitly.
+Enum matches must be exhaustive -- all cases must be listed explicitly. Use `default throws` for non-exhaustive enum matching (see below).
 
 ### Match Expression
 ```maxon
@@ -199,6 +199,26 @@ let result = match value 'label'
     default gives "other"
 end 'label'
 ```
+
+### Default Throws (non-exhaustive enum match)
+```maxon
+// Statement form: throws an error for unmatched cases
+// Enclosing function must declare 'throws ErrorType'
+match shape 'draw'
+    circle(r) then drawCircle(r)
+    square(s) then drawSquare(s)
+    default throws ShapeError.unsupported
+end 'draw'
+
+// Expression form: also throws for unmatched cases
+let desc = match shape 'describe'
+    circle(r) gives "circle"
+    square(s) gives "square"
+    default throws ShapeError.unsupported
+end 'describe'
+```
+
+`default throws` is the only form of `default` allowed on enum matches (E2046). For non-enum matches, `default` with arbitrary code is still valid.
 
 ## Types 
 
@@ -326,12 +346,17 @@ var c = try Result.fromName("success", 42) otherwise Result.pending
 // Methods
 enum Direction
     north
+    south
     function opposite() returns Direction
-        if self == Direction.north 'c' return Direction.south end 'c'
-        return Direction.north
+        return match self 'c'
+            north gives Direction.south
+            south gives Direction.north
+        end 'c'
     end 'opposite'
 end 'Direction'
 ```
+
+Enum values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect enums. This prevents bugs when new cases are added to an enum. Enums auto-conform to `Hashable` internally for Map/Set usage.
 
 ## Error Handling
 

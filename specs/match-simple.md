@@ -435,7 +435,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2044: specs/fragments/match-simple/error.match-enum-default.test:13:3: 'default' is not allowed when matching on enum 'Color', all cases must be listed explicitly
+error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:5: 'default' in a match on enum 'Color' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'
 ```
 
 <!-- test: match-enum.expression -->

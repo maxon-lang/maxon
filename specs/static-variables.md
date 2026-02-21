@@ -287,9 +287,19 @@ end 'Color'
 var current = Color.Green
 
 function main() returns ExitCode
-  if current == Color.Green 'check'
+  var isGreen = match current 'check'
+    Color.Green gives true
+    Color.Red gives false
+    Color.Blue gives false
+  end 'check'
+  if isGreen 'check'
     current = Color.Blue
-    if current == Color.Blue 'check2'
+    var isBlue = match current 'check2'
+      Color.Blue gives true
+      Color.Red gives false
+      Color.Green gives false
+    end 'check2'
+    if isBlue 'check2'
       return 42
     end 'check2'
   end 'check'

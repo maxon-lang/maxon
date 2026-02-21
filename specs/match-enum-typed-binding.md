@@ -71,10 +71,12 @@ function isGreen(p Pixel) returns ExitCode
 end 'isGreen'
 
 function checkColor(c Color) returns ExitCode
-    if c == Color.green 'g'
-        return 1
+    var result = match c 'g'
+        Color.green gives 1
+        Color.red gives 0
+        Color.blue gives 0
     end 'g'
-    return 0
+    return result
 end 'checkColor'
 
 function main() returns ExitCode

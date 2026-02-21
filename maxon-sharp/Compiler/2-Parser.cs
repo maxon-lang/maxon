@@ -6263,7 +6263,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         // Enum pattern: Type.case
         var enumTypeToken = Advance();
         Advance(); // consume '.'
-        var caseNameToken = Expect(TokenType.Identifier);
+        var caseNameToken = ExpectIdentifierLike();
         var patternEnumName = enumTypeToken.Value;
 
         if (enumTypeName == null || patternEnumName != enumTypeName) {
@@ -6858,17 +6858,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Validates enum exhaustiveness - all cases must be covered, default is not allowed.
+  /// Validates enum exhaustiveness — all cases must be covered, or a 'default throws' clause must be present.
+  /// 'default' without 'throws' is not allowed on enums.
   /// </summary>
   private static void ValidateEnumExhaustiveness(
       MlirEnumType? enumType, string? enumTypeName,
-      bool hasDefault, HashSet<string> seenEnumCases, Token errorToken) {
+      bool hasDefaultThrows, HashSet<string> seenEnumCases, Token errorToken) {
     if (enumType == null) return;
-    if (hasDefault) {
-      throw new CompileError(ErrorCode.ParserMatchDefaultWithEnum,
-        $"'default' is not allowed when matching on enum '{enumTypeName}', all cases must be listed explicitly",
-        errorToken.Line, errorToken.Column);
-    }
+    // 'default throws' covers all unmatched cases — no exhaustiveness check needed
+    if (hasDefaultThrows) return;
     var missingCases = enumType.Cases
       .Where(c => !seenEnumCases.Contains(c.Name))
       .Select(c => c.Name)
@@ -6878,6 +6876,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         $"match on enum '{enumTypeName}' is not exhaustive, missing: {string.Join(", ", missingCases)}",
         errorToken.Line, errorToken.Column);
     }
+  }
+
+  /// <summary>
+  /// Parses and emits a 'default throws' case for an enum match.
+  /// The 'throws' token must not yet be consumed. On return, the case is fully emitted
+  /// and the caller should increment caseIndex and continue to the next iteration.
+  /// </summary>
+  private void ParseDefaultThrowsCase(
+      Token defaultToken, string matchLabel, int caseIndex,
+      List<MlirBlock<MaxonOp>?> cmpBlocks, List<MlirBlock<MaxonOp>> caseBlocks,
+      List<bool> caseIsDefault, List<bool>? caseFallthrough) {
+    Advance(); // consume 'throws'
+    var throwLabel = $"{matchLabel}.case{caseIndex}";
+    cmpBlocks.Add(null);
+    var throwBlock = _currentFunction!.Body.AddBlock(throwLabel);
+    _currentBlock = throwBlock;
+    var throwExpr = ParseExpression();
+    var errorValue = ResolveExprValue(throwExpr);
+    if (errorValue is not MaxonEnum enumVal) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, "throws requires an error enum value", defaultToken.Line, defaultToken.Column);
+    }
+    _currentBlock.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+    caseBlocks.Add(throwBlock);
+    caseIsDefault.Add(true);
+    caseFallthrough?.Add(false);
   }
 
   /// <summary>
@@ -6992,10 +7015,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var patterns = new List<MatchPattern>();
 
       if (Check(TokenType.Default)) {
-        Advance(); // consume 'default'
+        var defaultToken = Advance(); // consume 'default'
         isDefault = true;
         hasDefault = true;
         defaultSeen = true;
+
+        // For enum matches, 'default' must be followed by 'throws <error>' — not arbitrary code.
+        // This makes the non-exhaustive path explicit and catchable rather than silently wrong.
+        if (enumType != null) {
+          if (!Check(TokenType.Throws)) {
+            throw new CompileError(ErrorCode.ParserMatchDefaultEnumMustThrow,
+              $"'default' in a match on enum '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              defaultToken.Line, defaultToken.Column);
+          }
+          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough);
+          caseIndex++;
+          SkipNewlines();
+          continue;
+        }
       } else {
         if (defaultSeen) {
           throw new CompileError(ErrorCode.ParserMatchDefaultNotLast,
@@ -7061,7 +7098,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var endToken = ExpectMatchEndLabel(sourceLabel);
     ValidateEnumExhaustiveness(enumType, enumTypeName, hasDefault, seenEnumCases, endToken);
 
-    // Always create merge block - comparison chain needs a valid fallback target
+    // Always create merge block - case bodies that don't terminate branch here
     var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
 
     PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel);
@@ -7128,6 +7165,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var seenEnumCases = new HashSet<string>();
     bool hasDefault = false;
     bool defaultSeen = false;
+    string? resultStructTypeName = null;
 
     int caseIndex = 0;
     while (!Check(TokenType.End) && !IsAtEnd()) {
@@ -7140,10 +7178,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var patterns = new List<MatchPattern>();
 
       if (Check(TokenType.Default)) {
-        Advance(); // consume 'default'
+        var defaultToken = Advance(); // consume 'default'
         isDefault = true;
         hasDefault = true;
         defaultSeen = true;
+
+        // For enum matches, 'default' in an expression match must be followed by 'throws <error>'.
+        if (enumType != null) {
+          if (!Check(TokenType.Throws)) {
+            throw new CompileError(ErrorCode.ParserMatchDefaultEnumMustThrow,
+              $"'default' in a match on enum '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              defaultToken.Line, defaultToken.Column);
+          }
+          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null);
+          caseIndex++;
+          SkipNewlines();
+          continue;
+        }
       } else {
         if (defaultSeen) {
           throw new CompileError(ErrorCode.ParserMatchDefaultNotLast,
@@ -7182,6 +7233,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var caseValue = ResolveExprValue(ParseExpression());
       resultKind = DetermineValueKind(caseValue);
 
+      // Update variable info to reflect the actual result type (may differ from initial Integer placeholder)
+      resultStructTypeName = caseValue is MaxonEnum me ? me.TypeName
+        : caseValue is MaxonStruct ms ? ms.TypeName : null;
+      _variables[resultVarName] = new VarInfo(resultKind, true, caseValue, entryBlock, StructTypeName: resultStructTypeName);
+
       if (Check(TokenType.And)) {
         throw new CompileError(ErrorCode.ParserUnexpectedToken,
           $"unexpected token: '{Current().Value}'",
@@ -7199,20 +7255,32 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var endToken = ExpectMatchEndLabel(sourceLabel);
+
     ValidateEnumExhaustiveness(enumType, enumTypeName, hasDefault, seenEnumCases, endToken);
 
     var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
     PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel);
 
+    _currentBlock = mergeBlock;
+
     _variables.Remove(scrutTempName);
     _variables.Remove(resultVarName);
     if (origEnumTempName != null) _variables.Remove(origEnumTempName);
 
-    _currentBlock = mergeBlock;
-    var resultRef = new MaxonVarRefOp(resultVarName, resultKind);
-    _currentBlock.AddOp(resultRef);
+    MaxonValue resultValue;
+    if (resultKind == MaxonValueKind.Enum && resultStructTypeName != null) {
+      var resultEnumType = (MlirEnumType)_typeRegistry[resultStructTypeName];
+      var resultBackingKind = GetEnumBackingKind(resultEnumType);
+      var enumRef = new MaxonEnumVarRefOp(resultVarName, resultStructTypeName, resultBackingKind);
+      _currentBlock!.AddOp(enumRef);
+      resultValue = enumRef.Result;
+    } else {
+      var resultRef = new MaxonVarRefOp(resultVarName, resultKind);
+      _currentBlock!.AddOp(resultRef);
+      resultValue = resultRef.Result;
+    }
 
-    return new ExprResult.Direct(resultRef.Result);
+    return new ExprResult.Direct(resultValue);
   }
 
   // ============================================================================
@@ -7258,6 +7326,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           && lhsVal is MaxonStruct lhsStruct && rhsVal is MaxonStruct rhsStruct
           && lhsStruct.TypeName == rhsStruct.TypeName) {
         if (_typeRegistry[lhsStruct.TypeName] is MlirStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
+          if (!_isStdlib && _typeRegistry[lhsStruct.TypeName] is MlirEnumType) {
+            var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
+            throw new CompileError(ErrorCode.SemanticEnumNotComparable,
+              $"cannot compare enum values with '{opStr}', use 'match' instead",
+              opToken.Line, opToken.Column);
+          }
           var equalsMethodName = $"{lhsStruct.TypeName}.equals";
           var equalsToken = new Token(TokenType.Identifier, equalsMethodName, opToken.Line, opToken.Column);
           var callOp = CreateFunctionCall(equalsToken, [lhsVal, rhsVal]);
@@ -7313,6 +7387,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         promotedRhs = rhsVal;
       } else {
         (kind, promotedLhs, promotedRhs) = DetermineValueKind(lhsVal, rhsVal, entry.Op, opToken);
+
+        // Enum values cannot be compared with == or != - must use match
+        if (!_isStdlib && kind == MaxonValueKind.Enum && (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne)) {
+          var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
+          throw new CompileError(ErrorCode.SemanticEnumNotComparable,
+            $"cannot compare enum values with '{opStr}', use 'match' instead",
+            opToken.Line, opToken.Column);
+        }
 
         // Enum comparisons use the backing kind (Integer or Float)
         if (kind == MaxonValueKind.Enum) {

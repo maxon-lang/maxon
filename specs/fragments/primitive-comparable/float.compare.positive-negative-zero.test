@@ -3,10 +3,11 @@ function main() returns ExitCode
   var pos = 0.0
   var neg = 0.0 - 0.0
   var result = pos.compare(neg)
-  if result == Ordering.equalTo 'check'
-    return 0
+  match result 'check'
+    Ordering.lessThan then return 1
+    Ordering.equalTo then return 0
+    Ordering.greaterThan then return 1
   end 'check'
-  return 1
 end 'main'
 ---
 ExitCode: 0
@@ -23,18 +24,35 @@ module {
     x86.movsd xmm1, xmm3
     x86.call stdlib.float.compare
     x86.mov [rbp-8], eax
+    x86.jmp primitive-comparable.main.check_0.cmp0
+  check_0.cmp0:
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne primitive-comparable.main.check_0.cmp1
+  check_0.case0:
     x86.mov eax, 1
-    x86.mov ecx, [rbp-8]
-    x86.cmp ecx, eax
-    x86.jne primitive-comparable.main.check_0.after
-  check_0:
+    x86.epilogue
+    x86.ret
+  check_0.cmp1:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne primitive-comparable.main.check_0.cmp2
+  check_0.case1:
     x86.xor eax, eax
     x86.epilogue
     x86.ret
-  check_0.after:
+  check_0.cmp2:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne primitive-comparable.main.check_0.merge
+  check_0.case2:
     x86.mov eax, 1
     x86.epilogue
     x86.ret
+  check_0.merge:
   }
 }
 ---

@@ -91,26 +91,22 @@ enum Direction
   west
 
   function opposite() returns Direction
-    if self == Direction.north 'n'
-      return Direction.south
-    end 'n'
-    if self == Direction.south 's'
-      return Direction.north
-    end 's'
-    if self == Direction.east 'e'
-      return Direction.west
-    end 'e'
-    return Direction.east
+    match self 'check'
+      Direction.north then return Direction.south
+      Direction.south then return Direction.north
+      Direction.east then return Direction.west
+      Direction.west then return Direction.east
+    end 'check'
   end 'opposite'
 
   function isVertical() returns bool
-    if self == Direction.north 'check'
-      return true
+    var result = match self 'check'
+      Direction.north gives true
+      Direction.south gives true
+      Direction.east gives false
+      Direction.west gives false
     end 'check'
-    if self == Direction.south 'check2'
-      return true
-    end 'check2'
-    return false
+    return result
   end 'isVertical'
 end 'Direction'
 ```
@@ -164,10 +160,13 @@ end 'Direction'
 
 function main() returns ExitCode
   var dir = Direction.north
-  if dir == Direction.north 'check'
-    return 1
+  var result = match dir 'check'
+    Direction.north gives 1
+    Direction.south gives 0
+    Direction.east gives 0
+    Direction.west gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -185,10 +184,12 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.red
   c = Color.blue
-  if c == Color.blue 'check'
-    return 1
+  var result = match c 'check'
+    Color.red gives 0
+    Color.green gives 0
+    Color.blue gives 1
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -205,10 +206,12 @@ end 'Status'
 
 function main() returns ExitCode
   var s = Status.pending
-  if s != Status.active 'check'
-    return 1
+  var result = match s 'check'
+    Status.active gives 0
+    Status.pending gives 1
+    Status.done gives 1
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -225,14 +228,11 @@ end 'Status'
 
 function main() returns ExitCode
   var s1 = Status.pending
-  var s2 = Status.pending
-  var s3 = Status.active
-  if s1 == s2 'eq'
-    if s1 != s3 'neq'
-      return 1
-    end 'neq'
-  end 'eq'
-  return 0
+  match s1 'check'
+    Status.pending then return 1
+    Status.active then return 0
+    Status.done then return 0
+  end 'check'
 end 'main'
 ```
 ```exitcode
@@ -247,10 +247,11 @@ enum Status
 end 'Status'
 
 function isOn(s Status) returns bool
-  if s == Status.on 'check'
-    return true
+  var result = match s 'check'
+    Status.on gives true
+    Status.off gives false
   end 'check'
-  return false
+  return result
 end 'isOn'
 
 function main() returns ExitCode
@@ -281,10 +282,11 @@ end 'getResult'
 
 function main() returns ExitCode
   var r = getResult(true)
-  if r == Result.success 'handle'
-    return 1
+  var result = match r 'handle'
+    Result.success gives 1
+    Result.failure gives 0
   end 'handle'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -338,10 +340,11 @@ enum Direction
   south
 
   function isNorth() returns bool
-    if self == Direction.north 'check'
-      return true
+    var result = match self 'check'
+      Direction.north gives true
+      Direction.south gives false
     end 'check'
-    return false
+    return result
   end 'isNorth'
 end 'Direction'
 
@@ -364,20 +367,22 @@ enum Toggle
   off
 
   function flip() returns Toggle
-    if self == Toggle.on 'check'
-      return Toggle.off
+    var result = match self 'check'
+      Toggle.on gives Toggle.off
+      Toggle.off gives Toggle.on
     end 'check'
-    return Toggle.on
+    return result
   end 'flip'
 end 'Toggle'
 
 function main() returns ExitCode
   let t = Toggle.on
   let flipped = t.flip()
-  if flipped == Toggle.off 'check'
-    return 1
+  var result = match flipped 'check'
+    Toggle.off gives 1
+    Toggle.on gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -473,10 +478,12 @@ end 'FloatBacked'
 
 function main() returns ExitCode
   var f = FloatBacked.North
-  if f == FloatBacked.South 'check'
-    return 0
+  var result = match f 'check'
+    FloatBacked.North gives 1
+    FloatBacked.South gives 0
+    FloatBacked.East gives 0
   end 'check'
-  return 1
+  return result
 end 'main'
 ```
 ```exitcode
@@ -595,10 +602,17 @@ end 'TokenType'
 
 function main() returns ExitCode
   var t = TokenType.function
-  if t == TokenType.function 'check'
-    return 1
+  var result = match t 'check'
+    TokenType.function gives 1
+    TokenType.return gives 0
+    TokenType.end gives 0
+    TokenType.if gives 0
+    TokenType.else gives 0
+    TokenType.let gives 0
+    TokenType.var gives 0
+    TokenType.identifier gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode

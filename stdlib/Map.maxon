@@ -87,7 +87,12 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     while probes < capacity 'probe'
       var state = try states.get(index) otherwise SlotState.Empty
 
-      if state == SlotState.Empty 'empty'
+      var isEmpty = match state 'se1'
+        SlotState.Empty gives true
+        SlotState.Occupied gives false
+        SlotState.Deleted gives false
+      end 'se1'
+      if isEmpty 'empty'
         // Empty slot - insert here or at first deleted
         var insertIndex = index
         if firstDeleted >= 0 'use_deleted'
@@ -101,11 +106,21 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
         return
       end 'empty'
 
-      if state == SlotState.Deleted and firstDeleted < 0 'mark_deleted'
+      var isDeleted = match state 'sd1'
+        SlotState.Deleted gives true
+        SlotState.Empty gives false
+        SlotState.Occupied gives false
+      end 'sd1'
+      if isDeleted and firstDeleted < 0 'mark_deleted'
         firstDeleted = index
       end 'mark_deleted'
 
-      if state == SlotState.Occupied 'check_key'
+      var isOccupied = match state 'so1'
+        SlotState.Occupied gives true
+        SlotState.Empty gives false
+        SlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'check_key'
         if let existing = try keys.get(index) 'get_existing'
           if existing == key 'exists'
             // Key already exists - update value
@@ -147,11 +162,21 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     while probes < capacity 'probe'
       var state = try states.get(index) otherwise SlotState.Empty
 
-      if state == SlotState.Empty 'empty'
+      var isEmpty = match state 'se1'
+        SlotState.Empty gives true
+        SlotState.Occupied gives false
+        SlotState.Deleted gives false
+      end 'se1'
+      if isEmpty 'empty'
         throw MapError.keyNotFound
       end 'empty'
 
-      if state == SlotState.Occupied 'check_key'
+      var isOccupied = match state 'so1'
+        SlotState.Occupied gives true
+        SlotState.Empty gives false
+        SlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'check_key'
         if let existing = try keys.get(index) 'get_existing'
           if existing == key 'found'
             if let v = try values.get(index) 'get_value'
@@ -185,11 +210,21 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     while probes < capacity 'probe'
       var state = try states.get(index) otherwise SlotState.Empty
 
-      if state == SlotState.Empty 'empty'
+      var isEmpty = match state 'se1'
+        SlotState.Empty gives true
+        SlotState.Occupied gives false
+        SlotState.Deleted gives false
+      end 'se1'
+      if isEmpty 'empty'
         return false
       end 'empty'
 
-      if state == SlotState.Occupied 'check_key'
+      var isOccupied = match state 'so1'
+        SlotState.Occupied gives true
+        SlotState.Empty gives false
+        SlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'check_key'
         if let existing = try keys.get(index) 'get_existing'
           if existing == key 'found'
             return true
@@ -221,11 +256,21 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     while probes < capacity 'probe'
       var state = try states.get(index) otherwise SlotState.Empty
 
-      if state == SlotState.Empty 'empty'
+      var isEmpty = match state 'se1'
+        SlotState.Empty gives true
+        SlotState.Occupied gives false
+        SlotState.Deleted gives false
+      end 'se1'
+      if isEmpty 'empty'
         return false
       end 'empty'
 
-      if state == SlotState.Occupied 'check_key'
+      var isOccupied = match state 'so1'
+        SlotState.Occupied gives true
+        SlotState.Empty gives false
+        SlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'check_key'
         if let existing = try keys.get(index) 'get_existing'
           if existing == key 'found'
             states.set(index, value: SlotState.Deleted)
@@ -253,7 +298,12 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
       var state = try states.get(iterIndex) otherwise SlotState.Empty
       var idx = iterIndex
       iterIndex = iterIndex + 1
-      if state == SlotState.Occupied 'occupied'
+      var isOccupied = match state 'so1'
+        SlotState.Occupied gives true
+        SlotState.Empty gives false
+        SlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'occupied'
         var k = try keys.get(idx) otherwise 'get_k'
         throw IterationError.exhausted
         end 'get_k'
@@ -304,7 +354,12 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     while i < oldCapacity 'rehash'
       var state = try oldStates.get(i) otherwise SlotState.Empty
 
-      if state == SlotState.Occupied 'occupied'
+      var isOccupied = match state 'so1'
+        SlotState.Occupied gives true
+        SlotState.Empty gives false
+        SlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'occupied'
         var key = try oldKeys.get(i) otherwise 'skip_key'
         i = i + 1
         continue 'rehash'

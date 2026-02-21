@@ -79,7 +79,12 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
     while probes < capacity 'probe'
       var state = try states.get(index) otherwise SetSlotState.Empty
 
-      if state == SetSlotState.Empty 'empty'
+      var isEmpty = match state 'se1'
+        SetSlotState.Empty gives true
+        SetSlotState.Occupied gives false
+        SetSlotState.Deleted gives false
+      end 'se1'
+      if isEmpty 'empty'
         // Empty slot - insert here or at first deleted
         var insertIndex = index
         if firstDeleted >= 0 'use_deleted'
@@ -92,11 +97,21 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
         return
       end 'empty'
 
-      if state == SetSlotState.Deleted and firstDeleted < 0 'mark_deleted'
+      var isDeleted = match state 'sd1'
+        SetSlotState.Deleted gives true
+        SetSlotState.Empty gives false
+        SetSlotState.Occupied gives false
+      end 'sd1'
+      if isDeleted and firstDeleted < 0 'mark_deleted'
         firstDeleted = index
       end 'mark_deleted'
 
-      if state == SetSlotState.Occupied 'check_exists'
+      var isOccupied = match state 'so1'
+        SetSlotState.Occupied gives true
+        SetSlotState.Empty gives false
+        SetSlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'check_exists'
         if let existing = try elements.get(index) 'get_existing'
           if existing == element 'exists'
             // Element already exists - no-op for sets
@@ -136,11 +151,21 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
     while probes < capacity 'probe'
       var state = try states.get(index) otherwise SetSlotState.Empty
 
-      if state == SetSlotState.Empty 'empty'
+      var isEmpty = match state 'se1'
+        SetSlotState.Empty gives true
+        SetSlotState.Occupied gives false
+        SetSlotState.Deleted gives false
+      end 'se1'
+      if isEmpty 'empty'
         return false
       end 'empty'
 
-      if state == SetSlotState.Occupied 'check_found'
+      var isOccupied = match state 'so1'
+        SetSlotState.Occupied gives true
+        SetSlotState.Empty gives false
+        SetSlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'check_found'
         if let existing = try elements.get(index) 'get_existing'
           if existing == element 'found'
             return true
@@ -172,11 +197,21 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
     while probes < capacity 'probe'
       var state = try states.get(index) otherwise SetSlotState.Empty
 
-      if state == SetSlotState.Empty 'empty'
+      var isEmpty = match state 'se1'
+        SetSlotState.Empty gives true
+        SetSlotState.Occupied gives false
+        SetSlotState.Deleted gives false
+      end 'se1'
+      if isEmpty 'empty'
         return false
       end 'empty'
 
-      if state == SetSlotState.Occupied 'check_found'
+      var isOccupied = match state 'so1'
+        SetSlotState.Occupied gives true
+        SetSlotState.Empty gives false
+        SetSlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'check_found'
         if let existing = try elements.get(index) 'get_existing'
           if existing == element 'found'
             states.set(index, value: SetSlotState.Deleted)
@@ -204,7 +239,12 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
       var state = try states.get(iterIndex) otherwise SetSlotState.Empty
       var idx = iterIndex
       iterIndex = iterIndex + 1
-      if state == SetSlotState.Occupied 'occupied'
+      var isOccupied = match state 'so1'
+        SetSlotState.Occupied gives true
+        SetSlotState.Empty gives false
+        SetSlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'occupied'
         if let elem = try elements.get(idx) 'get_elem'
           return elem
         end 'get_elem'
@@ -247,7 +287,12 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
     while i < oldCapacity 'rehash'
       var state = try oldStates.get(i) otherwise SetSlotState.Empty
 
-      if state == SetSlotState.Occupied 'occupied'
+      var isOccupied = match state 'so1'
+        SetSlotState.Occupied gives true
+        SetSlotState.Empty gives false
+        SetSlotState.Deleted gives false
+      end 'so1'
+      if isOccupied 'occupied'
         // Re-insert into new arrays using insert logic
         if let element = try oldElements.get(i) 'get_elem'
           var hash = element.hash()
@@ -258,9 +303,19 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
           // Find empty slot (no deleted slots in fresh array)
           var currentState = try states.get(index) otherwise SetSlotState.Empty
-          while currentState != SetSlotState.Empty 'find_slot'
+          var isNotEmpty = match currentState 'se1'
+            SetSlotState.Empty gives false
+            SetSlotState.Occupied gives true
+            SetSlotState.Deleted gives true
+          end 'se1'
+          while isNotEmpty 'find_slot'
             index = (index + 1) mod newCapacity
             currentState = try states.get(index) otherwise SetSlotState.Empty
+            isNotEmpty = match currentState 'se2'
+              SetSlotState.Empty gives false
+              SetSlotState.Occupied gives true
+              SetSlotState.Deleted gives true
+            end 'se2'
           end 'find_slot'
 
           elements.set(index, value: element)

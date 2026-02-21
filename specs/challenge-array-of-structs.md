@@ -95,7 +95,7 @@ end 'main'
 
 <!-- test: array-of-structs-enum-for-in-loop -->
 ```maxon
-// Regression test: enum comparison works in for-in loop over struct array
+// Regression test: enum match works in for-in loop over struct array
 enum Status
   pending
   active
@@ -116,8 +116,10 @@ function main() returns ExitCode
 
   var activeCount = 0
   for task in tasks 'loop'
-    if task.status == Status.active 'check'
-      activeCount = activeCount + 1
+    match task.status 'check'
+      Status.active then activeCount = activeCount + 1
+      Status.pending then activeCount = activeCount
+      Status.done then activeCount = activeCount
     end 'check'
   end 'loop'
 

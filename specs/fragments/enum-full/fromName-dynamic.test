@@ -12,10 +12,12 @@ end 'getName'
 function main() returns ExitCode
   var name = getName()
   var color = try Color.fromName(name) otherwise Color.red
-  if color == Color.green 'check'
-    return 1
+  var result = match color 'check'
+    Color.green gives 1
+    Color.red gives 0
+    Color.blue gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ---
 ExitCode: 1
@@ -60,7 +62,7 @@ module {
   }
   func @enum-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=112
+    x86.prologue stack_size=144
     x86.call enum-full.getName
     x86.mov [rbp-8], eax
     x86.mov eax, [rbp-8]
@@ -78,9 +80,9 @@ module {
     x86.cmp edi, eax
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov [rbp-48], edx
-    x86.mov [rbp-56], ebx
-    x86.mov [rbp-64], edi
+    x86.mov [rbp-72], edx
+    x86.mov [rbp-80], ebx
+    x86.mov [rbp-88], edi
     x86.mov rdx, rcx
     x86.mov r8, rax
     x86.mov rcx, rbx
@@ -89,7 +91,7 @@ module {
     x86.cmp eax, ecx
     x86.sete eax
     x86.movzx eax, eaxb
-    x86.mov ecx, [rbp-48]
+    x86.mov ecx, [rbp-72]
     x86.and ecx, eax
     x86.xor eax, eax
     x86.mov edx, 1
@@ -104,60 +106,60 @@ module {
     x86.lea_rdata rax, [__str_8]
     x86.mov rcx, rax
     x86.mov eax, 5
-    x86.mov edx, [rbp-64]
+    x86.mov edx, [rbp-88]
     x86.cmp edx, eax
     x86.sete edi
     x86.movzx edi, edib
-    x86.mov [rbp-72], ebx
-    x86.mov [rbp-80], esi
-    x86.mov [rbp-88], edi
+    x86.mov [rbp-96], ebx
+    x86.mov [rbp-104], esi
+    x86.mov [rbp-112], edi
     x86.mov rdx, rcx
     x86.mov r8, rax
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-80]
     x86.call maxon_memcmp
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.sete eax
     x86.movzx eax, eaxb
-    x86.mov ecx, [rbp-88]
+    x86.mov ecx, [rbp-112]
     x86.and ecx, eax
     x86.xor eax, eax
-    x86.mov edx, [rbp-72]
+    x86.mov edx, [rbp-96]
     x86.test ecx, ecx
     x86.mov ebx, edx
     x86.cmovne ebx, eax
     x86.mov eax, 1
-    x86.mov edx, [rbp-80]
+    x86.mov edx, [rbp-104]
     x86.test ecx, ecx
     x86.mov esi, edx
     x86.cmovne esi, eax
     x86.lea_rdata rax, [__enum_fn_Color_blue_55]
     x86.mov rcx, rax
     x86.mov eax, 4
-    x86.mov edx, [rbp-64]
+    x86.mov edx, [rbp-88]
     x86.cmp edx, eax
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov [rbp-96], edx
-    x86.mov [rbp-104], ebx
-    x86.mov [rbp-112], esi
+    x86.mov [rbp-120], edx
+    x86.mov [rbp-128], ebx
+    x86.mov [rbp-136], esi
     x86.mov rdx, rcx
     x86.mov r8, rax
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-80]
     x86.call maxon_memcmp
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.sete eax
     x86.movzx eax, eaxb
-    x86.mov ecx, [rbp-96]
+    x86.mov ecx, [rbp-120]
     x86.and ecx, eax
     x86.xor eax, eax
-    x86.mov edx, [rbp-104]
+    x86.mov edx, [rbp-128]
     x86.test ecx, ecx
     x86.mov ebx, edx
     x86.cmovne ebx, eax
     x86.mov eax, 2
-    x86.mov edx, [rbp-112]
+    x86.mov edx, [rbp-136]
     x86.test ecx, ecx
     x86.mov esi, edx
     x86.cmovne esi, eax
@@ -174,16 +176,58 @@ module {
   otherwise_default_continue_3:
     x86.mov eax, [rbp-32]
     x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-40]
+    x86.xor edx, edx
+    x86.mov [rbp-48], edx
+    x86.mov [rbp-56], ecx
+    x86.jmp enum-full.main.check_4.cmp0
+  check_4.cmp0:
+    x86.mov eax, [rbp-56]
     x86.mov ecx, 1
-    x86.mov edx, [rbp-40]
-    x86.cmp edx, ecx
-    x86.jne enum-full.main.check_4.after
-  check_4:
+    x86.cmp eax, ecx
+    x86.jne enum-full.main.check_4.cmp1
+  check_4.case0:
     x86.mov eax, 1
-    x86.epilogue
-    x86.ret
-  check_4.after:
+    x86.mov [rbp-48], eax
+    x86.jmp enum-full.main.check_4.merge
+  check_4.cmp1:
+    x86.mov eax, [rbp-56]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne enum-full.main.check_4.cmp2
+  check_4.case1:
     x86.xor eax, eax
+    x86.mov [rbp-48], eax
+    x86.jmp enum-full.main.check_4.merge
+  check_4.cmp2:
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne enum-full.main.check_4.merge
+  check_4.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-48], eax
+    x86.jmp enum-full.main.check_4.merge
+  check_4.merge:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je enum-full.main.__range_ok_5
+  __range_panic_5:
+    x86.lea_symdata rax, [__panic_msg_40]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_5:
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

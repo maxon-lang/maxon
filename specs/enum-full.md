@@ -205,18 +205,6 @@ var extracted = match container 'get'
 end 'get'
 ```
 
-### Comparing Enum Values
-
-Enum values can be compared for equality using `==` and `!=`:
-
-```maxon
-if dir == Direction.north 'check'
-  // handle north
-end 'check'
-```
-
-For enums with associated values, `==` compares both the case and the associated values.
-
 ### Enum Methods
 
 Enums can have methods, similar to structs:
@@ -229,26 +217,22 @@ enum Direction
   west
 
   function opposite() returns Direction
-    if self == Direction.north 'n'
-      return Direction.south
-    end 'n'
-    if self == Direction.south 's'
-      return Direction.north
-    end 's'
-    if self == Direction.east 'e'
-      return Direction.west
-    end 'e'
-    return Direction.east
+    match self 'check'
+      Direction.north then return Direction.south
+      Direction.south then return Direction.north
+      Direction.east then return Direction.west
+      Direction.west then return Direction.east
+    end 'check'
   end 'opposite'
 
   function isVertical() returns bool
-    if self == Direction.north 'check'
-      return true
+    var result = match self 'check'
+      Direction.north gives true
+      Direction.south gives true
+      Direction.east gives false
+      Direction.west gives false
     end 'check'
-    if self == Direction.south 'check2'
-      return true
-    end 'check2'
-    return false
+    return result
   end 'isVertical'
 end 'Direction'
 ```
@@ -286,7 +270,7 @@ enum HttpStatus
 end 'HttpStatus'
 
 var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
-// status == HttpStatus.notFound
+// status is HttpStatus.notFound
 ```
 
 Works with all backing types (int, float, String, Character):
@@ -298,7 +282,7 @@ enum Planet
 end 'Planet'
 
 var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
-// p == Planet.mars
+// p is Planet.mars
 ```
 
 Note: `fromRawValue` is not available for enums with associated values.
@@ -316,10 +300,13 @@ end 'Direction'
 
 function main() returns ExitCode
   var dir = Direction.north
-  if dir == Direction.north 'check'
-    return 1
+  var result = match dir 'check'
+    Direction.north gives 1
+    Direction.south gives 0
+    Direction.east gives 0
+    Direction.west gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -337,10 +324,12 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.red
   c = Color.blue
-  if c == Color.blue 'check'
-    return 1
+  var result = match c 'check'
+    Color.red gives 0
+    Color.green gives 0
+    Color.blue gives 1
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -357,10 +346,12 @@ end 'Status'
 
 function main() returns ExitCode
   var s = Status.pending
-  if s != Status.active 'check'
-    return 1
+  var result = match s 'check'
+    Status.active gives 0
+    Status.pending gives 1
+    Status.done gives 1
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -377,14 +368,11 @@ end 'Status'
 
 function main() returns ExitCode
   var s1 = Status.pending
-  var s2 = Status.pending
-  var s3 = Status.active
-  if s1 == s2 'eq'
-    if s1 != s3 'neq'
-      return 1
-    end 'neq'
-  end 'eq'
-  return 0
+  match s1 'check'
+    Status.pending then return 1
+    Status.active then return 0
+    Status.done then return 0
+  end 'check'
 end 'main'
 ```
 ```exitcode
@@ -399,10 +387,11 @@ enum Status
 end 'Status'
 
 function isOn(s Status) returns bool
-  if s == Status.on 'check'
-    return true
+  var result = match s 'check'
+    Status.on gives true
+    Status.off gives false
   end 'check'
-  return false
+  return result
 end 'isOn'
 
 function main() returns ExitCode
@@ -433,10 +422,11 @@ end 'getResult'
 
 function main() returns ExitCode
   var r = getResult(true)
-  if r == Result.success 'handle'
-    return 1
+  var result = match r 'handle'
+    Result.success gives 1
+    Result.failure gives 0
   end 'handle'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -496,12 +486,10 @@ end 'Container'
 
 function main() returns ExitCode
   var c = Container.value(42)
-  var e = Container.empty
-  // Construction works - verify by checking tags are different
-  if c != e 'check'
-    return 1
+  match c 'check'
+    value(n) then return 1
+    empty then return 0
   end 'check'
-  return 0
 end 'main'
 ```
 ```exitcode
@@ -741,10 +729,11 @@ enum Direction
   south
 
   function isNorth() returns bool
-    if self == Direction.north 'check'
-      return true
+    var result = match self 'check'
+      Direction.north gives true
+      Direction.south gives false
     end 'check'
-    return false
+    return result
   end 'isNorth'
 end 'Direction'
 
@@ -767,20 +756,22 @@ enum Toggle
   off
 
   function flip() returns Toggle
-    if self == Toggle.on 'check'
-      return Toggle.off
+    var result = match self 'check'
+      Toggle.on gives Toggle.off
+      Toggle.off gives Toggle.on
     end 'check'
-    return Toggle.on
+    return result
   end 'flip'
 end 'Toggle'
 
 function main() returns ExitCode
   let t = Toggle.on
   let flipped = t.flip()
-  if flipped == Toggle.off 'check'
-    return 1
+  var result = match flipped 'check'
+    Toggle.off gives 1
+    Toggle.on gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1042,10 +1033,12 @@ end 'StringBacked'
 
 function main() returns ExitCode
   var dir = StringBacked.North
-  if dir == StringBacked.South 'check'
-    return 0
+  var result = match dir 'check'
+    StringBacked.North gives 1
+    StringBacked.South gives 0
+    StringBacked.East gives 0
   end 'check'
-  return 1
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1062,10 +1055,12 @@ end 'CharBacked'
 
 function main() returns ExitCode
   var dir = CharBacked.N
-  if dir == CharBacked.S 'check'
-    return 0
+  var result = match dir 'check'
+    CharBacked.N gives 1
+    CharBacked.S gives 0
+    CharBacked.E gives 0
   end 'check'
-  return 1
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1082,10 +1077,12 @@ end 'Direction'
 
 function main() returns ExitCode
   var d = Direction.North
-  if d == Direction.South 'check'
-    return 0
+  var result = match d 'check'
+    Direction.North gives 1
+    Direction.South gives 0
+    Direction.East gives 0
   end 'check'
-  return 1
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1102,10 +1099,12 @@ end 'FloatBacked'
 
 function main() returns ExitCode
   var f = FloatBacked.North
-  if f == FloatBacked.South 'check'
-    return 0
+  var result = match f 'check'
+    FloatBacked.North gives 1
+    FloatBacked.South gives 0
+    FloatBacked.East gives 0
   end 'check'
-  return 1
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1561,10 +1560,13 @@ end 'Direction'
 
 function main() returns ExitCode
   var dir = try Direction.fromName("south") otherwise Direction.north
-  if dir == Direction.south 'check'
-    return 1
+  var result = match dir 'check'
+    Direction.south gives 1
+    Direction.north gives 0
+    Direction.east gives 0
+    Direction.west gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1585,10 +1587,11 @@ end 'getInvalidName'
 function main() returns ExitCode
   var name = getInvalidName()
   var dir = try Direction.fromName(name) otherwise Direction.north
-  if dir == Direction.north 'check'
-    return 1
+  var result = match dir 'check'
+    Direction.north gives 1
+    Direction.south gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1629,10 +1632,12 @@ end 'getName'
 function main() returns ExitCode
   var name = getName()
   var color = try Color.fromName(name) otherwise Color.red
-  if color == Color.green 'check'
-    return 1
+  var result = match color 'check'
+    Color.green gives 1
+    Color.red gives 0
+    Color.blue gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1754,10 +1759,12 @@ end 'Color'
 
 function main() returns ExitCode
   var c = try Color.fromRawValue(1) otherwise Color.red
-  if c == Color.green 'check'
-    return 1
+  var result = match c 'check'
+    Color.green gives 1
+    Color.red gives 0
+    Color.blue gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1774,10 +1781,12 @@ end 'HttpStatus'
 
 function main() returns ExitCode
   var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
-  if status == HttpStatus.notFound 'check'
-    return 1
+  var result = match status 'check'
+    HttpStatus.notFound gives 1
+    HttpStatus.ok gives 0
+    HttpStatus.serverError gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1794,10 +1803,12 @@ end 'Weights'
 
 function main() returns ExitCode
   var w = try Weights.fromRawValue(2.5) otherwise Weights.light
-  if w == Weights.medium 'check'
-    return 1
+  var result = match w 'check'
+    Weights.medium gives 1
+    Weights.light gives 0
+    Weights.heavy gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1813,10 +1824,11 @@ end 'Planet'
 
 function main() returns ExitCode
   var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
-  if p == Planet.mars 'check'
-    return 1
+  var result = match p 'check'
+    Planet.mars gives 1
+    Planet.earth gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1833,10 +1845,12 @@ end 'Grade'
 
 function main() returns ExitCode
   var g = try Grade.fromRawValue('B') otherwise Grade.average
-  if g == Grade.good 'check'
-    return 1
+  var result = match g 'check'
+    Grade.good gives 1
+    Grade.excellent gives 0
+    Grade.average gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1860,10 +1874,11 @@ end 'getCode'
 function main() returns ExitCode
   var code = getCode()
   var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
-  if status == HttpStatus.notFound 'check'
-    return 1
+  var result = match status 'check'
+    HttpStatus.notFound gives 1
+    HttpStatus.ok gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode
@@ -1887,10 +1902,11 @@ end 'getCode'
 function main() returns ExitCode
   var code = getCode()
   var status = try HttpStatus.fromRawValue(code) otherwise HttpStatus.ok
-  if status == HttpStatus.ok 'check'
-    return 1
+  var result = match status 'check'
+    HttpStatus.ok gives 1
+    HttpStatus.notFound gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ```
 ```exitcode

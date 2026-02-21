@@ -7,14 +7,11 @@ end 'Status'
 
 function main() returns ExitCode
   var s1 = Status.pending
-  var s2 = Status.pending
-  var s3 = Status.active
-  if s1 == s2 'eq'
-    if s1 != s3 'neq'
-      return 1
-    end 'neq'
-  end 'eq'
-  return 0
+  match s1 'check'
+    Status.pending then return 1
+    Status.active then return 0
+    Status.done then return 0
+  end 'check'
 end 'main'
 ---
 ExitCode: 1
@@ -22,32 +19,38 @@ ExitCode: 1
 module {
   func @enum-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.xor eax, eax
     x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov edx, 1
-    x86.mov [rbp-24], edx
-    x86.mov ebx, [rbp-8]
-    x86.mov esi, [rbp-16]
-    x86.cmp ebx, esi
-    x86.jne enum-full.main.eq_0.merge
-  eq_0:
+    x86.jmp enum-full.main.check_0.cmp0
+  check_0.cmp0:
     x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-24]
+    x86.xor ecx, ecx
     x86.cmp eax, ecx
-    x86.je enum-full.main.neq_1.after
-  neq_1:
+    x86.jne enum-full.main.check_0.cmp1
+  check_0.case0:
     x86.mov eax, 1
     x86.epilogue
     x86.ret
-  neq_1.after:
-    x86.jmp enum-full.main.eq_0.merge
-  eq_0.merge:
+  check_0.cmp1:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne enum-full.main.check_0.cmp2
+  check_0.case1:
     x86.xor eax, eax
     x86.epilogue
     x86.ret
+  check_0.cmp2:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne enum-full.main.check_0.merge
+  check_0.case2:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.merge:
   }
 }
 ---

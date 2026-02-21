@@ -903,16 +903,24 @@ end 'check'
 
 ### Comparing Enum Values
 
-Enum values can be compared for equality using `==` and `!=`:
+Enum values cannot be compared using `==` or `!=` (error E3066). The only way to inspect an enum value is through `match`. This restriction exists to prevent a class of bugs that happen when a new value is added to an enum that is unaccounted for and code that handles the enum either falls through or uses a default value that is wrong.
 
 ```maxon
 var dir = Direction.north
-if dir == Direction.north 'check'
+if dir == Direction.north 'check'    // ERROR E3066: Cannot compare enum values
     print("Going north!")
+end 'check'
+
+// Use match instead
+match dir 'check'
+    north then print("Going north!")
+    south then print("Going south!")
+    east then print("Going east!")
+    west then print("Going west!")
 end 'check'
 ```
 
-For enums with associated values, `==` compares both the case and the associated values.
+Enums still auto-conform to `Hashable` internally, so they can be used as `Map` keys and `Set` elements. However, users cannot call `==` or `!=` on enum values directly.
 
 ### Creating Enums from Names (`fromName`)
 
@@ -968,10 +976,10 @@ enum Direction
     south
 
     function opposite() returns Direction
-        if self == Direction.north 'check'
-            return Direction.south
+        return match self 'check'
+            north gives Direction.south
+            south gives Direction.north
         end 'check'
-        return Direction.north
     end 'opposite'
 end 'Direction'
 ```
@@ -994,17 +1002,17 @@ enum Status
 end 'Status'
 
 function isOn(s Status) returns bool
-    if s == Status.on 'check'
-        return true
+    return match s 'check'
+        on gives true
+        off gives false
     end 'check'
-    return false
 end 'isOn'
 
 function toggle(s Status) returns Status
-    if s == Status.on 'check'
-        return Status.off
+    return match s 'check'
+        on gives Status.off
+        off gives Status.on
     end 'check'
-    return Status.on
 end 'toggle'
 ```
 
@@ -1738,7 +1746,7 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums, all cases must be covered explicitly — `default` is not allowed
+- For enums, all cases must be covered explicitly (error E2026) — `default` with arbitrary code is not allowed (error E2046). Use `default throws` for non-exhaustive enum matching (see below).
 - `default` matches any non-enum value not matched by previous patterns
 - `default` must be the last case if present
 - Enum case patterns: `CaseName(binding1, binding2)` extracts associated values
@@ -1833,6 +1841,76 @@ end 'get'
 - `and fallthrough` is NOT allowed in match expressions
 - Block identifier required
 - Enum bindings work the same as in match statements
+
+### Default Throws in Enum Match
+
+When matching on an enum, all cases must normally be covered explicitly (exhaustive matching). To handle only a subset of cases, use `default throws` to specify an error to throw for unmatched cases. This makes non-exhaustive matching explicit and produces a catchable error rather than a silent panic.
+
+The `default throws` clause throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature.
+
+**Statement Form:**
+
+```maxon
+function handleShape(shape Shape) throws ShapeError
+    match shape 'draw'
+        circle(r) then drawCircle(r)
+        square(s) then drawSquare(s)
+        default throws ShapeError.unsupported
+    end 'draw'
+end 'handleShape'
+```
+
+If `shape` is `triangle`, the function throws `ShapeError.unsupported`, which the caller must handle with `try`.
+
+**Expression Form:**
+
+```maxon
+function describeShape(shape Shape) returns String throws ShapeError
+    let desc = match shape 'describe'
+        circle(r) gives "circle with radius {r}"
+        square(s) gives "square with side {s}"
+        default throws ShapeError.unsupported
+    end 'describe'
+    return desc
+end 'describeShape'
+```
+
+**Example:**
+
+```maxon
+enum Shape
+    circle(radius float)
+    square(side float)
+    triangle(base float, height float)
+end 'Shape'
+
+enum ShapeError implements Error
+    unsupported
+end 'ShapeError'
+
+function getArea(shape Shape) returns float throws ShapeError
+    return match shape 'calc'
+        circle(r) gives 3.14159 * r * r
+        square(s) gives s * s
+        default throws ShapeError.unsupported
+    end 'calc'
+end 'getArea'
+
+function main() returns ExitCode
+    var shape = Shape.circle(5.0)
+    let area = try getArea(shape) otherwise 0.0
+    print("{area}")
+    return 0
+end 'main'
+```
+
+**Notes:**
+- `default throws` is the only form of `default` allowed in enum matches -- `default` with arbitrary code on enums is forbidden (error E2046)
+- The error value must be a valid enum case of an `Error`-conforming type
+- The enclosing function must declare `throws` with a matching error type
+- Callers must handle the thrown error using `try ... otherwise` or `try` propagation
+- Supports all the same features as regular match: associated value extraction, `and fallthrough`, `break`, etc.
+- For non-enum matches, `default` with arbitrary code remains valid as before
 
 ### Break Statement
 ```maxon

@@ -6,10 +6,11 @@ end 'Planet'
 
 function main() returns ExitCode
   var p = try Planet.fromRawValue("Mars") otherwise Planet.earth
-  if p == Planet.mars 'check'
-    return 1
+  var result = match p 'check'
+    Planet.mars gives 1
+    Planet.earth gives 0
   end 'check'
-  return 0
+  return result
 end 'main'
 ---
 ExitCode: 1
@@ -17,17 +18,17 @@ ExitCode: 1
 module {
   func @enum-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=112
+    x86.prologue stack_size=128
     x86.lea_rdata rax, [__str_8]
     x86.mov rcx, rax
     x86.mov edx, 4
     x86.mov ebx, 32
-    x86.mov [rbp-56], ecx
+    x86.mov [rbp-80], ecx
     x86.mov rcx, rbx
     x86.call maxon_alloc
     x86.mov [rbp-8], eax
     x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-56]
+    x86.mov edi, [rbp-80]
     x86.mov [esi+0], edi
     x86.mov r8, [rbp-8]
     x86.mov r9, 4
@@ -63,9 +64,9 @@ module {
     x86.cmp edx, esi
     x86.sete r8
     x86.movzx r8, r8b
-    x86.mov [rbp-64], ecx
-    x86.mov [rbp-72], edx
-    x86.mov [rbp-80], r8
+    x86.mov [rbp-88], ecx
+    x86.mov [rbp-96], edx
+    x86.mov [rbp-104], r8
     x86.mov rdx, rdi
     x86.mov r8, rsi
     x86.call maxon_memcmp
@@ -73,7 +74,7 @@ module {
     x86.cmp eax, ecx
     x86.sete eax
     x86.movzx eax, eaxb
-    x86.mov ecx, [rbp-80]
+    x86.mov ecx, [rbp-104]
     x86.and ecx, eax
     x86.xor eax, eax
     x86.mov edx, 1
@@ -88,30 +89,30 @@ module {
     x86.lea_rdata rax, [__str_8]
     x86.mov rcx, rax
     x86.mov eax, 4
-    x86.mov edx, [rbp-72]
+    x86.mov edx, [rbp-96]
     x86.cmp edx, eax
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov [rbp-88], edx
-    x86.mov [rbp-96], ebx
-    x86.mov [rbp-104], esi
+    x86.mov [rbp-112], edx
+    x86.mov [rbp-120], ebx
+    x86.mov [rbp-128], esi
     x86.mov rdx, rcx
     x86.mov r8, rax
-    x86.mov rcx, [rbp-64]
+    x86.mov rcx, [rbp-88]
     x86.call maxon_memcmp
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.sete eax
     x86.movzx eax, eaxb
-    x86.mov ecx, [rbp-88]
+    x86.mov ecx, [rbp-112]
     x86.and ecx, eax
     x86.xor eax, eax
-    x86.mov edx, [rbp-96]
+    x86.mov edx, [rbp-120]
     x86.test ecx, ecx
     x86.mov ebx, edx
     x86.cmovne ebx, eax
     x86.mov eax, 1
-    x86.mov edx, [rbp-104]
+    x86.mov edx, [rbp-128]
     x86.test ecx, ecx
     x86.mov esi, edx
     x86.cmovne esi, eax
@@ -128,16 +129,49 @@ module {
   otherwise_default_continue_3:
     x86.mov eax, [rbp-40]
     x86.mov [rbp-48], eax
+    x86.mov ecx, [rbp-48]
+    x86.xor edx, edx
+    x86.mov [rbp-56], edx
+    x86.mov [rbp-64], ecx
+    x86.jmp enum-full.main.check_4.cmp0
+  check_4.cmp0:
+    x86.mov eax, [rbp-64]
     x86.mov ecx, 1
-    x86.mov edx, [rbp-48]
-    x86.cmp edx, ecx
-    x86.jne enum-full.main.check_4.after
-  check_4:
+    x86.cmp eax, ecx
+    x86.jne enum-full.main.check_4.cmp1
+  check_4.case0:
     x86.mov eax, 1
-    x86.epilogue
-    x86.ret
-  check_4.after:
+    x86.mov [rbp-56], eax
+    x86.jmp enum-full.main.check_4.merge
+  check_4.cmp1:
+    x86.mov eax, [rbp-64]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne enum-full.main.check_4.merge
+  check_4.case1:
     x86.xor eax, eax
+    x86.mov [rbp-56], eax
+    x86.jmp enum-full.main.check_4.merge
+  check_4.merge:
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-72], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je enum-full.main.__range_ok_5
+  __range_panic_5:
+    x86.lea_symdata rax, [__panic_msg_34]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_5:
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }

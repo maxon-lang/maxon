@@ -28,11 +28,19 @@ function main() returns ExitCode
   setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
   var compilerLevel = getCategoryLevel(LogCategory.compiler)
   var lexerLevel = getCategoryLevel(LogCategory.lexer)
-  if compilerLevel == LogLevel.INFO 'c'
-    if lexerLevel == LogLevel.ERROR 'l'
-      return 1
-    end 'l'
+  var r1 = match compilerLevel 'c'
+    LogLevel.INFO gives true
+    LogLevel.NONE gives false
+    LogLevel.ERROR gives false
   end 'c'
+  var r2 = match lexerLevel 'l'
+    LogLevel.ERROR gives true
+    LogLevel.NONE gives false
+    LogLevel.INFO gives false
+  end 'l'
+  if r1 and r2 'both'
+    return 1
+  end 'both'
   return 0
 end 'main'
 ---
@@ -87,7 +95,7 @@ module {
   }
   func @enum-hashable.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=112
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -226,22 +234,84 @@ module {
     x86.mov rcx, rax
     x86.call enum-hashable.getCategoryLevel
     x86.mov [rbp-72], eax
-    x86.mov eax, 2
-    x86.mov ecx, [rbp-64]
-    x86.cmp ecx, eax
-    x86.jne enum-hashable.main.c_0.merge
-  c_0:
+    x86.mov eax, [rbp-64]
+    x86.xor ecx, ecx
+    x86.mov [rbp-80], ecx
+    x86.mov [rbp-88], eax
+    x86.jmp enum-hashable.main.c_0.cmp0
+  c_0.cmp0:
+    x86.mov eax, [rbp-88]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne enum-hashable.main.c_0.cmp1
+  c_0.case0:
     x86.mov eax, 1
+    x86.mov [rbp-80], eax
+    x86.jmp enum-hashable.main.c_0.merge
+  c_0.cmp1:
+    x86.mov eax, [rbp-88]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne enum-hashable.main.c_0.cmp2
+  c_0.case1:
+    x86.xor eax, eax
+    x86.mov [rbp-80], eax
+    x86.jmp enum-hashable.main.c_0.merge
+  c_0.cmp2:
+    x86.mov eax, [rbp-88]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne enum-hashable.main.c_0.merge
+  c_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-80], eax
+    x86.jmp enum-hashable.main.c_0.merge
+  c_0.merge:
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-89], eax
     x86.mov ecx, [rbp-72]
-    x86.cmp ecx, eax
-    x86.jne enum-hashable.main.l_1.after
-  l_1:
+    x86.xor edx, edx
+    x86.mov [rbp-97], edx
+    x86.mov [rbp-105], ecx
+    x86.jmp enum-hashable.main.l_1.cmp0
+  l_1.cmp0:
+    x86.mov eax, [rbp-105]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne enum-hashable.main.l_1.cmp1
+  l_1.case0:
+    x86.mov eax, 1
+    x86.mov [rbp-97], eax
+    x86.jmp enum-hashable.main.l_1.merge
+  l_1.cmp1:
+    x86.mov eax, [rbp-105]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne enum-hashable.main.l_1.cmp2
+  l_1.case1:
+    x86.xor eax, eax
+    x86.mov [rbp-97], eax
+    x86.jmp enum-hashable.main.l_1.merge
+  l_1.cmp2:
+    x86.mov eax, [rbp-105]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne enum-hashable.main.l_1.merge
+  l_1.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-97], eax
+    x86.jmp enum-hashable.main.l_1.merge
+  l_1.merge:
+    x86.mov eax, [rbp-97]
+    x86.mov ecx, [rbp-89]
+    x86.and ecx, eax
+    x86.test ecx, ecx
+    x86.je enum-hashable.main.both_2.after
+  both_2:
     x86.mov eax, 1
     x86.epilogue
     x86.ret
-  l_1.after:
-    x86.jmp enum-hashable.main.c_0.merge
-  c_0.merge:
+  both_2.after:
     x86.xor eax, eax
     x86.epilogue
     x86.ret
