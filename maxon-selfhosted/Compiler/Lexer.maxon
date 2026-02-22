@@ -7,8 +7,6 @@ export typealias LineNumber = int(0 to u64.max)
 export typealias ColumnNumber = int(0 to u64.max)
 export typealias CharOffset = int(0 to u64.max)
 
-typealias DfaIndex = int(0 to 1024)
-
 type LexerState
     export var pos CharOffset
     export var line LineNumber
@@ -79,7 +77,7 @@ enum DfaState
     enterDigit
     enterAlpha
     enterComment
-    skipSlash
+    slash
     skipOther
     COUNT
 end 'DfaState'
@@ -187,6 +185,7 @@ export enum TokenKind
     plus
     minus
     star
+    slash
     colon
     newline
     eof
@@ -248,7 +247,7 @@ let transitionTable = [
     // sawGt: '>' seen, looking for '='
     DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gtEq, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt,
     // sawSlash: '/' seen, looking for '/'
-    DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.enterComment, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash, DfaState.skipSlash,
+    DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
     // Terminal states (rows 6-31) — never transitioned from
     DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
     DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
@@ -276,43 +275,32 @@ let actionTable = [Action.skip, Action.skip,   Action.skip,   Action.skip,   Act
                 Action.newline, Action.emit,   Action.emit,   Action.emit,   Action.emit,   Action.emit,   Action.emit,   Action.emit,   Action.emit,
 //              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
                 Action.emit,    Action.emit2,  Action.emit2,  Action.emit,   Action.emit2,  Action.emit,   Action.emit2,
-//              skipBang        enterSquote      enterDquote      enterDigit      enterAlpha      enterComment   skipSlash      skipOther
-                Action.skip,    Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.skip, Action.skip
+//              skipBang        enterSquote      enterDquote      enterDigit      enterAlpha      enterComment   slash          skipOther
+                Action.skip,    Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.emit, Action.skip
     ]
 
-function singleByte(b Byte) returns ByteArray
-    var arr = ByteArray{}
-    arr.push(b)
-    return arr
-end 'singleByte'
-
-function twoBytes(a Byte, b Byte) returns ByteArray
-    var arr = ByteArray{}
-    arr.push(a)
-    arr.push(b)
-    return arr
-end 'twoBytes'
-
 // Single dispatch point for all fixed-text tokens (operators, punctuation).
-// Token values are built as ByteArray directly — String literals assigned to
-// ByteArray fields in struct literals cause memory corruption in the self-hosted binary.
-function emitFixedToken(state DfaIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
-    match state 'dispatch'
-        9 then tokens.push(Token{kind: TokenKind.leftParen, value: singleByte(40), line: line, column: column})
-        10 then tokens.push(Token{kind: TokenKind.rightParen, value: singleByte(41), line: line, column: column})
-        11 then tokens.push(Token{kind: TokenKind.leftBrace, value: singleByte(123), line: line, column: column})
-        12 then tokens.push(Token{kind: TokenKind.rightBrace, value: singleByte(125), line: line, column: column})
-        13 then tokens.push(Token{kind: TokenKind.plus, value: singleByte(43), line: line, column: column})
-        14 then tokens.push(Token{kind: TokenKind.minus, value: singleByte(45), line: line, column: column})
-        15 then tokens.push(Token{kind: TokenKind.star, value: singleByte(42), line: line, column: column})
-        16 then tokens.push(Token{kind: TokenKind.colon, value: singleByte(58), line: line, column: column})
-        17 then tokens.push(Token{kind: TokenKind.equals, value: singleByte(61), line: line, column: column})
-        18 then tokens.push(Token{kind: TokenKind.equalsEquals, value: twoBytes(61, b: 61), line: line, column: column})
-        19 then tokens.push(Token{kind: TokenKind.bangEquals, value: twoBytes(33, b: 61), line: line, column: column})
-        20 then tokens.push(Token{kind: TokenKind.lessThan, value: singleByte(60), line: line, column: column})
-        21 then tokens.push(Token{kind: TokenKind.lessEquals, value: twoBytes(60, b: 61), line: line, column: column})
-        22 then tokens.push(Token{kind: TokenKind.greaterThan, value: singleByte(62), line: line, column: column})
-        23 then tokens.push(Token{kind: TokenKind.greaterEquals, value: twoBytes(62, b: 61), line: line, column: column})
+typealias DfaStateIndex = int(0 to 64)
+
+function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
+    // State indices correspond to DfaState enum raw values (int match can't use enum names).
+    match stateIndex 'dispatch'
+        9 then tokens.push(Token{kind: TokenKind.leftParen, value: b"(", line: line, column: column})
+        10 then tokens.push(Token{kind: TokenKind.rightParen, value: b")", line: line, column: column})
+        11 then tokens.push(Token{kind: TokenKind.leftBrace, value: b"\x7B", line: line, column: column})
+        12 then tokens.push(Token{kind: TokenKind.rightBrace, value: b"\x7D", line: line, column: column})
+        13 then tokens.push(Token{kind: TokenKind.plus, value: b"+", line: line, column: column})
+        14 then tokens.push(Token{kind: TokenKind.minus, value: b"-", line: line, column: column})
+        15 then tokens.push(Token{kind: TokenKind.star, value: b"*", line: line, column: column})
+        16 then tokens.push(Token{kind: TokenKind.colon, value: b":", line: line, column: column})
+        17 then tokens.push(Token{kind: TokenKind.equals, value: b"=", line: line, column: column})
+        18 then tokens.push(Token{kind: TokenKind.equalsEquals, value: b"==", line: line, column: column})
+        19 then tokens.push(Token{kind: TokenKind.bangEquals, value: b"!=", line: line, column: column})
+        20 then tokens.push(Token{kind: TokenKind.lessThan, value: b"<", line: line, column: column})
+        21 then tokens.push(Token{kind: TokenKind.lessEquals, value: b"<=", line: line, column: column})
+        22 then tokens.push(Token{kind: TokenKind.greaterThan, value: b">", line: line, column: column})
+        23 then tokens.push(Token{kind: TokenKind.greaterEquals, value: b">=", line: line, column: column})
+        30 then tokens.push(Token{kind: TokenKind.slash, value: b"/", line: line, column: column})
         default then break
     end 'dispatch'
 end 'emitFixedToken'
@@ -365,7 +353,7 @@ export function tokenize(source ByteArray) returns TokenArray
         end 'doCr'
 
         if action == Action.newline 'doNewline'
-            tokens.push(Token{kind: TokenKind.newline, value: ByteArray{}, line: startLine, column: startCol})
+            tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
             s.line = s.line + 1
             s.column = 1
             continue
@@ -418,7 +406,7 @@ export function tokenize(source ByteArray) returns TokenArray
         end 'doComment'
     end 'scan'
 
-    tokens.push(Token{kind: TokenKind.eof, value: ByteArray{}, line: s.line, column: s.column})
+    tokens.push(Token{kind: TokenKind.eof, value: b"", line: s.line, column: s.column})
     logDebug(LogCategory.lexer, message: "Lexer complete: {tokens.count()} tokens")
     return tokens
 end 'tokenize'
@@ -471,14 +459,74 @@ end 'scanDoubleQuoteString'
 function scanNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
     let len = source.count()
     let numStart = state.pos
+    let firstByte = try source.get(state.pos) otherwise 0
+
+    // Check for 0x, 0b, 0o prefixes
+    if firstByte == Ascii.zero and state.pos + 1 < len 'checkPrefix'
+        let prefixByte = try source.get(state.pos + 1) otherwise 0
+
+        // Hex literal: 0x or 0X
+        if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
+            state.pos = state.pos + 2
+            state.column = state.column + 2
+            while state.pos < len 'hexDigits'
+                let hc = try source.get(state.pos) otherwise 0
+                if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
+                    break
+                end 'endHex'
+                state.pos = state.pos + 1
+                state.column = state.column + 1
+            end 'hexDigits'
+            let hexVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
+            tokens.push(Token{kind: TokenKind.intLiteral, value: hexVal, line: startLine, column: startCol})
+            return
+        end 'isHex'
+
+        // Binary literal: 0b or 0B
+        if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
+            state.pos = state.pos + 2
+            state.column = state.column + 2
+            while state.pos < len 'binDigits'
+                let bc = try source.get(state.pos) otherwise 0
+                if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
+                    break
+                end 'endBin'
+                state.pos = state.pos + 1
+                state.column = state.column + 1
+            end 'binDigits'
+            let binVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
+            tokens.push(Token{kind: TokenKind.intLiteral, value: binVal, line: startLine, column: startCol})
+            return
+        end 'isBin'
+
+        // Octal literal: 0o or 0O
+        if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
+            state.pos = state.pos + 2
+            state.column = state.column + 2
+            while state.pos < len 'octDigits'
+                let oc = try source.get(state.pos) otherwise 0
+                if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
+                    break
+                end 'endOct'
+                state.pos = state.pos + 1
+                state.column = state.column + 1
+            end 'octDigits'
+            let octVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
+            tokens.push(Token{kind: TokenKind.intLiteral, value: octVal, line: startLine, column: startCol})
+            return
+        end 'isOct'
+    end 'checkPrefix'
+
+    // Decimal digits (with underscore separators)
     while state.pos < len 'digits'
         let dc = try source.get(state.pos) otherwise 0
-        if not isDigit(dc) 'endNum'
+        if not isDigit(dc) and dc != Ascii.underscore 'endNum'
             break
         end 'endNum'
         state.pos = state.pos + 1
         state.column = state.column + 1
     end 'digits'
+
     // Check for decimal point (float literal)
     var isFloat = false
     if state.pos < len 'checkDot'
@@ -489,7 +537,7 @@ function scanNumber(source ByteArray, state LexerState, tokens TokenArray, start
             state.column = state.column + 1
             while state.pos < len 'fracDigits'
                 let fc = try source.get(state.pos) otherwise 0
-                if not isDigit(fc) 'endFrac'
+                if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
                     break
                 end 'endFrac'
                 state.pos = state.pos + 1
@@ -497,6 +545,34 @@ function scanNumber(source ByteArray, state LexerState, tokens TokenArray, start
             end 'fracDigits'
         end 'hasDot'
     end 'checkDot'
+
+    // Check for scientific notation exponent (e/E)
+    if state.pos < len 'checkExp'
+        let expCh = try source.get(state.pos) otherwise 0
+        if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
+            isFloat = true
+            state.pos = state.pos + 1
+            state.column = state.column + 1
+            // Optional sign
+            if state.pos < len 'checkSign'
+                let signCh = try source.get(state.pos) otherwise 0
+                if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
+                    state.pos = state.pos + 1
+                    state.column = state.column + 1
+                end 'hasSign'
+            end 'checkSign'
+            // Exponent digits
+            while state.pos < len 'expDigits'
+                let ec = try source.get(state.pos) otherwise 0
+                if not isDigit(ec) 'endExp'
+                    break
+                end 'endExp'
+                state.pos = state.pos + 1
+                state.column = state.column + 1
+            end 'expDigits'
+        end 'hasExp'
+    end 'checkExp'
+
     let numVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
     if isFloat 'emitFloat'
         tokens.push(Token{kind: TokenKind.floatLiteral, value: numVal, line: startLine, column: startCol})
@@ -518,8 +594,7 @@ function scanIdentifier(source ByteArray, state LexerState, tokens TokenArray, s
         state.column = state.column + 1
     end 'identBody'
     let identVal = sliceBytes(source, startPos: startPos, endPos: state.pos)
-    let identBuf = ByteBuffer{managed: identVal.managed}
-    let kind = classifyIdentifier(identBuf)
+    let kind = classifyIdentifier(identVal)
     tokens.push(Token{kind: kind, value: identVal, line: startLine, column: startCol})
 end 'scanIdentifier'
 
@@ -641,7 +716,7 @@ var keywordMap = [
     b"print":       KeywordInfo{kind: TokenKind.print,       helpText: "Built-in function for printing to the console. Not a real keyword.",                                               canHaveBlockLabel: false}
 ]
 
-function classifyIdentifier(name ByteBuffer) returns TokenKind
+function classifyIdentifier(name ByteArray) returns TokenKind
     let info = try keywordMap.get(key: name) otherwise 'notFound'
         return TokenKind.identifier
     end 'notFound'
@@ -650,9 +725,33 @@ end 'classifyIdentifier'
 
 // ASCII byte enum
 enum Ascii
-    lf        = 10
-    quote     = 39
-    dquote    = 34
-    dot       = 46
-    backslash = 92
+    lf         = 10
+    quote      = 39
+    dquote     = 34
+    plus       = 43
+    minus      = 45
+    dot        = 46
+    zero       = 48
+    backslash  = 92
+    upperB     = 66
+    upperE     = 69
+    upperO     = 79
+    upperX     = 88
+    underscore = 95
+    lowerB     = 98
+    lowerE     = 101
+    lowerO     = 111
+    lowerX     = 120
 end 'Ascii'
+
+function isHexDigit(b Byte) returns bool
+    return (b >= 48 and b <= 57) or (b >= 65 and b <= 70) or (b >= 97 and b <= 102)
+end 'isHexDigit'
+
+function isBinaryDigit(b Byte) returns bool
+    return b == 48 or b == 49
+end 'isBinaryDigit'
+
+function isOctalDigit(b Byte) returns bool
+    return b >= 48 and b <= 55
+end 'isOctalDigit'

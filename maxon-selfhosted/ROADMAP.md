@@ -7,7 +7,7 @@ Each phase includes X86 + ARM64 backends and PE + ELF output formats. All target
 ## Progress
 
 ```
-Phase 1:  Core Arithmetic        [ ] (no deps)
+Phase 1:  Core Arithmetic        [x] (no deps)
 Phase 2:  Control Flow           [ ] (depends on Phase 1)
 Phase 3:  Function Params        [ ] (depends on Phase 1)
 Phase 4:  Basic Types            [ ] (depends on Phase 3)
@@ -29,12 +29,13 @@ Phase 16: Optimization Passes    [ ] (depends on Phase 15)
 
 ## Current Capabilities
 
-- **Lexer**: DFA tokenizer (complete enough for basic programs)
-- **Parser**: Function declarations (no params), `var`/`let` declarations, `return`, `print()`, `if`/`else`, integer/float literals, `+`/`-`/`*` and comparison operators, function calls (no args), parenthesized expressions, string interpolation in print, top-level `let` string constants
-- **Maxon Dialect**: 27 ops (literal, floatLiteral, return, varDecl, varLoad, add/sub/mul, 6 comparisons, floatCmpEq, condBr, br, label, printLiteral, printInt, funcBegin, funcEnd, call)
+- **Lexer**: DFA tokenizer with hex/binary/octal/underscore/scientific notation literals, `/` operator
+- **Parser**: Function declarations (no params), `var`/`let` declarations, `return`, `print()`, `if`/`else`/`else if`, `while` loops, variable reassignment, block scoping, integer/float/boolean literals, full operator precedence (`+`/`-`/`*`/`/`/`mod`, comparisons, bitwise `and`/`or`/`xor`/`shl`/`shr`, unary `-`/`not`), parenthesized expressions, function calls (no args), string interpolation in print, top-level `let` string constants
+- **Maxon Dialect**: 37 ops (literal, floatLiteral, return, varDecl, varLoad, varStore, add/sub/mul/div/mod, neg, bitNot/bitAnd/bitOr/bitXor/shl/shr, 6 comparisons, floatCmpEq, condBr, br, label, printLiteral, printInt, funcBegin, funcEnd, call)
 - **Standard Dialect**: Mirrors Maxon dialect 1:1
-- **X86 Dialect**: prologue/epilogue, movRegImm, movSlot, loadSlot, addRegReg, subRegReg, imulRegReg, cmpRaxRcx, condJump, jmp, label, float slot ops, ucomisd, printLiteral, printInt, funcLabel, callDirect
-- **Code Emitter**: Emits machine code for above ops
+- **X86 Dialect**: prologue/epilogue, movRegImm (32/64-bit), movSlot, loadSlot, addRegReg, subRegReg, imulRegReg, idivRcx, iremRcx, negReg, bitNotReg, andRegReg, orRegReg, xorRegReg, shlRegCl, sarRegCl, cmpRaxRcx, testRaxRax, condJump, jmp, label, float slot ops, ucomisd, printLiteral, printInt, funcLabel, callDirect
+- **ARM64 Dialect**: prologue/epilogue, movImm, strToSlot, ldrFromSlot, addRegs, subRegs, mulRegs, sdivRegs, remRegs, negReg, mvnReg, andRegs, orrRegs, eorRegs, lslRegs, asrRegs, cmpRegs, cmpRegZero, condBranch, branch, label, branchLink, funcLabel, printLiteral, printInt, ret
+- **Code Emitter**: Emits machine code for all above ops
 - **PE/ELF Writers**: Working for simple programs
 
 ---
@@ -569,7 +570,7 @@ These are mostly stdlib types built on top of Array and generics. Requires:
 **Goal**: Everything else — tuples, namespaces, exports, panic/stack traces, command-line args, file I/O, etc.
 
 ### Specs to unlock
-`tuples`, `namespaces`, `export-keyword`, `command-line-args`, `file-io`, `directory`, `panic-stack-trace`, `alloc-tracking`, `codegen-internals`, `managed-memory-element-size`, `stdlib-basic`, `stdlib-autodiscovery`, `grapheme-clusters`, `slice-memory`, `array-managed-elements`, `array-of-bytebuffer`, `challenge-array-of-structs`, `challenge-struct-lifetime`, `register-allocator`, `unused-variables`, `unused-parameters`, `discarded-results`, `duplicate-functions`, `duplicate-block-identifiers`, `unknown-keyword-error`, `type-checking`, `function-overloads`, `method-calls`, `method-call-on-parameter`, `init-from-literal`, `initablefromarrayliteral`, `parsable-interface`, `ranged-typealias`, `union-hashable`, `advent`
+`tuples`, `namespaces`, `export-keyword`, `command-line-args`, `file-io`, `directory`, `panic-stack-trace`, `alloc-tracking`, `codegen-internals`, `managed-memory-element-size`, `stdlib-basic`, `stdlib-autodiscovery`, `grapheme-clusters`, `slice-memory`, `array-managed-elements`, `array-of-bytearray`, `challenge-array-of-structs`, `challenge-struct-lifetime`, `register-allocator`, `unused-variables`, `unused-parameters`, `discarded-results`, `duplicate-functions`, `duplicate-block-identifiers`, `unknown-keyword-error`, `type-checking`, `function-overloads`, `method-calls`, `method-call-on-parameter`, `init-from-literal`, `initablefromarrayliteral`, `parsable-interface`, `ranged-typealias`, `union-hashable`, `advent`
 
 ### Sub-phases
 

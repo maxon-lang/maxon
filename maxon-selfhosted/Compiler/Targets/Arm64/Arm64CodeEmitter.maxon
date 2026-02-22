@@ -7,7 +7,7 @@ typealias Arm64OffsetArray = Array with Arm64Offset
 
 // --- Instruction emit helper ---
 
-function emitInsn(code ByteBuffer, insn MachineWord)
+function emitInsn(code ByteArray, insn MachineWord)
     code.push(insn and 0xFF)
     code.push((insn shr 8) and 0xFF)
     code.push((insn shr 16) and 0xFF)
@@ -49,61 +49,61 @@ end 'arm64CondNum'
 // --- Instruction helpers ---
 
 // STP X29, X30, [SP, #-frameSize]! (pre-indexed, 64-bit)
-function arm64EmitStpPreIndex(code ByteBuffer, frameSize StackSize)
+function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
     let imm7 = (0 - frameSize) / 8 and 0x7F
     let insn = 0xA9800000 or (imm7 shl 15) or (30 shl 10) or (31 shl 5) or 29
     emitInsn(code, insn: insn)
 end 'arm64EmitStpPreIndex'
 
 // MOV X29, SP => ADD X29, SP, #0
-function arm64EmitMovFpSp(code ByteBuffer)
+function arm64EmitMovFpSp(code ByteArray)
     code.append(b"\xfd\x03\x00\x91")
 end 'arm64EmitMovFpSp'
 
 // LDP X29, X30, [SP], #frameSize (post-indexed, 64-bit)
-function arm64EmitLdpPostIndex(code ByteBuffer, frameSize StackSize)
+function arm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
     let imm7 = frameSize / 8 and 0x7F
     let insn = 0xA8C00000 or (imm7 shl 15) or (30 shl 10) or (31 shl 5) or 29
     emitInsn(code, insn: insn)
 end 'arm64EmitLdpPostIndex'
 
 // RET (return via X30)
-function arm64EmitRet(code ByteBuffer)
+function arm64EmitRet(code ByteArray)
     code.append(b"\xc0\x03\x5f\xd6")
 end 'arm64EmitRet'
 
 // MOVZ Xd, #imm16 (no shift)
-function arm64EmitMovz(code ByteBuffer, rd MachineWord, imm16 MachineWord)
+function arm64EmitMovz(code ByteArray, rd MachineWord, imm16 MachineWord)
     let insn = 0xD2800000 or ((imm16 and 0xFFFF) shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMovz'
 
 // MOVZ Xd, #imm16, LSL #16
-function arm64EmitMovzLsl16(code ByteBuffer, rd MachineWord, imm16 MachineWord)
+function arm64EmitMovzLsl16(code ByteArray, rd MachineWord, imm16 MachineWord)
     let insn = 0xD2A00000 or ((imm16 and 0xFFFF) shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMovzLsl16'
 
 // MOVK Xd, #imm16, LSL #16
-function arm64EmitMovkLsl16(code ByteBuffer, rd MachineWord, imm16 MachineWord)
+function arm64EmitMovkLsl16(code ByteArray, rd MachineWord, imm16 MachineWord)
     let insn = 0xF2A00000 or ((imm16 and 0xFFFF) shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMovkLsl16'
 
 // MOVK Xd, #imm16, LSL #32
-function arm64EmitMovkLsl32(code ByteBuffer, rd MachineWord, imm16 MachineWord)
+function arm64EmitMovkLsl32(code ByteArray, rd MachineWord, imm16 MachineWord)
     let insn = 0xF2C00000 or ((imm16 and 0xFFFF) shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMovkLsl32'
 
 // MOVK Xd, #imm16, LSL #48
-function arm64EmitMovkLsl48(code ByteBuffer, rd MachineWord, imm16 MachineWord)
+function arm64EmitMovkLsl48(code ByteArray, rd MachineWord, imm16 MachineWord)
     let insn = 0xF2E00000 or ((imm16 and 0xFFFF) shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMovkLsl48'
 
 // Load a full 64-bit immediate into register Xd using MOVZ + MOVK sequence.
-function arm64EmitMovImm(code ByteBuffer, rd MachineWord, value MachineWord)
+function arm64EmitMovImm(code ByteArray, rd MachineWord, value MachineWord)
     let chunk0 = value and 0xFFFF
     let chunk1 = (value shr 16) and 0xFFFF
     let chunk2 = (value shr 32) and 0xFFFF
@@ -123,7 +123,7 @@ end 'arm64EmitMovImm'
 
 // STR Xt, [X29, #offset] (unsigned offset, scaled by 8)
 // offset = 16 + slotIndex * 8
-function arm64EmitStrSlot(code ByteBuffer, rt MachineWord, slotIndex VarSlot)
+function arm64EmitStrSlot(code ByteArray, rt MachineWord, slotIndex VarSlot)
     let offset = 16 + slotIndex * 8
     let insn = 0xF9000000 or ((offset / 8) shl 10) or (29 shl 5) or rt
     emitInsn(code, insn: insn)
@@ -131,107 +131,169 @@ end 'arm64EmitStrSlot'
 
 // LDR Xt, [X29, #offset] (unsigned offset, scaled by 8)
 // offset = 16 + slotIndex * 8
-function arm64EmitLdrSlot(code ByteBuffer, rt MachineWord, slotIndex VarSlot)
+function arm64EmitLdrSlot(code ByteArray, rt MachineWord, slotIndex VarSlot)
     let offset = 16 + slotIndex * 8
     let insn = 0xF9400000 or ((offset / 8) shl 10) or (29 shl 5) or rt
     emitInsn(code, insn: insn)
 end 'arm64EmitLdrSlot'
 
 // ADD Xd, Xn, Xm (64-bit register)
-function arm64EmitAdd(code ByteBuffer, rd MachineWord, rn MachineWord, rm MachineWord)
+function arm64EmitAdd(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
     let insn = 0x8B000000 or (rm shl 16) or (rn shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitAdd'
 
 // SUB Xd, Xn, Xm (64-bit register)
-function arm64EmitSub(code ByteBuffer, rd MachineWord, rn MachineWord, rm MachineWord)
+function arm64EmitSub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
     let insn = 0xCB000000 or (rm shl 16) or (rn shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitSub'
 
 // MUL Xd, Xn, Xm (64-bit register)
-function arm64EmitMul(code ByteBuffer, rd MachineWord, rn MachineWord, rm MachineWord)
+function arm64EmitMul(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
     let insn = 0x9B007C00 or (rm shl 16) or (rn shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMul'
 
+// SDIV Xd, Xn, Xm (signed divide)
+function arm64EmitSdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9AC00C00 or (rm shl 16) or (rn shl 5) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitSdiv'
+
+// NEG Xd, Xn => SUB Xd, XZR, Xn
+function arm64EmitNeg(code ByteArray, rd MachineWord, rn MachineWord)
+    let insn = 0xCB000000 or (rn shl 16) or (31 shl 5) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitNeg'
+
+// MVN Xd, Xn => ORN Xd, XZR, Xn
+function arm64EmitMvn(code ByteArray, rd MachineWord, rn MachineWord)
+    let insn = 0xAA2003E0 or (rn shl 16) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitMvn'
+
+// AND Xd, Xn, Xm
+function arm64EmitAnd(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x8A000000 or (rm shl 16) or (rn shl 5) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitAnd'
+
+// ORR Xd, Xn, Xm
+function arm64EmitOrr(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0xAA000000 or (rm shl 16) or (rn shl 5) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitOrr'
+
+// EOR Xd, Xn, Xm
+function arm64EmitEor(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0xCA000000 or (rm shl 16) or (rn shl 5) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitEor'
+
+// LSLV Xd, Xn, Xm (variable shift left)
+function arm64EmitLslv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9AC02000 or (rm shl 16) or (rn shl 5) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitLslv'
+
+// ASRV Xd, Xn, Xm (variable arithmetic shift right)
+function arm64EmitAsrv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9AC02800 or (rm shl 16) or (rn shl 5) or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitAsrv'
+
+// Remainder: SDIV X2, X0, X1; MSUB X0, X2, X1, X0 => X0 = X0 - (X0/X1)*X1
+function arm64EmitRem(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    // Use X2 as scratch for quotient
+    arm64EmitSdiv(code, rd: 2, rn: rn, rm: rm)
+    arm64EmitMsub(code, rd: rd, rn: 2, rm: rm, ra: rn)
+end 'arm64EmitRem'
+
 // CMP Xn, Xm => SUBS XZR, Xn, Xm
-function arm64EmitCmp(code ByteBuffer, rn MachineWord, rm MachineWord)
+function arm64EmitCmp(code ByteArray, rn MachineWord, rm MachineWord)
     let insn = 0xEB00001F or (rm shl 16) or (rn shl 5)
     emitInsn(code, insn: insn)
 end 'arm64EmitCmp'
 
+// CMP Xn, #0 — compare register against zero
+function arm64EmitCmpRegZero(code ByteArray, rn MachineWord)
+    // SUBS XZR, Xn, #0: 0xF100001F | (rn << 5)
+    let insn = 0xF100001F or (rn shl 5)
+    emitInsn(code, insn: insn)
+end 'arm64EmitCmpRegZero'
+
 // B.cond with imm19 placeholder (patched later)
-function arm64EmitCondBranch(code ByteBuffer, cond MachineWord)
+function arm64EmitCondBranch(code ByteArray, cond MachineWord)
     let insn = 0x54000000 or cond
     emitInsn(code, insn: insn)
 end 'arm64EmitCondBranch'
 
 // B (unconditional) with imm26 placeholder (patched later)
-function arm64EmitBranch(code ByteBuffer)
+function arm64EmitBranch(code ByteArray)
     code.append(b"\x00\x00\x00\x14")
 end 'arm64EmitBranch'
 
 // BL (branch and link) with imm26 placeholder (patched later)
-function arm64EmitBranchLink(code ByteBuffer)
+function arm64EmitBranchLink(code ByteArray)
     code.append(b"\x00\x00\x00\x94")
 end 'arm64EmitBranchLink'
 
 // SVC #0 (supervisor call for Linux syscalls)
-function arm64EmitSvc(code ByteBuffer)
+function arm64EmitSvc(code ByteArray)
     code.append(b"\x01\x00\x00\xd4")
 end 'arm64EmitSvc'
 
 // BLR Xn (branch to register with link)
-function arm64EmitBlr(code ByteBuffer, rn MachineWord)
+function arm64EmitBlr(code ByteArray, rn MachineWord)
     let insn = 0xD63F0000 or (rn shl 5)
     emitInsn(code, insn: insn)
 end 'arm64EmitBlr'
 
 // BR Xn (branch to register, no link)
-function arm64EmitBr(code ByteBuffer, rn MachineWord)
+function arm64EmitBr(code ByteArray, rn MachineWord)
     let insn = 0xD61F0000 or (rn shl 5)
     emitInsn(code, insn: insn)
 end 'arm64EmitBr'
 
 // ADRP Xd, #immhi (4KB page-relative, placeholder — patched by relocation)
-function arm64EmitAdrp(code ByteBuffer, rd MachineWord)
+function arm64EmitAdrp(code ByteArray, rd MachineWord)
     let insn = 0x90000000 or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitAdrp'
 
 // LDR Xd, [Xn, #imm12] (unsigned offset, scaled by 8)
-function arm64EmitLdrImm(code ByteBuffer, rt MachineWord, rn MachineWord, imm12 MachineWord)
+function arm64EmitLdrImm(code ByteArray, rt MachineWord, rn MachineWord, imm12 MachineWord)
     let insn = 0xF9400000 or ((imm12 / 8) shl 10) or (rn shl 5) or rt
     emitInsn(code, insn: insn)
 end 'arm64EmitLdrImm'
 
 // UDIV Xd, Xn, Xm
-function arm64EmitUdiv(code ByteBuffer, rd MachineWord, rn MachineWord, rm MachineWord)
+function arm64EmitUdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
     let insn = 0x9AC00800 or (rm shl 16) or (rn shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitUdiv'
 
 // MSUB Xd, Xn, Xm, Xa => Xd = Xa - Xn * Xm
-function arm64EmitMsub(code ByteBuffer, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
+function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
     let insn = 0x9B008000 or (rm shl 16) or (ra shl 10) or (rn shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMsub'
 
 // STRB Wt, [Xn, #offset] (unsigned offset, unscaled byte)
-function arm64EmitStrb(code ByteBuffer, rt MachineWord, rn MachineWord, offset MachineWord)
+function arm64EmitStrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
     let insn = 0x39000000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
     emitInsn(code, insn: insn)
 end 'arm64EmitStrb'
 
 // LDRB Wt, [Xn, #offset]
-function arm64EmitLdrb(code ByteBuffer, rt MachineWord, rn MachineWord, offset MachineWord)
+function arm64EmitLdrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
     let insn = 0x39400000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
     emitInsn(code, insn: insn)
 end 'arm64EmitLdrb'
 
 // ADR Xd, #offset (PC-relative, +/- 1MB range)
-function arm64EmitAdr(code ByteBuffer, rd MachineWord, offset MachineWord)
+function arm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
     let immlo = offset and 0x3
     let immhi = (offset shr 2) and 0x7FFFF
     let insn = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
@@ -239,31 +301,31 @@ function arm64EmitAdr(code ByteBuffer, rd MachineWord, offset MachineWord)
 end 'arm64EmitAdr'
 
 // SUB Xd, Xn, #imm12 (immediate)
-function arm64EmitSubImm(code ByteBuffer, rd MachineWord, rn MachineWord, imm12 MachineWord)
+function arm64EmitSubImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
     let insn = 0xD1000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitSubImm'
 
 // ADD Xd, Xn, #imm12 (immediate)
-function arm64EmitAddImm(code ByteBuffer, rd MachineWord, rn MachineWord, imm12 MachineWord)
+function arm64EmitAddImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
     let insn = 0x91000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitAddImm'
 
 // CBZ Xn, #offset (compare and branch if zero, for i64ToString zero check)
-function arm64EmitCbz(code ByteBuffer, rn MachineWord, imm19 MachineWord)
+function arm64EmitCbz(code ByteArray, rn MachineWord, imm19 MachineWord)
     let insn = 0xB4000000 or ((imm19 and 0x7FFFF) shl 5) or rn
     emitInsn(code, insn: insn)
 end 'arm64EmitCbz'
 
 // CBNZ Xn, #offset (compare and branch if not zero)
-function arm64EmitCbnz(code ByteBuffer, rn MachineWord, imm19 MachineWord)
+function arm64EmitCbnz(code ByteArray, rn MachineWord, imm19 MachineWord)
     let insn = 0xB5000000 or ((imm19 and 0x7FFFF) shl 5) or rn
     emitInsn(code, insn: insn)
 end 'arm64EmitCbnz'
 
 // MOV Xd, Xn => ORR Xd, XZR, Xn
-function arm64EmitMovReg(code ByteBuffer, rd MachineWord, rn MachineWord)
+function arm64EmitMovReg(code ByteArray, rd MachineWord, rn MachineWord)
     let insn = 0xAA0003E0 or (rn shl 16) or rd
     emitInsn(code, insn: insn)
 end 'arm64EmitMovReg'
@@ -286,7 +348,7 @@ typealias Arm64CallFixupArray = Array with Arm64CallFixup
 // --- Patch helpers ---
 
 // Patch a B or BL instruction at instrOffset with a PC-relative offset in instruction units.
-function arm64PatchBranch(code ByteBuffer, instrOffset Arm64Offset, targetOffset Arm64Offset)
+function arm64PatchBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
     let relBytes = targetOffset - instrOffset
     let relInsns = relBytes / 4
     let origInsn = readDword(code, offset: instrOffset)
@@ -296,7 +358,7 @@ function arm64PatchBranch(code ByteBuffer, instrOffset Arm64Offset, targetOffset
 end 'arm64PatchBranch'
 
 // Patch a B.cond instruction at instrOffset with a PC-relative offset.
-function arm64PatchCondBranch(code ByteBuffer, instrOffset Arm64Offset, targetOffset Arm64Offset)
+function arm64PatchCondBranch(code ByteArray, instrOffset Arm64Offset, targetOffset Arm64Offset)
     let relBytes = targetOffset - instrOffset
     let relInsns = relBytes / 4
     let origInsn = readDword(code, offset: instrOffset)
@@ -332,7 +394,7 @@ end 'arm64LookupLabel'
 
 // --- Fixup resolution ---
 
-function arm64ResolveJumpFixups(code ByteBuffer, labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, jumpFixups Arm64JumpFixupArray)
+function arm64ResolveJumpFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, jumpFixups Arm64JumpFixupArray)
     for fixup in jumpFixups 'resolve'
         let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetLabel)
         if fixup.isCond 'cond'
@@ -343,7 +405,7 @@ function arm64ResolveJumpFixups(code ByteBuffer, labelNames ByteArrayArray, labe
     end 'resolve'
 end 'arm64ResolveJumpFixups'
 
-function arm64ResolveCallFixups(code ByteBuffer, labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray)
+function arm64ResolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray)
     logTrace(LogCategory.codegen, message: "ARM64 resolving {callFixups.count()} call fixups")
     for fixup in callFixups 'resolve'
         let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
@@ -354,7 +416,7 @@ end 'arm64ResolveCallFixups'
 // --- OS-parameterized stubs ---
 
 // Emit _start: BL main (patched later), then exit via OsDescriptor strategy
-function arm64EmitStart(code ByteBuffer, osDesc OsDescriptor, callFixups Arm64CallFixupArray, relocations RelocationArray) returns Arm64Offset
+function arm64EmitStart(code ByteArray, osDesc OsDescriptor, callFixups Arm64CallFixupArray, relocations RelocationArray) returns Arm64Offset
     // BL main (placeholder, patched after all functions emitted)
     let mainCallFixupOffset = code.count()
     var mainName = ByteArray{}
@@ -375,13 +437,13 @@ function arm64EmitStart(code ByteBuffer, osDesc OsDescriptor, callFixups Arm64Ca
 end 'arm64EmitStart'
 
 // Exit via syscall: MOV X8, #N; SVC #0
-function arm64EmitExitSyscall(code ByteBuffer, syscallNumber MachineWord)
+function arm64EmitExitSyscall(code ByteArray, syscallNumber MachineWord)
     arm64EmitMovz(code, rd: 8, imm16: syscallNumber)
     arm64EmitSvc(code)
 end 'arm64EmitExitSyscall'
 
 // Exit via IAT (Windows): load ExitProcess from IAT, tail-call with exit code in X0
-function arm64EmitExitIat(code ByteBuffer, relocations RelocationArray, slotIndex MachineWord)
+function arm64EmitExitIat(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
     // ADRP X16, <page of IAT entry> (placeholder, patched by relocation)
     relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
     arm64EmitAdrp(code, rd: 16)
@@ -392,7 +454,7 @@ function arm64EmitExitIat(code ByteBuffer, relocations RelocationArray, slotInde
 end 'arm64EmitExitIat'
 
 // Emit write_stdout stub parameterized by OsDescriptor
-function arm64EmitWriteStdout(code ByteBuffer, osDesc OsDescriptor, relocations RelocationArray) returns Arm64Offset
+function arm64EmitWriteStdout(code ByteArray, osDesc OsDescriptor, relocations RelocationArray) returns Arm64Offset
     let offset = code.count()
     match osDesc.write 'writeStrategy'
         syscall(writeNum, fd) then arm64EmitWriteStdoutSyscall(code, writeNumber: writeNum, fd: fd)
@@ -402,7 +464,7 @@ function arm64EmitWriteStdout(code ByteBuffer, osDesc OsDescriptor, relocations 
 end 'arm64EmitWriteStdout'
 
 // write_stdout via syscall: caller X0=ptr, X1=len
-function arm64EmitWriteStdoutSyscall(code ByteBuffer, writeNumber MachineWord, fd MachineWord)
+function arm64EmitWriteStdoutSyscall(code ByteArray, writeNumber MachineWord, fd MachineWord)
     // Prologue (minimal, leaf function)
     arm64EmitStpPreIndex(code, frameSize: 32)
     arm64EmitMovFpSp(code)
@@ -422,7 +484,7 @@ end 'arm64EmitWriteStdoutSyscall'
 // write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
 // Caller: X0=ptr, X1=len
 // ARM64 Windows calling convention: X0-X7 for args, X16/X17 as IP scratch
-function arm64EmitWriteStdoutWinApi(code ByteBuffer, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+function arm64EmitWriteStdoutWinApi(code ByteArray, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
     // Prologue: save LR/FP + space for locals (64 bytes)
     arm64EmitStpPreIndex(code, frameSize: 80)
     arm64EmitMovFpSp(code)
@@ -475,7 +537,7 @@ end 'arm64EmitWriteStdoutWinApi'
 // Returns: X0 = pointer to string, X1 = length
 // Strategy: extract digits via UDIV/MSUB, store in reverse, then copy forward.
 
-function arm64EmitI64ToString(code ByteBuffer) returns Arm64Offset
+function arm64EmitI64ToString(code ByteArray) returns Arm64Offset
     let offset = code.count()
     let frameSize = 80
 
@@ -562,7 +624,7 @@ end 'arm64EmitI64ToString'
 // --- Print operations ---
 
 // printLiteral: jump over data island, then ADR to data, call write_stdout
-function arm64EmitPrintLiteral(code ByteBuffer, data ByteArray, writeStdoutOffset Arm64Offset)
+function arm64EmitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset Arm64Offset)
     let dataLen = data.count()
     if dataLen == 0 'empty'
         return
@@ -605,7 +667,7 @@ function arm64EmitPrintLiteral(code ByteBuffer, data ByteArray, writeStdoutOffse
 end 'arm64EmitPrintLiteral'
 
 // printInt: value in X0, convert to string then print
-function arm64EmitPrintInt(code ByteBuffer, writeStdoutOffset Arm64Offset, i64ToStringOffset Arm64Offset)
+function arm64EmitPrintInt(code ByteArray, writeStdoutOffset Arm64Offset, i64ToStringOffset Arm64Offset)
     // X0 already has the value
     // BL i64_to_string (returns X0=ptr, X1=len)
     arm64EmitBranchLink(code)
@@ -634,13 +696,13 @@ function arm64ComputeFrameSize(stackSize StackSize) returns StackSize
     return aligned
 end 'arm64ComputeFrameSize'
 
-function arm64EmitPrologue(code ByteBuffer, stackSize StackSize)
+function arm64EmitPrologue(code ByteArray, stackSize StackSize)
     let frameSize = arm64ComputeFrameSize(stackSize)
     arm64EmitStpPreIndex(code, frameSize: frameSize)
     arm64EmitMovFpSp(code)
 end 'arm64EmitPrologue'
 
-function arm64EmitEpilogue(code ByteBuffer, stackSize StackSize)
+function arm64EmitEpilogue(code ByteArray, stackSize StackSize)
     let frameSize = arm64ComputeFrameSize(stackSize)
     arm64EmitLdpPostIndex(code, frameSize: frameSize)
     arm64EmitRet(code)
@@ -651,22 +713,22 @@ type Arm64StackTracker
     export var currentStackSize StackSize
 end 'Arm64StackTracker'
 
-function arm64HandlePrologue(code ByteBuffer, stackSize StackSize, tracker Arm64StackTracker)
+function arm64HandlePrologue(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
     tracker.currentStackSize = stackSize
     arm64EmitPrologue(code, stackSize: stackSize)
 end 'arm64HandlePrologue'
 
-function arm64HandleCondBranch(code ByteBuffer, jumpFixups Arm64JumpFixupArray, condition Arm64CondCode, targetLabel ByteArray)
+function arm64HandleCondBranch(code ByteArray, jumpFixups Arm64JumpFixupArray, condition Arm64CondCode, targetLabel ByteArray)
     jumpFixups.push(Arm64JumpFixup{instrOffset: code.count(), targetLabel: targetLabel, isCond: true})
     arm64EmitCondBranch(code, cond: arm64CondNum(condition))
 end 'arm64HandleCondBranch'
 
-function arm64HandleBranch(code ByteBuffer, jumpFixups Arm64JumpFixupArray, targetLabel ByteArray)
+function arm64HandleBranch(code ByteArray, jumpFixups Arm64JumpFixupArray, targetLabel ByteArray)
     jumpFixups.push(Arm64JumpFixup{instrOffset: code.count(), targetLabel: targetLabel, isCond: false})
     arm64EmitBranch(code)
 end 'arm64HandleBranch'
 
-function arm64HandleBranchLink(code ByteBuffer, callFixups Arm64CallFixupArray, linkTarget ByteArray)
+function arm64HandleBranchLink(code ByteArray, callFixups Arm64CallFixupArray, linkTarget ByteArray)
     callFixups.push(Arm64CallFixup{instrOffset: code.count(), targetName: linkTarget})
     arm64EmitBranchLink(code)
 end 'arm64HandleBranchLink'
@@ -676,7 +738,7 @@ end 'arm64HandleBranchLink'
 export function emitArm64(stdOps StdOpArray, target TargetTriple, osDesc OsDescriptor) returns CodeResult
     let arm64Ops = lowerStdOpsToArm64(stdOps, target: target)
     logDebug(LogCategory.codegen, message: "ARM64: Emitting machine code for {arm64Ops.count()} ops ({tripleToString(target)})")
-    var code = ByteBuffer{}
+    var code = ByteArray{}
     code.reserve(1024)
     var relocations = RelocationArray{}
     var labelNames = ByteArrayArray{}
@@ -709,7 +771,17 @@ export function emitArm64(stdOps StdOpArray, target TargetTriple, osDesc OsDescr
             addRegs(dest, src1, src2) then arm64EmitAdd(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
             subRegs(dest, src1, src2) then arm64EmitSub(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
             mulRegs(dest, src1, src2) then arm64EmitMul(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            sdivRegs(dest, src1, src2) then arm64EmitSdiv(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            remRegs(dest, src1, src2) then arm64EmitRem(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            negReg(dest, src) then arm64EmitNeg(code, rd: arm64RegNum(dest), rn: arm64RegNum(src))
+            mvnReg(dest, src) then arm64EmitMvn(code, rd: arm64RegNum(dest), rn: arm64RegNum(src))
+            andRegs(dest, src1, src2) then arm64EmitAnd(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            orrRegs(dest, src1, src2) then arm64EmitOrr(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            eorRegs(dest, src1, src2) then arm64EmitEor(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            lslRegs(dest, src1, src2) then arm64EmitLslv(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            asrRegs(dest, src1, src2) then arm64EmitAsrv(code, rd: arm64RegNum(dest), rn: arm64RegNum(src1), rm: arm64RegNum(src2))
             cmpRegs(src1, src2) then arm64EmitCmp(code, rn: arm64RegNum(src1), rm: arm64RegNum(src2))
+            cmpRegZero(src) then arm64EmitCmpRegZero(code, rn: arm64RegNum(src))
             condBranch(condition, targetLabel) then arm64HandleCondBranch(code, jumpFixups: jumpFixups, condition: condition, targetLabel: targetLabel)
             branch(targetLabel) then arm64HandleBranch(code, jumpFixups: jumpFixups, targetLabel: targetLabel)
             label(name) then arm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: name, offset: code.count())

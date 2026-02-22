@@ -973,7 +973,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var alias = FindArrayTypeAliasForElement(MaxonValueKind.Byte);
         if (_typeRegistry.TryGetValue(alias, out var bstrType)) return bstrType;
         throw new CompileError(ErrorCode.ParserExpectedType,
-          $"ByteBuffer type alias '{alias}' not found in type registry; is the standard library loaded?", token.Line, token.Column);
+          $"ByteArray type alias '{alias}' not found in type registry; is the standard library loaded?", token.Line, token.Column);
       case TokenType.Identifier:
         // Enum/struct reference: Type.case
         if (pos + 2 < _tokens.Count && _tokens[pos + 1].Type == TokenType.Dot) {
@@ -6451,9 +6451,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var patternLine = Current().Line;
       var patternCol = Current().Column;
 
-      if (Check(TokenType.Identifier) && enumType is { HasAssociatedValues: true }
+      if (CheckIdentifierLike() && enumType is { HasAssociatedValues: true }
           && PeekNext().Type != TokenType.Dot
           && enumType.GetCase(Current().Value) != null) {
+
         // Bare case name pattern for associated-value enums: empty, value(n), etc.
         var caseNameToken = Advance();
         var enumCase = enumType.GetCase(caseNameToken.Value)!;
@@ -6488,7 +6489,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         patterns.Add(new EnumCasePattern(enumCase.Ordinal, caseNameToken.Value, bindings,
           enumCase.AssociatedValues, displayName, patternLine, patternCol));
-      } else if (Check(TokenType.Identifier) && enumType is { HasAssociatedValues: true }
+      } else if (CheckIdentifierLike() && enumType is { HasAssociatedValues: true }
           && PeekNext().Type != TokenType.Dot
           && enumType.GetCase(Current().Value) == null
           && (PeekNext().Type == TokenType.LeftParen || PeekNext().Type == TokenType.Then || PeekNext().Type == TokenType.Gives)) {
@@ -11161,7 +11162,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// Returns true if the given token can be used as a name (identifier or keyword used as name).
   private static bool IsIdentifierLikeToken(Token token) =>
-    token.Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(token.Value);
+    token.Type == TokenType.Identifier || Lexer.KeywordMap.ContainsKey(token.Value)
+    || token.Type == TokenType.Mod;
 
   /// Returns true if the current token can be used as a name (identifier or keyword used as name).
   private bool CheckIdentifierLike() =>

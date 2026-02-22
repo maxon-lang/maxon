@@ -4,7 +4,7 @@
 export typealias X86OpArray = Array with X86Op
 typealias CodeOffsetArray = Array with CodeOffset
 
-function emitPrologue(code ByteBuffer, stackSize StackSize)
+function emitPrologue(code ByteArray, stackSize StackSize)
     // push rbp; mov rbp, rsp
     code.append(b"\x55\x48\x89\xe5")
     // sub rsp, stackSize (only if non-zero)
@@ -14,19 +14,26 @@ function emitPrologue(code ByteBuffer, stackSize StackSize)
     end 'hasSub'
 end 'emitPrologue'
 
-function emitEpilogue(code ByteBuffer)
+function emitEpilogue(code ByteArray)
     // mov rsp, rbp; pop rbp; ret
     code.append(b"\x48\x89\xec\x5d\xc3")
 end 'emitEpilogue'
 
-function emitMovRegImm(code ByteBuffer, value MachineWord)
-    // mov rax, imm32 (sign-extended)
-    code.append(b"\x48\xc7\xc0")
-    writeDword(code, value: value)
+function emitMovRegImm(code ByteArray, value MachineWord)
+    // Use 32-bit sign-extended form if value fits in signed 32-bit range
+    if value >= 0 - 2147483648 and value <= 2147483647 'small'
+        // mov rax, imm32 (sign-extended)  =>  48 C7 C0 <dword>
+        code.append(b"\x48\xc7\xc0")
+        writeDword(code, value: value)
+    end 'small' else 'large'
+        // mov rax, imm64  =>  48 B8 <qword>
+        code.append(b"\x48\xb8")
+        writeQword(code, value: value)
+    end 'large'
 end 'emitMovRegImm'
 
 // Store RAX to stack slot: mov [rbp - (slotIndex+1)*8], rax
-function emitMovSlot(code ByteBuffer, slotIndex VarSlot)
+function emitMovSlot(code ByteArray, slotIndex VarSlot)
     let offset = (slotIndex + 1) * 8
     // mov [rbp - offset], rax  =>  48 89 45 <disp8>
     code.append(b"\x48\x89\x45")
@@ -34,7 +41,7 @@ function emitMovSlot(code ByteBuffer, slotIndex VarSlot)
 end 'emitMovSlot'
 
 // Load stack slot to a register: mov REG, [rbp - (slotIndex+1)*8]
-function emitLoadSlotToReg(code ByteBuffer, slotIndex VarSlot, dest X86Register)
+function emitLoadSlotToReg(code ByteArray, slotIndex VarSlot, dest X86Register)
     let offset = (slotIndex + 1) * 8
     match dest 'pickReg'
         X86Register.rax then emitLoadSlotRax(code, offset: offset)
@@ -52,49 +59,102 @@ function emitLoadSlotToReg(code ByteBuffer, slotIndex VarSlot, dest X86Register)
     end 'pickReg'
 end 'emitLoadSlotToReg'
 
-function emitLoadSlotRax(code ByteBuffer, offset VarSlot)
+function emitLoadSlotRax(code ByteArray, offset VarSlot)
     // mov rax, [rbp - offset]  =>  48 8B 45 <disp8>
     code.append(b"\x48\x8b\x45")
     code.push((0 - offset) and 0xFF)
 end 'emitLoadSlotRax'
 
-function emitLoadSlotRcx(code ByteBuffer, offset VarSlot)
+function emitLoadSlotRcx(code ByteArray, offset VarSlot)
     // mov rcx, [rbp - offset]  =>  48 8B 4D <disp8>
     code.append(b"\x48\x8b\x4d")
     code.push((0 - offset) and 0xFF)
 end 'emitLoadSlotRcx'
 
 // Save RAX to RCX before loading second operand
-function emitMovRcxRax(code ByteBuffer)
+function emitMovRcxRax(code ByteArray)
     // mov rcx, rax  =>  48 89 C1
     code.append(b"\x48\x89\xc1")
 end 'emitMovRcxRax'
 
-function emitAddRegReg(code ByteBuffer)
+function emitAddRegReg(code ByteArray)
     // add rax, rcx  =>  48 01 C8
     code.append(b"\x48\x01\xc8")
 end 'emitAddRegReg'
 
-function emitSubRegReg(code ByteBuffer)
-    // xchg rax, rcx; sub rax, rcx (rcx=left, rax=right -> rax=left-right)
-    code.append(b"\x48\x91\x48\x29\xc8")
+function emitSubRegReg(code ByteArray)
+    // sub rax, rcx  =>  48 29 C8  (rax = rax - rcx)
+    code.append(b"\x48\x29\xc8")
 end 'emitSubRegReg'
 
-function emitImulRegReg(code ByteBuffer)
+function emitImulRegReg(code ByteArray)
     // imul rax, rcx  =>  48 0F AF C1
     code.append(b"\x48\x0f\xaf\xc1")
 end 'emitImulRegReg'
 
+// CQO + IDIV RCX: sign-extend RAX into RDX:RAX, then divide. Quotient in RAX.
+function emitIdivRcx(code ByteArray)
+    // cqo  =>  48 99
+    // idiv rcx  =>  48 F7 F9
+    code.append(b"\x48\x99\x48\xf7\xf9")
+end 'emitIdivRcx'
+
+// CQO + IDIV RCX + MOV RAX,RDX: same as idiv but moves remainder to RAX.
+function emitIremRcx(code ByteArray)
+    // cqo; idiv rcx; mov rax, rdx
+    code.append(b"\x48\x99\x48\xf7\xf9\x48\x89\xd0")
+end 'emitIremRcx'
+
+function emitNegReg(code ByteArray)
+    // neg rax  =>  48 F7 D8
+    code.append(b"\x48\xf7\xd8")
+end 'emitNegReg'
+
+function emitBitNotReg(code ByteArray)
+    // not rax  =>  48 F7 D0
+    code.append(b"\x48\xf7\xd0")
+end 'emitBitNotReg'
+
+function emitAndRegReg(code ByteArray)
+    // and rax, rcx  =>  48 21 C8
+    code.append(b"\x48\x21\xc8")
+end 'emitAndRegReg'
+
+function emitOrRegReg(code ByteArray)
+    // or rax, rcx  =>  48 09 C8
+    code.append(b"\x48\x09\xc8")
+end 'emitOrRegReg'
+
+function emitXorRegReg(code ByteArray)
+    // xor rax, rcx  =>  48 31 C8
+    code.append(b"\x48\x31\xc8")
+end 'emitXorRegReg'
+
+function emitShlRegCl(code ByteArray)
+    // shl rax, cl  =>  48 D3 E0
+    code.append(b"\x48\xd3\xe0")
+end 'emitShlRegCl'
+
+function emitSarRegCl(code ByteArray)
+    // sar rax, cl  =>  48 D3 F8
+    code.append(b"\x48\xd3\xf8")
+end 'emitSarRegCl'
+
 // cmp rcx, rax (compare left in rcx against right in rax)
-function emitCmpRaxRcx(code ByteBuffer)
-    // cmp rcx, rax  =>  48 39 C1
-    code.append(b"\x48\x39\xc1")
+function emitCmpRaxRcx(code ByteArray)
+    // cmp rax, rcx  =>  48 39 C8  (sets flags based on rax - rcx)
+    code.append(b"\x48\x39\xc8")
 end 'emitCmpRaxRcx'
+
+function emitTestRaxRax(code ByteArray)
+    // test rax, rax  =>  48 85 C0  (sets ZF if rax == 0)
+    code.append(b"\x48\x85\xc0")
+end 'emitTestRaxRax'
 
 // ucomisd xmm0, xmm1 (compare float in xmm0 vs xmm1)
 // After push/pop: rcx=left raw bits, rax=right raw bits
 // We need to move them to xmm registers first
-function emitUcomisd(code ByteBuffer)
+function emitUcomisd(code ByteArray)
     // movq xmm0, rcx; movq xmm1, rax; ucomisd xmm0, xmm1
     code.append(b"\x66\x48\x0f\x6e\xc1\x66\x48\x0f\x6e\xc8\x66\x0f\x2e\xc1")
 end 'emitUcomisd'
@@ -126,21 +186,21 @@ function conditionToOpcode(cond JumpCondition) returns CondJumpOpcode
 end 'conditionToOpcode'
 
 // Emit a 2-byte conditional jump (0F xx) with rel32 fixup.
-function emitCondJump(code ByteBuffer, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel ByteArray)
+function emitCondJump(code ByteArray, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel ByteArray)
     code.push(0x0F)
     code.push(opcode)
     jumpFixups.push(JumpFixup{codeOffset: code.count(), targetLabel: targetLabel})
     writeDword(code, value: 0)
 end 'emitCondJump'
 
-function emitJmp(code ByteBuffer, jumpFixups JumpFixupArray, targetLabel ByteArray)
+function emitJmp(code ByteArray, jumpFixups JumpFixupArray, targetLabel ByteArray)
     // jmp rel32  =>  E9 <rel32>
     code.push(0xE9)
     jumpFixups.push(JumpFixup{codeOffset: code.count(), targetLabel: targetLabel})
     writeDword(code, value: 0)
 end 'emitJmp'
 
-function resolveJumpFixups(code ByteBuffer, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, jumpFixups JumpFixupArray)
+function resolveJumpFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, jumpFixups JumpFixupArray)
     for fixup in jumpFixups 'resolve'
         let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetLabel)
         let jumpEnd = fixup.codeOffset + 4
@@ -150,7 +210,7 @@ function resolveJumpFixups(code ByteBuffer, labelNames ByteArrayArray, labelOffs
 end 'resolveJumpFixups'
 
 // Emit a relative call: call <rel32>
-function emitRelativeCall(code ByteBuffer, targetOffset CodeOffset)
+function emitRelativeCall(code ByteArray, targetOffset CodeOffset)
     code.push(0xE8)
     let callEnd = code.count() + 4
     let rel = targetOffset - callEnd
@@ -165,7 +225,7 @@ end 'emitRelativeCall'
 
 // i64_to_string(value_in_rcx, buffer_in_rdx) -> length in RAX
 // Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=is_negative/length
-function emitI64ToString(code ByteBuffer) returns CodeOffset
+function emitI64ToString(code ByteArray) returns CodeOffset
     let offset = code.count()
 
     // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x30
@@ -214,7 +274,7 @@ end 'emitI64ToString'
 // --- Print Operations ---
 
 // Emit printLiteral: jump over data island, then call write_stdout
-function emitPrintLiteral(code ByteBuffer, data ByteArray, writeStdoutOffset CodeOffset)
+function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset CodeOffset)
     let dataLen = data.count()
     if dataLen == 0 'empty'
         return
@@ -253,7 +313,7 @@ end 'emitPrintLiteral'
 
 // Emit printInt: value assumed in RAX, convert to string then print
 // Uses stack buffer at [rbp-<high offset>] for the conversion buffer
-function emitPrintInt(code ByteBuffer, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
+function emitPrintInt(code ByteArray, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
     // mov rcx, rax; lea rdx, [rsp]
     code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
 
@@ -273,7 +333,7 @@ end 'emitPrintInt'
 export function emitX86(stdOps StdOpArray, target TargetTriple, osDesc OsDescriptor) returns CodeResult
     let x86Ops = lowerStdOpsToX86(stdOps, target: target)
     logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops ({tripleToString(target)})")
-    var code = ByteBuffer{}
+    var code = ByteArray{}
     code.reserve(1024)
     var relocations = RelocationArray{}
     var callFixups = CallFixupArray{}
@@ -291,7 +351,7 @@ end 'emitX86'
 // --- OS-parameterized stubs ---
 
 // Emit _start: optional shadow space, call main, then exit via OsDescriptor strategy
-function emitX86Start(code ByteBuffer, osDesc OsDescriptor, relocations RelocationArray, callFixups CallFixupArray) returns CodeOffset
+function emitX86Start(code ByteArray, osDesc OsDescriptor, relocations RelocationArray, callFixups CallFixupArray) returns CodeOffset
     // Shadow space (Windows x64 ABI requires it)
     if osDesc.startShadowSpace > 0 'hasShadow'
         // sub rsp, shadowSpace
@@ -322,7 +382,7 @@ function emitX86Start(code ByteBuffer, osDesc OsDescriptor, relocations Relocati
 end 'emitX86Start'
 
 // Exit via syscall (Linux): mov edi, eax; mov eax, N; syscall
-function emitX86ExitSyscall(code ByteBuffer, syscallNumber MachineWord)
+function emitX86ExitSyscall(code ByteArray, syscallNumber MachineWord)
     // mov edi, eax; mov eax, syscallNumber
     code.append(b"\x89\xc7\xb8")
     writeDword(code, value: syscallNumber)
@@ -331,7 +391,7 @@ function emitX86ExitSyscall(code ByteBuffer, syscallNumber MachineWord)
 end 'emitX86ExitSyscall'
 
 // Exit via IAT (Windows): mov ecx, eax; call [rip+disp32]
-function emitX86ExitIat(code ByteBuffer, relocations RelocationArray, slotIndex MachineWord)
+function emitX86ExitIat(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
     // mov ecx, eax; call [rip+disp32]
     code.append(b"\x89\xc1\xff\x15")
     relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
@@ -339,7 +399,7 @@ function emitX86ExitIat(code ByteBuffer, relocations RelocationArray, slotIndex 
 end 'emitX86ExitIat'
 
 // Emit write_stdout stub parameterized by OsDescriptor
-function emitX86WriteStdout(code ByteBuffer, osDesc OsDescriptor, relocations RelocationArray) returns CodeOffset
+function emitX86WriteStdout(code ByteArray, osDesc OsDescriptor, relocations RelocationArray) returns CodeOffset
     let offset = code.count()
     match osDesc.write 'writeStrategy'
         syscall(writeNum, fd) then emitX86WriteStdoutSyscall(code, writeNumber: writeNum, fd: fd)
@@ -349,7 +409,7 @@ function emitX86WriteStdout(code ByteBuffer, osDesc OsDescriptor, relocations Re
 end 'emitX86WriteStdout'
 
 // write_stdout via syscall (Linux): args in rcx=ptr, rdx=len
-function emitX86WriteStdoutSyscall(code ByteBuffer, writeNumber MachineWord, fd MachineWord)
+function emitX86WriteStdoutSyscall(code ByteArray, writeNumber MachineWord, fd MachineWord)
     // Prologue; mov rsi, rcx; mov edi, fd
     code.append(b"\x55\x48\x89\xe5\x48\x89\xce\xbf")
     writeDword(code, value: fd)
@@ -360,7 +420,7 @@ function emitX86WriteStdoutSyscall(code ByteBuffer, writeNumber MachineWord, fd 
 end 'emitX86WriteStdoutSyscall'
 
 // write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
-function emitX86WriteStdoutWinApi(code ByteBuffer, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+function emitX86WriteStdoutWinApi(code ByteArray, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
     // Prologue; save args; zero bytesWritten; mov ecx, handleConstant
     code.append(b"\x55\x48\x89\xe5\x48\x83\xec\x40\x48\x89\x4d\xf8\x48\x89\x55\xf0\x48\xc7\x45\xe0\x00\x00\x00\x00\x48\xc7\xc1")
     writeDword(code, value: handleConstant)
@@ -383,7 +443,7 @@ function emitX86WriteStdoutWinApi(code ByteBuffer, relocations RelocationArray, 
 end 'emitX86WriteStdoutWinApi'
 
 // Core X86 instruction emission loop — OS-neutral
-function emitX86Core(x86Ops X86OpArray, code ByteBuffer, relocations RelocationArray, callFixups CallFixupArray, jumpFixups JumpFixupArray, mainCallFixupOffset CodeOffset, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset) returns CodeResult
+function emitX86Core(x86Ops X86OpArray, code ByteArray, relocations RelocationArray, callFixups CallFixupArray, jumpFixups JumpFixupArray, mainCallFixupOffset CodeOffset, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset) returns CodeResult
     var labelNames = ByteArrayArray{}
     var labelOffsets = CodeOffsetArray{}
 
@@ -401,7 +461,17 @@ function emitX86Core(x86Ops X86OpArray, code ByteBuffer, relocations RelocationA
             addRegReg(destReg, srcReg) then emitAddRegReg(code)
             subRegReg(destReg, srcReg) then emitSubRegReg(code)
             imulRegReg(destReg, srcReg) then emitImulRegReg(code)
+            idivRcx then emitIdivRcx(code)
+            iremRcx then emitIremRcx(code)
+            negReg(reg) then emitNegReg(code)
+            bitNotReg(reg) then emitBitNotReg(code)
+            andRegReg(destReg, srcReg) then emitAndRegReg(code)
+            orRegReg(destReg, srcReg) then emitOrRegReg(code)
+            xorRegReg(destReg, srcReg) then emitXorRegReg(code)
+            shlRegCl(reg) then emitShlRegCl(code)
+            sarRegCl(reg) then emitSarRegCl(code)
             cmpRaxRcx then emitCmpRaxRcx(code)
+            testRaxRax then emitTestRaxRax(code)
             condJump(condition, targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: conditionToOpcode(condition), targetLabel: targetLabel)
             jmp(targetLabel) then emitJmp(code, jumpFixups: jumpFixups, targetLabel: targetLabel)
             label(name) then recordLabel(labelNames, labelOffsets: labelOffsets, name: name, offset: code.count())
@@ -430,7 +500,7 @@ end 'recordLabel'
 
 // Emit call rel32 placeholder — resolved after all functions are emitted.
 // Safe for zero-arg calls where stack is aligned by caller's prologue.
-function emitCallFixup(code ByteBuffer, callFixups CallFixupArray, target ByteArray)
+function emitCallFixup(code ByteArray, callFixups CallFixupArray, target ByteArray)
     logTrace(LogCategory.codegen, message: "Call fixup to '{String.from(target)}' at offset {code.count()}")
     code.push(0xE8)
     let fixupOffset = code.count()
@@ -438,7 +508,7 @@ function emitCallFixup(code ByteBuffer, callFixups CallFixupArray, target ByteAr
     code.append(b"\x00\x00\x00\x00")
 end 'emitCallFixup'
 
-function resolveCallFixups(code ByteBuffer, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
+function resolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
     logTrace(LogCategory.codegen, message: "Resolving {callFixups.count()} call fixups")
     for fixup in callFixups 'resolve'
         let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)

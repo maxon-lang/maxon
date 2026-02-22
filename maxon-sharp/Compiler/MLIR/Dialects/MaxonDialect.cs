@@ -845,7 +845,7 @@ public class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
-// Byte string literal: stores UTF-8 bytes in rdata and creates a ByteBuffer (Array with Byte)
+// Byte string literal: stores UTF-8 bytes in rdata and creates a ByteArray (Array with Byte)
 public class MaxonByteStringLiteralOp(string value, string arrayTypeName) : MaxonOp {
   public override string Mnemonic => $"maxon.byte_string_literal \"{Value}\"";
   public string Value { get; } = value;

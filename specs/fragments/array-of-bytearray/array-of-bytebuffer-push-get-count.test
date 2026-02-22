@@ -1,16 +1,16 @@
 // Test: array-of-bytebuffer-push-get-count
 typealias Byte = byte(0 to u8.max)
-typealias ByteBuffer = Array with Byte
-typealias ByteBufferArray = Array with ByteBuffer
+typealias ByteArray = Array with Byte
+typealias ByteArrayArray = Array with ByteArray
 
 function main() returns ExitCode
-  var outer = ByteBufferArray{}
-  var inner = ByteBuffer{}
+  var outer = ByteArrayArray{}
+  var inner = ByteArray{}
   inner.push(10)
   inner.push(20)
   inner.push(30)
   outer.push(inner)
-  let retrieved = try outer.get(0) otherwise ByteBuffer{}
+  let retrieved = try outer.get(0) otherwise ByteArray{}
   print("{retrieved.count()}\n")
   return 0
 end 'main'
@@ -21,7 +21,7 @@ Stdout: ```
 ```
 ---
 module {
-  func @array-of-bytebuffer.main() -> u32 {
+  func @array-of-bytearray.main() -> u32 {
   entry:
     x86.prologue stack_size=192
     x86.xor eax, eax
@@ -91,28 +91,28 @@ module {
     x86.and eax, ecx
     x86.mov ecx, [rbp-32]
     x86.mov rdx, rax
-    x86.call ByteBuffer.push
+    x86.call ByteArray.push
     x86.mov eax, 20
     x86.mov ecx, 255
     x86.and eax, ecx
     x86.mov ecx, [rbp-32]
     x86.mov rdx, rax
-    x86.call ByteBuffer.push
+    x86.call ByteArray.push
     x86.mov eax, 30
     x86.mov ecx, 255
     x86.and eax, ecx
     x86.mov ecx, [rbp-32]
     x86.mov rdx, rax
-    x86.call ByteBuffer.push
+    x86.call ByteArray.push
     x86.mov eax, [rbp-16]
     x86.mov ecx, [rbp-32]
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call ByteBufferArray.push
+    x86.call ByteArrayArray.push
     x86.xor eax, eax
     x86.mov ecx, [rbp-16]
     x86.mov rdx, rax
-    x86.call ByteBufferArray.get
+    x86.call ByteArrayArray.get
     x86.xor ecx, ecx
     x86.xor ebx, ebx
     x86.xor esi, esi
@@ -151,16 +151,16 @@ module {
     x86.xor eax, eax
     x86.mov ecx, [rbp-160]
     x86.cmp ecx, eax
-    x86.je array-of-bytebuffer.main.otherwise_default_continue_3
+    x86.je array-of-bytearray.main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov eax, [rbp-48]
     x86.mov [rbp-56], eax
-    x86.jmp array-of-bytebuffer.main.otherwise_default_continue_3
+    x86.jmp array-of-bytearray.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-56]
     x86.mov [rbp-64], eax
     x86.mov ecx, [rbp-64]
-    x86.call ByteBuffer.count
+    x86.call ByteArray.count
     x86.mov edx, 21
     x86.mov [rbp-152], eax
     x86.mov rcx, rdx

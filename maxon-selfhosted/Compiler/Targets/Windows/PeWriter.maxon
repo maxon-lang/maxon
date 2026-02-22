@@ -14,14 +14,14 @@ let IAT_SLOT_GET_STD_HANDLE = 1
 let IAT_SLOT_WRITE_FILE = 2
 
 type ImportSection
-    export var data ByteBuffer
+    export var data ByteArray
     export var iatRva Rva
     export var importDirRva Rva
     export var importDirSize ByteCount
 end 'ImportSection'
 
 function buildImportSection(idataRva Rva) returns ImportSection
-    var data = ByteBuffer{}
+    var data = ByteArray{}
     data.reserve(256)
 
     let iatOffset = 0
@@ -70,7 +70,7 @@ end 'buildImportSection'
 
 // --- Section header writer ---
 
-function writeSectionName(buf ByteBuffer, name String)
+function writeSectionName(buf ByteArray, name String)
     var written = 0
     for ch in name 'chars'
         let b = try ch.asciiValue() otherwise 0
@@ -83,7 +83,7 @@ function writeSectionName(buf ByteBuffer, name String)
     end 'pad'
 end 'writeSectionName'
 
-function writeSectionHeader(buf ByteBuffer, name String, virtualSize ByteCount, virtualAddress Rva, rawDataSize ByteCount, rawDataPointer ByteOffset, characteristics SectionFlags)
+function writeSectionHeader(buf ByteArray, name String, virtualSize ByteCount, virtualAddress Rva, rawDataSize ByteCount, rawDataPointer ByteOffset, characteristics SectionFlags)
     writeSectionName(buf, name: name)
     writeDword(buf, value: virtualSize)
     writeDword(buf, value: virtualAddress)
@@ -97,7 +97,7 @@ end 'writeSectionHeader'
 // --- Main PE writer ---
 
 // Patch x86_64 RIP-relative relocations: each relocation is a disp32 at codeOffset
-function patchRelocationsX86(code ByteBuffer, relocations RelocationArray, textRva Rva, idataRva Rva)
+function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva)
     for reloc in relocations 'patch'
         let ripAtReloc = textRva + reloc.codeOffset + 4
         let iatEntryRva = idataRva + (reloc.slotIndex * 8)
@@ -107,7 +107,7 @@ function patchRelocationsX86(code ByteBuffer, relocations RelocationArray, textR
 end 'patchRelocationsX86'
 
 // Patch ARM64 ADRP+LDR relocations: codeOffset points to ADRP, LDR is at codeOffset+4
-function patchRelocationsArm64(code ByteBuffer, relocations RelocationArray, textRva Rva, idataRva Rva)
+function patchRelocationsArm64(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva)
     for reloc in relocations 'patch'
         let iatEntryRva = idataRva + (reloc.slotIndex * 8)
         let instrRva = textRva + reloc.codeOffset
@@ -137,7 +137,7 @@ end 'patchRelocationsArm64'
 
 export function writePe(outputPath String, codeResult CodeResult, target TargetTriple)
     logDebug(LogCategory.pe, message: "Writing PE file: {outputPath}")
-    var pe = ByteBuffer{}
+    var pe = ByteArray{}
     pe.reserve(4096)
 
     var code = codeResult.code

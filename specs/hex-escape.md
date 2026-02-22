@@ -14,7 +14,7 @@ The `\xNN` escape sequence allows specifying a byte value using two hexadecimal 
 ### Syntax
 
 ```text
-let bytes = b"\x41\x42"       // ByteBuffer containing [65, 66] (same as b"AB")
+let bytes = b"\x41\x42"       // ByteArray containing [65, 66] (same as b"AB")
 let ch = '\x41'                // Character 'A'
 let s = "\x48\x69"            // String "Hi"
 ```

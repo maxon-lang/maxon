@@ -9,13 +9,13 @@ category: types
 
 ## Documentation
 
-A byte string literal uses the `b"..."` prefix to create a `ByteBuffer` (`Array with Byte`) directly from a string, without allocating a `String`. This is useful when working with raw bytes or APIs that expect byte arrays.
+A byte string literal uses the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a string, without allocating a `String`. This is useful when working with raw bytes or APIs that expect byte arrays.
 
 ### Syntax
 
 ```text
-let bytes = b"hello"           // ByteBuffer containing [104, 101, 108, 108, 111]
-let empty = b""                // Empty ByteBuffer
+let bytes = b"hello"           // ByteArray containing [104, 101, 108, 108, 111]
+let empty = b""                // Empty ByteArray
 let escaped = b"line\n"        // Supports escape sequences
 ```
 
@@ -23,16 +23,16 @@ The byte string literal supports the same escape sequences as regular string lit
 
 ### Use Cases
 
-Byte string literals are particularly useful as map keys when the map uses `ByteBuffer` keys, avoiding the overhead of `String` construction and `toByteArray()` conversion:
+Byte string literals are particularly useful as map keys when the map uses `ByteArray` keys, avoiding the overhead of `String` construction and `toByteArray()` conversion:
 
 ```text
-typealias KeywordMap = Map with (ByteBuffer, int)
+typealias KeywordMap = Map with (ByteArray, int)
 let keywords = [b"if": 1, b"else": 2, b"while": 3]
 ```
 
 ### Methods
 
-Byte string literals produce a standard `ByteBuffer`, so all `Array` methods are available:
+Byte string literals produce a standard `ByteArray`, so all `Array` methods are available:
 
 ```text
 let data = b"hello"

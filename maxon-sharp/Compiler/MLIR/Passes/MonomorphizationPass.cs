@@ -171,8 +171,8 @@ public static class MonomorphizationPass {
 
   private static string? ResolveCalleeRewrite(string callee, string? resultStructTypeName, List<MaxonValue> args, Dictionary<(string, string), string> calleeMap) {
     // Prioritize self argument type over result type to avoid ambiguity when
-    // the return type is itself a specialized type (e.g., Array<ByteBuffer>.get()
-    // returns ByteBuffer, but should resolve to ByteBufferArray.get, not ByteBuffer.get).
+    // the return type is itself a specialized type (e.g., Array<ByteArray>.get()
+    // returns ByteArray, but should resolve to ByteArrayArray.get, not ByteArray.get).
     if (args.Count > 0 && args[0] is MaxonStruct selfStruct) {
       var key = (callee, selfStruct.TypeName);
       if (calleeMap.TryGetValue(key, out var newCallee)) return newCallee;
@@ -302,8 +302,7 @@ public static class MonomorphizationPass {
           var op = block.Operations[i];
           string? callee = null;
           List<MaxonValue>? args = null;
-          if (op is MaxonCallOp call) { callee = call.Callee; args = call.Args; }
-          else if (op is MaxonTryCallOp tryCall) { callee = tryCall.Callee; args = tryCall.Args; }
+          if (op is MaxonCallOp call) { callee = call.Callee; args = call.Args; } else if (op is MaxonTryCallOp tryCall) { callee = tryCall.Callee; args = tryCall.Args; }
           if (callee == null || args == null) continue;
           if (!ifaceFuncs.TryGetValue(callee, out var ifaceInfo)) continue;
 

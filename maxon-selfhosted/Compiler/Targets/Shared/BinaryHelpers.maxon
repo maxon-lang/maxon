@@ -6,19 +6,19 @@ export typealias MachineWord = int(0 to u64.max)
 export typealias CodeOffset = int(0 to u64.max)
 export typealias StackSize = int(0 to u64.max)
 
-export function writeWord(buf ByteBuffer, value MachineWord)
+export function writeWord(buf ByteArray, value MachineWord)
     buf.push(value and 0xFF)
     buf.push((value shr 8) and 0xFF)
 end 'writeWord'
 
-export function writeDword(buf ByteBuffer, value MachineWord)
+export function writeDword(buf ByteArray, value MachineWord)
     buf.push(value and 0xFF)
     buf.push((value shr 8) and 0xFF)
     buf.push((value shr 16) and 0xFF)
     buf.push((value shr 24) and 0xFF)
 end 'writeDword'
 
-export function writeQword(buf ByteBuffer, value MachineWord)
+export function writeQword(buf ByteArray, value MachineWord)
     buf.push(value and 0xFF)
     buf.push((value shr 8) and 0xFF)
     buf.push((value shr 16) and 0xFF)
@@ -29,7 +29,7 @@ export function writeQword(buf ByteBuffer, value MachineWord)
     buf.push((value shr 56) and 0xFF)
 end 'writeQword'
 
-export function writeZeros(buf ByteBuffer, n ByteCount)
+export function writeZeros(buf ByteArray, n ByteCount)
     var i = 0
     while i < n 'zeros'
         buf.push(0)
@@ -37,7 +37,7 @@ export function writeZeros(buf ByteBuffer, n ByteCount)
     end 'zeros'
 end 'writeZeros'
 
-export function writeAscii(buf ByteBuffer, text String)
+export function writeAscii(buf ByteArray, text String)
     for ch in text 'chars'
         let b = try ch.asciiValue() otherwise 0
         buf.push(b)
@@ -45,13 +45,13 @@ export function writeAscii(buf ByteBuffer, text String)
     buf.push(0)
 end 'writeAscii'
 
-export function padTo(buf ByteBuffer, size ByteCount)
+export function padTo(buf ByteArray, size ByteCount)
     while buf.count() < size 'pad'
         buf.push(0)
     end 'pad'
 end 'padTo'
 
-export function readDword(buf ByteBuffer, offset ByteOffset) returns MachineWord
+export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord
     let b0 = try buf.get(offset) otherwise 0
     let b1 = try buf.get(offset + 1) otherwise 0
     let b2 = try buf.get(offset + 2) otherwise 0
@@ -59,7 +59,7 @@ export function readDword(buf ByteBuffer, offset ByteOffset) returns MachineWord
     return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
 end 'readDword'
 
-export function patchDword(buf ByteBuffer, offset ByteOffset, value MachineWord)
+export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
     buf.set(offset, value: value and 0xFF)
     buf.set(offset + 1, value: (value shr 8) and 0xFF)
     buf.set(offset + 2, value: (value shr 16) and 0xFF)

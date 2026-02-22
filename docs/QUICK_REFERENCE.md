@@ -10,7 +10,7 @@
 | `byte` | 0-255 | `255 as byte` |
 | `character literal` | Grapheme cluster | `'A'`, `'é'` |
 | `string literal` | UTF-8 string | `"hello"` |
-| `byte string literal` | ByteBuffer from string | `b"hello"` |
+| `byte string literal` | ByteArray from string | `b"hello"` |
 
 ## Ranged Type Aliases
 

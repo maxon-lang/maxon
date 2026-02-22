@@ -245,7 +245,7 @@ File not found
 
 function main() returns ExitCode
   // Create a byte array with known values
-  var data = ByteBuffer{}
+  var data = ByteArray{}
   data.push(65 as Byte)
   data.push(66 as Byte)
   data.push(67 as Byte)

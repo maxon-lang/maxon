@@ -27,8 +27,28 @@ function resetSymbolTable(project Project)
     project.parserVarNames = ByteArrayArray{}
     project.parserVarSlots = VarSlotArray{}
     project.parserVarIsFloat = BoolArray{}
+    project.parserScopeStack = ScopeDepthArray{}
     project.parserNextSlot = 0
 end 'resetSymbolTable'
+
+// Scope depth tracking for block scoping (if/while bodies).
+// Records the symbol table size when entering a scope so variables can be removed on exit.
+export typealias ScopeDepth = int(0 to u64.max)
+export typealias ScopeDepthArray = Array with ScopeDepth
+
+function pushScope(project Project)
+    project.parserScopeStack.push(project.parserVarNames.count())
+end 'pushScope'
+
+function popScope(project Project)
+    let savedSize = try project.parserScopeStack.pop() otherwise 0
+    // Remove variables added since the scope was pushed
+    while project.parserVarNames.count() > savedSize 'trim'
+        try project.parserVarNames.pop() otherwise ByteArray{}
+        try project.parserVarSlots.pop() otherwise 0
+        try project.parserVarIsFloat.pop() otherwise false
+    end 'trim'
+end 'popScope'
 
 function defineVariable(project Project, name ByteArray, isFloat bool) returns VarSlot
     let slot = project.parserNextSlot
@@ -48,7 +68,7 @@ function lookupVariable(project Project, name ByteArray, token Token, filePath S
         end 'found'
         i = i - 1
     end 'lookup'
-    try raiseCompileError(ErrorCode.semanticUndefinedVariable, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
+    try raiseCompileError(ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
     return 0
 end 'lookupVariable'
 
@@ -183,7 +203,20 @@ function parseStatements(project Project, tokens TokenArray, startPos TokenIndex
                     if stmtToken.kind == TokenKind.if 'isIf'
                         pos = try parseIfStatement(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
                     end 'isIf' else 'notIf'
-                        try raiseCompileError(ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+                        if stmtToken.kind == TokenKind.while 'isWhile'
+                            pos = try parseWhileStatement(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+                        end 'isWhile' else 'notWhile'
+                            if stmtToken.kind == TokenKind.identifier 'maybeAssign'
+                                let peekAssign = tokenAt(tokens, pos: pos + 1)
+                                if peekAssign.kind == TokenKind.equals 'isAssign'
+                                    pos = try parseVarAssignment(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+                                end 'isAssign' else 'notAssign'
+                                    try raiseCompileError(ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+                                end 'notAssign'
+                            end 'maybeAssign' else 'notAssign2'
+                                try raiseCompileError(ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+                            end 'notAssign2'
+                        end 'notWhile'
                     end 'notIf'
                 end 'notPrint'
             end 'notVarDecl'
@@ -216,6 +249,14 @@ end 'parseTopLevelLet'
 
 function parseReturnStatement(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
     var pos = startPos + 1  // skip 'return'
+    // Bare 'return' without expression (void return)
+    let nextTok = tokenAt(tokens, pos: pos)
+    if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
+        let zeroId = nextValueId(project)
+        ops.push(MaxonOp.literal(zeroId, 0))
+        ops.push(MaxonOp.returnOp(zeroId))
+        return pos
+    end 'bareReturn'
     let resultId = try parseExpression(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
     pos = resultId.nextPos
     ops.push(MaxonOp.returnOp(resultId.valueId))
@@ -245,10 +286,12 @@ function parseIfStatement(project Project, tokens TokenArray, startPos TokenInde
     // Emit conditional branch
     ops.push(MaxonOp.condBr(condResult.valueId, thenLabel, elseLabel))
 
-    // Emit then block
+    // Emit then block with block scoping
     ops.push(MaxonOp.label(thenLabel))
+    pushScope(project)
     var thenReturns = false
     pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath, lastWasReturn: thenReturns)
+    popScope(project)
 
     if not thenReturns 'thenNeedsMerge'
         ops.push(MaxonOp.br(mergeLabel))
@@ -269,27 +312,40 @@ function parseIfStatement(project Project, tokens TokenArray, startPos TokenInde
     if maybeElse.kind == TokenKind.else 'isElse'
         hasElse = true
         pos = pos + 1  // skip 'else'
-        // Skip else block label
-        let elseLabelToken = tokenAt(tokens, pos: pos)
-        if elseLabelToken.kind == TokenKind.stringLiteral 'hasElseLabel'
-            pos = pos + 1
-        end 'hasElseLabel'
-        pos = skipNewlines(tokens, startPos: pos)
 
-        // Emit else block
-        ops.push(MaxonOp.label(elseLabel))
-        pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath, lastWasReturn: elseReturns)
+        // Check for 'else if' chain
+        let maybeIf = tokenAt(tokens, pos: pos)
+        if maybeIf.kind == TokenKind.if 'isElseIf'
+            // Emit else label, then recurse into parseIfStatement for the chained if
+            ops.push(MaxonOp.label(elseLabel))
+            pos = try parseIfStatement(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+            // The recursive call handles its own merge; we just need to merge from here
+            elseReturns = false
+        end 'isElseIf' else 'plainElse'
+            // Skip else block label
+            let elseLabelToken = tokenAt(tokens, pos: pos)
+            if elseLabelToken.kind == TokenKind.stringLiteral 'hasElseLabel'
+                pos = pos + 1
+            end 'hasElseLabel'
+            pos = skipNewlines(tokens, startPos: pos)
 
-        if not elseReturns 'elseNeedsMerge'
-            ops.push(MaxonOp.br(mergeLabel))
-        end 'elseNeedsMerge'
+            // Emit else block with block scoping
+            ops.push(MaxonOp.label(elseLabel))
+            pushScope(project)
+            pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath, lastWasReturn: elseReturns)
+            popScope(project)
 
-        // Skip 'end' and label
-        pos = pos + 1  // skip 'end'
-        let afterElseEnd = tokenAt(tokens, pos: pos)
-        if afterElseEnd.kind == TokenKind.stringLiteral 'hasElseEndLabel'
-            pos = pos + 1
-        end 'hasElseEndLabel'
+            if not elseReturns 'elseNeedsMerge'
+                ops.push(MaxonOp.br(mergeLabel))
+            end 'elseNeedsMerge'
+
+            // Skip 'end' and label
+            pos = pos + 1  // skip 'end'
+            let afterElseEnd = tokenAt(tokens, pos: pos)
+            if afterElseEnd.kind == TokenKind.stringLiteral 'hasElseEndLabel'
+                pos = pos + 1
+            end 'hasElseEndLabel'
+        end 'plainElse'
     end 'isElse'
 
     if not hasElse 'noElseBlock'
@@ -305,7 +361,68 @@ function parseIfStatement(project Project, tokens TokenArray, startPos TokenInde
     return pos
 end 'parseIfStatement'
 
-function nextLabelName(project Project, prefix ByteBuffer) returns ByteArray
+// Parse: while <condition> 'label' ... end 'label'
+function parseWhileStatement(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
+    var pos = startPos + 1  // skip 'while'
+
+    let loopLabel = nextLabelName(project, prefix: b"loop")
+    let exitLabel = nextLabelName(project, prefix: b"exit")
+
+    // Emit loop label at the top (condition is re-evaluated each iteration)
+    ops.push(MaxonOp.label(loopLabel))
+
+    // Parse condition expression
+    let condResult = try parseExpression(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+    pos = condResult.nextPos
+
+    // Skip block label after condition
+    let whileLabelToken = tokenAt(tokens, pos: pos)
+    if whileLabelToken.kind == TokenKind.stringLiteral 'hasWhileLabel'
+        pos = pos + 1
+    end 'hasWhileLabel'
+    pos = skipNewlines(tokens, startPos: pos)
+
+    // Branch to exit if condition is false
+    ops.push(MaxonOp.condBr(condResult.valueId, loopLabel, exitLabel))
+
+    // Parse body with block scoping
+    pushScope(project)
+    var bodyReturns = false
+    pos = try parseStatements(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath, lastWasReturn: bodyReturns)
+    popScope(project)
+
+    // Jump back to loop header
+    if not bodyReturns 'needsLoop'
+        ops.push(MaxonOp.br(loopLabel))
+    end 'needsLoop'
+
+    // Skip 'end' and optional label string
+    pos = pos + 1  // skip 'end'
+    let afterEnd = tokenAt(tokens, pos: pos)
+    if afterEnd.kind == TokenKind.stringLiteral 'hasEndLabel'
+        pos = pos + 1
+    end 'hasEndLabel'
+
+    // Emit exit label
+    ops.push(MaxonOp.label(exitLabel))
+
+    return pos
+end 'parseWhileStatement'
+
+// Parse: identifier = expression (variable reassignment)
+function parseVarAssignment(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns TokenIndex throws CompileError
+    var pos = startPos
+    let nameToken = tokenAt(tokens, pos: pos)
+    pos = pos + 1  // skip name
+    pos = pos + 1  // skip '='
+    let exprResult = try parseExpression(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+    pos = exprResult.nextPos
+    let slot = try lookupVariable(project, name: nameToken.value, token: nameToken, filePath: filePath)
+    ops.push(MaxonOp.varStore(slot, exprResult.valueId))
+    return pos
+end 'parseVarAssignment'
+
+function nextLabelName(project Project, prefix ByteArray) returns ByteArray
     let id = project.nextLabelId_
     project.nextLabelId_ = project.nextLabelId_ + 1
     var buf = ByteArray{}
@@ -324,7 +441,7 @@ function nextLabelName(project Project, prefix ByteBuffer) returns ByteArray
     return buf
 end 'nextLabelName'
 
-function appendBytes(dst ByteArray, src ByteBuffer)
+function appendBytes(dst ByteArray, src ByteArray)
     var i = 0
     while i < src.count() 'copy'
         dst.push(try src.get(i) otherwise 0)
@@ -480,8 +597,109 @@ export type ExprResult
 end 'ExprResult'
 
 function parseExpression(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
-    return try parseComparison(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
+    return try parseBitwiseOr(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
 end 'parseExpression'
+
+// Bitwise OR: bitwiseXor (or bitwiseXor)*
+function parseBitwiseOr(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    var result = try parseBitwiseXor(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
+    var pos = result.nextPos
+    var leftId = result.valueId
+
+    while pos < tokens.count() 'orLoop'
+        let opToken = tokenAt(tokens, pos: pos)
+        if opToken.kind == TokenKind.or 'isOr'
+            pos = pos + 1
+            let right = try parseBitwiseXor(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+            pos = right.nextPos
+            let resultId = nextValueId(project)
+            ops.push(MaxonOp.bitOr(resultId, leftId, right.valueId))
+            leftId = resultId
+        end 'isOr' else 'notOr'
+            break 'orLoop'
+        end 'notOr'
+    end 'orLoop'
+
+    return ExprResult{valueId: leftId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+end 'parseBitwiseOr'
+
+// Bitwise XOR: bitwiseAnd (xor bitwiseAnd)*
+function parseBitwiseXor(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    var result = try parseBitwiseAnd(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
+    var pos = result.nextPos
+    var leftId = result.valueId
+
+    while pos < tokens.count() 'xorLoop'
+        let opToken = tokenAt(tokens, pos: pos)
+        if opToken.kind == TokenKind.xor 'isXor'
+            pos = pos + 1
+            let right = try parseBitwiseAnd(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+            pos = right.nextPos
+            let resultId = nextValueId(project)
+            ops.push(MaxonOp.bitXor(resultId, leftId, right.valueId))
+            leftId = resultId
+        end 'isXor' else 'notXor'
+            break 'xorLoop'
+        end 'notXor'
+    end 'xorLoop'
+
+    return ExprResult{valueId: leftId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+end 'parseBitwiseXor'
+
+// Bitwise AND: shift (and shift)*
+function parseBitwiseAnd(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    var result = try parseShift(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
+    var pos = result.nextPos
+    var leftId = result.valueId
+
+    while pos < tokens.count() 'andLoop'
+        let opToken = tokenAt(tokens, pos: pos)
+        if opToken.kind == TokenKind.and 'isAnd'
+            pos = pos + 1
+            let right = try parseShift(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+            pos = right.nextPos
+            let resultId = nextValueId(project)
+            ops.push(MaxonOp.bitAnd(resultId, leftId, right.valueId))
+            leftId = resultId
+        end 'isAnd' else 'notAnd'
+            break 'andLoop'
+        end 'notAnd'
+    end 'andLoop'
+
+    return ExprResult{valueId: leftId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+end 'parseBitwiseAnd'
+
+// Shift: comparison (shl|shr comparison)*
+function parseShift(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    var result = try parseComparison(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
+    var pos = result.nextPos
+    var leftId = result.valueId
+
+    while pos < tokens.count() 'shiftLoop'
+        let opToken = tokenAt(tokens, pos: pos)
+        if opToken.kind == TokenKind.shl 'isShl'
+            pos = pos + 1
+            let right = try parseComparison(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+            pos = right.nextPos
+            let resultId = nextValueId(project)
+            ops.push(MaxonOp.shl(resultId, leftId, right.valueId))
+            leftId = resultId
+        end 'isShl' else 'notShl'
+            if opToken.kind == TokenKind.shr 'isShr'
+                pos = pos + 1
+                let right = try parseComparison(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+                pos = right.nextPos
+                let resultId = nextValueId(project)
+                ops.push(MaxonOp.shr(resultId, leftId, right.valueId))
+                leftId = resultId
+            end 'isShr' else 'notShr'
+                break 'shiftLoop'
+            end 'notShr'
+        end 'notShl'
+    end 'shiftLoop'
+
+    return ExprResult{valueId: leftId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+end 'parseShift'
 
 // Comparison: addSub (== | != | < | <= | > | >=) addSub
 function parseComparison(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
@@ -598,7 +816,7 @@ function parseAddSub(project Project, tokens TokenArray, startPos TokenIndex, op
 end 'parseAddSub'
 
 function parseMulDiv(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
-    var result = try parsePrimary(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
+    var result = try parseUnary(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
     var pos = result.nextPos
     var leftId = result.valueId
     var leftIsFloat = result.isFloat
@@ -607,18 +825,57 @@ function parseMulDiv(project Project, tokens TokenArray, startPos TokenIndex, op
         let opToken = tokenAt(tokens, pos: pos)
         if opToken.kind == TokenKind.star 'isMul'
             pos = pos + 1
-            let right = try parsePrimary(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+            let right = try parseUnary(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
             pos = right.nextPos
             let resultId = nextValueId(project)
             ops.push(MaxonOp.mul(resultId, leftId, right.valueId))
             leftId = resultId
         end 'isMul' else 'notMul'
-            break 'mulLoop'
+            if opToken.kind == TokenKind.slash 'isDiv'
+                pos = pos + 1
+                let right = try parseUnary(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+                pos = right.nextPos
+                let resultId = nextValueId(project)
+                ops.push(MaxonOp.div(resultId, leftId, right.valueId))
+                leftId = resultId
+            end 'isDiv' else 'notDiv'
+                if opToken.kind == TokenKind.mod 'isMod'
+                    pos = pos + 1
+                    let right = try parseUnary(project, tokens: tokens, startPos: pos, ops: ops, filePath: filePath)
+                    pos = right.nextPos
+                    let resultId = nextValueId(project)
+                    ops.push(MaxonOp.mod(resultId, leftId, right.valueId))
+                    leftId = resultId
+                end 'isMod' else 'notMod'
+                    break 'mulLoop'
+                end 'notMod'
+            end 'notDiv'
         end 'notMul'
     end 'mulLoop'
 
     return ExprResult{valueId: leftId, nextPos: pos, isFloat: leftIsFloat, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseMulDiv'
+
+// Unary: -expr | not expr | primary
+function parseUnary(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
+    let token = tokenAt(tokens, pos: startPos)
+
+    if token.kind == TokenKind.minus 'isNeg'
+        let operand = try parseUnary(project, tokens: tokens, startPos: startPos + 1, ops: ops, filePath: filePath)
+        let resultId = nextValueId(project)
+        ops.push(MaxonOp.neg(resultId, operand.valueId))
+        return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: operand.isFloat, isStringConst: false, stringConstValue: ByteArray{}}
+    end 'isNeg'
+
+    if token.kind == TokenKind.not 'isNot'
+        let operand = try parseUnary(project, tokens: tokens, startPos: startPos + 1, ops: ops, filePath: filePath)
+        let resultId = nextValueId(project)
+        ops.push(MaxonOp.bitNot(resultId, operand.valueId))
+        return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+    end 'isNot'
+
+    return try parsePrimary(project, tokens: tokens, startPos: startPos, ops: ops, filePath: filePath)
+end 'parseUnary'
 
 function parsePrimary(project Project, tokens TokenArray, startPos TokenIndex, ops MaxonOpArray, filePath String) returns ExprResult throws CompileError
     let token = tokenAt(tokens, pos: startPos)
@@ -663,15 +920,25 @@ function parsePrimary(project Project, tokens TokenArray, startPos TokenIndex, o
         return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: true, stringConstValue: token.value}
     end 'isStrLit'
 
+    if token.kind == TokenKind.true 'isTrue'
+        let id = nextValueId(project)
+        ops.push(MaxonOp.literal(id, 1))
+        return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+    end 'isTrue'
+
+    if token.kind == TokenKind.false 'isFalse'
+        let id = nextValueId(project)
+        ops.push(MaxonOp.literal(id, 0))
+        return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+    end 'isFalse'
+
     if token.kind == TokenKind.leftParen 'isParen'
         let inner = try parseExpression(project, tokens: tokens, startPos: startPos + 1, ops: ops, filePath: filePath)
         return ExprResult{valueId: inner.valueId, nextPos: inner.nextPos + 1, isFloat: inner.isFloat, isStringConst: inner.isStringConst, stringConstValue: inner.stringConstValue}
     end 'isParen'
 
-    // Fallback: return 0
-    let id = nextValueId(project)
-    ops.push(MaxonOp.literal(id, 0))
-    return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+    try raiseCompileError(ErrorCode.parserExpectedExpression, message: "Expected expression but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+    return ExprResult{valueId: 0, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parsePrimary'
 
 // --- Helpers ---
@@ -693,31 +960,64 @@ function tokenAt(tokens TokenArray, pos TokenIndex) returns Token
     return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: ByteArray{}, line: 0, column: 0}
 end 'tokenAt'
 
-// Convert a decimal float string (e.g. "3.14") to IEEE 754 double raw bits.
+// Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
 // Uses integer-only arithmetic: parses into integer/fraction parts,
 // then constructs the IEEE 754 representation manually.
 function parseFloatBits(s ByteArray) returns ParsedInt
-    // Parse integer and fractional parts as integers
+    // Parse integer and fractional parts as integers, skip underscores.
+    // Also parse optional exponent (e/E followed by optional +/- and digits).
     var intPart = 0
     var fracPart = 0
     var fracDigits = 0
     var pastDot = false
+    var sciExp = 0
+    var sciExpNeg = false
+    var inExponent = false
 
     var pi = 0
     while pi < s.count() 'parse'
         let b = try s.get(pi) otherwise 0
-        if b == 46 'isDot'
-            pastDot = true
-        end 'isDot' else 'notDot'
-            if b >= 48 and b <= 57 'isDigit'
-                if pastDot 'frac'
-                    fracPart = fracPart * 10 + (b - 48)
-                    fracDigits = fracDigits + 1
-                end 'frac' else 'int'
-                    intPart = intPart * 10 + (b - 48)
-                end 'int'
-            end 'isDigit'
-        end 'notDot'
+
+        // Skip underscores
+        if b == 95 'skipUnderscore'
+            pi = pi + 1
+            continue
+        end 'skipUnderscore'
+
+        if inExponent 'expPart'
+            if b >= 48 and b <= 57 'expDigit'
+                sciExp = sciExp * 10 + (b - 48)
+            end 'expDigit'
+        end 'expPart' else 'mantissaPart'
+            // Check for exponent start: e or E (101 = 'e', 69 = 'E')
+            if b == 101 or b == 69 'startExp'
+                inExponent = true
+                // Check for sign on next byte
+                if pi + 1 < s.count() 'peekSign'
+                    let signByte = try s.get(pi + 1) otherwise 0
+                    if signByte == 45 'negSign'
+                        sciExpNeg = true
+                        pi = pi + 1
+                    end 'negSign'
+                    if signByte == 43 'posSign'
+                        pi = pi + 1
+                    end 'posSign'
+                end 'peekSign'
+            end 'startExp' else 'notExp'
+                if b == 46 'isDot'
+                    pastDot = true
+                end 'isDot' else 'notDot'
+                    if b >= 48 and b <= 57 'isDigit'
+                        if pastDot 'frac'
+                            fracPart = fracPart * 10 + (b - 48)
+                            fracDigits = fracDigits + 1
+                        end 'frac' else 'int'
+                            intPart = intPart * 10 + (b - 48)
+                        end 'int'
+                    end 'isDigit'
+                end 'notDot'
+            end 'notExp'
+        end 'mantissaPart'
         pi = pi + 1
     end 'parse'
 
@@ -730,14 +1030,25 @@ function parseFloatBits(s ByteArray) returns ParsedInt
     end 'powLoop'
 
     // Build the mantissa by scaling: value = intPart + fracPart/fracDivisor
-    // We need to find exponent and 52-bit mantissa for IEEE 754 double.
-
-    // Find the binary exponent: how many times we can halve or double intPart
-    // Strategy: scale the value into [1.0, 2.0) by tracking the exponent
     // Represent value as (intPart * fracDivisor + fracPart) / fracDivisor
-
     var numerator = intPart * fracDivisor + fracPart
     var denominator = fracDivisor
+
+    // Apply scientific notation exponent: multiply or divide by 10^sciExp
+    if sciExp > 0 'applySciExp'
+        var ei = 0
+        if sciExpNeg 'divByTen'
+            while ei < sciExp 'divLoop'
+                denominator = denominator * 10
+                ei = ei + 1
+            end 'divLoop'
+        end 'divByTen' else 'mulByTen'
+            while ei < sciExp 'mulLoop'
+                numerator = numerator * 10
+                ei = ei + 1
+            end 'mulLoop'
+        end 'mulByTen'
+    end 'applySciExp'
 
     // Handle zero
     if numerator == 0 'isZero'
@@ -758,7 +1069,6 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 
     // Now 1.0 <= numerator/denominator < 2.0
     // Extract 52 bits of mantissa (implicit leading 1 is not stored)
-    // mantissa = ((numerator/denominator - 1) * 2^52)
     numerator = numerator - denominator
     var mantissa = 0
     var bit = 51
@@ -777,14 +1087,93 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 end 'parseFloatBits'
 
 function parseInt(s ByteArray) returns ParsedInt
+    let sLen = s.count()
+    if sLen < 1 'empty'
+        return 0
+    end 'empty'
+
+    // Check for 0x, 0b, 0o prefixes (need at least 2 bytes)
+    if sLen >= 2 'checkPrefix'
+        let first = try s.get(0) otherwise 0
+        let second = try s.get(1) otherwise 0
+
+        // Hex: 0x or 0X
+        if first == 48 and (second == 120 or second == 88) 'isHex'
+            return parseHexInt(s, startIndex: 2)
+        end 'isHex'
+
+        // Binary: 0b or 0B
+        if first == 48 and (second == 98 or second == 66) 'isBin'
+            return parseBinaryInt(s, startIndex: 2)
+        end 'isBin'
+
+        // Octal: 0o or 0O
+        if first == 48 and (second == 111 or second == 79) 'isOct'
+            return parseOctalInt(s, startIndex: 2)
+        end 'isOct'
+    end 'checkPrefix'
+
+    // Decimal with underscore support
     var result = 0
     var pi = 0
-    while pi < s.count() 'digits'
+    while pi < sLen 'digits'
         let b = try s.get(pi) otherwise 0
         if b >= 48 and b <= 57 'digit'
             result = result * 10 + (b - 48)
         end 'digit'
+        // Underscores are silently skipped
         pi = pi + 1
     end 'digits'
     return result
 end 'parseInt'
+
+function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt
+    var result = 0
+    var pi = startIndex
+    while pi < s.count() 'hexDigits'
+        let b = try s.get(pi) otherwise 0
+        if b >= 48 and b <= 57 'decDigit'
+            result = result * 16 + (b - 48)
+        end 'decDigit'
+        if b >= 97 and b <= 102 'lowerHex'
+            result = result * 16 + (b - 87)
+        end 'lowerHex'
+        if b >= 65 and b <= 70 'upperHex'
+            result = result * 16 + (b - 55)
+        end 'upperHex'
+        // Underscores are silently skipped
+        pi = pi + 1
+    end 'hexDigits'
+    return result
+end 'parseHexInt'
+
+function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt
+    var result = 0
+    var pi = startIndex
+    while pi < s.count() 'binDigits'
+        let b = try s.get(pi) otherwise 0
+        if b == 48 'zeroBit'
+            result = result * 2
+        end 'zeroBit'
+        if b == 49 'oneBit'
+            result = result * 2 + 1
+        end 'oneBit'
+        // Underscores are silently skipped
+        pi = pi + 1
+    end 'binDigits'
+    return result
+end 'parseBinaryInt'
+
+function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt
+    var result = 0
+    var pi = startIndex
+    while pi < s.count() 'octDigits'
+        let b = try s.get(pi) otherwise 0
+        if b >= 48 and b <= 55 'octDigit'
+            result = result * 8 + (b - 48)
+        end 'octDigit'
+        // Underscores are silently skipped
+        pi = pi + 1
+    end 'octDigits'
+    return result
+end 'parseOctalInt'

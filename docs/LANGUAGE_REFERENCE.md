@@ -223,15 +223,15 @@ interface FormattedStringable
 end 'FormattedStringable'
 ```
 
-**Byte String Literals** (create a ByteBuffer from a string)
+**Byte String Literals** (create a ByteArray from a string)
 ```maxon
-let bytes = b"hello"           // ByteBuffer containing [104, 101, 108, 108, 111]
-let empty = b""                // Empty ByteBuffer
+let bytes = b"hello"           // ByteArray containing [104, 101, 108, 108, 111]
+let empty = b""                // Empty ByteArray
 let escaped = b"line\n"        // Supports escape sequences
 let raw = b"\xFF\x00"          // Hex escape: raw bytes [255, 0]
 ```
 
-Byte string literals use the `b"..."` prefix to create a `ByteBuffer` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF). This is useful when working with raw bytes or APIs that expect byte arrays.
+Byte string literals use the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF). This is useful when working with raw bytes or APIs that expect byte arrays.
 
 **Boolean Literals**
 ```maxon
