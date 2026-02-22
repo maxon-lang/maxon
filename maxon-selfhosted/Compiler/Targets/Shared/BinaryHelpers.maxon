@@ -51,6 +51,14 @@ export function padTo(buf ByteBuffer, size ByteCount)
     end 'pad'
 end 'padTo'
 
+export function readDword(buf ByteBuffer, offset ByteOffset) returns MachineWord
+    let b0 = try buf.get(offset) otherwise 0
+    let b1 = try buf.get(offset + 1) otherwise 0
+    let b2 = try buf.get(offset + 2) otherwise 0
+    let b3 = try buf.get(offset + 3) otherwise 0
+    return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+end 'readDword'
+
 export function patchDword(buf ByteBuffer, offset ByteOffset, value MachineWord)
     buf.set(offset, value: value and 0xFF)
     buf.set(offset + 1, value: (value shr 8) and 0xFF)

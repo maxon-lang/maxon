@@ -551,23 +551,23 @@ export function emitX86(stdOps StdOpArray, target TargetTriple, osDesc OsDescrip
     logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops ({tripleToString(target)})")
     var code = ByteBuffer{}
     code.reserve(1024)
-    var iatFixups = IatFixupArray{}
+    var relocations = RelocationArray{}
     var callFixups = CallFixupArray{}
     var jumpFixups = JumpFixupArray{}
 
-    let mainCallFixupOffset = emitX86Start(code, osDesc: osDesc, iatFixups: iatFixups, callFixups: callFixups)
+    let mainCallFixupOffset = emitX86Start(code, osDesc: osDesc, relocations: relocations, callFixups: callFixups)
 
     logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
-    let writeStdoutOff = emitX86WriteStdout(code, osDesc: osDesc, iatFixups: iatFixups)
+    let writeStdoutOff = emitX86WriteStdout(code, osDesc: osDesc, relocations: relocations)
     let i64ToStringOff = emitI64ToString(code)
 
-    return emitX86Core(x86Ops, code: code, iatFixups: iatFixups, callFixups: callFixups, jumpFixups: jumpFixups, mainCallFixupOffset: mainCallFixupOffset, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+    return emitX86Core(x86Ops, code: code, relocations: relocations, callFixups: callFixups, jumpFixups: jumpFixups, mainCallFixupOffset: mainCallFixupOffset, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
 end 'emitX86'
 
 // --- OS-parameterized stubs ---
 
 // Emit _start: optional shadow space, call main, then exit via OsDescriptor strategy
-function emitX86Start(code ByteBuffer, osDesc OsDescriptor, iatFixups IatFixupArray, callFixups CallFixupArray) returns CodeOffset
+function emitX86Start(code ByteBuffer, osDesc OsDescriptor, relocations RelocationArray, callFixups CallFixupArray) returns CodeOffset
     // Shadow space (Windows x64 ABI requires it)
     if osDesc.startShadowSpace > 0 'hasShadow'
         // sub rsp, shadowSpace
@@ -594,7 +594,7 @@ function emitX86Start(code ByteBuffer, osDesc OsDescriptor, iatFixups IatFixupAr
     // Exit using the OS-specified strategy
     match osDesc.exit 'exitStrategy'
         syscall(num) then emitX86ExitSyscall(code, syscallNumber: num)
-        iatCall(slotIdx) then emitX86ExitIat(code, iatFixups: iatFixups, slotIndex: slotIdx)
+        iatCall(slotIdx) then emitX86ExitIat(code, relocations: relocations, slotIndex: slotIdx)
     end 'exitStrategy'
 
     // int3 (unreachable)
@@ -619,14 +619,14 @@ function emitX86ExitSyscall(code ByteBuffer, syscallNumber MachineWord)
 end 'emitX86ExitSyscall'
 
 // Exit via IAT (Windows): mov ecx, eax; call [rip+disp32]
-function emitX86ExitIat(code ByteBuffer, iatFixups IatFixupArray, slotIndex MachineWord)
+function emitX86ExitIat(code ByteBuffer, relocations RelocationArray, slotIndex MachineWord)
     // mov ecx, eax (return value -> first arg for ExitProcess)
     code.push(0x89)
     code.push(0xC1)
     // call [rip+disp32] (indirect through IAT)
     code.push(0xFF)
     code.push(0x15)
-    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: slotIndex})
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
     code.push(0x00)
     code.push(0x00)
     code.push(0x00)
@@ -634,11 +634,11 @@ function emitX86ExitIat(code ByteBuffer, iatFixups IatFixupArray, slotIndex Mach
 end 'emitX86ExitIat'
 
 // Emit write_stdout stub parameterized by OsDescriptor
-function emitX86WriteStdout(code ByteBuffer, osDesc OsDescriptor, iatFixups IatFixupArray) returns CodeOffset
+function emitX86WriteStdout(code ByteBuffer, osDesc OsDescriptor, relocations RelocationArray) returns CodeOffset
     let offset = code.count()
     match osDesc.write 'writeStrategy'
         syscall(writeNum, fd) then emitX86WriteStdoutSyscall(code, writeNumber: writeNum, fd: fd)
-        winApi(getHandleSlot, handleConstant, writeFileSlot) then emitX86WriteStdoutWinApi(code, iatFixups: iatFixups, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot)
+        winApi(getHandleSlot, handleConstant, writeFileSlot) then emitX86WriteStdoutWinApi(code, relocations: relocations, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot)
     end 'writeStrategy'
     return offset
 end 'emitX86WriteStdout'
@@ -678,7 +678,7 @@ function emitX86WriteStdoutSyscall(code ByteBuffer, writeNumber MachineWord, fd 
 end 'emitX86WriteStdoutSyscall'
 
 // write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
-function emitX86WriteStdoutWinApi(code ByteBuffer, iatFixups IatFixupArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+function emitX86WriteStdoutWinApi(code ByteBuffer, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
     // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x40
     code.push(0x55)
     code.push(0x48)
@@ -721,7 +721,7 @@ function emitX86WriteStdoutWinApi(code ByteBuffer, iatFixups IatFixupArray, getH
     // call [rip+disp32] GetStdHandle
     code.push(0xFF)
     code.push(0x15)
-    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: getHandleSlot})
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: getHandleSlot})
     writeDword(code, value: 0)
 
     // Save handle: mov [rbp-24], rax
@@ -765,7 +765,7 @@ function emitX86WriteStdoutWinApi(code ByteBuffer, iatFixups IatFixupArray, getH
     // call [rip+disp32] WriteFile
     code.push(0xFF)
     code.push(0x15)
-    iatFixups.push(IatFixup{codeOffset: code.count(), iatSlotIndex: writeFileSlot})
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeFileSlot})
     writeDword(code, value: 0)
 
     // Epilogue: mov rsp, rbp; pop rbp; ret
@@ -777,7 +777,7 @@ function emitX86WriteStdoutWinApi(code ByteBuffer, iatFixups IatFixupArray, getH
 end 'emitX86WriteStdoutWinApi'
 
 // Core X86 instruction emission loop — OS-neutral
-function emitX86Core(x86Ops X86OpArray, code ByteBuffer, iatFixups IatFixupArray, callFixups CallFixupArray, jumpFixups JumpFixupArray, mainCallFixupOffset CodeOffset, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset) returns CodeResult
+function emitX86Core(x86Ops X86OpArray, code ByteBuffer, relocations RelocationArray, callFixups CallFixupArray, jumpFixups JumpFixupArray, mainCallFixupOffset CodeOffset, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset) returns CodeResult
     var labelNames = ByteArrayArray{}
     var labelOffsets = CodeOffsetArray{}
 
@@ -813,7 +813,7 @@ function emitX86Core(x86Ops X86OpArray, code ByteBuffer, iatFixups IatFixupArray
     resolveJumpFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, jumpFixups: jumpFixups)
 
     logDebug(LogCategory.codegen, message: "Emitted {code.count()} bytes of machine code")
-    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, osFixups: OsFixups.peFixups(iatFixups)}
+    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations}
 end 'emitX86Core'
 
 function recordLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray, offset CodeOffset)

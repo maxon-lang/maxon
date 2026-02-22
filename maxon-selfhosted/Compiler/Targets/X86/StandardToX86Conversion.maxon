@@ -105,24 +105,24 @@ export function lowerStdOpsToX86(stdOps StdOpArray, target TargetTriple) returns
 
         // All other ops are 1:1 mappings (single push each)
         match sOp 'lower'
-            funcBegin(name, returnType) then i = i  // handled above
-            funcEnd then i = i  // no-op: prologue/epilogue handled by funcBegin/returnOp
-            constI64(resultId, value) then i = i  // handled above
-            constF64(resultId, rawBits) then i = i  // handled above
+            funcBegin(name, returnType) then break 'lower'  // handled above
+            funcEnd then break 'lower'  // no-op: prologue/epilogue handled by funcBegin/returnOp
+            constI64(resultId, value) then break 'lower'  // handled above
+            constF64(resultId, rawBits) then break 'lower'  // handled above
             returnOp(retValId) then ops.push(X86Op.epilogue)
             storeSlot(slotId, valueId) then emitStoreSlot(ops, valueSlots: valueSlots, slotId: slotId, valueId: valueId)
             loadSlot(resultId, slotId) then emitLoadSlot(ops, valueSlots: valueSlots, resultId: resultId, slotId: slotId)
-            addI64(resultId, leftId, rightId) then i = i  // handled above
-            subI64(resultId, leftId, rightId) then i = i  // handled above
-            mulI64(resultId, leftId, rightId) then i = i  // handled above
-            cmpI64Eq(resultId, leftId, rightId) then i = i  // handled above
-            cmpI64Ne(resultId, leftId, rightId) then i = i  // handled above
-            cmpI64Lt(resultId, leftId, rightId) then i = i  // handled above
-            cmpI64Le(resultId, leftId, rightId) then i = i  // handled above
-            cmpI64Gt(resultId, leftId, rightId) then i = i  // handled above
-            cmpI64Ge(resultId, leftId, rightId) then i = i  // handled above
-            cmpF64Eq(resultId, leftId, rightId) then i = i  // handled above
-            condBr(condId, thenLabel, elseLabel) then i = i  // handled above
+            addI64(resultId, leftId, rightId) then break 'lower'  // handled above
+            subI64(resultId, leftId, rightId) then break 'lower'  // handled above
+            mulI64(resultId, leftId, rightId) then break 'lower'  // handled above
+            cmpI64Eq(resultId, leftId, rightId) then break 'lower'  // handled above
+            cmpI64Ne(resultId, leftId, rightId) then break 'lower'  // handled above
+            cmpI64Lt(resultId, leftId, rightId) then break 'lower'  // handled above
+            cmpI64Le(resultId, leftId, rightId) then break 'lower'  // handled above
+            cmpI64Gt(resultId, leftId, rightId) then break 'lower'  // handled above
+            cmpI64Ge(resultId, leftId, rightId) then break 'lower'  // handled above
+            cmpF64Eq(resultId, leftId, rightId) then break 'lower'  // handled above
+            condBr(condId, thenLabel, elseLabel) then break 'lower'  // handled above
             br(targetLabel) then ops.push(X86Op.jmp(targetLabel))
             label(name) then ops.push(X86Op.label(name))
             printLiteral(data) then ops.push(X86Op.printLiteral(data))
@@ -163,19 +163,19 @@ function getBinaryOpInfo(op StdOp) returns BinaryOpInfo
         cmpI64Gt(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
         cmpI64Ge(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.cmpRaxRcx}
         cmpF64Eq(resultId, leftId, rightId) then result = BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, x86Op: X86Op.ucomisd}
-        funcBegin(name, returnType) then result = result
-        funcEnd then result = result
-        constI64(resultId, value) then result = result
-        constF64(resultId, rawBits) then result = result
-        returnOp(retValId) then result = result
-        storeSlot(slotId, valueId) then result = result
-        loadSlot(resultId, slotId) then result = result
-        condBr(condId, thenLabel, elseLabel) then result = result
-        br(targetLabel) then result = result
-        label(name) then result = result
-        printLiteral(data) then result = result
-        printInt(valueId) then result = result
-        call(resultId, callee) then result = result
+        funcBegin(name, returnType) then break 'check'
+        funcEnd then break 'check'
+        constI64(resultId, value) then break 'check'
+        constF64(resultId, rawBits) then break 'check'
+        returnOp(retValId) then break 'check'
+        storeSlot(slotId, valueId) then break 'check'
+        loadSlot(resultId, slotId) then break 'check'
+        condBr(condId, thenLabel, elseLabel) then break 'check'
+        br(targetLabel) then break 'check'
+        label(name) then break 'check'
+        printLiteral(data) then break 'check'
+        printInt(valueId) then break 'check'
+        call(resultId, callee) then break 'check'
     end 'check'
     return result
 end 'getBinaryOpInfo'

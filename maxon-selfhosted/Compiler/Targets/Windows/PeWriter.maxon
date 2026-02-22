@@ -107,16 +107,46 @@ end 'writeSectionHeader'
 
 // --- Main PE writer ---
 
-function patchIatFixups(code ByteBuffer, iatFixups IatFixupArray, textRva Rva, idataRva Rva)
-    for fixup in iatFixups 'patchIat'
-        let ripAtFixup = textRva + fixup.codeOffset + 4
-        let iatEntryRva = idataRva + (fixup.iatSlotIndex * 8)
-        let iatRel = iatEntryRva - ripAtFixup
-        patchDword(code, offset: fixup.codeOffset, value: iatRel)
-    end 'patchIat'
-end 'patchIatFixups'
+// Patch x86_64 RIP-relative relocations: each relocation is a disp32 at codeOffset
+function patchRelocationsX86(code ByteBuffer, relocations RelocationArray, textRva Rva, idataRva Rva)
+    for reloc in relocations 'patch'
+        let ripAtReloc = textRva + reloc.codeOffset + 4
+        let iatEntryRva = idataRva + (reloc.slotIndex * 8)
+        let rel = iatEntryRva - ripAtReloc
+        patchDword(code, offset: reloc.codeOffset, value: rel)
+    end 'patch'
+end 'patchRelocationsX86'
 
-export function writePe(outputPath String, codeResult CodeResult)
+// Patch ARM64 ADRP+LDR relocations: codeOffset points to ADRP, LDR is at codeOffset+4
+function patchRelocationsArm64(code ByteBuffer, relocations RelocationArray, textRva Rva, idataRva Rva)
+    for reloc in relocations 'patch'
+        let iatEntryRva = idataRva + (reloc.slotIndex * 8)
+        let instrRva = textRva + reloc.codeOffset
+
+        // ADRP: target page relative to instruction page
+        let instrPage = instrRva and not 0xFFF
+        let targetPage = iatEntryRva and not 0xFFF
+        let pageOff = targetPage - instrPage
+        let pageOffShifted = pageOff shr 12
+        let immlo = pageOffShifted and 0x3
+        let immhi = (pageOffShifted shr 2) and 0x7FFFF
+        // Patch ADRP: preserve Rd, encode page offset
+        let origAdrp = readDword(code, offset: reloc.codeOffset)
+        let rd = origAdrp and 0x1F
+        let patchedAdrp = (immlo shl 29) or 0x90000000 or (immhi shl 5) or rd
+        patchDword(code, offset: reloc.codeOffset, value: patchedAdrp)
+
+        // Patch LDR: encode page offset within the 4KB page, scaled by 8
+        let pageOffset = iatEntryRva and 0xFFF
+        let ldrOffset = reloc.codeOffset + 4
+        let origLdr = readDword(code, offset: ldrOffset)
+        let ldrImm = (pageOffset / 8) and 0xFFF
+        let patchedLdr = (origLdr and 0xFFC003FF) or (ldrImm shl 10)
+        patchDword(code, offset: ldrOffset, value: patchedLdr)
+    end 'patch'
+end 'patchRelocationsArm64'
+
+export function writePe(outputPath String, codeResult CodeResult, target TargetTriple)
     logDebug(LogCategory.pe, message: "Writing PE file: {outputPath}")
     var pe = ByteBuffer{}
     pe.reserve(4096)
@@ -146,11 +176,11 @@ export function writePe(outputPath String, codeResult CodeResult)
     logDebug(LogCategory.pe, message: "Code section: {codeSize} bytes")
     logDebug(LogCategory.pe, message: "Import section: {idataSize} bytes")
 
-    // Patch all IAT RIP-relative references in code
-    match codeResult.osFixups 'applyFixups'
-        peFixups(iatFixups) then patchIatFixups(code, iatFixups: iatFixups, textRva: textRva, idataRva: idataRva)
-        none then code = code
-    end 'applyFixups'
+    // Patch IAT references in code (different encoding per CPU architecture)
+    match target.cpu 'patchCpu'
+        CpuArch.x86_64 then patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
+        CpuArch.aarch64 then patchRelocationsArm64(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
+    end 'patchCpu'
 
     // IAT directory size: 3 entries + null terminator = 32 bytes
     let iatDirSize = 32
@@ -164,7 +194,12 @@ export function writePe(outputPath String, codeResult CodeResult)
     writeDword(pe, value: 0x00004550)
 
     // === COFF Header (20 bytes) ===
-    writeWord(pe, value: 0x8664)
+    var coffMachine = 0x8664
+    match target.cpu 'coffCpu'
+        CpuArch.x86_64 then coffMachine = 0x8664
+        CpuArch.aarch64 then coffMachine = 0xAA64
+    end 'coffCpu'
+    writeWord(pe, value: coffMachine)
     writeWord(pe, value: numSections)
     writeDword(pe, value: 0)
     writeDword(pe, value: 0)

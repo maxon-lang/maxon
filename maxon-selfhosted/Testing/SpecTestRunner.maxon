@@ -362,6 +362,19 @@ function isHostTarget(target TargetTriple) returns bool
   return targetStr == hostStr
 end 'isHostTarget'
 
+// Check if we can execute binaries for this target.
+// Host target runs natively, Linux targets run via Docker.
+// Non-host Windows targets (e.g. aarch64-windows) are compile-only.
+function canExecuteTarget(target TargetTriple) returns bool
+  if isHostTarget(target) 'isHost'
+    return true
+  end 'isHost'
+  match target.os 'checkOs'
+    Os.linux then return true
+    Os.windows then return false
+  end 'checkOs'
+end 'canExecuteTarget'
+
 // Build the command to run a compiled binary.
 // Host targets run directly; Linux targets run via Docker.
 function buildRunCommand(outputPath String, target TargetTriple, projectRoot String, testArgs String) returns String
@@ -496,6 +509,13 @@ function runSingleTest(test SpecTest, projectRoot String, target TargetTriple) r
     cleanup(tempSource, tempExe: tempExe)
     return false
   end 'isCompilerError'
+
+  // For targets we can't execute (e.g. aarch64-windows), compilation success is the test
+  if not canExecuteTarget(target) 'compileOnly'
+    logDebug(LogCategory.testing, message: "[PASS] {test.name} (compile-only)")
+    cleanup(tempSource, tempExe: tempExe)
+    return true
+  end 'compileOnly'
 
   // Run the compiled executable
   let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: test.args)

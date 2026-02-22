@@ -1,12 +1,14 @@
 // Shared types for code emission results, used across all backends.
 
-typealias IatSlotIndex = int(0 to u64.max)
+typealias RelocSlotIndex = int(0 to u64.max)
 
-export type IatFixup
+// A relocation records a code location that needs patching after section layout.
+// Used for IAT entries (Windows PE) and GOT entries (Linux ELF).
+export type Relocation
     export var codeOffset CodeOffset
-    export var iatSlotIndex IatSlotIndex
-end 'IatFixup'
-export typealias IatFixupArray = Array with IatFixup
+    export var slotIndex RelocSlotIndex
+end 'Relocation'
+export typealias RelocationArray = Array with Relocation
 
 export type CallFixup
     export var codeOffset CodeOffset
@@ -14,14 +16,8 @@ export type CallFixup
 end 'CallFixup'
 export typealias CallFixupArray = Array with CallFixup
 
-// OS-specific fixup data carried through to the executable writer
-export union OsFixups
-    none
-    peFixups(iatFixups IatFixupArray)
-end 'OsFixups'
-
 export type CodeResult
     export var code ByteBuffer
     export var mainCallFixupOffset CodeOffset
-    export var osFixups OsFixups
+    export var relocations RelocationArray
 end 'CodeResult'

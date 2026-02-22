@@ -182,6 +182,30 @@ function arm64EmitSvc(code ByteBuffer)
     emitInsn(code, insn: 0xD4000001)
 end 'arm64EmitSvc'
 
+// BLR Xn (branch to register with link)
+function arm64EmitBlr(code ByteBuffer, rn MachineWord)
+    let insn = 0xD63F0000 or (rn shl 5)
+    emitInsn(code, insn: insn)
+end 'arm64EmitBlr'
+
+// BR Xn (branch to register, no link)
+function arm64EmitBr(code ByteBuffer, rn MachineWord)
+    let insn = 0xD61F0000 or (rn shl 5)
+    emitInsn(code, insn: insn)
+end 'arm64EmitBr'
+
+// ADRP Xd, #immhi (4KB page-relative, placeholder — patched by relocation)
+function arm64EmitAdrp(code ByteBuffer, rd MachineWord)
+    let insn = 0x90000000 or rd
+    emitInsn(code, insn: insn)
+end 'arm64EmitAdrp'
+
+// LDR Xd, [Xn, #imm12] (unsigned offset, scaled by 8)
+function arm64EmitLdrImm(code ByteBuffer, rt MachineWord, rn MachineWord, imm12 MachineWord)
+    let insn = 0xF9400000 or ((imm12 / 8) shl 10) or (rn shl 5) or rt
+    emitInsn(code, insn: insn)
+end 'arm64EmitLdrImm'
+
 // UDIV Xd, Xn, Xm
 function arm64EmitUdiv(code ByteBuffer, rd MachineWord, rn MachineWord, rm MachineWord)
     let insn = 0x9AC00800 or (rm shl 16) or (rn shl 5) or rd
@@ -265,36 +289,21 @@ typealias Arm64CallFixupArray = Array with Arm64CallFixup
 function arm64PatchBranch(code ByteBuffer, instrOffset Arm64Offset, targetOffset Arm64Offset)
     let relBytes = targetOffset - instrOffset
     let relInsns = relBytes / 4
-    // Read the original instruction to preserve the opcode bits
-    let b0 = try code.get(instrOffset) otherwise 0
-    let b1 = try code.get(instrOffset + 1) otherwise 0
-    let b2 = try code.get(instrOffset + 2) otherwise 0
-    let b3 = try code.get(instrOffset + 3) otherwise 0
-    let origInsn = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+    let origInsn = readDword(code, offset: instrOffset)
     // Preserve top 6 bits (opcode), replace low 26 bits with offset
     let patched = (origInsn and 0xFC000000) or (relInsns and 0x3FFFFFF)
-    code.set(instrOffset, value: patched and 0xFF)
-    code.set(instrOffset + 1, value: (patched shr 8) and 0xFF)
-    code.set(instrOffset + 2, value: (patched shr 16) and 0xFF)
-    code.set(instrOffset + 3, value: (patched shr 24) and 0xFF)
+    patchDword(code, offset: instrOffset, value: patched)
 end 'arm64PatchBranch'
 
 // Patch a B.cond instruction at instrOffset with a PC-relative offset.
 function arm64PatchCondBranch(code ByteBuffer, instrOffset Arm64Offset, targetOffset Arm64Offset)
     let relBytes = targetOffset - instrOffset
     let relInsns = relBytes / 4
-    let b0 = try code.get(instrOffset) otherwise 0
-    let b1 = try code.get(instrOffset + 1) otherwise 0
-    let b2 = try code.get(instrOffset + 2) otherwise 0
-    let b3 = try code.get(instrOffset + 3) otherwise 0
-    let origInsn = b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+    let origInsn = readDword(code, offset: instrOffset)
     // B.cond: bits[31:24]=01010100, imm19=[23:5], cond=[3:0]
     let condBits = origInsn and 0xF
     let patched = 0x54000000 or ((relInsns and 0x7FFFF) shl 5) or condBits
-    code.set(instrOffset, value: patched and 0xFF)
-    code.set(instrOffset + 1, value: (patched shr 8) and 0xFF)
-    code.set(instrOffset + 2, value: (patched shr 16) and 0xFF)
-    code.set(instrOffset + 3, value: (patched shr 24) and 0xFF)
+    patchDword(code, offset: instrOffset, value: patched)
 end 'arm64PatchCondBranch'
 
 // --- Label management (same pattern as x86) ---
@@ -345,7 +354,7 @@ end 'arm64ResolveCallFixups'
 // --- OS-parameterized stubs ---
 
 // Emit _start: BL main (patched later), then exit via OsDescriptor strategy
-function arm64EmitStart(code ByteBuffer, osDesc OsDescriptor, callFixups Arm64CallFixupArray) returns Arm64Offset
+function arm64EmitStart(code ByteBuffer, osDesc OsDescriptor, callFixups Arm64CallFixupArray, relocations RelocationArray) returns Arm64Offset
     // BL main (placeholder, patched after all functions emitted)
     let mainCallFixupOffset = code.count()
     var mainName = ByteArray{}
@@ -359,7 +368,7 @@ function arm64EmitStart(code ByteBuffer, osDesc OsDescriptor, callFixups Arm64Ca
     // Exit using the OS-specified strategy
     match osDesc.exit 'exitStrategy'
         syscall(num) then arm64EmitExitSyscall(code, syscallNumber: num)
-        iatCall(slotIdx) then arm64EmitExitSyscall(code, syscallNumber: 0) // unreachable: no ARM64+Windows target
+        iatCall(slotIdx) then arm64EmitExitIat(code, relocations: relocations, slotIndex: slotIdx)
     end 'exitStrategy'
 
     return mainCallFixupOffset
@@ -371,12 +380,23 @@ function arm64EmitExitSyscall(code ByteBuffer, syscallNumber MachineWord)
     arm64EmitSvc(code)
 end 'arm64EmitExitSyscall'
 
+// Exit via IAT (Windows): load ExitProcess from IAT, tail-call with exit code in X0
+function arm64EmitExitIat(code ByteBuffer, relocations RelocationArray, slotIndex MachineWord)
+    // ADRP X16, <page of IAT entry> (placeholder, patched by relocation)
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
+    arm64EmitAdrp(code, rd: 16)
+    // LDR X16, [X16, #<page offset>] (placeholder, patched by relocation)
+    arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+    // BR X16 (tail call — no return expected)
+    arm64EmitBr(code, rn: 16)
+end 'arm64EmitExitIat'
+
 // Emit write_stdout stub parameterized by OsDescriptor
-function arm64EmitWriteStdout(code ByteBuffer, osDesc OsDescriptor) returns Arm64Offset
+function arm64EmitWriteStdout(code ByteBuffer, osDesc OsDescriptor, relocations RelocationArray) returns Arm64Offset
     let offset = code.count()
     match osDesc.write 'writeStrategy'
         syscall(writeNum, fd) then arm64EmitWriteStdoutSyscall(code, writeNumber: writeNum, fd: fd)
-        winApi(getHandleSlot, handleConstant, writeFileSlot) then arm64EmitWriteStdoutSyscall(code, writeNumber: 0, fd: 1) // unreachable: no ARM64+Windows target
+        winApi(getHandleSlot, handleConstant, writeFileSlot) then arm64EmitWriteStdoutWinApi(code, relocations: relocations, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot)
     end 'writeStrategy'
     return offset
 end 'arm64EmitWriteStdout'
@@ -398,6 +418,56 @@ function arm64EmitWriteStdoutSyscall(code ByteBuffer, writeNumber MachineWord, f
     arm64EmitLdpPostIndex(code, frameSize: 32)
     arm64EmitRet(code)
 end 'arm64EmitWriteStdoutSyscall'
+
+// write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
+// Caller: X0=ptr, X1=len
+// ARM64 Windows calling convention: X0-X7 for args, X16/X17 as IP scratch
+function arm64EmitWriteStdoutWinApi(code ByteBuffer, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+    // Prologue: save LR/FP + space for locals (64 bytes)
+    arm64EmitStpPreIndex(code, frameSize: 80)
+    arm64EmitMovFpSp(code)
+
+    // Save args: [FP+16] = X0 (ptr), [FP+24] = X1 (len)
+    arm64EmitStrSlot(code, rt: 0, slotIndex: 0)
+    arm64EmitStrSlot(code, rt: 1, slotIndex: 1)
+
+    // Zero bytesWritten at [FP+32]
+    arm64EmitMovz(code, rd: 2, imm16: 0)
+    arm64EmitStrSlot(code, rt: 2, slotIndex: 2)
+
+    // GetStdHandle(STD_OUTPUT_HANDLE): X0 = handleConstant
+    arm64EmitMovImm(code, rd: 0, value: handleConstant)
+    // Load GetStdHandle from IAT via ADRP+LDR
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: getHandleSlot})
+    arm64EmitAdrp(code, rd: 16)
+    arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+    arm64EmitBlr(code, rn: 16)
+
+    // Save handle to [FP+40]
+    arm64EmitStrSlot(code, rt: 0, slotIndex: 3)
+
+    // WriteFile(handle, buffer, length, &bytesWritten, NULL)
+    // X0 = handle
+    arm64EmitLdrSlot(code, rt: 0, slotIndex: 3)
+    // X1 = buffer ptr
+    arm64EmitLdrSlot(code, rt: 1, slotIndex: 0)
+    // X2 = length
+    arm64EmitLdrSlot(code, rt: 2, slotIndex: 1)
+    // X3 = &bytesWritten (FP+32 = FP + 16 + 2*8)
+    arm64EmitAddImm(code, rd: 3, rn: 29, imm12: 32)
+    // X4 = NULL (lpOverlapped)
+    arm64EmitMovz(code, rd: 4, imm16: 0)
+
+    // Load WriteFile from IAT via ADRP+LDR
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeFileSlot})
+    arm64EmitAdrp(code, rd: 16)
+    arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+    arm64EmitBlr(code, rn: 16)
+
+    // Epilogue
+    arm64EmitLdpPostIndex(code, frameSize: 80)
+    arm64EmitRet(code)
+end 'arm64EmitWriteStdoutWinApi'
 
 // --- i64_to_string stub ---
 // Input: X0 = value to convert
@@ -468,14 +538,9 @@ function arm64EmitI64ToString(code ByteBuffer) returns Arm64Offset
     // zero_case: patch CBZ to here
     let zeroCaseOffset = code.count()
     let cbzRelInsns = (zeroCaseOffset - cbzOffset) / 4
-    arm64PatchCondBranch(code, instrOffset: cbzOffset, targetOffset: zeroCaseOffset)
-    // Actually CBZ is not B.cond, re-patch manually
-    // CBZ encoding: 0xB4000000 | (imm19 << 5) | Rn
+    // CBZ is not B.cond — patch directly with CBZ encoding
     let cbzPatched = 0xB4000000 or ((cbzRelInsns and 0x7FFFF) shl 5) or 4
-    code.set(cbzOffset, value: cbzPatched and 0xFF)
-    code.set(cbzOffset + 1, value: (cbzPatched shr 8) and 0xFF)
-    code.set(cbzOffset + 2, value: (cbzPatched shr 16) and 0xFF)
-    code.set(cbzOffset + 3, value: (cbzPatched shr 24) and 0xFF)
+    patchDword(code, offset: cbzOffset, value: cbzPatched)
 
     // Store '0' at [X29+47] and return pointer/length
     arm64EmitMovz(code, rd: 2, imm16: 0x30)
@@ -613,7 +678,7 @@ export function emitArm64(stdOps StdOpArray, target TargetTriple, osDesc OsDescr
     logDebug(LogCategory.codegen, message: "ARM64: Emitting machine code for {arm64Ops.count()} ops ({tripleToString(target)})")
     var code = ByteBuffer{}
     code.reserve(1024)
-    var osFixups = OsFixups.none
+    var relocations = RelocationArray{}
     var labelNames = ByteArrayArray{}
     var labelOffsets = Arm64OffsetArray{}
     var callFixups = Arm64CallFixupArray{}
@@ -624,11 +689,11 @@ export function emitArm64(stdOps StdOpArray, target TargetTriple, osDesc OsDescr
 
     // Emit _start wrapper (entry point at offset 0)
     var mainCallFixupOffset = 0
-    mainCallFixupOffset = arm64EmitStart(code, osDesc: osDesc, callFixups: callFixups)
+    mainCallFixupOffset = arm64EmitStart(code, osDesc: osDesc, callFixups: callFixups, relocations: relocations)
 
     // Emit runtime stubs
     logTrace(LogCategory.codegen, message: "ARM64: Emitting runtime stubs at offset {code.count()}")
-    let writeStdoutOff = arm64EmitWriteStdout(code, osDesc: osDesc)
+    let writeStdoutOff = arm64EmitWriteStdout(code, osDesc: osDesc, relocations: relocations)
     let i64ToStringOff = arm64EmitI64ToString(code)
 
     // Emit all function bodies
@@ -660,5 +725,5 @@ export function emitArm64(stdOps StdOpArray, target TargetTriple, osDesc OsDescr
     arm64ResolveJumpFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, jumpFixups: jumpFixups)
 
     logDebug(LogCategory.codegen, message: "ARM64: Emitted {code.count()} bytes of machine code")
-    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, osFixups: osFixups}
+    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations}
 end 'emitArm64'
