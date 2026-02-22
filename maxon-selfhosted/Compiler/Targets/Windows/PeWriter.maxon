@@ -33,41 +33,32 @@ function buildImportSection(idataRva Rva) returns ImportSection
     let hintWriteFile = hintGetStdHandle + 16
     let dllNameOffset = hintWriteFile + 12
 
-    // IAT entries: point to hint/name table entries
+    // IAT entries: point to hint/name table entries + null terminator
     writeQword(data, value: idataRva + hintExitProcess)
     writeQword(data, value: idataRva + hintGetStdHandle)
     writeQword(data, value: idataRva + hintWriteFile)
-    writeQword(data, value: 0)
+    data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
-    // ILT entries: same as IAT
+    // ILT entries: same as IAT + null terminator
     writeQword(data, value: idataRva + hintExitProcess)
     writeQword(data, value: idataRva + hintGetStdHandle)
     writeQword(data, value: idataRva + hintWriteFile)
-    writeQword(data, value: 0)
+    data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
 
     // Import Directory entry
     writeDword(data, value: idataRva + iltOffset)
-    writeDword(data, value: 0)
-    writeDword(data, value: 0)
+    data.append(b"\x00\x00\x00\x00\x00\x00\x00\x00") // TimeDateStamp(0), ForwarderChain(0)
     writeDword(data, value: idataRva + dllNameOffset)
     writeDword(data, value: idataRva + iatOffset)
 
-    // Import Directory null terminator
+    // Import Directory null terminator (20 bytes)
     writeZeros(data, n: 20)
 
-    // Hint/Name table
-    writeWord(data, value: 0)
-    writeAscii(data, text: "ExitProcess")
-
-    writeWord(data, value: 0)
-    writeAscii(data, text: "GetStdHandle")
-    data.push(0) // pad to even boundary
-
-    writeWord(data, value: 0)
-    writeAscii(data, text: "WriteFile")
-
-    // DLL name
-    writeAscii(data, text: "kernel32.dll")
+    // Hint/Name table entries (hint=0 for each) + DLL name
+    data.append(b"\x00\x00ExitProcess\x00")
+    data.append(b"\x00\x00GetStdHandle\x00\x00")
+    data.append(b"\x00\x00WriteFile\x00")
+    data.append(b"kernel32.dll\x00")
 
     return ImportSection{
         data: data,
@@ -98,10 +89,8 @@ function writeSectionHeader(buf ByteBuffer, name String, virtualSize ByteCount, 
     writeDword(buf, value: virtualAddress)
     writeDword(buf, value: rawDataSize)
     writeDword(buf, value: rawDataPointer)
-    writeDword(buf, value: 0)
-    writeDword(buf, value: 0)
-    writeWord(buf, value: 0)
-    writeWord(buf, value: 0)
+    // PointerToRelocations(0), PointerToLinenumbers(0), NumberOfRelocations(0), NumberOfLinenumbers(0)
+    buf.append(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
     writeDword(buf, value: characteristics)
 end 'writeSectionHeader'
 
@@ -185,13 +174,9 @@ export function writePe(outputPath String, codeResult CodeResult, target TargetT
     // IAT directory size: 3 entries + null terminator = 32 bytes
     let iatDirSize = 32
 
-    // === DOS Header (64 bytes) ===
-    writeWord(pe, value: 0x5A4D)
-    writeZeros(pe, n: 58)
-    writeDword(pe, value: 64)
-
-    // === PE Signature ===
-    writeDword(pe, value: 0x00004550)
+    // === DOS Header (64 bytes) + PE Signature ===
+    // MZ magic, 58 zero bytes, PE offset=64, then PE\0\0 signature
+    pe.append(b"MZ\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x40\x00\x00\x00PE\x00\x00")
 
     // === COFF Header (20 bytes) ===
     var coffMachine = 0x8664
@@ -201,50 +186,31 @@ export function writePe(outputPath String, codeResult CodeResult, target TargetT
     end 'coffCpu'
     writeWord(pe, value: coffMachine)
     writeWord(pe, value: numSections)
-    writeDword(pe, value: 0)
-    writeDword(pe, value: 0)
-    writeDword(pe, value: 0)
-    writeWord(pe, value: 240)
-    writeWord(pe, value: 0x22)
+    // TimeDateStamp(0), PointerToSymbolTable(0), NumberOfSymbols(0), SizeOfOptionalHeader(240), Characteristics(0x22)
+    pe.append(b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xf0\x00\x22\x00")
 
     // === Optional Header PE32+ (240 bytes) ===
-    writeWord(pe, value: 0x20B)
-    pe.push(14)
-    pe.push(0)
+    pe.append(b"\x0b\x02\x0e\x00")
     writeDword(pe, value: codeSizeAligned)
     writeDword(pe, value: idataSizeAligned)
-    writeDword(pe, value: 0)
+    pe.append(b"\x00\x00\x00\x00") // BaseOfCode(0) — placeholder before textRva writes
     writeDword(pe, value: textRva)
     writeDword(pe, value: textRva)
 
-    // PE32+ additional fields
-    writeQword(pe, value: 0x140000000)
-    writeDword(pe, value: SECTION_ALIGNMENT)
-    writeDword(pe, value: FILE_ALIGNMENT)
-    writeWord(pe, value: 6)
-    writeWord(pe, value: 0)
-    writeWord(pe, value: 0)
-    writeWord(pe, value: 0)
-    writeWord(pe, value: 6)
-    writeWord(pe, value: 0)
-    writeDword(pe, value: 0)
+    // ImageBase(0x140000000), SectionAlignment(4096), FileAlignment(512)
+    // MajorOSVersion(6), MinorOSVersion(0), MajorImageVersion(0), MinorImageVersion(0)
+    // MajorSubsystemVersion(6), MinorSubsystemVersion(0), Win32VersionValue(0)
+    pe.append(b"\x00\x00\x00\x40\x01\x00\x00\x00\x00\x10\x00\x00\x00\x02\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00\x00")
     writeDword(pe, value: imageSize)
     writeDword(pe, value: headersAligned)
-    writeDword(pe, value: 0)
-    writeWord(pe, value: 3)
-    writeWord(pe, value: 0x8160)
-    writeQword(pe, value: 0x100000)
-    writeQword(pe, value: 0x1000)
-    writeQword(pe, value: 0x100000)
-    writeQword(pe, value: 0x1000)
-    writeDword(pe, value: 0)
-    writeDword(pe, value: 16)
+    // CheckSum(0), Subsystem(3=CONSOLE), DllCharacteristics(0x8160)
+    // SizeOfStackReserve(0x100000), SizeOfStackCommit(0x1000)
+    // SizeOfHeapReserve(0x100000), SizeOfHeapCommit(0x1000)
+    // LoaderFlags(0), NumberOfRvaAndSizes(16)
+    pe.append(b"\x00\x00\x00\x00\x03\x00\x60\x81\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
 
-    // Data directories (16 entries, 8 bytes each)
-    // 0: Export Table
-    writeDword(pe, value: 0)
-    writeDword(pe, value: 0)
-    // 1: Import Table
+    // Data directories: 0=Export(zeros), 1=Import
+    pe.append(b"\x00\x00\x00\x00\x00\x00\x00\x00")
     writeDword(pe, value: idata.importDirRva)
     writeDword(pe, value: idata.importDirSize)
     // 2-11: zeros

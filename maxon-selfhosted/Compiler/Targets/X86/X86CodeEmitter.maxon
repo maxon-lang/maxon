@@ -5,51 +5,31 @@ export typealias X86OpArray = Array with X86Op
 typealias CodeOffsetArray = Array with CodeOffset
 
 function emitPrologue(code ByteBuffer, stackSize StackSize)
-    // push rbp
-    code.push(0x55)
-    // mov rbp, rsp
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xE5)
+    // push rbp; mov rbp, rsp
+    code.append(b"\x55\x48\x89\xe5")
     // sub rsp, stackSize (only if non-zero)
     if stackSize > 0 'hasSub'
-        code.push(0x48)
-        code.push(0x83)
-        code.push(0xEC)
+        code.append(b"\x48\x83\xec")
         code.push(stackSize and 0xFF)
     end 'hasSub'
 end 'emitPrologue'
 
 function emitEpilogue(code ByteBuffer)
-    // mov rsp, rbp
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xEC)
-    // pop rbp
-    code.push(0x5D)
-    // ret
-    code.push(0xC3)
+    // mov rsp, rbp; pop rbp; ret
+    code.append(b"\x48\x89\xec\x5d\xc3")
 end 'emitEpilogue'
 
 function emitMovRegImm(code ByteBuffer, value MachineWord)
     // mov rax, imm32 (sign-extended)
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0xC0)
-    // imm32 little-endian
-    code.push(value and 0xFF)
-    code.push((value shr 8) and 0xFF)
-    code.push((value shr 16) and 0xFF)
-    code.push((value shr 24) and 0xFF)
+    code.append(b"\x48\xc7\xc0")
+    writeDword(code, value: value)
 end 'emitMovRegImm'
 
 // Store RAX to stack slot: mov [rbp - (slotIndex+1)*8], rax
 function emitMovSlot(code ByteBuffer, slotIndex VarSlot)
     let offset = (slotIndex + 1) * 8
     // mov [rbp - offset], rax  =>  48 89 45 <disp8>
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x45)
+    code.append(b"\x48\x89\x45")
     code.push((0 - offset) and 0xFF)
 end 'emitMovSlot'
 
@@ -74,83 +54,49 @@ end 'emitLoadSlotToReg'
 
 function emitLoadSlotRax(code ByteBuffer, offset VarSlot)
     // mov rax, [rbp - offset]  =>  48 8B 45 <disp8>
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x45)
+    code.append(b"\x48\x8b\x45")
     code.push((0 - offset) and 0xFF)
 end 'emitLoadSlotRax'
 
 function emitLoadSlotRcx(code ByteBuffer, offset VarSlot)
     // mov rcx, [rbp - offset]  =>  48 8B 4D <disp8>
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x4D)
+    code.append(b"\x48\x8b\x4d")
     code.push((0 - offset) and 0xFF)
 end 'emitLoadSlotRcx'
 
 // Save RAX to RCX before loading second operand
 function emitMovRcxRax(code ByteBuffer)
     // mov rcx, rax  =>  48 89 C1
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xC1)
+    code.append(b"\x48\x89\xc1")
 end 'emitMovRcxRax'
 
 function emitAddRegReg(code ByteBuffer)
     // add rax, rcx  =>  48 01 C8
-    code.push(0x48)
-    code.push(0x01)
-    code.push(0xC8)
+    code.append(b"\x48\x01\xc8")
 end 'emitAddRegReg'
 
 function emitSubRegReg(code ByteBuffer)
-    // After push/pop: rcx=left, rax=right. We want left-right.
-    // xchg rax, rcx  =>  48 91
-    code.push(0x48)
-    code.push(0x91)
-    // sub rax, rcx  =>  48 29 C8  (now rax=left - right)
-    code.push(0x48)
-    code.push(0x29)
-    code.push(0xC8)
+    // xchg rax, rcx; sub rax, rcx (rcx=left, rax=right -> rax=left-right)
+    code.append(b"\x48\x91\x48\x29\xc8")
 end 'emitSubRegReg'
 
 function emitImulRegReg(code ByteBuffer)
     // imul rax, rcx  =>  48 0F AF C1
-    code.push(0x48)
-    code.push(0x0F)
-    code.push(0xAF)
-    code.push(0xC1)
+    code.append(b"\x48\x0f\xaf\xc1")
 end 'emitImulRegReg'
 
 // cmp rcx, rax (compare left in rcx against right in rax)
 function emitCmpRaxRcx(code ByteBuffer)
     // cmp rcx, rax  =>  48 39 C1
-    code.push(0x48)
-    code.push(0x39)
-    code.push(0xC1)
+    code.append(b"\x48\x39\xc1")
 end 'emitCmpRaxRcx'
 
 // ucomisd xmm0, xmm1 (compare float in xmm0 vs xmm1)
 // After push/pop: rcx=left raw bits, rax=right raw bits
 // We need to move them to xmm registers first
 function emitUcomisd(code ByteBuffer)
-    // movq xmm0, rcx  =>  66 48 0F 6E C1
-    code.push(0x66)
-    code.push(0x48)
-    code.push(0x0F)
-    code.push(0x6E)
-    code.push(0xC1)
-    // movq xmm1, rax  =>  66 48 0F 6E C8
-    code.push(0x66)
-    code.push(0x48)
-    code.push(0x0F)
-    code.push(0x6E)
-    code.push(0xC8)
-    // ucomisd xmm0, xmm1  =>  66 0F 2E C1
-    code.push(0x66)
-    code.push(0x0F)
-    code.push(0x2E)
-    code.push(0xC1)
+    // movq xmm0, rcx; movq xmm1, rax; ucomisd xmm0, xmm1
+    code.append(b"\x66\x48\x0f\x6e\xc1\x66\x48\x0f\x6e\xc8\x66\x0f\x2e\xc1")
 end 'emitUcomisd'
 
 // Conditional and unconditional jumps with label fixup
@@ -223,232 +169,36 @@ function emitI64ToString(code ByteBuffer) returns CodeOffset
     let offset = code.count()
 
     // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x30
-    code.push(0x55)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xE5)
-    code.push(0x48)
-    code.push(0x83)
-    code.push(0xEC)
-    code.push(0x30)
-
-    // Save args: [rbp-8] = rcx (value), [rbp-16] = rdx (buffer)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x4D)
-    code.push(0xF8)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x55)
-    code.push(0xF0)
-
-    // Special case: value == 0
-    // test rcx, rcx
-    code.push(0x48)
-    code.push(0x85)
-    code.push(0xC9)
-    // jnz not_zero (skip 19 bytes: mov byte[rdx]='0'(3) + mov byte[rdx+1]=0(4) + mov rax,1(7) + jmp epilogue(5))
-    code.push(0x75)
-    code.push(0x13)
-    // mov byte [rdx], '0'
-    code.push(0xC6)
-    code.push(0x02)
-    code.push(0x30)
-    // mov byte [rdx+1], 0
-    code.push(0xC6)
-    code.push(0x42)
-    code.push(0x01)
-    code.push(0x00)
-    // mov rax, 1
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0xC0)
-    code.push(0x01)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    // jmp epilogue (will be patched)
-    code.push(0xE9)
+    // Save args: [rbp-8] = rcx, [rbp-16] = rdx
+    // test rcx, rcx; jnz not_zero
+    // Zero case: mov byte[rdx]='0'; mov byte[rdx+1]=0; mov rax,1; jmp epilogue
+    code.append(b"\x55\x48\x89\xe5\x48\x83\xec\x30\x48\x89\x4d\xf8\x48\x89\x55\xf0\x48\x85\xc9\x75\x13\xc6\x02\x30\xc6\x42\x01\x00\x48\xc7\xc0\x01\x00\x00\x00\xe9")
     let jmpToEpilogueFixup1 = code.count()
     writeDword(code, value: 0)
 
-    // Zero is_negative: mov qword [rbp-24], 0
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0x45)
-    code.push(0xE8)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
+    // Zero is_negative; test rcx; jns positive
+    // neg rcx; save; mov rax,1; save flag
+    code.append(b"\x48\xc7\x45\xe8\x00\x00\x00\x00\x48\x85\xc9\x79\x12\x48\xf7\xd9\x48\x89\x4d\xf8\x48\xc7\xc0\x01\x00\x00\x00\x48\x89\x45\xe8")
 
-    // test rcx, rcx
-    code.push(0x48)
-    code.push(0x85)
-    code.push(0xC9)
-    // jns positive (skip 18 bytes: neg + save + mov_rax_1 + save_flag)
-    code.push(0x79)
-    code.push(0x12)
-
-    // neg rcx
-    code.push(0x48)
-    code.push(0xF7)
-    code.push(0xD9)
-    // mov [rbp-8], rcx (update saved value)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x4D)
-    code.push(0xF8)
-    // mov rax, 1 (is_negative = 1)
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0xC0)
-    code.push(0x01)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    // mov [rbp-24], rax
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x45)
-    code.push(0xE8)
-
-    // positive: r9 = buffer + 20
-    // mov r9, rdx
-    code.push(0x49)
-    code.push(0x89)
-    code.push(0xD1)
-    // add r9, 20
-    code.push(0x49)
-    code.push(0x83)
-    code.push(0xC1)
-    code.push(0x14)
-    // mov byte [r9], 0 (null terminator)
-    code.push(0x41)
-    code.push(0xC6)
-    code.push(0x01)
-    code.push(0x00)
+    // positive: mov r9, rdx; add r9, 20; mov byte [r9], 0
+    code.append(b"\x49\x89\xd1\x49\x83\xc1\x14\x41\xc6\x01\x00")
 
     // digit_loop:
     let digitLoopOffset = code.count()
 
-    // dec r9
-    code.push(0x49)
-    code.push(0xFF)
-    code.push(0xC9)
-    // mov rax, [rbp-8] (value/quotient)
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x45)
-    code.push(0xF8)
-    // mov rcx, 10
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0xC1)
-    code.push(0x0A)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    // xor rdx, rdx
-    code.push(0x48)
-    code.push(0x31)
-    code.push(0xD2)
-    // div rcx (unsigned: rax=quotient, rdx=remainder)
-    code.push(0x48)
-    code.push(0xF7)
-    code.push(0xF1)
-    // mov [rbp-8], rax (store quotient)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x45)
-    code.push(0xF8)
-    // add rdx, 0x30 ('0')
-    code.push(0x48)
-    code.push(0x83)
-    code.push(0xC2)
-    code.push(0x30)
-    // mov byte [r9], dl
-    code.push(0x41)
-    code.push(0x88)
-    code.push(0x11)
-    // cmp qword [rbp-8], 0
-    code.push(0x48)
-    code.push(0x83)
-    code.push(0x7D)
-    code.push(0xF8)
-    code.push(0x00)
+    // dec r9; mov rax,[rbp-8]; mov rcx,10; xor rdx,rdx; div rcx
+    // mov [rbp-8],rax; add rdx,0x30; mov byte [r9],dl; cmp qword [rbp-8],0
+    code.append(b"\x49\xff\xc9\x48\x8b\x45\xf8\x48\xc7\xc1\x0a\x00\x00\x00\x48\x31\xd2\x48\xf7\xf1\x48\x89\x45\xf8\x48\x83\xc2\x30\x41\x88\x11\x48\x83\x7d\xf8\x00")
     // jnz digit_loop
     code.push(0x75)
     let jnzTarget = digitLoopOffset - (code.count() + 1)
     code.push(jnzTarget and 0xFF)
 
-    // Check is_negative: mov rax, [rbp-24]; test rax, rax; jz no_sign
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x45)
-    code.push(0xE8)
-    code.push(0x48)
-    code.push(0x85)
-    code.push(0xC0)
-    // jz no_sign (skip 7 bytes: dec r9 + mov byte [r9], '-')
-    code.push(0x74)
-    code.push(0x07)
-    // dec r9
-    code.push(0x49)
-    code.push(0xFF)
-    code.push(0xC9)
-    // mov byte [r9], '-'
-    code.push(0x41)
-    code.push(0xC6)
-    code.push(0x01)
-    code.push(0x2D)
-
-    // no_sign: compute length = (buffer + 20) - r9
-    // mov rax, [rbp-16] (buffer)
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x45)
-    code.push(0xF0)
-    // add rax, 20
-    code.push(0x48)
-    code.push(0x83)
-    code.push(0xC0)
-    code.push(0x14)
-    // sub rax, r9 => length
-    code.push(0x4C)
-    code.push(0x29)
-    code.push(0xC8)
-
-    // Save length: mov [rbp-24], rax
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x45)
-    code.push(0xE8)
-
-    // Copy digits from r9 to buffer: rsi=r9, rdi=buffer, rcx=length
-    // mov rsi, r9
-    code.push(0x4C)
-    code.push(0x89)
-    code.push(0xCE)
-    // mov rdi, [rbp-16]
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x7D)
-    code.push(0xF0)
-    // mov rcx, [rbp-24] (length)
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x4D)
-    code.push(0xE8)
-    // rep movsb
-    code.push(0xF3)
-    code.push(0xA4)
-
+    // Check is_negative; jz no_sign; dec r9; mov byte [r9], '-'
+    // Compute length = (buffer+20) - r9; save length
+    // Copy: mov rsi,r9; mov rdi,[rbp-16]; mov rcx,[rbp-24]; rep movsb
     // Return length in rax
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x45)
-    code.push(0xE8)
+    code.append(b"\x48\x8b\x45\xe8\x48\x85\xc0\x74\x07\x49\xff\xc9\x41\xc6\x01\x2d\x48\x8b\x45\xf0\x48\x83\xc0\x14\x4c\x29\xc8\x48\x89\x45\xe8\x4c\x89\xce\x48\x8b\x7d\xf0\x48\x8b\x4d\xe8\xf3\xa4\x48\x8b\x45\xe8")
 
     // epilogue label (patch jump from zero case)
     let epilogueOffset = code.count()
@@ -456,11 +206,7 @@ function emitI64ToString(code ByteBuffer) returns CodeOffset
     patchDword(code, offset:jmpToEpilogueFixup1, value: jmpRel)
 
     // Epilogue: mov rsp, rbp; pop rbp; ret
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xEC)
-    code.push(0x5D)
-    code.push(0xC3)
+    code.append(b"\x48\x89\xec\x5d\xc3")
 
     return offset
 end 'emitI64ToString'
@@ -492,17 +238,13 @@ function emitPrintLiteral(code ByteBuffer, data ByteArray, writeStdoutOffset Cod
     patchDword(code, offset:jmpFixup, value: afterData - (jmpFixup + 4))
 
     // lea rcx, [rip + offset_to_data]
-    code.push(0x48)
-    code.push(0x8D)
-    code.push(0x0D)
+    code.append(b"\x48\x8d\x0d")
     let leaEnd = code.count() + 4
     let leaRel = dataOffset - leaEnd
     writeDword(code, value: leaRel)
 
     // mov rdx, dataLen
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0xC2)
+    code.append(b"\x48\xc7\xc2")
     writeDword(code, value: dataLen)
 
     // call write_stdout
@@ -512,32 +254,14 @@ end 'emitPrintLiteral'
 // Emit printInt: value assumed in RAX, convert to string then print
 // Uses stack buffer at [rbp-<high offset>] for the conversion buffer
 function emitPrintInt(code ByteBuffer, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
-    // Save rax (the value) to rcx for i64_to_string arg1
-    // mov rcx, rax
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xC1)
-
-    // lea rdx, [rsp] (use current stack top as buffer - we have space from prologue)
-    code.push(0x48)
-    code.push(0x8D)
-    code.push(0x14)
-    code.push(0x24)
+    // mov rcx, rax; lea rdx, [rsp]
+    code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
 
     // call i64_to_string (returns length in rax)
     emitRelativeCall(code, targetOffset: i64ToStringOffset)
 
-    // Now rax = length, buffer at rsp
-    // mov rdx, rax (length)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xC2)
-
-    // lea rcx, [rsp] (buffer ptr)
-    code.push(0x48)
-    code.push(0x8D)
-    code.push(0x0C)
-    code.push(0x24)
+    // mov rdx, rax (length); lea rcx, [rsp] (buffer ptr)
+    code.append(b"\x48\x89\xc2\x48\x8d\x0c\x24")
 
     // call write_stdout
     emitRelativeCall(code, targetOffset: writeStdoutOffset)
@@ -571,9 +295,7 @@ function emitX86Start(code ByteBuffer, osDesc OsDescriptor, relocations Relocati
     // Shadow space (Windows x64 ABI requires it)
     if osDesc.startShadowSpace > 0 'hasShadow'
         // sub rsp, shadowSpace
-        code.push(0x48)
-        code.push(0x83)
-        code.push(0xEC)
+        code.append(b"\x48\x83\xec")
         code.push(osDesc.startShadowSpace and 0xFF)
     end 'hasShadow'
 
@@ -586,10 +308,7 @@ function emitX86Start(code ByteBuffer, osDesc OsDescriptor, relocations Relocati
     mainName.push(105)
     mainName.push(110)
     callFixups.push(CallFixup{codeOffset: mainCallFixupOffset, targetName: mainName})
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
+    code.append(b"\x00\x00\x00\x00")
 
     // Exit using the OS-specified strategy
     match osDesc.exit 'exitStrategy'
@@ -604,33 +323,19 @@ end 'emitX86Start'
 
 // Exit via syscall (Linux): mov edi, eax; mov eax, N; syscall
 function emitX86ExitSyscall(code ByteBuffer, syscallNumber MachineWord)
-    // mov edi, eax (return value -> first arg)
-    code.push(0x89)
-    code.push(0xC7)
-    // mov eax, syscallNumber
-    code.push(0xB8)
-    code.push(syscallNumber and 0xFF)
-    code.push((syscallNumber shr 8) and 0xFF)
-    code.push((syscallNumber shr 16) and 0xFF)
-    code.push((syscallNumber shr 24) and 0xFF)
+    // mov edi, eax; mov eax, syscallNumber
+    code.append(b"\x89\xc7\xb8")
+    writeDword(code, value: syscallNumber)
     // syscall
-    code.push(0x0F)
-    code.push(0x05)
+    code.append(b"\x0f\x05")
 end 'emitX86ExitSyscall'
 
 // Exit via IAT (Windows): mov ecx, eax; call [rip+disp32]
 function emitX86ExitIat(code ByteBuffer, relocations RelocationArray, slotIndex MachineWord)
-    // mov ecx, eax (return value -> first arg for ExitProcess)
-    code.push(0x89)
-    code.push(0xC1)
-    // call [rip+disp32] (indirect through IAT)
-    code.push(0xFF)
-    code.push(0x15)
+    // mov ecx, eax; call [rip+disp32]
+    code.append(b"\x89\xc1\xff\x15")
     relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
+    code.append(b"\x00\x00\x00\x00")
 end 'emitX86ExitIat'
 
 // Emit write_stdout stub parameterized by OsDescriptor
@@ -645,135 +350,36 @@ end 'emitX86WriteStdout'
 
 // write_stdout via syscall (Linux): args in rcx=ptr, rdx=len
 function emitX86WriteStdoutSyscall(code ByteBuffer, writeNumber MachineWord, fd MachineWord)
-    // Prologue
-    code.push(0x55)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xE5)
-
-    // System V ABI: rdi=fd, rsi=buf, rdx=count, rax=syscall#
-    // mov rsi, rcx (buf)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xCE)
-    // mov edi, fd
-    code.push(0xBF)
-    code.push(fd and 0xFF)
-    code.push((fd shr 8) and 0xFF)
-    code.push((fd shr 16) and 0xFF)
-    code.push((fd shr 24) and 0xFF)
-    // mov eax, writeNumber
+    // Prologue; mov rsi, rcx; mov edi, fd
+    code.append(b"\x55\x48\x89\xe5\x48\x89\xce\xbf")
+    writeDword(code, value: fd)
+    // mov eax, writeNumber; syscall; epilogue
     code.push(0xB8)
-    code.push(writeNumber and 0xFF)
-    code.push((writeNumber shr 8) and 0xFF)
-    code.push((writeNumber shr 16) and 0xFF)
-    code.push((writeNumber shr 24) and 0xFF)
-    // syscall
-    code.push(0x0F)
-    code.push(0x05)
-
-    // Epilogue
-    code.push(0x5D)
-    code.push(0xC3)
+    writeDword(code, value: writeNumber)
+    code.append(b"\x0f\x05\x5d\xc3")
 end 'emitX86WriteStdoutSyscall'
 
 // write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
 function emitX86WriteStdoutWinApi(code ByteBuffer, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
-    // Prologue: push rbp; mov rbp, rsp; sub rsp, 0x40
-    code.push(0x55)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xE5)
-    code.push(0x48)
-    code.push(0x83)
-    code.push(0xEC)
-    code.push(0x40)
-
-    // Save args: [rbp-8] = rcx (ptr), [rbp-16] = rdx (len)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x4D)
-    code.push(0xF8)
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x55)
-    code.push(0xF0)
-
-    // Zero bytesWritten: mov qword [rbp-32], 0
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0x45)
-    code.push(0xE0)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-
-    // GetStdHandle(handleConstant): mov ecx, handleConstant
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0xC1)
-    code.push(handleConstant and 0xFF)
-    code.push((handleConstant shr 8) and 0xFF)
-    code.push((handleConstant shr 16) and 0xFF)
-    code.push((handleConstant shr 24) and 0xFF)
+    // Prologue; save args; zero bytesWritten; mov ecx, handleConstant
+    code.append(b"\x55\x48\x89\xe5\x48\x83\xec\x40\x48\x89\x4d\xf8\x48\x89\x55\xf0\x48\xc7\x45\xe0\x00\x00\x00\x00\x48\xc7\xc1")
+    writeDword(code, value: handleConstant)
 
     // call [rip+disp32] GetStdHandle
-    code.push(0xFF)
-    code.push(0x15)
+    code.append(b"\xff\x15")
     relocations.push(Relocation{codeOffset: code.count(), slotIndex: getHandleSlot})
     writeDword(code, value: 0)
 
-    // Save handle: mov [rbp-24], rax
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0x45)
-    code.push(0xE8)
-
-    // WriteFile(handle, buffer, length, &bytesWritten, NULL)
-    // arg1: mov rcx, [rbp-24] (handle)
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x4D)
-    code.push(0xE8)
-    // arg2: mov rdx, [rbp-8] (buffer ptr)
-    code.push(0x48)
-    code.push(0x8B)
-    code.push(0x55)
-    code.push(0xF8)
-    // arg3: mov r8, [rbp-16] (length)
-    code.push(0x4C)
-    code.push(0x8B)
-    code.push(0x45)
-    code.push(0xF0)
-    // arg4: lea r9, [rbp-32] (&bytesWritten)
-    code.push(0x4C)
-    code.push(0x8D)
-    code.push(0x4D)
-    code.push(0xE0)
-    // arg5: mov qword [rsp+0x20], 0 (lpOverlapped = NULL)
-    code.push(0x48)
-    code.push(0xC7)
-    code.push(0x44)
-    code.push(0x24)
-    code.push(0x20)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
+    // Save handle; load WriteFile args; mov qword [rsp+0x20], 0
+    code.append(b"\x48\x89\x45\xe8\x48\x8b\x4d\xe8\x48\x8b\x55\xf8\x4c\x8b\x45\xf0\x4c\x8d\x4d\xe0\x48\xc7\x44\x24\x20\x00\x00\x00\x00")
 
     // call [rip+disp32] WriteFile
-    code.push(0xFF)
-    code.push(0x15)
+    code.append(b"\xff\x15")
     relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeFileSlot})
     writeDword(code, value: 0)
 
     // Epilogue: mov rsp, rbp; pop rbp; ret
-    code.push(0x48)
-    code.push(0x89)
-    code.push(0xEC)
-    code.push(0x5D)
-    code.push(0xC3)
+    code.append(b"\x48\x89\xec\x5d\xc3")
 end 'emitX86WriteStdoutWinApi'
 
 // Core X86 instruction emission loop — OS-neutral
@@ -829,10 +435,7 @@ function emitCallFixup(code ByteBuffer, callFixups CallFixupArray, target ByteAr
     code.push(0xE8)
     let fixupOffset = code.count()
     callFixups.push(CallFixup{codeOffset: fixupOffset, targetName: target})
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
-    code.push(0x00)
+    code.append(b"\x00\x00\x00\x00")
 end 'emitCallFixup'
 
 function resolveCallFixups(code ByteBuffer, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)

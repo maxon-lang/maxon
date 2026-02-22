@@ -57,7 +57,7 @@ end 'arm64EmitStpPreIndex'
 
 // MOV X29, SP => ADD X29, SP, #0
 function arm64EmitMovFpSp(code ByteBuffer)
-    emitInsn(code, insn: 0x910003FD)
+    code.append(b"\xfd\x03\x00\x91")
 end 'arm64EmitMovFpSp'
 
 // LDP X29, X30, [SP], #frameSize (post-indexed, 64-bit)
@@ -69,7 +69,7 @@ end 'arm64EmitLdpPostIndex'
 
 // RET (return via X30)
 function arm64EmitRet(code ByteBuffer)
-    emitInsn(code, insn: 0xD65F03C0)
+    code.append(b"\xc0\x03\x5f\xd6")
 end 'arm64EmitRet'
 
 // MOVZ Xd, #imm16 (no shift)
@@ -169,17 +169,17 @@ end 'arm64EmitCondBranch'
 
 // B (unconditional) with imm26 placeholder (patched later)
 function arm64EmitBranch(code ByteBuffer)
-    emitInsn(code, insn: 0x14000000)
+    code.append(b"\x00\x00\x00\x14")
 end 'arm64EmitBranch'
 
 // BL (branch and link) with imm26 placeholder (patched later)
 function arm64EmitBranchLink(code ByteBuffer)
-    emitInsn(code, insn: 0x94000000)
+    code.append(b"\x00\x00\x00\x94")
 end 'arm64EmitBranchLink'
 
 // SVC #0 (supervisor call for Linux syscalls)
 function arm64EmitSvc(code ByteBuffer)
-    emitInsn(code, insn: 0xD4000001)
+    code.append(b"\x01\x00\x00\xd4")
 end 'arm64EmitSvc'
 
 // BLR Xn (branch to register with link)
