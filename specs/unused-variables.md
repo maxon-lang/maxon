@@ -23,13 +23,20 @@ end 'main'
 error E3012: specs/fragments/unused-variables/docs-example-1.test:3:7: unused variable: 'x'
 ```
 
-### Discarding Values
+### Discarding Return Values
 
-Use `_` as the variable name to discard a value:
+Use `let _ =` to discard a function's return value:
 
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sideEffect() returns Integer
+  print("hello\n")
+  return 42
+end 'sideEffect'
+
 function main() returns ExitCode
-  let _ = 42  // OK: underscore discards
+  let _ = sideEffect()  // OK: underscore discards return value
   return 0
 end 'main'
 ```
@@ -92,8 +99,8 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3067: specs/fragments/unused-variables/underscore-discard.test:4:7: discarding a non-call expression has no effect
 ```
 
 <!-- test: used-in-nested-scope -->

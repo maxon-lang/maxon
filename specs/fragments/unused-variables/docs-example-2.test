@@ -1,6 +1,13 @@
 // Test: docs-example-2
+typealias Integer = int(i64.min to i64.max)
+
+function sideEffect() returns Integer
+  print("hello\n")
+  return 42
+end 'sideEffect'
+
 function main() returns ExitCode
-  let _ = 42  // OK: underscore discards
+  let _ = sideEffect()  // OK: underscore discards return value
   return 0
 end 'main'
 
@@ -8,9 +15,50 @@ end 'main'
 ExitCode: 0
 ---
 module {
+  func @unused-variables.sideEffect() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.mov edx, 6
+    x86.mov ebx, 32
+    x86.mov [rbp-24], ecx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-24]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, 6
+    x86.mov [r8+8], r9
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.mov rcx, [rbp-16]
+    x86.call stdlib.Print.print
+    x86.mov eax, 42
+    x86.epilogue
+    x86.ret
+  }
   func @unused-variables.main() -> u32 {
   entry:
-    x86.xor eax, eax
+    x86.call unused-variables.sideEffect
+    x86.xor ecx, ecx
+    x86.mov eax, ecx
     x86.ret
   }
 }

@@ -1724,6 +1724,12 @@ variable = expression
 
 **Note:** Cannot assign to `let` variables (immutable).
 
+Assigning a variable to itself is a compile error (E3067), since it has no effect:
+```maxon
+x = x         // ERROR: self-assignment has no effect
+p.x = p.x     // ERROR: self-assignment has no effect
+```
+
 ### If Statement
 
 **Syntax**
@@ -2880,6 +2886,17 @@ end 'test'
 ```maxon
 let x = 5
 x = 10                  // ERROR: Cannot assign to immutable variable
+```
+
+**Self-Assignment**
+```maxon
+var x = 5
+x = x                   // ERROR: self-assignment has no effect
+```
+
+**Useless Discard**
+```maxon
+let _ = 42              // ERROR: discarding a non-call expression has no effect
 ```
 
 **Unknown Keyword**

@@ -17,16 +17,61 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-    let _ = MyKeyMap{}
-    return 1
+    var m = MyKeyMap{}
+    m.insert(key: MyKey{value: 1}, value: 42)
+    return m.count()
 end 'main'
 ---
 ExitCode: 1
 ---
 module {
+  func @MyKey.hash(__self_ptr: i64) -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, 31
+    x86.imul edx, eax
+    x86.mov [rbp-16], edx
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rbx, 4294967295
+    x86.cmp rdx, rbx
+    x86.setg edx
+    x86.movzx edx, edxb
+    x86.or eax, edx
+    x86.test eax, eax
+    x86.je MyKey.hash.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @MyKey.equals(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov eax, [rbp-16]
+    x86.mov esi, [eax+0]
+    x86.cmp ebx, esi
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.epilogue
+    x86.ret
+  }
   func @where-clauses.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -146,6 +191,38 @@ module {
     x86.xor ecx, ecx
     x86.mov [eax+40], ecx
     x86.mov eax, 1
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, 1
+    x86.mov [eax+0], ecx
+    x86.mov eax, 42
+    x86.mov ecx, [rbp-56]
+    x86.mov edx, [rbp-64]
+    x86.mov r8, rax
+    x86.call MyKeyMap.insert
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, rax
+    x86.call MyKeyMap.count
+    x86.mov [rbp-72], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je where-clauses.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_56]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }

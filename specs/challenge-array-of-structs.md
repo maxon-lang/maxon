@@ -118,8 +118,8 @@ function main() returns ExitCode
   for task in tasks 'loop'
     match task.status 'check'
       Status.active then activeCount = activeCount + 1
-      Status.pending then activeCount = activeCount
-      Status.done then activeCount = activeCount
+      Status.pending then break
+      Status.done then break
     end 'check'
   end 'loop'
 

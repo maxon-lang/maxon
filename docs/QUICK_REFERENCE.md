@@ -87,7 +87,7 @@ var globalCounter = 0   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
 ```
 
-All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used.
+All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `let _ =` can only discard function call results, not literals or other expressions.
 
 Function return values must be used. Pure functions (no side effects) cannot have their results discarded at all. Impure functions can have results explicitly discarded with `let _ = func()`. Chainable methods (returning own type) may be freely discarded.
 

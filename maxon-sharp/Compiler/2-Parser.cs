@@ -60,8 +60,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   // Unified variable resolution result
   private abstract record ResolvedVar {
-    public record Local(VarInfo Info) : ResolvedVar;
-    public record Global(GlobalVarInfo Info) : ResolvedVar;
+    public record Local(VarInfo Info) : ResolvedVar {
+      public override bool IsMutable => Info.Mutable;
+    }
+    public record Global(GlobalVarInfo Info) : ResolvedVar {
+      public override bool IsMutable => Info.Mutable;
+    }
+    public abstract bool IsMutable { get; }
   }
 
   // Default parameter values (funcName -> index -> value)
@@ -4964,6 +4969,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Mark the underlying call as let-discarded for purity checking
     if (isDiscard) {
+      var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock!.Operations[^1] : null;
+      var hasCall = lastOp is MaxonCallOp || _lastExprCallOp is MaxonTryCallOp;
+      if (!hasCall) {
+        throw new CompileError(ErrorCode.SemanticSelfAssignment,
+          "discarding a non-call expression has no effect",
+          nameToken.Line, nameToken.Column);
+      }
       MarkLetDiscardResult(nameToken);
     }
 
@@ -5090,45 +5102,38 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       Expect(TokenType.Equals);
-      EmitFieldAssignment(currentStructTypeName, currentValue, fieldToken, nameToken);
+      EmitFieldAssignment(currentStructTypeName, currentValue, fieldToken, nameToken, name);
       return;
     }
 
     // Simple assignment: name = expr
     Expect(TokenType.Equals);
 
-    switch (ResolveVariable(name)) {
-      case ResolvedVar.Global(var globalInfo): {
-        if (!globalInfo.Mutable) {
-          throw new CompileError(ErrorCode.ParserImmutableVariable,
-            $"cannot assign to immutable variable: '{name}'",
-            nameToken.Line, nameToken.Column);
-        }
-        var newValue = ResolveExprValue(ParseExpression());
-        _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newValue, globalInfo.Kind));
-        break;
-      }
-      case ResolvedVar.Local(var varInfo): {
-        if (!varInfo.Mutable) {
-          throw new CompileError(ErrorCode.ParserImmutableVariable,
-            $"cannot assign to immutable variable: '{name}'",
-            nameToken.Line, nameToken.Column);
-        }
-        var newVal = ResolveExprValue(ParseExpression());
-        MlirFunctionType? fnType = null;
-        if (varInfo.Kind == MaxonValueKind.Function) {
-          fnType = GetFunctionTypeFromLastOp();
-        }
-        _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
-        if (varInfo.Kind == MaxonValueKind.Function) {
-          _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, FnTypeName: fnType);
-        } else {
-          _variables[name] = new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName);
-        }
-        break;
-      }
-      case null:
-        throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
+    var resolved = ResolveVariable(name)
+      ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
+
+    if (!resolved.IsMutable) {
+      throw new CompileError(ErrorCode.ParserImmutableVariable,
+        $"cannot assign to immutable variable: '{name}'",
+        nameToken.Line, nameToken.Column);
+    }
+
+    var newVal = ResolveExprValue(ParseExpression());
+    if (_lastExprVarName == name) {
+      throw new CompileError(ErrorCode.SemanticSelfAssignment,
+        $"self-assignment has no effect: '{name} = {name}'",
+        nameToken.Line, nameToken.Column);
+    }
+
+    if (resolved is ResolvedVar.Global(var globalInfo)) {
+      _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newVal, globalInfo.Kind));
+    } else {
+      var varInfo = ((ResolvedVar.Local)resolved).Info;
+      var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
+      _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
+      _variables[name] = fnType != null
+        ? new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, FnTypeName: fnType)
+        : new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName);
     }
   }
 
@@ -5158,7 +5163,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return Expect(TokenType.Identifier);
   }
 
-  private void EmitFieldAssignment(string structTypeName, MaxonValue structVal, Token fieldToken, Token errorToken) {
+  private void EmitFieldAssignment(string structTypeName, MaxonValue structVal, Token fieldToken, Token errorToken, string? lhsVarName = null) {
     var structType = (MlirStructType)_typeRegistry[structTypeName];
     var field = structType.GetField(fieldToken.Value)
       ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
@@ -5178,7 +5183,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     var newValue = ResolveExprValue(ParseExpression());
+
+    if (lhsVarName != null && IsFieldSelfAssignment(lhsVarName, fieldToken.Value)) {
+      throw new CompileError(ErrorCode.SemanticSelfAssignment,
+        $"self-assignment has no effect: '{lhsVarName}.{fieldToken.Value} = {lhsVarName}.{fieldToken.Value}'",
+        errorToken.Line, errorToken.Column);
+    }
+
     _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, structTypeName, fieldToken.Value, newValue));
+  }
+
+  // Checks if the last op emitted is a field access on the same variable and field as the LHS
+  private bool IsFieldSelfAssignment(string varName, string fieldName) {
+    var ops = _currentBlock!.Operations;
+    if (ops.Count < 2) return false;
+    if (ops[^1] is not MaxonFieldAccessOp fieldAccess) return false;
+    if (fieldAccess.FieldName != fieldName) return false;
+
+    // Struct VarRefs always emit a MaxonStructVarRefOp before the field access
+    return ops[^2] is MaxonStructVarRefOp structVarRef && structVarRef.VarName == varName;
   }
 
   private void ParseCallStatement() {

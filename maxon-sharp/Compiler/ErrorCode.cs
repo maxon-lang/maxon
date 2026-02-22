@@ -80,6 +80,7 @@ public enum ErrorCode {
   SemanticDiscardedPureResult = 3064,
   SemanticDiscardedImpureResult = 3065,
   SemanticUnionNotComparable = 3066,
+  SemanticSelfAssignment = 3067,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

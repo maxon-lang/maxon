@@ -86,8 +86,8 @@ function getVal() returns Integer
 end
 
 function main() returns ExitCode
-  let _ = Bounded{getVal()}
-  return 0 as ExitCode
+  var b = Bounded{getVal()}
+  return b as ExitCode
 end
 ```
 ```exitcode
