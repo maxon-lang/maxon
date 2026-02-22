@@ -149,6 +149,7 @@ Underscore separators for readability:
 '\t'          // Escape sequence (tab)
 '\\'          // Escape sequence (backslash)
 '\''          // Escape sequence (single quote)
+'\x41'        // Hex escape (character 'A')
 ```
 
 Character literals create a `character` type value, which represents an Extended Grapheme Cluster (EGC).
@@ -160,9 +161,10 @@ The `character` type may contain multiple UTF-8 bytes.
 "Line1\nLine2"
 "Tab\there"
 "Quote: \"text\""
+"\x48\x69"          // Hex escape ("Hi")
 ```
 
-Escape sequences: `\n` `\t` `\\` `\"` `\{` `\}`
+Escape sequences: `\n` `\t` `\r` `\0` `\\` `\"` `\{` `\}` `\xNN`
 
 **String Interpolation** (embed expressions in strings)
 ```maxon
@@ -226,9 +228,10 @@ end 'FormattedStringable'
 let bytes = b"hello"           // ByteBuffer containing [104, 101, 108, 108, 111]
 let empty = b""                // Empty ByteBuffer
 let escaped = b"line\n"        // Supports escape sequences
+let raw = b"\xFF\x00"          // Hex escape: raw bytes [255, 0]
 ```
 
-Byte string literals use the `b"..."` prefix to create a `ByteBuffer` (`Array with Byte`) directly from a UTF-8 encoded string. They support the same escape sequences as regular string literals. This is useful when working with raw bytes or APIs that expect byte arrays.
+Byte string literals use the `b"..."` prefix to create a `ByteBuffer` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF). This is useful when working with raw bytes or APIs that expect byte arrays.
 
 **Boolean Literals**
 ```maxon

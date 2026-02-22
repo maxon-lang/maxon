@@ -55,7 +55,7 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 "Hello, {name}!"    // interpolation with {}
 "{n:04}"            // format specifier: zero-pad to width 4
 "{f:.2}"            // format specifier: 2 decimal places
-"Line1\nLine2"      // escape sequences: \n \t \\ \" \{ \}
+"Line1\nLine2"      // escape sequences: \n \t \r \0 \\ \" \{ \} \xNN
 ```
 
 ## Operators

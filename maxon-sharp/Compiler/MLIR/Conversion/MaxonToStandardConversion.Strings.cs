@@ -11,8 +11,9 @@ public static partial class MaxonToStandardConversion {
 	  string value,
 	  string rdataLabel,
 	  MlirBlock<StandardOp> block,
-	  MlirModule<StandardOp> result) {
-		var utf8Bytes = System.Text.Encoding.UTF8.GetBytes(value);
+	  MlirModule<StandardOp> result,
+	  System.Text.Encoding? encoding = null) {
+		var utf8Bytes = (encoding ?? System.Text.Encoding.UTF8).GetBytes(value);
 
 		if (_rdataStringCache!.TryGetValue(value, out var existingLabel)) {
 			rdataLabel = existingLabel;
@@ -98,7 +99,8 @@ public static partial class MaxonToStandardConversion {
 		// EmitManagedMemoryLiteral stores managed at offset 0 (for String layout),
 		// so we build the ByteArray struct manually.
 		var rdataLabel = $"__bstr_{op.Result.Id}";
-		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result);
+		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result,
+		  System.Text.Encoding.Latin1);
 
 		// Heap-allocate __ManagedMemory struct (32 bytes)
 		var managedName = $"__bstrtmp_managed_{op.Result.Id}";

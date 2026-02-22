@@ -8429,6 +8429,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (nextChar is '{' or '}') {
           literalBuf.Append(nextChar);
           pos += 2;
+        } else if (nextChar == 'x') {
+          var escLen = Math.Min(4, text.Length - pos);
+          var escSeq = text.Substring(pos, escLen);
+          try { literalBuf.Append(StringUtils.ResolveEscapes(escSeq)); } catch (InvalidEscapeException ex) {
+            throw new CompileError(ErrorCode.LexerInvalidEscape,
+                $"{ex.Message} in string interpolation", token.Line, token.Column + pos);
+          }
+          pos += 4;
         } else {
           try { literalBuf.Append(StringUtils.ResolveEscapes($"\\{nextChar}")); } catch (InvalidEscapeException ex) {
             throw new CompileError(ErrorCode.LexerInvalidEscape,
