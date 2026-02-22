@@ -34,7 +34,7 @@ module {
   }
   func @self-keyword.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 6
     x86.mov ecx, 7
     x86.mov edx, 16
@@ -63,11 +63,15 @@ module {
     x86.test ecx, ecx
     x86.je self-keyword.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_18]
+    x86.lea_symdata rax, [__panic_msg_27]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
     x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call maxon_release
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

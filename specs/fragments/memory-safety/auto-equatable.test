@@ -1,13 +1,9 @@
 // Test: auto-equatable
 typealias Integer = int(i64.min to i64.max)
 
-type Point implements Equatable
+type Point
   export var x Integer
   export var y Integer
-
-  function equals(other Point) returns bool
-    return x == other.x and y == other.y
-  end 'equals'
 end 'Point'
 
 function main() returns ExitCode
@@ -34,13 +30,13 @@ module {
     x86.mov [rbp-16], edx
     x86.mov eax, [rbp-8]
     x86.mov ebx, [eax+0]
-    x86.mov eax, [rbp-8]
-    x86.mov esi, [eax+8]
     x86.mov eax, [rbp-16]
-    x86.mov edi, [eax+0]
-    x86.cmp ebx, edi
+    x86.mov esi, [eax+0]
+    x86.cmp ebx, esi
     x86.sete eax
     x86.movzx eax, eaxb
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [ebx+8]
     x86.mov ebx, [rbp-16]
     x86.mov edi, [ebx+8]
     x86.cmp esi, edi
@@ -132,11 +128,19 @@ module {
     x86.test edx, edx
     x86.je memory-safety.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_43]
+    x86.lea_symdata rax, [__panic_msg_41]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
     x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-48], eax
+    x86.call maxon_release
+    x86.mov rcx, [rbp-16]
+    x86.call maxon_release
+    x86.mov ecx, [rbp-24]
+    x86.call maxon_release
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }

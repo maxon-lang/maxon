@@ -224,6 +224,15 @@ public static partial class MaxonToStandardConversion {
 
       _refParamPtrVars = refParamPtrVars;
 
+      // Tracks struct variable names that this function owns (allocated or cloned).
+      // Params are excluded — caller owns them. Ref bindings are included since
+      // they hold an incref'd reference that must be decref'd at scope exit.
+      // Only simple value structs (no __ManagedMemory fields) are tracked for cleanup;
+      // complex types like String, Array, Map manage their own backing memory.
+      var ownedStructVars = new HashSet<string>();
+      // Tracks parameter names to exclude from cleanup
+      var structParamNames = new HashSet<string>();
+
       // Cache self-field loads: maps "fieldName" → temp var name for struct-typed self fields.
       // Avoids redundant load_indirect from self's heap pointer for the same field within a block.
       // Reset per-block since a cached var stored in one branch may not be defined in another.
@@ -355,6 +364,7 @@ public static partial class MaxonToStandardConversion {
                 structVarNames[structParamOp.Result.Id] = structParamOp.Name;
                 structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
               }
+              structParamNames.Add(structParamOp.Name);
               break;
             }
             case MaxonEnumLiteralOp enumLitOp: {
@@ -813,6 +823,15 @@ public static partial class MaxonToStandardConversion {
                 structVarNames[assignOp.Value.Id] = dstName;
                 structValueTypes[assignOp.Value.Id] = structTypeName;
                 varNameToStructPrefix[assignOp.VarName] = dstName;
+                // Track ownership: user-visible struct declarations own their data.
+                // Only track simple value structs for cleanup — types with __ManagedMemory
+                // fields (String, Array, Map, Set, etc.) manage their own backing memory.
+                if (assignOp.IsDeclaration && !dstName.StartsWith("__")
+                    && !structParamNames.Contains(dstName)
+                    && !IsSelfField(isStructInstanceMethod, selfStructType, dstName)
+                    && IsSimpleValueStruct(structTypeName, module.TypeDefs)) {
+                  ownedStructVars.Add(dstName);
+                }
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 // Widen I32/U32 to I64 when the variable was previously stored as I64
@@ -1401,10 +1420,10 @@ public static partial class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, ownedStructVars);
               break;
             case MaxonThrowOp throwOp:
-              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
+              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs, ownedStructVars);
               break;
             case MaxonManagedMemGetOp memGetOp:
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
@@ -1503,6 +1522,28 @@ public static partial class MaxonToStandardConversion {
       result.AddFunction(newFunc);
     }
     return result;
+  }
+
+  /// <summary>
+  /// Checks if a struct type is a simple value struct suitable for automatic cleanup.
+  /// Simple value structs contain only primitives and other simple value structs —
+  /// no __ManagedMemory fields, no interface types, no function types.
+  /// Types with managed memory (String, Array, Map, Set) need custom destructors.
+  /// </summary>
+  private static bool IsSimpleValueStruct(string typeName, Dictionary<string, MlirType> typeDefs) {
+    // __ManagedMemory is an internal heap-managed buffer, not a simple value struct
+    if (typeName.StartsWith("__")) return false;
+    if (!typeDefs.TryGetValue(typeName, out var typeDef)) return false;
+    if (typeDef is not MlirStructType st) return false;
+
+    foreach (var field in st.Fields) {
+      if (field.Type is MlirStructType fieldStruct) {
+        if (!IsSimpleValueStruct(fieldStruct.Name, typeDefs)) return false;
+      } else if (field.Type is MlirFunctionType or MlirInterfaceType or MlirTypeParameterType) {
+        return false;
+      }
+    }
+    return true;
   }
 
 }

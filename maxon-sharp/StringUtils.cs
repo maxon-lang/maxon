@@ -16,15 +16,20 @@ static class StringUtils {
         if (next == 'x') {
           if (i + 3 >= text.Length || !IsHexDigit(text[i + 2]) || !IsHexDigit(text[i + 3])) {
             var available = text.Substring(i, Math.Min(4, text.Length - i));
-            throw new InvalidEscapeException($"Invalid hex escape '\\{available.Substring(1)}': expected 2 hex digits");
+            throw new InvalidEscapeException($"Invalid hex escape '\\{available[1..]}': expected 2 hex digits");
           }
           var hex = text.Substring(i + 2, 2);
           sb.Append((char)Convert.ToByte(hex, 16));
           i += 3;
         } else {
           sb.Append(next switch {
-            'n' => '\n', 't' => '\t', 'r' => '\r', '0' => '\0',
-            '\\' => '\\', '\'' => '\'', '"' => '"',
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            '0' => '\0',
+            '\\' => '\\',
+            '\'' => '\'',
+            '"' => '"',
             _ => throw new InvalidEscapeException(next),
           });
           i++;

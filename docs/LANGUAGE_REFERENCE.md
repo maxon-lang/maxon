@@ -2775,6 +2775,57 @@ end 'Cloneable'
 
 **When auto-conformance fails:** If a struct contains a field whose type is not Cloneable (such as an enum or union), the compiler will not auto-generate conformance. Attempting `var b = a` on such a type produces error E3077. You can still use `var b = ref a` to create a reference alias.
 
+### Auto-Equatable
+
+The compiler also auto-generates `Equatable` conformance for structs whose fields all implement `Equatable`. The synthesized `equals()` method compares each field using `==` (for primitives) or `.equals()` (for nested structs).
+
+```maxon
+type Point
+  export var x int
+  export var y int
+end 'Point'
+
+// Point auto-conforms to Equatable (all fields are primitive)
+var a = Point{x: 1, y: 2}
+var b = Point{x: 1, y: 2}
+if a == b 'equal'           // true -- content equality
+  print("equal")
+end 'equal'
+```
+
+If a struct contains a field that doesn't implement `Equatable` (such as a function type), using `==` produces error E3078.
+
+To compare reference identity (whether two variables point to the same heap object), use the `is` operator:
+
+```maxon
+var a = Point{x: 1, y: 2}
+var b = a                   // deep copy
+var c = ref a               // alias
+a is b                      // false -- different objects
+a is c                      // true -- same object
+```
+
+### Scope Cleanup
+
+When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via `ref`), the refcount is incremented. When a variable goes out of scope, `maxon_release` decrements the refcount and frees the memory if it reaches zero.
+
+```maxon
+function compute() returns int
+  var a = Point{x: 10, y: 20}  // allocated on heap, refcount = 1
+  var b = Point{x: 30, y: 40}  // allocated on heap, refcount = 1
+  return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
+end 'compute'
+```
+
+**Return values transfer ownership:** When a struct is returned from a function, its ownership transfers to the caller. The returned variable is not released at scope exit.
+
+```maxon
+function makePoint() returns Point
+  var p = Point{x: 1, y: 2}
+  return p                      // ownership transfers to caller, p is NOT freed
+end 'makePoint'
+```
+
 ### Ownership System
 
 Maxon implements a compile-time ownership system that tracks value ownership and prevents use-after-move errors without runtime overhead.

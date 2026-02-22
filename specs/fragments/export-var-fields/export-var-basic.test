@@ -40,7 +40,7 @@ module {
   }
   func @export-var-fields.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.call Value.create
     x86.mov [rbp-8], eax
     x86.mov eax, [rbp-8]
@@ -58,11 +58,15 @@ module {
     x86.test ebx, ebx
     x86.je export-var-fields.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_15]
+    x86.lea_symdata rax, [__panic_msg_24]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
     x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call maxon_release
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

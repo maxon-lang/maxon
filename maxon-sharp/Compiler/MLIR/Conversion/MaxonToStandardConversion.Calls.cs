@@ -80,7 +80,6 @@ public static partial class MaxonToStandardConversion {
     // Use the resolved fully-qualified name for call emission (e.g., "String.hash" → "stdlib.String.hash")
     var resolvedCallee = calleeFunc.Name;
     var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
-    bool calleeIsStructInstance = IsStructInstanceMethod(calleeFunc);
 
     var newArgs = new List<StdValue>();
 
@@ -169,7 +168,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    HashSet<string> ownedStructVars) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -180,6 +180,15 @@ public static partial class MaxonToStandardConversion {
 
     // No self write-back needed: with heap refs, all field mutations go through
     // the heap pointer directly, so the caller sees changes automatically.
+
+    // Determine which variable is being returned (skip cleanup for it — ownership transfers to caller)
+    string? returnedVarName = null;
+    if (retOp.Value != null && structVarNames.TryGetValue(retOp.Value.Id, out var retVarName)) {
+      returnedVarName = retVarName;
+    }
+
+    // Emit decref for all owned struct vars that are NOT the returned value
+    EmitScopeCleanup(block, ownedStructVars, returnedVarName, varTypes);
 
     // Associated-value enum return: caller expects a heap pointer, not flat vars
     if (retOp.Value != null
@@ -208,13 +217,34 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// <summary>
+  /// Emit release (decref + free-if-zero) for all owned struct variables at scope exit.
+  /// The returned variable is skipped since its ownership transfers to the caller.
+  /// </summary>
+  private static void EmitScopeCleanup(
+    MlirBlock<StandardOp> block,
+    HashSet<string> ownedStructVars,
+    string? returnedVarName,
+    Dictionary<string, string> varTypes) {
+    foreach (var varName in ownedStructVars) {
+      if (varName == returnedVarName) continue;
+      Logger.Debug(LogCategory.Mlir, $"Scope cleanup: releasing '{varName}' (returned={returnedVarName})");
+      var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("maxon_release", [heapPtr], null));
+    }
+  }
+
   private static void LowerThrow(
     MaxonThrowOp throwOp,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<int, string> structVarNames,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    HashSet<string> ownedStructVars) {
+    // Clean up owned struct vars before throwing (no struct is being "returned")
+    EmitScopeCleanup(block, ownedStructVars, returnedVarName: null, varTypes);
+
     // Check if this is an associated-value error enum
     if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)

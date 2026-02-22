@@ -102,6 +102,10 @@ All variables must be used (E3012). The exact name `_` is a discard identifier -
 
 **Assignment semantics:** For struct types, `var b = a` creates a deep copy (the type must be `Cloneable`; error E3077 if not). Use `var b = ref a` to create a reference alias instead. `ref` must use `var` (not `let`), cannot target standalone primitives, and references cannot escape their scope.
 
+**Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types.
+
+**Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs transfer ownership to the caller and are not freed at scope exit.
+
 Function return values must be used. Pure functions (no side effects) cannot have their results discarded at all. Impure functions can have results explicitly discarded with `let _ = func()`. Chainable methods (returning own type) may be freely discarded.
 
 ## Functions

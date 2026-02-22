@@ -200,57 +200,6 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Identifies struct literals with fixed-capacity __ManagedMemory buffers that can be
-  /// stack-allocated instead of heap-allocated. Uses escape analysis to ensure the struct
-  /// doesn't outlive this frame.
-  /// </summary>
-  private static HashSet<int> FindStackAllocatableStructs(
-      MlirFunction<MaxonOp> func,
-      Dictionary<string, MlirType> typeDefs,
-      HashSet<int> escapingIds) {
-    var stackAllocIds = new HashSet<int>();
-
-    // Build a map of struct literal IDs and variable-to-struct-literal tracking
-    // to detect structs that escape via return (stack frame destroyed on return)
-    var structLiterals = new Dictionary<int, MaxonStructLiteralOp>();
-    var varToStructLit = new Dictionary<string, int>();
-    var escapingStructIds = new HashSet<int>();
-
-    foreach (var block in func.Body.Blocks) {
-      foreach (var op in block.Operations) {
-        if (op is MaxonStructLiteralOp sLit)
-          structLiterals[sLit.Result.Id] = sLit;
-        if (op is MaxonAssignOp assign && structLiterals.ContainsKey(assign.Value.Id))
-          varToStructLit[assign.VarName] = assign.Value.Id;
-        if (op is MaxonStructVarRefOp varRef && varToStructLit.TryGetValue(varRef.VarName, out var refLitId))
-          structLiterals.TryAdd(varRef.Result.Id, structLiterals[refLitId]);
-        if (op is MaxonReturnOp ret && ret.Value != null && structLiterals.TryGetValue(ret.Value.Id, out var retLit))
-          escapingStructIds.Add(retLit.Result.Id);
-      }
-    }
-
-    foreach (var (id, structLit) in structLiterals) {
-      if (escapingIds.Contains(id)) continue;
-      if (escapingStructIds.Contains(id)) continue;
-      if (!typeDefs.TryGetValue(structLit.TypeName, out var typeDef)) continue;
-      if (typeDef is not MlirStructType structType) continue;
-      if (!structType.HasStackAllocatableBuffer) continue;
-
-      stackAllocIds.Add(id);
-
-      // Also mark the inner __ManagedMemory struct for stack allocation
-      foreach (var (fieldName, fieldVal) in structLit.FieldValues) {
-        if (fieldName == "managed") {
-          stackAllocIds.Add(fieldVal.Id);
-          break;
-        }
-      }
-    }
-
-    return stackAllocIds;
-  }
-
-  /// <summary>
   /// Allocates a struct on the stack by creating contiguous field variables and returning
   /// a LEA address to the base. Uses the same convention as array literal elements.
   /// </summary>

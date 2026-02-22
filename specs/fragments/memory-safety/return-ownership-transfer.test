@@ -17,10 +17,108 @@ function main() returns ExitCode
   return 0
 end 'main'
 ---
+ExitCode: 0
 Stdout: ```
 1
 ```
----
+RequiredMLIR: ```
+=== maxon
+module {
+  func @memory-safety.makeRef() -> Point {
+  entry:
+    %13 = maxon.literal {value = 1 : i64}
+    %14 = maxon.literal {value = 2 : i64}
+    %15 = maxon.struct_literal @Point
+    maxon.assign %15 {var = local} {decl = 1 : i1} {mut = 1 : i1}
+    %16 = maxon.struct_var_ref local
+    maxon.return %16
+  }
+  func @memory-safety.main() -> i64 {
+  entry:
+    %17 = maxon.call @memory-safety.makeRef
+    maxon.assign %17 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.struct_var_ref p
+    %19 = maxon.field_access .x %18
+    %20 = maxon.string_interp
+    maxon.call @stdlib.Print.print %20
+    %21 = maxon.literal {value = 0 : i64}
+    maxon.return %21
+  }
+}
+=== standard
+module {
+  func @memory-safety.makeRef() -> i64 {
+  entry:
+    %0 = arith.constant {value = 1 : i64}
+    %1 = arith.constant {value = 2 : i64}
+    %2 = arith.constant {value = 16 : i64}
+    %3 = std.call_runtime @maxon_alloc %2
+    memref.store %3, local
+    %4 = memref.load local : i64
+    memref.store_indirect %0, %4+0
+    %5 = memref.load local : i64
+    memref.store_indirect %1, %5+8
+    %6 = memref.load local : i64
+    func.return %6
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    %7 = func.call @memory-safety.makeRef
+    memref.store %7, p
+    %9 = memref.load p : i64
+    %10 = memref.load_indirect %9+0
+    %11 = arith.constant {value = 21 : i64}
+    %12 = std.call_runtime @maxon_alloc %11
+    memref.store %12, __tostr_buf_12
+    %13 = std.call_runtime @maxon_i64_to_string %10, %12
+    %14 = memref.load __tostr_buf_12 : i64
+    %15 = arith.constant {value = 1 : i64}
+    %16 = arith.addi %13, %15
+    %17 = std.call_runtime @maxon_alloc %16
+    %18 = arith.constant {value = 0 : i64}
+    memref.store %18, __interp_offset_20
+    memref.store %17, __interp_buf_20
+    memref.store %13, __interp_totallen_20
+    memref.store %14, __interp_partbuf_20_0
+    memref.store %13, __interp_partlen_20_0
+    %19 = memref.load __interp_buf_20 : i64
+    %20 = memref.load __interp_offset_20 : i64
+    %21 = arith.addi %19, %20
+    %22 = memref.load __interp_partbuf_20_0 : i64
+    %23 = memref.load __interp_partlen_20_0 : i64
+    std.memcopy %22, %21, %23
+    %27 = arith.constant {value = 32 : i64}
+    %28 = std.call_runtime @maxon_alloc %27
+    memref.store %28, __interp_managed_20
+    %29 = memref.load __interp_buf_20 : i64
+    %30 = memref.load __interp_managed_20 : i64
+    memref.store_indirect %29, %30+0
+    %31 = memref.load __interp_totallen_20 : i64
+    %32 = memref.load __interp_managed_20 : i64
+    memref.store_indirect %31, %32+8
+    %33 = memref.load __interp_managed_20 : i64
+    memref.store_indirect %31, %33+16
+    %34 = arith.constant {value = 1 : i64}
+    %35 = memref.load __interp_managed_20 : i64
+    memref.store_indirect %34, %35+24
+    %36 = arith.constant {value = 16 : i64}
+    %37 = std.call_runtime @maxon_alloc %36
+    memref.store %37, __interptmp_20
+    %38 = memref.load __interp_managed_20 : i64
+    %39 = memref.load __interptmp_20 : i64
+    memref.store_indirect %38, %39+0
+    %40 = arith.constant {value = 0 : i64}
+    %41 = memref.load __interptmp_20 : i64
+    memref.store_indirect %40, %41+8
+    %42 = memref.load __interptmp_20 : i64
+    func.call @stdlib.Print.print %42
+    %43 = arith.constant {value = 0 : i64}
+    %44 = memref.load p : i64
+    std.call_runtime @maxon_release %44
+    func.return %43
+  }
+}
+=== x86
 module {
   func @memory-safety.makeRef() -> i64 {
   entry:
@@ -109,8 +207,13 @@ module {
     x86.mov rcx, rax
     x86.call stdlib.Print.print
     x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call maxon_release
+    x86.xor eax, eax
     x86.epilogue
     x86.ret
   }
 }
+```
+---
 ---

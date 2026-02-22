@@ -15,7 +15,71 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
----
+RequiredMLIR: ```
+=== maxon
+module {
+  func @memory-safety.createAndDrop() -> i64 {
+  entry:
+    %8 = maxon.literal {value = 42 : i64}
+    %9 = maxon.struct_literal @Resource
+    maxon.assign %9 {var = r} {decl = 1 : i1} {mut = 1 : i1}
+    %10 = maxon.struct_var_ref r
+    %11 = maxon.field_access .id %10
+    maxon.return %11
+  }
+  func @memory-safety.main() -> i64 {
+  entry:
+    %12 = maxon.call @memory-safety.createAndDrop
+    maxon.assign %12 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %13 = maxon.literal {value = 0 : i64}
+    %14 = maxon.binop %12, %13 {op = lt}
+    %15 = maxon.literal {value = 4294967295 : i64}
+    %16 = maxon.binop %12, %15 {op = gt}
+    %17 = maxon.binop %14, %16 {op = or}
+    maxon.cond_br %17 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at scope-cleanup.test:14: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %19 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %19
+  }
+}
+=== standard
+module {
+  func @memory-safety.createAndDrop() -> i64 {
+  entry:
+    %0 = arith.constant {value = 42 : i64}
+    %1 = arith.constant {value = 8 : i64}
+    %2 = std.call_runtime @maxon_alloc %1
+    memref.store %2, r
+    %3 = memref.load r : i64
+    memref.store_indirect %0, %3+0
+    %4 = memref.load r : i64
+    %5 = memref.load_indirect %4+0
+    %6 = memref.load r : i64
+    std.call_runtime @maxon_release %6
+    func.return %5
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    %7 = func.call @memory-safety.createAndDrop
+    memref.store %7, __range_val_0
+    %8 = arith.constant {value = 0 : i64}
+    %9 = arith.cmpi lt %7, %8
+    %10 = arith.constant {value = 4294967295 : i64}
+    %11 = arith.cmpi gt %7, %10
+    %12 = arith.ori1 %9, %11
+    cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %13 = memref.lea_symdata __panic_msg_18
+    %14 = std.ptr_to_i64 %13
+    std.call_runtime @maxon_panic %14
+  __range_ok_0:
+    %15 = memref.load __range_val_0 : i64
+    func.return %15
+  }
+}
+=== x86
 module {
   func @memory-safety.createAndDrop() -> i64 {
   entry:
@@ -29,6 +93,11 @@ module {
     x86.mov [edx+0], ebx
     x86.mov esi, [rbp-8]
     x86.mov eax, [esi+0]
+    x86.mov edi, [rbp-8]
+    x86.mov [rbp-16], eax
+    x86.mov rcx, rdi
+    x86.call maxon_release
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -49,7 +118,7 @@ module {
     x86.test ecx, ecx
     x86.je memory-safety.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_13]
+    x86.lea_symdata rax, [__panic_msg_18]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -58,4 +127,6 @@ module {
     x86.ret
   }
 }
+```
+---
 ---

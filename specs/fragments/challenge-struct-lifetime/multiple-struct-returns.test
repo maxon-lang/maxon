@@ -84,7 +84,7 @@ module {
   }
   func @challenge-struct-lifetime.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.call challenge-struct-lifetime.step1
     x86.mov [rbp-8], eax
     x86.mov eax, [rbp-8]
@@ -109,11 +109,19 @@ module {
     x86.test edi, edi
     x86.je challenge-struct-lifetime.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_29]
+    x86.lea_symdata rax, [__panic_msg_34]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
     x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-40], eax
+    x86.call maxon_release
+    x86.mov rcx, [rbp-16]
+    x86.call maxon_release
+    x86.mov ecx, [rbp-24]
+    x86.call maxon_release
+    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   }

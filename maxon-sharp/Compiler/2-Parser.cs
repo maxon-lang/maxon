@@ -42,6 +42,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         !seedModule!.NonExportedTypeNames.Contains(kv.Key)
         || !seedModule!.TypeDefSourceFiles.TryGetValue(kv.Key, out var src)
         || src == sourceFilePath)) : [];
+  // Types registered during this parser's PreScan — only these get auto-conformance synthesis
+  private readonly HashSet<string> _locallyDefinedTypes = [];
   private string? _currentTypeName;
 
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
@@ -779,6 +781,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Skip for stdlib — stdlib types that need Cloneable should declare it explicitly
     if (!_isStdlib) {
       ResolveAutoCloneableConformance(module);
+      ResolveAutoEquatableConformance(module);
     }
 
     // Evaluate constants (handling forward references)
@@ -1197,7 +1200,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           $"'{paramName}' is not a type parameter of this type",
           paramToken.Line, paramToken.Column);
 
-      var isToken = Expect(TokenType.Is);
+      Expect(TokenType.Is);
 
       var interfaces = new List<string> {
         Expect(TokenType.Identifier).Value
@@ -1412,6 +1415,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
       typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
       whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null);
+    _locallyDefinedTypes.Add(typeName);
     if (isExported) _exportedTypes.Add(typeName);
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
@@ -1449,26 +1453,39 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// that contain other structs.
   /// </summary>
   private void ResolveAutoCloneableConformance(MlirModule<MaxonOp> module) {
-    // Collect all struct types that don't already conform to Cloneable
-    // Skip compiler-internal types (e.g. __ManagedMemory) which have special memory semantics
+    ResolveAutoConformance(module, "Cloneable", PreRegisterSyntheticStructClone);
+  }
+
+  private void ResolveAutoEquatableConformance(MlirModule<MaxonOp> module) {
+    ResolveAutoConformance(module, "Equatable", PreRegisterSyntheticStructEquals);
+  }
+
+  /// <summary>
+  /// Auto-add interface conformance to locally-defined struct types whose fields all conform.
+  /// Uses iterative resolution to handle structs containing other structs (topological order).
+  /// Only processes types defined in this parse session — stdlib types declare conformance explicitly.
+  /// </summary>
+  private void ResolveAutoConformance(
+      MlirModule<MaxonOp> module,
+      string interfaceName,
+      Action<MlirModule<MaxonOp>, string, MlirStructType> preRegisterStub) {
     var candidates = new Dictionary<string, MlirStructType>();
     foreach (var (name, type) in _typeRegistry) {
-      if (type is MlirStructType st && !st.ConformingInterfaces.Contains("Cloneable")
-          && !name.StartsWith("__")) {
+      if (type is MlirStructType st && !st.ConformingInterfaces.Contains(interfaceName)
+          && !name.StartsWith("__") && _locallyDefinedTypes.Contains(name)) {
         candidates[name] = st;
       }
     }
 
-    // Iteratively resolve: keep checking until no more structs can be added
     bool changed = true;
     while (changed) {
       changed = false;
       foreach (var (name, st) in candidates) {
-        if (st.ConformingInterfaces.Contains("Cloneable")) continue;
+        if (st.ConformingInterfaces.Contains(interfaceName)) continue;
 
-        bool allFieldsCloneable = true;
+        bool allFieldsConform = true;
         foreach (var field in st.Fields) {
-          // Primitives and ranged primitives are value types, inherently copyable
+          // Primitives and ranged primitives inherently conform to Cloneable/Equatable
           if (field.Type is MlirRangedPrimitiveType
               || (field.Type is not MlirStructType and not MlirUnionType and not MlirEnumType
                   and not MlirInterfaceType and not MlirFunctionType and not MlirTypeParameterType))
@@ -1477,15 +1494,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           if (field.Type is MlirStructType fieldStruct) {
             fieldTypeName = fieldStruct.Name;
           }
-          if (!TypeConformsToInterface(fieldTypeName, "Cloneable")) {
-            allFieldsCloneable = false;
+          if (!TypeConformsToInterface(fieldTypeName, interfaceName)) {
+            allFieldsConform = false;
             break;
           }
         }
 
-        if (allFieldsCloneable) {
-          st.ConformingInterfaces.Add("Cloneable");
-          PreRegisterSyntheticStructClone(module, name, st);
+        if (allFieldsConform) {
+          st.ConformingInterfaces.Add(interfaceName);
+          preRegisterStub(module, name, st);
           changed = true;
         }
       }
@@ -1506,6 +1523,23 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         SourceFilePath = _sourceFilePath
       };
       module.AddFunction(cloneFunc);
+    }
+  }
+
+  /// <summary>
+  /// Pre-register a stub equals() method for auto-Equatable struct types.
+  /// </summary>
+  private void PreRegisterSyntheticStructEquals(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+
+    var equalsName = $"{qualifiedTypeName}.equals";
+    if (!module.Functions.Any(f => f.Name == equalsName)) {
+      var equalsFunc = new MlirFunction<MaxonOp>(
+        equalsName, ["self", "other"], [(MlirType)structType, (MlirType)structType], MlirType.I1, null) {
+        SourceFilePath = _sourceFilePath
+      };
+      module.AddFunction(equalsFunc);
     }
   }
 
@@ -3464,6 +3498,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SynthesizeStructClone(module, typeName, st);
     }
 
+    // Synthesize equals() body for auto-Equatable structs
+    if (_typeRegistry.TryGetValue(typeName, out var regTypeEq) && regTypeEq is MlirStructType stEq
+        && stEq.ConformingInterfaces.Contains("Equatable")) {
+      SynthesizeStructEquals(module, typeName, stEq);
+    }
+
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
     ExpectEndLabel(typeName);
@@ -3607,6 +3647,82 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
     block.AddOp(structLit);
     block.AddOp(new MaxonReturnOp(structLit.Result));
+  }
+
+  /// <summary>
+  /// Synthesize equals() method body for an auto-Equatable struct type.
+  /// Compares each field using == (for primitives) or .equals() (for structs).
+  /// </summary>
+  private void SynthesizeStructEquals(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+
+    var equalsName = $"{qualifiedTypeName}.equals";
+    var equalsFunc = module.Functions.FirstOrDefault(f => f.Name == equalsName);
+    if (equalsFunc == null) return;
+
+    // Only synthesize if the stub has no body (user didn't provide their own)
+    if (equalsFunc.Body.Blocks.Count > 0) return;
+
+    module.Functions.Remove(equalsFunc);
+    equalsFunc = new MlirFunction<MaxonOp>(
+      equalsName, ["self", "other"], [(MlirType)structType, (MlirType)structType], MlirType.I1, null) {
+      SourceFilePath = _sourceFilePath
+    };
+    module.AddFunction(equalsFunc);
+    var block = equalsFunc.Body.AddBlock("entry");
+
+    var selfParam = new MaxonStructParamOp(0, "self", typeName);
+    block.AddOp(selfParam);
+    var otherParam = new MaxonStructParamOp(1, "other", typeName);
+    block.AddOp(otherParam);
+
+    // Start with true, AND each field comparison
+    MaxonValue? accumulator = null;
+
+    foreach (var field in structType.Fields) {
+      var fieldKind = field.Type.ToValueKind();
+      string? fieldStructTypeName = null;
+      if (field.Type is MlirStructType fst) fieldStructTypeName = fst.Name;
+      else if (field.Type is MlirUnionType fut) fieldStructTypeName = fut.Name;
+
+      var selfAccess = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
+      block.AddOp(selfAccess);
+      var otherAccess = new MaxonFieldAccessOp(otherParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
+      block.AddOp(otherAccess);
+
+      MaxonValue fieldEqual;
+      if (field.Type is MlirStructType nestedStruct) {
+        // Nested struct: call .equals()
+        var nestedQualified = string.IsNullOrEmpty(namespace_) ? nestedStruct.Name : $"{namespace_}.{nestedStruct.Name}";
+        var nestedEqualsName = $"{nestedQualified}.equals";
+        var nestedEqualsCall = new MaxonCallOp(nestedEqualsName, [selfAccess.Result, otherAccess.Result], MaxonValueKind.Bool);
+        block.AddOp(nestedEqualsCall);
+        fieldEqual = nestedEqualsCall.Result!;
+      } else {
+        // Primitives: use == operator
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, selfAccess.Result, otherAccess.Result, fieldKind);
+        block.AddOp(cmpOp);
+        fieldEqual = cmpOp.Result;
+      }
+
+      if (accumulator == null) {
+        accumulator = fieldEqual;
+      } else {
+        var andOp = new MaxonBinOp(MaxonBinOperator.And, accumulator, fieldEqual, MaxonValueKind.Bool);
+        block.AddOp(andOp);
+        accumulator = andOp.Result;
+      }
+    }
+
+    // Handle empty structs (no fields) - always equal
+    if (accumulator == null) {
+      var trueOp = new MaxonLiteralOp(true);
+      block.AddOp(trueOp);
+      accumulator = trueOp.Result;
+    }
+
+    block.AddOp(new MaxonReturnOp(accumulator));
   }
 
   /// <summary>

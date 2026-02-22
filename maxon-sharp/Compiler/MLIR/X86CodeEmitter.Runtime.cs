@@ -15,6 +15,7 @@ public partial class X86CodeEmitter {
     EmitMaxonFree();
     EmitMaxonIncref();
     EmitMaxonDecref();
+    EmitMaxonRelease();
     EmitMaxonCowCheck();
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
@@ -138,6 +139,22 @@ public partial class X86CodeEmitter {
     DefineLabel("rt_decref_zero");
     EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
     DefineLabel("rt_decref_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>maxon_release(ptr_in_rcx) — decref and free if refcount reaches 0, null-safe</summary>
+  private void EmitMaxonRelease() {
+    EmitRuntimeFunctionStart("maxon_release", 1); // prologue saves rcx to [rbp-8]
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_release_skip");
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_release_skip");
+    // Refcount reached 0 — reload ptr (DEC didn't change rcx, but reload for safety) and free
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_release_skip");
     EmitRuntimeFunctionEnd();
   }
 

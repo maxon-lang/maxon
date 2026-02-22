@@ -17,7 +17,7 @@ ExitCode: 42
 module {
   func @challenge-struct-field-assign.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov eax, 10
     x86.mov ecx, 8
     x86.call maxon_alloc
@@ -43,11 +43,15 @@ module {
     x86.test eax, eax
     x86.je challenge-struct-field-assign.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_14]
+    x86.lea_symdata rax, [__panic_msg_19]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
     x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call maxon_release
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }
