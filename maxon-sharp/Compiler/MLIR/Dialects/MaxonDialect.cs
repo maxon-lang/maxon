@@ -144,13 +144,14 @@ public class MaxonLiteralOp : MaxonOp {
   }
 }
 
-public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration, bool isMutable, MaxonValueKind valueKind) : MaxonOp {
+public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration, bool isMutable, MaxonValueKind valueKind, bool isRef = false) : MaxonOp {
   public override string Mnemonic => "maxon.assign";
   public string VarName { get; } = varName;
   public MaxonValue Value { get; } = value;
   public bool IsDeclaration { get; } = isDeclaration;
   public bool IsMutable { get; } = isMutable;
   public MaxonValueKind ValueKind { get; } = valueKind;
+  public bool IsRef { get; } = isRef;
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes {
     get {
@@ -162,6 +163,7 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
       }
       if (IsDeclaration) attrs["decl"] = new IntegerAttr(1, MlirType.I1);
       if (IsMutable) attrs["mut"] = new IntegerAttr(1, MlirType.I1);
+      if (IsRef) attrs["ref"] = new IntegerAttr(1, MlirType.I1);
       return attrs;
     }
   }

@@ -1,4 +1,4 @@
-// Test: mutation-through-alias
+// Test: copy-isolates-mutation
 typealias Integer = int(i64.min to i64.max)
 
 type Point
@@ -13,9 +13,33 @@ function main() returns ExitCode
   return a.x
 end 'main'
 ---
-ExitCode: 99
+ExitCode: 1
 ---
 module {
+  func @Point.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+8]
+    x86.mov eax, 16
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], ebx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, [rbp-32]
+    x86.mov [ebx+8], esi
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
   func @reference-identity.main() -> u32 {
   entry:
     x86.prologue stack_size=32
@@ -32,9 +56,9 @@ module {
     x86.mov r8, 2
     x86.mov [edi+8], r8
     x86.mov r9, [rbp-8]
-    x86.mov [rbp-16], r9
     x86.mov rcx, r9
-    x86.call maxon_incref
+    x86.call Point.clone
+    x86.mov [rbp-16], eax
     x86.mov eax, 99
     x86.mov ecx, [rbp-16]
     x86.mov [ecx+0], eax
@@ -53,7 +77,7 @@ module {
     x86.test eax, eax
     x86.je reference-identity.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_13]
+    x86.lea_symdata rax, [__panic_msg_18]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

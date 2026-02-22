@@ -1,0 +1,61 @@
+// Test: scope-cleanup
+typealias Integer = int(i64.min to i64.max)
+
+type Resource
+  export var id Integer
+end 'Resource'
+
+function createAndDrop() returns Integer
+  var r = Resource{id: 42}
+  return r.id
+end 'createAndDrop'
+
+function main() returns ExitCode
+  return createAndDrop()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @memory-safety.createAndDrop() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 42
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 42
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-8]
+    x86.mov eax, [esi+0]
+    x86.epilogue
+    x86.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call memory-safety.createAndDrop
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je memory-safety.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_13]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

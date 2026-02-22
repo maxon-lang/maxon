@@ -1,0 +1,144 @@
+// Test: auto-equatable
+typealias Integer = int(i64.min to i64.max)
+
+type Point implements Equatable
+  export var x Integer
+  export var y Integer
+
+  function equals(other Point) returns bool
+    return x == other.x and y == other.y
+  end 'equals'
+end 'Point'
+
+function main() returns ExitCode
+  var a = Point{x: 1, y: 2}
+  var b = Point{x: 1, y: 2}
+  var c = Point{x: 3, y: 4}
+  var result = 0
+  if a == b 'eq1'
+    result = result + 1
+  end 'eq1'
+  if a == c 'eq2'
+    result = result + 10
+  end 'eq2'
+  return result
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Point.equals(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov esi, [eax+8]
+    x86.mov eax, [rbp-16]
+    x86.mov edi, [eax+0]
+    x86.cmp ebx, edi
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.mov ebx, [rbp-16]
+    x86.mov edi, [ebx+8]
+    x86.cmp esi, edi
+    x86.sete ebx
+    x86.movzx ebx, ebxb
+    x86.and eax, ebx
+    x86.epilogue
+    x86.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 1
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 2
+    x86.mov [edi+8], r8
+    x86.mov r9, 1
+    x86.mov eax, 2
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.mov [eax+8], ecx
+    x86.mov eax, 3
+    x86.mov ecx, 4
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 3
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 4
+    x86.mov [eax+8], ecx
+    x86.xor eax, eax
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Point.equals
+    x86.test eax, eax
+    x86.je memory-safety.main.eq1_0.merge
+  eq1_0:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-32]
+    x86.add ecx, eax
+    x86.mov [rbp-32], ecx
+    x86.jmp memory-safety.main.eq1_0.merge
+  eq1_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Point.equals
+    x86.test eax, eax
+    x86.je memory-safety.main.eq2_1.merge
+  eq2_1:
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-32]
+    x86.add ecx, eax
+    x86.mov [rbp-32], ecx
+    x86.jmp memory-safety.main.eq2_1.merge
+  eq2_1.merge:
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je memory-safety.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_symdata rax, [__panic_msg_43]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-40]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

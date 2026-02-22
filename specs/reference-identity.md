@@ -13,7 +13,7 @@ category: operators
 
 In Maxon, all struct-typed variables are references (heap pointers). The `==` operator compares **contents** (value equality via `Equatable`), while the `is` operator compares **reference identity** — whether two variables point to the same object in memory.
 
-Assignment (`var b = a`) creates a reference alias — both variables point to the same object. Mutations through one are visible through the other. To check if two references point to the same object, use `is`.
+Assignment (`var b = a`) creates a **copy** — `b` is a new, independent object with the same field values. To create a reference alias where both variables point to the same object, use `var b = ref a`. To check if two references point to the same object, use `is`.
 
 ### Operators
 
@@ -60,7 +60,29 @@ end 'main'
 1
 ```
 
-<!-- test: assignment-creates-alias -->
+<!-- test: ref-creates-alias -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function main() returns ExitCode
+  var a = Point{x: 1, y: 2}
+  var b = ref a
+  if a is b 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: copy-creates-new-object -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -79,7 +101,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-1
+0
 ```
 
 <!-- test: different-objects -->
@@ -195,7 +217,27 @@ end 'main'
 1
 ```
 
-<!-- test: mutation-through-alias -->
+<!-- test: mutation-through-ref -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function main() returns ExitCode
+  var a = Point{x: 1, y: 2}
+  var b = ref a
+  b.x = 99
+  return a.x
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: copy-isolates-mutation -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -212,7 +254,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-99
+1
 ```
 
 <!-- test: primitive-error -->

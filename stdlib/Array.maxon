@@ -3,7 +3,7 @@
 
 // Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
 
-export type Array uses Element implements BuiltinArrayLiteral, Iterable with Element
+export type Array uses Element implements BuiltinArrayLiteral, Iterable with Element, Cloneable
   var iterIndex Index          // Current iteration position (now at offset 0)
   export var managed __ManagedMemory  // Compiler-managed opaque array storage (now at offset 8)
 
@@ -34,6 +34,13 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   // =========================================================================
   // Properties
   // =========================================================================
+
+  /// Create a deep copy of this array with independent backing storage
+  export function clone() returns Self
+    var len = __managed_memory_len(managed)
+    var newManaged = __managed_memory_slice(managed, 0, len)
+    return Self{managed: newManaged, iterIndex: 0}
+  end 'clone'
 
   /// Get the number of elements in the array
   export function count() returns Count

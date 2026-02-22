@@ -1,0 +1,116 @@
+// Test: return-ownership-transfer
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function makeRef() returns Point
+  var local = Point{x: 1, y: 2}
+  return local
+end 'makeRef'
+
+function main() returns ExitCode
+  var p = makeRef()
+  print("{p.x}")
+  return 0
+end 'main'
+---
+Stdout: ```
+1
+```
+---
+module {
+  func @memory-safety.makeRef() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 1
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 2
+    x86.mov [edi+8], r8
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=96
+    x86.call memory-safety.makeRef
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov edx, 21
+    x86.mov [rbp-80], ecx
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov rcx, [rbp-80]
+    x86.mov rdx, rax
+    x86.call maxon_i64_to_string
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, 1
+    x86.lea edi, [eax + esi]
+    x86.mov [rbp-88], eax
+    x86.mov [rbp-96], ebx
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.xor r8, r8
+    x86.mov [rbp-24], r8
+    x86.mov [rbp-32], eax
+    x86.mov r9, [rbp-88]
+    x86.mov [rbp-40], r9
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-48], eax
+    x86.mov [rbp-56], r9
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-24]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-48]
+    x86.mov edx, [rbp-56]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, 32
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-64]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-64]
+    x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-64]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-64]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-72]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-72]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-72]
+    x86.mov rcx, rax
+    x86.call stdlib.Print.print
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

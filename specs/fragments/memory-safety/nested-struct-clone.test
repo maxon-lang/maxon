@@ -1,0 +1,266 @@
+// Test: nested-struct-clone
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+  export var value Integer
+end 'Inner'
+
+type Outer
+  export var a Inner
+  export var b Integer
+end 'Outer'
+
+function main() returns ExitCode
+  var x = Outer{a: Inner{value: 42}, b: 10}
+  var y = x
+  y.a.value = 99
+  y.b = 0
+  print("{x.a.value}\n")
+  print("{x.b}")
+  return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+42
+10
+```
+---
+module {
+  func @Inner.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, 8
+    x86.mov [rbp-24], edx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
+    x86.mov [ecx+0], edx
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @Outer.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call Inner.clone
+    x86.mov [rbp-24], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [ecx+8]
+    x86.mov ebx, 16
+    x86.mov [rbp-40], edx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-32], eax
+    x86.mov esi, [rbp-24]
+    x86.mov edi, [rbp-32]
+    x86.mov [edi+0], esi
+    x86.mov r8, [rbp-32]
+    x86.mov r9, [rbp-40]
+    x86.mov [r8+8], r9
+    x86.mov eax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=256
+    x86.mov eax, 42
+    x86.mov ecx, 8
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 42
+    x86.mov [edx+0], ebx
+    x86.mov esi, 10
+    x86.mov edi, 16
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [rbp-16]
+    x86.mov [r9+0], r8
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 10
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call Outer.clone
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-32], ecx
+    x86.mov eax, 99
+    x86.mov ecx, [rbp-32]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-24]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-40], ecx
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [eax+0]
+    x86.mov eax, 21
+    x86.mov [rbp-192], ecx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-48], eax
+    x86.mov rcx, [rbp-192]
+    x86.mov rdx, rax
+    x86.call maxon_i64_to_string
+    x86.mov ecx, [rbp-48]
+    x86.lea_rdata rdx, [__interp_lit_47]
+    x86.mov rbx, rdx
+    x86.mov edx, 1
+    x86.lea esi, [eax + edx]
+    x86.mov edi, 1
+    x86.lea r8, [esi + edi]
+    x86.mov [rbp-200], eax
+    x86.mov [rbp-208], ecx
+    x86.mov [rbp-216], ebx
+    x86.mov [rbp-224], esi
+    x86.mov rcx, r8
+    x86.call maxon_alloc
+    x86.xor ecx, ecx
+    x86.mov [rbp-56], ecx
+    x86.mov [rbp-64], eax
+    x86.mov eax, [rbp-224]
+    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-208]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-200]
+    x86.mov [rbp-88], eax
+    x86.mov eax, [rbp-216]
+    x86.mov [rbp-96], eax
+    x86.mov eax, 1
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-56]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-80]
+    x86.mov edx, [rbp-88]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-88]
+    x86.add eax, ecx
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-56]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-96]
+    x86.mov edx, [rbp-104]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, 32
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-112], eax
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-112]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-72]
+    x86.mov ecx, [rbp-112]
+    x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-112]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-112]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-120], eax
+    x86.mov eax, [rbp-112]
+    x86.mov ecx, [rbp-120]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-120]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-120]
+    x86.mov rcx, rax
+    x86.call stdlib.Print.print
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [eax+8]
+    x86.mov eax, 21
+    x86.mov [rbp-232], ecx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-128], eax
+    x86.mov rcx, [rbp-232]
+    x86.mov rdx, rax
+    x86.call maxon_i64_to_string
+    x86.mov ecx, [rbp-128]
+    x86.mov edx, 1
+    x86.lea ebx, [eax + edx]
+    x86.mov [rbp-240], eax
+    x86.mov [rbp-248], ecx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.xor ecx, ecx
+    x86.mov [rbp-136], ecx
+    x86.mov [rbp-144], eax
+    x86.mov eax, [rbp-240]
+    x86.mov [rbp-152], eax
+    x86.mov ecx, [rbp-248]
+    x86.mov [rbp-160], ecx
+    x86.mov [rbp-168], eax
+    x86.mov eax, [rbp-144]
+    x86.mov ecx, [rbp-136]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-160]
+    x86.mov edx, [rbp-168]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, 32
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-176], eax
+    x86.mov eax, [rbp-144]
+    x86.mov ecx, [rbp-176]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-152]
+    x86.mov ecx, [rbp-176]
+    x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-176]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-176]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-184], eax
+    x86.mov eax, [rbp-176]
+    x86.mov ecx, [rbp-184]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-184]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-184]
+    x86.mov rcx, rax
+    x86.call stdlib.Print.print
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

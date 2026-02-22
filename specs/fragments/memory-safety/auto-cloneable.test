@@ -1,0 +1,104 @@
+// Test: auto-cloneable
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function main() returns ExitCode
+  var a = Point{x: 10, y: 20}
+  var b = a
+  b.x = 99
+  if a is not b 'diff'
+    return a.x + a.y
+  end 'diff'
+  return 0
+end 'main'
+---
+ExitCode: 30
+---
+module {
+  func @Point.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+8]
+    x86.mov eax, 16
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], ebx
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, [rbp-32]
+    x86.mov [ebx+8], esi
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, 10
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 20
+    x86.mov [edi+8], r8
+    x86.mov r9, [rbp-8]
+    x86.mov rcx, r9
+    x86.call Point.clone
+    x86.mov [rbp-16], eax
+    x86.mov eax, 99
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.cmp eax, ecx
+    x86.je memory-safety.main.diff_0.after
+  diff_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+8]
+    x86.add ecx, ebx
+    x86.mov [rbp-24], ecx
+    x86.xor esi, esi
+    x86.cmp ecx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rcx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je memory-safety.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  diff_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

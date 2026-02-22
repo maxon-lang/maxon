@@ -1,0 +1,23 @@
+// Test: ref-escapes-scope-error
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function makeRef() returns Point
+  var local = Point{x: 1, y: 2}
+  return ref local
+end 'makeRef'
+
+function main() returns ExitCode
+  var p = makeRef()
+  return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3072: cannot return a reference to local variable 'local'
+```
+---
+---

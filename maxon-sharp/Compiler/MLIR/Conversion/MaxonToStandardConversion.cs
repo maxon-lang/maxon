@@ -782,6 +782,7 @@ public static partial class MaxonToStandardConversion {
               if (assignOp.ValueKind == MaxonValueKind.Struct
                   || structVarNames.ContainsKey(assignOp.Value.Id)) {
                 // Struct assignment: copy the heap pointer (alias, not deep copy)
+                // Copy-by-default cloning is handled at the parser level via clone() calls.
                 var srcName = structVarNames[assignOp.Value.Id];
                 var dstName = assignOp.VarName;
                 var structTypeName = structValueTypes.TryGetValue(assignOp.Value.Id, out var svt)

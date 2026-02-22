@@ -1,4 +1,4 @@
-// Test: assignment-creates-alias
+// Test: is-compares-refs
 typealias Integer = int(i64.min to i64.max)
 
 type Point
@@ -8,17 +8,17 @@ end 'Point'
 
 function main() returns ExitCode
   var a = Point{x: 1, y: 2}
-  var b = a
-  if a is b 'check'
+  var b = ref a
+  if a is b 'same'
     return 1
-  end 'check'
+  end 'same'
   return 0
 end 'main'
 ---
 ExitCode: 1
 ---
 module {
-  func @reference-identity.main() -> u32 {
+  func @memory-safety.main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 1
@@ -40,12 +40,12 @@ module {
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
     x86.cmp eax, ecx
-    x86.jne reference-identity.main.check_0.after
-  check_0:
+    x86.jne memory-safety.main.same_0.after
+  same_0:
     x86.mov eax, 1
     x86.epilogue
     x86.ret
-  check_0.after:
+  same_0.after:
     x86.xor eax, eax
     x86.epilogue
     x86.ret

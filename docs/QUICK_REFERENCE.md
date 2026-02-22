@@ -73,6 +73,7 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 | Lowest | `or` |
 
 `and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
+`==` on struct types requires the type to implement `Equatable` (error E3078 if not).
 `is`, `is not` compare reference identity (same heap object) for struct types.
 `shl`, `shr` work on integers only.
 
@@ -86,9 +87,20 @@ let _ = sideEffect()  // discard: no binding, no unused check
 // Top-level variables (outside functions)
 var globalCounter = 0   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
+
+// Copy-by-default for structs (requires Cloneable)
+var a = Point{x: 1, y: 2}
+var b = a               // deep copy -- b is independent
+b.x = 99               // a.x is still 1
+
+// Reference binding with ref
+var c = ref a           // c is an alias for a (same object)
+c.x = 99               // a.x is now 99
 ```
 
 All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `let _ =` can only discard function call results, not literals or other expressions.
+
+**Assignment semantics:** For struct types, `var b = a` creates a deep copy (the type must be `Cloneable`; error E3077 if not). Use `var b = ref a` to create a reference alias instead. `ref` must use `var` (not `let`), cannot target standalone primitives, and references cannot escape their scope.
 
 Function return values must be used. Pure functions (no side effects) cannot have their results discarded at all. Impure functions can have results explicitly discarded with `let _ = func()`. Chainable methods (returning own type) may be freely discarded.
 

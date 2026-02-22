@@ -2,7 +2,7 @@
 /// @category Text
 
 // String receives __ManagedMemory directly for literal initialization via BuiltinStringLiteral.
-export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with Character
+export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with Character, Cloneable
   var _managed __ManagedMemory
   var _iterPos Index
 
@@ -26,6 +26,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
   export function toByteArray() returns ByteArray
     return ByteArray{managed: _managed}
   end 'toByteArray'
+
+  /// Create a deep copy of this string with independent backing storage
+  export function clone() returns String
+    var len = __managed_memory_len(_managed)
+    var newManaged = __managed_memory_slice(_managed, 0, len)
+    return String{_managed: newManaged, _iterPos: 0}
+  end 'clone'
 
   export function byteLength() returns Count
     return __managed_memory_len(_managed)

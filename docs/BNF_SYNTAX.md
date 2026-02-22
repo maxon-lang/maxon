@@ -46,11 +46,11 @@ KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
               | 'extension' | 'extern' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
-              | 'match' | 'mod' | 'not' | 'or' | 'otherwise' | 'return'
-              | 'self' | 'Self' | 'shl' | 'shr' | 'static' | 'then'
-              | 'throw' | 'throws' | 'to' | 'true' | 'try' | 'type'
-              | 'typealias' | 'union' | 'upto' | 'uses' | 'var' | 'where'
-              | 'while' | 'with' | 'xor'
+              | 'match' | 'mod' | 'not' | 'or' | 'otherwise' | 'ref'
+              | 'return' | 'self' | 'Self' | 'shl' | 'shr' | 'static'
+              | 'then' | 'throw' | 'throws' | 'to' | 'true' | 'try'
+              | 'type' | 'typealias' | 'union' | 'upto' | 'uses' | 'var'
+              | 'where' | 'while' | 'with' | 'xor'
 ```
 
 ### 1.4 Literals
@@ -366,6 +366,7 @@ expression_stmt
 
 ```
 var_decl      = 'var' IDENTIFIER '=' expression
+              | 'var' IDENTIFIER '=' 'ref' expression          (* reference binding *)
               | 'var' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
 let_decl      = 'let' IDENTIFIER '=' expression

@@ -82,6 +82,12 @@ public enum ErrorCode {
   SemanticUnionNotComparable = 3066,
   SemanticSelfAssignment = 3067,
   SemanticRefIdentityOnPrimitive = 3068,
+  SemanticRefWithLetBinding = 3070,
+  SemanticRefOnStandalonePrimitive = 3071,
+  SemanticRefEscapesScope = 3072,
+  SemanticRefFieldOfMutableSource = 3076,
+  SemanticCopyNonCloneable = 3077,
+  SemanticEqRequiresEquatable = 3078,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

@@ -1302,7 +1302,7 @@ c
 ```
 
 <!-- test: cow-mutation-copies -->
-### COW Mutation Through Alias
+### Copy-by-Default Isolates String Mutation
 ```maxon
 function main() returns ExitCode
   var original = "HELLO"
@@ -1317,12 +1317,12 @@ end 'main'
 0
 ```
 ```stdout
-hello
+HELLO
 hello
 ```
 
 <!-- test: cow-original-unchanged -->
-### COW Aliases Share Mutations
+### Copy-by-Default Preserves Original
 ```maxon
 function main() returns ExitCode
   var a = "TEST STRING"
@@ -1339,9 +1339,9 @@ end 'main'
 0
 ```
 ```stdout
+TEST STRING
 test string
-test string
-test string
+TEST STRING
 ```
 
 <!-- test: cow-slice-independent -->

@@ -414,7 +414,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   };
 
   // VarInfo now tracks struct type name for struct variables, or function type for function variables
-  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false);
+  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false, bool IsRef = false);
 
   private MlirType? GetOptimalType(MaxonValue value) {
     // Look up the variable's ranged type to get the optimal type for codegen
@@ -774,6 +774,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _pos = savedPos;
 
     DetectCircularTypeAliases();
+
+    // Auto-add Cloneable conformance for structs whose fields are all Cloneable
+    // Skip for stdlib — stdlib types that need Cloneable should declare it explicitly
+    if (!_isStdlib) {
+      ResolveAutoCloneableConformance(module);
+    }
 
     // Evaluate constants (handling forward references)
     var evaluated = new Dictionary<string, object>();
@@ -1435,6 +1441,72 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         && extInterfaces.Contains(requiredInterface))
       return true;
     return false;
+  }
+
+  /// <summary>
+  /// After all types are pre-scanned, auto-add Cloneable conformance to structs
+  /// whose fields are all Cloneable. Uses topological resolution to handle structs
+  /// that contain other structs.
+  /// </summary>
+  private void ResolveAutoCloneableConformance(MlirModule<MaxonOp> module) {
+    // Collect all struct types that don't already conform to Cloneable
+    // Skip compiler-internal types (e.g. __ManagedMemory) which have special memory semantics
+    var candidates = new Dictionary<string, MlirStructType>();
+    foreach (var (name, type) in _typeRegistry) {
+      if (type is MlirStructType st && !st.ConformingInterfaces.Contains("Cloneable")
+          && !name.StartsWith("__")) {
+        candidates[name] = st;
+      }
+    }
+
+    // Iteratively resolve: keep checking until no more structs can be added
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      foreach (var (name, st) in candidates) {
+        if (st.ConformingInterfaces.Contains("Cloneable")) continue;
+
+        bool allFieldsCloneable = true;
+        foreach (var field in st.Fields) {
+          // Primitives and ranged primitives are value types, inherently copyable
+          if (field.Type is MlirRangedPrimitiveType
+              || (field.Type is not MlirStructType and not MlirUnionType and not MlirEnumType
+                  and not MlirInterfaceType and not MlirFunctionType and not MlirTypeParameterType))
+            continue;
+          var fieldTypeName = MlirType.FormatAsSourceName(field.Type);
+          if (field.Type is MlirStructType fieldStruct) {
+            fieldTypeName = fieldStruct.Name;
+          }
+          if (!TypeConformsToInterface(fieldTypeName, "Cloneable")) {
+            allFieldsCloneable = false;
+            break;
+          }
+        }
+
+        if (allFieldsCloneable) {
+          st.ConformingInterfaces.Add("Cloneable");
+          PreRegisterSyntheticStructClone(module, name, st);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  /// <summary>
+  /// Pre-register a stub clone() method for auto-Cloneable struct types.
+  /// </summary>
+  private void PreRegisterSyntheticStructClone(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+
+    var cloneName = $"{qualifiedTypeName}.clone";
+    if (!module.Functions.Any(f => f.Name == cloneName)) {
+      var cloneFunc = new MlirFunction<MaxonOp>(
+        cloneName, ["self"], [(MlirType)structType], (MlirType)structType, null) {
+        SourceFilePath = _sourceFilePath
+      };
+      module.AddFunction(cloneFunc);
+    }
   }
 
   private void ValidateWhereConstraints(
@@ -3386,6 +3458,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected 'var' or 'let' in field declaration, got '{Current().Value}'", Current().Line, Current().Column);
     }
 
+    // Synthesize clone() body for auto-Cloneable structs
+    if (_typeRegistry.TryGetValue(typeName, out var regType) && regType is MlirStructType st
+        && st.ConformingInterfaces.Contains("Cloneable")) {
+      SynthesizeStructClone(module, typeName, st);
+    }
+
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
     ExpectEndLabel(typeName);
@@ -3473,6 +3551,62 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ParseBodyUntilEnd();
     ExpectEndLabel(nameToken.Value);
     FinishFunctionBody(nameToken.Value, nameToken, returnType);
+  }
+
+  /// <summary>
+  /// Synthesize clone() method body for an auto-Cloneable struct type.
+  /// Creates a new struct literal with each field cloned from self.
+  /// </summary>
+  private void SynthesizeStructClone(MlirModule<MaxonOp> module, string typeName, MlirStructType structType) {
+    var namespace_ = DeriveNamespace(includeFilename: false);
+    var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? typeName : $"{namespace_}.{typeName}";
+
+    var cloneName = $"{qualifiedTypeName}.clone";
+    var cloneFunc = module.Functions.FirstOrDefault(f => f.Name == cloneName);
+    if (cloneFunc == null) return;
+
+    // Only synthesize if the stub has no body (user didn't provide their own)
+    if (cloneFunc.Body.Blocks.Count > 0) return;
+
+    module.Functions.Remove(cloneFunc);
+    cloneFunc = new MlirFunction<MaxonOp>(
+      cloneName, ["self"], [(MlirType)structType], (MlirType)structType, null) {
+      SourceFilePath = _sourceFilePath
+    };
+    module.AddFunction(cloneFunc);
+    var block = cloneFunc.Body.AddBlock("entry");
+
+    // self param
+    var selfParam = new MaxonStructParamOp(0, "self", typeName);
+    block.AddOp(selfParam);
+
+    // Access each field and clone if needed
+    var fieldValues = new List<(string FieldName, MaxonValue Value)>();
+    foreach (var field in structType.Fields) {
+      var fieldKind = field.Type.ToValueKind();
+      string? fieldStructTypeName = null;
+      if (field.Type is MlirStructType fst) fieldStructTypeName = fst.Name;
+      else if (field.Type is MlirUnionType fut) fieldStructTypeName = fut.Name;
+
+      var accessOp = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
+      block.AddOp(accessOp);
+
+      MaxonValue fieldValue = accessOp.Result;
+      if (field.Type is MlirStructType nestedStruct) {
+        // Recursively clone nested struct fields using qualified name
+        var nestedQualified = string.IsNullOrEmpty(namespace_) ? nestedStruct.Name : $"{namespace_}.{nestedStruct.Name}";
+        var nestedCloneName = $"{nestedQualified}.clone";
+        var nestedCloneCall = new MaxonCallOp(nestedCloneName, [accessOp.Result], MaxonValueKind.Struct, nestedStruct.Name);
+        block.AddOp(nestedCloneCall);
+        fieldValue = nestedCloneCall.Result!;
+      }
+      // Primitives and ranged types: value is copied directly (no clone call needed)
+      fieldValues.Add((field.Name, fieldValue));
+    }
+
+    var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
+    block.AddOp(structLit);
+    block.AddOp(new MaxonReturnOp(structLit.Result));
   }
 
   /// <summary>
@@ -4564,6 +4698,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Advance(); // consume 'return'
 
     if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
+      // Check for 'return ref local' — returning a reference to a local is always an error
+      if (Check(TokenType.Ref)) {
+        Advance(); // consume 'ref'
+        var refExpr = ParseExpression();
+        var refValue = ResolveExprValue(refExpr);
+        // Find the source variable name
+        string? varName = null;
+        if (refValue is MaxonStruct) {
+          varName = FindSourceVariableName(refValue);
+        }
+        throw new CompileError(ErrorCode.SemanticRefEscapesScope,
+          varName != null
+            ? $"cannot return a reference to local variable '{varName}'"
+            : "cannot return a reference to a local variable");
+      }
+
       var value = ResolveExprValue(ParseExpression());
       CheckReturnType(value, returnToken);
       value = CheckReturnRange(value, returnToken);
@@ -4941,6 +5091,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ParseVarOrLetDecl(isMutable: false);
   }
 
+  /// <summary>
+  /// Check if a value originates from a user-declared variable reference (MaxonStructVarRefOp
+  /// pointing to a non-internal variable name), as opposed to a fresh allocation from a struct
+  /// literal, function call return, or internal temp. Used to determine whether copy-by-default
+  /// cloning is needed.
+  /// </summary>
+  private bool IsExistingUserVariableRef(MaxonValue value) {
+    foreach (var op in _currentBlock!.Operations) {
+      if (op is MaxonStructVarRefOp varRef && varRef.Result.Id == value.Id
+          && !varRef.VarName.StartsWith("__"))
+        return true;
+    }
+    return false;
+  }
+
+  /// <summary>
+  /// Trace a MaxonValue back through the current block's ops to find the source variable name.
+  /// </summary>
+  private string? FindSourceVariableName(MaxonValue value) {
+    foreach (var op in _currentBlock!.Operations) {
+      if (op is MaxonStructVarRefOp varRef && varRef.Result.Id == value.Id) {
+        return varRef.VarName;
+      }
+    }
+    return null;
+  }
+
   private void ParseVarOrLetDecl(bool isMutable) {
     Advance(); // consume 'var' or 'let'
     _lastRangedTypeName = null;
@@ -4958,9 +5135,41 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
     }
     Expect(TokenType.Equals);
+
+    // Check for 'ref' keyword: var b = ref a
+    var isRef = false;
+    if (Check(TokenType.Ref)) {
+      Advance(); // consume 'ref'
+      isRef = true;
+      if (!isMutable) {
+        throw new CompileError(ErrorCode.SemanticRefWithLetBinding,
+          "'ref' binding must use 'var', not 'let'");
+      }
+    }
+
     _lastExprCallOp = null;
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
+
+    // Validate ref targets
+    if (isRef) {
+      var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock!.Operations[^1] : null;
+
+      // ref to standalone primitive is an error (unless it's a field access)
+      if (initValue is not MaxonStruct && lastOp is not MaxonFieldAccessOp) {
+        throw new CompileError(ErrorCode.SemanticRefOnStandalonePrimitive,
+          "'ref' cannot reference a standalone primitive variable; ref targets structs, fields, or array elements");
+      }
+
+      // ref to field/element of a mutable source is an error
+      if (lastOp is MaxonFieldAccessOp fieldAccess) {
+        var sourceVarName = FindSourceVariableName(fieldAccess.StructValue);
+        if (sourceVarName != null && _variables.TryGetValue(sourceVarName, out var sourceVar) && sourceVar.Mutable) {
+          throw new CompileError(ErrorCode.SemanticRefFieldOfMutableSource,
+            $"'ref' to field of mutable variable '{sourceVarName}'; source must be immutable ('let')");
+        }
+      }
+    }
 
     // Mark the underlying call as let-discarded for purity checking
     if (isDiscard) {
@@ -4976,20 +5185,38 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (initValue is MaxonStruct structVal) {
       var kind = MaxonValueKind.Struct;
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+
+      // Copy-by-default: when assigning from an existing variable (not ref, not a fresh
+      // allocation), emit a clone call to create a deep copy
+      var effectiveValue = (MaxonValue)initValue;
+      var effectiveRef = isRef;
+      if (!isRef && IsExistingUserVariableRef(initValue)) {
+        if (TypeConformsToInterface(structVal.TypeName, "Cloneable")) {
+          // Deep copy via clone()
+          var cloneCall = new MaxonCallOp($"{structVal.TypeName}.clone", [initValue], MaxonValueKind.Struct, structVal.TypeName);
+          _currentBlock!.AddOp(cloneCall);
+          effectiveValue = cloneCall.Result!;
+          effectiveRef = true; // clone result is fresh allocation, treat as ref
+        } else {
+          throw new CompileError(ErrorCode.SemanticCopyNonCloneable,
+            $"cannot copy type '{structVal.TypeName}': not all fields implement 'Cloneable'");
+        }
+      }
+
+      _currentBlock!.AddOp(new MaxonAssignOp(name, effectiveValue, isDeclaration: true, isMutable: isMutable, kind, isRef: effectiveRef));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, structVal.TypeName);
+        _variables[name] = new VarInfo(kind, isMutable, effectiveValue, _currentBlock!, structVal.TypeName, IsRef: isRef);
     } else if (initValue is MaxonEnum enumVal) {
       var kind = MaxonValueKind.Enum;
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind, isRef: isRef));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, enumVal.TypeName);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, enumVal.TypeName, IsRef: isRef);
     } else if (initValue is MaxonFunctionPtr) {
       var kind = MaxonValueKind.Function;
       var fnType = GetFunctionTypeFromLastOp();
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind, isRef: isRef));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, FnTypeName: fnType);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, FnTypeName: fnType, IsRef: isRef);
     } else {
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
@@ -5000,9 +5227,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           && rt is MlirRangedPrimitiveType rpt && rpt.OptimalType == MlirType.F32) {
         kind = MaxonValueKind.Float32;
       }
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind, isRef: isRef));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName, IsRef: isRef);
     }
   }
 
@@ -7595,6 +7822,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             lhs = new ExprResult.Direct(callOp.Result!);
           }
           continue;
+        } else {
+          var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
+          throw new CompileError(ErrorCode.SemanticEqRequiresEquatable,
+            $"'{opStr}' requires type '{lhsStruct.TypeName}' to implement 'Equatable'");
         }
       }
 
