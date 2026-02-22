@@ -1,72 +1,11 @@
 // PE64 file writer for Windows executables.
 // Produces a minimal PE with .text and .idata sections.
 
-export typealias ByteCount = int(0 to u64.max)
-export typealias ByteOffset = int(0 to u64.max)
 typealias Rva = int(0 to u64.max)
-typealias IatSlotIndex = int(0 to u64.max)
 typealias SectionFlags = int(0 to u64.max)
-
-// --- ByteBuffer multi-byte write helpers ---
-
-export function writeWord(buf ByteBuffer, value MachineWord)
-    buf.push(value and 0xFF)
-    buf.push((value shr 8) and 0xFF)
-end 'writeWord'
-
-export function writeDword(buf ByteBuffer, value MachineWord)
-    buf.push(value and 0xFF)
-    buf.push((value shr 8) and 0xFF)
-    buf.push((value shr 16) and 0xFF)
-    buf.push((value shr 24) and 0xFF)
-end 'writeDword'
-
-export function writeQword(buf ByteBuffer, value MachineWord)
-    buf.push(value and 0xFF)
-    buf.push((value shr 8) and 0xFF)
-    buf.push((value shr 16) and 0xFF)
-    buf.push((value shr 24) and 0xFF)
-    buf.push((value shr 32) and 0xFF)
-    buf.push((value shr 40) and 0xFF)
-    buf.push((value shr 48) and 0xFF)
-    buf.push((value shr 56) and 0xFF)
-end 'writeQword'
-
-export function writeZeros(buf ByteBuffer, n ByteCount)
-    var i = 0
-    while i < n 'zeros'
-        buf.push(0)
-        i = i + 1
-    end 'zeros'
-end 'writeZeros'
-
-export function writeAscii(buf ByteBuffer, text String)
-    for ch in text 'chars'
-        let b = try ch.asciiValue() otherwise 0
-        buf.push(b)
-    end 'chars'
-    buf.push(0)
-end 'writeAscii'
-
-export function padTo(buf ByteBuffer, size ByteCount)
-    while buf.count() < size 'pad'
-        buf.push(0)
-    end 'pad'
-end 'padTo'
-
-export function patchDword(buf ByteBuffer, offset ByteOffset, value MachineWord)
-    buf.set(offset, value: value and 0xFF)
-    buf.set(offset + 1, value: (value shr 8) and 0xFF)
-    buf.set(offset + 2, value: (value shr 16) and 0xFF)
-    buf.set(offset + 3, value: (value shr 24) and 0xFF)
-end 'patchDword'
 
 let FILE_ALIGNMENT = 512
 let SECTION_ALIGNMENT = 4096
-
-export function alignUp(value ByteCount, alignment ByteCount) returns ByteCount
-    return (value + alignment - 1) and not (alignment - 1)
-end 'alignUp'
 
 // --- Import section builder ---
 // IAT slot indices for kernel32.dll imports
@@ -80,12 +19,6 @@ type ImportSection
     export var importDirRva Rva
     export var importDirSize ByteCount
 end 'ImportSection'
-
-export type IatFixup
-    export var codeOffset CodeOffset
-    export var iatSlotIndex IatSlotIndex
-end 'IatFixup'
-
 
 function buildImportSection(idataRva Rva) returns ImportSection
     var data = ByteBuffer{}
@@ -174,11 +107,14 @@ end 'writeSectionHeader'
 
 // --- Main PE writer ---
 
-export type CodeResult
-    export var code ByteBuffer
-    export var mainCallFixupOffset CodeOffset
-    export var iatFixups IatFixupArray
-end 'CodeResult'
+function patchIatFixups(code ByteBuffer, iatFixups IatFixupArray, textRva Rva, idataRva Rva)
+    for fixup in iatFixups 'patchIat'
+        let ripAtFixup = textRva + fixup.codeOffset + 4
+        let iatEntryRva = idataRva + (fixup.iatSlotIndex * 8)
+        let iatRel = iatEntryRva - ripAtFixup
+        patchDword(code, offset: fixup.codeOffset, value: iatRel)
+    end 'patchIat'
+end 'patchIatFixups'
 
 export function writePe(outputPath String, codeResult CodeResult)
     logDebug(LogCategory.pe, message: "Writing PE file: {outputPath}")
@@ -211,12 +147,10 @@ export function writePe(outputPath String, codeResult CodeResult)
     logDebug(LogCategory.pe, message: "Import section: {idataSize} bytes")
 
     // Patch all IAT RIP-relative references in code
-    for fixup in codeResult.iatFixups 'patchIat'
-        let ripAtFixup = textRva + fixup.codeOffset + 4
-        let iatEntryRva = idataRva + (fixup.iatSlotIndex * 8)
-        let iatRel = iatEntryRva - ripAtFixup
-        patchDword(code, offset: fixup.codeOffset, value: iatRel)
-    end 'patchIat'
+    match codeResult.osFixups 'applyFixups'
+        peFixups(iatFixups) then patchIatFixups(code, iatFixups: iatFixups, textRva: textRva, idataRva: idataRva)
+        none then code = code
+    end 'applyFixups'
 
     // IAT directory size: 3 entries + null terminator = 32 bytes
     let iatDirSize = 32

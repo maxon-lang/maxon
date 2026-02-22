@@ -1,0 +1,62 @@
+// OS descriptor: pure data describing how to interact with the operating system.
+// The CPU emitter consumes this to generate platform-specific stubs.
+
+// How to terminate the process
+export union ExitStrategy
+    syscall(number MachineWord)
+    iatCall(slotIndex MachineWord)
+end 'ExitStrategy'
+
+// How to write to stdout
+export union WriteStrategy
+    syscall(writeNumber MachineWord, fd MachineWord)
+    winApi(getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+end 'WriteStrategy'
+
+export type OsDescriptor
+    export var exit ExitStrategy
+    export var write WriteStrategy
+    export var startShadowSpace MachineWord
+end 'OsDescriptor'
+
+export function makeOsDescriptor(target TargetTriple) returns OsDescriptor
+    var result = OsDescriptor{
+        exit: ExitStrategy.syscall(0),
+        write: WriteStrategy.syscall(0, 0),
+        startShadowSpace: 0
+    }
+
+    match target.os 'pickOs'
+        Os.windows then result = makeWindowsDescriptor()
+        Os.linux then result = makeLinuxDescriptor(target)
+    end 'pickOs'
+
+    return result
+end 'makeOsDescriptor'
+
+function makeWindowsDescriptor() returns OsDescriptor
+    return OsDescriptor{
+        exit: ExitStrategy.iatCall(0),
+        write: WriteStrategy.winApi(1, 0xFFFFFFF5, 2),
+        startShadowSpace: 0x28
+    }
+end 'makeWindowsDescriptor'
+
+function makeLinuxDescriptor(target TargetTriple) returns OsDescriptor
+    var exitNum = 0
+    var writeNum = 0
+    match target.cpu 'cpuSyscalls'
+        CpuArch.x86_64 then exitNum = 60
+        CpuArch.aarch64 then exitNum = 93
+    end 'cpuSyscalls'
+    match target.cpu 'cpuWrite'
+        CpuArch.x86_64 then writeNum = 1
+        CpuArch.aarch64 then writeNum = 64
+    end 'cpuWrite'
+
+    return OsDescriptor{
+        exit: ExitStrategy.syscall(exitNum),
+        write: WriteStrategy.syscall(writeNum, 1),
+        startShadowSpace: 0
+    }
+end 'makeLinuxDescriptor'

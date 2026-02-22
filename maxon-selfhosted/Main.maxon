@@ -42,6 +42,7 @@ function printUsage()
     print("\n")
     print("Spec test options:\n")
     print("  --filter=PATTERN         Run only tests matching pattern\n")
+    print("  --target=<TRIPLE|all>    Cross-compile tests for target (e.g. x86_64-linux-gnu)\n")
     print("\n")
     print("Logging (all commands):\n")
     print("  --log=LEVEL              Set all log categories to LEVEL\n")
@@ -86,8 +87,9 @@ function runBuild(args StringArray) returns ExitCode
 end 'runBuild'
 
 function runSpecTests(args StringArray) returns ExitCode
-    // Parse --filter= option
+    // Parse --filter= and --target= options
     var filter = ""
+    var targetStr = ""
     for arg in args 'parseArgs'
         if arg.startsWith("--filter=") 'isFilter'
             let eqIdx = try arg.findFirst("=") otherwise 'bad'
@@ -97,10 +99,50 @@ function runSpecTests(args StringArray) returns ExitCode
                 continue
             end 'bad2'
             filter = arg.slice(afterEq, endIndex: arg.endIndex())
-        end 'isFilter'
+        end 'isFilter' else if arg.startsWith("--target=") 'isTarget'
+            let eqIdx = try arg.findFirst("=") otherwise 'bad3'
+                continue
+            end 'bad3'
+            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad4'
+                continue
+            end 'bad4'
+            targetStr = arg.slice(afterEq, endIndex: arg.endIndex())
+        end 'isTarget'
     end 'parseArgs'
 
-    logInfo(LogCategory.testing, message: "Running self-hosted spec tests...")
+    if targetStr == "all" 'runAll'
+        return runAllTargetTests(filter)
+    end 'runAll'
 
-    return runAllSpecTests(filter)
+    var target = detectHostTriple()
+    if not targetStr.isEmpty() 'hasTarget'
+        target = parseTargetTriple(targetStr)
+    end 'hasTarget'
+
+    logInfo(LogCategory.testing, message: "Running self-hosted spec tests ({tripleToString(target)})...")
+    return runAllSpecTests(filter, target: target)
 end 'runSpecTests'
+
+function runAllTargetTests(filter String) returns ExitCode
+    var totalFailed = 0
+
+    let t1 = TargetTriple{cpu: CpuArch.x86_64, os: Os.windows, abi: Abi.msvc}
+    logInfo(LogCategory.testing, message: "Testing target: {tripleToString(t1)}")
+    let ec1 = runAllSpecTests(filter, target: t1)
+    totalFailed = totalFailed + ec1
+
+    let t2 = TargetTriple{cpu: CpuArch.x86_64, os: Os.linux, abi: Abi.gnu}
+    logInfo(LogCategory.testing, message: "Testing target: {tripleToString(t2)}")
+    let ec2 = runAllSpecTests(filter, target: t2)
+    totalFailed = totalFailed + ec2
+
+    let t3 = TargetTriple{cpu: CpuArch.aarch64, os: Os.linux, abi: Abi.gnu}
+    logInfo(LogCategory.testing, message: "Testing target: {tripleToString(t3)}")
+    let ec3 = runAllSpecTests(filter, target: t3)
+    totalFailed = totalFailed + ec3
+
+    if totalFailed > 0 'hasFail'
+        return 1
+    end 'hasFail'
+    return 0
+end 'runAllTargetTests'

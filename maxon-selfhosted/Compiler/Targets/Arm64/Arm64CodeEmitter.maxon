@@ -1,6 +1,6 @@
 // ARM64 (AArch64) machine code emitter.
 // Emits fixed-width 32-bit instructions from Arm64Op dialect ops.
-// Linux-only for now (syscall-based I/O stubs).
+// OS-specific stubs are parameterized by OsDescriptor.
 
 typealias Arm64Offset = int(0 to u64.max)
 typealias Arm64OffsetArray = Array with Arm64Offset
@@ -342,10 +342,10 @@ function arm64ResolveCallFixups(code ByteBuffer, labelNames ByteArrayArray, labe
     end 'resolve'
 end 'arm64ResolveCallFixups'
 
-// --- Linux _start wrapper ---
-// BL main (patched later), then sys_exit with return value
+// --- OS-parameterized stubs ---
 
-function arm64EmitStartLinux(code ByteBuffer, callFixups Arm64CallFixupArray) returns Arm64Offset
+// Emit _start: BL main (patched later), then exit via OsDescriptor strategy
+function arm64EmitStart(code ByteBuffer, osDesc OsDescriptor, callFixups Arm64CallFixupArray) returns Arm64Offset
     // BL main (placeholder, patched after all functions emitted)
     let mainCallFixupOffset = code.count()
     var mainName = ByteArray{}
@@ -356,44 +356,48 @@ function arm64EmitStartLinux(code ByteBuffer, callFixups Arm64CallFixupArray) re
     callFixups.push(Arm64CallFixup{instrOffset: mainCallFixupOffset, targetName: mainName})
     arm64EmitBranchLink(code)
 
-    // MOV X0, X0 (return value already in X0 from main)
-    // MOV X8, #93 (sys_exit on aarch64-linux)
-    arm64EmitMovz(code, rd: 8, imm16: 93)
-    // SVC #0
-    arm64EmitSvc(code)
+    // Exit using the OS-specified strategy
+    match osDesc.exit 'exitStrategy'
+        syscall(num) then arm64EmitExitSyscall(code, syscallNumber: num)
+        iatCall(slotIdx) then arm64EmitExitSyscall(code, syscallNumber: 0) // unreachable: no ARM64+Windows target
+    end 'exitStrategy'
 
     return mainCallFixupOffset
-end 'arm64EmitStartLinux'
+end 'arm64EmitStart'
 
-// --- Linux write_stdout stub ---
-// Caller passes: X0=ptr, X1=len
-// Linux write syscall: X8=64, X0=fd(1), X1=buf, X2=count
+// Exit via syscall: MOV X8, #N; SVC #0
+function arm64EmitExitSyscall(code ByteBuffer, syscallNumber MachineWord)
+    arm64EmitMovz(code, rd: 8, imm16: syscallNumber)
+    arm64EmitSvc(code)
+end 'arm64EmitExitSyscall'
 
-function arm64EmitWriteStdoutLinux(code ByteBuffer) returns Arm64Offset
+// Emit write_stdout stub parameterized by OsDescriptor
+function arm64EmitWriteStdout(code ByteBuffer, osDesc OsDescriptor) returns Arm64Offset
     let offset = code.count()
+    match osDesc.write 'writeStrategy'
+        syscall(writeNum, fd) then arm64EmitWriteStdoutSyscall(code, writeNumber: writeNum, fd: fd)
+        winApi(getHandleSlot, handleConstant, writeFileSlot) then arm64EmitWriteStdoutSyscall(code, writeNumber: 0, fd: 1) // unreachable: no ARM64+Windows target
+    end 'writeStrategy'
+    return offset
+end 'arm64EmitWriteStdout'
 
+// write_stdout via syscall: caller X0=ptr, X1=len
+function arm64EmitWriteStdoutSyscall(code ByteBuffer, writeNumber MachineWord, fd MachineWord)
     // Prologue (minimal, leaf function)
     arm64EmitStpPreIndex(code, frameSize: 32)
     arm64EmitMovFpSp(code)
 
-    // Remap args: caller X0=ptr, X1=len -> syscall X0=1, X1=ptr, X2=len
-    // MOV X2, X1 (len -> count)
+    // Remap args: caller X0=ptr, X1=len -> syscall X0=fd, X1=ptr, X2=len
     arm64EmitMovReg(code, rd: 2, rn: 1)
-    // MOV X1, X0 (ptr -> buf)
     arm64EmitMovReg(code, rd: 1, rn: 0)
-    // MOV X0, #1 (stdout fd)
-    arm64EmitMovz(code, rd: 0, imm16: 1)
-    // MOV X8, #64 (sys_write on aarch64-linux)
-    arm64EmitMovz(code, rd: 8, imm16: 64)
-    // SVC #0
+    arm64EmitMovz(code, rd: 0, imm16: fd)
+    arm64EmitMovz(code, rd: 8, imm16: writeNumber)
     arm64EmitSvc(code)
 
     // Epilogue
     arm64EmitLdpPostIndex(code, frameSize: 32)
     arm64EmitRet(code)
-
-    return offset
-end 'arm64EmitWriteStdoutLinux'
+end 'arm64EmitWriteStdoutSyscall'
 
 // --- i64_to_string stub ---
 // Input: X0 = value to convert
@@ -604,12 +608,12 @@ end 'arm64HandleBranchLink'
 
 // --- Main emitter ---
 
-export function emitArm64Linux(stdOps StdOpArray) returns CodeResult
-    let arm64Ops = lowerStdOpsToArm64(stdOps)
-    logDebug(LogCategory.codegen, message: "ARM64: Emitting machine code for {arm64Ops.count()} ops (Linux)")
+export function emitArm64(stdOps StdOpArray, target TargetTriple, osDesc OsDescriptor) returns CodeResult
+    let arm64Ops = lowerStdOpsToArm64(stdOps, target: target)
+    logDebug(LogCategory.codegen, message: "ARM64: Emitting machine code for {arm64Ops.count()} ops ({tripleToString(target)})")
     var code = ByteBuffer{}
     code.reserve(1024)
-    var iatFixups = IatFixupArray{}
+    var osFixups = OsFixups.none
     var labelNames = ByteArrayArray{}
     var labelOffsets = Arm64OffsetArray{}
     var callFixups = Arm64CallFixupArray{}
@@ -620,11 +624,11 @@ export function emitArm64Linux(stdOps StdOpArray) returns CodeResult
 
     // Emit _start wrapper (entry point at offset 0)
     var mainCallFixupOffset = 0
-    mainCallFixupOffset = arm64EmitStartLinux(code, callFixups: callFixups)
+    mainCallFixupOffset = arm64EmitStart(code, osDesc: osDesc, callFixups: callFixups)
 
     // Emit runtime stubs
     logTrace(LogCategory.codegen, message: "ARM64: Emitting runtime stubs at offset {code.count()}")
-    let writeStdoutOff = arm64EmitWriteStdoutLinux(code)
+    let writeStdoutOff = arm64EmitWriteStdout(code, osDesc: osDesc)
     let i64ToStringOff = arm64EmitI64ToString(code)
 
     // Emit all function bodies
@@ -656,5 +660,5 @@ export function emitArm64Linux(stdOps StdOpArray) returns CodeResult
     arm64ResolveJumpFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, jumpFixups: jumpFixups)
 
     logDebug(LogCategory.codegen, message: "ARM64: Emitted {code.count()} bytes of machine code")
-    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, iatFixups: iatFixups}
-end 'emitArm64Linux'
+    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, osFixups: osFixups}
+end 'emitArm64'

@@ -1,8 +1,11 @@
 // Spec test runner for the self-hosted compiler.
 // Parses spec files and compiles tests using the self-hosted compiler.
 
-// Whitelisted specs to run (only specs the self-hosted compiler cares about)
-var specWhitelist = ["basics", "print-function", "variables"]
+// Whitelisted specs to run (only specs the self-hosted compiler cares about).
+// IMPORTANT: must be local to avoid module-level array iterator persistence across calls.
+let SPEC_WHITELIST_BASICS = "basics"
+let SPEC_WHITELIST_PRINT = "print-function"
+let SPEC_WHITELIST_VARS = "variables"
 
 // Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
 function trimWhitespace(s String) returns String
@@ -351,8 +354,42 @@ function skipCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNu
 end 'skipCodeBlock'
 
 
-// Run all whitelisted spec tests. Returns (passed, failed).
-export function runAllSpecTests(filter String) returns ExitCode
+// Check if a target matches the host (x86_64-windows-msvc).
+function isHostTarget(target TargetTriple) returns bool
+  let host = detectHostTriple()
+  let targetStr = tripleToString(target)
+  let hostStr = tripleToString(host)
+  return targetStr == hostStr
+end 'isHostTarget'
+
+// Build the command to run a compiled binary.
+// Host targets run directly; Linux targets run via Docker.
+function buildRunCommand(outputPath String, target TargetTriple, projectRoot String, testArgs String) returns String
+  if isHostTarget(target) 'isHost'
+    if not testArgs.isEmpty() 'hasArgs'
+      return "{outputPath} {testArgs}"
+    end 'hasArgs'
+    return outputPath
+  end 'isHost'
+
+  // Docker execution for Linux targets
+  var dockerArch = "amd64"
+  match target.cpu 'pickArch'
+    CpuArch.x86_64 then dockerArch = "amd64"
+    CpuArch.aarch64 then dockerArch = "arm64"
+  end 'pickArch'
+
+  // Convert Windows path to forward slashes for Docker volume mount
+  let tempDir = "{projectRoot}/temp"
+  var dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp"
+  if not testArgs.isEmpty() 'hasDockerArgs'
+    dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp {testArgs}"
+  end 'hasDockerArgs'
+  return dockerCmd
+end 'buildRunCommand'
+
+// Run all whitelisted spec tests for a specific target. Returns (passed, failed).
+export function runAllSpecTests(filter String, target TargetTriple) returns ExitCode
   let root = try findProjectRoot() otherwise 'noRoot'
     logError(LogCategory.testing, message: "Could not find project root (no specs/ directory found)")
     return 1
@@ -362,7 +399,10 @@ export function runAllSpecTests(filter String) returns ExitCode
   var totalFailed = 0
   var totalTests = 0
 
-  for specName in specWhitelist 'eachSpec'
+  // Local array avoids module-level iterator persistence across calls
+  let whitelist = [SPEC_WHITELIST_BASICS, SPEC_WHITELIST_PRINT, SPEC_WHITELIST_VARS]
+
+  for specName in whitelist 'eachSpec'
     let specPath = "{root}/specs/{specName}.md"
     let content = try File.readText(specPath) otherwise 'readErr'
       logError(LogCategory.testing, message: "Could not read spec: {specPath}")
@@ -380,7 +420,7 @@ export function runAllSpecTests(filter String) returns ExitCode
       end 'hasFilter'
 
       totalTests = totalTests + 1
-      let passed = runSingleTest(test, projectRoot: root)
+      let passed = runSingleTest(test, projectRoot: root, target: target)
       if passed 'pass'
         totalPassed = totalPassed + 1
       end 'pass' else 'fail'
@@ -407,10 +447,11 @@ export function runAllSpecTests(filter String) returns ExitCode
 end 'runAllSpecTests'
 
 // Run a single test. Returns true if passed.
-function runSingleTest(test SpecTest, projectRoot String) returns bool
+function runSingleTest(test SpecTest, projectRoot String, target TargetTriple) returns bool
   let tempDir = "{projectRoot}/temp"
   let tempSource = "{tempDir}/spectest_temp.maxon"
-  let tempExe = "{tempDir}/spectest_temp.exe"
+  let ext = executableExtension(target)
+  let tempExe = "{tempDir}/spectest_temp{ext}"
 
   // Prepend "// Test:" header so line numbers match the spec fragment files
   let sourceWithHeader = "// Test: {test.name}\n{test.source}"
@@ -422,7 +463,7 @@ function runSingleTest(test SpecTest, projectRoot String) returns bool
 
   // Compile using the self-hosted compiler, capturing any error output
   startCapturingErrors()
-  let outputPath = try compile(tempSource, target: detectHostTriple()) otherwise 'compileFailed'
+  let outputPath = try compile(tempSource, target: target) otherwise 'compileFailed'
     let capturedErrors = stopCapturingErrors()
 
     if test.expectation.hasStderr 'expectedError'
@@ -456,15 +497,12 @@ function runSingleTest(test SpecTest, projectRoot String) returns bool
     return false
   end 'isCompilerError'
 
-  // Run the compiled executable, with args if specified
-  var runCommand = outputPath
-  if not test.args.isEmpty() 'hasArgs'
-    runCommand = "{outputPath} {test.args}"
-  end 'hasArgs'
+  // Run the compiled executable
+  let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: test.args)
   let runCap = Process.captureStart(runCommand)
   let runStdout = Process.captureStdout(runCap)
   let runStderr = Process.captureStderr(runCap)
-  let runEc = Process.captureWait(runCap, timeoutMs: 5000)
+  let runEc = Process.captureWait(runCap, timeoutMs: 30000)
 
   var passed = true
 
