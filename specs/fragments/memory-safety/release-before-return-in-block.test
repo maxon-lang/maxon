@@ -1,0 +1,173 @@
+// Test: release-before-return-in-block
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+  export var val Integer
+end 'Wrapper'
+
+function compute(flag Integer) returns Integer
+  if flag > 0 'check'
+    var w = Wrapper{val: flag}
+    return w.val + 1
+  end 'check'
+  return 0
+end 'compute'
+
+function main() returns ExitCode
+  return compute(flag: 5)
+end 'main'
+---
+ExitCode: 6
+RequiredMLIR: ```
+=== maxon
+module {
+  func @memory-safety.compute(flag: i64) -> i64 {
+  entry:
+    %8 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
+    %9 = maxon.literal {value = 0 : i64}
+    %10 = maxon.binop %8, %9 {op = gt} {optimalType = i64}
+    maxon.cond_br %10 [then: check_0, else: check_0.after]
+  check_0:
+    %11 = maxon.var_ref {var = flag} {type = i64}
+    %12 = maxon.struct_literal @Wrapper
+    maxon.assign %12 {var = w} {decl = 1 : i1} {mut = 1 : i1}
+    %13 = maxon.struct_var_ref w
+    %14 = maxon.field_access .val %13
+    %15 = maxon.literal {value = 1 : i64}
+    %16 = maxon.binop %14, %15 {op = add}
+    maxon.release {var = w} {type = Wrapper}
+    maxon.return %16
+  check_0.after:
+    %17 = maxon.literal {value = 0 : i64}
+    maxon.return %17
+  }
+  func @memory-safety.main() -> i64 {
+  entry:
+    %18 = maxon.literal {value = 5 : i64}
+    %19 = maxon.call @memory-safety.compute %18
+    maxon.assign %19 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.literal {value = 0 : i64}
+    %21 = maxon.binop %19, %20 {op = lt}
+    %22 = maxon.literal {value = 4294967295 : i64}
+    %23 = maxon.binop %19, %22 {op = gt}
+    %24 = maxon.binop %21, %23 {op = or}
+    maxon.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at release-before-return-in-block.test:17: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %26 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.return %26
+  }
+}
+=== standard
+module {
+  func @memory-safety.compute(flag: i64) -> i64 {
+  entry:
+    %0 = func.param flag : StdI64
+    memref.store %0, flag
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.cmpi gt %0, %1
+    cf.cond_br %2 [then: check_0, else: check_0.after]
+  check_0:
+    %3 = memref.load flag : i64
+    %4 = arith.constant {value = 8 : i64}
+    %5 = std.call_runtime @maxon_alloc %4
+    memref.store %5, w
+    %6 = memref.load w : i64
+    memref.store_indirect %3, %6+0
+    %7 = memref.load w : i64
+    %8 = memref.load_indirect %7+0
+    %9 = arith.constant {value = 1 : i64}
+    %10 = arith.addi %8, %9
+    %11 = memref.load w : i64
+    std.call_runtime @maxon_release %11
+    func.return %10
+  check_0.after:
+    %12 = arith.constant {value = 0 : i64}
+    func.return %12
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    %13 = arith.constant {value = 5 : i64}
+    %14 = func.call @memory-safety.compute %13
+    memref.store %14, __range_val_0
+    %15 = arith.constant {value = 0 : i64}
+    %16 = arith.cmpi lt %14, %15
+    %17 = arith.constant {value = 4294967295 : i64}
+    %18 = arith.cmpi gt %14, %17
+    %19 = arith.ori1 %16, %18
+    cf.cond_br %19 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %20 = memref.lea_symdata __panic_msg_25
+    %21 = std.ptr_to_i64 %20
+    std.call_runtime @maxon_panic %21
+  __range_ok_0:
+    %22 = memref.load __range_val_0 : i64
+    func.return %22
+  }
+}
+=== x86
+module {
+  func @memory-safety.compute(flag: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.jle memory-safety.compute.check_0.after
+  check_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.mov [rbp-24], eax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, [rbp-24]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov edi, [esi+0]
+    x86.mov r8, 1
+    x86.add edi, r8
+    x86.mov r9, [rbp-16]
+    x86.mov [rbp-32], edi
+    x86.mov rcx, r9
+    x86.call maxon_release
+    x86.mov eax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 5
+    x86.mov rcx, rax
+    x86.call memory-safety.compute
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je memory-safety.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_25]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+---

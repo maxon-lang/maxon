@@ -527,6 +527,15 @@ public class MaxonBrOp(string target) : MaxonOp {
   public string Target { get; } = target;
 }
 
+// Releases a struct variable's heap allocation at scope exit
+public class MaxonReleaseOp(string varName, string structTypeName) : MaxonOp {
+  public override string Mnemonic => "maxon.release";
+  public string VarName { get; } = varName;
+  public string StructTypeName { get; } = structTypeName;
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> { ["var"] = new StringAttr(VarName), ["type"] = new StringAttr(StructTypeName) };
+}
+
 public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
   public override string Mnemonic => "maxon.return";
   public MaxonValue? Value { get; } = value;

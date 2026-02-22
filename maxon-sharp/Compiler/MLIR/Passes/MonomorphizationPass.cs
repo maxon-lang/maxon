@@ -514,6 +514,8 @@ public static class MonomorphizationPass {
         return new MaxonCondBrOp(mapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
       case MaxonBrOp br:
         return new MaxonBrOp(br.Target);
+      case MaxonReleaseOp rel:
+        return new MaxonReleaseOp(rel.VarName, rel.StructTypeName);
       case MaxonReturnOp ret:
         return new MaxonReturnOp(ret.Value != null ? mapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th:

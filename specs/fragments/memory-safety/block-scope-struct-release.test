@@ -1,0 +1,151 @@
+// Test: block-scope-struct-release
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function main() returns ExitCode
+  var result = 0
+  if true 'block'
+    var p = Point{x: 10, y: 20}
+    result = p.x
+  end 'block'
+  return result
+end 'main'
+---
+ExitCode: 10
+RequiredMLIR: ```
+=== maxon
+module {
+  func @memory-safety.main() -> i64 {
+  entry:
+    %13 = maxon.literal {value = 0 : i64}
+    maxon.assign %13 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %14 = maxon.literal {value = 1 : i1}
+    maxon.cond_br %14 [then: block_0, else: block_0.merge]
+  block_0:
+    %15 = maxon.literal {value = 10 : i64}
+    %16 = maxon.literal {value = 20 : i64}
+    %17 = maxon.struct_literal @Point
+    maxon.assign %17 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.struct_var_ref p
+    %19 = maxon.field_access .x %18
+    maxon.assign %19 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.release {var = p} {type = Point}
+    maxon.br block_0.merge
+  block_0.merge:
+    %20 = maxon.var_ref {var = result} {type = i64}
+    maxon.assign %20 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %21 = maxon.literal {value = 0 : i64}
+    %22 = maxon.binop %20, %21 {op = lt}
+    %23 = maxon.literal {value = 4294967295 : i64}
+    %24 = maxon.binop %20, %23 {op = gt}
+    %25 = maxon.binop %22, %24 {op = or}
+    maxon.cond_br %25 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "panic at block-scope-struct-release.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_1:
+    %27 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.return %27
+  }
+}
+=== standard
+module {
+  func @memory-safety.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, result
+    %1 = arith.constant {value = 1 : i1}
+    cf.cond_br %1 [then: block_0, else: block_0.merge]
+  block_0:
+    %2 = arith.constant {value = 10 : i64}
+    %3 = arith.constant {value = 20 : i64}
+    %4 = arith.constant {value = 16 : i64}
+    %5 = std.call_runtime @maxon_alloc %4
+    memref.store %5, p
+    %6 = memref.load p : i64
+    memref.store_indirect %2, %6+0
+    %7 = memref.load p : i64
+    memref.store_indirect %3, %7+8
+    %8 = memref.load p : i64
+    %9 = memref.load_indirect %8+0
+    memref.store %9, result
+    %10 = memref.load p : i64
+    std.call_runtime @maxon_release %10
+    cf.br block_0.merge
+  block_0.merge:
+    %11 = memref.load result : i64
+    memref.store %11, __range_val_1
+    %12 = arith.constant {value = 0 : i64}
+    %13 = arith.cmpi lt %11, %12
+    %14 = arith.constant {value = 4294967295 : i64}
+    %15 = arith.cmpi gt %11, %14
+    %16 = arith.ori1 %13, %15
+    cf.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %17 = memref.lea_symdata __panic_msg_26
+    %18 = std.ptr_to_i64 %17
+    std.call_runtime @maxon_panic %18
+  __range_ok_1:
+    %19 = memref.load __range_val_1 : i64
+    func.return %19
+  }
+}
+=== x86
+module {
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.test ecx, ecx
+    x86.je memory-safety.main.block_0.merge
+  block_0:
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.mov edx, 16
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, 10
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-16]
+    x86.mov r8, 20
+    x86.mov [edi+8], r8
+    x86.mov r9, [rbp-16]
+    x86.mov eax, [r9+0]
+    x86.mov [rbp-8], eax
+    x86.mov rcx, [rbp-16]
+    x86.call maxon_release
+    x86.jmp memory-safety.main.block_0.merge
+  block_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je memory-safety.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_26]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+---

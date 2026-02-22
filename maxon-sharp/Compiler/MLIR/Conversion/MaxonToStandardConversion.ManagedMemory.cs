@@ -108,9 +108,11 @@ public static partial class MaxonToStandardConversion {
 		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
 		if (op.IsStructElement) {
-			// Struct elements are heap pointers — store the pointer value (i64) into the buffer
+			// Struct elements are heap pointers — store the pointer value (i64) into the buffer.
+			// Incref because the buffer creates a new reference to the heap object.
 			var srcName = structVarNames[op.Value.Id];
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
+			block.AddOp(new StdCallRuntimeOp("maxon_incref", [srcHeapPtr], null));
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));
 		} else {
 			// Scalar elements: store directly

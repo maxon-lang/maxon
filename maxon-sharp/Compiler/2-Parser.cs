@@ -379,8 +379,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return null;
   }
 
-  private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel);
-  private record MatchContext(string SourceLabel, string MergeLabel);
+  private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars);
+  private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
     { TokenType.Or, (MaxonBinOperator.Or, 0) },
@@ -777,12 +777,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     DetectCircularTypeAliases();
 
-    // Auto-add Cloneable conformance for structs whose fields are all Cloneable
-    // Skip for stdlib — stdlib types that need Cloneable should declare it explicitly
-    if (!_isStdlib) {
-      ResolveAutoCloneableConformance(module);
-      ResolveAutoEquatableConformance(module);
-    }
+    // Auto-add Cloneable/Equatable conformance for structs whose fields all conform
+    ResolveAutoCloneableConformance(module);
+    ResolveAutoEquatableConformance(module);
 
     // Evaluate constants (handling forward references)
     var evaluated = new Dictionary<string, object>();
@@ -4510,9 +4507,53 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void PopScope() {
     var parentKeys = _scopeStack.Pop();
     var toRemove = _variables.Keys.Where(k => !parentKeys.Contains(k)).ToList();
+    EmitScopeReleaseOps(toRemove);
     foreach (var name in toRemove) {
       _variables.Remove(name);
     }
+  }
+
+  /// Emits MaxonReleaseOp for struct variables leaving scope.
+  /// Skipped if the current block already terminates (return/throw handle their own cleanup).
+  private void EmitScopeReleaseOps(List<string> varNames) {
+    if (_currentBlock == null || BlockEndsWithTerminator(_currentBlock)) return;
+    foreach (var name in varNames) {
+      EmitReleaseIfStruct(name);
+    }
+  }
+
+  /// Emits MaxonReleaseOp for all struct variables in scopes above the target scope.
+  /// Used before break/continue to clean up intermediate scope variables.
+  private void EmitReleaseForScopesAbove(HashSet<string> targetScopeVars) {
+    if (_currentBlock == null) return;
+    foreach (var (name, _) in _variables) {
+      if (targetScopeVars.Contains(name)) continue;
+      EmitReleaseIfStruct(name);
+    }
+  }
+
+  /// Emits MaxonReleaseOp for block-scoped struct variables before a return statement.
+  /// Entry-block vars are handled by the lowering's EmitScopeCleanup; this covers inner scopes.
+  private void EmitBlockScopedReleaseBeforeReturn(MaxonValue? returnValue) {
+    if (_currentBlock == null || _scopeStack.Count == 0) return;
+    // The bottom of the scope stack holds the function-level variable names.
+    // Release everything NOT in that set — entry-block vars are cleaned up by the lowering.
+    var functionLevelVars = _scopeStack.Last();
+    foreach (var (name, info) in _variables) {
+      if (functionLevelVars.Contains(name)) continue;
+      // Don't release the variable being returned — ownership transfers to caller
+      if (returnValue != null && info.Value.Id == returnValue.Id) continue;
+      EmitReleaseIfStruct(name);
+    }
+  }
+
+  /// Emits a single MaxonReleaseOp if the variable is an owned struct (not ref, not internal).
+  private void EmitReleaseIfStruct(string name) {
+    if (!_variables.TryGetValue(name, out var info)) return;
+    if (info.Kind != MaxonValueKind.Struct) return;
+    if (info.IsRef) return;
+    if (name.StartsWith("__")) return;
+    _currentBlock!.AddOp(new MaxonReleaseOp(name, info.StructTypeName ?? ""));
   }
 
   private void ParseBodyUntilEnd() {
@@ -4833,8 +4874,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var value = ResolveExprValue(ParseExpression());
       CheckReturnType(value, returnToken);
       value = CheckReturnRange(value, returnToken);
+      EmitBlockScopedReleaseBeforeReturn(value);
       _currentBlock!.AddOp(new MaxonReturnOp(value));
     } else {
+      EmitBlockScopedReleaseBeforeReturn(null);
       _currentBlock!.AddOp(new MaxonReturnOp());
     }
   }
@@ -6350,7 +6393,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Create and parse the body block
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys]));
     PushScope();
     ParseBodyUntilEnd();
     PopScope();
@@ -6550,7 +6593,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Body block: load the result as the loop variable
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys]));
     PushScope();
 
     if (resultVar != null) {
@@ -6661,7 +6704,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Body block
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel));
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys]));
     PushScope();
 
     // Bind loop variable: let i = __range_current
@@ -6705,33 +6748,36 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseBreak() {
     var token = Advance(); // consume 'break'
-    var exitLabel = ResolveBreakTarget(token);
+    var (exitLabel, scopeVars) = ResolveBreakTarget(token);
+    EmitReleaseForScopesAbove(scopeVars);
     _currentBlock!.AddOp(new MaxonBrOp(exitLabel));
   }
 
   private void ParseContinue() {
     var token = Advance(); // consume 'continue'
     var loop = ResolveLoopTarget(token);
+    EmitReleaseForScopesAbove(loop.ScopeVars);
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
-  private string ResolveBreakTarget(Token keyword) {
+  private (string ExitLabel, HashSet<string> ScopeVars) ResolveBreakTarget(Token keyword) {
     if (_matchStack.Count == 0 && _loopStack.Count == 0) {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"'{keyword.Value}' can only be used inside a loop or match", keyword.Line, keyword.Column);
     }
     if (Check(TokenType.CharacterLiteral)) {
       var labelToken = Advance();
       foreach (var ctx in _matchStack) {
-        if (ctx.SourceLabel == labelToken.Value) return ctx.MergeLabel;
+        if (ctx.SourceLabel == labelToken.Value) return (ctx.MergeLabel, ctx.ScopeVars);
       }
       foreach (var ctx in _loopStack) {
-        if (ctx.SourceLabel == labelToken.Value) return ctx.ExitLabel;
+        if (ctx.SourceLabel == labelToken.Value) return (ctx.ExitLabel, ctx.ScopeVars);
       }
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"No enclosing loop or match with label '{labelToken.Value}'", labelToken.Line, labelToken.Column);
     }
     // Unlabeled break: prefer match if we're inside one, otherwise loop
-    if (_matchStack.Count > 0) return _matchStack.Peek().MergeLabel;
-    return _loopStack.Peek().ExitLabel;
+    if (_matchStack.Count > 0) { var m = _matchStack.Peek(); return (m.MergeLabel, m.ScopeVars); }
+    var l = _loopStack.Peek();
+    return (l.ExitLabel, l.ScopeVars);
   }
 
   private LoopContext ResolveLoopTarget(Token keyword) {
@@ -7581,7 +7627,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     bool hasDefault = false;
     bool defaultSeen = false;
 
-    _matchStack.Push(new MatchContext(sourceLabel, mergeLabel));
+    _matchStack.Push(new MatchContext(sourceLabel, mergeLabel, [.. _variables.Keys]));
     int caseIndex = 0;
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
@@ -11510,7 +11556,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// Parses 'is' or 'is not' reference identity expression.
-  private ExprResult ParseRefIdentity(ExprResult lhs) {
+  private ExprResult.Direct ParseRefIdentity(ExprResult lhs) {
     var isToken = Advance(); // consume 'is'
     var negate = Check(TokenType.Not);
     if (negate) Advance(); // consume 'not'

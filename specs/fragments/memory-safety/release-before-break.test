@@ -1,0 +1,207 @@
+// Test: release-before-break
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+  export var n Integer
+end 'Counter'
+
+function main() returns ExitCode
+  var result = 0
+  var i = 0
+  while i < 3 'loop'
+    var c = Counter{n: i}
+    if c.n == 1 'check'
+      result = c.n
+      break 'loop'
+    end 'check'
+    i = i + 1
+  end 'loop'
+  return result
+end 'main'
+---
+ExitCode: 1
+RequiredMLIR: ```
+=== maxon
+module {
+  func @memory-safety.main() -> i64 {
+  entry:
+    %8 = maxon.literal {value = 0 : i64}
+    maxon.assign %8 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %9 = maxon.literal {value = 0 : i64}
+    maxon.assign %9 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.header:
+    %10 = maxon.literal {value = 3 : i64}
+    %11 = maxon.var_ref {var = i} {type = i64}
+    %12 = maxon.binop %11, %10 {op = lt}
+    maxon.cond_br %12 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %13 = maxon.var_ref {var = i} {type = i64}
+    %14 = maxon.struct_literal @Counter
+    maxon.assign %14 {var = c} {decl = 1 : i1} {mut = 1 : i1}
+    %15 = maxon.struct_var_ref c
+    %16 = maxon.field_access .n %15
+    %17 = maxon.literal {value = 1 : i64}
+    %18 = maxon.binop %16, %17 {op = eq}
+    maxon.cond_br %18 [then: check_1, else: check_1.after]
+  check_1:
+    %19 = maxon.struct_var_ref c
+    %20 = maxon.field_access .n %19
+    maxon.assign %20 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.release {var = c} {type = Counter}
+    maxon.br loop_0.exit
+  check_1.after:
+    %21 = maxon.literal {value = 1 : i64}
+    %22 = maxon.var_ref {var = i} {type = i64}
+    %23 = maxon.binop %22, %21 {op = add}
+    maxon.assign %23 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.release {var = c} {type = Counter}
+    maxon.br loop_0.header
+  loop_0.exit:
+    %24 = maxon.var_ref {var = result} {type = i64}
+    maxon.assign %24 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %25 = maxon.literal {value = 0 : i64}
+    %26 = maxon.binop %24, %25 {op = lt}
+    %27 = maxon.literal {value = 4294967295 : i64}
+    %28 = maxon.binop %24, %27 {op = gt}
+    %29 = maxon.binop %26, %28 {op = or}
+    maxon.cond_br %29 [then: __range_panic_2, else: __range_ok_2]
+  __range_panic_2:
+    maxon.panic "panic at release-before-break.test:19: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_2:
+    %31 = maxon.var_ref {var = __range_val_2} {type = i64}
+    maxon.return %31
+  }
+}
+=== standard
+module {
+  func @memory-safety.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, result
+    %1 = arith.constant {value = 0 : i64}
+    memref.store %1, i
+    cf.br loop_0.header
+  loop_0.header:
+    %2 = arith.constant {value = 3 : i64}
+    %3 = memref.load i : i64
+    %4 = arith.cmpi lt %3, %2
+    cf.cond_br %4 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %5 = memref.load i : i64
+    %6 = arith.constant {value = 8 : i64}
+    %7 = std.call_runtime @maxon_alloc %6
+    memref.store %7, c
+    %8 = memref.load c : i64
+    memref.store_indirect %5, %8+0
+    %9 = memref.load c : i64
+    %10 = memref.load_indirect %9+0
+    %11 = arith.constant {value = 1 : i64}
+    %12 = arith.cmpi eq %10, %11
+    cf.cond_br %12 [then: check_1, else: check_1.after]
+  check_1:
+    %13 = memref.load c : i64
+    %14 = memref.load_indirect %13+0
+    memref.store %14, result
+    %15 = memref.load c : i64
+    std.call_runtime @maxon_release %15
+    cf.br loop_0.exit
+  check_1.after:
+    %16 = arith.constant {value = 1 : i64}
+    %17 = memref.load i : i64
+    %18 = arith.addi %17, %16
+    memref.store %18, i
+    %19 = memref.load c : i64
+    std.call_runtime @maxon_release %19
+    cf.br loop_0.header
+  loop_0.exit:
+    %20 = memref.load result : i64
+    memref.store %20, __range_val_2
+    %21 = arith.constant {value = 0 : i64}
+    %22 = arith.cmpi lt %20, %21
+    %23 = arith.constant {value = 4294967295 : i64}
+    %24 = arith.cmpi gt %20, %23
+    %25 = arith.ori1 %22, %24
+    cf.cond_br %25 [then: __range_panic_2, else: __range_ok_2]
+  __range_panic_2:
+    %26 = memref.lea_symdata __panic_msg_30
+    %27 = std.ptr_to_i64 %26
+    std.call_runtime @maxon_panic %27
+  __range_ok_2:
+    %28 = memref.load __range_val_2 : i64
+    func.return %28
+  }
+}
+=== x86
+module {
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp memory-safety.main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 3
+    x86.mov ecx, [rbp-16]
+    x86.cmp ecx, eax
+    x86.jge memory-safety.main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 8
+    x86.mov [rbp-40], eax
+    x86.call maxon_alloc
+    x86.mov [rbp-24], eax
+    x86.mov edx, [rbp-24]
+    x86.mov ebx, [rbp-40]
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-24]
+    x86.mov edi, [esi+0]
+    x86.mov r8, 1
+    x86.cmp edi, r8
+    x86.jne memory-safety.main.check_1.after
+  check_1:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-8], ecx
+    x86.mov edx, [rbp-24]
+    x86.mov rcx, rdx
+    x86.call maxon_release
+    x86.jmp memory-safety.main.loop_0.exit
+  check_1.after:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.add ecx, eax
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-24]
+    x86.mov rcx, rdx
+    x86.call maxon_release
+    x86.jmp memory-safety.main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je memory-safety.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_symdata rax, [__panic_msg_30]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+}
+```
+---
+---

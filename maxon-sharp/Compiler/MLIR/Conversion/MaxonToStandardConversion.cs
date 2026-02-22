@@ -826,7 +826,10 @@ public static partial class MaxonToStandardConversion {
                 // Track ownership: user-visible struct declarations own their data.
                 // Only track simple value structs for cleanup — types with __ManagedMemory
                 // fields (String, Array, Map, Set, etc.) manage their own backing memory.
-                if (assignOp.IsDeclaration && !dstName.StartsWith("__")
+                // Only track entry-block declarations — variables declared inside
+                // conditionals or loops may not be initialized on all paths.
+                if (assignOp.IsDeclaration && block.Name == "entry"
+                    && !dstName.StartsWith("__")
                     && !structParamNames.Contains(dstName)
                     && !IsSelfField(isStructInstanceMethod, selfStructType, dstName)
                     && IsSimpleValueStruct(structTypeName, module.TypeDefs)) {
@@ -1107,6 +1110,15 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonBrOp br: {
               newBlock.AddOp(new StdBrOp(br.Target));
+              break;
+            }
+            case MaxonReleaseOp releaseOp: {
+              if (releaseOp.StructTypeName != ""
+                  && IsSimpleValueStruct(releaseOp.StructTypeName, module.TypeDefs)
+                  && varTypes.ContainsKey(releaseOp.VarName)) {
+                var heapPtr = (StdI64)EmitLoad(newBlock, releaseOp.VarName, varTypes);
+                newBlock.AddOp(new StdCallRuntimeOp("maxon_release", [heapPtr], null));
+              }
               break;
             }
             case MaxonTruncOp truncOp: {
