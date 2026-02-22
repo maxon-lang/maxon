@@ -368,8 +368,12 @@ public partial class X86CodeEmitter() {
     _relCallFixups.Add((_code.Count, mainFunctionName));
     EmitDword(0); // placeholder
 
-    // mov ecx, eax (move return value to first arg for ExitProcess)
-    EmitBytes(0x89, 0xC1);
+    // Save main's return value, run leak check, restore it
+    EmitPushReg(X86Register.Rax);
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "maxon_leak_check"));
+    EmitDword(0); // placeholder
+    EmitPopReg(X86Register.Rcx); // rcx = saved return value for ExitProcess
 
     // call [rip+disp32] ExitProcess (indirect through IAT)
     EmitBytes(0xFF, 0x15);

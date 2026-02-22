@@ -69,9 +69,12 @@ public static partial class MaxonToStandardConversion {
 
 		if (op.IsStructElement) {
 			// Struct elements are heap pointers stored in the buffer (8 bytes each).
-			// Load the pointer, store in a temp var, and register as a struct variable.
+			// Load the pointer, incref it (the array retains its own reference, and the
+			// caller gets a borrowed one that will be released at scope exit), then store
+			// in a temp var and register as a struct variable.
 			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(loadOp);
+			block.AddOp(new StdCallRuntimeOp("maxon_incref", [loadOp.Result], null));
 			var tempName = $"__memget_{MlirContext.Current.NextId()}";
 			EmitStore(block, loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;

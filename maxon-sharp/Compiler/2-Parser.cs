@@ -4845,6 +4845,44 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var (allArgs, selfCallee) = ParseInstanceMethodCallArgs(qualifiedToken, structVal);
       var callOp = CreateFunctionCall(qualifiedToken, allArgs, selfCallee);
       MarkDiscardedResult(callOp, fieldToken);
+    } else if (Check(TokenType.Dot)) {
+      // self.field.method(...) or self.field.subfield... chain
+      var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
+      var (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(selfVal, selfInfo.StructTypeName!, fieldToken);
+
+      while (Check(TokenType.Dot)) {
+        Advance(); // consume '.'
+        var nextFieldToken = ExpectFieldName();
+
+        if (Check(TokenType.LeftParen)) {
+          // Terminal method call
+          var methodName = $"{currentStructTypeName}.{nextFieldToken.Value}";
+          var resolvedName = ResolveMethodName(methodName)
+            ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+              $"Undefined method '{nextFieldToken.Value}' on type '{currentStructTypeName}'",
+              nextFieldToken.Line, nextFieldToken.Column);
+          Advance(); // consume '('
+          var qualifiedToken = new Token(TokenType.Identifier, resolvedName, nextFieldToken.Line, nextFieldToken.Column);
+          var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, currentValue);
+          var callOp = CreateFunctionCall(qualifiedToken, args, callee);
+          MarkDiscardedResult(callOp, nextFieldToken);
+          return;
+        }
+
+        if (Check(TokenType.Equals)) {
+          // Terminal field assignment
+          Advance(); // consume '='
+          EmitFieldAssignment(currentStructTypeName, currentValue, nextFieldToken, selfToken);
+          return;
+        }
+
+        // Intermediate field access
+        (currentValue, currentStructTypeName) = EmitIntermediateFieldAccess(currentValue, currentStructTypeName, nextFieldToken);
+      }
+
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        "Expected method call or assignment at end of field access chain",
+        Current().Line, Current().Column);
     } else {
       throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"Expected '=' or '(' after 'self.{fieldToken.Value}'", fieldToken.Line, fieldToken.Column);
     }

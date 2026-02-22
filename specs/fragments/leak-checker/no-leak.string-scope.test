@@ -1,0 +1,64 @@
+// Test: no-leak.string-scope
+function make_string()
+  var s = "this string is long enough to require heap allocation for sure and even more text"
+  print(s)
+end 'make_string'
+
+function main() returns ExitCode
+  make_string()
+  return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+this string is long enough to require heap allocation for sure and even more text
+```
+---
+module {
+  func @leak-checker.make_string() {
+  entry:
+    x86.prologue stack_size=32
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.mov edx, 81
+    x86.mov ebx, 32
+    x86.mov [rbp-32], ecx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-32]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, 81
+    x86.mov [r8+8], r9
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [edx+0], ecx
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-16]
+    x86.mov [edx+8], ecx
+    x86.mov [rbp-24], eax
+    x86.mov rcx, [rbp-24]
+    x86.call stdlib.Print.print
+    x86.epilogue
+    x86.ret
+  }
+  func @leak-checker.main() -> u32 {
+  entry:
+    x86.call leak-checker.make_string
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

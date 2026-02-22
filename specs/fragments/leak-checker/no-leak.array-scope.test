@@ -1,0 +1,76 @@
+// Test: no-leak.array-scope
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function use_array()
+  var arr = IntArray{}
+  arr.push(10)
+  arr.push(20)
+  arr.push(30)
+end 'use_array'
+
+function main() returns ExitCode
+  use_array()
+  return 0
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @leak-checker.use_array() {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.xor edx, edx
+    x86.xor ebx, ebx
+    x86.mov esi, 8
+    x86.mov edi, 32
+    x86.mov rcx, rdi
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov r8, [rbp-8]
+    x86.xor r9, r9
+    x86.mov [r8+0], r9
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
+    x86.call IntArray.push
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
+    x86.call IntArray.push
+    x86.mov eax, 30
+    x86.mov ecx, [rbp-16]
+    x86.mov rdx, rax
+    x86.call IntArray.push
+    x86.epilogue
+    x86.ret
+  }
+  func @leak-checker.main() -> u32 {
+  entry:
+    x86.call leak-checker.use_array
+    x86.xor eax, eax
+    x86.ret
+  }
+}
+---

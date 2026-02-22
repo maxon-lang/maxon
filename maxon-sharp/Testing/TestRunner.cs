@@ -367,6 +367,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
                 FilePath = fragment.FilePath
               };
             }
+          } else if (!string.IsNullOrWhiteSpace(Stderr)) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = $"Unexpected stderr output:\n{Stderr.Trim()}",
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
           }
         }
 

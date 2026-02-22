@@ -1,0 +1,129 @@
+// Test: self-nested-field-method
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Inner
+    export var values IntArray
+
+    function total() returns Integer
+        return self.values.count()
+    end 'total'
+end 'Inner'
+
+type Outer
+    export var inner Inner
+
+    function getInnerCount() returns Integer
+        return self.inner.values.count()
+    end 'getInnerCount'
+end 'Outer'
+
+function main() returns ExitCode
+    var inner = Inner{values: [1, 2, 3]}
+    var outer = Outer{inner: inner}
+    return outer.getInnerCount()
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @Outer.getInnerCount(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-24], edx
+    x86.mov rcx, [rbp-24]
+    x86.epilogue
+    x86.jmp IntArray.count
+  }
+  func @self-field-method-chain.main() -> u32 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov eax, 1
+    x86.mov ecx, 2
+    x86.mov edx, 3
+    x86.mov [rbp-8], edx
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], eax
+    x86.xor ebx, ebx
+    x86.mov esi, 3
+    x86.xor edi, edi
+    x86.mov r8, 8
+    x86.mov r9, 32
+    x86.mov rcx, r9
+    x86.call maxon_alloc
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 3
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-32]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.call maxon_alloc
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-40]
+    x86.mov [ecx+8], eax
+    x86.lea rax, [rbp-24]
+    x86.mov rcx, rax
+    x86.mov eax, [rbp-40]
+    x86.mov edx, [eax+8]
+    x86.mov [edx+0], ecx
+    x86.mov eax, 3
+    x86.mov [edx+16], eax
+    x86.mov eax, 8
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-48]
+    x86.mov [ecx+0], eax
+    x86.mov eax, 8
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-56]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, rax
+    x86.call Outer.getInnerCount
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je self-field-method-chain.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_49]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-64]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

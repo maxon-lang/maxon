@@ -10,6 +10,9 @@ public partial class X86CodeEmitter {
   ];
 
   public void EmitRuntimeFunctions() {
+    // Allocation tracking counter in .symtab section (not .data, to avoid affecting RequiredData tests)
+    DefineSymdata("__alloc_count", new byte[8]);
+
     EmitMaxonAlloc();
     EmitMaxonRealloc();
     EmitMaxonFree();
@@ -58,6 +61,7 @@ public partial class X86CodeEmitter {
     EmitMaxonMemcpy();
     EmitMaxonMemcmp();
     EmitMaxonCleanupUntracked();
+    EmitMaxonLeakCheck();
   }
 
   /// <summary>maxon_alloc(size_in_rcx) -> ptr_in_rax (with 8-byte refcount header)</summary>
@@ -71,6 +75,12 @@ public partial class X86CodeEmitter {
     // Store refcount=1 at [rax+0], return rax+8
     EmitBytes(0x48, 0xC7, 0x00, 0x01, 0x00, 0x00, 0x00); // MOV qword [rax], 1
     EmitAddRegImm(X86Register.Rax, 8);          // RAX = user-visible pointer
+    // Track allocation for leak detection
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);   // save rax
+    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitSymdataStoreI64(X86Register.Rax, "__alloc_count");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);   // restore rax
     EmitRuntimeFunctionEnd();
   }
 
@@ -92,6 +102,12 @@ public partial class X86CodeEmitter {
     EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x10); // HEAP_ZERO_MEMORY
     EmitBytes(0x48, 0xC7, 0x00, 0x01, 0x00, 0x00, 0x00); // MOV qword [rax], 1
     EmitAddRegImm(X86Register.Rax, 8);          // return user-visible pointer
+    // Track new allocation for leak detection
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);   // save rax
+    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitSymdataStoreI64(X86Register.Rax, "__alloc_count");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);   // restore rax
     EmitJmp("rt_realloc_epilogue");
     // Realloc path: adjust ptr-8 for real base, realloc, return base+8
     DefineLabel("rt_realloc_realloc_path");
@@ -109,6 +125,10 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_free", 1);
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
     EmitJcc("z", "rt_free_skip");
+    // Track deallocation for leak detection
+    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
+    EmitSubRegImm(X86Register.Rax, 1);
+    EmitSymdataStoreI64(X86Register.Rax, "__alloc_count");
     // Adjust pointer back by 8 to include refcount header
     EmitMovRegMem(X86Register.Rax, -0x08, 8);  // RAX = ptr
     EmitSubRegImm(X86Register.Rax, 8);          // RAX = real base (ptr - 8)
@@ -2604,5 +2624,57 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
     DefineLabel("rt_cleanup_untracked_done");
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_leak_check() — called from _start after main() returns.
+  /// If __alloc_count > 0, prints "Leak detected: N allocation(s) not freed\n" to stderr.
+  /// Stack: [rbp-8..rbp-0x28] scratch space, including 24-byte buffer for i64-to-string.
+  /// </summary>
+  private void EmitMaxonLeakCheck() {
+    DefineSymdata("__leak_prefix", System.Text.Encoding.UTF8.GetBytes("Leak detected: \0"));
+    DefineSymdata("__leak_suffix", System.Text.Encoding.UTF8.GetBytes(" allocation(s) not freed\n\0"));
+
+    EmitRuntimeFunctionStart("maxon_leak_check", 0, 0x40);
+    // Load allocation count
+    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_leak_check_done");
+    // Save alloc count for later conversion
+    EmitMovMemReg(-0x08, X86Register.Rax, 8);
+    // Print prefix: "Leak detected: "
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__leak_prefix");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+    // Convert count to string: maxon_i64_to_string(count, &buffer)
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);  // count
+    // Use stack space at [rbp-0x28] as 24-byte buffer
+    EmitBytes(0x48, 0x8D, 0x55, 0xD8);         // LEA rdx, [rbp-0x28]
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
+    // Print the number (buffer is already null-terminated by i64_to_string)
+    EmitBytes(0x48, 0x8D, 0x4D, 0xD8);         // LEA rcx, [rbp-0x28]
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+    // Print suffix: " allocation(s) not freed\n"
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__leak_suffix");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+    DefineLabel("rt_leak_check_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>Load a 64-bit value from a symdata label into dest. Uses r11 as scratch.</summary>
+  private void EmitSymdataLoadI64(X86Register dest, string label) {
+    EmitLeaRegSymdataRel(X86Register.R11, label);
+    // MOV dest, [r11]: REX.W + 8B /r (mod=00, r/m=r11)
+    Rex.W().Reg(dest).Rm(X86Register.R11).Emit(this);
+    EmitByte(0x8B);
+    EmitByte((byte)(0x03 | (RegCode(dest) << 3))); // mod=00, r/m=011 (r11)
+  }
+
+  /// <summary>Store a 64-bit value from src into a symdata label. Uses r11 as scratch.</summary>
+  private void EmitSymdataStoreI64(X86Register src, string label) {
+    EmitLeaRegSymdataRel(X86Register.R11, label);
+    // MOV [r11], src: REX.W + 89 /r (mod=00, r/m=r11)
+    Rex.W().Reg(src).Rm(X86Register.R11).Emit(this);
+    EmitByte(0x89);
+    EmitByte((byte)(0x03 | (RegCode(src) << 3))); // mod=00, r/m=011 (r11)
   }
 }
