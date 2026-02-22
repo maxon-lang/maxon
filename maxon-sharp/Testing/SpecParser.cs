@@ -87,12 +87,6 @@ public static partial class SpecParser {
         testArgs = argsMatch.Groups[1].Value.Trim();
       }
 
-      bool trackMemory = false;
-      var trackMemMatch = TrackMemoryDirectiveRegex().Match(testSection);
-      if (trackMemMatch.Success) {
-        trackMemory = trackMemMatch.Groups[1].Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase);
-      }
-
       var source = ExtractCodeBlock(testSection, "maxon");
       if (source == null) continue;
 
@@ -125,7 +119,6 @@ public static partial class SpecParser {
           RequiredMLIR = requiredMLIR,
           RequiredRdata = requiredRdata,
           RequiredData = requiredData,
-          TrackMemory = trackMemory
         };
       }
 
@@ -134,7 +127,6 @@ public static partial class SpecParser {
         Source = source,
         Expectation = expectation,
         Args = testArgs,
-        TrackMemory = trackMemory,
         SourceFiles = SplitMultiFileSource(source)
       });
     }
@@ -261,9 +253,6 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*Args:\s*(.+?)\s*-->")]
   private static partial Regex ArgsDirectiveRegex();
-
-  [GeneratedRegex(@"<!--\s*TrackMemory:\s*(.+?)\s*-->")]
-  private static partial Regex TrackMemoryDirectiveRegex();
 
   [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline)]
   private static partial Regex FileMarkerRegex();

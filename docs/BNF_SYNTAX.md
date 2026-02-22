@@ -45,12 +45,12 @@ KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
               | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'extern' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
-              | 'implements' | 'in' | 'int' | 'interface' | 'let' | 'match'
-              | 'mod' | 'not' | 'or' | 'otherwise' | 'return' | 'self'
-              | 'Self' | 'shl' | 'shr' | 'static' | 'then' | 'throw'
-              | 'throws' | 'to' | 'true' | 'try' | 'type' | 'typealias'
-              | 'union' | 'upto' | 'uses' | 'var' | 'where' | 'while'
-              | 'with' | 'xor'
+              | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
+              | 'match' | 'mod' | 'not' | 'or' | 'otherwise' | 'return'
+              | 'self' | 'Self' | 'shl' | 'shr' | 'static' | 'then'
+              | 'throw' | 'throws' | 'to' | 'true' | 'try' | 'type'
+              | 'typealias' | 'union' | 'upto' | 'uses' | 'var' | 'where'
+              | 'while' | 'with' | 'xor'
 ```
 
 ### 1.4 Literals
@@ -513,7 +513,7 @@ otherwise_clause
 | 1     | `or`                                  | Left          |
 | 2     | `xor`                                 | Left          |
 | 3     | `and`                                 | Left          |
-| 4     | `==`  `!=`  `<`  `>`  `<=`  `>=`     | Left          |
+| 4     | `==`  `!=`  `<`  `>`  `<=`  `>=`  `is`  `is not` | Left          |
 | 5     | `shl`  `shr`                          | Left          |
 | 6     | `+`  `-`                              | Left          |
 | 7     | `*`  `/`  `mod`                       | Left          |
@@ -532,7 +532,7 @@ xor_expr      = and_expr { 'xor' and_expr }
 
 and_expr      = comparison { 'and' comparison }
 
-comparison    = shift_expr { cmp_op shift_expr }
+comparison    = shift_expr { ( cmp_op shift_expr ) | ( 'is' ['not'] shift_expr ) }
 cmp_op        = '==' | '!=' | '<' | '>' | '<=' | '>='
 
 shift_expr    = additive { ('shl' | 'shr') additive }

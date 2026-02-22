@@ -24,11 +24,6 @@ public class TestCase {
   /// </summary>
   public string? Args { get; init; }
   /// <summary>
-  /// Whether to compile with --track-allocs for memory tracking output.
-  /// Parsed from `&lt;!-- TrackMemory: true --&gt;` directives in the spec file.
-  /// </summary>
-  public bool TrackMemory { get; init; }
-  /// <summary>
   /// For multi-file tests: list of (FileName, Source) pairs.
   /// When non-null, the test compiles multiple files instead of a single source.
   /// </summary>
@@ -50,7 +45,6 @@ public class SuccessExpectation : TestExpectation {
   /// Expected runtime stderr output (e.g., panic messages with stack traces).
   /// </summary>
   public string? Stderr { get; init; }
-  public bool TrackMemory { get; init; }
   /// <summary>
   /// All pipeline stages concatenated with "--- stagename" markers.
   /// Verified during test runs (must match exactly).
@@ -91,10 +85,6 @@ public class Fragment {
   /// Command-line arguments to pass when running the test executable.
   /// </summary>
   public string? Args { get; init; }
-  /// <summary>
-  /// Whether to compile with --track-allocs for memory tracking output.
-  /// </summary>
-  public bool TrackMemory { get; init; }
   /// <summary>
   /// For multi-file tests: list of (FileName, Source) pairs.
   /// When non-null, the test compiles multiple files instead of a single source.

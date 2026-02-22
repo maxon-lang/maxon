@@ -58,6 +58,7 @@ public enum TokenType {
   Fallthrough,
   Default,
   Upto,
+  Is,
 
   // Types
   Int,
@@ -204,6 +205,7 @@ public class Lexer(string source) {
     { "fallthrough", new(TokenType.Fallthrough, "Falls through to the next case in a match statement.", false) },
     { "default", new(TokenType.Default, "Default case in a match statement.", false) },
     { "upto", new(TokenType.Upto, "Exclusive upper bound in range patterns.", false) },
+    { "is", new(TokenType.Is, "Reference identity operator. Returns true if two variables refer to the same object. Use 'is not' for inequality.", false) },
   };
 
   // Operator map: { operator_text, TokenType, OperatorCategory, help_text }

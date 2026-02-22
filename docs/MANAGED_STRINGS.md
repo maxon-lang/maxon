@@ -303,28 +303,11 @@ void MIRCodeGenerator::popScope(mir::MIRFunction *function) {
 
 ## Debugging Tips
 
-### Memory Tracking
-
-Enable allocation tracking with `--track-allocs` to see all allocations:
-
-```
-ALLOC #1: 36 bytes (string literal)
-ALLOC #2: 10 bytes (cstring conversion)
-FREE #2: 10 bytes (cstring release)
-FREE #1: 36 bytes (string literal)
-
-=== ALLOC STATS ===
-Allocated: 46 bytes
-Freed:     46 bytes
-Leaked:    0 bytes
-```
-
 ### Common Issues
 
 1. **Leaked bytes**: Check that all heap strings are tracked in `scopeStack`
 2. **Double free**: Verify refcounting logic, especially for shared strings
 3. **Use after free**: Ensure substrings retain their parent before use
-4. **Wrong size in tracking**: Header is 8 bytes, allocation is `capacity + 8`
 
 ### Header Layout Verification
 

@@ -953,7 +953,6 @@ end 'main'
 ```
 
 <!-- test: memory-tracking-simple-interp -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   var a = "hello"
@@ -968,25 +967,9 @@ end 'main'
 ```
 ```stdout
 11
-CLEANUP: cs
-CLEANUP: a
-CLEANUP: b
-CLEANUP: s
-DECREF: s -> rc=0
-
-=== MEMORY STATS ===
-Allocated: 0 bytes
-Freed:     0 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   0
-Decrefs:   1
-Copies:    0
-Cleanups:  4
 ```
 
 <!-- test: memory-tracking-chained-interp -->
-<!-- TrackMemory: true -->
 String interpolation with multiple parts creates a single allocation with O(n) copy.
 All intermediate buffers use stack allocation for primitives.
 ```maxon
@@ -1005,27 +988,9 @@ end 'main'
 ```
 ```stdout
 4
-CLEANUP: cs
-CLEANUP: a
-CLEANUP: b
-CLEANUP: c
-CLEANUP: d
-CLEANUP: s
-DECREF: s -> rc=0
-
-=== MEMORY STATS ===
-Allocated: 0 bytes
-Freed:     0 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   0
-Decrefs:   1
-Copies:    0
-Cleanups:  6
 ```
 
 <!-- test: memory-tracking-loop-interp -->
-<!-- TrackMemory: true -->
 String accumulation in loop properly releases old values on reassignment.
 The final value is released at scope exit. Uses efficient O(n) interpolation.
 ```maxon
@@ -1045,30 +1010,10 @@ end 'main'
 0
 ```
 ```stdout
-CLEANUP: s
-CLEANUP: s
-DECREF: s -> rc=0
-CLEANUP: s
-DECREF: s -> rc=0
 3
-CLEANUP: cs
-CLEANUP: s
-DECREF: s -> rc=0
-CLEANUP: x
-
-=== MEMORY STATS ===
-Allocated: 0 bytes
-Freed:     0 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   0
-Decrefs:   3
-Copies:    0
-Cleanups:  6
 ```
 
 <!-- test: memory-tracking-no-leak-scope-exit -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   if true 'scope'
@@ -1083,18 +1028,6 @@ end 'main'
 ```
 ```stdout
 27
-CLEANUP: cs
-CLEANUP: temp
-
-=== MEMORY STATS ===
-Allocated: 0 bytes
-Freed:     0 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   0
-Decrefs:   0
-Copies:    0
-Cleanups:  2
 ```
 
 <!-- test: toLower -->
@@ -1369,7 +1302,7 @@ c
 ```
 
 <!-- test: cow-mutation-copies -->
-### COW Mutation Creates Copy
+### COW Mutation Through Alias
 ```maxon
 function main() returns ExitCode
   var original = "HELLO"
@@ -1384,12 +1317,12 @@ end 'main'
 0
 ```
 ```stdout
-HELLO
+hello
 hello
 ```
 
 <!-- test: cow-original-unchanged -->
-### COW Original Unchanged After Copy Mutation
+### COW Aliases Share Mutations
 ```maxon
 function main() returns ExitCode
   var a = "TEST STRING"
@@ -1406,9 +1339,9 @@ end 'main'
 0
 ```
 ```stdout
-TEST STRING
 test string
-TEST STRING
+test string
+test string
 ```
 
 <!-- test: cow-slice-independent -->

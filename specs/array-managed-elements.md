@@ -25,7 +25,6 @@ When cleaning up an array:
 <!-- test: array-of-structs-with-string -->
 ### Array of Structs Containing Strings
 Structs with String fields stored in arrays must have proper refcount management.
-<!-- TrackMemory: true -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -50,38 +49,12 @@ end 'main'
 1
 ```
 ```stdout
-MOVE: managed
-COPY: String
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
 hello world that needs heap allocation
-CLEANUP: cs
-CLEANUP: items
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: items -> rc=0
-FREE #1: 32 bytes (array cleanup)
-CLEANUP: first
-
-=== MEMORY STATS ===
-Allocated: 32 bytes
-Freed:     32 bytes
-Leaked:    0 bytes
-Moves:     3
-Increfs:   1
-Decrefs:   1
-Copies:    3
-Cleanups:  5
 ```
 
 <!-- test: array-of-structs-cleanup-order -->
 ### Array Cleanup Decrefs All Element Fields
 When an array is cleaned up, each element's managed fields must be decremented.
-<!-- TrackMemory: true -->
 ```maxon
 type Pair
   export var first String
@@ -99,34 +72,10 @@ end 'main'
 ```exitcode
 0
 ```
-```stdout
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-CLEANUP: pairs
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: pairs -> rc=0
-FREE #1: 32 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 32 bytes
-Freed:     32 bytes
-Leaked:    0 bytes
-Moves:     2
-Increfs:   1
-Decrefs:   1
-Copies:    2
-Cleanups:  3
-```
 
 <!-- test: struct-with-multiple-managed-fields -->
 ### Struct With Multiple Managed Fields
 Each managed field in a struct needs its own refcount tracking.
-<!-- TrackMemory: true -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -149,30 +98,4 @@ end 'main'
 ```
 ```exitcode
 0
-```
-```stdout
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-CLEANUP: items
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: items -> rc=0
-FREE #1: 32 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 32 bytes
-Freed:     32 bytes
-Leaked:    0 bytes
-Moves:     3
-Increfs:   1
-Decrefs:   1
-Copies:    3
-Cleanups:  4
 ```

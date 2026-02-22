@@ -35,7 +35,6 @@ maxon compile <source.maxon> [options]
 | `-v` | Enable verbose/debug output |
 | `--emit-ir` | Emit IR output to `<source>.ir` |
 | `--emit-asm` | Emit assembly output to `<source>.asm` |
-| `--track-allocs` | Enable runtime allocation tracking |
 
 **Output:**
 - Creates `<source>.exe` in the same directory as the source file
@@ -46,9 +45,6 @@ maxon compile <source.maxon> [options]
 ```bash
 # Basic compilation
 maxon compile hello.maxon
-
-# Compile with allocation tracking
-maxon compile app.maxon --track-allocs
 
 # Compile with verbose output
 maxon compile app.maxon -v
@@ -78,7 +74,6 @@ maxon build [options]
 | `-v` | Enable verbose/debug output |
 | `--emit-ir` | Emit IR output |
 | `--emit-asm` | Emit assembly output |
-| `--track-allocs` | Enable runtime allocation tracking |
 
 **Behavior:**
 1. Scans the current directory recursively for `.maxon` files
@@ -96,8 +91,6 @@ maxon build [options]
 cd myproject
 maxon build
 
-# Build with allocation tracking
-maxon build --track-allocs
 ```
 
 **Error Conditions:**
@@ -311,6 +304,4 @@ maxon compile problem.maxon --emit-ir
 # Emit assembly for inspection
 maxon compile problem.maxon --emit-asm
 
-# Check for memory issues
-maxon compile app.maxon --track-allocs
 ```

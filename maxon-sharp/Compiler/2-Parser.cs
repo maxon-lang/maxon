@@ -1191,12 +1191,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           $"'{paramName}' is not a type parameter of this type",
           paramToken.Line, paramToken.Column);
 
-      // Expect 'is' (contextual keyword, not a global keyword)
-      var isToken = Expect(TokenType.Identifier);
-      if (isToken.Value != "is")
-        throw new CompileError(ErrorCode.ParserExpectedToken,
-          $"Expected 'is' after type parameter name in where clause, got '{isToken.Value}'",
-          isToken.Line, isToken.Column);
+      var isToken = Expect(TokenType.Is);
 
       var interfaces = new List<string> {
         Expect(TokenType.Identifier).Value
@@ -7549,9 +7544,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       lhs = new ExprResult.Direct(castOp.Result);
     }
 
-    while (BinaryOperators.TryGetValue(Current().Type, out var entry) && entry.Precedence >= minPrecedence) {
+    while ((BinaryOperators.TryGetValue(Current().Type, out var entry) && entry.Precedence >= minPrecedence)
+        || (Current().Type == TokenType.Is && 3 >= minPrecedence)) {
       // 'and fallthrough' is match syntax, not a binary expression
       if (Current().Type == TokenType.And && PeekNext().Type == TokenType.Fallthrough) break;
+
+      // Reference identity: 'is' / 'is not'
+      if (Current().Type == TokenType.Is) {
+        lhs = ParseRefIdentity(lhs);
+        continue;
+      }
 
       var opToken = Advance(); // consume operator
       var rhs = ParseExpression(entry.Precedence + 1);
@@ -11158,6 +11160,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (callOp.Result is MaxonStruct resultStruct)
         resultStruct.TypeName = aliasTypeName;
     }
+  }
+
+  /// Parses 'is' or 'is not' reference identity expression.
+  private ExprResult ParseRefIdentity(ExprResult lhs) {
+    var isToken = Advance(); // consume 'is'
+    var negate = Check(TokenType.Not);
+    if (negate) Advance(); // consume 'not'
+    var rhsExpr = ParseExpression(4); // precedence above comparison level
+
+    MaxonValue lhsVal = ResolveExprValue(lhs);
+    MaxonValue rhsVal = ResolveExprValue(rhsExpr);
+
+    // Only struct-typed values (references) support identity comparison
+    if (lhsVal is not MaxonStruct lhsStruct || rhsVal is not MaxonStruct rhsStruct) {
+      var opStr = negate ? "is not" : "is";
+      throw new CompileError(ErrorCode.SemanticRefIdentityOnPrimitive,
+        $"'{opStr}' requires reference types (structs), not primitive values",
+        isToken.Line, isToken.Column);
+    }
+    if (lhsStruct.TypeName != rhsStruct.TypeName) {
+      var opStr = negate ? "is not" : "is";
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"'{opStr}' requires both operands to be the same type, got '{lhsStruct.TypeName}' and '{rhsStruct.TypeName}'",
+        isToken.Line, isToken.Column);
+    }
+
+    var refEqOp = new MaxonRefEqOp(lhsVal, rhsVal, negate);
+    _currentBlock!.AddOp(refEqOp);
+    return new ExprResult.Direct(refEqOp.Result);
   }
 
   /// Returns true if the given token can be used as a name (identifier or keyword used as name).

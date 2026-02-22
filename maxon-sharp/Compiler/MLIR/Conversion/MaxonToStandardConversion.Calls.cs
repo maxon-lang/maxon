@@ -47,12 +47,10 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
-    Dictionary<string, List<string>> managedVarOwners,
-    HashSet<string> mutatingFunctions,
     Dictionary<int, string>? fnEnvVarNames = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
       isTryCall: false, funcLookup, block, valueMap, varTypes, structVarNames,
-      structValueTypes, typeDefs, managedVarOwners, mutatingFunctions, fnEnvVarNames: fnEnvVarNames,
+      structValueTypes, typeDefs, fnEnvVarNames: fnEnvVarNames,
       argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames);
   }
 
@@ -73,8 +71,6 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
-    Dictionary<string, List<string>>? managedVarOwners,
-    HashSet<string>? mutatingFunctions,
     MaxonValue? errorFlagValue = null,
     Dictionary<int, string>? fnEnvVarNames = null,
     List<bool>? argMutabilities = null,
@@ -87,61 +83,6 @@ public static partial class MaxonToStandardConversion {
     bool calleeIsStructInstance = IsStructInstanceMethod(calleeFunc);
 
     var newArgs = new List<StdValue>();
-
-    // With reference semantics, struct args are borrowed references — the caller retains
-    // ownership and cleans up. But we still emit MOVE tracking for debugging visibility.
-    if (_trackAllocs && managedVarOwners != null && mutatingFunctions != null) {
-      bool calleeMutates = mutatingFunctions.Contains(callee) || IsMutatingMethodCall(callee);
-      if (calleeMutates) {
-        // Emit MOVE for non-self struct args passed to mutating functions (borrow tracking).
-        // Unlike value semantics, we do NOT remove from managedVarOwners — caller still owns.
-        for (int i = 0; i < args.Count; i++) {
-          bool isSelfArg = calleeIsStructInstance && i == 0;
-          if (!isSelfArg && structVarNames.TryGetValue(args[i].Id, out var argVarName)
-              && managedVarOwners.ContainsKey(argVarName)) {
-            EmitTrackMove(block, argVarName);
-          }
-        }
-        // For struct instance method calls where non-self params are managed structs,
-        // emit MOVE for the self arg's managed field (the container accepting ownership)
-        bool hasManagedStructParam = false;
-        bool hasNestedManagedStructParam = false;
-        if (calleeIsStructInstance) {
-          for (int i = 1; i < calleeFunc.ParamTypes.Count; i++) {
-            if (calleeFunc.ParamTypes[i] is MlirStructType paramSt) {
-              if (GetManagedFieldName(paramSt) != null) {
-                hasManagedStructParam = true;
-              } else if (GetManagedElementFieldInfo(paramSt).Count > 0) {
-                hasNestedManagedStructParam = true;
-              }
-            }
-          }
-        }
-        if (calleeIsStructInstance && hasManagedStructParam && !hasNestedManagedStructParam) {
-          var selfArg = args[0];
-          if (structVarNames.TryGetValue(selfArg.Id, out _)) {
-            var selfStructType2 = (MlirStructType)calleeFunc.ParamTypes[0];
-            var managedFieldName = GetManagedFieldName(selfStructType2);
-            if (managedFieldName != null) {
-              EmitTrackMove(block, managedFieldName);
-            }
-          }
-        }
-        // For struct params with nested managed fields (e.g. Item with String field),
-        // emit MOVE/COPY for each managed field within the struct
-        if (calleeIsStructInstance && hasNestedManagedStructParam) {
-          for (int i = 1; i < calleeFunc.ParamTypes.Count; i++) {
-            if (calleeFunc.ParamTypes[i] is MlirStructType paramSt) {
-              var managedFields = GetManagedElementFieldInfo(paramSt);
-              foreach (var (_, typeName) in managedFields) {
-                EmitTrackMove(block, "managed");
-                EmitTrackCopy(block, typeName);
-              }
-            }
-          }
-        }
-      }
-    }
 
     // Mutability enforcement: immutable args cannot be passed to mutating params
     if (_mutatingParams != null && _mutatingParams.TryGetValue(calleeFunc.Name, out var calleeMutParams)
@@ -228,11 +169,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, List<string>> managedVarOwners,
-    HashSet<string> cstringTrackVars,
-    Dictionary<string, List<(int offset, string typeName)>> managedBufferElementInfo,
-    Dictionary<string, MlirType> typeDefs,
-    Dictionary<string, string> varNameToStructType) {
+    Dictionary<string, MlirType> typeDefs) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -251,7 +188,6 @@ public static partial class MaxonToStandardConversion {
         && typeDefs.TryGetValue(enumRetTypeName, out var enumRetTypeDef)
         && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
       var heapPtr = PackEnumFlatVarsToHeap(block, enumRetPrefix, enumRetType, varTypes, typeDefs);
-      EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
       block.AddOp(new StdReturnOp(heapPtr));
       return;
     }
@@ -261,57 +197,14 @@ public static partial class MaxonToStandardConversion {
       StdValue retHeapPtr;
       if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
         retHeapPtr = EmitLoad(block, srcName, varTypes);
-        managedVarOwners.Remove(srcName);
       } else {
         // Value is already an i64 (e.g. struct element pointer from managed memory)
         retHeapPtr = valueMap[retOp.Value];
       }
-
-      bool hasCleanup2 = _trackAllocs && (managedVarOwners.Count > 0 || cstringTrackVars.Count > 0);
-      if (hasCleanup2) {
-        var retSave = $"__ret_save_{MlirContext.Current.NextId()}";
-        EmitStore(block, retHeapPtr, retSave, varTypes);
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
-        var retReload = EmitLoad(block, retSave, varTypes);
-        block.AddOp(new StdReturnOp(retReload));
-      } else {
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
-        block.AddOp(new StdReturnOp(retHeapPtr));
-      }
+      block.AddOp(new StdReturnOp(retHeapPtr));
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
-      bool hasCleanup = _trackAllocs && (managedVarOwners.Count > 0 || cstringTrackVars.Count > 0);
-      if (newRetVal != null && hasCleanup) {
-        // Save return value to stack before cleanup (cleanup calls clobber registers)
-        var retVarName = $"__ret_save_{MlirContext.Current.NextId()}";
-        EmitStore(block, newRetVal, retVarName, varTypes);
-
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
-
-        var retReload = EmitLoad(block, retVarName, varTypes);
-        block.AddOp(new StdReturnOp(retReload));
-      } else {
-        EmitReturnCleanup(block, cstringTrackVars, managedVarOwners, varTypes, typeDefs, varNameToStructType, managedBufferElementInfo);
-        block.AddOp(new StdReturnOp(newRetVal));
-      }
-    }
-  }
-
-  private static void EmitReturnCleanup(
-    MlirBlock<StandardOp> block,
-    HashSet<string> cstringTrackVars,
-    Dictionary<string, List<string>> managedVarOwners,
-    Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
-    Dictionary<string, string> varNameToStructType,
-    Dictionary<string, List<(int offset, string typeName)>>? managedBufferElementInfo = null) {
-    foreach (var csVar in cstringTrackVars)
-      EmitTrackCleanup(block, csVar);
-    foreach (var (varName, bufferPaths) in managedVarOwners) {
-      foreach (var bufferPath in bufferPaths) {
-        var elementInfo = managedBufferElementInfo != null && managedBufferElementInfo.TryGetValue(bufferPath, out var info) ? info : null;
-        EmitManagedCleanup(block, varName, bufferPath, varTypes, typeDefs, varNameToStructType, elementInfo);
-      }
+      block.AddOp(new StdReturnOp(newRetVal));
     }
   }
 
@@ -365,7 +258,7 @@ public static partial class MaxonToStandardConversion {
     LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
       tryCallOp.ResultKind, isTryCall: true, funcLookup, block, valueMap, varTypes,
       structVarNames, structValueTypes, typeDefs,
-      null, null, tryCallOp.ErrorFlag,
+      tryCallOp.ErrorFlag,
       argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames);
   }
 }

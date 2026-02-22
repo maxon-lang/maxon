@@ -34,56 +34,7 @@ function main() returns ExitCode
   return result
 end 'main'
 ---
-TrackMemory: true
 ExitCode: 30
-Stdout: ```
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-MOVE: nums
-CLEANUP: item
-DECREF: item -> rc=0
-FREE #1: 32 bytes (array cleanup)
-CLEANUP: item
-CLEANUP: item
-ALLOC #2: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-MOVE: nums
-CLEANUP: item
-DECREF: item -> rc=0
-FREE #2: 32 bytes (array cleanup)
-CLEANUP: item
-CLEANUP: item
-ALLOC #3: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-MOVE: nums
-CLEANUP: item
-DECREF: item -> rc=0
-FREE #3: 32 bytes (array cleanup)
-CLEANUP: item
-CLEANUP: item
-
-=== MEMORY STATS ===
-Allocated: 96 bytes
-Freed:     96 bytes
-Leaked:    0 bytes
-Moves:     9
-Increfs:   3
-Decrefs:   3
-Copies:    6
-Cleanups:  9
-```
 ---
 module {
   func @if-try.mayFail(succeed: i1) -> i64 {
@@ -214,31 +165,6 @@ module {
     x86.mov eax, [rbp-48]
     x86.mov ecx, [rbp-56]
     x86.mov [ecx+16], eax
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
-    x86.lea_rdata rax, [__track_tag_1]
-    x86.mov rcx, rax
-    x86.mov eax, 6
-    x86.mov rdx, rax
-    x86.call maxon_track_copy
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
-    x86.lea_rdata rax, [__track_tag_1]
-    x86.mov rcx, rax
-    x86.mov eax, 6
-    x86.mov rdx, rax
-    x86.call maxon_track_copy
-    x86.lea_rdata rax, [__track_tag_2]
-    x86.mov rcx, rax
-    x86.mov eax, 4
-    x86.mov rdx, rax
-    x86.call maxon_track_move
     x86.mov eax, [rbp-56]
     x86.xor edx, edx
     x86.epilogue
@@ -246,7 +172,7 @@ module {
   }
   func @if-try.main() -> u32 {
   entry:
-    x86.prologue stack_size=160
+    x86.prologue stack_size=64
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
@@ -296,87 +222,10 @@ module {
     x86.mov ecx, [rbp-16]
     x86.add ecx, eax
     x86.mov [rbp-16], ecx
-    x86.mov edx, [rbp-32]
-    x86.mov ebx, [edx+0]
-    x86.mov [rbp-64], ebx
-    x86.mov esi, [rbp-64]
-    x86.mov edi, [esi+8]
-    x86.mov [rbp-72], edi
-    x86.mov r8, [rbp-72]
-    x86.mov r9, [r8+16]
-    x86.mov eax, [rbp-72]
-    x86.mov ecx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_3]
-    x86.mov rdx, rax
-    x86.mov eax, 4
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
-    x86.mov rcx, r9
-    x86.mov r9, rax
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-80], ecx
-    x86.mov eax, [rbp-80]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-88], ecx
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-88]
-    x86.mov [ecx+16], eax
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-96], ecx
-    x86.mov eax, [rbp-96]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-104], ecx
-    x86.mov eax, [rbp-104]
-    x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-104]
-    x86.mov edx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_3]
-    x86.mov rbx, rax
-    x86.mov eax, 4
-    x86.mov r8, rbx
-    x86.mov r9, rax
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-112], ecx
-    x86.mov eax, [rbp-112]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-120], ecx
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-120]
-    x86.mov [ecx+16], eax
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+16]
-    x86.mov [rbp-128], ecx
-    x86.mov eax, [rbp-128]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-136], ecx
-    x86.mov eax, [rbp-136]
-    x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-136]
-    x86.mov edx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_3]
-    x86.mov rbx, rax
-    x86.mov eax, 4
-    x86.mov r8, rbx
-    x86.mov r9, rax
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+16]
-    x86.mov [rbp-144], ecx
-    x86.mov eax, [rbp-144]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-152], ecx
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-152]
-    x86.mov [ecx+16], eax
     x86.jmp if-try.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
-    x86.mov [rbp-160], eax
+    x86.mov [rbp-64], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -393,7 +242,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_8:
-    x86.mov eax, [rbp-160]
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

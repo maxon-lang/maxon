@@ -629,7 +629,6 @@ two
 ```
 
 <!-- test: string-array-memory -->
-<!-- TrackMemory: true -->
 Verify string array memory is properly managed (no leaks).
 
 ```maxon
@@ -645,29 +644,6 @@ end 'main'
 ```
 ```exitcode
 0
-```
-```stdout
-MOVE: managed
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-MOVE: managed
-CLEANUP: arr
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: arr -> rc=0
-FREE #1: 32 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 32 bytes
-Freed:     32 bytes
-Leaked:    0 bytes
-Moves:     3
-Increfs:   1
-Decrefs:   1
-Copies:    0
-Cleanups:  4
 ```
 
 <!-- test: push-self-assignment -->

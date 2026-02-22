@@ -4,17 +4,13 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 public static partial class MaxonToStandardConversion {
-  [ThreadStatic] private static bool _trackAllocs;
   [ThreadStatic] private static MlirModule<StandardOp>? _resultModule;
-  [ThreadStatic] private static Dictionary<string, string>? _rdataTagCache;
   [ThreadStatic] private static Dictionary<string, string>? _rdataStringCache;
   [ThreadStatic] private static Dictionary<string, HashSet<string>>? _mutatingParams;
   // Maps param name -> ref pointer var name for the current function being lowered
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
 
-  public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module, bool trackAllocs = false) {
-    _trackAllocs = trackAllocs;
-    _rdataTagCache = [];
+  public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
     _rdataStringCache = [];
     var result = new MlirModule<StandardOp>();
     _resultModule = result;
@@ -38,23 +34,6 @@ public static partial class MaxonToStandardConversion {
 
     // Build a lookup of functions by name for struct-aware call lowering
     var funcLookup = module.Functions.ToDictionary(f => f.Name);
-
-    // Pre-analyze: which functions mutate managed struct parameters?
-    // Used to determine MOVE vs borrow semantics at call sites.
-    var mutatingFunctions = new HashSet<string>();
-    if (trackAllocs) {
-      foreach (var f in module.Functions) {
-        foreach (var b in f.Body.Blocks) {
-          foreach (var op in b.Operations) {
-            if (op is MaxonCallOp c && IsMutatingMethodCall(c.Callee)) {
-              mutatingFunctions.Add(f.Name);
-              goto nextFunc;
-            }
-          }
-        }
-      nextFunc:;
-      }
-    }
 
     // Detect mutated params to enable selective pass-by-reference:
     // only params that are assigned to get pointer indirection, others stay by-value.
@@ -122,7 +101,8 @@ public static partial class MaxonToStandardConversion {
 
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
       var escapingArrayLiterals = FindEscapingArrayLiterals(func);
-      var stackAllocIds = FindStackAllocatableStructs(func, module.TypeDefs, escapingArrayLiterals);
+      // Stack-allocated structs have no refcount header — disabled for reference semantics
+      var stackAllocIds = new HashSet<int>();
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
@@ -239,39 +219,18 @@ public static partial class MaxonToStandardConversion {
       var varNameToStructPrefix = new Dictionary<string, string>();
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
       var varNameToStructType = new Dictionary<string, string>();
-      // Tracks variable names that own managed memory (for cleanup before return)
-      // Key: user variable name (e.g. "arr"), Value: list of paths to buffer fields
-      // Single-managed: ["arr.managed.buffer"], Multi-managed: ["item.numbers.managed.buffer", "item.text._managed.buffer", ...]
-      var managedVarOwners = new Dictionary<string, List<string>>();
-      // Tracks which buffer paths hold arrays of structs with managed fields (for per-element cleanup)
-      // Key: buffer path (e.g. "m.keys.managed.buffer"), Value: list of (offset, typeName) for managed fields within elements
-      var managedBufferElementInfo = new Dictionary<string, List<(int offset, string typeName)>>();
-
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
 
       _refParamPtrVars = refParamPtrVars;
-
-      // Track cstring result IDs from .cstr() calls and their variable names
-      var cstringResultIds = new HashSet<int>();
-      var cstringTrackVars = new HashSet<string>();
 
       // Cache self-field loads: maps "fieldName" → temp var name for struct-typed self fields.
       // Avoids redundant load_indirect from self's heap pointer for the same field within a block.
       // Reset per-block since a cached var stored in one branch may not be defined in another.
       var selfFieldCache = new Dictionary<string, string>();
 
-      // Track processed blocks to detect loop back-edges
-      var processedBlocks = new HashSet<string>();
-      // Snapshot of managedVarOwners at each block's entry, keyed by block name
-      var managedStateAtBlockEntry = new Dictionary<string, Dictionary<string, List<string>>>();
-
       foreach (var block in func.Body.Blocks) {
-        processedBlocks.Add(block.Name);
         selfFieldCache.Clear();
-        if (_trackAllocs)
-          managedStateAtBlockEntry[block.Name] = managedVarOwners.ToDictionary(
-            kvp => kvp.Key, kvp => new List<string>(kvp.Value));
         var newBlock = newFunc.Body.AddBlock(block.Name);
 
         // Pre-scan: find struct literals immediately consumed by declaration assigns
@@ -746,18 +705,6 @@ public static partial class MaxonToStandardConversion {
                   var copyResult = new StdI64(MlirContext.Current.NextId());
                   newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
 
-                  if (_trackAllocs) {
-                    var bufVar = $"__escape_buf_{MlirContext.Current.NextId()}";
-                    EmitStore(newBlock, heapBuf, bufVar, varTypes);
-                    var sizeVar = $"__escape_size_{MlirContext.Current.NextId()}";
-                    EmitStore(newBlock, totalSize.Result, sizeVar, varTypes);
-                    var bufReload = (StdI64)EmitLoad(newBlock, bufVar, varTypes);
-                    var sizeReload = (StdI64)EmitLoad(newBlock, sizeVar, varTypes);
-                    EmitTrackAlloc(newBlock, bufReload, sizeReload, "array literal");
-                    EmitTrackIncref(newBlock, "array literal", 1);
-                    heapBuf = (StdI64)EmitLoad(newBlock, bufVar, varTypes);
-                  }
-
                   rdataPtr = heapBuf;
                 } else {
                   // Stack buffer is safe — array is only used within this function
@@ -807,67 +754,6 @@ public static partial class MaxonToStandardConversion {
               structVarNames[structLitOp.Result.Id] = tempName;
               structValueTypes[structLitOp.Result.Id] = structLitOp.TypeName;
 
-              // Transfer ownership: managed vars used as field values in the struct literal
-              // are now owned by the struct literal, not the original variable.
-              // For non-variable managed fields (e.g. String literals), emit MOVE+COPY tracking.
-              // Skip tracking for internal/builtin struct types (initializers, not transfers).
-              if (_trackAllocs && !structLitOp.TypeName.StartsWith("__")
-                  && structType != null && GetManagedFieldName(structType) == null) {
-                // Check if this struct literal is consumed as a non-self arg to a mutating call.
-                // If so, the call handler emits MOVE/COPY tracking — skip Phase 1 here to avoid doubling.
-                bool consumedByMutatingCall = false;
-                var resultId = structLitOp.Result.Id;
-                foreach (var laterOp in block.Operations) {
-                  if (laterOp is MaxonCallOp callOp) {
-                    for (int ai = 1; ai < callOp.Args.Count; ai++) {
-                      if (callOp.Args[ai].Id == resultId) {
-                        var calleeName = callOp.Callee;
-                        if (mutatingFunctions.Contains(calleeName) || IsMutatingMethodCall(calleeName)) {
-                          consumedByMutatingCall = true;
-                        }
-                        break;
-                      }
-                    }
-                  }
-                  if (consumedByMutatingCall) break;
-                }
-
-                if (!consumedByMutatingCall) {
-                  // Phase 1: MOVE+COPY for non-variable managed fields (String literals, etc.)
-                  foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
-                    // Skip fields backed by tracked managed variables (handled in Phase 2)
-                    if (structVarNames.TryGetValue(fieldVal.Id, out var srcName)
-                        && managedVarOwners.ContainsKey(srcName))
-                      continue;
-                    var field = structType.GetField(fieldName)!;
-                    if (field.Type is MlirStructType fieldStruct) {
-                      var fieldPaths = GetAllManagedBufferPaths("", fieldStruct.Name, module.TypeDefs);
-                      if (fieldPaths.Count > 0) {
-                        EmitTrackMove(newBlock, "managed");
-                        EmitTrackCopy(newBlock, fieldStruct.Name);
-                      }
-                    }
-                  }
-                }
-              }
-              // Phase 2: MOVE for variable-backed managed fields (ownership transfer).
-              // Must run for ALL struct types (including auto-generated like __Map_String_i64)
-              // to prevent double-free when the parent struct and source variable share buffers.
-              if (_trackAllocs && structType != null && GetManagedFieldName(structType) == null) {
-                foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
-                  if (structVarNames.TryGetValue(fieldVal.Id, out var srcVarName)
-                      && managedVarOwners.ContainsKey(srcVarName)) {
-                    var field = structType.GetField(fieldName)!;
-                    if (field.Type is MlirStructType fieldStruct) {
-                      var fieldPaths = GetAllManagedBufferPaths("", fieldStruct.Name, module.TypeDefs);
-                      if (fieldPaths.Count > 0) {
-                        EmitTrackMove(newBlock, srcVarName);
-                        managedVarOwners.Remove(srcVarName);
-                      }
-                    }
-                  }
-                }
-              }
               break;
             }
             case MaxonAssignOp assignOp: {
@@ -903,24 +789,15 @@ public static partial class MaxonToStandardConversion {
                   : assignOp.Value is MaxonStruct ms
                     ? ms.TypeName
                     : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'");
-                // Cleanup old managed memory before reassignment
-                if (!isStructInstanceMethod && managedVarOwners.TryGetValue(assignOp.VarName, out var oldBufPaths)) {
-                  foreach (var oldBufPath in oldBufPaths) {
-                    var oldElementInfo = managedBufferElementInfo.TryGetValue(oldBufPath, out var oldInfo) ? oldInfo : null;
-                    EmitManagedCleanup(newBlock, assignOp.VarName, oldBufPath, varTypes, module.TypeDefs, varNameToStructType, oldElementInfo);
-                  }
-                }
-                // Deep-copy when assigning between user variables so value semantics
-                // are preserved (mutations to one must not affect the other).
-                // Internal temps (__callret_, __struct_, etc.) are already fresh
-                // allocations and can be aliased safely.
+                // Alias: copy the heap pointer so both variables reference the same object.
+                // Internal temps (__callret_, __struct_, etc.) are fresh allocations
+                // consumed exactly once — ownership transfers, no incref needed.
+                // User variables need incref since the source keeps its reference.
                 if (srcName != dstName) {
                   var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
+                  EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
                   if (!srcName.StartsWith("__")) {
-                    var copyPtr = EmitStructDeepCopy(newBlock, srcHeapPtr, structTypeName, module.TypeDefs, varTypes);
-                    EmitStore(newBlock, copyPtr, dstName, varTypes);
-                  } else {
-                    EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
+                    newBlock.AddOp(new StdCallRuntimeOp("maxon_incref", [srcHeapPtr], null));
                   }
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
@@ -935,14 +812,6 @@ public static partial class MaxonToStandardConversion {
                 structVarNames[assignOp.Value.Id] = dstName;
                 structValueTypes[assignOp.Value.Id] = structTypeName;
                 varNameToStructPrefix[assignOp.VarName] = dstName;
-                // Track managed memory ownership for cleanup
-                if (!isStructInstanceMethod && !assignOp.VarName.StartsWith("__")) {
-                  var bufferPaths = GetAllManagedBufferPaths(dstName, structTypeName, module.TypeDefs);
-                  if (bufferPaths.Count > 0) {
-                    managedVarOwners[assignOp.VarName] = bufferPaths;
-                    PopulateManagedBufferElementInfo(bufferPaths, dstName, structTypeName, module.TypeDefs, managedBufferElementInfo);
-                  }
-                }
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 // Widen I32/U32 to I64 when the variable was previously stored as I64
@@ -959,8 +828,6 @@ public static partial class MaxonToStandardConversion {
                 } else {
                   EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
                 }
-                if (_trackAllocs && cstringResultIds.Contains(assignOp.Value.Id))
-                  cstringTrackVars.Add(assignOp.VarName);
               }
               // Write back through reference pointer for reassigned mutated parameters
               if (!assignOp.IsDeclaration && _refParamPtrVars != null
@@ -1201,53 +1068,24 @@ public static partial class MaxonToStandardConversion {
               valueMap[binOp.Result] = factoryResult;
               break;
             }
+            case MaxonRefEqOp refEq: {
+              // Struct values are tracked by structVarNames — load their heap pointers
+              var lhsVarName = structVarNames[refEq.Lhs.Id];
+              var rhsVarName = structVarNames[refEq.Rhs.Id];
+              var lhsPtr = (StdI64)EmitLoad(newBlock, lhsVarName, varTypes);
+              var rhsPtr = (StdI64)EmitLoad(newBlock, rhsVarName, varTypes);
+              var predicate = refEq.Negate ? "ne" : "eq";
+              var cmpOp = new StdCmpI64Op(predicate, lhsPtr, rhsPtr);
+              newBlock.AddOp(cmpOp);
+              valueMap[refEq.Result] = cmpOp.Result;
+              break;
+            }
             case MaxonCondBrOp condBr: {
               var cond = (StdBool)valueMap[condBr.Condition];
               newBlock.AddOp(new StdCondBrOp(cond, condBr.ThenBlock, condBr.ElseBlock));
               break;
             }
             case MaxonBrOp br: {
-              // Loop back-edge: cleanup managed vars defined in this iteration
-              if (_trackAllocs && processedBlocks.Contains(br.Target)
-                  && managedStateAtBlockEntry.TryGetValue(br.Target, out var targetState)) {
-                var loopScopedVars = new List<string>();
-                foreach (var (varName, _) in managedVarOwners) {
-                  if (!targetState.ContainsKey(varName))
-                    loopScopedVars.Add(varName);
-                }
-                foreach (var varName in loopScopedVars) {
-                  foreach (var bufferPath in managedVarOwners[varName]) {
-                    var elementInfo = managedBufferElementInfo.TryGetValue(bufferPath, out var info) ? info : null;
-                    EmitManagedCleanup(newBlock, varName, bufferPath, varTypes, module.TypeDefs, varNameToStructType, elementInfo);
-                    // Zero capacity to prevent use-after-free on reinitialization
-                    // Navigate through heap pointers to reach the __ManagedMemory struct
-                    var managedBase = bufferPath[..bufferPath.LastIndexOf('.')];
-                    var navSegments = managedBase.Split('.');
-                    var navVar = navSegments[0];
-                    var navTypeName = varNameToStructType.TryGetValue(navSegments[0], out var lvst) ? lvst : null;
-                    for (int si = 1; si < navSegments.Length; si++) {
-                      int navOffset = 0;
-                      if (navTypeName != null && module.TypeDefs.TryGetValue(navTypeName, out var lType)
-                          && lType is MlirStructType lStruct) {
-                        var lField = lStruct.GetField(navSegments[si]);
-                        if (lField != null) {
-                          navOffset = lField.Offset;
-                          navTypeName = lField.Type is MlirStructType fst ? fst.Name : null;
-                        }
-                      }
-                      var nv = $"__loop_nav_{MlirContext.Current.NextId()}";
-                      var np = EmitStructFieldLoad(newBlock, navVar, navOffset, MlirType.I64, varTypes);
-                      EmitStore(newBlock, np, nv, varTypes);
-                      navVar = nv;
-                    }
-                    var zero = new StdConstI64Op(0);
-                    newBlock.AddOp(zero);
-                    EmitStructFieldStore(newBlock, zero.Result, navVar, ManagedFieldCapacity, MlirType.I64, varTypes);
-                  }
-                  // Remove from owner tracking — loop handles its own cleanup
-                  managedVarOwners.Remove(varName);
-                }
-              }
               newBlock.AddOp(new StdBrOp(br.Target));
               break;
             }
@@ -1516,9 +1354,7 @@ public static partial class MaxonToStandardConversion {
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, managedVarOwners, mutatingFunctions, fnEnvVarNames);
-              if (_trackAllocs && callOp.Callee.EndsWith(".cstr") && callOp.Result != null)
-                cstringResultIds.Add(callOp.Result.Id);
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, fnEnvVarNames);
               // After a call that passes variables by reference, reload those variables
               // so subsequent uses see the mutated values instead of stale SSA values
               if (_mutatingParams != null && callOp.ArgVarNames != null
@@ -1564,7 +1400,7 @@ public static partial class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, managedVarOwners, cstringTrackVars, managedBufferElementInfo, module.TypeDefs, varNameToStructType);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
               break;
             case MaxonThrowOp throwOp:
               LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);

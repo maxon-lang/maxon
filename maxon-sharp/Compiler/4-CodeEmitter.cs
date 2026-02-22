@@ -24,10 +24,10 @@ public class CodeEmitter {
   /// Emits machine code from an MLIR module containing X86 dialect operations.
   /// </summary>
   /// <param name="module">The MLIR module with X86 operations</param>
-  public static CodeEmitResult Emit(MlirModule<X86Op> module, bool trackAllocs = false) {
+  public static CodeEmitResult Emit(MlirModule<X86Op> module) {
     Logger.Debug(LogCategory.Codegen, "Emitting machine code");
 
-    var emitter = new X86CodeEmitter(trackAllocs);
+    var emitter = new X86CodeEmitter();
 
     // Define rdata constants from module's RdataEntries (populated during StandardToX86 conversion)
     foreach (var (label, rdataBytes, alignment) in module.RdataEntries) {
@@ -50,20 +50,6 @@ public class CodeEmitter {
         initValue = BitConverter.DoubleToInt64Bits(floatAttr.Value);
       }
       emitter.DefineGlobal(global.Name, size, initValue);
-    }
-
-    // Define tracking globals when --track-allocs is enabled
-    if (trackAllocs) {
-      emitter.DefineGlobal("__track_next_id", 8, 0);
-      emitter.DefineGlobal("__track_alloc_bytes", 8, 0);
-      emitter.DefineGlobal("__track_freed_bytes", 8, 0);
-      emitter.DefineGlobal("__track_move_count", 8, 0);
-      emitter.DefineGlobal("__track_incref_count", 8, 0);
-      emitter.DefineGlobal("__track_decref_count", 8, 0);
-      emitter.DefineGlobal("__track_copy_count", 8, 0);
-      emitter.DefineGlobal("__track_cleanup_count", 8, 0);
-      // 256 entries * 24 bytes each (ptr, size, id)
-      emitter.DefineGlobal("__track_table", 256 * 24, 0);
     }
 
     // Verify main exists (check for exact match or suffix match)

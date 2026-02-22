@@ -295,27 +295,6 @@ Located in `maxon-runtime/runtime.mir`:
 
 ## Debugging Tips
 
-### Memory Tracking
-
-Enable allocation tracking with `--track-allocs` to see all allocations:
-
-```
-ALLOC #1: 40 bytes (array grow)
-ALLOC #2: 56 bytes (array grow)
-FREE #1: 40 bytes (array grow)
-ALLOC #3: 88 bytes (array grow)
-FREE #2: 56 bytes (array grow)
-10
-FREE #3: 88 bytes (array cleanup)
-
-=== ALLOC STATS ===
-Allocated: 184 bytes
-Freed:     184 bytes
-Leaked:    0 bytes
-```
-
-Both array and string allocations are now fully tracked with reference counting.
-
 ### Common Issues
 
 1. **Leaked bytes**: Check that all heap arrays are tracked in `scopeStack`

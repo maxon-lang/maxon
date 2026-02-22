@@ -336,6 +336,17 @@ public class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, Max
       or MaxonBinOperator.Gt or MaxonBinOperator.Le or MaxonBinOperator.Ge;
 }
 
+/// Compares two struct references for identity (same heap address).
+public class MaxonRefEqOp(MaxonValue lhs, MaxonValue rhs, bool negate) : MaxonOp {
+  public override string Mnemonic => Negate ? "maxon.ref_ne" : "maxon.ref_eq";
+  public MaxonValue Lhs { get; } = lhs;
+  public MaxonValue Rhs { get; } = rhs;
+  public bool Negate { get; } = negate;
+  public MaxonBool Result { get; } = new MaxonBool(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+}
+
 public class MaxonCallOp : MaxonOp {
   public override string Mnemonic => $"maxon.call @{Callee}";
   public string Callee { get; set; }

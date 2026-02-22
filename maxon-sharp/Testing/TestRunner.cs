@@ -411,7 +411,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       }
 
       try {
-        var result = new Compiler.Compiler().Compile(sources, outputPath, trackAllocs: fragment.TrackMemory);
+        var result = new Compiler.Compiler().Compile(sources, outputPath);
         var error = result.Error;
         // Normalize temp directory paths to just filenames for multi-file tests
         if (error != null && tempDir != null) {

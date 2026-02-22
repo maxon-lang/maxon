@@ -67,12 +67,13 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 | Multiplicative | `*` `/` `mod` |
 | Additive | `+` `-` |
 | Shift | `shl` `shr` |
-| Comparison | `==` `!=` `<` `>` `<=` `>=` |
+| Comparison | `==` `!=` `<` `>` `<=` `>=` `is` `is not` |
 | AND | `and` |
 | XOR | `xor` |
 | Lowest | `or` |
 
 `and`, `or`, `xor`, `not` are context-dependent: logical on `bool`, bitwise on `int`.
+`is`, `is not` compare reference identity (same heap object) for struct types.
 `shl`, `shr` work on integers only.
 
 ## Variables

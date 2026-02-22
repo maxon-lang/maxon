@@ -271,30 +271,6 @@ public static partial class MaxonToStandardConversion {
   private const int ManagedFieldCapacity = 16;
   private const int ManagedFieldElementSize = 24;
 
-  /// Deep-copy a heap-allocated struct: allocate a new block, copy scalar fields,
-  /// and recursively deep-copy any nested struct fields so mutations are independent.
-  private static StdI64 EmitStructDeepCopy(
-    MlirBlock<StandardOp> block, StdValue srcHeapPtr, string structTypeName,
-    Dictionary<string, MlirType> typeDefs, Dictionary<string, string> varTypes) {
-    if (!typeDefs.TryGetValue(structTypeName, out var typeDef) || typeDef is not MlirStructType structType)
-      throw new InvalidOperationException($"EmitStructDeepCopy: unknown struct type '{structTypeName}'");
-
-    var newHeapPtr = EmitAlloc(block, structType.SizeInBytes);
-    foreach (var field in structType.Fields) {
-      var loadOp = new StdLoadIndirectOp(srcHeapPtr, field.Offset, MlirType.I64);
-      block.AddOp(loadOp);
-      if (field.Type is MlirStructType nestedStructType) {
-        // Nested struct field: recursively deep-copy
-        var nestedCopy = EmitStructDeepCopy(block, loadOp.Result, nestedStructType.Name, typeDefs, varTypes);
-        block.AddOp(new StdStoreIndirectOp(nestedCopy, newHeapPtr, field.Offset, MlirType.I64));
-      } else {
-        // Scalar field: copy the value directly
-        block.AddOp(new StdStoreIndirectOp(loadOp.Result, newHeapPtr, field.Offset, MlirType.I64));
-      }
-    }
-    return newHeapPtr;
-  }
-
   /// Load a field from a heap-allocated struct. Loads the struct's heap pointer from
   /// its variable, then reads the field at the given offset.
   private static StdValue EmitStructFieldLoad(

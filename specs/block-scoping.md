@@ -175,7 +175,6 @@ end 'main'
 ```
 
 <!-- test: if-scope-cleanup -->
-<!-- TrackMemory: true -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -194,28 +193,6 @@ end 'main'
 ```
 ```exitcode
 10
-```
-```stdout
-ALLOC #1: 24 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #2: 40 bytes (array grow)
-INCREF: array grow -> rc=1
-CLEANUP: outer
-DECREF: outer -> rc=0
-FREE #1: 24 bytes (array cleanup)
-CLEANUP: inner
-DECREF: inner -> rc=0
-FREE #2: 40 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 64 bytes
-Freed:     64 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   2
-Decrefs:   2
-Copies:    0
-Cleanups:  2
 ```
 
 <!-- test: var-redeclare-after-scope -->

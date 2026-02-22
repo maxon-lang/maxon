@@ -1,0 +1,130 @@
+// Test: string-identity
+function main() returns ExitCode
+  var a = "hello"
+  var b = "hello"
+  var result = 0
+  if a is a 'self'
+    result = result + 1
+  end 'self'
+  if a is b 'diff'
+    result = result + 10
+  end 'diff'
+  return result
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @reference-identity.main() -> u32 {
+  entry:
+    x86.prologue stack_size=80
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.mov edx, 5
+    x86.mov ebx, 32
+    x86.mov [rbp-72], ecx
+    x86.mov rcx, rbx
+    x86.call maxon_alloc
+    x86.mov [rbp-8], eax
+    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-72]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, 5
+    x86.mov [r8+8], r9
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [edx+0], ecx
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-16]
+    x86.mov [edx+8], ecx
+    x86.mov [rbp-24], eax
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.mov eax, 5
+    x86.mov edx, 32
+    x86.mov [rbp-80], ecx
+    x86.mov rcx, rdx
+    x86.call maxon_alloc
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-80]
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 5
+    x86.mov [eax+8], ecx
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-32]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-32]
+    x86.mov [ecx+24], eax
+    x86.mov eax, 16
+    x86.mov rcx, rax
+    x86.call maxon_alloc
+    x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, [rbp-40]
+    x86.mov [edx+0], ecx
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-40]
+    x86.mov [edx+8], ecx
+    x86.mov [rbp-48], eax
+    x86.xor eax, eax
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-24]
+    x86.cmp eax, ecx
+    x86.jne reference-identity.main.self_0.merge
+  self_0:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-56]
+    x86.add ecx, eax
+    x86.mov [rbp-56], ecx
+    x86.jmp reference-identity.main.self_0.merge
+  self_0.merge:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-48]
+    x86.cmp eax, ecx
+    x86.jne reference-identity.main.diff_1.merge
+  diff_1:
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-56]
+    x86.add ecx, eax
+    x86.mov [rbp-56], ecx
+    x86.jmp reference-identity.main.diff_1.merge
+  diff_1.merge:
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je reference-identity.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_symdata rax, [__panic_msg_21]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-64]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

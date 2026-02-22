@@ -330,7 +330,6 @@ end 'main'
 42
 ```
 <!-- test: string-keys-basic -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   var m = ["a": 1, "b": 2]
@@ -341,61 +340,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stdout
-ALLOC #1: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #2: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #3: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: ks
-MOVE: vs
-MOVE: sts
-MOVE: k
-MOVE: managed
-CLEANUP: k
-MOVE: k
-MOVE: managed
-CLEANUP: k
-CLEANUP: m
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: m -> rc=0
-FREE #1: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #2: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #3: 128 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 384 bytes
-Freed:     384 bytes
-Leaked:    0 bytes
-Moves:     7
-Increfs:   3
-Decrefs:   3
-Copies:    0
-Cleanups:  21
-```
 
 <!-- test: string-keys-get-multiple -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   var m = ["hello": 10, "world": 20, "foo": 30]
@@ -407,64 +353,8 @@ end 'main'
 ```exitcode
 30
 ```
-```stdout
-ALLOC #1: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #2: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #3: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: ks
-MOVE: vs
-MOVE: sts
-MOVE: k
-MOVE: managed
-CLEANUP: k
-MOVE: k
-MOVE: managed
-CLEANUP: k
-MOVE: k
-MOVE: managed
-CLEANUP: k
-CLEANUP: m
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: m -> rc=0
-FREE #1: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #2: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #3: 128 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 384 bytes
-Freed:     384 bytes
-Leaked:    0 bytes
-Moves:     9
-Increfs:   3
-Decrefs:   3
-Copies:    0
-Cleanups:  22
-```
 
 <!-- test: string-keys-contains -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   var m = ["key1": 100, "key2": 200]
@@ -477,61 +367,8 @@ end 'main'
 ```exitcode
 1
 ```
-```stdout
-ALLOC #1: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #2: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #3: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: ks
-MOVE: vs
-MOVE: sts
-MOVE: k
-MOVE: managed
-CLEANUP: k
-MOVE: k
-MOVE: managed
-CLEANUP: k
-CLEANUP: m
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: m -> rc=0
-FREE #1: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #2: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #3: 128 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 384 bytes
-Freed:     384 bytes
-Leaked:    0 bytes
-Moves:     7
-Increfs:   3
-Decrefs:   3
-Copies:    0
-Cleanups:  21
-```
 
 <!-- test: string-keys-insert-update -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   var m = ["x": 10]
@@ -543,58 +380,8 @@ end 'main'
 ```exitcode
 99
 ```
-```stdout
-ALLOC #1: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #2: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #3: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: ks
-MOVE: vs
-MOVE: sts
-MOVE: k
-MOVE: managed
-CLEANUP: k
-CLEANUP: m
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: m -> rc=0
-FREE #1: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #2: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #3: 128 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 384 bytes
-Freed:     384 bytes
-Leaked:    0 bytes
-Moves:     5
-Increfs:   3
-Decrefs:   3
-Copies:    0
-Cleanups:  20
-```
 
 <!-- test: string-keys-remove -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   var m = ["alpha": 1, "beta": 2, "gamma": 3]
@@ -608,64 +395,8 @@ end 'main'
 ```exitcode
 2
 ```
-```stdout
-ALLOC #1: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #2: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #3: 128 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: ks
-MOVE: vs
-MOVE: sts
-MOVE: k
-MOVE: managed
-CLEANUP: k
-MOVE: k
-MOVE: managed
-CLEANUP: k
-MOVE: k
-MOVE: managed
-CLEANUP: k
-CLEANUP: m
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: m -> rc=0
-FREE #1: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #2: 128 bytes (array cleanup)
-CLEANUP: m
-DECREF: m -> rc=0
-FREE #3: 128 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 384 bytes
-Freed:     384 bytes
-Leaked:    0 bytes
-Moves:     9
-Increfs:   3
-Decrefs:   3
-Copies:    0
-Cleanups:  22
-```
 
 <!-- test: string-keys-early-return -->
-<!-- TrackMemory: true -->
 ```maxon
 function main() returns ExitCode
   var m = ["test": 42]

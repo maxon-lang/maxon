@@ -1588,7 +1588,7 @@ extern function ExitProcess(uExitCode int) returns int
 3. **Multiplicative**: `*` `/` `mod`
 4. **Additive**: `+` `-`
 5. **Shift**: `shl` `shr`
-6. **Comparison**: `==` `!=` `<` `>` `<=` `>=`
+6. **Comparison**: `==` `!=` `<` `>` `<=` `>=` `is` `is not`
 7. **AND**: `and`
 8. **XOR**: `xor`
 9. **OR**: `or`
@@ -1616,6 +1616,21 @@ extern function ExitProcess(uExitCode int) returns int
 | `>` | Greater than | bool |
 | `<=` | Less than or equal | bool |
 | `>=` | Greater than or equal | bool |
+
+### Reference Identity Operators
+
+| Operator | Description | Result Type |
+|----------|-------------|-------------|
+| `is` | Same reference (same heap object) | bool |
+| `is not` | Different references | bool |
+
+`is` and `is not` compare whether two struct-typed variables refer to the same heap object. They cannot be used on primitive types (`int`, `float`, `bool`, `byte`).
+
+```maxon
+function areSame(a Point, b Point) returns bool
+  return a is b
+end 'areSame'
+```
 
 ### Logical / Bitwise Operators
 

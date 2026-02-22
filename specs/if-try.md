@@ -412,7 +412,6 @@ error E3055: specs/fragments/if-try/error.if-try-non-throwing.test:10:6: try req
 ```
 
 <!-- test: if-try-binding-struct-multiple-managed-fields -->
-<!-- TrackMemory: true -->
 When using if-let with a struct that has multiple managed fields (like Array and String fields),
 all managed fields must be properly cleaned up when the binding goes out of scope.
 
@@ -455,57 +454,8 @@ end 'main'
 ```exitcode
 30
 ```
-```stdout
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-MOVE: nums
-CLEANUP: item
-DECREF: item -> rc=0
-FREE #1: 32 bytes (array cleanup)
-CLEANUP: item
-CLEANUP: item
-ALLOC #2: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-MOVE: nums
-CLEANUP: item
-DECREF: item -> rc=0
-FREE #2: 32 bytes (array cleanup)
-CLEANUP: item
-CLEANUP: item
-ALLOC #3: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: String
-MOVE: nums
-CLEANUP: item
-DECREF: item -> rc=0
-FREE #3: 32 bytes (array cleanup)
-CLEANUP: item
-CLEANUP: item
-
-=== MEMORY STATS ===
-Allocated: 96 bytes
-Freed:     96 bytes
-Leaked:    0 bytes
-Moves:     9
-Increfs:   3
-Decrefs:   3
-Copies:    6
-Cleanups:  9
-```
 
 <!-- test: complex-nested-struct-cleanup -->
-<!-- TrackMemory: true -->
 Test cleanup of deeply nested structs with multiple managed fields at function return.
 
 ```maxon
@@ -545,41 +495,4 @@ end 'main'
 ```
 ```exitcode
 1
-```
-```stdout
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: IntArray
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: StringArray
-MOVE: inner
-MOVE: managed
-ALLOC #2: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-CLEANUP: outer
-CLEANUP: outer
-CLEANUP: outer
-DECREF: outer -> rc=0
-FREE #1: 32 bytes (array cleanup)
-CLEANUP: outer
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: outer -> rc=0
-FREE #2: 32 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 64 bytes
-Freed:     64 bytes
-Leaked:    0 bytes
-Moves:     7
-Increfs:   2
-Decrefs:   2
-Copies:    4
-Cleanups:  6
 ```

@@ -759,7 +759,6 @@ end 'main'
 ```
 
 <!-- test: array-literal-return-push-no-leak -->
-<!-- TrackMemory: true -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -780,23 +779,6 @@ end 'main'
 ```
 ```exitcode
 30
-```
-```stdout
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-CLEANUP: nums
-DECREF: nums -> rc=0
-FREE #1: 32 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 32 bytes
-Freed:     32 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   1
-Decrefs:   1
-Copies:    0
-Cleanups:  1
 ```
 
 <!-- test: array-literal-struct-return-from-function -->

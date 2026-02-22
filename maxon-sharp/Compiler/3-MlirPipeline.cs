@@ -9,7 +9,7 @@ namespace MaxonSharp.Compiler;
 public record MlirPipelineResult(MlirModule<X86Op> Module, string? AllStagesIr);
 
 public class MlirPipeline {
-  public static MlirPipelineResult Run(MlirModule<MaxonOp> module, bool returnIr = false, string? dumpStagesBasePath = null, bool trackAllocs = false) {
+  public static MlirPipelineResult Run(MlirModule<MaxonOp> module, bool returnIr = false, string? dumpStagesBasePath = null) {
     Logger.Debug(LogCategory.Mlir, "Starting MLIR pipeline");
 
     StringBuilder? irBuilder = returnIr ? new() : null;
@@ -43,7 +43,7 @@ public class MlirPipeline {
     }
 
     // Maxon dialect -> Standard dialects
-    var stdModule = MaxonToStandardConversion.Run(module, trackAllocs);
+    var stdModule = MaxonToStandardConversion.Run(module);
     Logger.Debug(LogCategory.Mlir, "Lowered Maxon to Standard");
 
     StoreForwardingPass.Run(stdModule);

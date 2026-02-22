@@ -165,15 +165,6 @@ public static partial class MaxonToStandardConversion {
 		// Load element_size from the managed struct via heap pointer
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
-		// Load capacity before COW check — needed to determine if old buffer was heap-allocated (tracked)
-		StdI64? oldCapacity = null;
-		if (_trackAllocs) {
-			oldCapacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
-			var oldCapVar = $"__grow_oldcap_{MlirContext.Current.NextId()}";
-			EmitStore(block, oldCapacity, oldCapVar, varTypes);
-			oldCapacity = (StdI64)EmitLoad(block, oldCapVar, varTypes);
-		}
-
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
 		var newCap = (StdI64)valueMap[op.NewCapacity];
 
@@ -184,40 +175,12 @@ public static partial class MaxonToStandardConversion {
 		var newByteSizeOp = new StdMulI64Op(newCap, elemSize);
 		block.AddOp(newByteSizeOp);
 
-		// Track the old buffer being freed by realloc
-		if (_trackAllocs && oldCapacity != null) {
-			// DECREF only if old buffer was heap-allocated (capacity > 0 before COW)
-			EmitTrackDecrefIfHeap(block, "array grow", 0, oldCapacity);
-
-			var oldBufVar = $"__grow_oldbuf_{MlirContext.Current.NextId()}";
-			EmitStore(block, oldBuffer, oldBufVar, varTypes);
-			var oldBufReload = (StdI64)EmitLoad(block, oldBufVar, varTypes);
-			EmitTrackFree(block, oldBufReload, "array grow");
-			oldBuffer = (StdI64)EmitLoad(block, oldBufVar, varTypes);
-		}
-
 		// Realloc: grows buffer in-place or allocates new, copies old data, frees old
 		var newBufferResult = new StdI64(MlirContext.Current.NextId());
 		block.AddOp(new StdCallRuntimeOp("maxon_realloc", [oldBuffer, newByteSizeOp.Result], newBufferResult));
 
-		StdI64 newBufReload;
-		if (_trackAllocs) {
-			var byteSizeVar = $"__grow_bytesize_{MlirContext.Current.NextId()}";
-			EmitStore(block, newByteSizeOp.Result, byteSizeVar, varTypes);
-			var newBufVar = $"__grow_newbuf_{MlirContext.Current.NextId()}";
-			EmitStore(block, newBufferResult, newBufVar, varTypes);
-
-			var bufReload = (StdI64)EmitLoad(block, newBufVar, varTypes);
-			var sizeReload = (StdI64)EmitLoad(block, byteSizeVar, varTypes);
-			EmitTrackAlloc(block, bufReload, sizeReload, "array grow");
-			EmitTrackIncref(block, "array grow", 1);
-
-			newBufReload = (StdI64)EmitLoad(block, newBufVar, varTypes);
-		} else {
-			newBufReload = newBufferResult;
-		}
-
 		// Update managed struct fields through heap pointer
+		var newBufReload = newBufferResult;
 		EmitStructFieldStore(block, newBufReload, managedVarName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, newCap, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		// No write-through needed: with heap refs, all field stores go through

@@ -33,45 +33,7 @@ function main() returns ExitCode
   return try outer.inner.values.get(0) otherwise 0
 end 'main'
 ---
-TrackMemory: true
 ExitCode: 1
-Stdout: ```
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: IntArray
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-COPY: String
-MOVE: managed
-COPY: StringArray
-MOVE: inner
-MOVE: managed
-ALLOC #2: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-MOVE: managed
-CLEANUP: outer
-CLEANUP: outer
-CLEANUP: outer
-DECREF: outer -> rc=0
-FREE #1: 32 bytes (array cleanup)
-CLEANUP: outer
-CLEANUP: <array element>
-CLEANUP: <array element>
-DECREF: outer -> rc=0
-FREE #2: 32 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 64 bytes
-Freed:     64 bytes
-Leaked:    0 bytes
-Moves:     7
-Increfs:   2
-Decrefs:   2
-Copies:    4
-Cleanups:  6
-```
 ---
 module {
   func @if-try.createOuter() -> i64 {
@@ -148,26 +110,6 @@ module {
     x86.mov eax, [rbp-32]
     x86.mov ecx, [rbp-40]
     x86.mov [ecx+8], eax
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
-    x86.lea_rdata rax, [__track_tag_1]
-    x86.mov rcx, rax
-    x86.mov eax, 6
-    x86.mov rdx, rax
-    x86.call maxon_track_copy
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
-    x86.lea_rdata rax, [__track_tag_2]
-    x86.mov rcx, rax
-    x86.mov eax, 8
-    x86.mov rdx, rax
-    x86.call maxon_track_copy
     x86.mov eax, [rbp-40]
     x86.mov ecx, [eax+8]
     x86.mov [rbp-48], ecx
@@ -256,31 +198,6 @@ module {
     x86.mov eax, [rbp-88]
     x86.mov ecx, [rbp-96]
     x86.mov [ecx+16], eax
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
-    x86.lea_rdata rax, [__track_tag_1]
-    x86.mov rcx, rax
-    x86.mov eax, 6
-    x86.mov rdx, rax
-    x86.call maxon_track_copy
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
-    x86.lea_rdata rax, [__track_tag_3]
-    x86.mov rcx, rax
-    x86.mov eax, 11
-    x86.mov rdx, rax
-    x86.call maxon_track_copy
-    x86.lea_rdata rax, [__track_tag_4]
-    x86.mov rcx, rax
-    x86.mov eax, 5
-    x86.mov rdx, rax
-    x86.call maxon_track_move
     x86.mov eax, [rbp-96]
     x86.mov ecx, [eax+16]
     x86.mov [rbp-104], ecx
@@ -314,11 +231,6 @@ module {
     x86.xor eax, eax
     x86.mov ecx, [rbp-120]
     x86.mov [ecx+8], eax
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
     x86.mov eax, [rbp-104]
     x86.mov ecx, [rbp-120]
     x86.mov rdx, rcx
@@ -357,11 +269,6 @@ module {
     x86.xor eax, eax
     x86.mov ecx, [rbp-144]
     x86.mov [ecx+8], eax
-    x86.lea_rdata rax, [__track_tag_0]
-    x86.mov rcx, rax
-    x86.mov eax, 7
-    x86.mov rdx, rax
-    x86.call maxon_track_move
     x86.mov eax, [rbp-128]
     x86.mov ecx, [rbp-144]
     x86.mov rdx, rcx
@@ -373,7 +280,7 @@ module {
   }
   func @if-try.main() -> u32 {
   entry:
-    x86.prologue stack_size=176
+    x86.prologue stack_size=48
     x86.call if-try.createOuter
     x86.mov [rbp-8], eax
     x86.mov eax, [rbp-8]
@@ -416,108 +323,6 @@ module {
     x86.call maxon_panic
   __range_ok_4:
     x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [ecx+0]
-    x86.mov [rbp-64], edx
-    x86.mov ebx, [rbp-64]
-    x86.mov esi, [ebx+0]
-    x86.mov [rbp-72], esi
-    x86.mov edi, [rbp-72]
-    x86.mov r8, [edi+16]
-    x86.mov r9, [rbp-72]
-    x86.mov eax, [r9+0]
-    x86.lea_rdata rcx, [__track_tag_5]
-    x86.mov rdx, rcx
-    x86.mov ecx, 5
-    x86.mov r9, rcx
-    x86.mov rcx, r8
-    x86.mov r8, rdx
-    x86.mov rdx, rax
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-80], ecx
-    x86.mov eax, [rbp-80]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-88], ecx
-    x86.mov eax, [rbp-88]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-96], ecx
-    x86.mov eax, [rbp-96]
-    x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-96]
-    x86.mov edx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_5]
-    x86.mov rbx, rax
-    x86.mov eax, 5
-    x86.mov r8, rbx
-    x86.mov r9, rax
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-104], ecx
-    x86.mov eax, [rbp-104]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-112], ecx
-    x86.mov eax, [rbp-112]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-120], ecx
-    x86.mov eax, [rbp-120]
-    x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-120]
-    x86.mov edx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_5]
-    x86.mov rbx, rax
-    x86.mov eax, 5
-    x86.mov r8, rbx
-    x86.mov r9, rax
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+16]
-    x86.mov [rbp-128], ecx
-    x86.mov eax, [rbp-128]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-136], ecx
-    x86.mov eax, [rbp-136]
-    x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-136]
-    x86.mov edx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_5]
-    x86.mov rbx, rax
-    x86.mov eax, 5
-    x86.mov [rbp-160], ecx
-    x86.mov [rbp-168], edx
-    x86.mov rcx, rbx
-    x86.mov rdx, rax
-    x86.call maxon_track_cleanup
-    x86.mov eax, [rbp-136]
-    x86.mov ecx, [eax+8]
-    x86.mov eax, [rbp-136]
-    x86.mov edx, [eax+24]
-    x86.lea_rdata rax, [__managed_offsets_250]
-    x86.mov rbx, rax
-    x86.mov eax, 1
-    x86.mov esi, [rbp-168]
-    x86.mov [rbp-144], esi
-    x86.mov edi, [rbp-160]
-    x86.mov [rbp-152], edi
-    x86.mov r8, rdx
-    x86.mov r9, rbx
-    x86.mov rdx, rcx
-    x86.mov rcx, rsi
-    x86.mov rsi, rax
-    x86.call maxon_cleanup_array_elements
-    x86.mov eax, [rbp-144]
-    x86.mov ecx, [rbp-152]
-    x86.lea_rdata rdx, [__track_tag_5]
-    x86.mov rbx, rdx
-    x86.mov edx, 5
-    x86.mov r8, rbx
-    x86.mov r9, rdx
-    x86.mov rdx, rax
-    x86.call maxon_cleanup_managed_free
-    x86.mov eax, [rbp-56]
     x86.epilogue
     x86.ret
   }

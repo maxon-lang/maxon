@@ -14,35 +14,12 @@ function main() returns ExitCode
   return try outer.get(0) otherwise 0
 end 'main'
 ---
-TrackMemory: true
 ExitCode: 10
-Stdout: ```
-ALLOC #1: 24 bytes (array grow)
-INCREF: array grow -> rc=1
-ALLOC #2: 40 bytes (array grow)
-INCREF: array grow -> rc=1
-CLEANUP: outer
-DECREF: outer -> rc=0
-FREE #1: 24 bytes (array cleanup)
-CLEANUP: inner
-DECREF: inner -> rc=0
-FREE #2: 40 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 64 bytes
-Freed:     64 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   2
-Decrefs:   2
-Copies:    0
-Cleanups:  2
-```
 ---
 module {
   func @block-scoping.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -167,36 +144,6 @@ module {
     x86.call maxon_panic
   __range_ok_5:
     x86.mov eax, [rbp-56]
-    x86.mov [rbp-64], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+8]
-    x86.mov [rbp-72], edx
-    x86.mov ebx, [rbp-72]
-    x86.mov esi, [ebx+16]
-    x86.mov edi, [rbp-72]
-    x86.mov r8, [edi+0]
-    x86.lea_rdata r9, [__track_tag_0]
-    x86.mov rax, r9
-    x86.mov ecx, 5
-    x86.mov rdx, r8
-    x86.mov r8, rax
-    x86.mov r9, rcx
-    x86.mov rcx, rsi
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-80], ecx
-    x86.mov eax, [rbp-80]
-    x86.mov ecx, [eax+16]
-    x86.mov eax, [rbp-80]
-    x86.mov edx, [eax+0]
-    x86.lea_rdata rax, [__track_tag_1]
-    x86.mov rbx, rax
-    x86.mov eax, 5
-    x86.mov r8, rbx
-    x86.mov r9, rax
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

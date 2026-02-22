@@ -5,98 +5,20 @@ export typealias MaxonOpArray = Array with MaxonOp
 export typealias ValueId = int(0 to u64.max)
 export typealias VarSlot = int(0 to u64.max)
 export typealias ParsedInt = int(i64.min to i64.max)
-typealias TokenIndex = int(0 to u64.max)
 export typealias VarSlotArray = Array with VarSlot
 export typealias BoolArray = Array with bool
 export typealias ByteArrayArray = Array with ByteArray
-
-type ParseFunctionResult
-    export var ops MaxonOpArray
-    export var nextPos TokenIndex
-end 'ParseFunctionResult'
-
-function tokenValueToString(value ByteArray) returns String
-    let len = value.count()
-    if len == 0 'empty'
-        return "(empty)"
-    end 'empty'
-    return String.from(value)
-end 'tokenValueToString'
-
-function resetSymbolTable(project Project)
-    project.parserVarNames = ByteArrayArray{}
-    project.parserVarSlots = VarSlotArray{}
-    project.parserVarIsFloat = BoolArray{}
-    project.parserScopeStack = ScopeDepthArray{}
-    project.parserNextSlot = 0
-end 'resetSymbolTable'
-
 // Scope depth tracking for block scoping (if/while bodies).
 // Records the symbol table size when entering a scope so variables can be removed on exit.
 export typealias ScopeDepth = int(0 to u64.max)
 export typealias ScopeDepthArray = Array with ScopeDepth
 
-function pushScope(project Project)
-    project.parserScopeStack.push(project.parserVarNames.count())
-end 'pushScope'
+typealias TokenIndex = int(0 to u64.max)
 
-function popScope(project Project)
-    let savedSize = try project.parserScopeStack.pop() otherwise 0
-    // Remove variables added since the scope was pushed
-    while project.parserVarNames.count() > savedSize 'trim'
-        try project.parserVarNames.pop() otherwise ByteArray{}
-        try project.parserVarSlots.pop() otherwise 0
-        try project.parserVarIsFloat.pop() otherwise false
-    end 'trim'
-end 'popScope'
-
-function defineVariable(project Project, name ByteArray, isFloat bool) returns VarSlot
-    let slot = project.parserNextSlot
-    project.parserVarNames.push(name)
-    project.parserVarSlots.push(slot)
-    project.parserVarIsFloat.push(isFloat)
-    project.parserNextSlot = project.parserNextSlot + 1
-    return slot
-end 'defineVariable'
-
-function lookupVariable(project Project, name ByteArray, token Token, filePath String) returns VarSlot throws CompileError
-    var i = project.parserVarNames.count() - 1
-    while i >= 0 'lookup'
-        let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
-        if bytesEqual(vn, b: name) 'found'
-            return try project.parserVarSlots.get(i) otherwise 0
-        end 'found'
-        i = i - 1
-    end 'lookup'
-    try raiseCompileError(ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
-    return 0
-end 'lookupVariable'
-
-// Look up a compile-time string constant. Returns empty ByteArray if not found.
-function lookupStringConst(project Project, name ByteArray) returns ByteArray
-    var i = 0
-    while i < project.stringConstNames.count() 'lookup'
-        let cn = try project.stringConstNames.get(i) otherwise ByteArray{}
-        if bytesEqual(cn, b: name) 'found'
-            return try project.stringConstValues.get(i) otherwise ByteArray{}
-        end 'found'
-        i = i + 1
-    end 'lookup'
-    var empty = ByteArray{}
-    return empty
-end 'lookupStringConst'
-
-function isVariableFloat(project Project, name ByteArray) returns bool
-    var i = project.parserVarNames.count() - 1
-    while i >= 0 'lookup'
-        let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
-        if bytesEqual(vn, b: name) 'found'
-            return try project.parserVarIsFloat.get(i) otherwise false
-        end 'found'
-        i = i - 1
-    end 'lookup'
-    return false
-end 'isVariableFloat'
+type ParseFunctionResult
+    export var ops MaxonOpArray
+    export var nextPos TokenIndex
+end 'ParseFunctionResult'
 
 export function parse(project Project, tokens TokenArray, filePath String) returns MaxonOpArray throws CompileError
     logDebug(LogCategory.parser, message: "Starting parser")
@@ -1177,3 +1099,81 @@ function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt
     end 'octDigits'
     return result
 end 'parseOctalInt'
+
+function tokenValueToString(value ByteArray) returns String
+    let len = value.count()
+    if len == 0 'empty'
+        return "(empty)"
+    end 'empty'
+    return String.from(value)
+end 'tokenValueToString'
+
+function resetSymbolTable(project Project)
+    project.parserVarNames = ByteArrayArray{}
+    project.parserVarSlots = VarSlotArray{}
+    project.parserVarIsFloat = BoolArray{}
+    project.parserScopeStack = ScopeDepthArray{}
+    project.parserNextSlot = 0
+end 'resetSymbolTable'
+
+function pushScope(project Project)
+    project.parserScopeStack.push(project.parserVarNames.count())
+end 'pushScope'
+
+function popScope(project Project)
+    let savedSize = try project.parserScopeStack.pop() otherwise 0
+    // Remove variables added since the scope was pushed
+    while project.parserVarNames.count() > savedSize 'trim'
+        try project.parserVarNames.pop() otherwise ByteArray{}
+        try project.parserVarSlots.pop() otherwise 0
+        try project.parserVarIsFloat.pop() otherwise false
+    end 'trim'
+end 'popScope'
+
+function defineVariable(project Project, name ByteArray, isFloat bool) returns VarSlot
+    let slot = project.parserNextSlot
+    project.parserVarNames.push(name)
+    project.parserVarSlots.push(slot)
+    project.parserVarIsFloat.push(isFloat)
+    project.parserNextSlot = project.parserNextSlot + 1
+    return slot
+end 'defineVariable'
+
+function lookupVariable(project Project, name ByteArray, token Token, filePath String) returns VarSlot throws CompileError
+    var i = project.parserVarNames.count() - 1
+    while i >= 0 'lookup'
+        let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
+        if bytesEqual(vn, b: name) 'found'
+            return try project.parserVarSlots.get(i) otherwise 0
+        end 'found'
+        i = i - 1
+    end 'lookup'
+    try raiseCompileError(ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
+    return 0
+end 'lookupVariable'
+
+// Look up a compile-time string constant. Returns empty ByteArray if not found.
+function lookupStringConst(project Project, name ByteArray) returns ByteArray
+    var i = 0
+    while i < project.stringConstNames.count() 'lookup'
+        let cn = try project.stringConstNames.get(i) otherwise ByteArray{}
+        if bytesEqual(cn, b: name) 'found'
+            return try project.stringConstValues.get(i) otherwise ByteArray{}
+        end 'found'
+        i = i + 1
+    end 'lookup'
+    var empty = ByteArray{}
+    return empty
+end 'lookupStringConst'
+
+function isVariableFloat(project Project, name ByteArray) returns bool
+    var i = project.parserVarNames.count() - 1
+    while i >= 0 'lookup'
+        let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
+        if bytesEqual(vn, b: name) 'found'
+            return try project.parserVarIsFloat.get(i) otherwise false
+        end 'found'
+        i = i - 1
+    end 'lookup'
+    return false
+end 'isVariableFloat'

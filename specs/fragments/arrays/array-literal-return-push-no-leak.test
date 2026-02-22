@@ -16,25 +16,7 @@ function main() returns ExitCode
   return c
 end 'main'
 ---
-TrackMemory: true
 ExitCode: 30
-Stdout: ```
-ALLOC #1: 32 bytes (array grow)
-INCREF: array grow -> rc=1
-CLEANUP: nums
-DECREF: nums -> rc=0
-FREE #1: 32 bytes (array cleanup)
-
-=== MEMORY STATS ===
-Allocated: 32 bytes
-Freed:     32 bytes
-Leaked:    0 bytes
-Moves:     0
-Increfs:   1
-Decrefs:   1
-Copies:    0
-Cleanups:  1
-```
 ---
 module {
   func @arrays.makeNumbers(a: i64, b: i64) -> i64 {
@@ -94,7 +76,7 @@ module {
   }
   func @arrays.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov eax, 10
     x86.mov ecx, 20
     x86.mov rdx, rcx
@@ -134,23 +116,6 @@ module {
     x86.call maxon_panic
   __range_ok_4:
     x86.mov eax, [rbp-32]
-    x86.mov [rbp-40], eax
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [ecx+8]
-    x86.mov [rbp-48], edx
-    x86.mov ebx, [rbp-48]
-    x86.mov esi, [ebx+16]
-    x86.mov edi, [rbp-48]
-    x86.mov r8, [edi+0]
-    x86.lea_rdata r9, [__track_tag_0]
-    x86.mov rax, r9
-    x86.mov ecx, 4
-    x86.mov rdx, r8
-    x86.mov r8, rax
-    x86.mov r9, rcx
-    x86.mov rcx, rsi
-    x86.call maxon_cleanup_managed
-    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   }
