@@ -19,6 +19,14 @@ public partial class X86CodeEmitter {
     EmitMaxonIncref();
     EmitMaxonDecref();
     EmitMaxonRelease();
+    EmitMaxonReleaseManaged();
+    EmitMaxonReleaseWithManaged();
+    EmitMaxonReleaseNested();
+    EmitMaxonReleaseWithManaged2();
+    EmitMaxonReleaseWithManaged3();
+    EmitMaxonReleaseArrayOfWithManaged();
+    EmitMaxonReleaseArrayOfSimple();
+    EmitMaxonReleaseArrayOfNested();
     EmitMaxonCowCheck();
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
@@ -175,6 +183,334 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
     DefineLabel("rt_release_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_managed(managed_ptr_in_rcx) — release a __ManagedMemory struct.
+  /// Decrefs; if refcount reaches 0, frees the buffer (if capacity > 0) then frees the struct.
+  /// </summary>
+  private void EmitMaxonReleaseManaged() {
+    EmitRuntimeFunctionStart("maxon_release_managed", 1);
+    // Null check
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_release_managed_skip");
+    // Decref
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_release_managed_skip");
+    // Refcount 0: free buffer if capacity > 0
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // reload managed_ptr
+    EmitBytes(0x48, 0x8B, 0x41, 0x10); // MOV rax, [rcx+16] (capacity)
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_release_managed_no_buf");
+    // Free the buffer at [managed+0]
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // reload managed_ptr
+    EmitBytes(0x48, 0x8B, 0x09); // MOV rcx, [rcx] (buffer ptr at offset 0)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_release_managed_no_buf");
+    // Free the __ManagedMemory struct itself
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // reload managed_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_release_managed_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_with_managed(outer_ptr_in_rcx, managed_field_offset_in_rdx) — release a struct
+  /// that contains a __ManagedMemory field at the given offset.
+  /// Decrefs outer; if refcount reaches 0, releases the inner __ManagedMemory then frees outer.
+  /// </summary>
+  private void EmitMaxonReleaseWithManaged() {
+    EmitRuntimeFunctionStart("maxon_release_with_managed", 2);
+    // Null check
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_release_wm_skip");
+    // Decref outer
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_release_wm_skip");
+    // Refcount 0: release inner __ManagedMemory
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = outer_ptr
+    EmitBytes(0x48, 0x03, 0x45, 0xF0); // ADD rax, [rbp-16] (+ offset)
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] (inner managed ptr)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_managed")); EmitDword(0);
+    // Free outer struct
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_release_wm_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_nested(outer_in_rcx, field_offset_in_rdx, inner_managed_offset_in_r8)
+  /// Release a struct that contains an inner struct field (at field_offset) which itself
+  /// has a __ManagedMemory field (at inner_managed_offset).
+  /// E.g., Container{items: Array} → field_offset=0, inner_managed_offset=8
+  /// Decrefs outer; if zero, loads inner struct ptr, calls release_with_managed on it, frees outer.
+  /// </summary>
+  private void EmitMaxonReleaseNested() {
+    EmitRuntimeFunctionStart("maxon_release_nested", 3, 0x40);
+    // args: [rbp-8]=outer, [rbp-16]=field_offset, [rbp-24]=inner_managed_offset
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_release_nested_skip");
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_release_nested_skip");
+    // Load inner struct ptr from [outer + field_offset]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = outer
+    EmitBytes(0x48, 0x03, 0x45, 0xF0); // ADD rax, [rbp-16] (+ field_offset)
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] (inner struct ptr)
+    // Call maxon_release_with_managed(inner, inner_managed_offset)
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // RDX = inner_managed_offset
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_with_managed")); EmitDword(0);
+    // Free outer
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_release_nested_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_with_managed_2(ptr_in_rcx, off1_in_rdx, off2_in_r8) — release a struct
+  /// with 2 inner struct fields (e.g., Set with 2 Arrays). Each inner struct has __ManagedMemory at offset 8.
+  /// Decrefs outer; if zero, release_with_managed each inner field, then free outer.
+  /// </summary>
+  private void EmitMaxonReleaseWithManaged2() {
+    EmitRuntimeFunctionStart("maxon_release_with_managed_2", 3, 0x40);
+    // args: [rbp-8]=ptr, [rbp-16]=off1, [rbp-24]=off2
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_release_wm2_skip");
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_release_wm2_skip");
+    // Release inner field 1: rcx = [ptr + off1], rdx = 8 (managed offset within Array)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = ptr
+    EmitBytes(0x48, 0x03, 0x45, 0xF0); // ADD rax, [rbp-16] (+ off1)
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] (inner struct ptr 1)
+    EmitBytes(0x48, 0xC7, 0xC2, 0x08, 0x00, 0x00, 0x00); // MOV rdx, 8
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_with_managed")); EmitDword(0);
+    // Release inner field 2
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = ptr
+    EmitBytes(0x48, 0x03, 0x45, 0xE8); // ADD rax, [rbp-24] (+ off2)
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax]
+    EmitBytes(0x48, 0xC7, 0xC2, 0x08, 0x00, 0x00, 0x00); // MOV rdx, 8
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_with_managed")); EmitDword(0);
+    // Free outer struct
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_release_wm2_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_with_managed_3(ptr_in_rcx, off1_in_rdx, off2_in_r8, off3_in_r9) — release a struct
+  /// with 3 inner struct fields (e.g., Map with 3 Arrays). Each inner struct has __ManagedMemory at offset 8.
+  /// </summary>
+  private void EmitMaxonReleaseWithManaged3() {
+    EmitRuntimeFunctionStart("maxon_release_with_managed_3", 4, 0x40);
+    // args: [rbp-8]=ptr, [rbp-16]=off1, [rbp-24]=off2, [rbp-32]=off3
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_release_wm3_skip");
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_release_wm3_skip");
+    // Release inner field 1
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x03, 0x45, 0xF0); // ADD rax, [rbp-16]
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax]
+    EmitBytes(0x48, 0xC7, 0xC2, 0x08, 0x00, 0x00, 0x00); // MOV rdx, 8
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_with_managed")); EmitDword(0);
+    // Release inner field 2
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x03, 0x45, 0xE8); // ADD rax, [rbp-24]
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax]
+    EmitBytes(0x48, 0xC7, 0xC2, 0x08, 0x00, 0x00, 0x00); // MOV rdx, 8
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_with_managed")); EmitDword(0);
+    // Release inner field 3
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x03, 0x45, 0xE0); // ADD rax, [rbp-32]
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax]
+    EmitBytes(0x48, 0xC7, 0xC2, 0x08, 0x00, 0x00, 0x00); // MOV rdx, 8
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_with_managed")); EmitDword(0);
+    // Free outer struct
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_release_wm3_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_array_of_with_managed(array_ptr_in_rcx, elem_managed_offset_in_rdx)
+  /// Release an array whose elements are structs with a __ManagedMemory field.
+  /// Decrefs array; if zero, iterates elements calling maxon_release_with_managed on each,
+  /// then releases the ManagedMemory and frees the array.
+  /// Array layout: [+0]=iterIndex, [+8]=managed_ptr.
+  /// </summary>
+  private void EmitMaxonReleaseArrayOfWithManaged() {
+    EmitRuntimeFunctionStart("maxon_release_array_of_with_managed", 2, 0x50);
+    // [rbp-8]=array_ptr, [rbp-16]=elem_managed_offset
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_rel_awm_skip");
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_rel_awm_skip");
+    // Load managed_ptr = [array_ptr + 8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8]
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = managed_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_rel_awm_free_outer");
+    // Load buffer = [managed_ptr + 0], length = [managed_ptr + 8]
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] (buffer)
+    EmitMovMemReg(-0x20, X86Register.Rcx, 8); // [rbp-28h] = buffer
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] (length)
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-30h] = length
+    // Loop counter i = 0
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-38h] = i = 0
+    DefineLabel("rt_rel_awm_loop");
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = i
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = length
+    EmitBytes(0x48, 0x39, 0xC8); // CMP rax, rcx
+    EmitJcc("ge", "rt_rel_awm_loop_done");
+    // Load elem = [buffer + i*8]
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = i
+    EmitBytes(0x48, 0xC1, 0xE0, 0x03); // SHL rax, 3 (i*8)
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // RCX = buffer
+    EmitBytes(0x48, 0x01, 0xC1); // ADD rcx, rax
+    EmitBytes(0x48, 0x8B, 0x09); // MOV rcx, [rcx] (elem ptr)
+    // Call maxon_release_with_managed(elem, elem_managed_offset)
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = elem_managed_offset
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_with_managed")); EmitDword(0);
+    // i++
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);
+    EmitJmp("rt_rel_awm_loop");
+    DefineLabel("rt_rel_awm_loop_done");
+    // Release managed memory
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = managed_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_managed")); EmitDword(0);
+    DefineLabel("rt_rel_awm_free_outer");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_rel_awm_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_array_of_simple(array_ptr_in_rcx) — release an array whose elements
+  /// are simple structs (no managed fields). Decrefs array; if zero, iterates elements calling
+  /// maxon_release on each, then releases ManagedMemory and frees array.
+  /// </summary>
+  private void EmitMaxonReleaseArrayOfSimple() {
+    EmitRuntimeFunctionStart("maxon_release_array_of_simple", 1, 0x58);
+    // [rbp-8]=array_ptr
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_rel_as_skip");
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_rel_as_skip");
+    // Load managed_ptr = [array_ptr + 8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8]
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = managed_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_rel_as_free_outer");
+    // Load buffer, length, and element_size from ManagedMemory
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] (buffer)
+    EmitMovMemReg(-0x18, X86Register.Rcx, 8); // [rbp-24] = buffer
+    EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] (length)
+    EmitMovMemReg(-0x20, X86Register.Rcx, 8); // [rbp-28h] = length
+    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] (element_size)
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-38h] = element_size
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-30h] = i = 0
+    DefineLabel("rt_rel_as_loop");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = i
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // RCX = length
+    EmitBytes(0x48, 0x39, 0xC8); // CMP rax, rcx
+    EmitJcc("ge", "rt_rel_as_loop_done");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = i
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = element_size
+    EmitBytes(0x48, 0x0F, 0xAF, 0xC1); // IMUL rax, rcx (i * element_size)
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = buffer
+    EmitBytes(0x48, 0x01, 0xC1); // ADD rcx, rax
+    EmitBytes(0x48, 0x8B, 0x09); // MOV rcx, [rcx] (elem ptr)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitJmp("rt_rel_as_loop");
+    DefineLabel("rt_rel_as_loop_done");
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = managed_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_managed")); EmitDword(0);
+    DefineLabel("rt_rel_as_free_outer");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_rel_as_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_release_array_of_nested(array_ptr_in_rcx, elem_field_off_in_rdx, elem_inner_managed_off_in_r8)
+  /// Release an array whose elements are structs containing an inner struct with __ManagedMemory.
+  /// E.g., Array of struct with an Array field: each element needs maxon_release_nested.
+  /// </summary>
+  private void EmitMaxonReleaseArrayOfNested() {
+    EmitRuntimeFunctionStart("maxon_release_array_of_nested", 3, 0x50);
+    // [rbp-8]=array_ptr, [rbp-16]=elem_field_off, [rbp-24]=elem_inner_managed_off
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "rt_rel_an_skip");
+    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
+    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "rt_rel_an_skip");
+    // Load managed_ptr = [array_ptr + 8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8]
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = managed_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_rel_an_free_outer");
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] (buffer)
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = buffer
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] (length)
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = length
+    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = i = 0
+    DefineLabel("rt_rel_an_loop");
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = i
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // RCX = length
+    EmitBytes(0x48, 0x39, 0xC8); // CMP rax, rcx
+    EmitJcc("ge", "rt_rel_an_loop_done");
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = i
+    EmitBytes(0x48, 0xC1, 0xE0, 0x03); // SHL rax, 3
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = buffer
+    EmitBytes(0x48, 0x01, 0xC1); // ADD rcx, rax
+    EmitBytes(0x48, 0x8B, 0x09); // MOV rcx, [rcx] (elem ptr)
+    // Call maxon_release_nested(elem, field_off, inner_managed_off)
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
+    EmitMovRegMem(X86Register.R8, -0x18, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_nested")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x40, X86Register.Rax, 8);
+    EmitJmp("rt_rel_an_loop");
+    DefineLabel("rt_rel_an_loop_done");
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_release_managed")); EmitDword(0);
+    DefineLabel("rt_rel_an_free_outer");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    DefineLabel("rt_rel_an_skip");
     EmitRuntimeFunctionEnd();
   }
 

@@ -112,8 +112,6 @@ module {
     x86.mov eax, [rbp-64]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov eax, 2
-    x86.mov [edx+16], eax
     x86.xor eax, eax
     x86.mov ecx, [rbp-64]
     x86.mov rdx, rax
@@ -156,10 +154,22 @@ module {
     x86.xor eax, eax
     x86.mov ecx, [rbp-152]
     x86.cmp ecx, eax
-    x86.je arrays.main.otherwise_default_continue_4
+    x86.je arrays.main.otherwise_default_cleanup_5
   otherwise_default_error_3:
+    x86.mov eax, [rbp-96]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
+    x86.mov edx, [rbp-88]
+    x86.mov [rbp-96], edx
+    x86.jmp arrays.main.otherwise_default_continue_4
+  otherwise_default_cleanup_5:
     x86.mov eax, [rbp-88]
-    x86.mov [rbp-96], eax
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.jmp arrays.main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov eax, [rbp-96]
@@ -199,13 +209,36 @@ module {
     x86.mov rdx, rcx
     x86.mov rcx, rax
     x86.call stdlib.String.equals
+    x86.mov ecx, [rbp-120]
+    x86.xor edx, edx
+    x86.mov [rbp-136], eax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-136]
     x86.test eax, eax
-    x86.je arrays.main.check_5.after
-  check_5:
+    x86.je arrays.main.check_6.after
+  check_6:
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-64]
+    x86.xor edx, edx
+    x86.call maxon_release_array_of_with_managed
+    x86.mov eax, [rbp-104]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.xor eax, eax
     x86.epilogue
     x86.ret
-  check_5.after:
+  check_6.after:
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-64]
+    x86.xor edx, edx
+    x86.call maxon_release_array_of_with_managed
+    x86.mov eax, [rbp-104]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.mov eax, 1
     x86.epilogue
     x86.ret

@@ -38,7 +38,7 @@ ExitCode: 1
 module {
   func @if-try.createOuter() -> i64 {
   entry:
-    x86.prologue stack_size=176
+    x86.prologue stack_size=192
     x86.lea_rdata rax, [__str_44]
     x86.mov rcx, rax
     x86.mov edx, 4
@@ -195,6 +195,8 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov ecx, [rbp-96]
     x86.mov [ecx+8], eax
+    x86.mov rcx, rax
+    x86.call maxon_incref
     x86.mov eax, [rbp-88]
     x86.mov ecx, [rbp-96]
     x86.mov [ecx+16], eax
@@ -236,6 +238,11 @@ module {
     x86.mov rdx, rcx
     x86.mov rcx, rax
     x86.call StringArray.push
+    x86.mov eax, [rbp-120]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.mov eax, [rbp-96]
     x86.mov ecx, [eax+16]
     x86.mov [rbp-128], ecx
@@ -274,13 +281,67 @@ module {
     x86.mov rdx, rcx
     x86.mov rcx, rax
     x86.call StringArray.push
+    x86.mov eax, [rbp-144]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-184], eax
+    x86.mov rcx, rax
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-184]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.and ebx, eax
+    x86.xor eax, eax
+    x86.test edx, edx
+    x86.jz __nsload_140
+    x86.mov eax, [edx+0]
+    x86.label __nsload_140
+    x86.test ebx, ebx
+    x86.mov esi, ecx
+    x86.cmovne esi, eax
+    x86.xor eax, eax
+    x86.mov [rbp-192], ebx
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-184]
+    x86.xor ecx, ecx
+    x86.test eax, eax
+    x86.jz __nsload_143
+    x86.mov ecx, [eax+8]
+    x86.label __nsload_143
+    x86.xor edx, edx
+    x86.mov ebx, [rbp-192]
+    x86.test ebx, ebx
+    x86.mov esi, edx
+    x86.cmovne esi, ecx
+    x86.mov ecx, 8
+    x86.mov rdx, rcx
+    x86.mov rcx, rsi
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-184]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-192]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
     x86.mov eax, [rbp-96]
     x86.epilogue
     x86.ret
   }
   func @if-try.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=96
     x86.call if-try.createOuter
     x86.mov [rbp-8], eax
     x86.mov eax, [rbp-8]
@@ -323,6 +384,115 @@ module {
     x86.call maxon_panic
   __range_ok_4:
     x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], ecx
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-64]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.and ebx, eax
+    x86.xor eax, eax
+    x86.test edx, edx
+    x86.jz __nsload_178
+    x86.mov eax, [edx+0]
+    x86.label __nsload_178
+    x86.test ebx, ebx
+    x86.mov esi, ecx
+    x86.cmovne esi, eax
+    x86.xor eax, eax
+    x86.mov [rbp-72], ebx
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov ecx, [rbp-64]
+    x86.xor edx, edx
+    x86.test ecx, ecx
+    x86.jz __nsload_181
+    x86.mov edx, [ecx+8]
+    x86.label __nsload_181
+    x86.xor ebx, ebx
+    x86.mov esi, [rbp-72]
+    x86.test esi, esi
+    x86.mov edi, ebx
+    x86.cmovne edi, edx
+    x86.mov [rbp-80], edi
+    x86.mov rcx, rdi
+    x86.call maxon_decref
+    x86.xor r8, r8
+    x86.mov r9, [rbp-80]
+    x86.cmp r9, r8
+    x86.setne ecx
+    x86.movzx ecx, ecxb
+    x86.cmp eax, r8
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.and ecx, eax
+    x86.xor eax, eax
+    x86.test r9, r9
+    x86.jz __nsload_188
+    x86.mov eax, [r9+0]
+    x86.label __nsload_188
+    x86.test ecx, ecx
+    x86.mov edx, r8
+    x86.cmovne edx, eax
+    x86.xor eax, eax
+    x86.mov [rbp-88], ecx
+    x86.mov rcx, rdx
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-80]
+    x86.xor ecx, ecx
+    x86.test eax, eax
+    x86.jz __nsload_191
+    x86.mov ecx, [eax+8]
+    x86.label __nsload_191
+    x86.xor edx, edx
+    x86.mov ebx, [rbp-88]
+    x86.test ebx, ebx
+    x86.mov esi, edx
+    x86.cmovne esi, ecx
+    x86.mov ecx, 8
+    x86.mov rdx, rcx
+    x86.mov rcx, rsi
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-80]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-88]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
+    x86.mov eax, [rbp-64]
+    x86.xor ecx, ecx
+    x86.test eax, eax
+    x86.jz __nsload_195
+    x86.mov ecx, [eax+16]
+    x86.label __nsload_195
+    x86.xor edx, edx
+    x86.mov ebx, [rbp-72]
+    x86.test ebx, ebx
+    x86.mov esi, edx
+    x86.cmovne esi, ecx
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rsi
+    x86.call maxon_release_array_of_with_managed
+    x86.mov eax, [rbp-64]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-72]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
+    x86.mov eax, [rbp-56]
     x86.epilogue
     x86.ret
   }

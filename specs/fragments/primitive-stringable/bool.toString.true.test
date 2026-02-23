@@ -13,7 +13,7 @@ ExitCode: 1
 module {
   func @primitive-stringable.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.mov eax, 1
     x86.mov rcx, rax
     x86.call stdlib.bool.toString
@@ -53,13 +53,26 @@ module {
     x86.mov rdx, rcx
     x86.mov rcx, rax
     x86.call stdlib.String.equals
+    x86.mov ecx, [rbp-24]
+    x86.xor edx, edx
+    x86.mov [rbp-40], eax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-40]
     x86.test eax, eax
     x86.je primitive-stringable.main.ok_0.after
   ok_0:
     x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.call maxon_release_with_managed
+    x86.mov eax, 1
     x86.epilogue
     x86.ret
   ok_0.after:
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.call maxon_release_with_managed
     x86.xor eax, eax
     x86.epilogue
     x86.ret

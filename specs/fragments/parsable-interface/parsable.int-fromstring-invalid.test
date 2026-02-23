@@ -9,7 +9,7 @@ ExitCode: 99
 module {
   func @parsable-interface.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.mov edx, 3
@@ -43,11 +43,19 @@ module {
     x86.mov eax, [rbp-16]
     x86.mov rcx, rax
     x86.call stdlib.Parsing.__int_fromString
-    x86.mov ecx, 99
-    x86.mov [rbp-24], ecx
+    x86.mov ecx, [rbp-16]
+    x86.xor ebx, ebx
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], edx
+    x86.mov rdx, rbx
+    x86.call maxon_release_with_managed
+    x86.mov eax, 99
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-56]
     x86.mov [rbp-32], eax
     x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.mov ecx, [rbp-64]
+    x86.cmp ecx, eax
     x86.je parsable-interface.main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov eax, [rbp-24]

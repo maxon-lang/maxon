@@ -790,6 +790,10 @@ public static class StandardToX86Conversion {
             regManager.EmitLoadIndirect(loadIndOp.Result, loadIndOp.BasePtr, loadIndOp.FieldOffset, loadIndOp.FieldType, x86Block);
             break;
 
+          case StdNullSafeLoadI64Op nsLoadOp:
+            regManager.EmitNullSafeLoadI64(nsLoadOp.Result, nsLoadOp.BasePtr, nsLoadOp.FieldOffset, x86Block);
+            break;
+
           case StdGlobalLoadI64Op globalLoadI64:
             regManager.EmitGlobalLoad(globalLoadI64.Result, globalLoadI64.GlobalName, x86Block);
             break;

@@ -34,8 +34,8 @@ public class RegisterManager {
   private int _minSpillOffset; // tracks deepest spill across all blocks
 
   /// <summary>
-  /// Total stack frame size including variables and spill slots, aligned to 16 bytes.
-  /// Returns 0 if no stack space is needed.
+  /// Total stack frame size including variables and spill slots,
+  /// aligned to 16 bytes. Returns 0 if no stack space is needed.
   /// </summary>
   public int TotalStackSize {
     get {
@@ -1417,6 +1417,18 @@ public class RegisterManager {
     }
   }
 
+
+  /// Null-safe load: returns [basePtr + offset] if basePtr is non-null, else 0.
+  public void EmitNullSafeLoadI64(StdI64 result, StdI64 basePtr, int fieldOffset, MlirBlock<X86Op> block) {
+    var baseReg = EnsureInRegister(basePtr, block);
+    var destReg = AllocateRegister(result, block, protect1: baseReg);
+    block.AddOp(new X86XorRegRegOp(destReg, destReg));
+    block.AddOp(new X86TestRegRegOp(baseReg, baseReg));
+    var skipLabel = $"__nsload_{result.Id}";
+    block.AddOp(new X86JccOp("z", skipLabel));
+    block.AddOp(new X86MovRegIndirectMemOp(destReg, baseReg, fieldOffset));
+    block.AddOp(new X86LabelDefOp(skipLabel));
+  }
 
   // --- Global variable support: RIP-relative addressing ---
 

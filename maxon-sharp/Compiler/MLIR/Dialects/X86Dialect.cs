@@ -336,6 +336,11 @@ public class X86JmpOp(string target) : X86Op {
   public override string Mnemonic => $"x86.jmp {Target}";
 }
 
+public class X86LabelDefOp(string name) : X86Op {
+  public string Name { get; } = name;
+  public override string Mnemonic => $"x86.label {Name}";
+}
+
 public class X86CqoOp : X86Op {
   public override string Mnemonic => "x86.cqo";
 }

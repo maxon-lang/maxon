@@ -296,6 +296,19 @@ public static partial class MaxonToStandardConversion {
   private static bool IsSelfField(bool isStructInstanceMethod, MlirStructType? selfStructType, string name) =>
     isStructInstanceMethod && selfStructType != null && selfStructType.GetField(name) != null;
 
+  /// <summary>
+  /// Returns true for struct temps that are consumed immediately by call-arg cleanup
+  /// or are sub-allocations owned by their parent struct (e.g., __ManagedMemory managed names).
+  /// These should NOT be in ownedStructVars to avoid double-free.
+  /// All other __ temps (match copies, callrets, destructures, struct literals) should be
+  /// tracked — they'll be removed from ownedStructVars when consumed by assignment.
+  /// </summary>
+  private static bool IsInternalStructTemp(string name) =>
+    name.StartsWith("__strtmp_") || name.StartsWith("__chrtmp_")
+    || name.StartsWith("__interptmp_") || name.StartsWith("__bstrtmp_")
+    || name.Contains("_managed_")
+    || name.StartsWith("__arr_"); // array literal staging vars: buffer absorbs their references
+
   private static bool IsEnumInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"

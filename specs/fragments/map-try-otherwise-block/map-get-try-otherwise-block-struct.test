@@ -31,7 +31,7 @@ ExitCode: 7
 module {
   func @map-try-otherwise-block.getEntry(m: i64, key: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.mov [rbp-8], ecx
     x86.mov [rbp-16], edx
     x86.mov eax, [rbp-8]
@@ -45,9 +45,42 @@ module {
     x86.je map-try-otherwise-block.getEntry.otherwise_continue_1
   otherwise_error_0:
     x86.xor eax, eax
-    x86.mov ecx, 1
-    x86.add eax, ecx
-    x86.mov edx, eax
+    x86.mov ecx, [rbp-24]
+    x86.mov [rbp-40], ecx
+    x86.call maxon_decref
+    x86.xor edx, edx
+    x86.mov ebx, [rbp-40]
+    x86.cmp ebx, edx
+    x86.setne esi
+    x86.movzx esi, esib
+    x86.cmp eax, edx
+    x86.sete edi
+    x86.movzx edi, edib
+    x86.and esi, edi
+    x86.xor r8, r8
+    x86.test ebx, ebx
+    x86.jz __nsload_18
+    x86.mov r8, [ebx+0]
+    x86.label __nsload_18
+    x86.test esi, esi
+    x86.mov r9, edx
+    x86.cmovne r9, r8
+    x86.xor eax, eax
+    x86.mov [rbp-48], esi
+    x86.mov rcx, r9
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-48]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
+    x86.mov eax, 1
+    x86.xor ecx, ecx
+    x86.lea edx, [ecx + eax]
     x86.xor eax, eax
     x86.epilogue
     x86.ret
@@ -61,7 +94,7 @@ module {
   }
   func @map-try-otherwise-block.main() -> u32 {
   entry:
-    x86.prologue stack_size=208
+    x86.prologue stack_size=224
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -257,16 +290,55 @@ module {
     x86.mov rdx, rcx
     x86.mov rcx, rax
     x86.call EntryMap.insert
+    x86.mov eax, [rbp-72]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-96]
+    x86.mov [rbp-184], eax
+    x86.mov rcx, rax
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-184]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.and ebx, eax
+    x86.xor eax, eax
+    x86.test edx, edx
+    x86.jz __nsload_140
+    x86.mov eax, [edx+0]
+    x86.label __nsload_140
+    x86.test ebx, ebx
+    x86.mov esi, ecx
+    x86.cmovne esi, eax
+    x86.xor eax, eax
+    x86.mov [rbp-192], ebx
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-184]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-192]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
     x86.lea_rdata rax, [__str_59]
     x86.mov rcx, rax
     x86.mov eax, 3
     x86.mov edx, 32
-    x86.mov [rbp-184], ecx
+    x86.mov [rbp-200], ecx
     x86.mov rcx, rdx
     x86.call maxon_alloc
     x86.mov [rbp-104], eax
     x86.mov eax, [rbp-104]
-    x86.mov ecx, [rbp-184]
+    x86.mov ecx, [rbp-200]
     x86.mov [eax+0], ecx
     x86.mov eax, [rbp-104]
     x86.mov ecx, 3
@@ -292,18 +364,22 @@ module {
     x86.mov rdx, rcx
     x86.mov rcx, rax
     x86.call map-try-otherwise-block.getEntry
-    x86.lea_rdata rcx, [__str_68]
-    x86.mov rbx, rcx
-    x86.mov ecx, 4
-    x86.mov esi, 32
-    x86.mov [rbp-192], eax
-    x86.mov [rbp-200], edx
-    x86.mov [rbp-208], ebx
-    x86.mov rcx, rsi
+    x86.mov ecx, [rbp-112]
+    x86.xor ebx, ebx
+    x86.mov [rbp-208], eax
+    x86.mov [rbp-216], edx
+    x86.mov rdx, rbx
+    x86.call maxon_release_with_managed
+    x86.lea_rdata rax, [__str_68]
+    x86.mov rcx, rax
+    x86.mov eax, 4
+    x86.mov edx, 32
+    x86.mov [rbp-224], ecx
+    x86.mov rcx, rdx
     x86.call maxon_alloc
     x86.mov [rbp-120], eax
     x86.mov eax, [rbp-120]
-    x86.mov ecx, [rbp-208]
+    x86.mov ecx, [rbp-224]
     x86.mov [eax+0], ecx
     x86.mov eax, [rbp-120]
     x86.mov ecx, 4
@@ -334,15 +410,85 @@ module {
     x86.mov eax, [rbp-136]
     x86.xor ecx, ecx
     x86.mov [eax+8], ecx
-    x86.mov eax, [rbp-192]
+    x86.mov eax, [rbp-208]
     x86.mov [rbp-144], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-200]
+    x86.mov ecx, [rbp-216]
     x86.cmp ecx, eax
-    x86.je map-try-otherwise-block.main.otherwise_default_continue_3
+    x86.je map-try-otherwise-block.main.otherwise_default_cleanup_4
   otherwise_default_error_2:
+    x86.mov eax, [rbp-144]
+    x86.mov [rbp-168], eax
+    x86.mov rcx, rax
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-168]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.and ebx, esi
+    x86.xor edi, edi
+    x86.test edx, edx
+    x86.jz __nsload_200
+    x86.mov edi, [edx+0]
+    x86.label __nsload_200
+    x86.test ebx, ebx
+    x86.mov r8, ecx
+    x86.cmovne r8, edi
+    x86.xor r9, r9
+    x86.mov [rbp-176], ebx
+    x86.mov rcx, r8
+    x86.mov rdx, r9
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-168]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-176]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
     x86.mov eax, [rbp-136]
     x86.mov [rbp-144], eax
+    x86.jmp map-try-otherwise-block.main.otherwise_default_continue_3
+  otherwise_default_cleanup_4:
+    x86.mov eax, [rbp-136]
+    x86.mov [rbp-168], eax
+    x86.mov rcx, rax
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-168]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete esi
+    x86.movzx esi, esib
+    x86.and ebx, esi
+    x86.xor edi, edi
+    x86.test edx, edx
+    x86.jz __nsload_211
+    x86.mov edi, [edx+0]
+    x86.label __nsload_211
+    x86.test ebx, ebx
+    x86.mov r8, ecx
+    x86.cmovne r8, edi
+    x86.xor r9, r9
+    x86.mov [rbp-176], ebx
+    x86.mov rcx, r8
+    x86.mov rdx, r9
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-168]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-176]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
     x86.jmp map-try-otherwise-block.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-144]
@@ -360,13 +506,112 @@ module {
     x86.movzx r8, r8b
     x86.or esi, r8
     x86.test esi, esi
-    x86.je map-try-otherwise-block.main.__range_ok_4
-  __range_panic_4:
+    x86.je map-try-otherwise-block.main.__range_ok_5
+  __range_panic_5:
     x86.lea_symdata rax, [__panic_msg_82]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_4:
+  __range_ok_5:
     x86.mov eax, [rbp-160]
+    x86.mov ecx, [rbp-56]
+    x86.mov [rbp-168], eax
+    x86.mov [rbp-176], ecx
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-176]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.and ebx, eax
+    x86.xor eax, eax
+    x86.test edx, edx
+    x86.jz __nsload_232
+    x86.mov eax, [edx+0]
+    x86.label __nsload_232
+    x86.test ebx, ebx
+    x86.mov esi, ecx
+    x86.cmovne esi, eax
+    x86.mov eax, 8
+    x86.mov [rbp-184], ebx
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov ecx, [rbp-176]
+    x86.xor edx, edx
+    x86.test ecx, ecx
+    x86.jz __nsload_235
+    x86.mov edx, [ecx+8]
+    x86.label __nsload_235
+    x86.xor ebx, ebx
+    x86.mov esi, [rbp-184]
+    x86.test esi, esi
+    x86.mov edi, ebx
+    x86.cmovne edi, edx
+    x86.mov r8, 8
+    x86.mov rcx, rdi
+    x86.mov rdx, r8
+    x86.call maxon_release_with_managed
+    x86.mov r9, [rbp-176]
+    x86.xor eax, eax
+    x86.test r9, r9
+    x86.jz __nsload_238
+    x86.mov eax, [r9+16]
+    x86.label __nsload_238
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-184]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov eax, 8
+    x86.mov rcx, rbx
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-176]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-184]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
+    x86.mov eax, [rbp-152]
+    x86.mov [rbp-192], eax
+    x86.mov rcx, rax
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-192]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.and ebx, eax
+    x86.xor eax, eax
+    x86.test edx, edx
+    x86.jz __nsload_248
+    x86.mov eax, [edx+0]
+    x86.label __nsload_248
+    x86.test ebx, ebx
+    x86.mov esi, ecx
+    x86.cmovne esi, eax
+    x86.xor eax, eax
+    x86.mov [rbp-200], ebx
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-192]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-200]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
+    x86.mov eax, [rbp-168]
     x86.epilogue
     x86.ret
   }

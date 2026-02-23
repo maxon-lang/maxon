@@ -151,6 +151,16 @@ public static partial class MaxonToStandardConversion {
 	  MlirModule<StandardOp> result) {
 
 		var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
+		// Track heap-allocated intermediate buffers that need freeing after memcopy
+		var interpTempBufVars = new List<string>();
+		void AddToStringResult((StdI64 Buffer, StdI64 Length, string BufVarName) r) {
+			partInfos.Add((r.Buffer, r.Length));
+			interpTempBufVars.Add(r.BufVarName);
+		}
+		void AddEnumToStringResult((StdI64 Buffer, StdI64 Length, string? BufVarName) r) {
+			partInfos.Add((r.Buffer, r.Length));
+			if (r.BufVarName != null) interpTempBufVars.Add(r.BufVarName);
+		}
 
 		foreach (var (IsLiteral, LiteralValue, ExprValue, FormatSpec, OptimalType) in op.Parts) {
 			if (IsLiteral) {
@@ -175,15 +185,15 @@ public static partial class MaxonToStandardConversion {
 					bool isUnsigned = (OptimalType?.IsUnsigned ?? false) || stdVal is StdU64;
 					if (FormatSpec != null) {
 						if (isUnsigned) {
-							partInfos.Add(EmitU64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
+							AddToStringResult(EmitU64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
 						} else {
-							partInfos.Add(EmitI64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
+							AddToStringResult(EmitI64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
 						}
 					} else {
 						if (isUnsigned) {
-							partInfos.Add(EmitU64ToString(stdVal, block, varTypes));
+							AddToStringResult(EmitU64ToString(stdVal, block, varTypes));
 						} else {
-							partInfos.Add(EmitI64ToString(stdVal, block, varTypes));
+							AddToStringResult(EmitI64ToString(stdVal, block, varTypes));
 						}
 					}
 				} else if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32ForStr) {
@@ -191,20 +201,20 @@ public static partial class MaxonToStandardConversion {
 					var promote = new StdF32ToF64Op(f32ForStr);
 					block.AddOp(promote);
 					if (FormatSpec != null) {
-						partInfos.Add(EmitF64ToStringFormatted(promote.Result, FormatSpec, block, varTypes, result));
+						AddToStringResult(EmitF64ToStringFormatted(promote.Result, FormatSpec, block, varTypes, result));
 					} else {
-						partInfos.Add(EmitF64ToString(promote.Result, block, varTypes));
+						AddToStringResult(EmitF64ToString(promote.Result, block, varTypes));
 					}
 				} else if (exprValue is MaxonFloat) {
 					if (FormatSpec != null) {
-						partInfos.Add(EmitF64ToStringFormatted((StdF64)valueMap[exprValue], FormatSpec, block, varTypes, result));
+						AddToStringResult(EmitF64ToStringFormatted((StdF64)valueMap[exprValue], FormatSpec, block, varTypes, result));
 					} else {
-						partInfos.Add(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
+						AddToStringResult(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
 					}
 				} else if (exprValue is MaxonBool) {
-					partInfos.Add(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
+					AddToStringResult(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
 				} else if (exprValue is MaxonEnum enumValue) {
-					partInfos.Add(EmitUnionToString(enumValue, valueMap, block, varTypes, result));
+					AddEnumToStringResult(EmitUnionToString(enumValue, valueMap, block, varTypes, result));
 				} else {
 					throw new InvalidOperationException(
 					  $"String interpolation: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
@@ -281,6 +291,23 @@ public static partial class MaxonToStandardConversion {
 			EmitStore(block, newOffset.Result, interpOffsetVar, varTypes);
 		}
 
+		// Write null terminator at buffer[totalLen]
+		{
+			var ntBuf = (StdI64)EmitLoad(block, interpBufVar, varTypes);
+			var ntOff = (StdI64)EmitLoad(block, interpTotalLenVar, varTypes);
+			var ntAddr = new StdAddI64Op(ntBuf, ntOff);
+			block.AddOp(ntAddr);
+			var ntZero = new StdConstI64Op(0);
+			block.AddOp(ntZero);
+			block.AddOp(new StdStoreIndirectOp(ntZero.Result, ntAddr.Result, 0, MlirType.I8));
+		}
+
+		// Free intermediate toString buffers now that contents are copied
+		foreach (var bufVar in interpTempBufVars) {
+			var bufPtr = (StdI64)EmitLoad(block, bufVar, varTypes);
+			block.AddOp(new StdCallRuntimeOp("maxon_free", [bufPtr], null));
+		}
+
 		// Create String struct with heap-allocated __ManagedMemory
 		var tempName2 = $"__interptmp_{op.Result.Id}";
 
@@ -319,8 +346,9 @@ public static partial class MaxonToStandardConversion {
 	/// <summary>
 	/// Allocates a buffer, calls a runtime conversion function, and returns (buffer, length).
 	/// Used by EmitI64ToString, EmitF64ToString, and EmitBoolToString.
+	/// Also returns the buffer variable name for cleanup after use.
 	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length) EmitRuntimeToString(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitRuntimeToString(
 	  StdValue value,
 	  string runtimeFuncName,
 	  int bufferSize,
@@ -337,18 +365,18 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult], lenResult));
 
 		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
-		return (finalBuf, lenResult);
+		return (finalBuf, lenResult, bufVarName);
 	}
 
-	private static (StdI64 Buffer, StdI64 Length) EmitI64ToString(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToString(
 	  StdValue intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(intValue, "maxon_i64_to_string", 21, block, varTypes);
 
-	private static (StdI64 Buffer, StdI64 Length) EmitU64ToString(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToString(
 	  StdValue intValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(intValue, "maxon_u64_to_string", 21, block, varTypes);
 
-	private static (StdI64 Buffer, StdI64 Length) EmitF64ToString(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToString(
 	  StdF64 floatValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(floatValue, "maxon_f64_to_string", 32, block, varTypes);
 
@@ -356,7 +384,7 @@ public static partial class MaxonToStandardConversion {
 	/// Allocates a buffer, emits the format spec as rdata, calls a formatted runtime conversion function,
 	/// and returns (buffer, length). Used for format-specifier string interpolation on built-in types.
 	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length) EmitRuntimeToStringFormatted(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitRuntimeToStringFormatted(
 	  StdValue value,
 	  string runtimeFuncName,
 	  int bufferSize,
@@ -390,20 +418,20 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult, fmtPtr.Result, fmtLen.Result], lenResult));
 
 		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
-		return (finalBuf, lenResult);
+		return (finalBuf, lenResult, bufVarName);
 	}
 
-	private static (StdI64 Buffer, StdI64 Length) EmitI64ToStringFormatted(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToStringFormatted(
 	  StdValue intValue, string formatSpec, MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
 	  EmitRuntimeToStringFormatted(intValue, "maxon_i64_to_string_fmt", 72, formatSpec, block, varTypes, result);
 
-	private static (StdI64 Buffer, StdI64 Length) EmitU64ToStringFormatted(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToStringFormatted(
 	  StdValue intValue, string formatSpec, MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
 	  EmitRuntimeToStringFormatted(intValue, "maxon_u64_to_string_fmt", 72, formatSpec, block, varTypes, result);
 
-	private static (StdI64 Buffer, StdI64 Length) EmitF64ToStringFormatted(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToStringFormatted(
 	  StdValue floatValue, string formatSpec, MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes, MlirModule<StandardOp> result) =>
 	  EmitRuntimeToStringFormatted(floatValue, "maxon_f64_to_string_fmt", 72, formatSpec, block, varTypes, result);
@@ -437,7 +465,7 @@ public static partial class MaxonToStandardConversion {
 	/// Float-backed enums emit the raw float value.
 	/// String-backed enums emit the raw string value.
 	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length) EmitUnionToString(
+	private static (StdI64 Buffer, StdI64 Length, string? BufVarName) EmitUnionToString(
 	  MaxonEnum enumValue,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  MlirBlock<StandardOp> block,
@@ -453,7 +481,8 @@ public static partial class MaxonToStandardConversion {
 		var stdValue = valueMap[enumValue];
 
 		if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
-			return EmitStringUnionToString(enumType, (StdI64)stdValue, block, result);
+			var r = EmitStringUnionToString(enumType, (StdI64)stdValue, block, result);
+			return (r.Buffer, r.Length, null);
 		}
 
 		if (backingMlirType == MlirType.F64) {
@@ -464,7 +493,8 @@ public static partial class MaxonToStandardConversion {
 		if (enumType is MlirEnumType) {
 			return EmitI64ToString((StdI64)stdValue, block, varTypes);
 		}
-		return EmitUnionCaseNameToString(enumType, (StdI64)stdValue, block, result);
+		var r2 = EmitUnionCaseNameToString(enumType, (StdI64)stdValue, block, result);
+		return (r2.Buffer, r2.Length, null);
 	}
 
 	/// <summary>
@@ -671,7 +701,7 @@ public static partial class MaxonToStandardConversion {
 	/// Allocates a 6-byte buffer and calls maxon_bool_to_string runtime to convert
 	/// a boolean value to "true" or "false". Returns (buffer, length).
 	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length) EmitBoolToString(
+	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitBoolToString(
 	  StdBool boolValue, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
 	  EmitRuntimeToString(boolValue, "maxon_bool_to_string", 6, block, varTypes);
 

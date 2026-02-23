@@ -58,7 +58,8 @@ public class CodeEmitter {
 
     // Emit _start wrapper first (entry point at offset 0)
     // _start calls main and then ExitProcess
-    emitter.EmitStartWrapper(mainFunc.Name);
+    bool hasGlobalCleanup = module.Functions.Any(f => f.Name == "__maxon_global_cleanup");
+    emitter.EmitStartWrapper(mainFunc.Name, hasGlobalCleanup);
 
     // Emit all functions (main and others)
     EmitFunction(emitter, mainFunc);

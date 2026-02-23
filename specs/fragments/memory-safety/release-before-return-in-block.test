@@ -63,47 +63,55 @@ module {
 module {
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
-    %0 = func.param flag : StdI64
-    memref.store %0, flag
-    %1 = arith.constant {value = 0 : i64}
-    %2 = arith.cmpi gt %0, %1
-    cf.cond_br %2 [then: check_0, else: check_0.after]
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, w
+    %1 = func.param flag : StdI64
+    memref.store %1, flag
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.cmpi gt %1, %2
+    cf.cond_br %3 [then: check_0, else: check_0.after]
   check_0:
-    %3 = memref.load flag : i64
-    %4 = arith.constant {value = 8 : i64}
-    %5 = std.call_runtime @maxon_alloc %4
-    memref.store %5, w
-    %6 = memref.load w : i64
-    memref.store_indirect %3, %6+0
+    %4 = memref.load flag : i64
+    %5 = arith.constant {value = 8 : i64}
+    %6 = std.call_runtime @maxon_alloc %5
+    memref.store %6, w
     %7 = memref.load w : i64
-    %8 = memref.load_indirect %7+0
-    %9 = arith.constant {value = 1 : i64}
-    %10 = arith.addi %8, %9
-    %11 = memref.load w : i64
-    std.call_runtime @maxon_release %11
-    func.return %10
+    memref.store_indirect %4, %7+0
+    %8 = memref.load w : i64
+    %9 = memref.load_indirect %8+0
+    %10 = arith.constant {value = 1 : i64}
+    %11 = arith.addi %9, %10
+    %12 = memref.load w : i64
+    std.call_runtime @maxon_release %12
+    %13 = arith.constant {value = 0 : i64}
+    memref.store %13, w
+    %14 = memref.load w : i64
+    std.call_runtime @maxon_release %14
+    func.return %11
   check_0.after:
-    %12 = arith.constant {value = 0 : i64}
-    func.return %12
+    %15 = arith.constant {value = 0 : i64}
+    %16 = memref.load w : i64
+    std.call_runtime @maxon_release %16
+    func.return %15
   }
   func @memory-safety.main() -> u32 {
   entry:
-    %13 = arith.constant {value = 5 : i64}
-    %14 = func.call @memory-safety.compute %13
-    memref.store %14, __range_val_0
-    %15 = arith.constant {value = 0 : i64}
-    %16 = arith.cmpi lt %14, %15
-    %17 = arith.constant {value = 4294967295 : i64}
-    %18 = arith.cmpi gt %14, %17
-    %19 = arith.ori1 %16, %18
-    cf.cond_br %19 [then: __range_panic_0, else: __range_ok_0]
+    %17 = arith.constant {value = 5 : i64}
+    %18 = func.call @memory-safety.compute %17
+    memref.store %18, __range_val_0
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.cmpi lt %18, %19
+    %21 = arith.constant {value = 4294967295 : i64}
+    %22 = arith.cmpi gt %18, %21
+    %23 = arith.ori1 %20, %22
+    cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %20 = memref.lea_symdata __panic_msg_25
-    %21 = std.ptr_to_i64 %20
-    std.call_runtime @maxon_panic %21
+    %24 = memref.lea_symdata __panic_msg_25
+    %25 = std.ptr_to_i64 %24
+    std.call_runtime @maxon_panic %25
   __range_ok_0:
-    %22 = memref.load __range_val_0 : i64
-    func.return %22
+    %26 = memref.load __range_val_0 : i64
+    func.return %26
   }
 }
 === x86
@@ -111,31 +119,40 @@ module {
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], ecx
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
     x86.xor eax, eax
     x86.cmp ecx, eax
     x86.jle memory-safety.compute.check_0.after
   check_0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 8
     x86.mov [rbp-24], eax
     x86.call maxon_alloc
-    x86.mov [rbp-16], eax
-    x86.mov edx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
     x86.mov ebx, [rbp-24]
     x86.mov [edx+0], ebx
-    x86.mov esi, [rbp-16]
+    x86.mov esi, [rbp-8]
     x86.mov edi, [esi+0]
     x86.mov r8, 1
     x86.add edi, r8
-    x86.mov r9, [rbp-16]
+    x86.mov r9, [rbp-8]
     x86.mov [rbp-32], edi
     x86.mov rcx, r9
+    x86.call maxon_release
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov rcx, [rbp-8]
     x86.call maxon_release
     x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   check_0.after:
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call maxon_release
     x86.xor eax, eax
     x86.epilogue
     x86.ret

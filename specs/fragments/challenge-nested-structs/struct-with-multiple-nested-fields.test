@@ -24,7 +24,7 @@ ExitCode: 33
 module {
   func @challenge-nested-structs.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=96
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 16
@@ -55,9 +55,13 @@ module {
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-24]
     x86.mov [ecx+0], eax
+    x86.mov rcx, rax
+    x86.call maxon_incref
     x86.mov eax, [rbp-16]
     x86.mov ecx, [rbp-24]
     x86.mov [ecx+8], eax
+    x86.mov rcx, rax
+    x86.call maxon_incref
     x86.mov eax, [rbp-24]
     x86.mov ecx, [eax+0]
     x86.mov [rbp-32], ecx
@@ -102,10 +106,53 @@ module {
     x86.mov ecx, [rbp-8]
     x86.mov [rbp-72], eax
     x86.call maxon_release
-    x86.mov rcx, [rbp-16]
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
     x86.call maxon_release
     x86.mov ecx, [rbp-24]
+    x86.mov [rbp-80], ecx
+    x86.call maxon_decref
+    x86.xor edx, edx
+    x86.mov ebx, [rbp-80]
+    x86.cmp ebx, edx
+    x86.setne esi
+    x86.movzx esi, esib
+    x86.cmp eax, edx
+    x86.sete edi
+    x86.movzx edi, edib
+    x86.and esi, edi
+    x86.xor r8, r8
+    x86.test ebx, ebx
+    x86.jz __nsload_53
+    x86.mov r8, [ebx+0]
+    x86.label __nsload_53
+    x86.test esi, esi
+    x86.mov r9, edx
+    x86.cmovne r9, r8
+    x86.mov [rbp-88], esi
+    x86.mov rcx, r9
     x86.call maxon_release
+    x86.mov eax, [rbp-80]
+    x86.xor ecx, ecx
+    x86.test eax, eax
+    x86.jz __nsload_55
+    x86.mov ecx, [eax+8]
+    x86.label __nsload_55
+    x86.xor edx, edx
+    x86.mov ebx, [rbp-88]
+    x86.test ebx, ebx
+    x86.mov esi, edx
+    x86.cmovne esi, ecx
+    x86.mov rcx, rsi
+    x86.call maxon_release
+    x86.mov eax, [rbp-80]
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-88]
+    x86.test edx, edx
+    x86.mov ebx, ecx
+    x86.cmovne ebx, eax
+    x86.mov rcx, rbx
+    x86.call maxon_free
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret

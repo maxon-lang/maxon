@@ -9,7 +9,7 @@ ExitCode: 3
 module {
   func @set.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov edx, 3
@@ -51,11 +51,14 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov eax, 3
-    x86.mov [edx+16], eax
     x86.mov eax, [rbp-40]
     x86.mov rcx, rax
     x86.call __Set_3_i64.init
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, 8
+    x86.mov [rbp-64], eax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-64]
     x86.mov [rbp-48], eax
     x86.mov eax, [rbp-48]
     x86.mov rcx, rax
@@ -78,6 +81,56 @@ module {
     x86.call maxon_panic
   __range_ok_1:
     x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-48]
+    x86.mov [rbp-64], eax
+    x86.mov [rbp-72], ecx
+    x86.call maxon_decref
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-72]
+    x86.cmp edx, ecx
+    x86.setne ebx
+    x86.movzx ebx, ebxb
+    x86.cmp eax, ecx
+    x86.sete eax
+    x86.movzx eax, eaxb
+    x86.and ebx, eax
+    x86.xor eax, eax
+    x86.test edx, edx
+    x86.jz __nsload_45
+    x86.mov eax, [edx+0]
+    x86.label __nsload_45
+    x86.test ebx, ebx
+    x86.mov esi, ecx
+    x86.cmovne esi, eax
+    x86.mov eax, 8
+    x86.mov [rbp-80], ebx
+    x86.mov rcx, rsi
+    x86.mov rdx, rax
+    x86.call maxon_release_with_managed
+    x86.mov ecx, [rbp-72]
+    x86.xor edx, edx
+    x86.test ecx, ecx
+    x86.jz __nsload_48
+    x86.mov edx, [ecx+8]
+    x86.label __nsload_48
+    x86.xor ebx, ebx
+    x86.mov esi, [rbp-80]
+    x86.test esi, esi
+    x86.mov edi, ebx
+    x86.cmovne edi, edx
+    x86.mov r8, 8
+    x86.mov rcx, rdi
+    x86.mov rdx, r8
+    x86.call maxon_release_with_managed
+    x86.mov r9, [rbp-72]
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-80]
+    x86.test ecx, ecx
+    x86.mov edx, eax
+    x86.cmovne edx, r9
+    x86.mov rcx, rdx
+    x86.call maxon_free
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

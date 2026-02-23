@@ -21,7 +21,7 @@ ExitCode: 0
 module {
   func @codegen-internals.recurse(n: i64) -> i8 {
   entry:
-    x86.prologue stack_size=16416
+    x86.prologue stack_size=16432
     x86.mov [rbp-8], ecx
     x86.xor eax, eax
     x86.xor edx, edx
@@ -59,8 +59,6 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov eax, 2048
-    x86.mov [edx+16], eax
     x86.mov eax, 2047
     x86.mov ecx, [rbp-24]
     x86.mov rdx, rax
@@ -73,6 +71,10 @@ module {
     x86.cmp edx, ecx
     x86.jg codegen-internals.recurse.base_1.after
   base_1:
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 8
+    x86.call maxon_release_with_managed
     x86.xor eax, eax
     x86.epilogue
     x86.ret
@@ -99,6 +101,11 @@ module {
     x86.call maxon_panic
   __range_ok_2:
     x86.mov eax, [rbp-16416]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 8
+    x86.mov [rbp-16424], eax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-16424]
     x86.epilogue
     x86.ret
   }

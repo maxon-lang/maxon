@@ -4534,7 +4534,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   /// Emits MaxonReleaseOp for block-scoped struct variables before a return statement.
   /// Entry-block vars are handled by the lowering's EmitScopeCleanup; this covers inner scopes.
-  private void EmitBlockScopedReleaseBeforeReturn(MaxonValue? returnValue) {
+  private void EmitBlockScopedReleaseBeforeReturn(string? returnVarName) {
     if (_currentBlock == null || _scopeStack.Count == 0) return;
     // The bottom of the scope stack holds the function-level variable names.
     // Release everything NOT in that set — entry-block vars are cleaned up by the lowering.
@@ -4542,7 +4542,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     foreach (var (name, info) in _variables) {
       if (functionLevelVars.Contains(name)) continue;
       // Don't release the variable being returned — ownership transfers to caller
-      if (returnValue != null && info.Value.Id == returnValue.Id) continue;
+      if (returnVarName != null && name == returnVarName) continue;
       EmitReleaseIfStruct(name);
     }
   }
@@ -4909,10 +4909,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             : "cannot return a reference to a local variable");
       }
 
-      var value = ResolveExprValue(ParseExpression());
+      var expr = ParseExpression();
+      // Extract variable name before ResolveExprValue creates a new value ID
+      string? returnVarName = expr is ExprResult.VarRef rv ? rv.VarName : null;
+      var value = ResolveExprValue(expr);
       CheckReturnType(value, returnToken);
       value = CheckReturnRange(value, returnToken);
-      EmitBlockScopedReleaseBeforeReturn(value);
+      EmitBlockScopedReleaseBeforeReturn(returnVarName);
       _currentBlock!.AddOp(new MaxonReturnOp(value));
     } else {
       EmitBlockScopedReleaseBeforeReturn(null);
@@ -5262,15 +5265,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var errorBlock = UniqueLabel("otherwise_default_error");
     var continueBlock = UniqueLabel("otherwise_default_continue");
+    bool needsCleanup = resultKind == MaxonValueKind.Struct && structTypeName != null;
+    var cleanupBlock = needsCleanup ? UniqueLabel("otherwise_default_cleanup") : null;
 
-    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, continueBlock);
+    // On error use default, on success either cleanup (struct) or go straight to continue
+    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, cleanupBlock ?? continueBlock);
 
-    // Error block: load default from temp variable and overwrite result
+    // Error block (fall-through from cond_br then-path): use default value as result
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
     var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+
+    // Cleanup block (success path): release the unused default value, then continue
+    if (needsCleanup) {
+      var clnBlock = _currentFunction!.Body.AddBlock(cleanupBlock!);
+      _currentBlock = clnBlock;
+      _currentBlock!.AddOp(new MaxonReleaseOp(defaultVarName, structTypeName!));
+      _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+    }
 
     // Continue block: load from result variable
     var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
@@ -5874,6 +5888,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
+    // === Memory management intrinsics ===
+    ["__free_cstring"] = RuntimeCallIntrinsic(
+      "Frees a heap-allocated C string. Use after converting owned cstrings to managed strings.\n\n`__free_cstring(cstr)`",
+      "maxon_free", 1, false),
     // === Command Line intrinsics ===
     ["__command_line_count"] = RuntimeCallIntrinsic(
       "Returns the number of command line arguments.\n\n`__command_line_count() returns int`",

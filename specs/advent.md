@@ -207,47 +207,50 @@ module {
     maxon.assign %8 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     %10 = maxon.literal {value = 0 : i64}
     %11 = maxon.binop %7, %10 {op = ne}
-    maxon.cond_br %11 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    maxon.cond_br %11 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
   otherwise_default_error_2:
     %12 = maxon.struct_var_ref __try_default_1
     maxon.assign %12 {var = __try_result_0} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_cleanup_4:
+    maxon.release {var = __try_default_1} {type = String}
     maxon.br otherwise_default_continue_3
   otherwise_default_continue_3:
     %13 = maxon.struct_var_ref __try_result_0
     %16, %15 = maxon.try_call @stdlib.Parsing.__int_fromString %13
     %17 = maxon.literal {value = 0 : i64}
-    maxon.assign %17 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %16 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %17 {var = __try_default_6} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %16 {var = __try_result_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %18 = maxon.literal {value = 0 : i64}
     %19 = maxon.binop %15, %18 {op = ne}
-    maxon.cond_br %19 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %20 = maxon.var_ref {var = __try_default_5} {type = i64}
-    maxon.assign %20 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %21 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.cond_br %19 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
+  otherwise_default_error_7:
+    %20 = maxon.var_ref {var = __try_default_6} {type = i64}
+    maxon.assign %20 {var = __try_result_5} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_8
+  otherwise_default_continue_8:
+    %21 = maxon.var_ref {var = __try_result_5} {type = i64}
     maxon.assign %21 {var = parsed} {kind = i64} {decl = 1 : i1}
     %22 = maxon.literal {value = 1000 : i64}
     %23 = maxon.binop %21, %22 {op = gt}
-    maxon.cond_br %23 [then: guard_8, else: guard_8.after]
-  guard_8:
+    maxon.cond_br %23 [then: guard_9, else: guard_9.after]
+  guard_9:
     %24 = maxon.literal {value = 99 : i64}
     maxon.return %24
-  guard_8.after:
+  guard_9.after:
     %25 = maxon.literal {value = 3 : i64}
     %26 = maxon.call @advent.multiply %25
-    maxon.assign %26 {var = __range_val_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %26 {var = __range_val_10} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %27 = maxon.literal {value = 0 : i64}
     %28 = maxon.binop %26, %27 {op = lt}
     %29 = maxon.literal {value = 4294967295 : i64}
     %30 = maxon.binop %26, %29 {op = gt}
     %31 = maxon.binop %28, %30 {op = or}
-    maxon.cond_br %31 [then: __range_panic_9, else: __range_ok_9]
-  __range_panic_9:
+    maxon.cond_br %31 [then: __range_panic_10, else: __range_ok_10]
+  __range_panic_10:
     maxon.panic "panic at day4a.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
-  __range_ok_9:
-    %33 = maxon.var_ref {var = __range_val_9} {type = i64}
+  __range_ok_10:
+    %33 = maxon.var_ref {var = __range_val_10} {type = i64}
     maxon.return %33
   }
 }
@@ -262,81 +265,101 @@ module {
   entry:
     %2 = func.call @stdlib.CommandLine.args
     memref.store %2, args
-    %4 = arith.constant {value = 0 : i64}
-    %5 = memref.load args : i64
-    %6, %7 = func.try_call @StringArray.get %5, %4
-    %8 = memref.lea_rdata __str_9
-    %9 = std.ptr_to_i64 %8
-    %10 = arith.constant {value = 0 : i64}
-    %11 = arith.constant {value = 32 : i64}
-    %12 = std.call_runtime @maxon_alloc %11
-    memref.store %12, __strtmp_managed_9
-    %13 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %9, %13+0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = memref.load args : i64
+    %7, %8 = func.try_call @StringArray.get %6, %5
+    %9 = memref.lea_rdata __str_9
+    %10 = std.ptr_to_i64 %9
+    %11 = arith.constant {value = 0 : i64}
+    %12 = arith.constant {value = 32 : i64}
+    %13 = std.call_runtime @maxon_alloc %12
+    memref.store %13, __strtmp_managed_9
     %14 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %10, %14+8
-    %15 = arith.constant {value = 0 : i64}
-    %16 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %15, %16+16
-    %17 = arith.constant {value = 1 : i64}
-    %18 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %17, %18+24
-    %19 = arith.constant {value = 16 : i64}
-    %20 = std.call_runtime @maxon_alloc %19
-    memref.store %20, __strtmp_9
-    %21 = memref.load __strtmp_managed_9 : i64
-    %22 = memref.load __strtmp_9 : i64
-    memref.store_indirect %21, %22+0
-    %23 = arith.constant {value = 0 : i64}
-    %24 = memref.load __strtmp_9 : i64
-    memref.store_indirect %23, %24+8
-    memref.store %20, __try_default_1
-    memref.store %6, __try_result_0
-    %27 = arith.constant {value = 0 : i64}
-    %28 = arith.cmpi ne %7, %27
-    cf.cond_br %28 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    memref.store_indirect %10, %14+0
+    %15 = memref.load __strtmp_managed_9 : i64
+    memref.store_indirect %11, %15+8
+    %16 = arith.constant {value = 0 : i64}
+    %17 = memref.load __strtmp_managed_9 : i64
+    memref.store_indirect %16, %17+16
+    %18 = arith.constant {value = 1 : i64}
+    %19 = memref.load __strtmp_managed_9 : i64
+    memref.store_indirect %18, %19+24
+    %20 = arith.constant {value = 16 : i64}
+    %21 = std.call_runtime @maxon_alloc %20
+    memref.store %21, __strtmp_9
+    %22 = memref.load __strtmp_managed_9 : i64
+    %23 = memref.load __strtmp_9 : i64
+    memref.store_indirect %22, %23+0
+    %24 = arith.constant {value = 0 : i64}
+    %25 = memref.load __strtmp_9 : i64
+    memref.store_indirect %24, %25+8
+    memref.store %21, __try_default_1
+    memref.store %7, __try_result_0
+    %29 = arith.constant {value = 0 : i64}
+    %30 = arith.cmpi ne %8, %29
+    cf.cond_br %30 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
   otherwise_default_error_2:
-    %29 = memref.load __try_default_1 : i64
-    memref.store %29, __try_result_0
+    %31 = memref.load __try_result_0 : i64
+    %32 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %31, %32
+    %33 = memref.load __try_default_1 : i64
+    memref.store %33, __try_result_0
+    cf.br otherwise_default_continue_3
+  otherwise_default_cleanup_4:
+    %34 = memref.load __try_default_1 : i64
+    %35 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %34, %35
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %30 = memref.load __try_result_0 : i64
-    %31, %32 = func.try_call @stdlib.Parsing.__int_fromString %30
-    %33 = arith.constant {value = 0 : i64}
-    memref.store %33, __try_default_5
-    memref.store %31, __try_result_4
-    %34 = arith.constant {value = 0 : i64}
-    %35 = arith.cmpi ne %32, %34
-    cf.cond_br %35 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %36 = memref.load __try_default_5 : i64
-    memref.store %36, __try_result_4
-    cf.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %37 = memref.load __try_result_4 : i64
-    %38 = arith.constant {value = 1000 : i64}
-    %39 = arith.cmpi gt %37, %38
-    cf.cond_br %39 [then: guard_8, else: guard_8.after]
-  guard_8:
-    %40 = arith.constant {value = 99 : i64}
-    func.return %40
-  guard_8.after:
-    %41 = arith.constant {value = 3 : i64}
-    %42 = func.call @advent.multiply %41
-    memref.store %42, __range_val_9
-    %43 = arith.constant {value = 0 : i64}
-    %44 = arith.cmpi lt %42, %43
-    %45 = arith.constant {value = 4294967295 : i64}
-    %46 = arith.cmpi gt %42, %45
-    %47 = arith.ori1 %44, %46
-    cf.cond_br %47 [then: __range_panic_9, else: __range_ok_9]
-  __range_panic_9:
-    %48 = memref.lea_symdata __panic_msg_32
-    %49 = std.ptr_to_i64 %48
-    std.call_runtime @maxon_panic %49
-  __range_ok_9:
-    %50 = memref.load __range_val_9 : i64
-    func.return %50
+    %36 = memref.load __try_result_0 : i64
+    %37, %38 = func.try_call @stdlib.Parsing.__int_fromString %36
+    %39 = arith.constant {value = 0 : i64}
+    memref.store %39, __try_default_6
+    memref.store %37, __try_result_5
+    %40 = arith.constant {value = 0 : i64}
+    %41 = arith.cmpi ne %38, %40
+    cf.cond_br %41 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
+  otherwise_default_error_7:
+    %42 = memref.load __try_default_6 : i64
+    memref.store %42, __try_result_5
+    cf.br otherwise_default_continue_8
+  otherwise_default_continue_8:
+    %43 = memref.load __try_result_5 : i64
+    %44 = arith.constant {value = 1000 : i64}
+    %45 = arith.cmpi gt %43, %44
+    cf.cond_br %45 [then: guard_9, else: guard_9.after]
+  guard_9:
+    %46 = arith.constant {value = 99 : i64}
+    %47 = memref.load args : i64
+    %48 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_array_of_with_managed %47, %48
+    %49 = memref.load __try_result_0 : i64
+    %50 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %49, %50
+    func.return %46
+  guard_9.after:
+    %51 = arith.constant {value = 3 : i64}
+    %52 = func.call @advent.multiply %51
+    memref.store %52, __range_val_10
+    %53 = arith.constant {value = 0 : i64}
+    %54 = arith.cmpi lt %52, %53
+    %55 = arith.constant {value = 4294967295 : i64}
+    %56 = arith.cmpi gt %52, %55
+    %57 = arith.ori1 %54, %56
+    cf.cond_br %57 [then: __range_panic_10, else: __range_ok_10]
+  __range_panic_10:
+    %58 = memref.lea_symdata __panic_msg_32
+    %59 = std.ptr_to_i64 %58
+    std.call_runtime @maxon_panic %59
+  __range_ok_10:
+    %60 = memref.load __range_val_10 : i64
+    %61 = memref.load args : i64
+    %62 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_array_of_with_managed %61, %62
+    %63 = memref.load __try_result_0 : i64
+    %64 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %63, %64
+    func.return %60
   }
 }
 === x86
@@ -393,10 +416,22 @@ module {
     x86.xor eax, eax
     x86.mov ecx, [rbp-80]
     x86.cmp ecx, eax
-    x86.je advent.main.otherwise_default_continue_3
+    x86.je advent.main.otherwise_default_cleanup_4
   otherwise_default_error_2:
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
+    x86.mov edx, [rbp-32]
+    x86.mov [rbp-40], edx
+    x86.jmp advent.main.otherwise_default_continue_3
+  otherwise_default_cleanup_4:
     x86.mov eax, [rbp-32]
-    x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-40]
@@ -407,21 +442,30 @@ module {
     x86.mov [rbp-56], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je advent.main.otherwise_default_continue_7
-  otherwise_default_error_6:
+    x86.je advent.main.otherwise_default_continue_8
+  otherwise_default_error_7:
     x86.mov eax, [rbp-48]
     x86.mov [rbp-56], eax
-    x86.jmp advent.main.otherwise_default_continue_7
-  otherwise_default_continue_7:
+    x86.jmp advent.main.otherwise_default_continue_8
+  otherwise_default_continue_8:
     x86.mov eax, [rbp-56]
     x86.mov ecx, 1000
     x86.cmp eax, ecx
-    x86.jle advent.main.guard_8.after
-  guard_8:
+    x86.jle advent.main.guard_9.after
+  guard_9:
+    x86.mov eax, 99
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.call maxon_release_array_of_with_managed
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.mov eax, 99
     x86.epilogue
     x86.ret
-  guard_8.after:
+  guard_9.after:
     x86.mov eax, 3
     x86.mov rcx, rax
     x86.call advent.multiply
@@ -436,13 +480,23 @@ module {
     x86.movzx esi, esib
     x86.or edx, esi
     x86.test edx, edx
-    x86.je advent.main.__range_ok_9
-  __range_panic_9:
+    x86.je advent.main.__range_ok_10
+  __range_panic_10:
     x86.lea_symdata rax, [__panic_msg_32]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_9:
+  __range_ok_10:
     x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.mov [rbp-72], eax
+    x86.call maxon_release_array_of_with_managed
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }
@@ -493,47 +547,50 @@ module {
     maxon.assign %8 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     %10 = maxon.literal {value = 0 : i64}
     %11 = maxon.binop %7, %10 {op = ne}
-    maxon.cond_br %11 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    maxon.cond_br %11 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
   otherwise_default_error_2:
     %12 = maxon.struct_var_ref __try_default_1
     maxon.assign %12 {var = __try_result_0} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_3
+  otherwise_default_cleanup_4:
+    maxon.release {var = __try_default_1} {type = String}
     maxon.br otherwise_default_continue_3
   otherwise_default_continue_3:
     %13 = maxon.struct_var_ref __try_result_0
     %16, %15 = maxon.try_call @stdlib.Parsing.__int_fromString %13
     %17 = maxon.literal {value = 0 : i64}
-    maxon.assign %17 {var = __try_default_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %16 {var = __try_result_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %17 {var = __try_default_6} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %16 {var = __try_result_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %18 = maxon.literal {value = 0 : i64}
     %19 = maxon.binop %15, %18 {op = ne}
-    maxon.cond_br %19 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %20 = maxon.var_ref {var = __try_default_5} {type = i64}
-    maxon.assign %20 {var = __try_result_4} {kind = i64} {mut = 1 : i1}
-    maxon.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %21 = maxon.var_ref {var = __try_result_4} {type = i64}
+    maxon.cond_br %19 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
+  otherwise_default_error_7:
+    %20 = maxon.var_ref {var = __try_default_6} {type = i64}
+    maxon.assign %20 {var = __try_result_5} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_8
+  otherwise_default_continue_8:
+    %21 = maxon.var_ref {var = __try_result_5} {type = i64}
     maxon.assign %21 {var = parsed} {kind = i64} {decl = 1 : i1}
     %22 = maxon.literal {value = 1000 : i64}
     %23 = maxon.binop %21, %22 {op = gt}
-    maxon.cond_br %23 [then: guard_8, else: guard_8.after]
-  guard_8:
+    maxon.cond_br %23 [then: guard_9, else: guard_9.after]
+  guard_9:
     %24 = maxon.literal {value = 99 : i64}
     maxon.return %24
-  guard_8.after:
+  guard_9.after:
     %25 = maxon.literal {value = 3 : i64}
     %26 = maxon.call @advent.multiply %25
-    maxon.assign %26 {var = __range_val_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %26 {var = __range_val_10} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %27 = maxon.literal {value = 0 : i64}
     %28 = maxon.binop %26, %27 {op = lt}
     %29 = maxon.literal {value = 4294967295 : i64}
     %30 = maxon.binop %26, %29 {op = gt}
     %31 = maxon.binop %28, %30 {op = or}
-    maxon.cond_br %31 [then: __range_panic_9, else: __range_ok_9]
-  __range_panic_9:
+    maxon.cond_br %31 [then: __range_panic_10, else: __range_ok_10]
+  __range_panic_10:
     maxon.panic "panic at day4b.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
-  __range_ok_9:
-    %33 = maxon.var_ref {var = __range_val_9} {type = i64}
+  __range_ok_10:
+    %33 = maxon.var_ref {var = __range_val_10} {type = i64}
     maxon.return %33
   }
 }
@@ -550,81 +607,101 @@ module {
   entry:
     %3 = func.call @stdlib.CommandLine.args
     memref.store %3, args
-    %5 = arith.constant {value = 0 : i64}
-    %6 = memref.load args : i64
-    %7, %8 = func.try_call @StringArray.get %6, %5
-    %9 = memref.lea_rdata __str_9
-    %10 = std.ptr_to_i64 %9
-    %11 = arith.constant {value = 0 : i64}
-    %12 = arith.constant {value = 32 : i64}
-    %13 = std.call_runtime @maxon_alloc %12
-    memref.store %13, __strtmp_managed_9
-    %14 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %10, %14+0
+    %6 = arith.constant {value = 0 : i64}
+    %7 = memref.load args : i64
+    %8, %9 = func.try_call @StringArray.get %7, %6
+    %10 = memref.lea_rdata __str_9
+    %11 = std.ptr_to_i64 %10
+    %12 = arith.constant {value = 0 : i64}
+    %13 = arith.constant {value = 32 : i64}
+    %14 = std.call_runtime @maxon_alloc %13
+    memref.store %14, __strtmp_managed_9
     %15 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %11, %15+8
-    %16 = arith.constant {value = 0 : i64}
-    %17 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %16, %17+16
-    %18 = arith.constant {value = 1 : i64}
-    %19 = memref.load __strtmp_managed_9 : i64
-    memref.store_indirect %18, %19+24
-    %20 = arith.constant {value = 16 : i64}
-    %21 = std.call_runtime @maxon_alloc %20
-    memref.store %21, __strtmp_9
-    %22 = memref.load __strtmp_managed_9 : i64
-    %23 = memref.load __strtmp_9 : i64
-    memref.store_indirect %22, %23+0
-    %24 = arith.constant {value = 0 : i64}
-    %25 = memref.load __strtmp_9 : i64
-    memref.store_indirect %24, %25+8
-    memref.store %21, __try_default_1
-    memref.store %7, __try_result_0
-    %28 = arith.constant {value = 0 : i64}
-    %29 = arith.cmpi ne %8, %28
-    cf.cond_br %29 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    memref.store_indirect %11, %15+0
+    %16 = memref.load __strtmp_managed_9 : i64
+    memref.store_indirect %12, %16+8
+    %17 = arith.constant {value = 0 : i64}
+    %18 = memref.load __strtmp_managed_9 : i64
+    memref.store_indirect %17, %18+16
+    %19 = arith.constant {value = 1 : i64}
+    %20 = memref.load __strtmp_managed_9 : i64
+    memref.store_indirect %19, %20+24
+    %21 = arith.constant {value = 16 : i64}
+    %22 = std.call_runtime @maxon_alloc %21
+    memref.store %22, __strtmp_9
+    %23 = memref.load __strtmp_managed_9 : i64
+    %24 = memref.load __strtmp_9 : i64
+    memref.store_indirect %23, %24+0
+    %25 = arith.constant {value = 0 : i64}
+    %26 = memref.load __strtmp_9 : i64
+    memref.store_indirect %25, %26+8
+    memref.store %22, __try_default_1
+    memref.store %8, __try_result_0
+    %30 = arith.constant {value = 0 : i64}
+    %31 = arith.cmpi ne %9, %30
+    cf.cond_br %31 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
   otherwise_default_error_2:
-    %30 = memref.load __try_default_1 : i64
-    memref.store %30, __try_result_0
+    %32 = memref.load __try_result_0 : i64
+    %33 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %32, %33
+    %34 = memref.load __try_default_1 : i64
+    memref.store %34, __try_result_0
+    cf.br otherwise_default_continue_3
+  otherwise_default_cleanup_4:
+    %35 = memref.load __try_default_1 : i64
+    %36 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %35, %36
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %31 = memref.load __try_result_0 : i64
-    %32, %33 = func.try_call @stdlib.Parsing.__int_fromString %31
-    %34 = arith.constant {value = 0 : i64}
-    memref.store %34, __try_default_5
-    memref.store %32, __try_result_4
-    %35 = arith.constant {value = 0 : i64}
-    %36 = arith.cmpi ne %33, %35
-    cf.cond_br %36 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
-  otherwise_default_error_6:
-    %37 = memref.load __try_default_5 : i64
-    memref.store %37, __try_result_4
-    cf.br otherwise_default_continue_7
-  otherwise_default_continue_7:
-    %38 = memref.load __try_result_4 : i64
-    %39 = arith.constant {value = 1000 : i64}
-    %40 = arith.cmpi gt %38, %39
-    cf.cond_br %40 [then: guard_8, else: guard_8.after]
-  guard_8:
-    %41 = arith.constant {value = 99 : i64}
-    func.return %41
-  guard_8.after:
-    %42 = arith.constant {value = 3 : i64}
-    %43 = func.call @advent.multiply %42
-    memref.store %43, __range_val_9
-    %44 = arith.constant {value = 0 : i64}
-    %45 = arith.cmpi lt %43, %44
-    %46 = arith.constant {value = 4294967295 : i64}
-    %47 = arith.cmpi gt %43, %46
-    %48 = arith.ori1 %45, %47
-    cf.cond_br %48 [then: __range_panic_9, else: __range_ok_9]
-  __range_panic_9:
-    %49 = memref.lea_symdata __panic_msg_32
-    %50 = std.ptr_to_i64 %49
-    std.call_runtime @maxon_panic %50
-  __range_ok_9:
-    %51 = memref.load __range_val_9 : i64
-    func.return %51
+    %37 = memref.load __try_result_0 : i64
+    %38, %39 = func.try_call @stdlib.Parsing.__int_fromString %37
+    %40 = arith.constant {value = 0 : i64}
+    memref.store %40, __try_default_6
+    memref.store %38, __try_result_5
+    %41 = arith.constant {value = 0 : i64}
+    %42 = arith.cmpi ne %39, %41
+    cf.cond_br %42 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
+  otherwise_default_error_7:
+    %43 = memref.load __try_default_6 : i64
+    memref.store %43, __try_result_5
+    cf.br otherwise_default_continue_8
+  otherwise_default_continue_8:
+    %44 = memref.load __try_result_5 : i64
+    %45 = arith.constant {value = 1000 : i64}
+    %46 = arith.cmpi gt %44, %45
+    cf.cond_br %46 [then: guard_9, else: guard_9.after]
+  guard_9:
+    %47 = arith.constant {value = 99 : i64}
+    %48 = memref.load args : i64
+    %49 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_array_of_with_managed %48, %49
+    %50 = memref.load __try_result_0 : i64
+    %51 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %50, %51
+    func.return %47
+  guard_9.after:
+    %52 = arith.constant {value = 3 : i64}
+    %53 = func.call @advent.multiply %52
+    memref.store %53, __range_val_10
+    %54 = arith.constant {value = 0 : i64}
+    %55 = arith.cmpi lt %53, %54
+    %56 = arith.constant {value = 4294967295 : i64}
+    %57 = arith.cmpi gt %53, %56
+    %58 = arith.ori1 %55, %57
+    cf.cond_br %58 [then: __range_panic_10, else: __range_ok_10]
+  __range_panic_10:
+    %59 = memref.lea_symdata __panic_msg_32
+    %60 = std.ptr_to_i64 %59
+    std.call_runtime @maxon_panic %60
+  __range_ok_10:
+    %61 = memref.load __range_val_10 : i64
+    %62 = memref.load args : i64
+    %63 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_array_of_with_managed %62, %63
+    %64 = memref.load __try_result_0 : i64
+    %65 = arith.constant {value = 0 : i64}
+    std.call_runtime @maxon_release_with_managed %64, %65
+    func.return %61
   }
 }
 === x86
@@ -683,10 +760,22 @@ module {
     x86.xor eax, eax
     x86.mov ecx, [rbp-80]
     x86.cmp ecx, eax
-    x86.je advent.main.otherwise_default_continue_3
+    x86.je advent.main.otherwise_default_cleanup_4
   otherwise_default_error_2:
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
+    x86.mov edx, [rbp-32]
+    x86.mov [rbp-40], edx
+    x86.jmp advent.main.otherwise_default_continue_3
+  otherwise_default_cleanup_4:
     x86.mov eax, [rbp-32]
-    x86.mov [rbp-40], eax
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-40]
@@ -697,21 +786,30 @@ module {
     x86.mov [rbp-56], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je advent.main.otherwise_default_continue_7
-  otherwise_default_error_6:
+    x86.je advent.main.otherwise_default_continue_8
+  otherwise_default_error_7:
     x86.mov eax, [rbp-48]
     x86.mov [rbp-56], eax
-    x86.jmp advent.main.otherwise_default_continue_7
-  otherwise_default_continue_7:
+    x86.jmp advent.main.otherwise_default_continue_8
+  otherwise_default_continue_8:
     x86.mov eax, [rbp-56]
     x86.mov ecx, 1000
     x86.cmp eax, ecx
-    x86.jle advent.main.guard_8.after
-  guard_8:
+    x86.jle advent.main.guard_9.after
+  guard_9:
+    x86.mov eax, 99
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.call maxon_release_array_of_with_managed
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.mov eax, 99
     x86.epilogue
     x86.ret
-  guard_8.after:
+  guard_9.after:
     x86.mov eax, 3
     x86.mov rcx, rax
     x86.call advent.multiply
@@ -726,13 +824,23 @@ module {
     x86.movzx esi, esib
     x86.or edx, esi
     x86.test edx, edx
-    x86.je advent.main.__range_ok_9
-  __range_panic_9:
+    x86.je advent.main.__range_ok_10
+  __range_panic_10:
     x86.lea_symdata rax, [__panic_msg_32]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_9:
+  __range_ok_10:
     x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.mov [rbp-72], eax
+    x86.call maxon_release_array_of_with_managed
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }

@@ -12,7 +12,7 @@ ExitCode: 60
 module {
   func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=112
+    x86.prologue stack_size=128
     x86.mov eax, 10
     x86.mov ecx, 20
     x86.mov edx, 30
@@ -43,12 +43,13 @@ module {
     x86.mov rcx, rax
     x86.mov eax, [rbp-32]
     x86.mov [eax+0], ecx
-    x86.mov eax, 3
-    x86.mov ecx, [rbp-32]
-    x86.mov [ecx+16], eax
     x86.mov eax, [rbp-32]
     x86.mov rcx, rax
     x86.call __Vector_3_i64.init
+    x86.mov ecx, [rbp-32]
+    x86.mov [rbp-120], eax
+    x86.call maxon_release_managed
+    x86.mov eax, [rbp-120]
     x86.mov [rbp-40], eax
     x86.xor eax, eax
     x86.mov ecx, [rbp-40]
@@ -122,6 +123,11 @@ module {
     x86.call maxon_panic
   __range_ok_13:
     x86.mov eax, [rbp-112]
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, 8
+    x86.mov [rbp-120], eax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-120]
     x86.epilogue
     x86.ret
   }

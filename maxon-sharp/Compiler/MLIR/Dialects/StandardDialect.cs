@@ -999,6 +999,17 @@ public class StdLoadIndirectOp(StdValue basePtr, int fieldOffset, MlirType field
   public override int PureResultId => Result.Id;
 }
 
+/// Null-safe load: returns [basePtr + fieldOffset] if basePtr != null, else returns 0.
+public class StdNullSafeLoadI64Op(StdI64 basePtr, int fieldOffset) : StandardOp {
+  public override string Mnemonic => $"memref.null_safe_load %{BasePtr.Id}+{FieldOffset}";
+  public StdI64 BasePtr { get; } = basePtr;
+  public int FieldOffset { get; } = fieldOffset;
+  public StdI64 Result { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [BasePtr];
+  public override int PureResultId => Result.Id;
+}
+
 public static class StdValueFactory {
   public static StdValue CreateStdValueForType(MlirType type) {
     if (type == MlirType.F32) return new StdF32(MlirContext.Current.NextId());

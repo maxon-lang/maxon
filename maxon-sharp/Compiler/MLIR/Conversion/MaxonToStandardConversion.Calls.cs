@@ -121,6 +121,12 @@ public static partial class MaxonToStandardConversion {
       if (calleeRetStructType != null && callResult != null) {
         // Struct return: store the heap pointer in a named variable
         var retVarName = $"__callret_{result.Id}";
+        // In loops, the same slot is reused — release old value before overwriting.
+        // The slot is zero-initialized in the entry block, so first iteration is a no-op.
+        if (varTypes.ContainsKey(retVarName)) {
+          var oldVal = (StdI64)EmitLoad(block, retVarName, varTypes);
+          EmitTypeAwareRelease(block, oldVal, calleeRetStructType.Name, typeDefs);
+        }
         EmitStore(block, callResult, retVarName, varTypes);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = calleeRetStructType.Name;
@@ -128,6 +134,11 @@ public static partial class MaxonToStandardConversion {
         // Associated-value enum return: unpack heap pointer into flat vars
         var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;
         var retVarName = $"__callret_{result.Id}";
+        // In loops, release old enum heap block before overwriting
+        if (varTypes.ContainsKey(retVarName)) {
+          var oldEnumVal = (StdI64)EmitLoad(block, retVarName, varTypes);
+          block.AddOp(new StdCallRuntimeOp("maxon_release", [oldEnumVal], null));
+        }
 
         if (isTryCall) {
           // try_call returns null (0) on error — guard against null dereference
@@ -142,6 +153,11 @@ public static partial class MaxonToStandardConversion {
           var safePtr = new StdSelectI64Op(isNull.Result, dummyPtr, (StdI64)callResult);
           block.AddOp(safePtr);
           EmitStore(block, safePtr.Result, retVarName, varTypes);
+          // Free the unused pointer: on success the dummy is unused, on error callResult is 0.
+          // Select: isNull=true (error) → 0 (no-op), isNull=false (success) → dummyPtr
+          var dummyToFree = new StdSelectI64Op(isNull.Result, zeroConst.Result, dummyPtr);
+          block.AddOp(dummyToFree);
+          block.AddOp(new StdCallRuntimeOp("maxon_release", [dummyToFree.Result], null));
         } else {
           EmitStore(block, callResult, retVarName, varTypes);
         }
@@ -158,6 +174,35 @@ public static partial class MaxonToStandardConversion {
         valueMap[result] = callResult;
       }
     }
+
+    // Release literal temporary arguments after the call.
+    // String/character literals create heap-allocated temps that the callee doesn't own.
+    // Also release __struct_* temps (array/managed literal temps passed to init functions).
+    for (int i = 0; i < args.Count; i++) {
+      if (!structVarNames.TryGetValue(args[i].Id, out var argVarName)) continue;
+      // Release known literal temps and struct literal temps
+      bool isLiteralTemp = argVarName.StartsWith("__strtmp_") || argVarName.StartsWith("__chrtmp_")
+          || argVarName.StartsWith("__interptmp_") || argVarName.StartsWith("__bstrtmp_");
+      bool isStructLiteralTemp = argVarName.StartsWith("__struct_");
+      if (!isLiteralTemp && !isStructLiteralTemp) continue;
+      // Skip self argument for instance methods — callee doesn't own it
+      if (i == 0 && calleeFunc.ParamNames.Count > 0 && calleeFunc.ParamNames[0] == "self") continue;
+      // Determine type from structValueTypes or callee param type
+      string? argTypeName = null;
+      if (structValueTypes.TryGetValue(args[i].Id, out var svt)) {
+        argTypeName = svt;
+      } else if (i < calleeFunc.ParamTypes.Count && calleeFunc.ParamTypes[i] is MlirStructType paramStructType) {
+        argTypeName = paramStructType.Name;
+      }
+      if (argTypeName == null) continue;
+      if (!varTypes.ContainsKey(argVarName)) continue;
+      var argHeapPtr = (StdI64)EmitLoad(block, argVarName, varTypes);
+      EmitTypeAwareRelease(block, argHeapPtr, argTypeName, typeDefs);
+    }
+
+    // NOTE: Enum packaging blocks (from FlattenCallArgs) are NOT released here.
+    // The callee may store the heap pointer (e.g., Array.push stores it in the buffer).
+    // Releasing here would create dangling pointers in the array.
   }
 
   private static void LowerReturn(
@@ -169,7 +214,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
-    HashSet<string> ownedStructVars) {
+    Dictionary<string, string> ownedStructVars,
+    Dictionary<int, string> fnEnvVarNames) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -188,7 +234,13 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Emit decref for all owned struct vars that are NOT the returned value
-    EmitScopeCleanup(block, ownedStructVars, returnedVarName, varTypes);
+    EmitScopeCleanup(block, ownedStructVars, returnedVarName, varTypes, typeDefs);
+
+    // Free closure environment allocations
+    foreach (var envVarName in fnEnvVarNames.Values.Distinct()) {
+      var envPtr = (StdI64)EmitLoad(block, envVarName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("maxon_release", [envPtr], null));
+    }
 
     // Associated-value enum return: caller expects a heap pointer, not flat vars
     if (retOp.Value != null
@@ -220,18 +272,193 @@ public static partial class MaxonToStandardConversion {
   /// <summary>
   /// Emit release (decref + free-if-zero) for all owned struct variables at scope exit.
   /// The returned variable is skipped since its ownership transfers to the caller.
+  /// Uses type-aware release: structs with __ManagedMemory fields use maxon_release_with_managed
+  /// to deep-free inner allocations when the outer refcount reaches 0.
   /// </summary>
   private static void EmitScopeCleanup(
     MlirBlock<StandardOp> block,
-    HashSet<string> ownedStructVars,
+    Dictionary<string, string> ownedStructVars,
     string? returnedVarName,
-    Dictionary<string, string> varTypes) {
-    foreach (var varName in ownedStructVars) {
+    Dictionary<string, string> varTypes,
+    Dictionary<string, MlirType> typeDefs) {
+    foreach (var (varName, typeName) in ownedStructVars) {
       if (varName == returnedVarName) continue;
-      Logger.Debug(LogCategory.Mlir, $"Scope cleanup: releasing '{varName}' (returned={returnedVarName})");
+      Logger.Debug(LogCategory.Mlir, $"Scope cleanup: releasing '{varName}' type={typeName} (returned={returnedVarName})");
       var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
-      block.AddOp(new StdCallRuntimeOp("maxon_release", [heapPtr], null));
+      EmitTypeAwareRelease(block, heapPtr, typeName, typeDefs);
     }
+  }
+
+  /// <summary>
+  /// Emit the appropriate release call for a heap pointer based on its type.
+  /// Recursively resolves inner struct fields to find __ManagedMemory and call
+  /// the right runtime release function.
+  /// </summary>
+  private static void EmitTypeAwareRelease(
+    MlirBlock<StandardOp> block,
+    StdI64 heapPtr,
+    string typeName,
+    Dictionary<string, MlirType> typeDefs) {
+    // __ManagedMemory itself needs maxon_release_managed (frees buffer if capacity>0)
+    if (typeName == "__ManagedMemory") {
+      block.AddOp(new StdCallRuntimeOp("maxon_release_managed", [heapPtr], null));
+      return;
+    }
+
+    // Check for array-of-managed-elements: dispatch to element-aware release.
+    // Only applies to Array-like types where __ManagedMemory is at offset 8 (not String where it's at 0).
+    if (typeDefs.TryGetValue(typeName, out var arrayTypeDef) && arrayTypeDef is MlirStructType arrayStructType
+        && arrayStructType.TypeParams.TryGetValue("Element", out var elemType)
+        && arrayStructType.Fields.Any(f => f.Type is MlirStructType st && st.Name == "__ManagedMemory" && f.Offset == 8)) {
+      // Union-typed elements (associated-value enums): each element is a heap pointer
+      if (elemType is MlirUnionType unionElemType && unionElemType.HasAssociatedValues) {
+        block.AddOp(new StdCallRuntimeOp("maxon_release_array_of_simple", [heapPtr], null));
+        return;
+      }
+      if (elemType is MlirStructType elemStructType) {
+        var elemInnerFields = GetInnerHeapFields(elemStructType.Name, typeDefs);
+        if (elemInnerFields.Count == 1 && elemInnerFields[0].isDirect) {
+          // Element has direct __ManagedMemory (e.g., String)
+          var elemOff = new StdConstI64Op(elemInnerFields[0].offset);
+          block.AddOp(elemOff);
+          block.AddOp(new StdCallRuntimeOp("maxon_release_array_of_with_managed",
+            [heapPtr, elemOff.Result], null));
+          return;
+        } else if (elemInnerFields.Count == 0) {
+          // Element is a simple struct (no managed fields)
+          block.AddOp(new StdCallRuntimeOp("maxon_release_array_of_simple", [heapPtr], null));
+          return;
+        } else if (elemInnerFields.Count == 1 && !elemInnerFields[0].isDirect) {
+          // Element has an indirect managed field (e.g., struct with Array field)
+          var fieldOff = new StdConstI64Op(elemInnerFields[0].offset);
+          var innerOff = new StdConstI64Op(elemInnerFields[0].innerManagedOffset);
+          block.AddOp(fieldOff);
+          block.AddOp(innerOff);
+          block.AddOp(new StdCallRuntimeOp("maxon_release_array_of_nested",
+            [heapPtr, fieldOff.Result, innerOff.Result], null));
+          return;
+        }
+      }
+      // For complex element types, fall through to the existing logic
+    }
+
+    // Look up struct type definition
+    if (!typeDefs.TryGetValue(typeName, out var typeDef) || typeDef is not MlirStructType structType) {
+      block.AddOp(new StdCallRuntimeOp("maxon_release", [heapPtr], null));
+      return;
+    }
+
+    // Classify fields into __ManagedMemory vs other struct types
+    var managedFields = new List<MlirStructField>();
+    var structFields = new List<MlirStructField>();
+    foreach (var field in structType.Fields) {
+      if (field.Type is MlirStructType fieldSt) {
+        if (fieldSt.Name == "__ManagedMemory")
+          managedFields.Add(field);
+        else
+          structFields.Add(field);
+      }
+    }
+    if (managedFields.Count == 0 && structFields.Count == 0) {
+      block.AddOp(new StdCallRuntimeOp("maxon_release", [heapPtr], null));
+      return;
+    }
+
+    // Managed-only fast path: use efficient runtime functions
+    if (structFields.Count == 0 && managedFields.Count <= 3) {
+      if (managedFields.Count == 1) {
+        var off = new StdConstI64Op(managedFields[0].Offset);
+        block.AddOp(off);
+        block.AddOp(new StdCallRuntimeOp("maxon_release_with_managed", [heapPtr, off.Result], null));
+      } else if (managedFields.Count == 2) {
+        var off1 = new StdConstI64Op(managedFields[0].Offset);
+        var off2 = new StdConstI64Op(managedFields[1].Offset);
+        block.AddOp(off1);
+        block.AddOp(off2);
+        block.AddOp(new StdCallRuntimeOp("maxon_release_with_managed_2", [heapPtr, off1.Result, off2.Result], null));
+      } else {
+        var off1 = new StdConstI64Op(managedFields[0].Offset);
+        var off2 = new StdConstI64Op(managedFields[1].Offset);
+        var off3 = new StdConstI64Op(managedFields[2].Offset);
+        block.AddOp(off1);
+        block.AddOp(off2);
+        block.AddOp(off3);
+        block.AddOp(new StdCallRuntimeOp("maxon_release_with_managed_3", [heapPtr, off1.Result, off2.Result, off3.Result], null));
+      }
+      return;
+    }
+
+    // Has struct-typed fields: inline deep release with recursive field cleanup.
+    // Uses StdNullSafeLoadI64Op so recursive calls are safe when heapPtr is null.
+    var decrefResult = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("maxon_decref", [heapPtr], decrefResult));
+    var zeroConst = new StdConstI64Op(0);
+    block.AddOp(zeroConst);
+    // Combine null check with refcount check: only release when ptr is non-null AND refcount reached 0.
+    // maxon_decref(null) returns 0, which would falsely trigger release without the null check.
+    var isNotNull = new StdCmpI64Op("ne", heapPtr, zeroConst.Result);
+    block.AddOp(isNotNull);
+    var isRefZero = new StdCmpI64Op("eq", decrefResult, zeroConst.Result);
+    block.AddOp(isRefZero);
+    var shouldRelease = new StdAndI1Op(isNotNull.Result, isRefZero.Result);
+    block.AddOp(shouldRelease);
+
+    // Release struct-typed fields recursively
+    foreach (var field in structFields) {
+      var fieldSt = (MlirStructType)field.Type;
+      var loadOp = new StdNullSafeLoadI64Op(heapPtr, field.Offset);
+      block.AddOp(loadOp);
+      var fieldOrNull = new StdSelectI64Op(shouldRelease.Result, loadOp.Result, zeroConst.Result);
+      block.AddOp(fieldOrNull);
+      EmitTypeAwareRelease(block, fieldOrNull.Result, fieldSt.Name, typeDefs);
+    }
+
+    // Release __ManagedMemory fields
+    foreach (var field in managedFields) {
+      var loadOp = new StdNullSafeLoadI64Op(heapPtr, field.Offset);
+      block.AddOp(loadOp);
+      var managedOrNull = new StdSelectI64Op(shouldRelease.Result, loadOp.Result, zeroConst.Result);
+      block.AddOp(managedOrNull);
+      block.AddOp(new StdCallRuntimeOp("maxon_release_managed", [managedOrNull.Result], null));
+    }
+
+    // Free the outer struct if refcount reached 0
+    var outerOrNull = new StdSelectI64Op(shouldRelease.Result, heapPtr, zeroConst.Result);
+    block.AddOp(outerOrNull);
+    block.AddOp(new StdCallRuntimeOp("maxon_free", [outerOrNull.Result], null));
+  }
+
+  /// <summary>Check if a struct type directly contains a __ManagedMemory field.</summary>
+  private static bool HasManagedMemoryField(MlirStructType structType) {
+    return structType.Fields.Any(f => f.Type is MlirStructType st && st.Name == "__ManagedMemory");
+  }
+
+  /// <summary>
+  /// Get information about inner heap fields that need cleanup (used for array-of-elements detection).
+  /// Returns (offset, isDirect, innerManagedOffset) tuples where:
+  /// - isDirect=true: field IS a __ManagedMemory (use maxon_release_managed)
+  /// - isDirect=false: field is a struct CONTAINING __ManagedMemory at innerManagedOffset
+  /// </summary>
+  private static List<(int offset, bool isDirect, int innerManagedOffset)> GetInnerHeapFields(
+    string typeName, Dictionary<string, MlirType> typeDefs) {
+    var fields = new List<(int offset, bool isDirect, int innerManagedOffset)>();
+    if (!typeDefs.TryGetValue(typeName, out var typeDef) || typeDef is not MlirStructType structType)
+      return fields;
+
+    foreach (var field in structType.Fields) {
+      if (field.Type is MlirStructType fieldStructType) {
+        if (fieldStructType.Name == "__ManagedMemory") {
+          fields.Add((field.Offset, isDirect: true, innerManagedOffset: 0));
+        } else {
+          var managedField = fieldStructType.Fields.FirstOrDefault(
+            f => f.Type is MlirStructType st && st.Name == "__ManagedMemory");
+          if (managedField != null) {
+            fields.Add((field.Offset, isDirect: false, innerManagedOffset: managedField.Offset));
+          }
+        }
+      }
+    }
+    return fields;
   }
 
   private static void LowerThrow(
@@ -241,9 +468,16 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<string, string> varTypes,
     Dictionary<string, MlirType> typeDefs,
-    HashSet<string> ownedStructVars) {
+    Dictionary<string, string> ownedStructVars,
+    Dictionary<int, string> fnEnvVarNames) {
     // Clean up owned struct vars before throwing (no struct is being "returned")
-    EmitScopeCleanup(block, ownedStructVars, returnedVarName: null, varTypes);
+    EmitScopeCleanup(block, ownedStructVars, returnedVarName: null, varTypes, typeDefs);
+
+    // Free closure environment allocations
+    foreach (var envVarName in fnEnvVarNames.Values.Distinct()) {
+      var envPtr = (StdI64)EmitLoad(block, envVarName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("maxon_release", [envPtr], null));
+    }
 
     // Check if this is an associated-value error enum
     if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)

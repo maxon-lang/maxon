@@ -30,22 +30,28 @@ module {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
-    x86.mov eax, 99
-    x86.mov ecx, 99
-    x86.mov edx, 16
-    x86.mov rcx, rdx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, 99
+    x86.mov ebx, 99
+    x86.mov esi, 16
+    x86.mov rcx, rsi
     x86.call maxon_alloc
-    x86.mov [rbp-16], eax
-    x86.mov ebx, [rbp-16]
-    x86.mov esi, 99
-    x86.mov [ebx+0], esi
-    x86.mov edi, [rbp-16]
-    x86.mov r8, 99
-    x86.mov [edi+8], r8
     x86.mov [rbp-24], eax
-    x86.mov r9, [rbp-8]
+    x86.mov edi, [rbp-24]
+    x86.mov r8, 99
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-24]
+    x86.mov ecx, 99
+    x86.mov [r9+8], ecx
+    x86.mov ecx, [rbp-16]
+    x86.call maxon_release
     x86.mov eax, [rbp-24]
-    x86.mov [r9+0], eax
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [eax+0], ecx
     x86.epilogue
     x86.ret
   }
@@ -79,7 +85,7 @@ module {
     x86.mov rdx, rax
     x86.call maxon_i64_to_string
     x86.mov ecx, [rbp-16]
-    x86.lea_rdata rdx, [__interp_lit_27]
+    x86.lea_rdata rdx, [__interp_lit_28]
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.lea esi, [eax + edx]
@@ -126,6 +132,14 @@ module {
     x86.mov rdi, eax
     x86.mov rcx, edx
     x86.rep_movsb
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-40]
+    x86.add eax, ecx
+    x86.xor ecx, ecx
+    x86.mov byte ptr [eax+0], ecxb
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, rax
+    x86.call maxon_free
     x86.mov eax, 32
     x86.mov rcx, rax
     x86.call maxon_alloc
@@ -154,6 +168,11 @@ module {
     x86.mov eax, [rbp-88]
     x86.mov rcx, rax
     x86.call stdlib.Print.print
+    x86.mov eax, [rbp-88]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.mov eax, [rbp-8]
     x86.mov ecx, [eax+8]
     x86.mov eax, 21
@@ -165,7 +184,7 @@ module {
     x86.mov rdx, rax
     x86.call maxon_i64_to_string
     x86.mov ecx, [rbp-96]
-    x86.lea_rdata rdx, [__interp_lit_27]
+    x86.lea_rdata rdx, [__interp_lit_28]
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.lea esi, [eax + edx]
@@ -212,6 +231,14 @@ module {
     x86.mov rdi, eax
     x86.mov rcx, edx
     x86.rep_movsb
+    x86.mov eax, [rbp-112]
+    x86.mov ecx, [rbp-120]
+    x86.add eax, ecx
+    x86.xor ecx, ecx
+    x86.mov byte ptr [eax+0], ecxb
+    x86.mov eax, [rbp-96]
+    x86.mov rcx, rax
+    x86.call maxon_free
     x86.mov eax, 32
     x86.mov rcx, rax
     x86.call maxon_alloc
@@ -240,6 +267,11 @@ module {
     x86.mov eax, [rbp-168]
     x86.mov rcx, rax
     x86.call stdlib.Print.print
+    x86.mov eax, [rbp-168]
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call maxon_release_with_managed
     x86.xor eax, eax
     x86.mov ecx, [rbp-8]
     x86.call maxon_release

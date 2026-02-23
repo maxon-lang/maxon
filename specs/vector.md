@@ -216,44 +216,45 @@ module {
     %21 = memref.load v : i64
     %22 = memref.load_indirect %21+8
     memref.store_indirect %20, %22+0
-    %23 = arith.constant {value = 3 : i64}
-    memref.store_indirect %23, %22+16
-    %24 = arith.constant {value = 0 : i64}
-    %25 = memref.load v : i64
-    %26, %27 = func.try_call @Vec3.get %25, %24
-    %28 = arith.constant {value = -1 : i64}
-    memref.store %28, __try_default_2
-    memref.store %26, __try_result_1
-    %29 = arith.constant {value = 0 : i64}
-    %30 = arith.cmpi ne %27, %29
-    cf.cond_br %30 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %23 = arith.constant {value = 0 : i64}
+    %24 = memref.load v : i64
+    %25, %26 = func.try_call @Vec3.get %24, %23
+    %27 = arith.constant {value = -1 : i64}
+    memref.store %27, __try_default_2
+    memref.store %25, __try_result_1
+    %28 = arith.constant {value = 0 : i64}
+    %29 = arith.cmpi ne %26, %28
+    cf.cond_br %29 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %31 = memref.load __try_default_2 : i64
-    memref.store %31, __try_result_1
+    %30 = memref.load __try_default_2 : i64
+    memref.store %30, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %32 = memref.load __try_result_1 : i64
-    memref.store %32, __range_val_5
-    %33 = arith.constant {value = 0 : i64}
-    %34 = arith.cmpi lt %32, %33
-    %35 = arith.constant {value = 4294967295 : i64}
-    %36 = arith.cmpi gt %32, %35
-    %37 = arith.ori1 %34, %36
-    cf.cond_br %37 [then: __range_panic_5, else: __range_ok_5]
+    %31 = memref.load __try_result_1 : i64
+    memref.store %31, __range_val_5
+    %32 = arith.constant {value = 0 : i64}
+    %33 = arith.cmpi lt %31, %32
+    %34 = arith.constant {value = 4294967295 : i64}
+    %35 = arith.cmpi gt %31, %34
+    %36 = arith.ori1 %33, %35
+    cf.cond_br %36 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %38 = memref.lea_symdata __panic_msg_25
-    %39 = std.ptr_to_i64 %38
-    std.call_runtime @maxon_panic %39
+    %37 = memref.lea_symdata __panic_msg_25
+    %38 = std.ptr_to_i64 %37
+    std.call_runtime @maxon_panic %38
   __range_ok_5:
-    %40 = memref.load __range_val_5 : i64
-    func.return %40
+    %39 = memref.load __range_val_5 : i64
+    %40 = memref.load v : i64
+    %41 = arith.constant {value = 8 : i64}
+    std.call_runtime @maxon_release_with_managed %40, %41
+    func.return %39
   }
 }
 === x86
 module {
   func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.mov [rbp-8], ecx
@@ -295,8 +296,6 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov eax, 3
-    x86.mov [edx+16], eax
     x86.xor eax, eax
     x86.mov ecx, [rbp-40]
     x86.mov rdx, rax
@@ -331,6 +330,11 @@ module {
     x86.call maxon_panic
   __range_ok_5:
     x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, 8
+    x86.mov [rbp-72], eax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }
@@ -455,48 +459,49 @@ module {
     %21 = memref.load v : i64
     %22 = memref.load_indirect %21+8
     memref.store_indirect %20, %22+0
-    %23 = arith.constant {value = 3 : i64}
-    memref.store_indirect %23, %22+16
-    %24 = arith.constant {value = 0 : i64}
-    %25 = arith.constant {value = 42 : i64}
-    %26 = memref.load v : i64
-    func.call @Vec3.set %26, %24, %25
-    %27 = arith.constant {value = 0 : i64}
-    %28 = memref.load v : i64
-    %29, %30 = func.try_call @Vec3.get %28, %27
+    %23 = arith.constant {value = 0 : i64}
+    %24 = arith.constant {value = 42 : i64}
+    %25 = memref.load v : i64
+    func.call @Vec3.set %25, %23, %24
+    %26 = arith.constant {value = 0 : i64}
+    %27 = memref.load v : i64
+    %28, %29 = func.try_call @Vec3.get %27, %26
+    %30 = arith.constant {value = 0 : i64}
+    memref.store %30, __try_default_2
+    memref.store %28, __try_result_1
     %31 = arith.constant {value = 0 : i64}
-    memref.store %31, __try_default_2
-    memref.store %29, __try_result_1
-    %32 = arith.constant {value = 0 : i64}
-    %33 = arith.cmpi ne %30, %32
-    cf.cond_br %33 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %32 = arith.cmpi ne %29, %31
+    cf.cond_br %32 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %34 = memref.load __try_default_2 : i64
-    memref.store %34, __try_result_1
+    %33 = memref.load __try_default_2 : i64
+    memref.store %33, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %35 = memref.load __try_result_1 : i64
-    memref.store %35, __range_val_5
-    %36 = arith.constant {value = 0 : i64}
-    %37 = arith.cmpi lt %35, %36
-    %38 = arith.constant {value = 4294967295 : i64}
-    %39 = arith.cmpi gt %35, %38
-    %40 = arith.ori1 %37, %39
-    cf.cond_br %40 [then: __range_panic_5, else: __range_ok_5]
+    %34 = memref.load __try_result_1 : i64
+    memref.store %34, __range_val_5
+    %35 = arith.constant {value = 0 : i64}
+    %36 = arith.cmpi lt %34, %35
+    %37 = arith.constant {value = 4294967295 : i64}
+    %38 = arith.cmpi gt %34, %37
+    %39 = arith.ori1 %36, %38
+    cf.cond_br %39 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %41 = memref.lea_symdata __panic_msg_27
-    %42 = std.ptr_to_i64 %41
-    std.call_runtime @maxon_panic %42
+    %40 = memref.lea_symdata __panic_msg_27
+    %41 = std.ptr_to_i64 %40
+    std.call_runtime @maxon_panic %41
   __range_ok_5:
-    %43 = memref.load __range_val_5 : i64
-    func.return %43
+    %42 = memref.load __range_val_5 : i64
+    %43 = memref.load v : i64
+    %44 = arith.constant {value = 8 : i64}
+    std.call_runtime @maxon_release_with_managed %43, %44
+    func.return %42
   }
 }
 === x86
 module {
   func @vector.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.mov [rbp-8], ecx
@@ -538,8 +543,6 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov eax, 3
-    x86.mov [edx+16], eax
     x86.xor eax, eax
     x86.mov ecx, 42
     x86.mov edx, [rbp-40]
@@ -581,6 +584,11 @@ module {
     x86.call maxon_panic
   __range_ok_5:
     x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, 8
+    x86.mov [rbp-72], eax
+    x86.call maxon_release_with_managed
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }

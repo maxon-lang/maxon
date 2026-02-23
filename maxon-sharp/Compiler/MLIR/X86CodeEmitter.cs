@@ -263,6 +263,9 @@ public partial class X86CodeEmitter() {
       case X86JmpOp jmp:
         EmitJmp(jmp.Target);
         break;
+      case X86LabelDefOp labelDef:
+        DefineLabel(labelDef.Name);
+        break;
       case X86CqoOp:
         EmitBytes(0x48, 0x99); // CQO: REX.W + 99
         break;
@@ -357,7 +360,7 @@ public partial class X86CodeEmitter() {
 
   // --- Start wrapper (_start entry point) ---
 
-  public void EmitStartWrapper(string mainFunctionName) {
+  public void EmitStartWrapper(string mainFunctionName, bool hasGlobalCleanup = false) {
     DefineLabel("_start");
 
     // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
@@ -368,8 +371,13 @@ public partial class X86CodeEmitter() {
     _relCallFixups.Add((_code.Count, mainFunctionName));
     EmitDword(0); // placeholder
 
-    // Save main's return value, run leak check, restore it
+    // Save main's return value, optionally clean up globals, run leak check, restore it
     EmitPushReg(X86Register.Rax);
+    if (hasGlobalCleanup) {
+      EmitByte(0xE8);
+      _relCallFixups.Add((_code.Count, "__maxon_global_cleanup"));
+      EmitDword(0);
+    }
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, "maxon_leak_check"));
     EmitDword(0); // placeholder
