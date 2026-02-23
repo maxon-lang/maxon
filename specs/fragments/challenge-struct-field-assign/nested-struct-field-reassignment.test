@@ -22,7 +22,7 @@ ExitCode: 42
 module {
   func @challenge-struct-field-assign.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=48
     x86.mov eax, 10
     x86.mov ecx, 8
     x86.call maxon_alloc
@@ -70,39 +70,9 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov ecx, [rbp-8]
     x86.mov [rbp-48], eax
-    x86.call maxon_release
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-56], eax
-    x86.mov rcx, rax
-    x86.call maxon_decref
-    x86.xor ecx, ecx
-    x86.mov edx, [rbp-56]
-    x86.cmp edx, ecx
-    x86.setne ebx
-    x86.movzx ebx, ebxb
-    x86.cmp eax, ecx
-    x86.sete esi
-    x86.movzx esi, esib
-    x86.and ebx, esi
-    x86.xor edi, edi
-    x86.test edx, edx
-    x86.jz __nsload_31
-    x86.mov edi, [edx+0]
-    x86.label __nsload_31
-    x86.test ebx, ebx
-    x86.mov r8, ecx
-    x86.cmovne r8, edi
-    x86.mov [rbp-64], ebx
-    x86.mov rcx, r8
-    x86.call maxon_release
-    x86.mov r9, [rbp-56]
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-64]
-    x86.test ecx, ecx
-    x86.mov edx, eax
-    x86.cmovne edx, r9
-    x86.mov rcx, rdx
-    x86.call maxon_free
+    x86.call __destroy_Inner
+    x86.mov rcx, [rbp-16]
+    x86.call __destroy_Outer
     x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret

@@ -360,7 +360,7 @@ public partial class X86CodeEmitter() {
 
   // --- Start wrapper (_start entry point) ---
 
-  public void EmitStartWrapper(string mainFunctionName, bool hasGlobalCleanup = false) {
+  public void EmitStartWrapper(string mainFunctionName, string? globalCleanupFunctionName = null) {
     DefineLabel("_start");
 
     // sub rsp, 0x28 (shadow space + alignment for Windows x64 ABI)
@@ -373,9 +373,9 @@ public partial class X86CodeEmitter() {
 
     // Save main's return value, optionally clean up globals, run leak check, restore it
     EmitPushReg(X86Register.Rax);
-    if (hasGlobalCleanup) {
+    if (!string.IsNullOrEmpty(globalCleanupFunctionName)) {
       EmitByte(0xE8);
-      _relCallFixups.Add((_code.Count, "__maxon_global_cleanup"));
+      _relCallFixups.Add((_code.Count, globalCleanupFunctionName));
       EmitDword(0);
     }
     EmitByte(0xE8);

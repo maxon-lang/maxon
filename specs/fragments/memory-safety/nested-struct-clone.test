@@ -70,14 +70,14 @@ module {
     x86.mov r9, [rbp-40]
     x86.mov [r8+8], r9
     x86.mov rcx, [rbp-24]
-    x86.call maxon_release
+    x86.call __destroy_Inner
     x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=288
+    x86.prologue stack_size=256
     x86.mov eax, 42
     x86.mov ecx, 8
     x86.call maxon_alloc
@@ -207,10 +207,8 @@ module {
     x86.mov rcx, rax
     x86.call stdlib.Print.print
     x86.mov eax, [rbp-120]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_String
     x86.mov eax, [rbp-16]
     x86.mov ecx, [eax+8]
     x86.mov eax, 21
@@ -282,74 +280,14 @@ module {
     x86.mov rcx, rax
     x86.call stdlib.Print.print
     x86.mov eax, [rbp-184]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_String
     x86.xor eax, eax
     x86.mov ecx, [rbp-16]
-    x86.mov [rbp-256], ecx
-    x86.call maxon_decref
-    x86.xor ecx, ecx
-    x86.mov edx, [rbp-256]
-    x86.cmp edx, ecx
-    x86.setne ebx
-    x86.movzx ebx, ebxb
-    x86.cmp eax, ecx
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.and ebx, eax
-    x86.xor eax, eax
-    x86.test edx, edx
-    x86.jz __nsload_145
-    x86.mov eax, [edx+0]
-    x86.label __nsload_145
-    x86.test ebx, ebx
-    x86.mov esi, ecx
-    x86.cmovne esi, eax
-    x86.mov [rbp-264], ebx
-    x86.mov rcx, rsi
-    x86.call maxon_release
-    x86.mov eax, [rbp-256]
-    x86.xor ecx, ecx
-    x86.mov edx, [rbp-264]
-    x86.test edx, edx
-    x86.mov ebx, ecx
-    x86.cmovne ebx, eax
-    x86.mov rcx, rbx
-    x86.call maxon_free
+    x86.call __destroy_Outer
     x86.mov eax, [rbp-24]
-    x86.mov [rbp-272], eax
     x86.mov rcx, rax
-    x86.call maxon_decref
-    x86.xor ecx, ecx
-    x86.mov edx, [rbp-272]
-    x86.cmp edx, ecx
-    x86.setne ebx
-    x86.movzx ebx, ebxb
-    x86.cmp eax, ecx
-    x86.sete eax
-    x86.movzx eax, eaxb
-    x86.and ebx, eax
-    x86.xor eax, eax
-    x86.test edx, edx
-    x86.jz __nsload_154
-    x86.mov eax, [edx+0]
-    x86.label __nsload_154
-    x86.test ebx, ebx
-    x86.mov esi, ecx
-    x86.cmovne esi, eax
-    x86.mov [rbp-280], ebx
-    x86.mov rcx, rsi
-    x86.call maxon_release
-    x86.mov eax, [rbp-272]
-    x86.xor ecx, ecx
-    x86.mov edx, [rbp-280]
-    x86.test edx, edx
-    x86.mov ebx, ecx
-    x86.cmovne ebx, eax
-    x86.mov rcx, rbx
-    x86.call maxon_free
+    x86.call __destroy_Outer
     x86.xor eax, eax
     x86.epilogue
     x86.ret

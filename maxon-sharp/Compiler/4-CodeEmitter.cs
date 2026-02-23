@@ -58,8 +58,11 @@ public class CodeEmitter {
 
     // Emit _start wrapper first (entry point at offset 0)
     // _start calls main and then ExitProcess
-    bool hasGlobalCleanup = module.Functions.Any(f => f.Name == "__maxon_global_cleanup");
-    emitter.EmitStartWrapper(mainFunc.Name, hasGlobalCleanup);
+    var globalCleanupName = module.Functions
+      .Where(f => f.Name == "__maxon_global_cleanup" || f.Name.EndsWith(".__maxon_global_cleanup"))
+      .Select(f => f.Name)
+      .FirstOrDefault();
+    emitter.EmitStartWrapper(mainFunc.Name, globalCleanupName);
 
     // Emit all functions (main and others)
     EmitFunction(emitter, mainFunc);
@@ -72,6 +75,9 @@ public class CodeEmitter {
 
     // Emit runtime allocation functions (maxon_alloc, maxon_free)
     emitter.EmitRuntimeFunctions();
+
+    // Emit per-type destructor functions (__destroy_TypeName)
+    emitter.EmitDestructors(module.TypeDefs);
 
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();

@@ -20,7 +20,7 @@ ExitCode: 1
 module {
   func @union-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
+    x86.prologue stack_size=112
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.mov edx, 5
@@ -88,15 +88,22 @@ module {
     x86.test ecx, ecx
     x86.mov esi, edx
     x86.cmovne esi, eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-104], ebx
+    x86.mov [rbp-112], esi
+    x86.mov rcx, rax
+    x86.call __destroy_String
     x86.mov eax, 99
     x86.mov ecx, 1
     x86.mov [rbp-40], ecx
     x86.mov [rbp-48], eax
-    x86.mov [rbp-56], esi
+    x86.mov eax, [rbp-112]
+    x86.mov [rbp-56], eax
     x86.xor eax, eax
     x86.mov [rbp-64], eax
     x86.xor eax, eax
-    x86.cmp ebx, eax
+    x86.mov ecx, [rbp-104]
+    x86.cmp ecx, eax
     x86.je union-full.main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov eax, [rbp-40]

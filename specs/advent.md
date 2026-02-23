@@ -300,66 +300,60 @@ module {
     cf.cond_br %30 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
   otherwise_default_error_2:
     %31 = memref.load __try_result_0 : i64
-    %32 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %31, %32
-    %33 = memref.load __try_default_1 : i64
-    memref.store %33, __try_result_0
+    std.call_runtime @__destroy_String %31
+    %32 = memref.load __try_default_1 : i64
+    memref.store %32, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_cleanup_4:
-    %34 = memref.load __try_default_1 : i64
-    %35 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %34, %35
+    %33 = memref.load __try_default_1 : i64
+    std.call_runtime @__destroy_String %33
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %36 = memref.load __try_result_0 : i64
-    %37, %38 = func.try_call @stdlib.Parsing.__int_fromString %36
-    %39 = arith.constant {value = 0 : i64}
-    memref.store %39, __try_default_6
-    memref.store %37, __try_result_5
-    %40 = arith.constant {value = 0 : i64}
-    %41 = arith.cmpi ne %38, %40
-    cf.cond_br %41 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
+    %34 = memref.load __try_result_0 : i64
+    %35, %36 = func.try_call @stdlib.Parsing.__int_fromString %34
+    %37 = arith.constant {value = 0 : i64}
+    memref.store %37, __try_default_6
+    memref.store %35, __try_result_5
+    %38 = arith.constant {value = 0 : i64}
+    %39 = arith.cmpi ne %36, %38
+    cf.cond_br %39 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
   otherwise_default_error_7:
-    %42 = memref.load __try_default_6 : i64
-    memref.store %42, __try_result_5
+    %40 = memref.load __try_default_6 : i64
+    memref.store %40, __try_result_5
     cf.br otherwise_default_continue_8
   otherwise_default_continue_8:
-    %43 = memref.load __try_result_5 : i64
-    %44 = arith.constant {value = 1000 : i64}
-    %45 = arith.cmpi gt %43, %44
-    cf.cond_br %45 [then: guard_9, else: guard_9.after]
+    %41 = memref.load __try_result_5 : i64
+    %42 = arith.constant {value = 1000 : i64}
+    %43 = arith.cmpi gt %41, %42
+    cf.cond_br %43 [then: guard_9, else: guard_9.after]
   guard_9:
-    %46 = arith.constant {value = 99 : i64}
-    %47 = memref.load args : i64
-    %48 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_array_of_with_managed %47, %48
-    %49 = memref.load __try_result_0 : i64
-    %50 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %49, %50
-    func.return %46
+    %44 = arith.constant {value = 99 : i64}
+    %45 = memref.load args : i64
+    std.call_runtime @__destroy_StringArray %45
+    %46 = memref.load __try_result_0 : i64
+    std.call_runtime @__destroy_String %46
+    func.return %44
   guard_9.after:
-    %51 = arith.constant {value = 3 : i64}
-    %52 = func.call @advent.multiply %51
-    memref.store %52, __range_val_10
-    %53 = arith.constant {value = 0 : i64}
-    %54 = arith.cmpi lt %52, %53
-    %55 = arith.constant {value = 4294967295 : i64}
-    %56 = arith.cmpi gt %52, %55
-    %57 = arith.ori1 %54, %56
-    cf.cond_br %57 [then: __range_panic_10, else: __range_ok_10]
+    %47 = arith.constant {value = 3 : i64}
+    %48 = func.call @advent.multiply %47
+    memref.store %48, __range_val_10
+    %49 = arith.constant {value = 0 : i64}
+    %50 = arith.cmpi lt %48, %49
+    %51 = arith.constant {value = 4294967295 : i64}
+    %52 = arith.cmpi gt %48, %51
+    %53 = arith.ori1 %50, %52
+    cf.cond_br %53 [then: __range_panic_10, else: __range_ok_10]
   __range_panic_10:
-    %58 = memref.lea_symdata __panic_msg_32
-    %59 = std.ptr_to_i64 %58
-    std.call_runtime @maxon_panic %59
+    %54 = memref.lea_symdata __panic_msg_32
+    %55 = std.ptr_to_i64 %54
+    std.call_runtime @maxon_panic %55
   __range_ok_10:
-    %60 = memref.load __range_val_10 : i64
-    %61 = memref.load args : i64
-    %62 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_array_of_with_managed %61, %62
-    %63 = memref.load __try_result_0 : i64
-    %64 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %63, %64
-    func.return %60
+    %56 = memref.load __range_val_10 : i64
+    %57 = memref.load args : i64
+    std.call_runtime @__destroy_StringArray %57
+    %58 = memref.load __try_result_0 : i64
+    std.call_runtime @__destroy_String %58
+    func.return %56
   }
 }
 === x86
@@ -418,20 +412,14 @@ module {
     x86.cmp ecx, eax
     x86.je advent.main.otherwise_default_cleanup_4
   otherwise_default_error_2:
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
-    x86.mov edx, [rbp-32]
-    x86.mov [rbp-40], edx
+    x86.mov rcx, [rbp-40]
+    x86.call __destroy_String
+    x86.mov ecx, [rbp-32]
+    x86.mov [rbp-40], ecx
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_cleanup_4:
-    x86.mov eax, [rbp-32]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.mov rcx, [rbp-32]
+    x86.call __destroy_String
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-40]
@@ -455,13 +443,9 @@ module {
   guard_9:
     x86.mov eax, 99
     x86.mov ecx, [rbp-8]
-    x86.xor edx, edx
-    x86.call maxon_release_array_of_with_managed
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_StringArray
+    x86.mov rcx, [rbp-40]
+    x86.call __destroy_String
     x86.mov eax, 99
     x86.epilogue
     x86.ret
@@ -488,14 +472,10 @@ module {
   __range_ok_10:
     x86.mov eax, [rbp-64]
     x86.mov ecx, [rbp-8]
-    x86.xor edx, edx
     x86.mov [rbp-72], eax
-    x86.call maxon_release_array_of_with_managed
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_StringArray
+    x86.mov rcx, [rbp-40]
+    x86.call __destroy_String
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
@@ -642,66 +622,60 @@ module {
     cf.cond_br %31 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
   otherwise_default_error_2:
     %32 = memref.load __try_result_0 : i64
-    %33 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %32, %33
-    %34 = memref.load __try_default_1 : i64
-    memref.store %34, __try_result_0
+    std.call_runtime @__destroy_String %32
+    %33 = memref.load __try_default_1 : i64
+    memref.store %33, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_cleanup_4:
-    %35 = memref.load __try_default_1 : i64
-    %36 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %35, %36
+    %34 = memref.load __try_default_1 : i64
+    std.call_runtime @__destroy_String %34
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %37 = memref.load __try_result_0 : i64
-    %38, %39 = func.try_call @stdlib.Parsing.__int_fromString %37
-    %40 = arith.constant {value = 0 : i64}
-    memref.store %40, __try_default_6
-    memref.store %38, __try_result_5
-    %41 = arith.constant {value = 0 : i64}
-    %42 = arith.cmpi ne %39, %41
-    cf.cond_br %42 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
+    %35 = memref.load __try_result_0 : i64
+    %36, %37 = func.try_call @stdlib.Parsing.__int_fromString %35
+    %38 = arith.constant {value = 0 : i64}
+    memref.store %38, __try_default_6
+    memref.store %36, __try_result_5
+    %39 = arith.constant {value = 0 : i64}
+    %40 = arith.cmpi ne %37, %39
+    cf.cond_br %40 [then: otherwise_default_error_7, else: otherwise_default_continue_8]
   otherwise_default_error_7:
-    %43 = memref.load __try_default_6 : i64
-    memref.store %43, __try_result_5
+    %41 = memref.load __try_default_6 : i64
+    memref.store %41, __try_result_5
     cf.br otherwise_default_continue_8
   otherwise_default_continue_8:
-    %44 = memref.load __try_result_5 : i64
-    %45 = arith.constant {value = 1000 : i64}
-    %46 = arith.cmpi gt %44, %45
-    cf.cond_br %46 [then: guard_9, else: guard_9.after]
+    %42 = memref.load __try_result_5 : i64
+    %43 = arith.constant {value = 1000 : i64}
+    %44 = arith.cmpi gt %42, %43
+    cf.cond_br %44 [then: guard_9, else: guard_9.after]
   guard_9:
-    %47 = arith.constant {value = 99 : i64}
-    %48 = memref.load args : i64
-    %49 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_array_of_with_managed %48, %49
-    %50 = memref.load __try_result_0 : i64
-    %51 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %50, %51
-    func.return %47
+    %45 = arith.constant {value = 99 : i64}
+    %46 = memref.load args : i64
+    std.call_runtime @__destroy_StringArray %46
+    %47 = memref.load __try_result_0 : i64
+    std.call_runtime @__destroy_String %47
+    func.return %45
   guard_9.after:
-    %52 = arith.constant {value = 3 : i64}
-    %53 = func.call @advent.multiply %52
-    memref.store %53, __range_val_10
-    %54 = arith.constant {value = 0 : i64}
-    %55 = arith.cmpi lt %53, %54
-    %56 = arith.constant {value = 4294967295 : i64}
-    %57 = arith.cmpi gt %53, %56
-    %58 = arith.ori1 %55, %57
-    cf.cond_br %58 [then: __range_panic_10, else: __range_ok_10]
+    %48 = arith.constant {value = 3 : i64}
+    %49 = func.call @advent.multiply %48
+    memref.store %49, __range_val_10
+    %50 = arith.constant {value = 0 : i64}
+    %51 = arith.cmpi lt %49, %50
+    %52 = arith.constant {value = 4294967295 : i64}
+    %53 = arith.cmpi gt %49, %52
+    %54 = arith.ori1 %51, %53
+    cf.cond_br %54 [then: __range_panic_10, else: __range_ok_10]
   __range_panic_10:
-    %59 = memref.lea_symdata __panic_msg_32
-    %60 = std.ptr_to_i64 %59
-    std.call_runtime @maxon_panic %60
+    %55 = memref.lea_symdata __panic_msg_32
+    %56 = std.ptr_to_i64 %55
+    std.call_runtime @maxon_panic %56
   __range_ok_10:
-    %61 = memref.load __range_val_10 : i64
-    %62 = memref.load args : i64
-    %63 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_array_of_with_managed %62, %63
-    %64 = memref.load __try_result_0 : i64
-    %65 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %64, %65
-    func.return %61
+    %57 = memref.load __range_val_10 : i64
+    %58 = memref.load args : i64
+    std.call_runtime @__destroy_StringArray %58
+    %59 = memref.load __try_result_0 : i64
+    std.call_runtime @__destroy_String %59
+    func.return %57
   }
 }
 === x86
@@ -762,20 +736,14 @@ module {
     x86.cmp ecx, eax
     x86.je advent.main.otherwise_default_cleanup_4
   otherwise_default_error_2:
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
-    x86.mov edx, [rbp-32]
-    x86.mov [rbp-40], edx
+    x86.mov rcx, [rbp-40]
+    x86.call __destroy_String
+    x86.mov ecx, [rbp-32]
+    x86.mov [rbp-40], ecx
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_cleanup_4:
-    x86.mov eax, [rbp-32]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.mov rcx, [rbp-32]
+    x86.call __destroy_String
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-40]
@@ -799,13 +767,9 @@ module {
   guard_9:
     x86.mov eax, 99
     x86.mov ecx, [rbp-8]
-    x86.xor edx, edx
-    x86.call maxon_release_array_of_with_managed
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_StringArray
+    x86.mov rcx, [rbp-40]
+    x86.call __destroy_String
     x86.mov eax, 99
     x86.epilogue
     x86.ret
@@ -832,14 +796,10 @@ module {
   __range_ok_10:
     x86.mov eax, [rbp-64]
     x86.mov ecx, [rbp-8]
-    x86.xor edx, edx
     x86.mov [rbp-72], eax
-    x86.call maxon_release_array_of_with_managed
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_StringArray
+    x86.mov rcx, [rbp-40]
+    x86.call __destroy_String
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret

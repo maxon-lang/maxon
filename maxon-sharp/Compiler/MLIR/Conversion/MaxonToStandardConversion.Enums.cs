@@ -335,7 +335,8 @@ public static partial class MaxonToStandardConversion {
     string calleeName,
     Dictionary<string, MlirType> typeDefs,
     Dictionary<int, string>? fnEnvVarNames = null,
-    List<string?>? argVarNames = null) {
+    List<string?>? argVarNames = null,
+    List<(StdI64 ptr, string typeName)>? enumPackagingBlocks = null) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
 
     // Look up which params the callee mutates
@@ -406,6 +407,9 @@ public static partial class MaxonToStandardConversion {
           var payloadVal = EmitLoad(block, $"{enumPrefix}.__payload_{pi}", varTypes);
           block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
         }
+
+        // Track for post-call release (callee increfs if it stores the pointer)
+        enumPackagingBlocks?.Add((heapPtr, enumArgType.Name));
 
         newArgs.Add(heapPtr);
       } else if (calleeFunc.ParamTypes[i] is MlirUnionType) {

@@ -62,7 +62,7 @@ module {
   }
   func @union-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.mov eax, 10
     x86.mov ecx, 20
     x86.mov edx, 1
@@ -78,19 +78,24 @@ module {
     x86.mov [eax+8], edi
     x86.mov r8, [rbp-24]
     x86.mov [eax+16], r8
+    x86.mov [rbp-40], eax
     x86.mov rcx, rax
     x86.call union-full.sum
-    x86.mov [rbp-32], eax
-    x86.xor r9, r9
-    x86.cmp eax, r9
-    x86.setl ecx
-    x86.movzx ecx, ecxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.setg eax
+    x86.mov [rbp-48], eax
+    x86.mov rcx, [rbp-40]
+    x86.call __destroy_TwoParts
+    x86.mov r9, [rbp-48]
+    x86.mov [rbp-32], r9
+    x86.xor eax, eax
+    x86.cmp r9, eax
+    x86.setl eax
     x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
+    x86.mov rcx, 4294967295
+    x86.cmp r9, rcx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
     x86.je union-full.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_24]

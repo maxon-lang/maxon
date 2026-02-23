@@ -245,8 +245,7 @@ module {
   __range_ok_5:
     %39 = memref.load __range_val_5 : i64
     %40 = memref.load v : i64
-    %41 = arith.constant {value = 8 : i64}
-    std.call_runtime @maxon_release_with_managed %40, %41
+    std.call_runtime @__destroy_Vec3 %40
     func.return %39
   }
 }
@@ -331,9 +330,8 @@ module {
   __range_ok_5:
     x86.mov eax, [rbp-64]
     x86.mov ecx, [rbp-40]
-    x86.mov edx, 8
     x86.mov [rbp-72], eax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_Vec3
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
@@ -492,8 +490,7 @@ module {
   __range_ok_5:
     %42 = memref.load __range_val_5 : i64
     %43 = memref.load v : i64
-    %44 = arith.constant {value = 8 : i64}
-    std.call_runtime @maxon_release_with_managed %43, %44
+    std.call_runtime @__destroy_Vec3 %43
     func.return %42
   }
 }
@@ -585,9 +582,8 @@ module {
   __range_ok_5:
     x86.mov eax, [rbp-64]
     x86.mov ecx, [rbp-40]
-    x86.mov edx, 8
     x86.mov [rbp-72], eax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_Vec3
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret

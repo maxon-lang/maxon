@@ -444,7 +444,7 @@ module {
     %4 = memref.load r : i64
     %5 = memref.load_indirect %4+0
     %6 = memref.load r : i64
-    std.call_runtime @maxon_release %6
+    std.call_runtime @__destroy_Resource %6
     func.return %5
   }
   func @memory-safety.main() -> u32 {
@@ -483,7 +483,7 @@ module {
     x86.mov edi, [rbp-8]
     x86.mov [rbp-16], eax
     x86.mov rcx, rdi
-    x86.call maxon_release
+    x86.call __destroy_Resource
     x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
@@ -641,12 +641,11 @@ module {
     %48 = memref.load __interptmp_20 : i64
     func.call @stdlib.Print.print %48
     %49 = memref.load __interptmp_20 : i64
+    std.call_runtime @__destroy_String %49
     %50 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %49, %50
-    %51 = arith.constant {value = 0 : i64}
-    %52 = memref.load p : i64
-    std.call_runtime @maxon_release %52
-    func.return %51
+    %51 = memref.load p : i64
+    std.call_runtime @__destroy_Point %51
+    func.return %50
   }
 }
 === x86
@@ -746,13 +745,11 @@ module {
     x86.mov rcx, rax
     x86.call stdlib.Print.print
     x86.mov eax, [rbp-72]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_String
     x86.xor eax, eax
     x86.mov ecx, [rbp-8]
-    x86.call maxon_release
+    x86.call __destroy_Point
     x86.xor eax, eax
     x86.epilogue
     x86.ret
@@ -863,7 +860,7 @@ module {
     %10 = memref.load_indirect %9+0
     memref.store %10, result
     %11 = memref.load p : i64
-    std.call_runtime @maxon_release %11
+    std.call_runtime @__destroy_Point %11
     %12 = arith.constant {value = 0 : i64}
     memref.store %12, p
     cf.br block_0.merge
@@ -883,7 +880,7 @@ module {
   __range_ok_1:
     %21 = memref.load __range_val_1 : i64
     %22 = memref.load p : i64
-    std.call_runtime @maxon_release %22
+    std.call_runtime @__destroy_Point %22
     func.return %21
   }
 }
@@ -917,7 +914,7 @@ module {
     x86.mov [rbp-16], eax
     x86.mov eax, [rbp-8]
     x86.mov rcx, rax
-    x86.call maxon_release
+    x86.call __destroy_Point
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.jmp memory-safety.main.block_0.merge
@@ -943,7 +940,7 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-8]
     x86.mov [rbp-32], eax
-    x86.call maxon_release
+    x86.call __destroy_Point
     x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
@@ -1078,13 +1075,13 @@ module {
     cf.cond_br %34 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
   otherwise_default_error_2:
     %35 = memref.load __try_result_0 : i64
-    std.call_runtime @maxon_release %35
+    std.call_runtime @__destroy_Item %35
     %36 = memref.load __try_default_1 : i64
     memref.store %36, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_cleanup_4:
     %37 = memref.load __try_default_1 : i64
-    std.call_runtime @maxon_release %37
+    std.call_runtime @__destroy_Item %37
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
     %38 = memref.load __try_result_0 : i64
@@ -1105,11 +1102,11 @@ module {
   __range_ok_5:
     %48 = memref.load __range_val_5 : i64
     %49 = memref.load arr : i64
-    std.call_runtime @maxon_release_array_of_simple %49
+    std.call_runtime @__destroy_ItemArray %49
     %50 = memref.load item : i64
-    std.call_runtime @maxon_release %50
+    std.call_runtime @__destroy_Item %50
     %51 = memref.load got : i64
-    std.call_runtime @maxon_release %51
+    std.call_runtime @__destroy_Item %51
     func.return %48
   }
 }
@@ -1183,13 +1180,13 @@ module {
     x86.je memory-safety.main.otherwise_default_cleanup_4
   otherwise_default_error_2:
     x86.mov rcx, [rbp-40]
-    x86.call maxon_release
+    x86.call __destroy_Item
     x86.mov ecx, [rbp-32]
     x86.mov [rbp-40], ecx
     x86.jmp memory-safety.main.otherwise_default_continue_3
   otherwise_default_cleanup_4:
     x86.mov rcx, [rbp-32]
-    x86.call maxon_release
+    x86.call __destroy_Item
     x86.jmp memory-safety.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-40]
@@ -1216,11 +1213,11 @@ module {
     x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-16]
     x86.mov [rbp-64], eax
-    x86.call maxon_release_array_of_simple
+    x86.call __destroy_ItemArray
     x86.mov rcx, [rbp-24]
-    x86.call maxon_release
+    x86.call __destroy_Item
     x86.mov ecx, [rbp-48]
-    x86.call maxon_release
+    x86.call __destroy_Item
     x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
@@ -1339,7 +1336,7 @@ module {
     %15 = memref.load_indirect %14+0
     memref.store %15, result
     %16 = memref.load c : i64
-    std.call_runtime @maxon_release %16
+    std.call_runtime @__destroy_Counter %16
     %17 = arith.constant {value = 0 : i64}
     memref.store %17, c
     cf.br loop_0.exit
@@ -1349,7 +1346,7 @@ module {
     %20 = arith.addi %19, %18
     memref.store %20, i
     %21 = memref.load c : i64
-    std.call_runtime @maxon_release %21
+    std.call_runtime @__destroy_Counter %21
     %22 = arith.constant {value = 0 : i64}
     memref.store %22, c
     cf.br loop_0.header
@@ -1369,7 +1366,7 @@ module {
   __range_ok_2:
     %31 = memref.load __range_val_2 : i64
     %32 = memref.load c : i64
-    std.call_runtime @maxon_release %32
+    std.call_runtime @__destroy_Counter %32
     func.return %31
   }
 }
@@ -1410,7 +1407,7 @@ module {
     x86.mov [rbp-16], ecx
     x86.mov edx, [rbp-8]
     x86.mov rcx, rdx
-    x86.call maxon_release
+    x86.call __destroy_Counter
     x86.xor ebx, ebx
     x86.mov [rbp-8], ebx
     x86.jmp memory-safety.main.loop_0.exit
@@ -1421,7 +1418,7 @@ module {
     x86.mov [rbp-24], ecx
     x86.mov edx, [rbp-8]
     x86.mov rcx, rdx
-    x86.call maxon_release
+    x86.call __destroy_Counter
     x86.xor ebx, ebx
     x86.mov [rbp-8], ebx
     x86.jmp memory-safety.main.loop_0.header
@@ -1447,7 +1444,7 @@ module {
     x86.mov eax, [rbp-32]
     x86.mov ecx, [rbp-8]
     x86.mov [rbp-40], eax
-    x86.call maxon_release
+    x86.call __destroy_Counter
     x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
@@ -1542,16 +1539,16 @@ module {
     %10 = arith.constant {value = 1 : i64}
     %11 = arith.addi %9, %10
     %12 = memref.load w : i64
-    std.call_runtime @maxon_release %12
+    std.call_runtime @__destroy_Wrapper %12
     %13 = arith.constant {value = 0 : i64}
     memref.store %13, w
     %14 = memref.load w : i64
-    std.call_runtime @maxon_release %14
+    std.call_runtime @__destroy_Wrapper %14
     func.return %11
   check_0.after:
     %15 = arith.constant {value = 0 : i64}
     %16 = memref.load w : i64
-    std.call_runtime @maxon_release %16
+    std.call_runtime @__destroy_Wrapper %16
     func.return %15
   }
   func @memory-safety.main() -> u32 {
@@ -1601,18 +1598,18 @@ module {
     x86.mov r9, [rbp-8]
     x86.mov [rbp-32], edi
     x86.mov rcx, r9
-    x86.call maxon_release
+    x86.call __destroy_Wrapper
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.mov rcx, [rbp-8]
-    x86.call maxon_release
+    x86.call __destroy_Wrapper
     x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   check_0.after:
     x86.xor eax, eax
     x86.mov ecx, [rbp-8]
-    x86.call maxon_release
+    x86.call __destroy_Wrapper
     x86.xor eax, eax
     x86.epilogue
     x86.ret

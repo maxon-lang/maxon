@@ -120,12 +120,11 @@ module {
     %48 = memref.load __interptmp_20 : i64
     func.call @stdlib.Print.print %48
     %49 = memref.load __interptmp_20 : i64
+    std.call_runtime @__destroy_String %49
     %50 = arith.constant {value = 0 : i64}
-    std.call_runtime @maxon_release_with_managed %49, %50
-    %51 = arith.constant {value = 0 : i64}
-    %52 = memref.load p : i64
-    std.call_runtime @maxon_release %52
-    func.return %51
+    %51 = memref.load p : i64
+    std.call_runtime @__destroy_Point %51
+    func.return %50
   }
 }
 === x86
@@ -225,13 +224,11 @@ module {
     x86.mov rcx, rax
     x86.call stdlib.Print.print
     x86.mov eax, [rbp-72]
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_String
     x86.xor eax, eax
     x86.mov ecx, [rbp-8]
-    x86.call maxon_release
+    x86.call __destroy_Point
     x86.xor eax, eax
     x86.epilogue
     x86.ret

@@ -324,8 +324,7 @@ module {
   __range_ok_5:
     %40 = memref.load __range_val_5 : i64
     %41 = memref.load arr : i64
-    %42 = arith.constant {value = 8 : i64}
-    std.call_runtime @maxon_release_with_managed %41, %42
+    std.call_runtime @__destroy_IntArray %41
     func.return %40
   }
 }
@@ -411,9 +410,8 @@ module {
   __range_ok_5:
     x86.mov eax, [rbp-40]
     x86.mov ecx, [rbp-16]
-    x86.mov edx, 8
     x86.mov [rbp-48], eax
-    x86.call maxon_release_with_managed
+    x86.call __destroy_IntArray
     x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret

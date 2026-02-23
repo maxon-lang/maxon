@@ -13,6 +13,7 @@ public static class StandardToX86Conversion {
     result.RdataEntries.AddRange(module.RdataEntries);
     result.SymdataEntries.AddRange(module.SymdataEntries);
     result.Globals.AddRange(module.Globals);
+    foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
     foreach (var func in module.Functions) {
       try {
