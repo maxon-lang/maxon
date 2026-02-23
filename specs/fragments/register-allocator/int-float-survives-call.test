@@ -18,94 +18,125 @@ RequiredMLIR: ```
 module {
   func @register-allocator.getInt() -> i64 {
   entry:
-    %0 = maxon.literal {value = 40 : i64}
-    maxon.return %0
+    __scope_0 = maxon.scope_enter {tag = register-allocator.getInt}
+    %1 = maxon.literal {value = 40 : i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %1
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %1 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %1 {var = f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.call @register-allocator.getInt
-    maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.trunc %1
-    %4 = maxon.binop %3, %2 {op = add}
-    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %4, %5 {op = lt}
-    %7 = maxon.literal {value = 4294967295 : i64}
-    %8 = maxon.binop %4, %7 {op = gt}
-    %9 = maxon.binop %6, %8 {op = or}
-    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    __scope_2 = maxon.scope_enter {tag = register-allocator.main}
+    %3 = maxon.literal {value = 3.14 : f64}
+    maxon.assign %3 {var = f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.call @register-allocator.getInt
+    maxon.assign %4 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.trunc %3
+    %6 = maxon.binop %5, %4 {op = add}
+    maxon.assign %6 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 0 : i64}
+    %8 = maxon.binop %6, %7 {op = lt}
+    %9 = maxon.literal {value = 4294967295 : i64}
+    %10 = maxon.binop %6, %9 {op = gt}
+    %11 = maxon.binop %8, %10 {op = or}
+    maxon.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-float-survives-call.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %11
+    %13 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_exit {scope = __scope_2} {tag = return_cleanup}
+    maxon.return %13
   }
 }
 === standard
 module {
   func @register-allocator.getInt() -> i64 {
   entry:
-    %0 = arith.constant {value = 40 : i64}
-    func.return %0
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = arith.constant {value = 40 : i64}
+    %3 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %3
+    func.return %2
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %1 = arith.float_constant {value = 3.14 : f64}
-    %2 = func.call @register-allocator.getInt
-    %3 = arith.fptosi %1
-    %4 = arith.addi %3, %2
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    %4 = arith.constant {value = 0 : i64}
+    %5 = std.call_runtime @mm_scope_enter %4
+    memref.store %5, __scope_2
+    %6 = arith.float_constant {value = 3.14 : f64}
+    %7 = func.call @register-allocator.getInt
+    %8 = arith.fptosi %6
+    %9 = arith.addi %8, %7
+    memref.store %9, __range_val_0
+    %10 = arith.constant {value = 0 : i64}
+    %11 = arith.cmpi lt %9, %10
+    %12 = arith.constant {value = 4294967295 : i64}
+    %13 = arith.cmpi gt %9, %12
+    %14 = arith.ori1 %11, %13
+    cf.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_10
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @maxon_panic %11
+    %15 = memref.lea_symdata __panic_msg_12
+    %16 = std.ptr_to_i64 %15
+    std.call_runtime @maxon_panic %16
   __range_ok_0:
-    %12 = memref.load __range_val_0 : i64
-    func.return %12
+    %17 = memref.load __range_val_0 : i64
+    %18 = memref.load __scope_2 : i64
+    std.call_runtime @mm_scope_exit %18
+    func.return %17
   }
 }
 === x86
 module {
   func @register-allocator.getInt() -> i64 {
   entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
     x86.mov eax, 40
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov eax, 40
+    x86.epilogue
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
     x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd [rbp-16], xmm0
+    x86.movsd [rbp-24], xmm0
     x86.call register-allocator.getInt
-    x86.movsd xmm0, [rbp-16]
+    x86.movsd xmm0, [rbp-24]
     x86.cvttsd2si ecx, xmm0
     x86.add ecx, eax
-    x86.mov [rbp-8], ecx
-    x86.xor eax, eax
-    x86.cmp ecx, eax
-    x86.setl eax
-    x86.movzx eax, eaxb
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
-    x86.setg ecx
-    x86.movzx ecx, ecxb
-    x86.or eax, ecx
-    x86.test eax, eax
+    x86.mov [rbp-16], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_12]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

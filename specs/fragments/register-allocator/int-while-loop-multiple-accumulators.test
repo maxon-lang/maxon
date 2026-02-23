@@ -22,69 +22,77 @@ RequiredMLIR: ```
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 0 : i64}
-    maxon.assign %0 {var = even_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    __scope_0 = maxon.scope_enter {tag = register-allocator.main}
     %1 = maxon.literal {value = 0 : i64}
-    maxon.assign %1 {var = odd_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = even_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.literal {value = 0 : i64}
-    maxon.assign %2 {var = count} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %2 {var = odd_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.literal {value = 0 : i64}
-    maxon.assign %3 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %3 {var = count} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.assign %4 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.header:
-    %4 = maxon.literal {value = 20 : i64}
-    %5 = maxon.var_ref {var = i} {type = i64}
-    %6 = maxon.binop %5, %4 {op = lt}
-    maxon.cond_br %6 [then: loop_0, else: loop_0.exit]
+    %5 = maxon.literal {value = 20 : i64}
+    %6 = maxon.var_ref {var = i} {type = i64}
+    %7 = maxon.binop %6, %5 {op = lt}
+    maxon.cond_br %7 [then: loop_0, else: loop_0.exit]
   loop_0:
-    %7 = maxon.literal {value = 2 : i64}
-    %8 = maxon.var_ref {var = i} {type = i64}
-    %9 = maxon.binop %8, %7 {op = mod}
-    %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %9, %10 {op = eq}
-    maxon.cond_br %11 [then: even_1, else: odd_2]
+    __scope_8 = maxon.scope_enter {tag = while}
+    %9 = maxon.literal {value = 2 : i64}
+    %10 = maxon.var_ref {var = i} {type = i64}
+    %11 = maxon.binop %10, %9 {op = mod}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %11, %12 {op = eq}
+    maxon.cond_br %13 [then: even_1, else: odd_2]
   even_1:
-    %12 = maxon.var_ref {var = even_sum} {type = i64}
-    %13 = maxon.var_ref {var = i} {type = i64}
-    %14 = maxon.binop %12, %13 {op = add}
-    maxon.assign %14 {var = even_sum} {kind = i64} {mut = 1 : i1}
-    %15 = maxon.literal {value = 1 : i64}
-    %16 = maxon.var_ref {var = count} {type = i64}
-    %17 = maxon.binop %16, %15 {op = add}
-    maxon.assign %17 {var = count} {kind = i64} {mut = 1 : i1}
+    __scope_14 = maxon.scope_enter {tag = if_then}
+    %15 = maxon.var_ref {var = even_sum} {type = i64}
+    %16 = maxon.var_ref {var = i} {type = i64}
+    %17 = maxon.binop %15, %16 {op = add}
+    maxon.assign %17 {var = even_sum} {kind = i64} {mut = 1 : i1}
+    %18 = maxon.literal {value = 1 : i64}
+    %19 = maxon.var_ref {var = count} {type = i64}
+    %20 = maxon.binop %19, %18 {op = add}
+    maxon.assign %20 {var = count} {kind = i64} {mut = 1 : i1}
+    maxon.scope_exit {scope = __scope_14} {tag = block_exit}
     maxon.br even_1.merge
   odd_2:
-    %18 = maxon.var_ref {var = odd_sum} {type = i64}
-    %19 = maxon.var_ref {var = i} {type = i64}
-    %20 = maxon.binop %18, %19 {op = add}
-    maxon.assign %20 {var = odd_sum} {kind = i64} {mut = 1 : i1}
+    __scope_21 = maxon.scope_enter {tag = else}
+    %22 = maxon.var_ref {var = odd_sum} {type = i64}
+    %23 = maxon.var_ref {var = i} {type = i64}
+    %24 = maxon.binop %22, %23 {op = add}
+    maxon.assign %24 {var = odd_sum} {kind = i64} {mut = 1 : i1}
+    maxon.scope_exit {scope = __scope_21} {tag = block_exit}
     maxon.br even_1.merge
   even_1.merge:
-    %21 = maxon.literal {value = 1 : i64}
-    %22 = maxon.var_ref {var = i} {type = i64}
-    %23 = maxon.binop %22, %21 {op = add}
-    maxon.assign %23 {var = i} {kind = i64} {mut = 1 : i1}
+    %25 = maxon.literal {value = 1 : i64}
+    %26 = maxon.var_ref {var = i} {type = i64}
+    %27 = maxon.binop %26, %25 {op = add}
+    maxon.assign %27 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.scope_exit {scope = __scope_8} {tag = block_exit}
     maxon.br loop_0.header
   loop_0.exit:
-    %24 = maxon.var_ref {var = even_sum} {type = i64}
-    %25 = maxon.var_ref {var = odd_sum} {type = i64}
-    %26 = maxon.binop %24, %25 {op = add}
-    %27 = maxon.var_ref {var = count} {type = i64}
-    %28 = maxon.binop %26, %27 {op = add}
-    %29 = maxon.literal {value = 256 : i64}
-    %30 = maxon.binop %28, %29 {op = mod}
-    maxon.assign %30 {var = __range_val_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %31 = maxon.literal {value = 0 : i64}
-    %32 = maxon.binop %30, %31 {op = lt}
-    %33 = maxon.literal {value = 4294967295 : i64}
-    %34 = maxon.binop %30, %33 {op = gt}
-    %35 = maxon.binop %32, %34 {op = or}
-    maxon.cond_br %35 [then: __range_panic_3, else: __range_ok_3]
+    %28 = maxon.var_ref {var = even_sum} {type = i64}
+    %29 = maxon.var_ref {var = odd_sum} {type = i64}
+    %30 = maxon.binop %28, %29 {op = add}
+    %31 = maxon.var_ref {var = count} {type = i64}
+    %32 = maxon.binop %30, %31 {op = add}
+    %33 = maxon.literal {value = 256 : i64}
+    %34 = maxon.binop %32, %33 {op = mod}
+    maxon.assign %34 {var = __range_val_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %35 = maxon.literal {value = 0 : i64}
+    %36 = maxon.binop %34, %35 {op = lt}
+    %37 = maxon.literal {value = 4294967295 : i64}
+    %38 = maxon.binop %34, %37 {op = gt}
+    %39 = maxon.binop %36, %38 {op = or}
+    maxon.cond_br %39 [then: __range_panic_3, else: __range_ok_3]
   __range_panic_3:
     maxon.panic "panic at int-while-loop-multiple-accumulators.test:16: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_3:
-    %37 = maxon.var_ref {var = __range_val_3} {type = i64}
-    maxon.return %37
+    %41 = maxon.var_ref {var = __range_val_3} {type = i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %41
   }
 }
 === standard
@@ -92,78 +100,100 @@ module {
   func @register-allocator.main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
-    memref.store %0, even_sum
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, odd_sum
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
     %2 = arith.constant {value = 0 : i64}
-    memref.store %2, count
+    memref.store %2, even_sum
     %3 = arith.constant {value = 0 : i64}
-    memref.store %3, i
+    memref.store %3, odd_sum
+    %4 = arith.constant {value = 0 : i64}
+    memref.store %4, count
+    %5 = arith.constant {value = 0 : i64}
+    memref.store %5, i
     cf.br loop_0.header
   loop_0.header:
-    %4 = arith.constant {value = 20 : i64}
-    %5 = memref.load i : i64
-    %6 = arith.cmpi lt %5, %4
-    cf.cond_br %6 [then: loop_0, else: loop_0.exit]
+    %6 = arith.constant {value = 20 : i64}
+    %7 = memref.load i : i64
+    %8 = arith.cmpi lt %7, %6
+    cf.cond_br %8 [then: loop_0, else: loop_0.exit]
   loop_0:
-    %7 = arith.constant {value = 2 : i64}
-    %8 = memref.load i : i64
-    %9 = arith.remsi %8, %7
-    %10 = arith.constant {value = 0 : i64}
-    %11 = arith.cmpi eq %9, %10
-    cf.cond_br %11 [then: even_1, else: odd_2]
+    %9 = arith.constant {value = 0 : i64}
+    %10 = std.call_runtime @mm_scope_enter %9
+    memref.store %10, __scope_8
+    %11 = arith.constant {value = 2 : i64}
+    %12 = memref.load i : i64
+    %13 = arith.remsi %12, %11
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi eq %13, %14
+    cf.cond_br %15 [then: even_1, else: odd_2]
   even_1:
-    %12 = memref.load even_sum : i64
-    %13 = memref.load i : i64
-    %14 = arith.addi %12, %13
-    memref.store %14, even_sum
-    %15 = arith.constant {value = 1 : i64}
-    %16 = memref.load count : i64
-    %17 = arith.addi %16, %15
-    memref.store %17, count
-    cf.br even_1.merge
-  odd_2:
-    %18 = memref.load odd_sum : i64
+    %16 = arith.constant {value = 0 : i64}
+    %17 = std.call_runtime @mm_scope_enter %16
+    memref.store %17, __scope_14
+    %18 = memref.load even_sum : i64
     %19 = memref.load i : i64
     %20 = arith.addi %18, %19
-    memref.store %20, odd_sum
+    memref.store %20, even_sum
+    %21 = arith.constant {value = 1 : i64}
+    %22 = memref.load count : i64
+    %23 = arith.addi %22, %21
+    memref.store %23, count
+    %24 = memref.load __scope_14 : i64
+    std.call_runtime @mm_scope_exit %24
+    cf.br even_1.merge
+  odd_2:
+    %25 = arith.constant {value = 0 : i64}
+    %26 = std.call_runtime @mm_scope_enter %25
+    memref.store %26, __scope_21
+    %27 = memref.load odd_sum : i64
+    %28 = memref.load i : i64
+    %29 = arith.addi %27, %28
+    memref.store %29, odd_sum
+    %30 = memref.load __scope_21 : i64
+    std.call_runtime @mm_scope_exit %30
     cf.br even_1.merge
   even_1.merge:
-    %21 = arith.constant {value = 1 : i64}
-    %22 = memref.load i : i64
-    %23 = arith.addi %22, %21
-    memref.store %23, i
+    %31 = arith.constant {value = 1 : i64}
+    %32 = memref.load i : i64
+    %33 = arith.addi %32, %31
+    memref.store %33, i
+    %34 = memref.load __scope_8 : i64
+    std.call_runtime @mm_scope_exit %34
     cf.br loop_0.header
   loop_0.exit:
-    %24 = memref.load even_sum : i64
-    %25 = memref.load odd_sum : i64
-    %26 = arith.addi %24, %25
-    %27 = memref.load count : i64
-    %28 = arith.addi %26, %27
-    %29 = arith.constant {value = 256 : i64}
-    %30 = arith.remsi %28, %29
-    memref.store %30, __range_val_3
-    %31 = arith.constant {value = 0 : i64}
-    %32 = arith.cmpi lt %30, %31
-    %33 = arith.constant {value = 4294967295 : i64}
-    %34 = arith.cmpi gt %30, %33
-    %35 = arith.ori1 %32, %34
-    cf.cond_br %35 [then: __range_panic_3, else: __range_ok_3]
+    %35 = memref.load even_sum : i64
+    %36 = memref.load odd_sum : i64
+    %37 = arith.addi %35, %36
+    %38 = memref.load count : i64
+    %39 = arith.addi %37, %38
+    %40 = arith.constant {value = 256 : i64}
+    %41 = arith.remsi %39, %40
+    memref.store %41, __range_val_3
+    %42 = arith.constant {value = 0 : i64}
+    %43 = arith.cmpi lt %41, %42
+    %44 = arith.constant {value = 4294967295 : i64}
+    %45 = arith.cmpi gt %41, %44
+    %46 = arith.ori1 %43, %45
+    cf.cond_br %46 [then: __range_panic_3, else: __range_ok_3]
   __range_panic_3:
-    %36 = memref.lea_symdata __panic_msg_36
-    %37 = std.ptr_to_i64 %36
-    std.call_runtime @maxon_panic %37
+    %47 = memref.lea_symdata __panic_msg_40
+    %48 = std.ptr_to_i64 %47
+    std.call_runtime @maxon_panic %48
   __range_ok_3:
-    %38 = memref.load __range_val_3 : i64
-    func.return %38
+    %49 = memref.load __range_val_3 : i64
+    %50 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %50
+    func.return %49
   }
 }
 === x86
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=80
     x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
@@ -171,55 +201,76 @@ module {
     x86.mov [rbp-24], edx
     x86.xor ebx, ebx
     x86.mov [rbp-32], ebx
+    x86.xor esi, esi
+    x86.mov [rbp-40], esi
     x86.jmp register-allocator.main.loop_0.header
   loop_0.header:
     x86.mov eax, 20
-    x86.mov ecx, [rbp-32]
+    x86.mov ecx, [rbp-40]
     x86.cmp ecx, eax
     x86.jge register-allocator.main.loop_0.exit
   loop_0:
-    x86.mov eax, 2
-    x86.mov ecx, [rbp-32]
-    x86.mov ebx, eax
-    x86.mov eax, ecx
-    x86.cqo
-    x86.idiv ebx
     x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-48], eax
+    x86.mov ecx, 2
+    x86.mov edx, [rbp-40]
+    x86.mov [rbp-80], edx
+    x86.mov eax, edx
+    x86.cqo
+    x86.idiv ecx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
     x86.jne register-allocator.main.odd_2
   even_1:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-32]
-    x86.add eax, ecx
-    x86.mov [rbp-8], eax
-    x86.mov edx, 1
-    x86.mov ebx, [rbp-24]
-    x86.add ebx, edx
-    x86.mov [rbp-24], ebx
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-56], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-40]
+    x86.add ecx, edx
+    x86.mov [rbp-16], ecx
+    x86.mov ebx, 1
+    x86.mov esi, [rbp-32]
+    x86.add esi, ebx
+    x86.mov [rbp-32], esi
+    x86.mov rcx, [rbp-56]
+    x86.call mm_scope_exit
     x86.jmp register-allocator.main.even_1.merge
   odd_2:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-32]
-    x86.add eax, ecx
-    x86.mov [rbp-16], eax
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-64], eax
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [rbp-40]
+    x86.add ecx, edx
+    x86.mov [rbp-24], ecx
+    x86.mov rcx, [rbp-64]
+    x86.call mm_scope_exit
     x86.jmp register-allocator.main.even_1.merge
   even_1.merge:
     x86.mov eax, 1
-    x86.mov ecx, [rbp-32]
+    x86.mov ecx, [rbp-40]
     x86.add ecx, eax
-    x86.mov [rbp-32], ecx
+    x86.mov [rbp-40], ecx
+    x86.mov edx, [rbp-48]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
     x86.add eax, ecx
-    x86.mov edx, [rbp-24]
+    x86.mov edx, [rbp-32]
     x86.add eax, edx
     x86.mov ebx, 256
-    x86.mov [rbp-48], eax
+    x86.mov [rbp-80], eax
     x86.cqo
     x86.idiv ebx
-    x86.mov [rbp-40], edx
+    x86.mov [rbp-72], edx
     x86.xor esi, esi
     x86.cmp edx, esi
     x86.setl edi
@@ -232,11 +283,15 @@ module {
     x86.test edi, edi
     x86.je register-allocator.main.__range_ok_3
   __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_36]
+    x86.lea_symdata rax, [__panic_msg_40]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_3:
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-72]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-80], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

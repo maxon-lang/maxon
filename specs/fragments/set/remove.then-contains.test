@@ -13,78 +13,94 @@ ExitCode: 0
 module {
   func @set.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
-    x86.mov eax, 1
-    x86.mov ecx, 2
-    x86.mov edx, 3
-    x86.mov [rbp-8], edx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
-    x86.xor ebx, ebx
-    x86.mov esi, 3
-    x86.xor edi, edi
-    x86.mov r8, 8
-    x86.mov r9, 32
-    x86.mov rcx, r9
-    x86.call maxon_alloc
-    x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-32]
-    x86.xor ecx, ecx
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, 3
-    x86.mov [eax+8], ecx
-    x86.mov eax, [rbp-32]
-    x86.xor ecx, ecx
-    x86.mov [eax+16], ecx
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, 8
-    x86.mov [eax+24], ecx
+    x86.prologue stack_size=80
     x86.xor eax, eax
-    x86.mov ecx, 16
-    x86.call maxon_alloc
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov edx, 2
+    x86.mov ebx, 3
+    x86.mov [rbp-16], ebx
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], ecx
+    x86.xor esi, esi
+    x86.mov edi, 3
+    x86.xor r8, r8
+    x86.mov r9, 8
+    x86.mov eax, 32
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_alloc
     x86.mov [rbp-40], eax
     x86.mov eax, [rbp-40]
     x86.xor ecx, ecx
     x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+8], eax
-    x86.lea rax, [rbp-24]
-    x86.mov rcx, rax
     x86.mov eax, [rbp-40]
+    x86.mov ecx, 3
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.xor eax, eax
+    x86.mov ecx, 16
+    x86.xor edx, edx
+    x86.call mm_alloc
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-48]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-48]
+    x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-48]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
+    x86.lea rax, [rbp-32]
+    x86.mov rcx, rax
+    x86.mov eax, [rbp-48]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-48]
     x86.mov rcx, rax
     x86.call __Set_3_i64.init
-    x86.mov ecx, [rbp-40]
     x86.mov [rbp-56], eax
-    x86.call __destroy_Array
-    x86.mov eax, [rbp-56]
-    x86.mov [rbp-48], eax
     x86.mov eax, 2
-    x86.mov ecx, [rbp-48]
+    x86.mov ecx, [rbp-56]
     x86.mov rdx, rax
     x86.call __Set_3_i64.remove
     x86.mov ecx, 2
-    x86.mov edx, [rbp-48]
-    x86.mov [rbp-64], eax
+    x86.mov edx, [rbp-56]
+    x86.mov [rbp-72], eax
     x86.xchg rdx, rcx
     x86.call __Set_3_i64.contains$element
     x86.test eax, eax
     x86.je set.main.check_1.after
   check_1:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-64], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-48]
-    x86.call __destroy___Set_3_i64
+    x86.mov ecx, [rbp-64]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   check_1.after:
     x86.xor eax, eax
-    x86.mov ecx, [rbp-48]
-    x86.call __destroy___Set_3_i64
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
     x86.xor eax, eax
     x86.epilogue
     x86.ret

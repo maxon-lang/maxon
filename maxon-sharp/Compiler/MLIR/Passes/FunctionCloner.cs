@@ -277,6 +277,12 @@ internal class FunctionCloner {
       case MaxonFunctionRefOp fr: { var c = new MaxonFunctionRefOp(fr.FunctionName, fr.FunctionType); RegisterResult(fr.Result, c.Result); return c; }
       case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, (MlirFunctionType)_typeSubstitution.SubstituteType(fv.FunctionType)); RegisterResult(fv.Result, c.Result); return c; }
 
+      // Memory manager scope ops
+      case MaxonScopeEnterOp se: { var c = new MaxonScopeEnterOp(se.ResultVar, se.Tag); return c; }
+      case MaxonScopeExitOp sx: return new MaxonScopeExitOp(sx.ScopeVar, sx.Tag);
+      case MaxonMoveOp mo: return new MaxonMoveOp(mo.VarName, mo.DestScopeVar, mo.Tag);
+      case MaxonReparentOp ut: return new MaxonReparentOp(ut.VarName, ut.ParentVarName, ut.Tag);
+
       default:
         throw new InvalidOperationException($"Monomorphization: unhandled op type {op.GetType().Name}");
     }

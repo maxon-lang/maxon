@@ -16,50 +16,87 @@ RequiredMLIR: ```
 module {
   func @codegen-internals.main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 3 : f64}
-    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 5 : f64}
-    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.binop %0, %1 {op = lt} {kind = f64}
-    maxon.cond_br %2 [then: less_0, else: less_0.after]
+    __scope_0 = maxon.scope_enter {tag = codegen-internals.main}
+    %1 = maxon.literal {value = 3 : f64}
+    maxon.assign %1 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 5 : f64}
+    maxon.assign %2 {var = b} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.binop %1, %2 {op = lt} {kind = f64}
+    maxon.cond_br %3 [then: less_0, else: less_0.after]
   less_0:
-    %3 = maxon.literal {value = 1 : i64}
-    maxon.return %3
+    __scope_4 = maxon.scope_enter {tag = if_then}
+    %5 = maxon.literal {value = 1 : i64}
+    maxon.scope_exit {scope = __scope_4} {tag = return_cleanup}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %5
   less_0.after:
-    %4 = maxon.literal {value = 0 : i64}
-    maxon.return %4
+    %6 = maxon.literal {value = 0 : i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %6
   }
 }
 === standard
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.float_constant {value = 3 : f64}
-    %1 = arith.float_constant {value = 5 : f64}
-    %2 = arith.cmpf lt %0, %1
-    cf.cond_br %2 [then: less_0, else: less_0.after]
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = arith.float_constant {value = 3 : f64}
+    %3 = arith.float_constant {value = 5 : f64}
+    %4 = arith.cmpf lt %2, %3
+    cf.cond_br %4 [then: less_0, else: less_0.after]
   less_0:
-    %3 = arith.constant {value = 1 : i64}
-    func.return %3
+    %5 = arith.constant {value = 0 : i64}
+    %6 = std.call_runtime @mm_scope_enter %5
+    memref.store %6, __scope_4
+    %7 = arith.constant {value = 1 : i64}
+    %8 = memref.load __scope_4 : i64
+    std.call_runtime @mm_scope_exit %8
+    %9 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %9
+    func.return %7
   less_0.after:
-    %4 = arith.constant {value = 0 : i64}
-    func.return %4
+    %10 = arith.constant {value = 0 : i64}
+    %11 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %11
+    func.return %10
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
     x86.movsd xmm0, [rip+__float_3]
     x86.movsd xmm1, [rip+__float_5]
     x86.ucomisd xmm0, xmm1
     x86.jp codegen-internals.main.less_0.after
     x86.jae codegen-internals.main.less_0.after
   less_0:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-16], eax
     x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.mov eax, 1
+    x86.epilogue
     x86.ret
   less_0.after:
     x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.xor eax, eax
+    x86.epilogue
     x86.ret
   }
 }

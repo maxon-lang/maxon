@@ -26,105 +26,126 @@ RequiredMLIR: ```
 module {
   func @memory-safety.makeRef() -> Point {
   entry:
-    %13 = maxon.literal {value = 1 : i64}
-    %14 = maxon.literal {value = 2 : i64}
-    %15 = maxon.struct_literal @Point
-    maxon.assign %15 {var = local} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.struct_var_ref local
-    maxon.return %16
+    __scope_13 = maxon.scope_enter {tag = memory-safety.makeRef}
+    %14 = maxon.literal {value = 1 : i64}
+    %15 = maxon.literal {value = 2 : i64}
+    %16 = maxon.struct_literal @Point
+    maxon.assign %16 {var = local} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.struct_var_ref local
+    maxon.move {var = local} {dest = __scope_13} {tag = return_move}
+    maxon.scope_exit {scope = __scope_13} {tag = return_cleanup}
+    maxon.return %17
   }
   func @memory-safety.main() -> i64 {
   entry:
-    %17 = maxon.call @memory-safety.makeRef
-    maxon.assign %17 {var = p} {decl = 1 : i1} {mut = 1 : i1}
-    %18 = maxon.struct_var_ref p
-    %19 = maxon.field_access .x %18
-    %20 = maxon.string_interp
-    maxon.call @stdlib.Print.print %20
-    %21 = maxon.literal {value = 0 : i64}
-    maxon.return %21
+    __scope_18 = maxon.scope_enter {tag = memory-safety.main}
+    %19 = maxon.call @memory-safety.makeRef
+    maxon.assign %19 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.struct_var_ref p
+    %21 = maxon.field_access .x %20
+    %22 = maxon.string_interp
+    maxon.call @stdlib.Print.print %22
+    %23 = maxon.literal {value = 0 : i64}
+    maxon.scope_exit {scope = __scope_18} {tag = return_cleanup}
+    maxon.return %23
   }
 }
 === standard
 module {
   func @memory-safety.makeRef() -> i64 {
   entry:
-    %0 = arith.constant {value = 1 : i64}
-    %1 = arith.constant {value = 2 : i64}
-    %2 = arith.constant {value = 16 : i64}
-    %3 = std.call_runtime @maxon_alloc %2
-    memref.store %3, local
-    %4 = memref.load local : i64
-    memref.store_indirect %0, %4+0
-    %5 = memref.load local : i64
-    memref.store_indirect %1, %5+8
-    %6 = memref.load local : i64
-    func.return %6
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_13
+    %2 = arith.constant {value = 1 : i64}
+    %3 = arith.constant {value = 2 : i64}
+    %4 = arith.constant {value = 16 : i64}
+    %5 = arith.constant {value = 0 : i64}
+    %6 = std.call_runtime @mm_alloc %4, %5
+    memref.store %6, local
+    %7 = memref.load local : i64
+    memref.store_indirect %2, %7+0
+    %8 = memref.load local : i64
+    memref.store_indirect %3, %8+8
+    %9 = memref.load local : i64
+    %10 = memref.load __scope_13 : i64
+    %11 = memref.load_indirect %10+8
+    %12 = arith.constant {value = 0 : i64}
+    std.call_runtime @mm_move %9, %11, %12
+    %13 = memref.load __scope_13 : i64
+    std.call_runtime @mm_scope_exit %13
+    %14 = memref.load local : i64
+    func.return %14
   }
   func @memory-safety.main() -> u32 {
   entry:
-    %7 = func.call @memory-safety.makeRef
-    memref.store %7, p
-    %10 = memref.load p : i64
-    %11 = memref.load_indirect %10+0
-    %12 = arith.constant {value = 21 : i64}
-    %13 = std.call_runtime @maxon_alloc %12
-    memref.store %13, __tostr_buf_13
-    %14 = std.call_runtime @maxon_i64_to_string %11, %13
-    %15 = memref.load __tostr_buf_13 : i64
-    %16 = arith.constant {value = 1 : i64}
-    %17 = arith.addi %14, %16
-    %18 = std.call_runtime @maxon_alloc %17
-    %19 = arith.constant {value = 0 : i64}
-    memref.store %19, __interp_offset_20
-    memref.store %18, __interp_buf_20
-    memref.store %14, __interp_totallen_20
-    memref.store %15, __interp_partbuf_20_0
-    memref.store %14, __interp_partlen_20_0
-    %20 = memref.load __interp_buf_20 : i64
-    %21 = memref.load __interp_offset_20 : i64
-    %22 = arith.addi %20, %21
-    %23 = memref.load __interp_partbuf_20_0 : i64
-    %24 = memref.load __interp_partlen_20_0 : i64
-    std.memcopy %23, %22, %24
-    %28 = memref.load __interp_buf_20 : i64
-    %29 = memref.load __interp_totallen_20 : i64
-    %30 = arith.addi %28, %29
-    %31 = arith.constant {value = 0 : i64}
-    memref.store_indirect %31, %30+0
-    %32 = memref.load __tostr_buf_13 : i64
-    std.call_runtime @maxon_free %32
-    %33 = arith.constant {value = 32 : i64}
-    %34 = std.call_runtime @maxon_alloc %33
-    memref.store %34, __interp_managed_20
-    %35 = memref.load __interp_buf_20 : i64
-    %36 = memref.load __interp_managed_20 : i64
-    memref.store_indirect %35, %36+0
-    %37 = memref.load __interp_totallen_20 : i64
-    %38 = memref.load __interp_managed_20 : i64
-    memref.store_indirect %37, %38+8
-    %39 = memref.load __interp_managed_20 : i64
-    memref.store_indirect %37, %39+16
-    %40 = arith.constant {value = 1 : i64}
-    %41 = memref.load __interp_managed_20 : i64
-    memref.store_indirect %40, %41+24
-    %42 = arith.constant {value = 16 : i64}
-    %43 = std.call_runtime @maxon_alloc %42
-    memref.store %43, __interptmp_20
-    %44 = memref.load __interp_managed_20 : i64
-    %45 = memref.load __interptmp_20 : i64
-    memref.store_indirect %44, %45+0
-    %46 = arith.constant {value = 0 : i64}
-    %47 = memref.load __interptmp_20 : i64
-    memref.store_indirect %46, %47+8
-    %48 = memref.load __interptmp_20 : i64
-    func.call @stdlib.Print.print %48
-    %49 = memref.load __interptmp_20 : i64
-    std.call_runtime @__destroy_String %49
-    %50 = arith.constant {value = 0 : i64}
-    %51 = memref.load p : i64
-    std.call_runtime @__destroy_Point %51
-    func.return %50
+    %15 = arith.constant {value = 0 : i64}
+    %16 = std.call_runtime @mm_scope_enter %15
+    memref.store %16, __scope_18
+    %17 = func.call @memory-safety.makeRef
+    memref.store %17, p
+    %19 = memref.load p : i64
+    %20 = memref.load_indirect %19+0
+    %21 = arith.constant {value = 21 : i64}
+    %22 = arith.constant {value = 0 : i64}
+    %23 = std.call_runtime @mm_alloc %21, %22
+    memref.store %23, __tostr_buf_23
+    %24 = std.call_runtime @maxon_i64_to_string %20, %23
+    %25 = memref.load __tostr_buf_23 : i64
+    %26 = arith.constant {value = 16 : i64}
+    %27 = arith.constant {value = 0 : i64}
+    %28 = std.call_runtime @mm_alloc %26, %27
+    memref.store %28, __interptmp_22
+    %29 = arith.constant {value = 32 : i64}
+    %30 = arith.constant {value = 0 : i64}
+    %31 = std.call_runtime @mm_alloc_in %29, %28, %30
+    memref.store %31, __interp_managed_22
+    %32 = arith.constant {value = 1 : i64}
+    %33 = arith.addi %24, %32
+    %34 = arith.constant {value = 0 : i64}
+    %35 = std.call_runtime @mm_alloc_in %33, %31, %34
+    %36 = arith.constant {value = 0 : i64}
+    memref.store %36, __interp_offset_22
+    memref.store %35, __interp_buf_22
+    memref.store %24, __interp_totallen_22
+    memref.store %25, __interp_partbuf_22_0
+    memref.store %24, __interp_partlen_22_0
+    %37 = memref.load __interp_buf_22 : i64
+    %38 = memref.load __interp_offset_22 : i64
+    %39 = arith.addi %37, %38
+    %40 = memref.load __interp_partbuf_22_0 : i64
+    %41 = memref.load __interp_partlen_22_0 : i64
+    std.memcopy %40, %39, %41
+    %45 = memref.load __interp_buf_22 : i64
+    %46 = memref.load __interp_totallen_22 : i64
+    %47 = arith.addi %45, %46
+    %48 = arith.constant {value = 0 : i64}
+    memref.store_indirect %48, %47+0
+    %49 = memref.load __tostr_buf_23 : i64
+    std.call_runtime @mm_free %49
+    %50 = memref.load __interp_buf_22 : i64
+    %51 = memref.load __interp_managed_22 : i64
+    memref.store_indirect %50, %51+0
+    %52 = memref.load __interp_totallen_22 : i64
+    %53 = memref.load __interp_managed_22 : i64
+    memref.store_indirect %52, %53+8
+    %54 = memref.load __interp_managed_22 : i64
+    memref.store_indirect %52, %54+16
+    %55 = arith.constant {value = 1 : i64}
+    %56 = memref.load __interp_managed_22 : i64
+    memref.store_indirect %55, %56+24
+    %57 = memref.load __interp_managed_22 : i64
+    %58 = memref.load __interptmp_22 : i64
+    memref.store_indirect %57, %58+0
+    %59 = arith.constant {value = 0 : i64}
+    %60 = memref.load __interptmp_22 : i64
+    memref.store_indirect %59, %60+8
+    %61 = memref.load __interptmp_22 : i64
+    func.call @stdlib.Print.print %61
+    %62 = arith.constant {value = 0 : i64}
+    %63 = memref.load __scope_18 : i64
+    std.call_runtime @mm_scope_exit %63
+    func.return %62
   }
 }
 === x86
@@ -132,103 +153,129 @@ module {
   func @memory-safety.makeRef() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 1
-    x86.mov ecx, 2
-    x86.mov edx, 16
-    x86.mov rcx, rdx
-    x86.call maxon_alloc
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov ebx, [rbp-8]
-    x86.mov esi, 1
-    x86.mov [ebx+0], esi
-    x86.mov edi, [rbp-8]
-    x86.mov r8, 2
-    x86.mov [edi+8], r8
-    x86.mov eax, [rbp-8]
+    x86.mov ecx, 1
+    x86.mov edx, 2
+    x86.mov ebx, 16
+    x86.xor esi, esi
+    x86.mov rcx, rbx
+    x86.mov rdx, rsi
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov edi, [rbp-16]
+    x86.mov r8, 1
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-16]
+    x86.mov eax, 2
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [ecx+8]
+    x86.xor ecx, ecx
+    x86.mov r8, rcx
+    x86.mov rcx, rax
+    x86.call mm_move
+    x86.mov rcx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
-    x86.call memory-safety.makeRef
+    x86.prologue stack_size=112
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
-    x86.mov edx, 21
-    x86.mov [rbp-80], ecx
-    x86.mov rcx, rdx
-    x86.call maxon_alloc
+    x86.call memory-safety.makeRef
     x86.mov [rbp-16], eax
-    x86.mov rcx, [rbp-80]
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, 21
+    x86.xor esi, esi
+    x86.mov [rbp-88], edx
+    x86.mov rcx, rbx
+    x86.mov rdx, rsi
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov rcx, [rbp-88]
     x86.mov rdx, rax
     x86.call maxon_i64_to_string
-    x86.mov ebx, [rbp-16]
-    x86.mov esi, 1
-    x86.lea edi, [eax + esi]
-    x86.mov [rbp-88], eax
-    x86.mov [rbp-96], ebx
-    x86.mov rcx, rdi
-    x86.call maxon_alloc
-    x86.xor r8, r8
-    x86.mov [rbp-24], r8
+    x86.mov edi, [rbp-24]
+    x86.mov r8, 16
+    x86.xor r9, r9
+    x86.mov [rbp-96], eax
+    x86.mov [rbp-104], edi
+    x86.mov rcx, r8
+    x86.mov rdx, r9
+    x86.call mm_alloc
     x86.mov [rbp-32], eax
-    x86.mov r9, [rbp-88]
-    x86.mov [rbp-40], r9
+    x86.mov ecx, 32
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rax
+    x86.call mm_alloc_in
+    x86.mov [rbp-40], eax
+    x86.mov ecx, 1
+    x86.mov edx, [rbp-96]
+    x86.lea ebx, [edx + ecx]
+    x86.xor ecx, ecx
+    x86.mov rdx, rax
+    x86.mov r8, rcx
+    x86.mov rcx, rbx
+    x86.call mm_alloc_in
+    x86.xor ecx, ecx
+    x86.mov [rbp-48], ecx
+    x86.mov [rbp-56], eax
     x86.mov eax, [rbp-96]
-    x86.mov [rbp-48], eax
-    x86.mov [rbp-56], r9
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [rbp-24]
-    x86.add eax, ecx
+    x86.mov [rbp-64], eax
+    x86.mov ecx, [rbp-104]
+    x86.mov [rbp-72], ecx
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-48]
-    x86.mov edx, [rbp-56]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-72]
+    x86.mov edx, [rbp-80]
     x86.mov rsi, ecx
     x86.mov rdi, eax
     x86.mov rcx, edx
     x86.rep_movsb
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [rbp-40]
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-64]
     x86.add eax, ecx
     x86.xor ecx, ecx
     x86.mov byte ptr [eax+0], ecxb
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-24]
     x86.mov rcx, rax
-    x86.call maxon_free
-    x86.mov eax, 32
-    x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov [rbp-64], eax
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [rbp-64]
+    x86.call mm_free
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-40]
     x86.mov [ecx+0], eax
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-64]
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-40]
     x86.mov [ecx+8], eax
-    x86.mov ecx, [rbp-64]
+    x86.mov ecx, [rbp-40]
     x86.mov [ecx+16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-64]
+    x86.mov ecx, [rbp-40]
     x86.mov [ecx+24], eax
-    x86.mov eax, 16
-    x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-64]
-    x86.mov ecx, [rbp-72]
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-32]
     x86.mov [ecx+0], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-72]
+    x86.mov ecx, [rbp-32]
     x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-72]
+    x86.mov eax, [rbp-32]
     x86.mov rcx, rax
     x86.call stdlib.Print.print
-    x86.mov eax, [rbp-72]
-    x86.mov rcx, rax
-    x86.call __destroy_String
     x86.xor eax, eax
     x86.mov ecx, [rbp-8]
-    x86.call __destroy_Point
+    x86.call mm_scope_exit
     x86.xor eax, eax
     x86.epilogue
     x86.ret

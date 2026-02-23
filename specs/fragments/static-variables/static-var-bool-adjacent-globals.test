@@ -19,46 +19,62 @@ ExitCode: 0
 module {
   func @static-variables.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
-    x86.movzx eax, byte [rip+flag]
-    x86.test eax, eax
+    x86.prologue stack_size=64
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.movzx ecx, byte [rip+flag]
+    x86.test ecx, ecx
     x86.je static-variables.main.checkFalse_0.after
   checkFalse_0:
-    x86.lea_rdata rax, [__str_1]
-    x86.mov rcx, rax
-    x86.mov edx, 21
-    x86.mov ebx, 32
-    x86.mov [rbp-40], ecx
-    x86.mov rcx, rbx
-    x86.call maxon_alloc
-    x86.mov [rbp-8], eax
-    x86.mov esi, [rbp-8]
-    x86.mov edi, [rbp-40]
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-8]
-    x86.mov r9, 21
-    x86.mov [r8+8], r9
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-16], eax
+    x86.lea_rdata rcx, [__str_3]
+    x86.mov rdx, rcx
+    x86.mov ebx, 21
+    x86.mov esi, 16
+    x86.xor edi, edi
+    x86.mov [rbp-64], edx
+    x86.mov rcx, rsi
+    x86.mov rdx, rdi
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov r8, 32
+    x86.xor r9, r9
+    x86.mov rcx, r8
+    x86.mov rdx, rax
+    x86.mov r8, r9
+    x86.call mm_alloc_in
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-64]
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 21
+    x86.mov [eax+8], ecx
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-32]
     x86.mov [ecx+16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, [rbp-32]
     x86.mov [ecx+24], eax
-    x86.mov eax, 16
-    x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-24]
     x86.mov [ecx+0], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-24]
     x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-24]
     x86.mov rcx, rax
     x86.call stdlib.Print.print
-    x86.mov rcx, [rbp-16]
-    x86.call __destroy_String
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.call mm_scope_exit
+    x86.mov rcx, [rbp-8]
+    x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
@@ -69,44 +85,58 @@ module {
     x86.jne static-variables.main.checkCounter_1.after
   checkCounter_1:
     x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-40], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-40]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.xor eax, eax
     x86.epilogue
     x86.ret
   checkCounter_1.after:
-    x86.lea_rdata rax, [__str_7]
+    x86.lea_rdata rax, [__str_10]
     x86.mov rcx, rax
     x86.mov edx, 14
-    x86.mov ebx, 32
-    x86.mov [rbp-40], ecx
+    x86.mov ebx, 16
+    x86.xor esi, esi
+    x86.mov [rbp-64], ecx
     x86.mov rcx, rbx
-    x86.call maxon_alloc
-    x86.mov [rbp-24], eax
-    x86.mov esi, [rbp-24]
-    x86.mov edi, [rbp-40]
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-24]
-    x86.mov r9, 14
-    x86.mov [r8+8], r9
+    x86.mov rdx, rsi
+    x86.call mm_alloc
+    x86.mov [rbp-48], eax
+    x86.mov edi, 32
+    x86.xor r8, r8
+    x86.mov rcx, rdi
+    x86.mov rdx, rax
+    x86.call mm_alloc_in
+    x86.mov [rbp-56], eax
+    x86.mov r9, [rbp-56]
+    x86.mov eax, [rbp-64]
+    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, 14
+    x86.mov [eax+8], ecx
     x86.xor eax, eax
-    x86.mov ecx, [rbp-24]
+    x86.mov ecx, [rbp-56]
     x86.mov [ecx+16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-24]
+    x86.mov ecx, [rbp-56]
     x86.mov [ecx+24], eax
-    x86.mov eax, 16
-    x86.mov rcx, rax
-    x86.call maxon_alloc
-    x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-32]
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-48]
     x86.mov [ecx+0], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-32]
+    x86.mov ecx, [rbp-48]
     x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-32]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-48]
     x86.call stdlib.Print.print
-    x86.mov rcx, [rbp-32]
-    x86.call __destroy_String
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret

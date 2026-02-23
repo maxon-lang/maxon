@@ -18,111 +18,126 @@ RequiredMLIR: ```
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 0 : i64}
-    maxon.assign %0 {var = sum1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    __scope_0 = maxon.scope_enter {tag = register-allocator.main}
     %1 = maxon.literal {value = 0 : i64}
-    maxon.assign %1 {var = sum2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = sum1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.literal {value = 0 : i64}
-    maxon.assign %2 {var = sum3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 10 : i64}
-    %4 = maxon.binop %0, %3 {op = add}
-    maxon.assign %4 {var = sum1} {kind = i64} {mut = 1 : i1}
-    %5 = maxon.literal {value = 20 : i64}
-    %6 = maxon.binop %1, %5 {op = add}
-    maxon.assign %6 {var = sum2} {kind = i64} {mut = 1 : i1}
-    %7 = maxon.literal {value = 30 : i64}
-    %8 = maxon.binop %2, %7 {op = add}
-    maxon.assign %8 {var = sum3} {kind = i64} {mut = 1 : i1}
-    %9 = maxon.literal {value = 5 : i64}
-    %10 = maxon.binop %4, %9 {op = add}
-    maxon.assign %10 {var = sum1} {kind = i64} {mut = 1 : i1}
-    %11 = maxon.literal {value = 10 : i64}
-    %12 = maxon.binop %6, %11 {op = add}
-    maxon.assign %12 {var = sum2} {kind = i64} {mut = 1 : i1}
-    %13 = maxon.literal {value = 15 : i64}
-    %14 = maxon.binop %8, %13 {op = add}
-    maxon.assign %14 {var = sum3} {kind = i64} {mut = 1 : i1}
-    %15 = maxon.binop %10, %12 {op = add}
-    %16 = maxon.binop %15, %14 {op = add}
-    maxon.assign %16 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %17 = maxon.literal {value = 0 : i64}
-    %18 = maxon.binop %16, %17 {op = lt}
-    %19 = maxon.literal {value = 4294967295 : i64}
-    %20 = maxon.binop %16, %19 {op = gt}
-    %21 = maxon.binop %18, %20 {op = or}
-    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+    maxon.assign %2 {var = sum2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    maxon.assign %3 {var = sum3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 10 : i64}
+    %5 = maxon.binop %1, %4 {op = add}
+    maxon.assign %5 {var = sum1} {kind = i64} {mut = 1 : i1}
+    %6 = maxon.literal {value = 20 : i64}
+    %7 = maxon.binop %2, %6 {op = add}
+    maxon.assign %7 {var = sum2} {kind = i64} {mut = 1 : i1}
+    %8 = maxon.literal {value = 30 : i64}
+    %9 = maxon.binop %3, %8 {op = add}
+    maxon.assign %9 {var = sum3} {kind = i64} {mut = 1 : i1}
+    %10 = maxon.literal {value = 5 : i64}
+    %11 = maxon.binop %5, %10 {op = add}
+    maxon.assign %11 {var = sum1} {kind = i64} {mut = 1 : i1}
+    %12 = maxon.literal {value = 10 : i64}
+    %13 = maxon.binop %7, %12 {op = add}
+    maxon.assign %13 {var = sum2} {kind = i64} {mut = 1 : i1}
+    %14 = maxon.literal {value = 15 : i64}
+    %15 = maxon.binop %9, %14 {op = add}
+    maxon.assign %15 {var = sum3} {kind = i64} {mut = 1 : i1}
+    %16 = maxon.binop %11, %13 {op = add}
+    %17 = maxon.binop %16, %15 {op = add}
+    maxon.assign %17 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.literal {value = 0 : i64}
+    %19 = maxon.binop %17, %18 {op = lt}
+    %20 = maxon.literal {value = 4294967295 : i64}
+    %21 = maxon.binop %17, %20 {op = gt}
+    %22 = maxon.binop %19, %21 {op = or}
+    maxon.cond_br %22 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-parallel-accumulation.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %23 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %23
+    %24 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %24
   }
 }
 === standard
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    %3 = arith.constant {value = 10 : i64}
-    %4 = arith.constant {value = 20 : i64}
-    %5 = arith.constant {value = 30 : i64}
-    %6 = arith.constant {value = 5 : i64}
-    %7 = arith.addi %3, %6
-    %8 = arith.constant {value = 10 : i64}
-    %9 = arith.addi %4, %8
-    %10 = arith.constant {value = 15 : i64}
-    %11 = arith.addi %5, %10
-    %12 = arith.addi %7, %9
-    %13 = arith.addi %12, %11
-    memref.store %13, __range_val_0
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 4294967295 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %5 = arith.constant {value = 10 : i64}
+    %6 = arith.constant {value = 20 : i64}
+    %7 = arith.constant {value = 30 : i64}
+    %8 = arith.constant {value = 5 : i64}
+    %9 = arith.addi %5, %8
+    %10 = arith.constant {value = 10 : i64}
+    %11 = arith.addi %6, %10
+    %12 = arith.constant {value = 15 : i64}
+    %13 = arith.addi %7, %12
+    %14 = arith.addi %9, %11
+    %15 = arith.addi %14, %13
+    memref.store %15, __range_val_0
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.cmpi lt %15, %16
+    %18 = arith.constant {value = 4294967295 : i64}
+    %19 = arith.cmpi gt %15, %18
+    %20 = arith.ori1 %17, %19
+    cf.cond_br %20 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %19 = memref.lea_symdata __panic_msg_22
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @maxon_panic %20
+    %21 = memref.lea_symdata __panic_msg_23
+    %22 = std.ptr_to_i64 %21
+    std.call_runtime @maxon_panic %22
   __range_ok_0:
-    %21 = memref.load __range_val_0 : i64
-    func.return %21
+    %23 = memref.load __range_val_0 : i64
+    %24 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %24
+    func.return %23
   }
 }
 === x86
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 10
-    x86.mov ecx, 20
-    x86.mov edx, 30
-    x86.mov ebx, 5
-    x86.add eax, ebx
-    x86.mov esi, 10
-    x86.add ecx, esi
-    x86.mov edi, 15
-    x86.add edx, edi
-    x86.add eax, ecx
-    x86.add eax, edx
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor r8, r8
-    x86.cmp eax, r8
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rcx, 4294967295
-    x86.cmp rax, rcx
-    x86.setg eax
+    x86.mov ecx, 10
+    x86.mov edx, 20
+    x86.mov ebx, 30
+    x86.mov esi, 5
+    x86.add ecx, esi
+    x86.mov edi, 10
+    x86.add edx, edi
+    x86.mov r8, 15
+    x86.add ebx, r8
+    x86.add ecx, edx
+    x86.add ecx, ebx
+    x86.mov [rbp-16], ecx
+    x86.xor r9, r9
+    x86.cmp ecx, r9
+    x86.setl eax
     x86.movzx eax, eaxb
-    x86.or r9, eax
-    x86.test r9, r9
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_22]
+    x86.lea_symdata rax, [__panic_msg_23]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

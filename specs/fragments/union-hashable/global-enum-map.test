@@ -54,60 +54,191 @@ module {
   func @union-hashable.setCategoryLevel(category: i64, level: i64) {
   entry:
     x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
-    x86.mov [rbp-16], edx
-    x86.mov eax, qword [rip+categoryLevels]
-    x86.mov [rbp-24], eax
-    x86.mov eax, [rbp-8]
-    x86.mov ebx, [rbp-16]
-    x86.mov rcx, [rbp-24]
-    x86.mov rdx, rax
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], edx
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, qword [rip+categoryLevels]
+    x86.mov [rbp-32], ecx
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, [rbp-24]
+    x86.mov rcx, [rbp-32]
     x86.mov r8, rbx
     x86.call CategoryLevelMap.insert
+    x86.mov rcx, [rbp-8]
+    x86.call mm_scope_exit
     x86.epilogue
     x86.ret
   }
   func @union-hashable.getCategoryLevel(category: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
-    x86.mov eax, qword [rip+categoryLevels]
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-8]
-    x86.mov edx, [rbp-16]
-    x86.mov rcx, rdx
-    x86.mov rdx, rax
-    x86.call CategoryLevelMap.get
-    x86.xor ecx, ecx
-    x86.mov [rbp-24], ecx
-    x86.mov [rbp-32], eax
+    x86.prologue stack_size=48
+    x86.mov [rbp-16], ecx
     x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, qword [rip+categoryLevels]
+    x86.mov [rbp-24], ecx
+    x86.mov edx, [rbp-16]
+    x86.mov rcx, [rbp-24]
+    x86.call CategoryLevelMap.get
+    x86.xor esi, esi
+    x86.mov [rbp-32], esi
+    x86.mov [rbp-40], eax
+    x86.xor edi, edi
+    x86.cmp edx, edi
     x86.je union-hashable.getCategoryLevel.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
     x86.jmp union-hashable.getCategoryLevel.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-48], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }
   func @union-hashable.main() -> u32 {
   entry:
-    x86.prologue stack_size=112
+    x86.prologue stack_size=80
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov edx, 2
+    x86.call union-hashable.setCategoryLevel
+    x86.mov ebx, 1
+    x86.mov esi, 1
+    x86.mov rcx, rbx
+    x86.mov rdx, rsi
+    x86.call union-hashable.setCategoryLevel
+    x86.xor edi, edi
+    x86.mov rcx, rdi
+    x86.call union-hashable.getCategoryLevel
+    x86.mov [rbp-16], eax
+    x86.mov r8, 1
+    x86.mov rcx, r8
+    x86.call union-hashable.getCategoryLevel
+    x86.mov [rbp-24], eax
+    x86.mov r9, [rbp-16]
+    x86.xor eax, eax
+    x86.mov [rbp-32], eax
+    x86.mov [rbp-40], r9
+    x86.jmp union-hashable.main.c_0.cmp0
+  c_0.cmp0:
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne union-hashable.main.c_0.cmp1
+  c_0.case0:
+    x86.mov eax, 1
+    x86.mov [rbp-32], eax
+    x86.jmp union-hashable.main.c_0.merge
+  c_0.cmp1:
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne union-hashable.main.c_0.cmp2
+  c_0.case1:
+    x86.xor eax, eax
+    x86.mov [rbp-32], eax
+    x86.jmp union-hashable.main.c_0.merge
+  c_0.cmp2:
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne union-hashable.main.c_0.merge
+  c_0.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-32], eax
+    x86.jmp union-hashable.main.c_0.merge
+  c_0.merge:
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-41], eax
+    x86.mov ecx, [rbp-24]
+    x86.xor edx, edx
+    x86.mov [rbp-49], edx
+    x86.mov [rbp-57], ecx
+    x86.jmp union-hashable.main.l_1.cmp0
+  l_1.cmp0:
+    x86.mov eax, [rbp-57]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne union-hashable.main.l_1.cmp1
+  l_1.case0:
+    x86.mov eax, 1
+    x86.mov [rbp-49], eax
+    x86.jmp union-hashable.main.l_1.merge
+  l_1.cmp1:
+    x86.mov eax, [rbp-57]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne union-hashable.main.l_1.cmp2
+  l_1.case1:
+    x86.xor eax, eax
+    x86.mov [rbp-49], eax
+    x86.jmp union-hashable.main.l_1.merge
+  l_1.cmp2:
+    x86.mov eax, [rbp-57]
+    x86.mov ecx, 2
+    x86.cmp eax, ecx
+    x86.jne union-hashable.main.l_1.merge
+  l_1.case2:
+    x86.xor eax, eax
+    x86.mov [rbp-49], eax
+    x86.jmp union-hashable.main.l_1.merge
+  l_1.merge:
+    x86.mov eax, [rbp-49]
+    x86.mov ecx, [rbp-41]
+    x86.and ecx, eax
+    x86.test ecx, ecx
+    x86.je union-hashable.main.both_2.after
+  both_2:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-65], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-65]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  both_2.after:
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @union-hashable.__module_init() {
+  entry:
+    x86.prologue stack_size=64
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
     x86.xor ebx, ebx
     x86.mov esi, 8
     x86.mov edi, 32
+    x86.xor r8, r8
     x86.mov rcx, rdi
-    x86.call maxon_alloc
+    x86.mov rdx, r8
+    x86.call mm_alloc
     x86.mov [rbp-8], eax
-    x86.mov r8, [rbp-8]
-    x86.xor r9, r9
-    x86.mov [r8+0], r9
+    x86.mov r9, [rbp-8]
+    x86.xor eax, eax
+    x86.mov [r9+0], eax
     x86.mov eax, [rbp-8]
     x86.xor ecx, ecx
     x86.mov [eax+8], ecx
@@ -118,8 +249,10 @@ module {
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.mov eax, 16
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call maxon_alloc
+    x86.call mm_alloc
     x86.mov [rbp-16], eax
     x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
@@ -127,14 +260,22 @@ module {
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
     x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-16]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
     x86.xor ebx, ebx
     x86.mov esi, 8
     x86.mov edi, 32
+    x86.xor r8, r8
     x86.mov rcx, rdi
-    x86.call maxon_alloc
+    x86.mov rdx, r8
+    x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
     x86.xor ecx, ecx
@@ -149,8 +290,10 @@ module {
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.mov eax, 16
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call maxon_alloc
+    x86.call mm_alloc
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
     x86.xor ecx, ecx
@@ -158,14 +301,22 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-32]
     x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-32]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
     x86.xor ebx, ebx
     x86.mov esi, 8
     x86.mov edi, 32
+    x86.xor r8, r8
     x86.mov rcx, rdi
-    x86.call maxon_alloc
+    x86.mov rdx, r8
+    x86.call mm_alloc
     x86.mov [rbp-40], eax
     x86.mov eax, [rbp-40]
     x86.xor ecx, ecx
@@ -180,8 +331,10 @@ module {
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.mov eax, 16
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call maxon_alloc
+    x86.call mm_alloc
     x86.mov [rbp-48], eax
     x86.mov eax, [rbp-48]
     x86.xor ecx, ecx
@@ -189,22 +342,48 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov ecx, [rbp-48]
     x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-48]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
     x86.mov ebx, 48
+    x86.xor esi, esi
     x86.mov rcx, rbx
-    x86.call maxon_alloc
+    x86.mov rdx, rsi
+    x86.call mm_alloc
     x86.mov [rbp-56], eax
     x86.mov eax, [rbp-16]
     x86.mov ecx, [rbp-56]
     x86.mov [ecx+0], eax
+    x86.mov ecx, [rbp-56]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
     x86.mov eax, [rbp-32]
     x86.mov ecx, [rbp-56]
     x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-56]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
     x86.mov eax, [rbp-48]
     x86.mov ecx, [rbp-56]
     x86.mov [ecx+16], eax
+    x86.mov ecx, [rbp-56]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
     x86.mov eax, [rbp-56]
     x86.xor ecx, ecx
     x86.mov [eax+24], ecx
@@ -216,103 +395,6 @@ module {
     x86.mov [eax+40], ecx
     x86.mov eax, [rbp-56]
     x86.mov qword [rip+categoryLevels], eax
-    x86.xor eax, eax
-    x86.mov ecx, 2
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call union-hashable.setCategoryLevel
-    x86.mov eax, 1
-    x86.mov ecx, 1
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
-    x86.call union-hashable.setCategoryLevel
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call union-hashable.getCategoryLevel
-    x86.mov [rbp-64], eax
-    x86.mov eax, 1
-    x86.mov rcx, rax
-    x86.call union-hashable.getCategoryLevel
-    x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-64]
-    x86.xor ecx, ecx
-    x86.mov [rbp-80], ecx
-    x86.mov [rbp-88], eax
-    x86.jmp union-hashable.main.c_0.cmp0
-  c_0.cmp0:
-    x86.mov eax, [rbp-88]
-    x86.mov ecx, 2
-    x86.cmp eax, ecx
-    x86.jne union-hashable.main.c_0.cmp1
-  c_0.case0:
-    x86.mov eax, 1
-    x86.mov [rbp-80], eax
-    x86.jmp union-hashable.main.c_0.merge
-  c_0.cmp1:
-    x86.mov eax, [rbp-88]
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.jne union-hashable.main.c_0.cmp2
-  c_0.case1:
-    x86.xor eax, eax
-    x86.mov [rbp-80], eax
-    x86.jmp union-hashable.main.c_0.merge
-  c_0.cmp2:
-    x86.mov eax, [rbp-88]
-    x86.mov ecx, 1
-    x86.cmp eax, ecx
-    x86.jne union-hashable.main.c_0.merge
-  c_0.case2:
-    x86.xor eax, eax
-    x86.mov [rbp-80], eax
-    x86.jmp union-hashable.main.c_0.merge
-  c_0.merge:
-    x86.mov eax, [rbp-80]
-    x86.mov [rbp-89], eax
-    x86.mov ecx, [rbp-72]
-    x86.xor edx, edx
-    x86.mov [rbp-97], edx
-    x86.mov [rbp-105], ecx
-    x86.jmp union-hashable.main.l_1.cmp0
-  l_1.cmp0:
-    x86.mov eax, [rbp-105]
-    x86.mov ecx, 1
-    x86.cmp eax, ecx
-    x86.jne union-hashable.main.l_1.cmp1
-  l_1.case0:
-    x86.mov eax, 1
-    x86.mov [rbp-97], eax
-    x86.jmp union-hashable.main.l_1.merge
-  l_1.cmp1:
-    x86.mov eax, [rbp-105]
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.jne union-hashable.main.l_1.cmp2
-  l_1.case1:
-    x86.xor eax, eax
-    x86.mov [rbp-97], eax
-    x86.jmp union-hashable.main.l_1.merge
-  l_1.cmp2:
-    x86.mov eax, [rbp-105]
-    x86.mov ecx, 2
-    x86.cmp eax, ecx
-    x86.jne union-hashable.main.l_1.merge
-  l_1.case2:
-    x86.xor eax, eax
-    x86.mov [rbp-97], eax
-    x86.jmp union-hashable.main.l_1.merge
-  l_1.merge:
-    x86.mov eax, [rbp-97]
-    x86.mov ecx, [rbp-89]
-    x86.and ecx, eax
-    x86.test ecx, ecx
-    x86.je union-hashable.main.both_2.after
-  both_2:
-    x86.mov eax, 1
-    x86.epilogue
-    x86.ret
-  both_2.after:
-    x86.xor eax, eax
     x86.epilogue
     x86.ret
   }
@@ -320,7 +402,7 @@ module {
   entry:
     x86.mov eax, qword [rip+categoryLevels]
     x86.mov rcx, rax
-    x86.call __destroy_CategoryLevelMap
+    x86.call mm_free
     x86.ret
   }
 }

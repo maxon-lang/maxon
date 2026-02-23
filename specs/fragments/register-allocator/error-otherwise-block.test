@@ -24,38 +24,42 @@ RequiredMLIR: ```
 module {
   func @register-allocator.mayFail() -> i64 {
   entry:
-    %8 = maxon.enum_literal @MyError.failed
-    maxon.throw @MyError %8
+    __scope_8 = maxon.scope_enter {tag = register-allocator.mayFail}
+    %9 = maxon.enum_literal @MyError.failed
+    maxon.scope_exit {scope = __scope_8} {tag = return_cleanup}
+    maxon.throw @MyError %9
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %9 = maxon.literal {value = 0 : i64}
-    maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %12, %11 = maxon.try_call @register-allocator.mayFail
-    maxon.assign %11 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %12 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %13 = maxon.literal {value = 0 : i64}
-    %14 = maxon.binop %11, %13 {op = ne}
-    maxon.cond_br %14 [then: otherwise_error_0, else: otherwise_continue_1]
+    __scope_10 = maxon.scope_enter {tag = register-allocator.main}
+    %11 = maxon.literal {value = 0 : i64}
+    maxon.assign %11 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %14, %13 = maxon.try_call @register-allocator.mayFail
+    maxon.assign %13 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %14 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %15 = maxon.literal {value = 0 : i64}
+    %16 = maxon.binop %13, %15 {op = ne}
+    maxon.cond_br %16 [then: otherwise_error_0, else: otherwise_continue_1]
   otherwise_error_0:
-    %15 = maxon.literal {value = 42 : i64}
-    maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
+    %17 = maxon.literal {value = 42 : i64}
+    maxon.assign %17 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_continue_1
   otherwise_continue_1:
-    %16 = maxon.var_ref {var = __try_result_3} {type = i64}
-    %17 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %17 {var = __range_val_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %18 = maxon.literal {value = 0 : i64}
-    %19 = maxon.binop %17, %18 {op = lt}
-    %20 = maxon.literal {value = 4294967295 : i64}
-    %21 = maxon.binop %17, %20 {op = gt}
-    %22 = maxon.binop %19, %21 {op = or}
-    maxon.cond_br %22 [then: __range_panic_4, else: __range_ok_4]
+    %18 = maxon.var_ref {var = __try_result_3} {type = i64}
+    %19 = maxon.var_ref {var = result} {type = i64}
+    maxon.assign %19 {var = __range_val_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.literal {value = 0 : i64}
+    %21 = maxon.binop %19, %20 {op = lt}
+    %22 = maxon.literal {value = 4294967295 : i64}
+    %23 = maxon.binop %19, %22 {op = gt}
+    %24 = maxon.binop %21, %23 {op = or}
+    maxon.cond_br %24 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
     maxon.panic "panic at error-otherwise-block.test:18: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_4:
-    %24 = maxon.var_ref {var = __range_val_4} {type = i64}
-    maxon.return %24
+    %26 = maxon.var_ref {var = __range_val_4} {type = i64}
+    maxon.scope_exit {scope = __scope_10} {tag = return_cleanup}
+    maxon.return %26
   }
 }
 === standard
@@ -63,68 +67,91 @@ module {
   func @register-allocator.mayFail() -> i64 {
   entry:
     %0 = arith.constant {value = 0 : i64}
-    %1 = arith.constant {value = 1 : i64}
-    %2 = arith.addi %0, %1
-    func.error_return %2
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_8
+    %2 = arith.constant {value = 0 : i64}
+    %3 = memref.load __scope_8 : i64
+    std.call_runtime @mm_scope_exit %3
+    %4 = arith.constant {value = 1 : i64}
+    %5 = arith.addi %2, %4
+    func.error_return %5
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %3 = arith.constant {value = 0 : i64}
-    memref.store %3, result
-    %4, %5 = func.try_call @register-allocator.mayFail
-    memref.store %4, __try_result_3
     %6 = arith.constant {value = 0 : i64}
-    %7 = arith.cmpi ne %5, %6
-    cf.cond_br %7 [then: otherwise_error_0, else: otherwise_continue_1]
-  otherwise_error_0:
-    %8 = arith.constant {value = 42 : i64}
+    %7 = std.call_runtime @mm_scope_enter %6
+    memref.store %7, __scope_10
+    %8 = arith.constant {value = 0 : i64}
     memref.store %8, result
+    %9, %10 = func.try_call @register-allocator.mayFail
+    memref.store %9, __try_result_3
+    %11 = arith.constant {value = 0 : i64}
+    %12 = arith.cmpi ne %10, %11
+    cf.cond_br %12 [then: otherwise_error_0, else: otherwise_continue_1]
+  otherwise_error_0:
+    %13 = arith.constant {value = 42 : i64}
+    memref.store %13, result
     cf.br otherwise_continue_1
   otherwise_continue_1:
-    %10 = memref.load result : i64
-    memref.store %10, __range_val_4
-    %11 = arith.constant {value = 0 : i64}
-    %12 = arith.cmpi lt %10, %11
-    %13 = arith.constant {value = 4294967295 : i64}
-    %14 = arith.cmpi gt %10, %13
-    %15 = arith.ori1 %12, %14
-    cf.cond_br %15 [then: __range_panic_4, else: __range_ok_4]
+    %15 = memref.load result : i64
+    memref.store %15, __range_val_4
+    %16 = arith.constant {value = 0 : i64}
+    %17 = arith.cmpi lt %15, %16
+    %18 = arith.constant {value = 4294967295 : i64}
+    %19 = arith.cmpi gt %15, %18
+    %20 = arith.ori1 %17, %19
+    cf.cond_br %20 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %16 = memref.lea_symdata __panic_msg_23
-    %17 = std.ptr_to_i64 %16
-    std.call_runtime @maxon_panic %17
+    %21 = memref.lea_symdata __panic_msg_25
+    %22 = std.ptr_to_i64 %21
+    std.call_runtime @maxon_panic %22
   __range_ok_4:
-    %18 = memref.load __range_val_4 : i64
-    func.return %18
+    %23 = memref.load __range_val_4 : i64
+    %24 = memref.load __scope_10 : i64
+    std.call_runtime @mm_scope_exit %24
+    func.return %23
   }
 }
 === x86
 module {
   func @register-allocator.mayFail() -> i64 {
   entry:
+    x86.prologue stack_size=16
     x86.xor eax, eax
-    x86.mov ecx, 1
-    x86.add eax, ecx
-    x86.mov edx, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.mov ebx, 1
+    x86.xor esi, esi
+    x86.lea edx, [esi + ebx]
     x86.xor eax, eax
+    x86.epilogue
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.call register-allocator.mayFail
     x86.xor ecx, ecx
-    x86.cmp edx, ecx
+    x86.mov [rbp-16], ecx
+    x86.call register-allocator.mayFail
+    x86.xor eax, eax
+    x86.cmp edx, eax
     x86.je register-allocator.main.otherwise_continue_1
   otherwise_error_0:
     x86.mov eax, 42
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.otherwise_continue_1
   otherwise_continue_1:
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -137,11 +164,15 @@ module {
     x86.test edx, edx
     x86.je register-allocator.main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_23]
+    x86.lea_symdata rax, [__panic_msg_25]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

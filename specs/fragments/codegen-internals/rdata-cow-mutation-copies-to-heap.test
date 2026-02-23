@@ -14,182 +14,205 @@ RequiredMLIR: ```
 module {
   func @codegen-internals.main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 42 : i64}
-    maxon.assign %0 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
-    %1 = maxon.literal {value = 0 : i64}
-    %2 = maxon.literal {value = 1 : i64}
-    %3 = maxon.literal {value = 0 : i64}
-    %4 = maxon.literal {value = 8 : i64}
-    %5 = maxon.struct_literal @__ManagedMemory
-    %6 = maxon.literal {value = 0 : i64}
-    %7 = maxon.struct_literal @IntArray
-    maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.literal {value = 0 : i64}
-    %9 = maxon.literal {value = 77 : i64}
-    maxon.call @IntArray.set %7, %8, %9
-    %10 = maxon.struct_var_ref arr
-    %11 = maxon.literal {value = 0 : i64}
-    %14, %13 = maxon.try_call @IntArray.get %10, %11
-    %15 = maxon.literal {value = 0 : i64}
-    maxon.assign %15 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %14 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    __scope_0 = maxon.scope_enter {tag = codegen-internals.main}
+    %1 = maxon.literal {value = 42 : i64}
+    maxon.assign %1 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.literal {value = 0 : i64}
+    %5 = maxon.literal {value = 8 : i64}
+    %6 = maxon.struct_literal @__ManagedMemory
+    %7 = maxon.literal {value = 0 : i64}
+    %8 = maxon.struct_literal @IntArray
+    maxon.assign %8 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    %9 = maxon.literal {value = 0 : i64}
+    %10 = maxon.literal {value = 77 : i64}
+    maxon.call @IntArray.set %8, %9, %10
+    %11 = maxon.struct_var_ref arr
+    %12 = maxon.literal {value = 0 : i64}
+    %15, %14 = maxon.try_call @IntArray.get %11, %12
     %16 = maxon.literal {value = 0 : i64}
-    %17 = maxon.binop %13, %16 {op = ne}
-    maxon.cond_br %17 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    maxon.assign %16 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %15 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.literal {value = 0 : i64}
+    %18 = maxon.binop %14, %17 {op = ne}
+    maxon.cond_br %18 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %18 = maxon.var_ref {var = __try_default_2} {type = i64}
-    maxon.assign %18 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
+    %19 = maxon.var_ref {var = __try_default_2} {type = i64}
+    maxon.assign %19 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
     maxon.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %19 = maxon.var_ref {var = __try_result_1} {type = i64}
-    maxon.assign %19 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %20 = maxon.literal {value = 0 : i64}
-    %21 = maxon.binop %19, %20 {op = lt}
-    %22 = maxon.literal {value = 4294967295 : i64}
-    %23 = maxon.binop %19, %22 {op = gt}
-    %24 = maxon.binop %21, %23 {op = or}
-    maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
+    %20 = maxon.var_ref {var = __try_result_1} {type = i64}
+    maxon.assign %20 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %21 = maxon.literal {value = 0 : i64}
+    %22 = maxon.binop %20, %21 {op = lt}
+    %23 = maxon.literal {value = 4294967295 : i64}
+    %24 = maxon.binop %20, %23 {op = gt}
+    %25 = maxon.binop %22, %24 {op = or}
+    maxon.cond_br %25 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
     maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
-    %26 = maxon.var_ref {var = __range_val_5} {type = i64}
-    maxon.return %26
+    %27 = maxon.var_ref {var = __range_val_5} {type = i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %27
   }
 }
 === standard
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %1 = arith.constant {value = 0 : i64}
-    %2 = arith.constant {value = 1 : i64}
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
     %3 = arith.constant {value = 0 : i64}
-    %4 = arith.constant {value = 8 : i64}
-    %5 = arith.constant {value = 32 : i64}
-    %6 = std.call_runtime @maxon_alloc %5
-    memref.store %6, __struct_5
-    %7 = memref.load __struct_5 : i64
-    memref.store_indirect %1, %7+0
-    %8 = memref.load __struct_5 : i64
-    memref.store_indirect %2, %8+8
-    %9 = memref.load __struct_5 : i64
-    memref.store_indirect %3, %9+16
-    %10 = memref.load __struct_5 : i64
-    memref.store_indirect %4, %10+24
-    %11 = arith.constant {value = 0 : i64}
-    %12 = arith.constant {value = 16 : i64}
-    %13 = std.call_runtime @maxon_alloc %12
-    memref.store %13, arr
-    %14 = memref.load arr : i64
-    memref.store_indirect %11, %14+0
-    %15 = memref.load __struct_5 : i64
-    %16 = memref.load arr : i64
-    memref.store_indirect %15, %16+8
-    %17 = memref.lea_rdata __const_array_codegen-internals.main_arr
-    %18 = std.ptr_to_i64 %17
-    %19 = memref.load arr : i64
-    %20 = memref.load_indirect %19+8
-    memref.store_indirect %18, %20+0
-    %21 = arith.constant {value = 0 : i64}
-    %22 = arith.constant {value = 77 : i64}
-    %23 = memref.load arr : i64
-    func.call @IntArray.set %23, %21, %22
-    %24 = arith.constant {value = 0 : i64}
+    %4 = arith.constant {value = 1 : i64}
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.constant {value = 8 : i64}
+    %7 = arith.constant {value = 32 : i64}
+    %8 = arith.constant {value = 0 : i64}
+    %9 = std.call_runtime @mm_alloc %7, %8
+    memref.store %9, __struct_6
+    %10 = memref.load __struct_6 : i64
+    memref.store_indirect %3, %10+0
+    %11 = memref.load __struct_6 : i64
+    memref.store_indirect %4, %11+8
+    %12 = memref.load __struct_6 : i64
+    memref.store_indirect %5, %12+16
+    %13 = memref.load __struct_6 : i64
+    memref.store_indirect %6, %13+24
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.constant {value = 16 : i64}
+    %16 = arith.constant {value = 0 : i64}
+    %17 = std.call_runtime @mm_alloc %15, %16
+    memref.store %17, arr
+    %18 = memref.load arr : i64
+    memref.store_indirect %14, %18+0
+    %19 = memref.load __struct_6 : i64
+    %20 = memref.load arr : i64
+    memref.store_indirect %19, %20+8
+    %21 = memref.load arr : i64
+    %22 = arith.constant {value = 0 : i64}
+    std.call_runtime @mm_reparent %19, %21, %22
+    %23 = memref.lea_rdata __const_array_codegen-internals.main_arr
+    %24 = std.ptr_to_i64 %23
     %25 = memref.load arr : i64
-    %26, %27 = func.try_call @IntArray.get %25, %24
-    %28 = arith.constant {value = 0 : i64}
-    memref.store %28, __try_default_2
-    memref.store %26, __try_result_1
-    %29 = arith.constant {value = 0 : i64}
-    %30 = arith.cmpi ne %27, %29
-    cf.cond_br %30 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %26 = memref.load_indirect %25+8
+    memref.store_indirect %24, %26+0
+    %27 = arith.constant {value = 0 : i64}
+    %28 = arith.constant {value = 77 : i64}
+    %29 = memref.load arr : i64
+    func.call @IntArray.set %29, %27, %28
+    %30 = arith.constant {value = 0 : i64}
+    %31 = memref.load arr : i64
+    %32, %33 = func.try_call @IntArray.get %31, %30
+    %34 = arith.constant {value = 0 : i64}
+    memref.store %34, __try_default_2
+    memref.store %32, __try_result_1
+    %35 = arith.constant {value = 0 : i64}
+    %36 = arith.cmpi ne %33, %35
+    cf.cond_br %36 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %31 = memref.load __try_default_2 : i64
-    memref.store %31, __try_result_1
+    %37 = memref.load __try_default_2 : i64
+    memref.store %37, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %32 = memref.load __try_result_1 : i64
-    memref.store %32, __range_val_5
-    %33 = arith.constant {value = 0 : i64}
-    %34 = arith.cmpi lt %32, %33
-    %35 = arith.constant {value = 4294967295 : i64}
-    %36 = arith.cmpi gt %32, %35
-    %37 = arith.ori1 %34, %36
-    cf.cond_br %37 [then: __range_panic_5, else: __range_ok_5]
+    %38 = memref.load __try_result_1 : i64
+    memref.store %38, __range_val_5
+    %39 = arith.constant {value = 0 : i64}
+    %40 = arith.cmpi lt %38, %39
+    %41 = arith.constant {value = 4294967295 : i64}
+    %42 = arith.cmpi gt %38, %41
+    %43 = arith.ori1 %40, %42
+    cf.cond_br %43 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %38 = memref.lea_symdata __panic_msg_25
-    %39 = std.ptr_to_i64 %38
-    std.call_runtime @maxon_panic %39
+    %44 = memref.lea_symdata __panic_msg_26
+    %45 = std.ptr_to_i64 %44
+    std.call_runtime @maxon_panic %45
   __range_ok_5:
-    %40 = memref.load __range_val_5 : i64
-    %41 = memref.load arr : i64
-    std.call_runtime @__destroy_IntArray %41
-    func.return %40
+    %46 = memref.load __range_val_5 : i64
+    %47 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %47
+    func.return %46
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.xor eax, eax
-    x86.mov ecx, 1
-    x86.xor edx, edx
-    x86.mov ebx, 8
-    x86.mov esi, 32
-    x86.mov rcx, rsi
-    x86.call maxon_alloc
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov edi, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov edx, 1
+    x86.xor ebx, ebx
+    x86.mov esi, 8
+    x86.mov edi, 32
     x86.xor r8, r8
-    x86.mov [edi+0], r8
-    x86.mov r9, [rbp-8]
-    x86.mov eax, 1
-    x86.mov [r9+8], eax
-    x86.mov eax, [rbp-8]
+    x86.mov rcx, rdi
+    x86.mov rdx, r8
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov r9, [rbp-16]
+    x86.xor eax, eax
+    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.mov [eax+8], ecx
+    x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.xor eax, eax
     x86.mov ecx, 16
-    x86.call maxon_alloc
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
+    x86.xor edx, edx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
     x86.xor ecx, ecx
     x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
     x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-24]
+    x86.xor edx, edx
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_reparent
     x86.lea_rdata rax, [__const_array_codegen-internals.main_arr]
     x86.mov rcx, rax
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-24]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
     x86.xor eax, eax
     x86.mov ecx, 77
-    x86.mov edx, [rbp-16]
+    x86.mov edx, [rbp-24]
     x86.mov r8, rcx
     x86.mov rcx, rdx
     x86.mov rdx, rax
     x86.call IntArray.set
     x86.xor eax, eax
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-24]
     x86.mov rdx, rax
     x86.call IntArray.get
     x86.xor ecx, ecx
-    x86.mov [rbp-24], ecx
-    x86.mov [rbp-32], eax
+    x86.mov [rbp-32], ecx
+    x86.mov [rbp-40], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je codegen-internals.main.otherwise_default_continue_4
   otherwise_default_error_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
-    x86.jmp codegen-internals.main.otherwise_default_continue_4
-  otherwise_default_continue_4:
     x86.mov eax, [rbp-32]
     x86.mov [rbp-40], eax
+    x86.jmp codegen-internals.main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -202,15 +225,15 @@ module {
     x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_5
   __range_panic_5:
-    x86.lea_symdata rax, [__panic_msg_25]
+    x86.lea_symdata rax, [__panic_msg_26]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-16]
-    x86.mov [rbp-48], eax
-    x86.call __destroy_IntArray
     x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-56], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-56]
     x86.epilogue
     x86.ret
   }

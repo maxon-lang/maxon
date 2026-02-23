@@ -41,6 +41,7 @@ class Program {
     Console.WriteLine("Build options (compile, build, run):");
     Console.WriteLine("  --emit-ir                Write .mlir file");
     Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.mlir, etc.)");
+    Console.WriteLine("  --mm-trace               Enable runtime memory manager trace output (stderr)");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
@@ -72,6 +73,8 @@ class Program {
         emitIr = true;
       } else if (arg == "--dump-stages") {
         dumpStages = true;
+      } else if (arg == "--mm-trace") {
+        Compiler.Compiler.MmTrace = true;
       } else if (arg.StartsWith("--log=")) {
         if (!Logger.ParseOption(arg["--log=".Length..])) {
           return (false, false, false);

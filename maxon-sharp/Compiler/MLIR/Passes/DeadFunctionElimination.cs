@@ -10,12 +10,20 @@ public static class DeadFunctionElimination {
     foreach (var func in module.Functions)
       funcByName[func.Name] = func;
 
-    // BFS from main (check for exact match or suffix match)
+    // BFS from main and runtime entry points (check for exact match or suffix match)
     var queue = new Queue<string>();
     var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main" || f.Name.EndsWith(".main"));
     if (mainFunc != null) {
       queue.Enqueue(mainFunc.Name);
       reachable.Add(mainFunc.Name);
+    }
+    // __module_init and __maxon_global_cleanup are called from _start, not from Maxon code
+    foreach (var func in module.Functions) {
+      if (func.Name == "__module_init" || func.Name.EndsWith(".__module_init")
+          || func.Name == "__maxon_global_cleanup" || func.Name.EndsWith(".__maxon_global_cleanup")) {
+        if (reachable.Add(func.Name))
+          queue.Enqueue(func.Name);
+      }
     }
 
     // Resolve a callee name to its actual function name (handles namespace-qualified names)

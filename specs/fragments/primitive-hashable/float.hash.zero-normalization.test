@@ -15,23 +15,40 @@ ExitCode: 1
 module {
   func @primitive-hashable.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
     x86.movsd xmm0, [rip+__float_0]
     x86.movsd xmm1, [rip+__float_0]
-    x86.movsd [rbp-8], xmm1
+    x86.movsd [rbp-24], xmm1
     x86.call stdlib.float.hash
-    x86.mov [rbp-16], eax
-    x86.movsd xmm1, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.movsd xmm1, [rbp-24]
     x86.movsd xmm0, xmm1
     x86.call stdlib.float.hash
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-32]
     x86.cmp ecx, eax
     x86.jne primitive-hashable.main.eq_0.after
   eq_0:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   eq_0.after:
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
     x86.xor eax, eax
     x86.epilogue
     x86.ret

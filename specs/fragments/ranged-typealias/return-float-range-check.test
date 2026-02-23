@@ -15,52 +15,71 @@ ExitCode: 42
 module {
   func @ranged-typealias.clampedPct(x: f64) -> f64 {
   entry:
-    x86.prologue stack_size=16
-    x86.movsd [rbp-8], xmm0
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.movsd [rbp-24], xmm0
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.movsd xmm0, [rbp-24]
+    x86.movsd [rbp-16], xmm0
     x86.movsd xmm1, [rip+__float_0]
     x86.ucomisd xmm0, xmm1
-    x86.setb eax
-    x86.movzx eax, eaxb
+    x86.setb ecx
+    x86.movzx ecx, ecxb
     x86.movsd xmm1, [rip+__float_100]
     x86.ucomisd xmm0, xmm1
-    x86.seta ecx
-    x86.movzx ecx, ecxb
-    x86.or eax, ecx
-    x86.test eax, eax
+    x86.seta edx
+    x86.movzx edx, edxb
+    x86.or ecx, edx
+    x86.test ecx, ecx
     x86.je ranged-typealias.clampedPct.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_6]
+    x86.lea_symdata rax, [__panic_msg_7]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.movsd xmm0, [rbp-8]
+    x86.movsd xmm0, [rbp-16]
+    x86.mov eax, [rbp-8]
+    x86.movsd [rbp-24], xmm0
+    x86.mov rcx, rax
+    x86.call mm_scope_exit
+    x86.movsd xmm0, [rbp-24]
     x86.epilogue
     x86.ret
   }
   func @ranged-typealias.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
     x86.movsd xmm0, [rip+__float_42.5]
     x86.call ranged-typealias.clampedPct
-    x86.cvttsd2si eax, xmm0
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.cvttsd2si ecx, xmm0
+    x86.mov [rbp-16], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je ranged-typealias.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_16]
+    x86.lea_symdata rax, [__panic_msg_18]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

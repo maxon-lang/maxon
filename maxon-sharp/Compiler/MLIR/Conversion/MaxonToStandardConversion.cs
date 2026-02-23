@@ -224,81 +224,17 @@ public static partial class MaxonToStandardConversion {
 
       _refParamPtrVars = refParamPtrVars;
 
-      // Tracks struct variable names that this function owns (allocated or cloned).
-      // Maps variable name → struct type name for cleanup at scope exit.
-      // Params are excluded — caller owns them. Ref bindings are included since
-      // they hold an incref'd reference that must be decref'd at scope exit.
-      var ownedStructVars = new Dictionary<string, string>();
-      // Tracks parameter names to exclude from cleanup
+      // Tracks parameter names (used to distinguish params from locals in some paths)
       var structParamNames = new HashSet<string>();
-      // Tracks __ManagedMemory init buffer vars that contain struct-typed elements.
-      // Maps __struct_* var name → (element type name, element count, __arr_ tag).
-      // Used by post-call cleanup to release struct elements that __destroy___ManagedMemory won't handle.
-      var initBufferElementInfo = new Dictionary<string, (string ElementTypeName, int ElementCount, string ArrayTag)>();
 
       // Cache self-field loads: maps "fieldName" → temp var name for struct-typed self fields.
       // Avoids redundant load_indirect from self's heap pointer for the same field within a block.
       // Reset per-block since a cached var stored in one branch may not be defined in another.
       var selfFieldCache = new Dictionary<string, string>();
 
-      // Pre-scan: find struct variable declarations in non-entry blocks so we can
-      // zero-init their stack slots in the entry block. This makes them safe to
-      // release at scope exit (maxon_release is null-safe).
-      var nonEntryStructDecls = new HashSet<string>();
-      // Also find struct call results in non-entry blocks for zero-init
-      // (prevents garbage reads when release-before-overwrite runs on first loop iteration).
-      var nonEntryCallRetVars = new HashSet<string>();
-      // Build a set of managed_mem_get result IDs that produce struct elements.
-      // These are type-parameter variables that look like scalars in the IR
-      // but are actually struct heap pointers (e.g., Map keys of type String).
-      var structMemGetResultIds = new HashSet<int>();
-      foreach (var b in func.Body.Blocks) {
-        foreach (var bOp in b.Operations) {
-          if (bOp is MaxonManagedMemGetOp memGet && memGet.IsStructElement)
-            structMemGetResultIds.Add(memGet.Result.Id);
-        }
-      }
-      foreach (var b in func.Body.Blocks) {
-        if (b.Name == "entry") continue;
-        foreach (var bOp in b.Operations) {
-          if (bOp is MaxonAssignOp a && a.IsDeclaration
-              && (a.ValueKind == MaxonValueKind.Struct || structMemGetResultIds.Contains(a.Value.Id))) {
-            var name = a.VarName;
-            if (name.StartsWith("__for_iter_")) continue; // already handled
-            if (IsInternalStructTemp(name)) continue;
-            if (IsSelfField(isStructInstanceMethod, selfStructType, name)) continue;
-            nonEntryStructDecls.Add(name);
-            Logger.Debug(LogCategory.Mlir, $"Pre-scan: non-entry struct decl '{name}' in func '{func.Name}' block '{b.Name}' (memget={structMemGetResultIds.Contains(a.Value.Id)})");
-          }
-          // Struct-returning calls create __callret_* temps that may be overwritten in loops
-          if (bOp is MaxonCallOp co && co.Result != null && co.ResultKind == MaxonValueKind.Struct)
-            nonEntryCallRetVars.Add($"__callret_{co.Result.Id}");
-          if (bOp is MaxonTryCallOp tco && tco.Result != null && tco.ResultKind == MaxonValueKind.Struct)
-            nonEntryCallRetVars.Add($"__callret_{tco.Result.Id}");
-        }
-      }
-
       foreach (var block in func.Body.Blocks) {
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
-
-        // Zero-init non-entry struct variable stack slots at the start of the entry block.
-        // This ensures that if the non-entry block is never reached, the slot is null
-        // and maxon_release(null) is a safe no-op at scope exit.
-        if (block.Name == "entry" && (nonEntryStructDecls.Count > 0 || nonEntryCallRetVars.Count > 0)) {
-          foreach (var varName in nonEntryStructDecls) {
-            var zero = new StdConstI64Op(0);
-            newBlock.AddOp(zero);
-            EmitStore(newBlock, zero.Result, varName, varTypes);
-          }
-          // Zero-init __callret_* temps from non-entry blocks so that
-          // release-before-overwrite in loops has a valid (null) initial value.
-          foreach (var varName in nonEntryCallRetVars) {
-            var zero = new StdConstI64Op(0);
-            newBlock.AddOp(zero);
-            EmitStore(newBlock, zero.Result, varName, varTypes);
-          }
-        }
 
         // Pre-scan: find struct literals immediately consumed by declaration assigns
         // so we can store fields directly to the target variable.
@@ -596,7 +532,6 @@ public static partial class MaxonToStandardConversion {
                 UnpackEnumHeapToFlatVars(newBlock, retVarName, enumType, varTypes, module.TypeDefs);
                 structVarNames[errToEnumOp.Result.Id] = retVarName;
                 structValueTypes[errToEnumOp.Result.Id] = errToEnumOp.EnumTypeName;
-                ownedStructVars[retVarName] = errToEnumOp.EnumTypeName;
               } else {
                 // Simple error enum: subtract 1 from error flag to recover ordinal
                 var errorFlagVal = (StdI64)valueMap[errToEnumOp.ErrorFlag];
@@ -616,7 +551,6 @@ public static partial class MaxonToStandardConversion {
               var isString = !strRawOp.IsChar;
               EmitManagedStructFromBufLen(tempName, buf, len,
                 isString, newBlock, varTypes, structVarNames, strRawOp.Result.Id);
-              ownedStructVars[tempName] = isString ? "String" : "Character";
               break;
             }
             case MaxonEnumNameOp enumNameOp: {
@@ -634,7 +568,6 @@ public static partial class MaxonToStandardConversion {
               var tempName = $"__enum_name_{enumNameOp.Result.Id}";
               EmitManagedStructFromBufLen(tempName, nameBuf, nameLen,
                 true, newBlock, varTypes, structVarNames, enumNameOp.Result.Id);
-              ownedStructVars[tempName] = "String";
               break;
             }
             case MaxonLiteralOp litOp: {
@@ -705,18 +638,11 @@ public static partial class MaxonToStandardConversion {
                     // Associated-value enums use flat vars but struct fields need a single heap pointer
                     var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, nestedStructName, nestedEnumType, varTypes, module.TypeDefs);
                     EmitStructFieldStore(newBlock, enumHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
+                    EmitReparent(newBlock, (StdI64)enumHeapPtr, tempName, varTypes);
                   } else {
                     var nestedHeapPtr = EmitLoad(newBlock, nestedStructName, varTypes);
                     EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
-                    bool isManagedOwnershipTransfer = field.Type is MlirStructType fieldStructType
-                      && fieldStructType.Name == "__ManagedMemory";
-                    // Incref shared nested struct pointer: field accesses and user variables
-                    // retain their reference, so the struct literal creates a second reference.
-                    // Internal temps (__callret_*, __struct_*, __managed_*) transfer ownership.
-                    if (!isManagedOwnershipTransfer
-                        && (!nestedStructName.StartsWith("__") || nestedStructName.StartsWith("__field_"))) {
-                      newBlock.AddOp(new StdCallRuntimeOp("maxon_incref", [nestedHeapPtr], null));
-                    }
+                    EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
                   }
                 } else {
                   var mappedVal = valueMap[fieldVal];
@@ -782,9 +708,20 @@ public static partial class MaxonToStandardConversion {
                   var totalSize = new StdMulI64Op(countOp.Result, elemSizeVal);
                   newBlock.AddOp(totalSize);
 
-                  var heapBuf = EmitAlloc(newBlock, totalSize.Result);
+                  // Allocate heap buffer as child of the array wrapper so it moves with the array
+                  var arrayWrapperPtr = (StdI64)EmitLoad(newBlock, tempName, varTypes);
+                  var heapBuf = EmitAllocIn(newBlock, totalSize.Result, arrayWrapperPtr);
                   var copyResult = new StdI64(MlirContext.Current.NextId());
                   newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
+
+                  // Reparent struct elements under the array wrapper so they survive scope exit
+                  var firstElemVar = $"{structLitOp.ArrayLiteralTag}.0";
+                  if (varNameToStructType.ContainsKey(firstElemVar)) {
+                    for (int ei = 0; ei < structLitOp.ArrayLiteralCount; ei++) {
+                      var elemVar = $"{structLitOp.ArrayLiteralTag}.{ei}";
+                      EmitReparent(newBlock, (StdI64)EmitLoad(newBlock, elemVar, varTypes), tempName, varTypes);
+                    }
+                  }
 
                   rdataPtr = heapBuf;
                 } else {
@@ -837,16 +774,6 @@ public static partial class MaxonToStandardConversion {
               structVarNames[structLitOp.Result.Id] = tempName;
               structValueTypes[structLitOp.Result.Id] = structLitOp.TypeName;
 
-              // Track raw __ManagedMemory init buffers with struct-typed elements.
-              // Map literals pass __ManagedMemory directly to Map.init; the __destroy___ManagedMemory
-              // destructor frees memory but doesn't iterate/release struct elements in the buffer.
-              if (structLitOp.ArrayLiteralTag != null && structLitOp.TypeName == "__ManagedMemory") {
-                var firstElemVar = $"{structLitOp.ArrayLiteralTag}.0";
-                if (varNameToStructType.TryGetValue(firstElemVar, out var elemTypeName)) {
-                  initBufferElementInfo[tempName] = (elemTypeName, structLitOp.ArrayLiteralCount, structLitOp.ArrayLiteralTag);
-                }
-              }
-
               break;
             }
             case MaxonAssignOp assignOp: {
@@ -883,73 +810,34 @@ public static partial class MaxonToStandardConversion {
                   : assignOp.Value is MaxonStruct ms
                     ? ms.TypeName
                     : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'");
-                // Alias: copy the heap pointer so both variables reference the same object.
-                // Internal temps (__callret_, __struct_, etc.) are fresh allocations
-                // consumed exactly once — ownership transfers, no incref needed.
-                // User variables need incref since the source keeps its reference.
+                // With scope-based memory management, all allocations are tracked by the
+                // memory manager. No incref/release needed — scope exit frees everything.
                 if (srcName != dstName) {
-                  // Release old value on reassignment (not declaration).
-                  // Also release for declarations in non-entry blocks (loop bodies):
-                  // the stack slot is zero-initialized so the first iteration is a null-safe no-op,
-                  // and subsequent iterations release the value from the previous iteration.
-                  bool needsRelease = !assignOp.IsDeclaration
-                      || nonEntryStructDecls.Contains(dstName);
-                  if (needsRelease && varTypes.ContainsKey(dstName)) {
-                    var oldHeapPtr = (StdI64)EmitLoad(newBlock, dstName, varTypes);
-                    // Look up the old type for type-aware release (use current structTypeName as fallback
-                    // for loop declarations where varNameToStructType isn't set yet)
-                    var releaseTypeName = varNameToStructType.TryGetValue(assignOp.VarName, out var oldTypeName)
-                      ? oldTypeName : structTypeName;
-                    EmitTypeAwareRelease(newBlock, oldHeapPtr, releaseTypeName, module.TypeDefs);
-                  }
                   var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
                   EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
-                  if (!srcName.StartsWith("__")) {
-                    newBlock.AddOp(new StdCallRuntimeOp("maxon_incref", [srcHeapPtr], null));
-                  } else {
-                    // Ownership transferred from internal temp — remove from tracking
-                    ownedStructVars.Remove(srcName);
-                    // Zero __callret_* slots after ownership transfer — these have
-                    // release-before-overwrite in LowerCallCore that would double-free
-                    // if the value was already released by MaxonReleaseOp on the next loop iteration
-                    if (srcName.StartsWith("__callret_")) {
-                      var zeroAfterTransfer = new StdConstI64Op(0);
-                      newBlock.AddOp(zeroAfterTransfer);
-                      EmitStore(newBlock, zeroAfterTransfer.Result, srcName, varTypes);
-                    }
-                  }
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
-                  // Self field: release old value before storing new one on reassignment
+                  // Self field: free old child value, re-parent new value under self, then store pointer
                   var field = selfStructType!.GetField(assignOp.VarName);
                   if (field != null) {
-                    if (!assignOp.IsDeclaration && field.Type is MlirStructType fieldStructType) {
+                    if (!assignOp.IsDeclaration && field.Type is MlirStructType) {
+                      // Free old field value (it's a child of self, mm_free unlinks + frees recursively)
                       var oldVal = (StdI64)EmitStructFieldLoad(newBlock, "self", field.Offset, MlirType.I64, varTypes);
-                      EmitTypeAwareRelease(newBlock, oldVal, fieldStructType.Name, module.TypeDefs);
+                      newBlock.AddOp(new StdCallRuntimeOp("mm_free", [oldVal], null));
                     }
                     var heapPtr2 = EmitLoad(newBlock, dstName, varTypes);
+                    // Re-parent new value under self so it moves with self
+                    var selfPtr = (StdI64)EmitLoad(newBlock, "self", varTypes);
+                    var untrackTag = new StdConstI64Op(0);
+                    newBlock.AddOp(untrackTag);
+                    newBlock.AddOp(new StdCallRuntimeOp("mm_reparent", [heapPtr2, selfPtr, untrackTag.Result], null));
                     EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
                   }
                 }
                 structVarNames[assignOp.Value.Id] = dstName;
                 structValueTypes[assignOp.Value.Id] = structTypeName;
                 varNameToStructPrefix[assignOp.VarName] = dstName;
-                // Track ownership: struct declarations in the entry block own their data.
-                // Exclude __ManagedMemory (sub-allocations owned by parent), struct params,
-                // self fields, and internal struct intermediates that are consumed immediately.
-                // Track ownership for struct variables that need cleanup at scope exit.
-                // Non-entry block vars are safe because their stack slots were zero-initialized.
-                bool isTrackable = block.Name == "entry"
-                  || dstName.StartsWith("__for_iter_")
-                  || nonEntryStructDecls.Contains(dstName);
-                if (assignOp.IsDeclaration && isTrackable
-                    && structTypeName != "__ManagedMemory"
-                    && !structParamNames.Contains(dstName)
-                    && !IsSelfField(isStructInstanceMethod, selfStructType, dstName)
-                    && !IsInternalStructTemp(dstName)) {
-                  ownedStructVars[dstName] = structTypeName;
-                }
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 // Widen I32/U32 to I64 when the variable was previously stored as I64
@@ -1227,18 +1115,48 @@ public static partial class MaxonToStandardConversion {
               newBlock.AddOp(new StdBrOp(br.Target));
               break;
             }
-            case MaxonReleaseOp releaseOp: {
-              if (releaseOp.StructTypeName != ""
-                  && varTypes.ContainsKey(releaseOp.VarName)) {
-                var heapPtr = (StdI64)EmitLoad(newBlock, releaseOp.VarName, varTypes);
-                EmitTypeAwareRelease(newBlock, heapPtr, releaseOp.StructTypeName, module.TypeDefs);
-                // Zero the stack slot so scope-exit cleanup sees null (no double-free)
-                if (ownedStructVars.ContainsKey(releaseOp.VarName)) {
-                  var zero = new StdConstI64Op(0);
-                  newBlock.AddOp(zero);
-                  EmitStore(newBlock, zero.Result, releaseOp.VarName, varTypes);
-                }
+            case MaxonReleaseOp:
+              // Legacy op — scope-based cleanup handles this now
+              break;
+            case MaxonScopeEnterOp scopeEnterOp: {
+              var tagOp = new StdConstI64Op(0); // NULL tag
+              newBlock.AddOp(tagOp);
+              var scopeResult = new StdI64(MlirContext.Current.NextId());
+              newBlock.AddOp(new StdCallRuntimeOp("mm_scope_enter", [tagOp.Result], scopeResult));
+              EmitStore(newBlock, scopeResult, scopeEnterOp.ResultVar, varTypes);
+              varTypes[scopeEnterOp.ResultVar] = "i64";
+              break;
+            }
+            case MaxonScopeExitOp scopeExitOp: {
+              var scopePtr = (StdI64)EmitLoad(newBlock, scopeExitOp.ScopeVar, varTypes);
+              newBlock.AddOp(new StdCallRuntimeOp("mm_scope_exit", [scopePtr], null));
+              break;
+            }
+            case MaxonMoveOp moveOp: {
+              var varPtr = (StdI64)EmitLoad(newBlock, moveOp.VarName, varTypes);
+              var scopePtr = (StdI64)EmitLoad(newBlock, moveOp.DestScopeVar, varTypes);
+              // For return_move: move to the PARENT scope (caller's scope)
+              // ScopeFrame layout: [+8] = parent_scope
+              StdI64 destScope;
+              if (moveOp.Tag == "return_move") {
+                var scopeAsPtr = new StdPtr(scopePtr.Id);
+                var loadParent = new StdLoadIndirectOp(scopeAsPtr, 8, MlirType.I64);
+                newBlock.AddOp(loadParent);
+                destScope = (StdI64)loadParent.Result;
+              } else {
+                destScope = scopePtr;
               }
+              var moveTag = new StdConstI64Op(0);
+              newBlock.AddOp(moveTag);
+              newBlock.AddOp(new StdCallRuntimeOp("mm_move", [varPtr, destScope, moveTag.Result], null));
+              break;
+            }
+            case MaxonReparentOp untrackOp: {
+              var varPtr = (StdI64)EmitLoad(newBlock, untrackOp.VarName, varTypes);
+              var parentPtr = (StdI64)EmitLoad(newBlock, untrackOp.ParentVarName, varTypes);
+              var untrackTag = new StdConstI64Op(0);
+              newBlock.AddOp(untrackTag);
+              newBlock.AddOp(new StdCallRuntimeOp("mm_reparent", [varPtr, parentPtr, untrackTag.Result], null));
               break;
             }
             case MaxonTruncOp truncOp: {
@@ -1502,25 +1420,11 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, initBufferElementInfo);
-              // Track __callret_* temps so they get released at scope exit
-              if (tryCallOp.Result != null && structVarNames.TryGetValue(tryCallOp.Result.Id, out var tryRetVarName)
-                  && tryRetVarName.StartsWith("__callret_")
-                  && structValueTypes.TryGetValue(tryCallOp.Result.Id, out var tryRetTypeName)
-                  && tryRetTypeName != "__ManagedMemory") {
-                ownedStructVars[tryRetVarName] = tryRetTypeName;
-              }
+              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, fnEnvVarNames, initBufferElementInfo);
-              // Track __callret_* temps so they get released at scope exit
-              if (callOp.Result != null && structVarNames.TryGetValue(callOp.Result.Id, out var callRetVarName)
-                  && callRetVarName.StartsWith("__callret_")
-                  && structValueTypes.TryGetValue(callOp.Result.Id, out var callRetTypeName)
-                  && callRetTypeName != "__ManagedMemory") {
-                ownedStructVars[callRetVarName] = callRetTypeName;
-              }
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, fnEnvVarNames);
               // After a call that passes variables by reference, reload those variables
               // so subsequent uses see the mutated values instead of stale SSA values
               if (_mutatingParams != null && callOp.ArgVarNames != null
@@ -1566,10 +1470,10 @@ public static partial class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues);
               break;
             case MaxonReturnOp retOp:
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, ownedStructVars, fnEnvVarNames);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, fnEnvVarNames);
               break;
             case MaxonThrowOp throwOp:
-              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs, ownedStructVars, fnEnvVarNames);
+              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs, fnEnvVarNames);
               break;
             case MaxonManagedMemGetOp memGetOp:
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
@@ -1688,7 +1592,7 @@ public static partial class MaxonToStandardConversion {
       if (meta.TypeName == null) continue;
       var globalLoad = new StdGlobalLoadI64Op(varName);
       block.AddOp(globalLoad);
-      EmitTypeAwareRelease(block, globalLoad.Result, meta.TypeName, module.TypeDefs);
+      block.AddOp(new StdCallRuntimeOp("mm_free", [globalLoad.Result], null));
     }
 
     block.AddOp(new StdReturnOp(null));

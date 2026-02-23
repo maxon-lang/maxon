@@ -14,37 +14,47 @@ RequiredMLIR: ```
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 3 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %0 {var = __match_check_0} {kind = i64} {decl = 1 : i1}
+    __scope_0 = maxon.scope_enter {tag = register-allocator.main}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %1 {var = __match_check_0} {kind = i64} {decl = 1 : i1}
     maxon.br check_0.cmp0
   check_0.cmp0:
-    %1 = maxon.var_ref {var = __match_check_0} {type = i64}
-    %2 = maxon.literal {value = 1 : i64}
-    %3 = maxon.binop %1, %2 {op = eq}
-    %4 = maxon.var_ref {var = __match_check_0} {type = i64}
-    %5 = maxon.literal {value = 2 : i64}
-    %6 = maxon.binop %4, %5 {op = eq}
-    %7 = maxon.binop %3, %6 {op = or}
-    maxon.cond_br %7 [then: check_0.case0, else: check_0.cmp1]
+    %2 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq}
+    %5 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %6 = maxon.literal {value = 2 : i64}
+    %7 = maxon.binop %5, %6 {op = eq}
+    %8 = maxon.binop %4, %7 {op = or}
+    maxon.cond_br %8 [then: check_0.case0, else: check_0.cmp1]
   check_0.case0:
-    %8 = maxon.literal {value = 10 : i64}
-    maxon.return %8
+    __scope_9 = maxon.scope_enter {tag = match_case}
+    %10 = maxon.literal {value = 10 : i64}
+    maxon.scope_exit {scope = __scope_9} {tag = return_cleanup}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %10
   check_0.cmp1:
-    %9 = maxon.var_ref {var = __match_check_0} {type = i64}
-    %10 = maxon.literal {value = 3 : i64}
-    %11 = maxon.binop %9, %10 {op = eq}
-    %12 = maxon.var_ref {var = __match_check_0} {type = i64}
-    %13 = maxon.literal {value = 4 : i64}
-    %14 = maxon.binop %12, %13 {op = eq}
-    %15 = maxon.binop %11, %14 {op = or}
-    maxon.cond_br %15 [then: check_0.case1, else: check_0.case2]
+    %11 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %12 = maxon.literal {value = 3 : i64}
+    %13 = maxon.binop %11, %12 {op = eq}
+    %14 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %15 = maxon.literal {value = 4 : i64}
+    %16 = maxon.binop %14, %15 {op = eq}
+    %17 = maxon.binop %13, %16 {op = or}
+    maxon.cond_br %17 [then: check_0.case1, else: check_0.case2]
   check_0.case1:
-    %16 = maxon.literal {value = 20 : i64}
-    maxon.return %16
+    __scope_18 = maxon.scope_enter {tag = match_case}
+    %19 = maxon.literal {value = 20 : i64}
+    maxon.scope_exit {scope = __scope_18} {tag = return_cleanup}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %19
   check_0.case2:
-    %17 = maxon.literal {value = 0 : i64}
-    maxon.return %17
+    __scope_20 = maxon.scope_enter {tag = match_case}
+    %21 = maxon.literal {value = 0 : i64}
+    maxon.scope_exit {scope = __scope_20} {tag = return_cleanup}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %21
   check_0.merge:
   }
 }
@@ -52,36 +62,60 @@ module {
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 3 : i64}
-    memref.store %0, __match_check_0
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = arith.constant {value = 3 : i64}
+    memref.store %2, __match_check_0
     cf.br check_0.cmp0
   check_0.cmp0:
-    %1 = memref.load __match_check_0 : i64
-    %2 = arith.constant {value = 1 : i64}
-    %3 = arith.cmpi eq %1, %2
-    %4 = memref.load __match_check_0 : i64
-    %5 = arith.constant {value = 2 : i64}
-    %6 = arith.cmpi eq %4, %5
-    %7 = arith.ori1 %3, %6
-    cf.cond_br %7 [then: check_0.case0, else: check_0.cmp1]
+    %3 = memref.load __match_check_0 : i64
+    %4 = arith.constant {value = 1 : i64}
+    %5 = arith.cmpi eq %3, %4
+    %6 = memref.load __match_check_0 : i64
+    %7 = arith.constant {value = 2 : i64}
+    %8 = arith.cmpi eq %6, %7
+    %9 = arith.ori1 %5, %8
+    cf.cond_br %9 [then: check_0.case0, else: check_0.cmp1]
   check_0.case0:
-    %8 = arith.constant {value = 10 : i64}
-    func.return %8
+    %10 = arith.constant {value = 0 : i64}
+    %11 = std.call_runtime @mm_scope_enter %10
+    memref.store %11, __scope_9
+    %12 = arith.constant {value = 10 : i64}
+    %13 = memref.load __scope_9 : i64
+    std.call_runtime @mm_scope_exit %13
+    %14 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %14
+    func.return %12
   check_0.cmp1:
-    %9 = memref.load __match_check_0 : i64
-    %10 = arith.constant {value = 3 : i64}
-    %11 = arith.cmpi eq %9, %10
-    %12 = memref.load __match_check_0 : i64
-    %13 = arith.constant {value = 4 : i64}
-    %14 = arith.cmpi eq %12, %13
-    %15 = arith.ori1 %11, %14
-    cf.cond_br %15 [then: check_0.case1, else: check_0.case2]
+    %15 = memref.load __match_check_0 : i64
+    %16 = arith.constant {value = 3 : i64}
+    %17 = arith.cmpi eq %15, %16
+    %18 = memref.load __match_check_0 : i64
+    %19 = arith.constant {value = 4 : i64}
+    %20 = arith.cmpi eq %18, %19
+    %21 = arith.ori1 %17, %20
+    cf.cond_br %21 [then: check_0.case1, else: check_0.case2]
   check_0.case1:
-    %16 = arith.constant {value = 20 : i64}
-    func.return %16
+    %22 = arith.constant {value = 0 : i64}
+    %23 = std.call_runtime @mm_scope_enter %22
+    memref.store %23, __scope_18
+    %24 = arith.constant {value = 20 : i64}
+    %25 = memref.load __scope_18 : i64
+    std.call_runtime @mm_scope_exit %25
+    %26 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %26
+    func.return %24
   check_0.case2:
-    %17 = arith.constant {value = 0 : i64}
-    func.return %17
+    %27 = arith.constant {value = 0 : i64}
+    %28 = std.call_runtime @mm_scope_enter %27
+    memref.store %28, __scope_20
+    %29 = arith.constant {value = 0 : i64}
+    %30 = memref.load __scope_20 : i64
+    std.call_runtime @mm_scope_exit %30
+    %31 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %31
+    func.return %29
   check_0.merge:
   }
 }
@@ -89,17 +123,21 @@ module {
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 3
+    x86.prologue stack_size=48
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
+    x86.mov ecx, 3
+    x86.mov [rbp-16], ecx
     x86.jmp register-allocator.main.check_0.cmp0
   check_0.cmp0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, [rbp-8]
+    x86.mov ebx, [rbp-16]
     x86.mov esi, 2
     x86.cmp ebx, esi
     x86.sete edi
@@ -108,16 +146,26 @@ module {
     x86.test edx, edx
     x86.je register-allocator.main.check_0.cmp1
   check_0.case0:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-24], eax
+    x86.mov eax, 10
+    x86.mov ecx, [rbp-24]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.mov eax, 10
     x86.epilogue
     x86.ret
   check_0.cmp1:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, 3
     x86.cmp eax, ecx
     x86.sete edx
     x86.movzx edx, edxb
-    x86.mov ebx, [rbp-8]
+    x86.mov ebx, [rbp-16]
     x86.mov esi, 4
     x86.cmp ebx, esi
     x86.sete edi
@@ -126,10 +174,30 @@ module {
     x86.test edx, edx
     x86.je register-allocator.main.check_0.case2
   check_0.case1:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-32], eax
+    x86.mov eax, 20
+    x86.mov ecx, [rbp-32]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.mov eax, 20
     x86.epilogue
     x86.ret
   check_0.case2:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-40], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-40]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.xor eax, eax
     x86.epilogue
     x86.ret

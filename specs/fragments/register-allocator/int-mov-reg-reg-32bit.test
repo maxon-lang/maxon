@@ -18,94 +18,131 @@ RequiredMLIR: ```
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
-    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
-    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
-    %2 = maxon.binop %0, %1 {op = add} {optimalType = i64}
-    maxon.return %2
+    __scope_0 = maxon.scope_enter {tag = register-allocator.add}
+    %1 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %2 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %3
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %3 = maxon.literal {value = 20 : i64}
-    maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 22 : i64}
-    maxon.assign %4 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.call @register-allocator.add %4, %3
-    maxon.assign %5 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.literal {value = 0 : i64}
-    %7 = maxon.binop %5, %6 {op = lt}
-    %8 = maxon.literal {value = 4294967295 : i64}
-    %9 = maxon.binop %5, %8 {op = gt}
-    %10 = maxon.binop %7, %9 {op = or}
-    maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+    __scope_4 = maxon.scope_enter {tag = register-allocator.main}
+    %5 = maxon.literal {value = 20 : i64}
+    maxon.assign %5 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 22 : i64}
+    maxon.assign %6 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.call @register-allocator.add %6, %5
+    maxon.assign %7 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %8 = maxon.literal {value = 0 : i64}
+    %9 = maxon.binop %7, %8 {op = lt}
+    %10 = maxon.literal {value = 4294967295 : i64}
+    %11 = maxon.binop %7, %10 {op = gt}
+    %12 = maxon.binop %9, %11 {op = or}
+    maxon.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-mov-reg-reg-32bit.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %12 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %12
+    %14 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_exit {scope = __scope_4} {tag = return_cleanup}
+    maxon.return %14
   }
 }
 === standard
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
-    %0 = func.param a : StdI64
-    %1 = func.param b : StdI64
-    %2 = arith.addi %0, %1
-    func.return %2
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = func.param a : StdI64
+    %3 = func.param b : StdI64
+    %4 = arith.addi %2, %3
+    %5 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %5
+    func.return %4
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %3 = arith.constant {value = 20 : i64}
-    %4 = arith.constant {value = 22 : i64}
-    %5 = func.call @register-allocator.add %4, %3
-    memref.store %5, __range_val_0
     %6 = arith.constant {value = 0 : i64}
-    %7 = arith.cmpi lt %5, %6
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.cmpi gt %5, %8
-    %10 = arith.ori1 %7, %9
-    cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+    %7 = std.call_runtime @mm_scope_enter %6
+    memref.store %7, __scope_4
+    %8 = arith.constant {value = 20 : i64}
+    %9 = arith.constant {value = 22 : i64}
+    %10 = func.call @register-allocator.add %9, %8
+    memref.store %10, __range_val_0
+    %11 = arith.constant {value = 0 : i64}
+    %12 = arith.cmpi lt %10, %11
+    %13 = arith.constant {value = 4294967295 : i64}
+    %14 = arith.cmpi gt %10, %13
+    %15 = arith.ori1 %12, %14
+    cf.cond_br %15 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %11 = memref.lea_symdata __panic_msg_11
-    %12 = std.ptr_to_i64 %11
-    std.call_runtime @maxon_panic %12
+    %16 = memref.lea_symdata __panic_msg_13
+    %17 = std.ptr_to_i64 %16
+    std.call_runtime @maxon_panic %17
   __range_ok_0:
-    %13 = memref.load __range_val_0 : i64
-    func.return %13
+    %18 = memref.load __range_val_0 : i64
+    %19 = memref.load __scope_4 : i64
+    std.call_runtime @mm_scope_exit %19
+    func.return %18
   }
 }
 === x86
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
-    x86.lea eax, [ecx + edx]
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-16], ecx
+    x86.mov [rbp-24], edx
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [rbp-16]
+    x86.add edx, ecx
+    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-32], edx
+    x86.mov rcx, rbx
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-32]
+    x86.epilogue
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 20
-    x86.mov ecx, 22
-    x86.mov rdx, rax
-    x86.call register-allocator.add
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor edx, edx
-    x86.cmp eax, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.mov ecx, 20
+    x86.mov edx, 22
+    x86.xchg rdx, rcx
+    x86.call register-allocator.add
+    x86.mov [rbp-16], eax
+    x86.xor ebx, ebx
+    x86.cmp eax, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_11]
+    x86.lea_symdata rax, [__panic_msg_13]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

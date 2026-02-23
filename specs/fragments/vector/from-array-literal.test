@@ -10,61 +10,63 @@ module {
   func @vector.main() -> u32 {
   entry:
     x86.prologue stack_size=80
-    x86.mov eax, 10
-    x86.mov ecx, 20
-    x86.mov edx, 30
-    x86.mov [rbp-8], edx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
-    x86.xor ebx, ebx
-    x86.mov esi, 3
-    x86.xor edi, edi
-    x86.mov r8, 8
-    x86.mov r9, 32
-    x86.mov rcx, r9
-    x86.call maxon_alloc
-    x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-32]
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 10
+    x86.mov edx, 20
+    x86.mov ebx, 30
+    x86.mov [rbp-16], ebx
+    x86.mov [rbp-24], edx
+    x86.mov [rbp-32], ecx
+    x86.xor esi, esi
+    x86.mov edi, 3
+    x86.xor r8, r8
+    x86.mov r9, 8
+    x86.mov eax, 32
+    x86.xor ecx, ecx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call mm_alloc
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
     x86.xor ecx, ecx
     x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-40]
     x86.mov ecx, 3
     x86.mov [eax+8], ecx
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-40]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-40]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
-    x86.lea rax, [rbp-24]
+    x86.lea rax, [rbp-32]
     x86.mov rcx, rax
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-40]
     x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-40]
     x86.mov rcx, rax
     x86.call __Vector_3_i64.init
-    x86.mov ecx, [rbp-32]
-    x86.mov [rbp-72], eax
-    x86.call __destroy___ManagedMemory
-    x86.mov eax, [rbp-72]
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-40]
+    x86.mov ecx, [rbp-48]
     x86.mov rdx, rax
     x86.call __Vector_3_i64.get
     x86.xor ecx, ecx
-    x86.mov [rbp-48], ecx
-    x86.mov [rbp-56], eax
+    x86.mov [rbp-56], ecx
+    x86.mov [rbp-64], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je vector.main.otherwise_default_continue_4
   otherwise_default_error_3:
-    x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
-    x86.jmp vector.main.otherwise_default_continue_4
-  otherwise_default_continue_4:
     x86.mov eax, [rbp-56]
     x86.mov [rbp-64], eax
+    x86.jmp vector.main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    x86.mov eax, [rbp-64]
+    x86.mov [rbp-72], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -77,15 +79,15 @@ module {
     x86.test edx, edx
     x86.je vector.main.__range_ok_5
   __range_panic_5:
-    x86.lea_symdata rax, [__panic_msg_24]
+    x86.lea_symdata rax, [__panic_msg_25]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
-    x86.mov eax, [rbp-64]
-    x86.mov ecx, [rbp-40]
-    x86.mov [rbp-72], eax
-    x86.call __destroy___Vector_3_i64
     x86.mov eax, [rbp-72]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-80], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret
   }

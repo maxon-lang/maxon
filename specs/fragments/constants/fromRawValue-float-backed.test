@@ -18,65 +18,82 @@ ExitCode: 1
 module {
   func @constants.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
     x86.movsd xmm0, [rip+__float_2.5]
-    x86.mov eax, 1
+    x86.mov ecx, 1
     x86.movsd xmm1, [rip+__float_1.5]
     x86.ucomisd xmm0, xmm1
-    x86.sete ecx
-    x86.movzx ecx, ecxb
-    x86.setnp edx
+    x86.sete edx
     x86.movzx edx, edxb
-    x86.and ecx, edx
-    x86.xor ebx, ebx
-    x86.test ecx, ecx
-    x86.mov esi, eax
-    x86.cmovne esi, ebx
+    x86.setnp ebx
+    x86.movzx ebx, ebxb
+    x86.and edx, ebx
+    x86.xor esi, esi
+    x86.test edx, edx
+    x86.mov edi, ecx
+    x86.cmovne edi, esi
     x86.movsd xmm2, [rip+__float_2.5]
     x86.ucomisd xmm0, xmm2
-    x86.sete edi
-    x86.movzx edi, edib
-    x86.setnp r8
+    x86.sete r8
     x86.movzx r8, r8b
-    x86.and edi, r8
-    x86.xor r9, r9
-    x86.test edi, edi
-    x86.mov eax, esi
-    x86.cmovne eax, r9
+    x86.setnp r9
+    x86.movzx r9, r9b
+    x86.and r8, r9
+    x86.xor eax, eax
+    x86.test r8, r8
+    x86.mov ecx, edi
+    x86.cmovne ecx, eax
     x86.movsd xmm3, [rip+__float_3.5]
     x86.ucomisd xmm0, xmm3
-    x86.sete ecx
-    x86.movzx ecx, ecxb
+    x86.sete eax
+    x86.movzx eax, eaxb
     x86.setnp edx
     x86.movzx edx, edxb
-    x86.and ecx, edx
+    x86.and eax, edx
     x86.xor edx, edx
-    x86.test ecx, ecx
-    x86.mov ebx, eax
+    x86.test eax, eax
+    x86.mov ebx, ecx
     x86.cmovne ebx, edx
     x86.movsd xmm4, [rip+__float_1.5]
-    x86.movsd [rbp-8], xmm4
-    x86.movsd [rbp-16], xmm0
+    x86.movsd [rbp-16], xmm4
+    x86.movsd [rbp-24], xmm0
     x86.xor eax, eax
     x86.cmp ebx, eax
     x86.je constants.main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.movsd xmm0, [rbp-8]
-    x86.movsd [rbp-16], xmm0
-    x86.jmp constants.main.otherwise_default_continue_3
-  otherwise_default_continue_3:
     x86.movsd xmm0, [rbp-16]
     x86.movsd [rbp-24], xmm0
+    x86.jmp constants.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.movsd xmm0, [rbp-24]
+    x86.movsd [rbp-32], xmm0
     x86.movsd xmm1, [rip+__float_2.5]
-    x86.movsd xmm2, [rbp-24]
+    x86.movsd xmm2, [rbp-32]
     x86.ucomisd xmm2, xmm1
     x86.jne constants.main.check_4.after
     x86.jp constants.main.check_4.after
   check_4:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-40], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-40]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   check_4.after:
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
     x86.xor eax, eax
     x86.epilogue
     x86.ret

@@ -8,7 +8,16 @@ ExitCode: 5
 module {
   func @literals.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
     x86.mov eax, 5
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov eax, 5
+    x86.epilogue
     x86.ret
   }
 }

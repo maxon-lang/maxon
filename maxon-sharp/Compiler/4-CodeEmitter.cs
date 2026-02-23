@@ -62,7 +62,11 @@ public class CodeEmitter {
       .Where(f => f.Name == "__maxon_global_cleanup" || f.Name.EndsWith(".__maxon_global_cleanup"))
       .Select(f => f.Name)
       .FirstOrDefault();
-    emitter.EmitStartWrapper(mainFunc.Name, globalCleanupName);
+    var moduleInitName = module.Functions
+      .Where(f => f.Name == "__module_init" || f.Name.EndsWith(".__module_init"))
+      .Select(f => f.Name)
+      .FirstOrDefault();
+    emitter.EmitStartWrapper(mainFunc.Name, globalCleanupName, moduleInitName);
 
     // Emit all functions (main and others)
     EmitFunction(emitter, mainFunc);
@@ -73,11 +77,11 @@ public class CodeEmitter {
     // Emit __chkstk runtime function (for large stack allocations)
     emitter.EmitChkstk();
 
-    // Emit runtime allocation functions (maxon_alloc, maxon_free)
+    // Emit runtime helper functions (string conversion, I/O, process management, etc.)
     emitter.EmitRuntimeFunctions();
 
-    // Emit per-type destructor functions (__destroy_TypeName)
-    emitter.EmitDestructors(module.TypeDefs);
+    // Emit scope-based memory manager functions (mm_alloc, mm_free, mm_scope_enter/exit, etc.)
+    emitter.EmitMemoryManagerFunctions();
 
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();

@@ -19,137 +19,188 @@ RequiredMLIR: ```
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
   entry:
-    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
-    %1 = maxon.literal {value = 1 : i64}
-    %2 = maxon.binop %0, %1 {op = le} {optimalType = i64}
-    maxon.cond_br %2 [then: base_0, else: base_0.after]
+    __scope_0 = maxon.scope_enter {tag = register-allocator.factorial}
+    %1 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.binop %1, %2 {op = le} {optimalType = i64}
+    maxon.cond_br %3 [then: base_0, else: base_0.after]
   base_0:
-    %3 = maxon.literal {value = 1 : i64}
-    maxon.return %3
+    __scope_4 = maxon.scope_enter {tag = if_then}
+    %5 = maxon.literal {value = 1 : i64}
+    maxon.scope_exit {scope = __scope_4} {tag = return_cleanup}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %5
   base_0.after:
-    %4 = maxon.literal {value = 1 : i64}
-    %5 = maxon.var_ref {var = n} {type = i64}
-    %6 = maxon.binop %5, %4 {op = sub}
-    %7 = maxon.call @register-allocator.factorial %6
-    %8 = maxon.var_ref {var = n} {type = i64}
-    %9 = maxon.binop %8, %7 {op = mul}
-    maxon.return %9
+    %6 = maxon.literal {value = 1 : i64}
+    %7 = maxon.var_ref {var = n} {type = i64}
+    %8 = maxon.binop %7, %6 {op = sub}
+    %9 = maxon.call @register-allocator.factorial %8
+    %10 = maxon.var_ref {var = n} {type = i64}
+    %11 = maxon.binop %10, %9 {op = mul}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %11
   }
   func @register-allocator.main() -> i64 {
   entry:
-    %10 = maxon.literal {value = 5 : i64}
-    %11 = maxon.call @register-allocator.factorial %10
-    %12 = maxon.literal {value = 256 : i64}
-    %13 = maxon.binop %11, %12 {op = mod}
-    maxon.assign %13 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %14 = maxon.literal {value = 0 : i64}
-    %15 = maxon.binop %13, %14 {op = lt}
-    %16 = maxon.literal {value = 4294967295 : i64}
-    %17 = maxon.binop %13, %16 {op = gt}
-    %18 = maxon.binop %15, %17 {op = or}
-    maxon.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+    __scope_12 = maxon.scope_enter {tag = register-allocator.main}
+    %13 = maxon.literal {value = 5 : i64}
+    %14 = maxon.call @register-allocator.factorial %13
+    %15 = maxon.literal {value = 256 : i64}
+    %16 = maxon.binop %14, %15 {op = mod}
+    maxon.assign %16 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.literal {value = 0 : i64}
+    %18 = maxon.binop %16, %17 {op = lt}
+    %19 = maxon.literal {value = 4294967295 : i64}
+    %20 = maxon.binop %16, %19 {op = gt}
+    %21 = maxon.binop %18, %20 {op = or}
+    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-recursive-factorial.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %20 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %20
+    %23 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_exit {scope = __scope_12} {tag = return_cleanup}
+    maxon.return %23
   }
 }
 === standard
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
   entry:
-    %0 = func.param n : StdI64
-    memref.store %0, n
-    %1 = arith.constant {value = 1 : i64}
-    %2 = arith.cmpi le %0, %1
-    cf.cond_br %2 [then: base_0, else: base_0.after]
-  base_0:
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = func.param n : StdI64
+    memref.store %2, n
     %3 = arith.constant {value = 1 : i64}
-    func.return %3
+    %4 = arith.cmpi le %2, %3
+    cf.cond_br %4 [then: base_0, else: base_0.after]
+  base_0:
+    %5 = arith.constant {value = 0 : i64}
+    %6 = std.call_runtime @mm_scope_enter %5
+    memref.store %6, __scope_4
+    %7 = arith.constant {value = 1 : i64}
+    %8 = memref.load __scope_4 : i64
+    std.call_runtime @mm_scope_exit %8
+    %9 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %9
+    func.return %7
   base_0.after:
-    %4 = arith.constant {value = 1 : i64}
-    %5 = memref.load n : i64
-    %6 = arith.subi %5, %4
-    %7 = func.call @register-allocator.factorial %6
-    %8 = memref.load n : i64
-    %9 = arith.muli %8, %7
-    func.return %9
+    %10 = arith.constant {value = 1 : i64}
+    %11 = memref.load n : i64
+    %12 = arith.subi %11, %10
+    %13 = func.call @register-allocator.factorial %12
+    %14 = memref.load n : i64
+    %15 = arith.muli %14, %13
+    %16 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %16
+    func.return %15
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %10 = arith.constant {value = 5 : i64}
-    %11 = func.call @register-allocator.factorial %10
-    %12 = arith.constant {value = 256 : i64}
-    %13 = arith.remsi %11, %12
-    memref.store %13, __range_val_0
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 4294967295 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+    %17 = arith.constant {value = 0 : i64}
+    %18 = std.call_runtime @mm_scope_enter %17
+    memref.store %18, __scope_12
+    %19 = arith.constant {value = 5 : i64}
+    %20 = func.call @register-allocator.factorial %19
+    %21 = arith.constant {value = 256 : i64}
+    %22 = arith.remsi %20, %21
+    memref.store %22, __range_val_0
+    %23 = arith.constant {value = 0 : i64}
+    %24 = arith.cmpi lt %22, %23
+    %25 = arith.constant {value = 4294967295 : i64}
+    %26 = arith.cmpi gt %22, %25
+    %27 = arith.ori1 %24, %26
+    cf.cond_br %27 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %19 = memref.lea_symdata __panic_msg_19
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @maxon_panic %20
+    %28 = memref.lea_symdata __panic_msg_22
+    %29 = std.ptr_to_i64 %28
+    std.call_runtime @maxon_panic %29
   __range_ok_0:
-    %21 = memref.load __range_val_0 : i64
-    func.return %21
+    %30 = memref.load __range_val_0 : i64
+    %31 = memref.load __scope_12 : i64
+    std.call_runtime @mm_scope_exit %31
+    func.return %30
   }
 }
 === x86
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, 1
-    x86.cmp ecx, eax
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], ecx
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov edx, [rbp-16]
+    x86.cmp edx, ecx
     x86.jg register-allocator.factorial.base_0.after
   base_0:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-24], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-24]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   base_0.after:
     x86.mov eax, 1
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, [rbp-16]
     x86.sub ecx, eax
     x86.call register-allocator.factorial
-    x86.mov edx, [rbp-8]
+    x86.mov edx, [rbp-16]
     x86.imul edx, eax
-    x86.mov eax, edx
+    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-32], edx
+    x86.mov rcx, rbx
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 5
+    x86.prologue stack_size=32
+    x86.xor eax, eax
     x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 5
     x86.call register-allocator.factorial
-    x86.mov ecx, 256
-    x86.mov [rbp-16], eax
+    x86.mov edx, 256
+    x86.mov ecx, edx
+    x86.mov [rbp-24], eax
     x86.cqo
     x86.idiv ecx
-    x86.mov [rbp-8], edx
-    x86.xor eax, eax
-    x86.cmp edx, eax
-    x86.setl eax
-    x86.movzx eax, eaxb
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.setg edx
-    x86.movzx edx, edxb
-    x86.or eax, edx
-    x86.test eax, eax
+    x86.mov [rbp-16], edx
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.setl esi
+    x86.movzx esi, esib
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or esi, r8
+    x86.test esi, esi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_19]
+    x86.lea_symdata rax, [__panic_msg_22]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

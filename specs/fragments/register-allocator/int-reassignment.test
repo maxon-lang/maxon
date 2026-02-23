@@ -12,81 +12,96 @@ RequiredMLIR: ```
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 100 : i64}
-    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 80 : i64}
-    %2 = maxon.binop %0, %1 {op = sub}
-    maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 22 : i64}
-    maxon.assign %3 {var = x} {kind = i64} {mut = 1 : i1}
-    %4 = maxon.binop %3, %2 {op = add}
-    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.literal {value = 0 : i64}
-    %6 = maxon.binop %4, %5 {op = lt}
-    %7 = maxon.literal {value = 4294967295 : i64}
-    %8 = maxon.binop %4, %7 {op = gt}
-    %9 = maxon.binop %6, %8 {op = or}
-    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    __scope_0 = maxon.scope_enter {tag = register-allocator.main}
+    %1 = maxon.literal {value = 100 : i64}
+    maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 80 : i64}
+    %3 = maxon.binop %1, %2 {op = sub}
+    maxon.assign %3 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 22 : i64}
+    maxon.assign %4 {var = x} {kind = i64} {mut = 1 : i1}
+    %5 = maxon.binop %4, %3 {op = add}
+    maxon.assign %5 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 0 : i64}
+    %7 = maxon.binop %5, %6 {op = lt}
+    %8 = maxon.literal {value = 4294967295 : i64}
+    %9 = maxon.binop %5, %8 {op = gt}
+    %10 = maxon.binop %7, %9 {op = or}
+    maxon.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-reassignment.test:6: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.return %11
+    %12 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %12
   }
 }
 === standard
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 100 : i64}
-    %1 = arith.constant {value = 80 : i64}
-    %2 = arith.subi %0, %1
-    %3 = arith.constant {value = 22 : i64}
-    %4 = arith.addi %3, %2
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = arith.constant {value = 100 : i64}
+    %3 = arith.constant {value = 80 : i64}
+    %4 = arith.subi %2, %3
+    %5 = arith.constant {value = 22 : i64}
+    %6 = arith.addi %5, %4
+    memref.store %6, __range_val_0
+    %7 = arith.constant {value = 0 : i64}
+    %8 = arith.cmpi lt %6, %7
+    %9 = arith.constant {value = 4294967295 : i64}
+    %10 = arith.cmpi gt %6, %9
+    %11 = arith.ori1 %8, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_10
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @maxon_panic %11
+    %12 = memref.lea_symdata __panic_msg_11
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
   __range_ok_0:
-    %12 = memref.load __range_val_0 : i64
-    func.return %12
+    %14 = memref.load __range_val_0 : i64
+    %15 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %15
+    func.return %14
   }
 }
 === x86
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 100
-    x86.mov ecx, 80
-    x86.sub eax, ecx
-    x86.mov edx, 22
-    x86.add edx, eax
-    x86.mov [rbp-8], edx
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rdx, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 100
+    x86.mov edx, 80
+    x86.sub ecx, edx
+    x86.mov ebx, 22
+    x86.add ebx, ecx
+    x86.mov [rbp-16], ebx
+    x86.xor esi, esi
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rbx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_11]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

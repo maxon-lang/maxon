@@ -63,6 +63,10 @@ public static partial class MaxonToStandardConversion {
         if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.ContainsKey(ret.Value.Id)) {
           escaping.Add(ret.Value.Id);
         }
+        // Global stores escape: the function's stack frame is destroyed but the global persists
+        if (op is MaxonGlobalStoreOp globalStore && arrayLiterals.ContainsKey(globalStore.Value.Id)) {
+          escaping.Add(globalStore.Value.Id);
+        }
         // Track struct_var_ref so indirect returns (var x = [...]; return x) are caught
         if (op is MaxonStructVarRefOp varRef && varToArrayLiteral.TryGetValue(varRef.VarName, out var litId)) {
           arrayLiterals.TryAdd(varRef.Result.Id, arrayLiterals[litId]);
@@ -70,11 +74,14 @@ public static partial class MaxonToStandardConversion {
       }
     }
 
-    // Second pass: catch returns that reference var refs of array literals
+    // Second pass: catch returns and global stores that reference var refs of array literals
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
-        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.TryGetValue(ret.Value.Id, out MaxonStructLiteralOp? value)) {
-          escaping.Add(value.Result.Id);
+        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.TryGetValue(ret.Value.Id, out MaxonStructLiteralOp? retLit)) {
+          escaping.Add(retLit.Result.Id);
+        }
+        if (op is MaxonGlobalStoreOp gs && arrayLiterals.TryGetValue(gs.Value.Id, out MaxonStructLiteralOp? gsLit)) {
+          escaping.Add(gsLit.Result.Id);
         }
       }
     }
@@ -188,8 +195,10 @@ public static partial class MaxonToStandardConversion {
   }
 
   private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, StdI64 size) {
+    var tagOp = new StdConstI64Op(0); // NULL tag
+    block.AddOp(tagOp);
     var result = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("maxon_alloc", [size], result));
+    block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, tagOp.Result], result));
     return result;
   }
 
@@ -197,6 +206,35 @@ public static partial class MaxonToStandardConversion {
     var sizeOp = new StdConstI64Op(constSize);
     block.AddOp(sizeOp);
     return EmitAlloc(block, sizeOp.Result);
+  }
+
+  /// <summary>
+  /// Allocates memory as a child of a parent allocation. When the parent is freed
+  /// via mm_free or mm_scope_exit, children are freed recursively.
+  /// </summary>
+  private static StdI64 EmitAllocIn(MlirBlock<StandardOp> block, StdI64 size, StdI64 parentPtr) {
+    var tagOp = new StdConstI64Op(0); // NULL tag
+    block.AddOp(tagOp);
+    var result = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("mm_alloc_in", [size, parentPtr, tagOp.Result], result));
+    return result;
+  }
+
+  private static StdI64 EmitAllocIn(MlirBlock<StandardOp> block, long constSize, StdI64 parentPtr) {
+    var sizeOp = new StdConstI64Op(constSize);
+    block.AddOp(sizeOp);
+    return EmitAllocIn(block, sizeOp.Result, parentPtr);
+  }
+
+  /// <summary>
+  /// Re-parents a heap allocation from its current owner (scope or parent) to become
+  /// a child of newParent. Used when storing a struct into an array element or struct field.
+  /// </summary>
+  private static void EmitReparent(MlirBlock<StandardOp> block, StdI64 childPtr, string parentVarName, Dictionary<string, string> varTypes) {
+    var parentPtr = (StdI64)EmitLoad(block, parentVarName, varTypes);
+    var tagOp = new StdConstI64Op(0);
+    block.AddOp(tagOp);
+    block.AddOp(new StdCallRuntimeOp("mm_reparent", [childPtr, parentPtr, tagOp.Result], null));
   }
 
   /// <summary>

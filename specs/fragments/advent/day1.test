@@ -9,8 +9,10 @@ RequiredMLIR: ```
 module {
   func @advent.main() -> i64 {
   entry:
-    %0 = maxon.literal {value = 0 : i64}
-    maxon.return %0
+    __scope_0 = maxon.scope_enter {tag = advent.main}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
+    maxon.return %1
   }
 }
 === standard
@@ -18,14 +20,28 @@ module {
   func @advent.main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
-    func.return %0
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = arith.constant {value = 0 : i64}
+    %3 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %3
+    func.return %2
   }
 }
 === x86
 module {
   func @advent.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.xor eax, eax
+    x86.epilogue
     x86.ret
   }
 }

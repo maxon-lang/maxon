@@ -1,0 +1,1100 @@
+using MaxonSharp.Compiler.Mlir.Dialects;
+
+namespace MaxonSharp.Compiler.Mlir;
+
+public partial class X86CodeEmitter {
+
+  // ==========================================================================
+  // Memory Manager — scope-based allocation tracking with hierarchical ownership
+  // ==========================================================================
+  //
+  // ScopeFrame (48 bytes):
+  //   +0   scope_id        (u64)
+  //   +8   parent_scope    (ptr)
+  //   +16  alloc_head      (ptr)
+  //   +24  alloc_tail      (ptr)
+  //   +32  tag_cstr        (ptr)
+  //   +40  alloc_count     (u64)
+  //
+  // AllocEntry (72 bytes):
+  //   +0   user_ptr        (ptr)
+  //   +8   size            (u64)
+  //   +16  next            (ptr)
+  //   +24  prev            (ptr)
+  //   +32  child_head      (ptr)
+  //   +40  child_tail      (ptr)
+  //   +48  owner_entry     (ptr to parent AllocEntry, or NULL if scope-owned)
+  //   +56  owner_scope     (ptr to owning ScopeFrame, or NULL if parent-owned)
+  //   +64  tag_cstr        (ptr)
+  //
+  // Every managed allocation has an 8-byte header at [ptr-8] = pointer to its AllocEntry.
+
+  public void EmitMemoryManagerFunctions() {
+    DefineSymdata("__mm_current_scope", new byte[8]);
+    DefineSymdata("__mm_trace_enabled", BitConverter.GetBytes(Compiler.MmTrace ? (long)1 : (long)0));
+    DefineSymdata("__mm_scope_id_counter", new byte[8]);
+
+    // Null-terminated strings for leak check output
+    DefineSymdata("__mm_leak_prefix",
+      "MM leak: \0"u8.ToArray());
+    DefineSymdata("__mm_leak_suffix",
+      " allocation(s) remain\n\0"u8.ToArray());
+
+    // Trace tag strings
+    DefineSymdata("__mm_tag_scope_enter", "MM scope_enter id=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_scope_exit", "MM scope_exit id=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_alloc", "MM alloc ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_alloc_in", "MM alloc_in ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_realloc", "MM realloc old=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_realloc_new", " new=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_free_entry", "MM free_entry ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_move", "MM move ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_move_to", " to_scope=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_size", " size=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_parent", " parent=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_reparent", "MM reparent ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_newline", "\n\0"u8.ToArray());
+    // Hex conversion table
+    DefineSymdata("__mm_hex_chars", "0123456789abcdef\0"u8.ToArray());
+    // Scratch buffer for hex output: "0x" + 16 hex digits + null = 19 bytes, round to 24
+    DefineSymdata("__mm_hex_buf", new byte[24]);
+
+    EmitMmTracePrintTag();
+    EmitMmTracePrintHex();
+    EmitMmScopeEnter();
+    EmitMmScopeExit();
+    EmitMmAlloc();
+    EmitMmAllocIn();
+    EmitMmRealloc();
+    EmitMmMove();
+    EmitMmReparent();
+    EmitMmFreeEntry();
+    EmitMmFree();
+    EmitMmLeakCheck();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_trace_print_tag(tag_symdata_label) — print a symdata tag string to stderr
+  // Args: rcx = pointer to null-terminated string
+  // -------------------------------------------------------------------------
+  private void EmitMmTracePrintTag() {
+    EmitRuntimeFunctionStart("mm_trace_print_tag", 1, 0x30);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_trace_print_hex(value) — print a 64-bit value as "0xHEX" to stderr
+  // Args: rcx = 64-bit value to print
+  // -------------------------------------------------------------------------
+  private void EmitMmTracePrintHex() {
+    // Build "0x" + 16 hex digits + null into __mm_hex_buf, then call maxon_write_stderr
+    EmitRuntimeFunctionStart("mm_trace_print_hex", 1, 0x30);
+    // Save value
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = value
+
+    // Write "0x" prefix to buf
+    EmitLeaRegSymdataRel(X86Register.Rdi, "__mm_hex_buf");
+    EmitBytes(0xC6, 0x07, 0x30); // MOV byte [rdi], '0'
+    EmitBytes(0xC6, 0x47, 0x01, 0x78); // MOV byte [rdi+1], 'x'
+
+    // Load hex chars table
+    EmitLeaRegSymdataRel(X86Register.Rsi, "__mm_hex_chars");
+
+    // Convert 16 nybbles (high to low)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = value
+    EmitMovRegImm(X86Register.Rcx, 15); // digit index (15..0)
+
+    DefineLabel("mm_trace_hex_loop");
+    // Extract low nybble: RDX = RAX & 0xF
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax);
+    EmitBytes(0x48, 0x83, 0xE2, 0x0F); // AND rdx, 0xF
+    // Load hex char: DL = [rsi + rdx]
+    EmitBytes(0x0F, 0xB6, 0x14, 0x16); // MOVZX edx, byte [rsi+rdx]
+    // Store at buf[2 + rcx]
+    EmitBytes(0x88, 0x54, 0x0F, 0x02); // MOV byte [rdi + rcx + 2], dl
+    // Shift value right by 4
+    EmitBytes(0x48, 0xC1, 0xE8, 0x04); // SHR rax, 4
+    // Decrement counter
+    EmitBytes(0x48, 0xFF, 0xC9); // DEC rcx
+    // Loop if rcx >= 0 (signed)
+    EmitBytes(0x48, 0x83, 0xF9, 0x00); // CMP rcx, 0
+    EmitJcc("ge", "mm_trace_hex_loop");
+
+    // Null-terminate at buf[18]
+    EmitBytes(0xC6, 0x47, 0x12, 0x00); // MOV byte [rdi+18], 0
+
+    // Call maxon_write_stderr(buf)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdi);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_scope_enter(tag_cstr_in_rcx) -> scope_ptr_in_rax
+  // -------------------------------------------------------------------------
+  private void EmitMmScopeEnter() {
+    // Stack: [rbp-8]=tag_cstr, [rbp-40]=new scope ptr, [rbp-48]=new scope_id
+    EmitRuntimeFunctionStart("mm_scope_enter", 1, 0x60);
+
+    // Increment __mm_scope_id_counter
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_scope_id_counter");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitSymdataStoreI64(X86Register.Rax, "__mm_scope_id_counter");
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new scope_id
+
+    // HeapAlloc(48) with HEAP_ZERO_MEMORY for ScopeFrame
+    EmitMovRegImm(X86Register.Rax, 48);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = 48 (size for HeapAlloc R8)
+    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x28);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = new scope ptr
+
+    // Set scope_id at [scope+0]
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = scope_id
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = scope ptr
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — scope.scope_id = id
+
+    // Set parent_scope at [scope+8] = __mm_current_scope
+    EmitSymdataLoadI64(X86Register.Rcx, "__mm_current_scope");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — scope.parent_scope
+
+    // Set tag_cstr at [scope+32]
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = tag arg
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x20); // MOV [rax+32], rcx — scope.tag_cstr
+
+    // alloc_head, alloc_tail, alloc_count are already zero from HEAP_ZERO_MEMORY
+
+    // Set __mm_current_scope = new scope
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitSymdataStoreI64(X86Register.Rax, "__mm_current_scope");
+
+    // Trace: "MM scope_enter id=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_scope_enter_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_scope_enter");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // scope_id
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_scope_enter_no_trace");
+
+    // Return scope ptr
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_scope_exit(scope_ptr_in_rcx) -> void
+  // -------------------------------------------------------------------------
+  private void EmitMmScopeExit() {
+    // Stack: [rbp-8]=scope_ptr, [rbp-40]=current entry, [rbp-48]=next entry
+    EmitRuntimeFunctionStart("mm_scope_exit", 1, 0x60);
+
+    // Walk alloc_head: for each entry, call mm_free_entry(entry)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — scope.alloc_head
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current entry
+
+    DefineLabel("mm_scope_exit_loop");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current entry
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_scope_exit_loop_done");
+
+    // Save next pointer before freeing: next = entry.next (at entry+16)
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — entry.next
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = next
+
+    // Call mm_free_entry(current entry)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free_entry")); EmitDword(0);
+
+    // Advance to next
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitJmp("mm_scope_exit_loop");
+
+    DefineLabel("mm_scope_exit_loop_done");
+
+    // Restore parent scope: __mm_current_scope = scope.parent_scope
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] — scope.parent_scope
+    EmitSymdataStoreI64(X86Register.Rax, "__mm_current_scope");
+
+    // Trace: "MM scope_exit id=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_scope_exit_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_scope_exit");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // scope_ptr
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — scope.scope_id
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_scope_exit_no_trace");
+
+    // HeapFree the scope frame itself
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // reuse slot for HeapFree R8
+    EmitHeapCall("HeapFree", 0, rbpSlotR8: -0x28);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_alloc(size_in_rcx, tag_cstr_in_rdx) -> user_ptr_in_rax
+  // -------------------------------------------------------------------------
+  private void EmitMmAlloc() {
+    // Stack: [rbp-8]=size, [rbp-16]=tag, [rbp-40]=raw_ptr, [rbp-48]=entry_ptr,
+    //        [rbp-56]=user_ptr, [rbp-64]=scope_ptr, [rbp-72]=alloc_size
+    EmitRuntimeFunctionStart("mm_alloc", 2, 0x80);
+
+    // Load current scope
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_current_scope");
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = scope_ptr
+
+    // HeapAlloc(size + 8) for payload with backpointer header
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
+    EmitAddRegImm(X86Register.Rax, 8);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = size + 8
+    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = raw_ptr
+
+    // HeapAlloc(72) for AllocEntry
+    EmitMovRegImm(X86Register.Rax, 72);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = 72
+    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = entry_ptr
+
+    // entry.user_ptr = raw_ptr + 8
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = raw_ptr
+    EmitAddRegImm(X86Register.Rcx, 8);
+    EmitMovMemReg(-0x38, X86Register.Rcx, 8); // [rbp-56] = user_ptr
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = entry
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — entry.user_ptr
+
+    // entry.size = size
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — entry.size
+
+    // entry.tag_cstr = tag arg
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x88, 0x40, 0x00, 0x00, 0x00); // MOV [rax+64], rcx — entry.tag_cstr
+
+    // entry.owner_entry = NULL (already zero from HEAP_ZERO_MEMORY)
+
+    // entry.owner_scope = scope_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8); // RCX = scope_ptr
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+56], rcx — entry.owner_scope
+
+    // Set backpointer header: [raw_ptr] = entry_ptr
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = raw_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = entry_ptr
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — [raw_ptr] = entry
+
+    // Append entry to scope's linked list
+    // Check if scope.alloc_tail != NULL
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = scope_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x18); // MOV rax, [rax+24] — scope.alloc_tail
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_alloc_empty_list");
+
+    // Non-empty list: tail.next = entry, entry.prev = tail, scope.alloc_tail = entry
+    // RAX = old tail
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — old_tail.next = entry
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — entry.prev = old_tail
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = scope_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — scope.alloc_tail = entry
+    EmitJmp("mm_alloc_list_done");
+
+    // Empty list: scope.alloc_head = entry, scope.alloc_tail = entry
+    DefineLabel("mm_alloc_empty_list");
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = scope_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — scope.alloc_head = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — scope.alloc_tail = entry
+
+    DefineLabel("mm_alloc_list_done");
+
+    // Increment scope.alloc_count
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = scope_ptr
+    EmitBytes(0x48, 0xFF, 0x40, 0x28); // INC qword [rax+40] — scope.alloc_count++
+
+    // Trace: "MM alloc ptr=0xHEX size=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_alloc_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_alloc");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_size");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // size
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_alloc_no_trace");
+
+    // Return user_ptr (raw_ptr + 8)
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_alloc_in(size_in_rcx, parent_user_ptr_in_rdx, tag_cstr_in_r8) -> user_ptr_in_rax
+  // -------------------------------------------------------------------------
+  private void EmitMmAllocIn() {
+    // Stack: [rbp-8]=size, [rbp-16]=parent_user_ptr, [rbp-24]=tag,
+    //        [rbp-40]=raw_ptr, [rbp-48]=entry_ptr, [rbp-56]=user_ptr,
+    //        [rbp-64]=parent_entry, [rbp-72]=alloc_size
+    EmitRuntimeFunctionStart("mm_alloc_in", 3, 0x80);
+
+    // Load parent's AllocEntry from [parent_user_ptr - 8]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = parent_user_ptr
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry ptr from backpointer
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = parent_entry
+
+    // HeapAlloc(size + 8) for payload
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
+    EmitAddRegImm(X86Register.Rax, 8);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = size + 8
+    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = raw_ptr
+
+    // HeapAlloc(72) for AllocEntry
+    EmitMovRegImm(X86Register.Rax, 72);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8);
+    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = entry_ptr
+
+    // entry.user_ptr = raw_ptr + 8
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitAddRegImm(X86Register.Rcx, 8);
+    EmitMovMemReg(-0x38, X86Register.Rcx, 8); // [rbp-56] = user_ptr
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — entry.user_ptr
+
+    // entry.size = size
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — entry.size
+
+    // entry.tag_cstr = tag arg (r8 saved at [rbp-24])
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x88, 0x40, 0x00, 0x00, 0x00); // MOV [rax+64], rcx — entry.tag_cstr
+
+    // entry.owner_entry = parent_entry
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8); // RCX = parent_entry
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x30); // MOV [rax+48], rcx — entry.owner_entry
+
+    // entry.owner_scope = NULL (already zero from HEAP_ZERO_MEMORY)
+
+    // Set backpointer header: [raw_ptr] = entry_ptr
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — [raw_ptr] = entry
+
+    // Append entry to parent_entry's child list
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = parent_entry
+    EmitBytes(0x48, 0x8B, 0x40, 0x28); // MOV rax, [rax+40] — parent_entry.child_tail
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_alloc_in_empty_children");
+
+    // Non-empty: old_tail.next = entry, entry.prev = old_tail, parent.child_tail = entry
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — old_tail.next = entry
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — entry.prev = old_tail
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = parent_entry
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x28); // MOV [rax+40], rcx — parent.child_tail = entry
+    EmitJmp("mm_alloc_in_children_done");
+
+    // Empty: parent.child_head = entry, parent.child_tail = entry
+    DefineLabel("mm_alloc_in_empty_children");
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x20); // MOV [rax+32], rcx — parent.child_head = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x28); // MOV [rax+40], rcx — parent.child_tail = entry
+
+    DefineLabel("mm_alloc_in_children_done");
+
+    // Trace: "MM alloc_in ptr=0xHEX size=0xHEX parent=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_alloc_in_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_alloc_in");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_size");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // size
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_parent");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // parent_user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_alloc_in_no_trace");
+
+    // Return user_ptr
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_realloc(user_ptr_in_rcx, new_size_in_rdx, tag_cstr_in_r8) -> new_user_ptr_in_rax
+  // -------------------------------------------------------------------------
+  private void EmitMmRealloc() {
+    // Stack: [rbp-8]=user_ptr, [rbp-16]=new_size, [rbp-24]=tag,
+    //        [rbp-40]=entry, [rbp-48]=new_raw, [rbp-56]=alloc_size, [rbp-64]=old_raw
+    EmitRuntimeFunctionStart("mm_realloc", 3, 0x80);
+
+    // If ptr == NULL, call mm_alloc(new_size, tag) and return
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_realloc_not_null");
+
+    // NULL path: delegate to mm_alloc
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = new_size
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // RDX = tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    EmitJmp("mm_realloc_done");
+
+    DefineLabel("mm_realloc_not_null");
+
+    // Load entry = [ptr - 8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry from backpointer
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
+
+    // If entry == 0, unmanaged — just HeapReAlloc the raw pointer
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_realloc_managed");
+
+    // Unmanaged path: HeapReAlloc(ptr, new_size)
+    // We don't have an 8-byte header for unmanaged, so realloc ptr directly
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = ptr (for R8)
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // use [rbp-64] for R9 = new_size
+    EmitHeapCall("HeapReAlloc", 0x08, rbpSlotR8: -0x38, rbpSlotR9: -0x40);
+    EmitJmp("mm_realloc_done");
+
+    DefineLabel("mm_realloc_managed");
+
+    // Managed path: HeapReAlloc(user_ptr - 8, new_size + 8)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // user_ptr
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = old_raw (ptr - 8)
+
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // new_size
+    EmitAddRegImm(X86Register.Rax, 8);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = new_size + 8
+
+    EmitHeapCall("HeapReAlloc", 0x08, rbpSlotR8: -0x40, rbpSlotR9: -0x38);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new_raw
+
+    // Update entry.user_ptr = new_raw + 8
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = new_raw
+    EmitAddRegImm(X86Register.Rcx, 8);
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — entry.user_ptr = new_raw + 8
+
+    // Update entry.size = new_size
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — entry.size = new_size
+
+    // Set backpointer: [new_raw] = entry
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = new_raw
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = entry
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — [new_raw] = entry
+
+    // Trace: "MM realloc old=0xHEX new=0xHEX size=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_realloc_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_realloc");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // old user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_realloc_new");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // new_raw
+    EmitAddRegImm(X86Register.Rax, 8);
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_size");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // new_size
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_realloc_no_trace");
+
+    // Return new_raw + 8
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // new_raw
+    EmitAddRegImm(X86Register.Rax, 8);
+
+    DefineLabel("mm_realloc_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_move(user_ptr_in_rcx, dest_scope_ptr_in_rdx, tag_cstr_in_r8) -> void
+  // -------------------------------------------------------------------------
+  private void EmitMmMove() {
+    // Stack: [rbp-8]=user_ptr, [rbp-16]=dest_scope, [rbp-24]=tag,
+    //        [rbp-40]=entry, [rbp-48]=old_scope, [rbp-56]=prev, [rbp-64]=next
+    EmitRuntimeFunctionStart("mm_move", 3, 0x80);
+
+    // If ptr == NULL, return
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_move_done");
+
+    // Load entry = [ptr - 8]
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
+
+    // If entry == 0, return (unmanaged)
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_move_done");
+
+    // If entry.owner_entry != NULL, this is a child allocation (not scope-owned) — skip
+    EmitBytes(0x48, 0x8B, 0x48, 0x30); // MOV rcx, [rax+48] — entry.owner_entry
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("nz", "mm_move_done");
+
+    // Load old_scope = entry.owner_scope (at +56)
+    EmitBytes(0x48, 0x8B, 0x40, 0x38); // MOV rax, [rax+56] — entry.owner_scope
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = old_scope
+
+    // Load entry.prev and entry.next for unlinking
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // entry
+    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — entry.prev
+    EmitMovMemReg(-0x38, X86Register.Rcx, 8); // [rbp-56] = prev
+    EmitBytes(0x48, 0x8B, 0x48, 0x10); // MOV rcx, [rax+16] — entry.next
+    EmitMovMemReg(-0x40, X86Register.Rcx, 8); // [rbp-64] = next
+
+    // Unlink from old_scope's list:
+    // if entry.prev != NULL: entry.prev.next = entry.next
+    // else: old_scope.alloc_head = entry.next
+    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = prev
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_move_no_prev");
+    // prev.next = next
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8); // RCX = next
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
+    EmitJmp("mm_move_prev_done");
+    DefineLabel("mm_move_no_prev");
+    // old_scope.alloc_head = next
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = old_scope
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8); // RCX = next
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — old_scope.alloc_head = next
+    DefineLabel("mm_move_prev_done");
+
+    // if entry.next != NULL: entry.next.prev = entry.prev
+    // else: old_scope.alloc_tail = entry.prev
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = next
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_move_no_next");
+    // next.prev = prev
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // RCX = prev
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
+    EmitJmp("mm_move_next_done");
+    DefineLabel("mm_move_no_next");
+    // old_scope.alloc_tail = prev
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = old_scope
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // RCX = prev
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — old_scope.alloc_tail = prev
+    DefineLabel("mm_move_next_done");
+
+    // Decrement old_scope.alloc_count
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = old_scope
+    EmitBytes(0x48, 0xFF, 0x48, 0x28); // DEC qword [rax+40] — old_scope.alloc_count--
+
+    // Clear entry's prev/next for clean insertion
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — entry.next = NULL
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = NULL (will be set below)
+
+    // Link entry into dest_scope's tail
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = dest_scope
+    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — dest_scope.alloc_tail
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "mm_move_dest_empty");
+
+    // Non-empty: old_tail.next = entry, entry.prev = old_tail, dest.alloc_tail = entry
+    // RCX = old tail
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — old_tail.next = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = old_tail
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
+    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — dest_scope.alloc_tail = entry
+    EmitJmp("mm_move_dest_done");
+
+    DefineLabel("mm_move_dest_empty");
+    // dest_scope.alloc_head = entry, dest_scope.alloc_tail = entry
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
+    EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — dest_scope.alloc_head = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — dest_scope.alloc_tail = entry
+
+    DefineLabel("mm_move_dest_done");
+
+    // Increment dest_scope.alloc_count
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = dest_scope
+    EmitBytes(0x48, 0xFF, 0x40, 0x28); // INC qword [rax+40]
+
+    // Set entry.owner_scope = dest_scope
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
+    EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+56], rcx — entry.owner_scope = dest_scope
+
+    // Trace: "MM move ptr=0xHEX to_scope=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_move_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_move");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_move_to");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // dest_scope
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — dest_scope.scope_id
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_move_no_trace");
+
+    DefineLabel("mm_move_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_reparent(user_ptr_in_rcx, new_parent_user_ptr_in_rdx, tag_cstr_in_r8) -> void
+  // Moves an allocation from its current owner (scope or parent entry)
+  // into a new parent entry's child list.
+  // -------------------------------------------------------------------------
+  private void EmitMmReparent() {
+    // Stack: [rbp-8]=user_ptr, [rbp-16]=new_parent_user_ptr, [rbp-24]=tag,
+    //        [rbp-40]=entry, [rbp-48]=new_parent_entry, [rbp-56]=prev, [rbp-64]=next,
+    //        [rbp-72]=owner_scope, [rbp-80]=owner_entry
+    EmitRuntimeFunctionStart("mm_reparent", 3, 0x80);
+
+    // If ptr == NULL, return
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_done");
+
+    // Load entry = [ptr - 8]
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_done");
+
+    // Load new_parent_entry = [new_parent_user_ptr - 8]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new_parent_entry
+
+    // Load entry.prev, entry.next
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — entry.prev
+    EmitMovMemReg(-0x38, X86Register.Rcx, 8); // [rbp-56] = prev
+    EmitBytes(0x48, 0x8B, 0x48, 0x10); // MOV rcx, [rax+16] — entry.next
+    EmitMovMemReg(-0x40, X86Register.Rcx, 8); // [rbp-64] = next
+
+    // Check if scope-owned: entry.owner_scope (at +56)
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x8B, 0x40, 0x38); // MOV rax, [rax+56] — entry.owner_scope
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = owner_scope
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_parent_owned");
+
+    // Scope-owned: unlink from scope's alloc list
+    // if prev: prev.next = next  else: scope.alloc_head = next
+    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = prev
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_scope_no_prev");
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
+    EmitJmp("mm_reparent_scope_prev_done");
+    DefineLabel("mm_reparent_scope_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // RAX = owner_scope
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — scope.alloc_head = next
+    DefineLabel("mm_reparent_scope_prev_done");
+
+    // if next: next.prev = prev  else: scope.alloc_tail = prev
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = next
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_scope_no_next");
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
+    EmitJmp("mm_reparent_scope_next_done");
+    DefineLabel("mm_reparent_scope_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // RAX = owner_scope
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — scope.alloc_tail = prev
+    DefineLabel("mm_reparent_scope_next_done");
+
+    // Decrement scope.alloc_count
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitBytes(0x48, 0xFF, 0x48, 0x28); // DEC qword [rax+40]
+
+    EmitJmp("mm_reparent_unlinked");
+
+    // Parent-owned: unlink from parent entry's child list
+    DefineLabel("mm_reparent_parent_owned");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x8B, 0x40, 0x30); // MOV rax, [rax+48] — entry.owner_entry
+    EmitMovMemReg(-0x50, X86Register.Rax, 8); // [rbp-80] = owner_entry
+
+    // if prev: prev.next = next  else: owner_entry.child_head = next
+    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = prev
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_parent_no_prev");
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
+    EmitJmp("mm_reparent_parent_prev_done");
+    DefineLabel("mm_reparent_parent_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x50, 8); // RAX = owner_entry
+    EmitMovRegMem(X86Register.Rcx, -0x40, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x20); // MOV [rax+32], rcx — owner_entry.child_head = next
+    DefineLabel("mm_reparent_parent_prev_done");
+
+    // if next: next.prev = prev  else: owner_entry.child_tail = prev
+    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = next
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_parent_no_next");
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
+    EmitJmp("mm_reparent_parent_next_done");
+    DefineLabel("mm_reparent_parent_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x50, 8); // RAX = owner_entry
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x28); // MOV [rax+40], rcx — owner_entry.child_tail = prev
+    DefineLabel("mm_reparent_parent_next_done");
+
+    DefineLabel("mm_reparent_unlinked");
+
+    // Link entry into new_parent_entry's child list
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — entry.next = NULL
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = NULL (may be set below)
+
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = new_parent_entry
+    EmitBytes(0x48, 0x8B, 0x48, 0x28); // MOV rcx, [rax+40] — new_parent.child_tail
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "mm_reparent_dest_empty");
+
+    // Non-empty: old_tail.next = entry, entry.prev = old_tail, parent.child_tail = entry
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — old_tail.next = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = old_tail
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = new_parent_entry
+    EmitBytes(0x48, 0x89, 0x41, 0x28); // MOV [rcx+40], rax — new_parent.child_tail = entry
+    EmitJmp("mm_reparent_dest_done");
+
+    DefineLabel("mm_reparent_dest_empty");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = new_parent_entry
+    EmitBytes(0x48, 0x89, 0x41, 0x20); // MOV [rcx+32], rax — new_parent.child_head = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x28); // MOV [rcx+40], rax — new_parent.child_tail = entry
+
+    DefineLabel("mm_reparent_dest_done");
+
+    // Set entry.owner_entry = new_parent_entry, entry.owner_scope = NULL
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = new_parent_entry
+    EmitBytes(0x48, 0x89, 0x48, 0x30); // MOV [rax+48], rcx — entry.owner_entry = new_parent
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+56], rcx — entry.owner_scope = NULL
+
+    // Trace: "MM reparent ptr=0xHEX parent=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_reparent");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_parent");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // new_parent_user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_reparent_no_trace");
+
+    DefineLabel("mm_reparent_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_free_entry(entry_ptr_in_rcx) -> void (internal)
+  // Recursively frees all children, then frees the payload and entry itself.
+  // -------------------------------------------------------------------------
+  private void EmitMmFreeEntry() {
+    // Stack: [rbp-8]=entry_ptr, [rbp-40]=current_child, [rbp-48]=next_child,
+    //        [rbp-56]=user_ptr, [rbp-64]=heap_free_arg
+    EmitRuntimeFunctionStart("mm_free_entry", 1, 0x80);
+
+    // Walk entry.child_head: for each child, recursively call mm_free_entry
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+    EmitBytes(0x48, 0x8B, 0x40, 0x20); // MOV rax, [rax+32] — entry.child_head
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current_child
+
+    DefineLabel("mm_free_entry_child_loop");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_entry_children_done");
+
+    // Save next before recursing
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — child.next
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = next_child
+
+    // Recurse: mm_free_entry(current_child)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free_entry")); EmitDword(0);
+
+    // Advance
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitJmp("mm_free_entry_child_loop");
+
+    DefineLabel("mm_free_entry_children_done");
+
+    // Trace: "MM free_entry ptr=0xHEX size=0xHEX\n"
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_entry_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_free_entry");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // entry
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — entry.user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_size");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // entry
+    EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] — entry.size
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_free_entry_no_trace");
+
+    // HeapFree the payload: entry.user_ptr - 8
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry.user_ptr
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = user_ptr - 8
+    EmitHeapCall("HeapFree", 0, rbpSlotR8: -0x38);
+
+    // HeapFree the entry node itself
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8);
+    EmitHeapCall("HeapFree", 0, rbpSlotR8: -0x38);
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_free(user_ptr_in_rcx) -> void
+  // Unlinks an allocation from its owner, then calls mm_free_entry.
+  // -------------------------------------------------------------------------
+  private void EmitMmFree() {
+    // Stack: [rbp-8]=user_ptr, [rbp-40]=entry, [rbp-48]=prev, [rbp-56]=next,
+    //        [rbp-64]=owner_scope, [rbp-72]=owner_entry
+    EmitRuntimeFunctionStart("mm_free", 1, 0x80);
+
+    // If ptr == NULL, return
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_done");
+
+    // Load entry = [ptr - 8]
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_done");
+
+    // Load prev and next
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — entry.prev
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = prev
+    EmitBytes(0x48, 0x8B, 0x48, 0x10); // MOV rcx, [rax+16] — entry.next
+    EmitMovMemReg(-0x38, X86Register.Rcx, 8); // [rbp-56] = next
+
+    // Check owner_scope
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x8B, 0x40, 0x38); // MOV rax, [rax+56] — entry.owner_scope
+    EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = owner_scope
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_parent_owned");
+
+    // Scope-owned: unlink from scope's alloc list
+    // if prev: prev.next = next  else: scope.alloc_head = next
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_scope_no_prev");
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
+    EmitJmp("mm_free_scope_prev_done");
+    DefineLabel("mm_free_scope_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — scope.alloc_head = next
+    DefineLabel("mm_free_scope_prev_done");
+
+    // if next: next.prev = prev  else: scope.alloc_tail = prev
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_scope_no_next");
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
+    EmitJmp("mm_free_scope_next_done");
+    DefineLabel("mm_free_scope_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — scope.alloc_tail = prev
+    DefineLabel("mm_free_scope_next_done");
+
+    // Decrement scope.alloc_count
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);
+    EmitBytes(0x48, 0xFF, 0x48, 0x28); // DEC qword [rax+40]
+
+    EmitJmp("mm_free_unlinked");
+
+    // Parent-owned: unlink from parent entry's child list
+    DefineLabel("mm_free_parent_owned");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitBytes(0x48, 0x8B, 0x40, 0x30); // MOV rax, [rax+48] — entry.owner_entry
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = owner_entry
+
+    // if prev: prev.next = next  else: owner.child_head = next
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_parent_no_prev");
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
+    EmitJmp("mm_free_parent_prev_done");
+    DefineLabel("mm_free_parent_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x20); // MOV [rax+32], rcx — owner.child_head = next
+    DefineLabel("mm_free_parent_prev_done");
+
+    // if next: next.prev = prev  else: owner.child_tail = prev
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_parent_no_next");
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
+    EmitJmp("mm_free_parent_next_done");
+    DefineLabel("mm_free_parent_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);
+    EmitBytes(0x48, 0x89, 0x48, 0x28); // MOV [rax+40], rcx — owner.child_tail = prev
+    DefineLabel("mm_free_parent_next_done");
+
+    DefineLabel("mm_free_unlinked");
+
+    // Call mm_free_entry(entry)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free_entry")); EmitDword(0);
+
+    DefineLabel("mm_free_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_leak_check() -> void
+  // Walks the scope chain and reports any remaining allocations to stderr.
+  // -------------------------------------------------------------------------
+  private void EmitMmLeakCheck() {
+    // Stack: [rbp-40]=current_scope, [rbp-48]=total_allocs, [rbp-56..rbp-80]=24-byte string buffer
+    EmitRuntimeFunctionStart("mm_leak_check", 0, 0x80);
+
+    // Load __mm_current_scope
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_current_scope");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_leak_check_done"); // No scopes remaining — all good
+
+    // Walk scope chain, sum alloc_counts
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current_scope
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = total = 0
+
+    DefineLabel("mm_leak_check_loop");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current_scope
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_leak_check_loop_done");
+
+    // total += scope.alloc_count
+    EmitBytes(0x48, 0x8B, 0x48, 0x28); // MOV rcx, [rax+40] — scope.alloc_count
+    EmitMovRegMem(X86Register.Rdx, -0x30, 8); // RDX = total
+    EmitBytes(0x48, 0x01, 0xCA); // ADD rdx, rcx
+    EmitMovMemReg(-0x30, X86Register.Rdx, 8); // [rbp-48] = total
+
+    // Advance to parent: scope.parent_scope
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] — scope.parent_scope
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitJmp("mm_leak_check_loop");
+
+    DefineLabel("mm_leak_check_loop_done");
+
+    // If total == 0, no leaks
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_leak_check_done");
+
+    // Print warning: "MM leak: N allocation(s) remain\n" to stderr
+    // Print "MM leak: " prefix
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_leak_prefix");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+
+    // Convert count to string: maxon_u64_to_string(count, &buffer) -> length
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);  // RCX = total count
+    EmitLeaRegMem(X86Register.Rdx, -0x50);     // RDX = &buffer at [rbp-0x50]
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_u64_to_string")); EmitDword(0);
+
+    // Print the count string (buffer is null-terminated by u64_to_string)
+    EmitLeaRegMem(X86Register.Rcx, -0x50);     // RCX = &buffer
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+
+    // Print " allocation(s) remain\n" suffix
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_leak_suffix");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+
+    DefineLabel("mm_leak_check_done");
+    EmitRuntimeFunctionEnd();
+  }
+}

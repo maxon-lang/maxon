@@ -536,6 +536,49 @@ public class MaxonReleaseOp(string varName, string structTypeName) : MaxonOp {
     new Dictionary<string, MlirAttribute> { ["var"] = new StringAttr(VarName), ["type"] = new StringAttr(StructTypeName) };
 }
 
+// ============================================================================
+// Memory manager scope operations
+// ============================================================================
+
+// Enters a new scope. The result is a scope pointer stored in a variable.
+public class MaxonScopeEnterOp(string resultVar, string tag) : MaxonOp {
+  public override string Mnemonic => "maxon.scope_enter";
+  public string ResultVar { get; } = resultVar;
+  public string Tag { get; } = tag;
+  public override IReadOnlyList<string> PrintableResults => [ResultVar];
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> { ["tag"] = new StringAttr(Tag) };
+}
+
+// Exits a scope, freeing all allocations owned by it.
+public class MaxonScopeExitOp(string scopeVar, string tag) : MaxonOp {
+  public override string Mnemonic => "maxon.scope_exit";
+  public string ScopeVar { get; } = scopeVar;
+  public string Tag { get; } = tag;
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> { ["scope"] = new StringAttr(ScopeVar), ["tag"] = new StringAttr(Tag) };
+}
+
+// Moves an allocation from its current scope to a destination scope.
+public class MaxonMoveOp(string varName, string destScopeVar, string tag) : MaxonOp {
+  public override string Mnemonic => "maxon.move";
+  public string VarName { get; } = varName;
+  public string DestScopeVar { get; } = destScopeVar;
+  public string Tag { get; } = tag;
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> { ["var"] = new StringAttr(VarName), ["dest"] = new StringAttr(DestScopeVar), ["tag"] = new StringAttr(Tag) };
+}
+
+// Re-parents an allocation from its current owner to be a child of another allocation.
+public class MaxonReparentOp(string varName, string parentVarName, string tag) : MaxonOp {
+  public override string Mnemonic => "maxon.reparent";
+  public string VarName { get; } = varName;
+  public string ParentVarName { get; } = parentVarName;
+  public string Tag { get; } = tag;
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> { ["var"] = new StringAttr(VarName), ["parent"] = new StringAttr(ParentVarName), ["tag"] = new StringAttr(Tag) };
+}
+
 public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
   public override string Mnemonic => "maxon.return";
   public MaxonValue? Value { get; } = value;

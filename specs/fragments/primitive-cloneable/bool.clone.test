@@ -12,16 +12,35 @@ ExitCode: 1
 module {
   func @primitive-cloneable.main() -> u32 {
   entry:
-    x86.mov eax, 1
+    x86.prologue stack_size=16
+    x86.xor eax, eax
     x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
     x86.call stdlib.bool.clone
     x86.test eax, eax
     x86.je primitive-cloneable.main.ok_0.after
   ok_0:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-16], eax
     x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.mov eax, 1
+    x86.epilogue
     x86.ret
   ok_0.after:
     x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.xor eax, eax
+    x86.epilogue
     x86.ret
   }
 }

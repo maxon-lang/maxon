@@ -21,17 +21,42 @@ ExitCode: 42
 module {
   func @static-variables.init() {
   entry:
-    x86.mov eax, 1
-    x86.mov byte [rip+initialized], eax
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 1
+    x86.mov byte [rip+initialized], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.epilogue
     x86.ret
   }
   func @static-variables.main() -> u32 {
   entry:
-    x86.movzx eax, byte [rip+initialized]
-    x86.test eax, eax
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.movzx ecx, byte [rip+initialized]
+    x86.test ecx, ecx
     x86.je static-variables.main.check1_0.after
   check1_0:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-16], eax
     x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.mov eax, 1
+    x86.epilogue
     x86.ret
   check1_0.after:
     x86.call static-variables.init
@@ -39,10 +64,25 @@ module {
     x86.test eax, eax
     x86.je static-variables.main.check2_1.after
   check2_1:
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-24], eax
     x86.mov eax, 42
+    x86.mov ecx, [rbp-24]
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, rdx
+    x86.call mm_scope_exit
+    x86.mov eax, 42
+    x86.epilogue
     x86.ret
   check2_1.after:
     x86.xor eax, eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.xor eax, eax
+    x86.epilogue
     x86.ret
   }
 }

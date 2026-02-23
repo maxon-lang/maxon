@@ -10,15 +10,6 @@ public partial class X86CodeEmitter {
   ];
 
   public void EmitRuntimeFunctions() {
-    // Allocation tracking counter in .symtab section (not .data, to avoid affecting RequiredData tests)
-    DefineSymdata("__alloc_count", new byte[8]);
-
-    EmitMaxonAlloc();
-    EmitMaxonRealloc();
-    EmitMaxonFree();
-    EmitMaxonIncref();
-    EmitMaxonDecref();
-    EmitMaxonRelease();
     EmitMaxonCowCheck();
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
@@ -60,122 +51,6 @@ public partial class X86CodeEmitter {
     EmitMaxonStrlen();
     EmitMaxonMemcpy();
     EmitMaxonMemcmp();
-    EmitMaxonCleanupUntracked();
-    EmitMaxonLeakCheck();
-  }
-
-  /// <summary>maxon_alloc(size_in_rcx) -> ptr_in_rax (with 8-byte refcount header)</summary>
-  private void EmitMaxonAlloc() {
-    EmitRuntimeFunctionStart("maxon_alloc", 1);
-    // Add 8 bytes for refcount header
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);  // RAX = size
-    EmitAddRegImm(X86Register.Rax, 8);          // RAX = size + 8
-    EmitMovMemReg(-0x08, X86Register.Rax, 8);   // [rbp-8] = size + 8
-    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x08); // HEAP_ZERO_MEMORY
-    // Store refcount=1 at [rax+0], return rax+8
-    EmitBytes(0x48, 0xC7, 0x00, 0x01, 0x00, 0x00, 0x00); // MOV qword [rax], 1
-    EmitAddRegImm(X86Register.Rax, 8);          // RAX = user-visible pointer
-    // Track allocation for leak detection
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);   // save rax
-    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
-    EmitAddRegImm(X86Register.Rax, 1);
-    EmitSymdataStoreI64(X86Register.Rax, "__alloc_count");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);   // restore rax
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// maxon_realloc(ptr_in_rcx, new_size_in_rdx) -> new_ptr_in_rax
-  /// If ptr is NULL, falls back to HeapAlloc (HeapReAlloc doesn't accept NULL).
-  /// Adjusts for refcount header on both paths.
-  /// </summary>
-  private void EmitMaxonRealloc() {
-    EmitRuntimeFunctionStart("maxon_realloc", 2, 0x40);
-    // Add 8 to new_size for refcount header
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);  // RAX = new_size
-    EmitAddRegImm(X86Register.Rax, 8);          // RAX = new_size + 8
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);   // [rbp-16] = new_size + 8
-    // If ptr == 0, use HeapAlloc instead
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("nz", "rt_realloc_realloc_path");
-    // Alloc path: allocate new_size+8, set refcount=1, return base+8
-    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x10); // HEAP_ZERO_MEMORY
-    EmitBytes(0x48, 0xC7, 0x00, 0x01, 0x00, 0x00, 0x00); // MOV qword [rax], 1
-    EmitAddRegImm(X86Register.Rax, 8);          // return user-visible pointer
-    // Track new allocation for leak detection
-    EmitMovMemReg(-0x18, X86Register.Rax, 8);   // save rax
-    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
-    EmitAddRegImm(X86Register.Rax, 1);
-    EmitSymdataStoreI64(X86Register.Rax, "__alloc_count");
-    EmitMovRegMem(X86Register.Rax, -0x18, 8);   // restore rax
-    EmitJmp("rt_realloc_epilogue");
-    // Realloc path: adjust ptr-8 for real base, realloc, return base+8
-    DefineLabel("rt_realloc_realloc_path");
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);  // RAX = ptr
-    EmitSubRegImm(X86Register.Rax, 8);          // RAX = real base
-    EmitMovMemReg(-0x08, X86Register.Rax, 8);   // [rbp-8] = real base
-    EmitHeapCall("HeapReAlloc", 0x08, rbpSlotR8: -0x08, rbpSlotR9: -0x10); // HEAP_ZERO_MEMORY
-    EmitAddRegImm(X86Register.Rax, 8);          // return user-visible pointer
-    DefineLabel("rt_realloc_epilogue");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>maxon_free(ptr_in_rcx) — null-safe, adjusts for refcount header before freeing</summary>
-  private void EmitMaxonFree() {
-    EmitRuntimeFunctionStart("maxon_free", 1);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "rt_free_skip");
-    // Track deallocation for leak detection
-    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
-    EmitSubRegImm(X86Register.Rax, 1);
-    EmitSymdataStoreI64(X86Register.Rax, "__alloc_count");
-    // Adjust pointer back by 8 to include refcount header
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);  // RAX = ptr
-    EmitSubRegImm(X86Register.Rax, 8);          // RAX = real base (ptr - 8)
-    EmitMovMemReg(-0x08, X86Register.Rax, 8);   // [rbp-8] = real base
-    EmitHeapCall("HeapFree", 0, rbpSlotR8: -0x08);
-    DefineLabel("rt_free_skip");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>maxon_incref(ptr_in_rcx) — null-safe, increments refcount at [ptr-8]</summary>
-  private void EmitMaxonIncref() {
-    EmitRuntimeFunctionStart("maxon_incref", 1);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "rt_incref_skip");
-    EmitBytes(0x48, 0xFF, 0x41, 0xF8); // INC qword [rcx-8]
-    DefineLabel("rt_incref_skip");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>maxon_decref(ptr_in_rcx) -> new_refcount_in_rax — null-safe</summary>
-  private void EmitMaxonDecref() {
-    EmitRuntimeFunctionStart("maxon_decref", 1);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "rt_decref_zero");
-    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
-    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
-    EmitJmp("rt_decref_done");
-    DefineLabel("rt_decref_zero");
-    EmitBytes(0x48, 0x31, 0xC0); // XOR rax, rax
-    DefineLabel("rt_decref_done");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>maxon_release(ptr_in_rcx) — decref and free if refcount reaches 0, null-safe</summary>
-  private void EmitMaxonRelease() {
-    EmitRuntimeFunctionStart("maxon_release", 1); // prologue saves rcx to [rbp-8]
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "rt_release_skip");
-    EmitBytes(0x48, 0xFF, 0x49, 0xF8); // DEC qword [rcx-8]
-    EmitBytes(0x48, 0x8B, 0x41, 0xF8); // MOV rax, [rcx-8]
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "rt_release_skip");
-    // Refcount reached 0 — reload ptr (DEC didn't change rcx, but reload for safety) and free
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
-    DefineLabel("rt_release_skip");
-    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
@@ -184,25 +59,31 @@ public partial class X86CodeEmitter {
   /// If capacity == 0, allocate length*elemSize bytes, copy from old buffer, return new buffer.
   /// </summary>
   private void EmitMaxonCowCheck() {
-    EmitRuntimeFunctionStart("maxon_cow_check", 4, 0x40);
+    // Args: rcx=buffer, rdx=capacity, r8=length, r9=elemSize, rsi=managedPtr
+    // Stack: [rbp-0x08]=buffer, [rbp-0x10]=capacity, [rbp-0x18]=length,
+    //        [rbp-0x20]=elemSize, [rbp-0x28]=managedPtr,
+    //        [rbp-0x30]=byteLen, [rbp-0x38]=new_buffer
+    EmitRuntimeFunctionStart("maxon_cow_check", 5, 0x60);
     // TEST rdx, rdx (check capacity)
     EmitBytes(0x48, 0x85, 0xD2);
     EmitJcc("nz", "rt_cow_writable");
-    // COW path: compute byteLen = length * elemSize, allocate, copy, return new buffer
+    // COW path: compute byteLen = length * elemSize
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = length
     EmitBytes(0x49, 0x0F, 0xAF, 0xC1);       // IMUL RAX, R9 (byteLen = length * elemSize)
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = byteLen
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // RCX = byteLen (alloc size)
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
-    // Save new buffer
-    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new buffer
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-0x30] = byteLen
+    // mm_alloc_in(size=byteLen, parent_ptr=managedPtr, tag=0)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // RCX = byteLen
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8);        // RDX = managedPtr
+    EmitXorRegReg(X86Register.R8, X86Register.R8);    // R8 = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc_in")); EmitDword(0);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-0x38] = new buffer
     // rep movsb: RSI=src, RDI=dst, RCX=count
     EmitMovRegMem(X86Register.Rsi, -0x08, 8);  // RSI = old buffer
-    EmitMovRegMem(X86Register.Rdi, -0x30, 8);  // RDI = new buffer
-    EmitMovRegMem(X86Register.Rcx, -0x28, 8);  // RCX = byteLen
+    EmitMovRegMem(X86Register.Rdi, -0x38, 8);  // RDI = new buffer
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8);  // RCX = byteLen
     EmitBytes(0xF3, 0xA4); // REP MOVSB
     // Return new buffer
-    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovRegMem(X86Register.Rax, -0x38, 8);
     EmitJmp("rt_cow_epilogue");
     // already_writable: return old buffer
     DefineLabel("rt_cow_writable");
@@ -230,7 +111,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);  // RCX = length
     // LEA RCX, [RCX+1] for alloc size
     EmitBytes(0x48, 0x8D, 0x49, 0x01); // LEA RCX, [RCX+1]
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     // Save new buffer at [rbp-24]
     EmitMovMemReg(-0x18, X86Register.Rax, 8);
     // rep movsb: RSI=src, RDI=dst, RCX=count
@@ -1704,7 +1586,7 @@ public partial class X86CodeEmitter {
   /// <summary>
   /// maxon_command_line_arg(index) -> cstring_ptr: returns a heap-allocated UTF-8 string.
   /// Calls GetCommandLineW + CommandLineToArgvW to get wide argv, indexes by the given
-  /// index, converts to UTF-8 via WideCharToMultiByte, allocates via maxon_alloc.
+  /// index, converts to UTF-8 via WideCharToMultiByte, allocates via mm_alloc.
   /// Stack: [rbp-0x08]=index, [rbp-0x10]=wargv, [rbp-0x18]=wstr, [rbp-0x20]=bufsize,
   ///        [rbp-0x28]=buffer, [rbp-0x30]=argc (scratch for CommandLineToArgvW)
   /// </summary>
@@ -1751,9 +1633,10 @@ public partial class X86CodeEmitter {
     // Save required size
     EmitMovMemReg(-0x20, X86Register.Rax, 8);
 
-    // Step 6: Allocate buffer via maxon_alloc
+    // Step 6: Allocate buffer via mm_alloc
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
 
     // Save buffer pointer
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
@@ -1988,7 +1871,8 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_find_first_file", 1, 0x40);
     // Allocate block
     EmitMovRegImm(X86Register.Rcx, FindBlockSize);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = block_ptr
     // FindFirstFileA(pattern, &block[8])
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: pattern
@@ -2001,7 +1885,7 @@ public partial class X86CodeEmitter {
     EmitJcc("ne", "rt_fff_found");
     // Not found: free block, return 0
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitJmp("rt_fff_done");
     // Found: store handle in block[0], return block_ptr
@@ -2052,7 +1936,7 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "FindClose");
     // Free block
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
     EmitRuntimeFunctionEnd();
   }
 
@@ -2101,7 +1985,8 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_get_current_directory", 0, 0x40);
     // Allocate 260 bytes (MAX_PATH) for the buffer
     EmitMovRegImm(X86Register.Rcx, 260);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
     // GetCurrentDirectoryA(nBufferLength=260, lpBuffer=buffer)
     EmitMovRegImm(X86Register.Rcx, 260);
@@ -2394,7 +2279,8 @@ public partial class X86CodeEmitter {
 
     // Allocate result struct (24 bytes)
     EmitMovRegImm(X86Register.Rcx, CaptureStructSize);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(resultSlot, X86Register.Rax, 8);
 
     // Populate capture struct: hProcess, stdoutRead, stderrRead
@@ -2436,7 +2322,8 @@ public partial class X86CodeEmitter {
 
     // Allocate initial buffer (4096 bytes)
     EmitMovRegImm(X86Register.Rcx, 4096);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_alloc")); EmitDword(0);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // buffer
     EmitMovRegImm(X86Register.Rax, 4096);
     EmitMovMemReg(-0x18, X86Register.Rax, 8);           // capacity = 4096
@@ -2462,7 +2349,8 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x18, X86Register.Rdx, 8);           // update capacity
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // old buffer
     // RDX already has new size
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_realloc")); EmitDword(0);
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // R8 = NULL tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // update buffer
 
     DefineLabel("rt_prp_read");
@@ -2607,57 +2495,6 @@ public partial class X86CodeEmitter {
     if (rbpSlotR9 != 0)
       EmitMovRegMem(X86Register.R9, rbpSlotR9, 8);
     EmitCallImport("kernel32.dll", heapFunction);
-  }
-
-  /// <summary>
-  /// maxon_cleanup_untracked(capacity_in_rcx, buffer_in_rdx)
-  /// Frees heap-allocated buffer if capacity > 0 (skips rdata/constant buffers).
-  /// Stack: [rbp-8]=capacity, [rbp-16]=buffer
-  /// </summary>
-  private void EmitMaxonCleanupUntracked() {
-    EmitRuntimeFunctionStart("maxon_cleanup_untracked", 2);
-    // Only free if capacity > 0 (heap-allocated)
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // capacity
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "rt_cleanup_untracked_done");
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // buffer
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_free")); EmitDword(0);
-    DefineLabel("rt_cleanup_untracked_done");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// maxon_leak_check() — called from _start after main() returns.
-  /// If __alloc_count > 0, prints "Leak detected: N allocation(s) not freed\n" to stderr.
-  /// Stack: [rbp-8..rbp-0x28] scratch space, including 24-byte buffer for i64-to-string.
-  /// </summary>
-  private void EmitMaxonLeakCheck() {
-    DefineSymdata("__leak_prefix", System.Text.Encoding.UTF8.GetBytes("Leak detected: \0"));
-    DefineSymdata("__leak_suffix", System.Text.Encoding.UTF8.GetBytes(" allocation(s) not freed\n\0"));
-
-    EmitRuntimeFunctionStart("maxon_leak_check", 0, 0x40);
-    // Load allocation count
-    EmitSymdataLoadI64(X86Register.Rax, "__alloc_count");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "rt_leak_check_done");
-    // Save alloc count for later conversion
-    EmitMovMemReg(-0x08, X86Register.Rax, 8);
-    // Print prefix: "Leak detected: "
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__leak_prefix");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
-    // Convert count to string: maxon_i64_to_string(count, &buffer)
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);  // count
-    // Use stack space at [rbp-0x28] as 24-byte buffer
-    EmitBytes(0x48, 0x8D, 0x55, 0xD8);         // LEA rdx, [rbp-0x28]
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_i64_to_string")); EmitDword(0);
-    // Print the number (buffer is already null-terminated by i64_to_string)
-    EmitBytes(0x48, 0x8D, 0x4D, 0xD8);         // LEA rcx, [rbp-0x28]
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
-    // Print suffix: " allocation(s) not freed\n"
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__leak_suffix");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
-    DefineLabel("rt_leak_check_done");
-    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>Load a 64-bit value from a symdata label into dest. Uses r11 as scratch.</summary>
