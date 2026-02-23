@@ -4580,15 +4580,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
-  /// Emits MaxonReleaseOp for struct variables leaving scope.
-  /// Skipped if the current block already terminates (return/throw handle their own cleanup).
-  private void EmitScopeReleaseOps(List<string> varNames) {
-    if (_currentBlock == null || BlockEndsWithTerminator(_currentBlock)) return;
-    foreach (var name in varNames) {
-      EmitReleaseIfStruct(name);
-    }
-  }
-
   /// Emits MaxonScopeExitOp for all scopes between the current innermost and the target scope.
   /// Used before break/continue to clean up intermediate block scopes.
   private void EmitReleaseForScopesAbove(string targetScopeVar) {
@@ -4615,15 +4606,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     for (int i = 0; i < scopes.Length; i++) {
       _currentBlock.AddOp(new MaxonScopeExitOp(scopes[i], "return_cleanup"));
     }
-  }
-
-  /// Emits a single MaxonReleaseOp if the variable is an owned struct (not ref, not internal).
-  private void EmitReleaseIfStruct(string name) {
-    if (!_variables.TryGetValue(name, out var info)) return;
-    if (info.Kind != MaxonValueKind.Struct) return;
-    if (info.IsRef) return;
-    if (name.StartsWith("__")) return;
-    _currentBlock!.AddOp(new MaxonReleaseOp(name, info.StructTypeName ?? ""));
   }
 
   private void ParseBodyUntilEnd() {

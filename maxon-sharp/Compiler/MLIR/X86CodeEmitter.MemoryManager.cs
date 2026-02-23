@@ -58,6 +58,29 @@ public partial class X86CodeEmitter {
     DefineSymdata("__mm_hex_chars", "0123456789abcdef\0"u8.ToArray());
     // Scratch buffer for hex output: "0x" + 16 hex digits + null = 19 bytes, round to 24
     DefineSymdata("__mm_hex_buf", new byte[24]);
+    // Panic messages for invalid memory manager calls
+    DefineSymdata("__mm_panic_free_null",
+      "mm_free called with NULL pointer\0"u8.ToArray());
+    DefineSymdata("__mm_panic_free_unmanaged",
+      "mm_free called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
+    DefineSymdata("__mm_panic_move_null",
+      "mm_move called with NULL pointer\0"u8.ToArray());
+    DefineSymdata("__mm_panic_move_unmanaged",
+      "mm_move called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
+    DefineSymdata("__mm_panic_move_child",
+      "mm_move called on parent-owned allocation (use mm_reparent)\0"u8.ToArray());
+    DefineSymdata("__mm_panic_reparent_null",
+      "mm_reparent called with NULL pointer\0"u8.ToArray());
+    DefineSymdata("__mm_panic_reparent_unmanaged",
+      "mm_reparent called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
+    DefineSymdata("__mm_panic_alloc_in_null_parent",
+      "mm_alloc_in called with NULL parent pointer\0"u8.ToArray());
+    DefineSymdata("__mm_panic_alloc_in_unmanaged_parent",
+      "mm_alloc_in called with unmanaged parent (no AllocEntry)\0"u8.ToArray());
+    DefineSymdata("__mm_panic_realloc_unmanaged",
+      "mm_realloc called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
+    DefineSymdata("__mm_panic_scope_exit_mismatch",
+      "mm_scope_exit called with wrong scope (not current scope)\0"u8.ToArray());
 
     EmitMmTracePrintTag();
     EmitMmTracePrintHex();
@@ -361,11 +384,25 @@ public partial class X86CodeEmitter {
     //        [rbp-64]=parent_entry, [rbp-72]=alloc_size
     EmitRuntimeFunctionStart("mm_alloc_in", 3, 0x80);
 
-    // Load parent's AllocEntry from [parent_user_ptr - 8]
+    // If parent_user_ptr == NULL, panic
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = parent_user_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_alloc_in_parent_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_alloc_in_null_parent");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_alloc_in_parent_ok");
+
+    // Load parent's AllocEntry from [parent_user_ptr - 8]
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry ptr from backpointer
     EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = parent_entry
+
+    // If parent_entry == NULL, panic (unmanaged parent)
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_alloc_in_parent_entry_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_alloc_in_unmanaged_parent");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_alloc_in_parent_entry_ok");
 
     // HeapAlloc(size + 8) for payload
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
@@ -486,18 +523,11 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry from backpointer
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
 
-    // If entry == 0, unmanaged — just HeapReAlloc the raw pointer
+    // If entry == 0, panic (unmanaged pointer)
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_realloc_managed");
-
-    // Unmanaged path: HeapReAlloc(ptr, new_size)
-    // We don't have an 8-byte header for unmanaged, so realloc ptr directly
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = ptr (for R8)
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);
-    EmitMovMemReg(-0x40, X86Register.Rax, 8); // use [rbp-64] for R9 = new_size
-    EmitHeapCall("HeapReAlloc", 0x08, rbpSlotR8: -0x38, rbpSlotR9: -0x40);
-    EmitJmp("mm_realloc_done");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_realloc_unmanaged");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
 
     DefineLabel("mm_realloc_managed");
 
@@ -567,19 +597,25 @@ public partial class X86CodeEmitter {
     //        [rbp-40]=entry, [rbp-48]=old_scope, [rbp-56]=prev, [rbp-64]=next
     EmitRuntimeFunctionStart("mm_move", 3, 0x80);
 
-    // If ptr == NULL, return
+    // If ptr == NULL, panic
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_move_done");
+    EmitJcc("nz", "mm_move_ptr_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_move_null");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_move_ptr_ok");
 
     // Load entry = [ptr - 8]
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
 
-    // If entry == 0, return (unmanaged)
+    // If entry == 0, panic (unmanaged pointer)
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_move_done");
+    EmitJcc("nz", "mm_move_entry_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_move_unmanaged");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_move_entry_ok");
 
     // If entry.owner_entry != NULL, this is a child allocation (not scope-owned) — skip
     EmitBytes(0x48, 0x8B, 0x48, 0x30); // MOV rcx, [rax+48] — entry.owner_entry
@@ -705,17 +741,24 @@ public partial class X86CodeEmitter {
     //        [rbp-72]=owner_scope, [rbp-80]=owner_entry
     EmitRuntimeFunctionStart("mm_reparent", 3, 0x80);
 
-    // If ptr == NULL, return
+    // If ptr == NULL, panic
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_done");
+    EmitJcc("nz", "mm_reparent_ptr_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_reparent_null");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_reparent_ptr_ok");
 
     // Load entry = [ptr - 8]
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
+    // If entry == 0, panic (unmanaged pointer)
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_done");
+    EmitJcc("nz", "mm_reparent_entry_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_reparent_unmanaged");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_reparent_entry_ok");
 
     // Load new_parent_entry = [new_parent_user_ptr - 8]
     EmitMovRegMem(X86Register.Rax, -0x10, 8);
@@ -911,8 +954,10 @@ public partial class X86CodeEmitter {
     DefineLabel("mm_free_entry_no_trace");
 
     // HeapFree the payload: entry.user_ptr - 8
+    // Zero the backpointer first so double-free is detected as "unmanaged pointer"
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry.user_ptr
+    EmitBytes(0x48, 0xC7, 0x40, 0xF8, 0x00, 0x00, 0x00, 0x00); // MOV qword [rax-8], 0
     EmitSubRegImm(X86Register.Rax, 8);
     EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = user_ptr - 8
     EmitHeapCall("HeapFree", 0, rbpSlotR8: -0x38);
@@ -934,17 +979,24 @@ public partial class X86CodeEmitter {
     //        [rbp-64]=owner_scope, [rbp-72]=owner_entry
     EmitRuntimeFunctionStart("mm_free", 1, 0x80);
 
-    // If ptr == NULL, return
+    // If ptr == NULL, panic — null should never be passed to mm_free
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_free_done");
+    EmitJcc("nz", "mm_free_ptr_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_free_null");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_free_ptr_ok");
 
     // Load entry = [ptr - 8]
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
+    // If entry == NULL, panic — mm_free called on unmanaged pointer
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_free_done");
+    EmitJcc("nz", "mm_free_entry_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_free_unmanaged");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_free_entry_ok");
 
     // Load prev and next
     EmitMovRegMem(X86Register.Rax, -0x28, 8);

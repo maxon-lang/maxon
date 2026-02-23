@@ -168,8 +168,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs,
-    Dictionary<int, string> fnEnvVarNames) {
+    Dictionary<string, MlirType> typeDefs) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
