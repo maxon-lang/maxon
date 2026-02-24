@@ -211,8 +211,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<int, string> structVarNames,
     Dictionary<string, string> varTypes,
-    Dictionary<string, MlirType> typeDefs,
-    Dictionary<int, string> fnEnvVarNames) {
+    Dictionary<string, MlirType> typeDefs) {
     // No scope cleanup needed — the parser emits MaxonScopeExitOp before throws,
     // and the memory manager handles all cleanup via mm_scope_exit.
 

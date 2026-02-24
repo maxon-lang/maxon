@@ -33,6 +33,7 @@ public partial class X86CodeEmitter {
     DefineSymdata("__mm_current_scope", new byte[8]);
     DefineSymdata("__mm_trace_enabled", BitConverter.GetBytes(Compiler.MmTrace ? (long)1 : (long)0));
     DefineSymdata("__mm_scope_id_counter", new byte[8]);
+    DefineSymdata("__mm_alloc_count", new byte[8]);
 
     // Null-terminated strings for leak check output
     DefineSymdata("__mm_leak_prefix",
@@ -52,7 +53,6 @@ public partial class X86CodeEmitter {
     DefineSymdata("__mm_tag_move_to", " to_scope=\0"u8.ToArray());
     DefineSymdata("__mm_tag_size", " size=\0"u8.ToArray());
     DefineSymdata("__mm_tag_parent", " parent=\0"u8.ToArray());
-    DefineSymdata("__mm_tag_reparent", "MM reparent ptr=\0"u8.ToArray());
     DefineSymdata("__mm_tag_newline", "\n\0"u8.ToArray());
     // Hex conversion table
     DefineSymdata("__mm_hex_chars", "0123456789abcdef\0"u8.ToArray());
@@ -68,11 +68,7 @@ public partial class X86CodeEmitter {
     DefineSymdata("__mm_panic_move_unmanaged",
       "mm_move called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
     DefineSymdata("__mm_panic_move_child",
-      "mm_move called on parent-owned allocation (use mm_reparent)\0"u8.ToArray());
-    DefineSymdata("__mm_panic_reparent_null",
-      "mm_reparent called with NULL pointer\0"u8.ToArray());
-    DefineSymdata("__mm_panic_reparent_unmanaged",
-      "mm_reparent called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
+      "mm_move called on parent-owned allocation (use mode=1)\0"u8.ToArray());
     DefineSymdata("__mm_panic_alloc_in_null_parent",
       "mm_alloc_in called with NULL parent pointer\0"u8.ToArray());
     DefineSymdata("__mm_panic_alloc_in_unmanaged_parent",
@@ -81,6 +77,8 @@ public partial class X86CodeEmitter {
       "mm_realloc called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
     DefineSymdata("__mm_panic_scope_exit_mismatch",
       "mm_scope_exit called with wrong scope (not current scope)\0"u8.ToArray());
+    DefineSymdata("__mm_panic_alloc_count_underflow",
+      "mm_scope_exit: global alloc count went negative (double free?)\0"u8.ToArray());
 
     EmitMmTracePrintTag();
     EmitMmTracePrintHex();
@@ -90,7 +88,6 @@ public partial class X86CodeEmitter {
     EmitMmAllocIn();
     EmitMmRealloc();
     EmitMmMove();
-    EmitMmReparent();
     EmitMmFreeEntry();
     EmitMmFree();
     EmitMmLeakCheck();
@@ -243,6 +240,14 @@ public partial class X86CodeEmitter {
 
     DefineLabel("mm_scope_exit_loop_done");
 
+    // Check that __mm_alloc_count didn't underflow (go negative)
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("ns", "mm_scope_exit_count_ok"); // SF=0 means non-negative
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_alloc_count_underflow");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_scope_exit_count_ok");
+
     // Restore parent scope: __mm_current_scope = scope.parent_scope
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
     EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] — scope.parent_scope
@@ -353,6 +358,11 @@ public partial class X86CodeEmitter {
     // Increment scope.alloc_count
     EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = scope_ptr
     EmitBytes(0x48, 0xFF, 0x40, 0x28); // INC qword [rax+40] — scope.alloc_count++
+
+    // Increment global alloc counter
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
+    EmitBytes(0x48, 0xFF, 0xC0); // INC rax
+    EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_count");
 
     // Trace: "MM alloc ptr=0xHEX size=0xHEX\n"
     EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
@@ -470,6 +480,11 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x89, 0x48, 0x28); // MOV [rax+40], rcx — parent.child_tail = entry
 
     DefineLabel("mm_alloc_in_children_done");
+
+    // Increment global alloc counter
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
+    EmitBytes(0x48, 0xFF, 0xC0); // INC rax
+    EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_count");
 
     // Trace: "MM alloc_in ptr=0xHEX size=0xHEX parent=0xHEX\n"
     EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
@@ -590,11 +605,15 @@ public partial class X86CodeEmitter {
   }
 
   // -------------------------------------------------------------------------
-  // mm_move(user_ptr_in_rcx, dest_scope_ptr_in_rdx, tag_cstr_in_r8) -> void
+  // mm_move(user_ptr_in_rcx, dest_ptr_in_rdx, mode_in_r8) -> void
+  // Unified move: transfers allocation ownership to a new owner.
+  //   mode=0: dest is a scope pointer (move to scope's alloc list)
+  //   mode=1: dest is an allocation's user pointer (reparent under allocation)
   // -------------------------------------------------------------------------
   private void EmitMmMove() {
-    // Stack: [rbp-8]=user_ptr, [rbp-16]=dest_scope, [rbp-24]=tag,
-    //        [rbp-40]=entry, [rbp-48]=old_scope, [rbp-56]=prev, [rbp-64]=next
+    // Stack: [rbp-8]=user_ptr, [rbp-16]=dest_ptr, [rbp-24]=mode,
+    //        [rbp-40]=entry, [rbp-48]=owner_scope_or_entry, [rbp-56]=prev, [rbp-64]=next,
+    //        [rbp-72]=dest_entry (for mode=1)
     EmitRuntimeFunctionStart("mm_move", 3, 0x80);
 
     // If ptr == NULL, panic
@@ -617,157 +636,8 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_move_entry_ok");
 
-    // If entry.owner_entry != NULL, this is a child allocation (not scope-owned) — skip
-    EmitBytes(0x48, 0x8B, 0x48, 0x30); // MOV rcx, [rax+48] — entry.owner_entry
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("nz", "mm_move_done");
-
-    // Load old_scope = entry.owner_scope (at +56)
-    EmitBytes(0x48, 0x8B, 0x40, 0x38); // MOV rax, [rax+56] — entry.owner_scope
-    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = old_scope
-
     // Load entry.prev and entry.next for unlinking
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // entry
-    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — entry.prev
-    EmitMovMemReg(-0x38, X86Register.Rcx, 8); // [rbp-56] = prev
-    EmitBytes(0x48, 0x8B, 0x48, 0x10); // MOV rcx, [rax+16] — entry.next
-    EmitMovMemReg(-0x40, X86Register.Rcx, 8); // [rbp-64] = next
-
-    // Unlink from old_scope's list:
-    // if entry.prev != NULL: entry.prev.next = entry.next
-    // else: old_scope.alloc_head = entry.next
-    EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = prev
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_move_no_prev");
-    // prev.next = next
-    EmitMovRegMem(X86Register.Rcx, -0x40, 8); // RCX = next
-    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
-    EmitJmp("mm_move_prev_done");
-    DefineLabel("mm_move_no_prev");
-    // old_scope.alloc_head = next
-    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = old_scope
-    EmitMovRegMem(X86Register.Rcx, -0x40, 8); // RCX = next
-    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — old_scope.alloc_head = next
-    DefineLabel("mm_move_prev_done");
-
-    // if entry.next != NULL: entry.next.prev = entry.prev
-    // else: old_scope.alloc_tail = entry.prev
-    EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = next
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_move_no_next");
-    // next.prev = prev
-    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // RCX = prev
-    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
-    EmitJmp("mm_move_next_done");
-    DefineLabel("mm_move_no_next");
-    // old_scope.alloc_tail = prev
-    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = old_scope
-    EmitMovRegMem(X86Register.Rcx, -0x38, 8); // RCX = prev
-    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — old_scope.alloc_tail = prev
-    DefineLabel("mm_move_next_done");
-
-    // Decrement old_scope.alloc_count
-    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = old_scope
-    EmitBytes(0x48, 0xFF, 0x48, 0x28); // DEC qword [rax+40] — old_scope.alloc_count--
-
-    // Clear entry's prev/next for clean insertion
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
-    EmitMovRegImm(X86Register.Rcx, 0);
-    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — entry.next = NULL
-    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = NULL (will be set below)
-
-    // Link entry into dest_scope's tail
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = dest_scope
-    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — dest_scope.alloc_tail
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "mm_move_dest_empty");
-
-    // Non-empty: old_tail.next = entry, entry.prev = old_tail, dest.alloc_tail = entry
-    // RCX = old tail
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
-    EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — old_tail.next = entry
-    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = old_tail
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
-    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — dest_scope.alloc_tail = entry
-    EmitJmp("mm_move_dest_done");
-
-    DefineLabel("mm_move_dest_empty");
-    // dest_scope.alloc_head = entry, dest_scope.alloc_tail = entry
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
-    EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — dest_scope.alloc_head = entry
-    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — dest_scope.alloc_tail = entry
-
-    DefineLabel("mm_move_dest_done");
-
-    // Increment dest_scope.alloc_count
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = dest_scope
-    EmitBytes(0x48, 0xFF, 0x40, 0x28); // INC qword [rax+40]
-
-    // Set entry.owner_scope = dest_scope
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
-    EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+56], rcx — entry.owner_scope = dest_scope
-
-    // Trace: "MM move ptr=0xHEX to_scope=0xHEX\n"
-    EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_move_no_trace");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_move");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_move_to");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // dest_scope
-    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — dest_scope.scope_id
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    DefineLabel("mm_move_no_trace");
-
-    DefineLabel("mm_move_done");
-    EmitRuntimeFunctionEnd();
-  }
-
-  // -------------------------------------------------------------------------
-  // mm_reparent(user_ptr_in_rcx, new_parent_user_ptr_in_rdx, tag_cstr_in_r8) -> void
-  // Moves an allocation from its current owner (scope or parent entry)
-  // into a new parent entry's child list.
-  // -------------------------------------------------------------------------
-  private void EmitMmReparent() {
-    // Stack: [rbp-8]=user_ptr, [rbp-16]=new_parent_user_ptr, [rbp-24]=tag,
-    //        [rbp-40]=entry, [rbp-48]=new_parent_entry, [rbp-56]=prev, [rbp-64]=next,
-    //        [rbp-72]=owner_scope, [rbp-80]=owner_entry
-    EmitRuntimeFunctionStart("mm_reparent", 3, 0x80);
-
-    // If ptr == NULL, panic
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_reparent_ptr_ok");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_reparent_null");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
-    DefineLabel("mm_reparent_ptr_ok");
-
-    // Load entry = [ptr - 8]
-    EmitSubRegImm(X86Register.Rax, 8);
-    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
-    // If entry == 0, panic (unmanaged pointer)
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_reparent_entry_ok");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_reparent_unmanaged");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
-    DefineLabel("mm_reparent_entry_ok");
-
-    // Load new_parent_entry = [new_parent_user_ptr - 8]
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);
-    EmitSubRegImm(X86Register.Rax, 8);
-    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
-    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new_parent_entry
-
-    // Load entry.prev, entry.next
-    EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — entry.prev
     EmitMovMemReg(-0x38, X86Register.Rcx, 8); // [rbp-56] = prev
     EmitBytes(0x48, 0x8B, 0x48, 0x10); // MOV rcx, [rax+16] — entry.next
@@ -776,128 +646,194 @@ public partial class X86CodeEmitter {
     // Check if scope-owned: entry.owner_scope (at +56)
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitBytes(0x48, 0x8B, 0x40, 0x38); // MOV rax, [rax+56] — entry.owner_scope
-    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = owner_scope
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = owner_scope
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_parent_owned");
+    EmitJcc("z", "mm_move_unlink_parent_owned");
 
-    // Scope-owned: unlink from scope's alloc list
+    // --- Scope-owned: unlink from scope's alloc list ---
     // if prev: prev.next = next  else: scope.alloc_head = next
     EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = prev
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_scope_no_prev");
+    EmitJcc("z", "mm_move_scope_no_prev");
     EmitMovRegMem(X86Register.Rcx, -0x40, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
-    EmitJmp("mm_reparent_scope_prev_done");
-    DefineLabel("mm_reparent_scope_no_prev");
-    EmitMovRegMem(X86Register.Rax, -0x48, 8); // RAX = owner_scope
+    EmitJmp("mm_move_scope_prev_done");
+    DefineLabel("mm_move_scope_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = owner_scope
     EmitMovRegMem(X86Register.Rcx, -0x40, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — scope.alloc_head = next
-    DefineLabel("mm_reparent_scope_prev_done");
+    DefineLabel("mm_move_scope_prev_done");
 
     // if next: next.prev = prev  else: scope.alloc_tail = prev
     EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = next
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_scope_no_next");
+    EmitJcc("z", "mm_move_scope_no_next");
     EmitMovRegMem(X86Register.Rcx, -0x38, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
-    EmitJmp("mm_reparent_scope_next_done");
-    DefineLabel("mm_reparent_scope_no_next");
-    EmitMovRegMem(X86Register.Rax, -0x48, 8); // RAX = owner_scope
+    EmitJmp("mm_move_scope_next_done");
+    DefineLabel("mm_move_scope_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = owner_scope
     EmitMovRegMem(X86Register.Rcx, -0x38, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — scope.alloc_tail = prev
-    DefineLabel("mm_reparent_scope_next_done");
+    DefineLabel("mm_move_scope_next_done");
 
     // Decrement scope.alloc_count
-    EmitMovRegMem(X86Register.Rax, -0x48, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitBytes(0x48, 0xFF, 0x48, 0x28); // DEC qword [rax+40]
 
-    EmitJmp("mm_reparent_unlinked");
+    EmitJmp("mm_move_unlinked");
 
-    // Parent-owned: unlink from parent entry's child list
-    DefineLabel("mm_reparent_parent_owned");
+    // --- Parent-owned: unlink from parent entry's child list ---
+    DefineLabel("mm_move_unlink_parent_owned");
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitBytes(0x48, 0x8B, 0x40, 0x30); // MOV rax, [rax+48] — entry.owner_entry
-    EmitMovMemReg(-0x50, X86Register.Rax, 8); // [rbp-80] = owner_entry
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = owner_entry (reuse slot)
 
     // if prev: prev.next = next  else: owner_entry.child_head = next
     EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = prev
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_parent_no_prev");
+    EmitJcc("z", "mm_move_parent_no_prev");
     EmitMovRegMem(X86Register.Rcx, -0x40, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — prev.next = next
-    EmitJmp("mm_reparent_parent_prev_done");
-    DefineLabel("mm_reparent_parent_no_prev");
-    EmitMovRegMem(X86Register.Rax, -0x50, 8); // RAX = owner_entry
+    EmitJmp("mm_move_parent_prev_done");
+    DefineLabel("mm_move_parent_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = owner_entry
     EmitMovRegMem(X86Register.Rcx, -0x40, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x20); // MOV [rax+32], rcx — owner_entry.child_head = next
-    DefineLabel("mm_reparent_parent_prev_done");
+    DefineLabel("mm_move_parent_prev_done");
 
     // if next: next.prev = prev  else: owner_entry.child_tail = prev
     EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = next
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_parent_no_next");
+    EmitJcc("z", "mm_move_parent_no_next");
     EmitMovRegMem(X86Register.Rcx, -0x38, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — next.prev = prev
-    EmitJmp("mm_reparent_parent_next_done");
-    DefineLabel("mm_reparent_parent_no_next");
-    EmitMovRegMem(X86Register.Rax, -0x50, 8); // RAX = owner_entry
+    EmitJmp("mm_move_parent_next_done");
+    DefineLabel("mm_move_parent_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = owner_entry
     EmitMovRegMem(X86Register.Rcx, -0x38, 8);
     EmitBytes(0x48, 0x89, 0x48, 0x28); // MOV [rax+40], rcx — owner_entry.child_tail = prev
-    DefineLabel("mm_reparent_parent_next_done");
+    DefineLabel("mm_move_parent_next_done");
 
-    DefineLabel("mm_reparent_unlinked");
+    DefineLabel("mm_move_unlinked");
 
-    // Link entry into new_parent_entry's child list
+    // Clear entry's prev/next for clean insertion
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
     EmitMovRegImm(X86Register.Rcx, 0);
     EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — entry.next = NULL
-    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = NULL (may be set below)
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = NULL
 
-    EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = new_parent_entry
-    EmitBytes(0x48, 0x8B, 0x48, 0x28); // MOV rcx, [rax+40] — new_parent.child_tail
+    // Branch on mode: 0 = scope, 1 = reparent under allocation
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = mode
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_move_to_parent");
+
+    // ===== Mode 0: Link into dest scope's alloc list =====
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = dest_scope
+    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — dest_scope.alloc_tail
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "mm_reparent_dest_empty");
+    EmitJcc("z", "mm_move_scope_dest_empty");
+
+    // Non-empty: old_tail.next = entry, entry.prev = old_tail, dest.alloc_tail = entry
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — old_tail.next = entry
+    EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = old_tail
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
+    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — dest_scope.alloc_tail = entry
+    EmitJmp("mm_move_scope_dest_done");
+
+    DefineLabel("mm_move_scope_dest_empty");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
+    EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — dest_scope.alloc_head = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x18); // MOV [rcx+24], rax — dest_scope.alloc_tail = entry
+
+    DefineLabel("mm_move_scope_dest_done");
+
+    // Increment dest_scope.alloc_count
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = dest_scope
+    EmitBytes(0x48, 0xFF, 0x40, 0x28); // INC qword [rax+40]
+
+    // Set entry.owner_scope = dest_scope, entry.owner_entry = NULL
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = dest_scope
+    EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+56], rcx — entry.owner_scope = dest_scope
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitBytes(0x48, 0x89, 0x48, 0x30); // MOV [rax+48], rcx — entry.owner_entry = NULL
+
+    EmitJmp("mm_move_link_done");
+
+    // ===== Mode 1: Reparent under dest allocation =====
+    DefineLabel("mm_move_to_parent");
+
+    // Resolve dest_entry = [dest_ptr - 8]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = dest_entry
+
+    // Link entry into dest_entry's child list
+    EmitMovRegMem(X86Register.Rax, -0x48, 8); // RAX = dest_entry
+    EmitBytes(0x48, 0x8B, 0x48, 0x28); // MOV rcx, [rax+40] — dest_entry.child_tail
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "mm_move_parent_dest_empty");
 
     // Non-empty: old_tail.next = entry, entry.prev = old_tail, parent.child_tail = entry
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
     EmitBytes(0x48, 0x89, 0x41, 0x10); // MOV [rcx+16], rax — old_tail.next = entry
     EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = old_tail
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = new_parent_entry
-    EmitBytes(0x48, 0x89, 0x41, 0x28); // MOV [rcx+40], rax — new_parent.child_tail = entry
-    EmitJmp("mm_reparent_dest_done");
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8); // RCX = dest_entry
+    EmitBytes(0x48, 0x89, 0x41, 0x28); // MOV [rcx+40], rax — dest_entry.child_tail = entry
+    EmitJmp("mm_move_parent_dest_done");
 
-    DefineLabel("mm_reparent_dest_empty");
+    DefineLabel("mm_move_parent_dest_empty");
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = new_parent_entry
-    EmitBytes(0x48, 0x89, 0x41, 0x20); // MOV [rcx+32], rax — new_parent.child_head = entry
-    EmitBytes(0x48, 0x89, 0x41, 0x28); // MOV [rcx+40], rax — new_parent.child_tail = entry
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8); // RCX = dest_entry
+    EmitBytes(0x48, 0x89, 0x41, 0x20); // MOV [rcx+32], rax — dest_entry.child_head = entry
+    EmitBytes(0x48, 0x89, 0x41, 0x28); // MOV [rcx+40], rax — dest_entry.child_tail = entry
 
-    DefineLabel("mm_reparent_dest_done");
+    DefineLabel("mm_move_parent_dest_done");
 
-    // Set entry.owner_entry = new_parent_entry, entry.owner_scope = NULL
+    // Set entry.owner_entry = dest_entry, entry.owner_scope = NULL
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = new_parent_entry
-    EmitBytes(0x48, 0x89, 0x48, 0x30); // MOV [rax+48], rcx — entry.owner_entry = new_parent
+    EmitMovRegMem(X86Register.Rcx, -0x48, 8); // RCX = dest_entry
+    EmitBytes(0x48, 0x89, 0x48, 0x30); // MOV [rax+48], rcx — entry.owner_entry = dest_entry
     EmitMovRegImm(X86Register.Rcx, 0);
     EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+56], rcx — entry.owner_scope = NULL
 
-    // Trace: "MM reparent ptr=0xHEX parent=0xHEX\n"
+    DefineLabel("mm_move_link_done");
+
+    // Trace: "MM move ptr=0xHEX to_scope=0xHEX\n" or "MM move ptr=0xHEX parent=0xHEX\n"
     EmitSymdataLoadI64(X86Register.Rax, "__mm_trace_enabled");
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_reparent_no_trace");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_reparent");
+    EmitJcc("z", "mm_move_no_trace");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_move");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    // Branch on mode for trace label
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // mode
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_move_trace_parent");
+    // Mode 0: " to_scope=<scope_id>"
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_move_to");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // dest_scope
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — dest_scope.scope_id
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitJmp("mm_move_trace_done");
+    // Mode 1: " parent=<dest_ptr>"
+    DefineLabel("mm_move_trace_parent");
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_parent");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // new_parent_user_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // dest_ptr (parent user_ptr)
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    DefineLabel("mm_move_trace_done");
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    DefineLabel("mm_reparent_no_trace");
+    DefineLabel("mm_move_no_trace");
 
-    DefineLabel("mm_reparent_done");
+    DefineLabel("mm_move_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -952,6 +888,11 @@ public partial class X86CodeEmitter {
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     DefineLabel("mm_free_entry_no_trace");
+
+    // Decrement global alloc counter
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
+    EmitBytes(0x48, 0xFF, 0xC8); // DEC rax
+    EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_count");
 
     // HeapFree the payload: entry.user_ptr - 8
     // Zero the backpointer first so double-free is detected as "unmanaged pointer"
@@ -1092,57 +1033,28 @@ public partial class X86CodeEmitter {
   // Walks the scope chain and reports any remaining allocations to stderr.
   // -------------------------------------------------------------------------
   private void EmitMmLeakCheck() {
-    // Stack: [rbp-40]=current_scope, [rbp-48]=total_allocs, [rbp-56..rbp-80]=24-byte string buffer
+    // Stack: [rbp-56..rbp-80]=24-byte string buffer
     EmitRuntimeFunctionStart("mm_leak_check", 0, 0x80);
 
-    // Load __mm_current_scope
-    EmitSymdataLoadI64(X86Register.Rax, "__mm_current_scope");
+    // Check global alloc counter
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_leak_check_done"); // No scopes remaining — all good
-
-    // Walk scope chain, sum alloc_counts
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current_scope
-    EmitMovRegImm(X86Register.Rcx, 0);
-    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = total = 0
-
-    DefineLabel("mm_leak_check_loop");
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current_scope
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_leak_check_loop_done");
-
-    // total += scope.alloc_count
-    EmitBytes(0x48, 0x8B, 0x48, 0x28); // MOV rcx, [rax+40] — scope.alloc_count
-    EmitMovRegMem(X86Register.Rdx, -0x30, 8); // RDX = total
-    EmitBytes(0x48, 0x01, 0xCA); // ADD rdx, rcx
-    EmitMovMemReg(-0x30, X86Register.Rdx, 8); // [rbp-48] = total
-
-    // Advance to parent: scope.parent_scope
-    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] — scope.parent_scope
-    EmitMovMemReg(-0x28, X86Register.Rax, 8);
-    EmitJmp("mm_leak_check_loop");
-
-    DefineLabel("mm_leak_check_loop_done");
-
-    // If total == 0, no leaks
-    EmitMovRegMem(X86Register.Rax, -0x30, 8);
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_leak_check_done");
+    EmitJcc("z", "mm_leak_check_done"); // count == 0, no leaks
 
     // Print warning: "MM leak: N allocation(s) remain\n" to stderr
-    // Print "MM leak: " prefix
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save count
+
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_leak_prefix");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
 
-    // Convert count to string: maxon_u64_to_string(count, &buffer) -> length
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8);  // RCX = total count
+    // Convert count to string
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);  // RCX = count
     EmitLeaRegMem(X86Register.Rdx, -0x50);     // RDX = &buffer at [rbp-0x50]
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_u64_to_string")); EmitDword(0);
 
-    // Print the count string (buffer is null-terminated by u64_to_string)
     EmitLeaRegMem(X86Register.Rcx, -0x50);     // RCX = &buffer
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
 
-    // Print " allocation(s) remain\n" suffix
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_leak_suffix");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
 

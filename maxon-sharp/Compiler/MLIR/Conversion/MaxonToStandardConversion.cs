@@ -827,11 +827,11 @@ public static partial class MaxonToStandardConversion {
                       newBlock.AddOp(new StdCallRuntimeOp("mm_free", [oldVal], null));
                     }
                     var heapPtr2 = EmitLoad(newBlock, dstName, varTypes);
-                    // Re-parent new value under self so it moves with self
+                    // Move new value under self so it moves with self
                     var selfPtr = (StdI64)EmitLoad(newBlock, "self", varTypes);
-                    var untrackTag = new StdConstI64Op(0);
-                    newBlock.AddOp(untrackTag);
-                    newBlock.AddOp(new StdCallRuntimeOp("mm_reparent", [heapPtr2, selfPtr, untrackTag.Result], null));
+                    var moveMode = new StdConstI64Op(1);
+                    newBlock.AddOp(moveMode);
+                    newBlock.AddOp(new StdCallRuntimeOp("mm_move", [heapPtr2, selfPtr, moveMode.Result], null));
                     EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
                   }
                 }
@@ -1151,14 +1151,6 @@ public static partial class MaxonToStandardConversion {
               newBlock.AddOp(new StdCallRuntimeOp("mm_move", [varPtr, destScope, moveTag.Result], null));
               break;
             }
-            case MaxonReparentOp untrackOp: {
-              var varPtr = (StdI64)EmitLoad(newBlock, untrackOp.VarName, varTypes);
-              var parentPtr = (StdI64)EmitLoad(newBlock, untrackOp.ParentVarName, varTypes);
-              var untrackTag = new StdConstI64Op(0);
-              newBlock.AddOp(untrackTag);
-              newBlock.AddOp(new StdCallRuntimeOp("mm_reparent", [varPtr, parentPtr, untrackTag.Result], null));
-              break;
-            }
             case MaxonTruncOp truncOp: {
               var mappedInput = valueMap[truncOp.Input];
               if (mappedInput is StdF64 f64Input) {
@@ -1473,7 +1465,7 @@ public static partial class MaxonToStandardConversion {
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
               break;
             case MaxonThrowOp throwOp:
-              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs, fnEnvVarNames);
+              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
               LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);

@@ -113,11 +113,11 @@ public static partial class MaxonToStandardConversion {
 			var srcName = structVarNames[op.Value.Id];
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));
-			// Re-parent the stored element under the ManagedMemory so it moves with the array
+			// Move the stored element under the ManagedMemory so it moves with the array
 			var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
-			var untrackTag = new StdConstI64Op(0);
-			block.AddOp(untrackTag);
-			block.AddOp(new StdCallRuntimeOp("mm_reparent", [(StdI64)srcHeapPtr, managedPtr, untrackTag.Result], null));
+			var moveMode = new StdConstI64Op(1);
+			block.AddOp(moveMode);
+			block.AddOp(new StdCallRuntimeOp("mm_move", [(StdI64)srcHeapPtr, managedPtr, moveMode.Result], null));
 		} else {
 			// Scalar elements: store directly
 			var value = valueMap[op.Value];

@@ -5228,11 +5228,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryCallOp);
     EmitErrorFlagCheck(tryCallOp.ErrorFlag, propagateErrorBlock, continueBlock);
 
-    // Propagation block: load error flag from variable and re-throw
+    // Propagation block: clean up scopes then re-throw error to caller
     var propBlock = _currentFunction!.Body.AddBlock(propagateErrorBlock);
     _currentBlock = propBlock;
     var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
     _currentBlock!.AddOp(loadErrorOp);
+    EmitBlockScopedReleaseBeforeReturn(null);
     _currentBlock!.AddOp(new MaxonReturnOp(loadErrorOp.Result, isErrorPropagation: true));
 
     return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
@@ -5635,7 +5636,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // When reassigning a managed variable from an inner scope, the new value was
       // allocated in the current scope. Move it to the variable's declaring scope so
       // it survives the current scope's exit.
-      // Skip self-fields: the lowering handles those with mm_reparent under self.
+      // Skip self-fields: the lowering handles those with mm_move under self.
       if (varInfo.Kind == MaxonValueKind.Struct && !varInfo.IsSelfField && CurrentScopeVar != varInfo.DeclScopeVar) {
         _currentBlock!.AddOp(new MaxonMoveOp(name, varInfo.DeclScopeVar, "reassign_move"));
       }
@@ -6884,8 +6885,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseBreak() {
     var token = Advance(); // consume 'break'
-    var (exitLabel, scopeVar) = ResolveBreakTarget(token);
+    var (exitLabel, scopeVar, isLoop) = ResolveBreakTarget(token);
     EmitReleaseForScopesAbove(scopeVar);
+    // For loops, also exit the loop body scope since break jumps past it
+    // For match, scopeVar is the parent scope (not match-owned), so don't exit it
+    if (isLoop)
+      _currentBlock!.AddOp(new MaxonScopeExitOp(scopeVar, "break_cleanup"));
     _currentBlock!.AddOp(new MaxonBrOp(exitLabel));
   }
 
@@ -6893,27 +6898,29 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var token = Advance(); // consume 'continue'
     var loop = ResolveLoopTarget(token);
     EmitReleaseForScopesAbove(loop.ScopeVar);
+    // Also exit the loop body scope since header is before scope_enter
+    _currentBlock!.AddOp(new MaxonScopeExitOp(loop.ScopeVar, "continue_cleanup"));
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
-  private (string ExitLabel, string ScopeVar) ResolveBreakTarget(Token keyword) {
+  private (string ExitLabel, string ScopeVar, bool IsLoop) ResolveBreakTarget(Token keyword) {
     if (_matchStack.Count == 0 && _loopStack.Count == 0) {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"'{keyword.Value}' can only be used inside a loop or match", keyword.Line, keyword.Column);
     }
     if (Check(TokenType.CharacterLiteral)) {
       var labelToken = Advance();
       foreach (var ctx in _matchStack) {
-        if (ctx.SourceLabel == labelToken.Value) return (ctx.MergeLabel, ctx.ScopeVar);
+        if (ctx.SourceLabel == labelToken.Value) return (ctx.MergeLabel, ctx.ScopeVar, false);
       }
       foreach (var ctx in _loopStack) {
-        if (ctx.SourceLabel == labelToken.Value) return (ctx.ExitLabel, ctx.ScopeVar);
+        if (ctx.SourceLabel == labelToken.Value) return (ctx.ExitLabel, ctx.ScopeVar, true);
       }
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"No enclosing loop or match with label '{labelToken.Value}'", labelToken.Line, labelToken.Column);
     }
     // Unlabeled break: prefer match if we're inside one, otherwise loop
-    if (_matchStack.Count > 0) { var m = _matchStack.Peek(); return (m.MergeLabel, m.ScopeVar); }
+    if (_matchStack.Count > 0) { var m = _matchStack.Peek(); return (m.MergeLabel, m.ScopeVar, false); }
     var l = _loopStack.Peek();
-    return (l.ExitLabel, l.ScopeVar);
+    return (l.ExitLabel, l.ScopeVar, true);
   }
 
   private LoopContext ResolveLoopTarget(Token keyword) {

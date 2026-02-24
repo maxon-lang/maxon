@@ -281,7 +281,6 @@ internal class FunctionCloner {
       case MaxonScopeEnterOp se: { var c = new MaxonScopeEnterOp(se.ResultVar, se.Tag); return c; }
       case MaxonScopeExitOp sx: return new MaxonScopeExitOp(sx.ScopeVar, sx.Tag);
       case MaxonMoveOp mo: return new MaxonMoveOp(mo.VarName, mo.DestScopeVar, mo.Tag);
-      case MaxonReparentOp ut: return new MaxonReparentOp(ut.VarName, ut.ParentVarName, ut.Tag);
 
       default:
         throw new InvalidOperationException($"Monomorphization: unhandled op type {op.GetType().Name}");

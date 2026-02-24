@@ -219,8 +219,8 @@ module {
     %22 = memref.load v : i64
     memref.store_indirect %21, %22+8
     %23 = memref.load v : i64
-    %24 = arith.constant {value = 0 : i64}
-    std.call_runtime @mm_reparent %21, %23, %24
+    %24 = arith.constant {value = 1 : i64}
+    std.call_runtime @mm_move %21, %23, %24
     %25 = memref.lea __arr_0
     %26 = std.ptr_to_i64 %25
     %27 = memref.load v : i64
@@ -310,11 +310,11 @@ module {
     x86.mov ecx, [rbp-48]
     x86.mov [ecx+8], eax
     x86.mov ecx, [rbp-48]
-    x86.xor edx, edx
+    x86.mov edx, 1
     x86.mov r8, rdx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call mm_reparent
+    x86.call mm_move
     x86.lea rax, [rbp-32]
     x86.mov rcx, rax
     x86.mov eax, [rbp-48]
@@ -485,8 +485,8 @@ module {
     %22 = memref.load v : i64
     memref.store_indirect %21, %22+8
     %23 = memref.load v : i64
-    %24 = arith.constant {value = 0 : i64}
-    std.call_runtime @mm_reparent %21, %23, %24
+    %24 = arith.constant {value = 1 : i64}
+    std.call_runtime @mm_move %21, %23, %24
     %25 = memref.lea __arr_0
     %26 = std.ptr_to_i64 %25
     %27 = memref.load v : i64
@@ -580,11 +580,11 @@ module {
     x86.mov ecx, [rbp-48]
     x86.mov [ecx+8], eax
     x86.mov ecx, [rbp-48]
-    x86.xor edx, edx
+    x86.mov edx, 1
     x86.mov r8, rdx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call mm_reparent
+    x86.call mm_move
     x86.lea rax, [rbp-32]
     x86.mov rcx, rax
     x86.mov eax, [rbp-48]

@@ -294,8 +294,8 @@ module {
     %20 = memref.load arr : i64
     memref.store_indirect %19, %20+8
     %21 = memref.load arr : i64
-    %22 = arith.constant {value = 0 : i64}
-    std.call_runtime @mm_reparent %19, %21, %22
+    %22 = arith.constant {value = 1 : i64}
+    std.call_runtime @mm_move %19, %21, %22
     %23 = memref.lea_rdata __const_array_codegen-internals.main_arr
     %24 = std.ptr_to_i64 %23
     %25 = memref.load arr : i64
@@ -381,11 +381,11 @@ module {
     x86.mov ecx, [rbp-24]
     x86.mov [ecx+8], eax
     x86.mov ecx, [rbp-24]
-    x86.xor edx, edx
+    x86.mov edx, 1
     x86.mov r8, rdx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call mm_reparent
+    x86.call mm_move
     x86.lea_rdata rax, [__const_array_codegen-internals.main_arr]
     x86.mov rcx, rax
     x86.mov eax, [rbp-24]

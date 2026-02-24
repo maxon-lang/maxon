@@ -1145,8 +1145,8 @@ module {
     %19 = memref.load arr : i64
     memref.store_indirect %18, %19+8
     %20 = memref.load arr : i64
-    %21 = arith.constant {value = 0 : i64}
-    std.call_runtime @mm_reparent %18, %20, %21
+    %21 = arith.constant {value = 1 : i64}
+    std.call_runtime @mm_move %18, %20, %21
     %22 = arith.constant {value = 7 : i64}
     %23 = arith.constant {value = 8 : i64}
     %24 = arith.constant {value = 0 : i64}
@@ -1245,11 +1245,11 @@ module {
     x86.mov ecx, [rbp-24]
     x86.mov [ecx+8], eax
     x86.mov ecx, [rbp-24]
-    x86.xor edx, edx
+    x86.mov edx, 1
     x86.mov r8, rdx
     x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call mm_reparent
+    x86.call mm_move
     x86.mov eax, 7
     x86.mov ecx, 8
     x86.xor edx, edx
@@ -1381,6 +1381,7 @@ module {
     %23 = maxon.field_access .n %22
     maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_exit {scope = __scope_21} {tag = break_cleanup}
+    maxon.scope_exit {scope = __scope_14} {tag = break_cleanup}
     maxon.br loop_0.exit
   check_1.after:
     %24 = maxon.literal {value = 1 : i64}
@@ -1448,33 +1449,35 @@ module {
     memref.store %21, result
     %22 = memref.load __scope_21 : i64
     std.call_runtime @mm_scope_exit %22
+    %23 = memref.load __scope_14 : i64
+    std.call_runtime @mm_scope_exit %23
     cf.br loop_0.exit
   check_1.after:
-    %23 = arith.constant {value = 1 : i64}
-    %24 = memref.load i : i64
-    %25 = arith.addi %24, %23
-    memref.store %25, i
-    %26 = memref.load __scope_14 : i64
-    std.call_runtime @mm_scope_exit %26
+    %24 = arith.constant {value = 1 : i64}
+    %25 = memref.load i : i64
+    %26 = arith.addi %25, %24
+    memref.store %26, i
+    %27 = memref.load __scope_14 : i64
+    std.call_runtime @mm_scope_exit %27
     cf.br loop_0.header
   loop_0.exit:
-    %27 = memref.load result : i64
-    memref.store %27, __range_val_2
-    %28 = arith.constant {value = 0 : i64}
-    %29 = arith.cmpi lt %27, %28
-    %30 = arith.constant {value = 4294967295 : i64}
-    %31 = arith.cmpi gt %27, %30
-    %32 = arith.ori1 %29, %31
-    cf.cond_br %32 [then: __range_panic_2, else: __range_ok_2]
+    %28 = memref.load result : i64
+    memref.store %28, __range_val_2
+    %29 = arith.constant {value = 0 : i64}
+    %30 = arith.cmpi lt %28, %29
+    %31 = arith.constant {value = 4294967295 : i64}
+    %32 = arith.cmpi gt %28, %31
+    %33 = arith.ori1 %30, %32
+    cf.cond_br %33 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %33 = memref.lea_symdata __panic_msg_33
-    %34 = std.ptr_to_i64 %33
-    std.call_runtime @maxon_panic %34
+    %34 = memref.lea_symdata __panic_msg_33
+    %35 = std.ptr_to_i64 %34
+    std.call_runtime @maxon_panic %35
   __range_ok_2:
-    %35 = memref.load __range_val_2 : i64
-    %36 = memref.load __scope_8 : i64
-    std.call_runtime @mm_scope_exit %36
-    func.return %35
+    %36 = memref.load __range_val_2 : i64
+    %37 = memref.load __scope_8 : i64
+    std.call_runtime @mm_scope_exit %37
+    func.return %36
   }
 }
 === x86
@@ -1526,6 +1529,8 @@ module {
     x86.mov edx, [ecx+0]
     x86.mov [rbp-16], edx
     x86.mov rcx, [rbp-48]
+    x86.call mm_scope_exit
+    x86.mov rcx, [rbp-32]
     x86.call mm_scope_exit
     x86.jmp memory-safety.main.loop_0.exit
   check_1.after:
@@ -1786,5 +1791,186 @@ module {
     x86.ret
   }
 }
+```
+
+### Continue cleans up loop body scope
+
+When `continue` is used inside a loop that allocates structs, the loop body scope
+must be exited before jumping back to the header. Otherwise the struct allocated in
+that iteration leaks.
+
+<!-- test: release-before-continue -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+  export var n Integer
+end 'Counter'
+
+function main() returns ExitCode
+  var total = 0
+  var i = 0
+  while i < 5 'loop'
+    i = i + 1
+    var c = Counter{n: i}
+    if c.n == 3 'skip'
+      continue 'loop'
+    end 'skip'
+    total = total + c.n
+  end 'loop'
+  return total
+end 'main'
+```
+```exitcode
+12
+```
+
+### Labeled break from nested loop cleans up both scopes
+
+When breaking out of an outer loop from inside an inner loop, both the inner
+loop body scope and the outer loop body scope must be cleaned up.
+
+<!-- test: release-labeled-break-nested -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+  export var a Integer
+  export var b Integer
+end 'Pair'
+
+function main() returns ExitCode
+  var result = 0
+  var i = 0
+  while i < 3 'outer'
+    var p = Pair{a: i, b: i * 10}
+    var j = 0
+    while j < 3 'inner'
+      var q = Pair{a: j, b: j * 10}
+      if p.a == 1 'check'
+        if q.a == 2 'found'
+          result = p.b + q.b
+          break 'outer'
+        end 'found'
+      end 'check'
+      j = j + 1
+    end 'inner'
+    i = i + 1
+  end 'outer'
+  return result
+end 'main'
+```
+```exitcode
+30
+```
+
+### Break from for-in loop cleans up loop scope
+
+For-in loops use the same scope mechanism as while loops. Breaking out of a
+for-in loop with struct allocations must clean up the loop body scope.
+
+<!-- test: release-break-for-in -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var val Integer
+end 'Item'
+
+function main() returns ExitCode
+  var items = [10, 20, 30, 40, 50]
+  var result = 0
+  for item in items 'search'
+    var wrapped = Item{val: item}
+    if wrapped.val == 30 'found'
+      result = wrapped.val
+      break 'search'
+    end 'found'
+  end 'search'
+  return result
+end 'main'
+```
+```exitcode
+30
+```
+
+### Error propagation cleans up function scope
+
+When a `try` call propagates an error to the caller, the function's scope must
+be exited so that any allocations made before the try call are freed.
+
+<!-- test: release-on-error-propagation -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Resource
+  export var id Integer
+end 'Resource'
+
+enum ResourceError
+  case notFound
+end 'ResourceError'
+
+function loadResource() returns Resource throws ResourceError
+  throw ResourceError.notFound
+end 'loadResource'
+
+function process() returns Integer throws ResourceError
+  var marker = Resource{id: 42}
+  var res = try loadResource()
+  return res.id + marker.id
+end 'process'
+
+function main() returns ExitCode
+  var result = try process() otherwise 'err'
+    return 99
+  end 'err'
+  return result
+end 'main'
+```
+```exitcode
+99
+```
+
+### Error propagation from inside block scope
+
+When error propagation happens inside a nested block scope (e.g., inside an if),
+all intermediate scopes plus the function scope must be cleaned up.
+
+<!-- test: release-on-error-propagation-in-block -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+  export var val Integer
+end 'Wrapper'
+
+enum LookupError
+  case missing
+end 'LookupError'
+
+function failingLookup() returns Integer throws LookupError
+  throw LookupError.missing
+end 'failingLookup'
+
+function compute(flag Integer) returns Integer throws LookupError
+  var w = Wrapper{val: flag}
+  if w.val > 0 'positive'
+    var inner = Wrapper{val: w.val * 2}
+    var result = try failingLookup()
+    return result + inner.val
+  end 'positive'
+  return 0
+end 'compute'
+
+function main() returns ExitCode
+  var result = try compute(flag: 5) otherwise 'err'
+    return 77
+  end 'err'
+  return result
+end 'main'
+```
+```exitcode
+77
 ```
 

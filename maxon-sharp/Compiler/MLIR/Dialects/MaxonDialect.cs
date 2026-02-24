@@ -569,16 +569,6 @@ public class MaxonMoveOp(string varName, string destScopeVar, string tag) : Maxo
     new Dictionary<string, MlirAttribute> { ["var"] = new StringAttr(VarName), ["dest"] = new StringAttr(DestScopeVar), ["tag"] = new StringAttr(Tag) };
 }
 
-// Re-parents an allocation from its current owner to be a child of another allocation.
-public class MaxonReparentOp(string varName, string parentVarName, string tag) : MaxonOp {
-  public override string Mnemonic => "maxon.reparent";
-  public string VarName { get; } = varName;
-  public string ParentVarName { get; } = parentVarName;
-  public string Tag { get; } = tag;
-  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
-    new Dictionary<string, MlirAttribute> { ["var"] = new StringAttr(VarName), ["parent"] = new StringAttr(ParentVarName), ["tag"] = new StringAttr(Tag) };
-}
-
 public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
   public override string Mnemonic => "maxon.return";
   public MaxonValue? Value { get; } = value;

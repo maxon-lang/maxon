@@ -227,14 +227,14 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Re-parents a heap allocation from its current owner (scope or parent) to become
-  /// a child of newParent. Used when storing a struct into an array element or struct field.
+  /// Moves a heap allocation to be a child of newParent (mm_move with mode=1).
+  /// Used when storing a struct into an array element or struct field.
   /// </summary>
   private static void EmitReparent(MlirBlock<StandardOp> block, StdI64 childPtr, string parentVarName, Dictionary<string, string> varTypes) {
     var parentPtr = (StdI64)EmitLoad(block, parentVarName, varTypes);
-    var tagOp = new StdConstI64Op(0);
-    block.AddOp(tagOp);
-    block.AddOp(new StdCallRuntimeOp("mm_reparent", [childPtr, parentPtr, tagOp.Result], null));
+    var modeOp = new StdConstI64Op(1);
+    block.AddOp(modeOp);
+    block.AddOp(new StdCallRuntimeOp("mm_move", [childPtr, parentPtr, modeOp.Result], null));
   }
 
   /// <summary>

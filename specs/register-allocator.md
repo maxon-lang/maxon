@@ -9503,6 +9503,7 @@ module {
     maxon.cond_br %15 [then: propagate_error_0, else: try_continue_1]
   propagate_error_0:
     %16 = maxon.var_ref {var = __try_error_2} {type = i64}
+    maxon.scope_exit {scope = __scope_10} {tag = return_cleanup}
     maxon.return %16
   try_continue_1:
     %17 = maxon.var_ref {var = __try_result_3} {type = i64}
@@ -9569,47 +9570,49 @@ module {
     cf.cond_br %11 [then: propagate_error_0, else: try_continue_1]
   propagate_error_0:
     %12 = memref.load __try_error_2 : i64
+    %13 = memref.load __scope_10 : i64
+    std.call_runtime @mm_scope_exit %13
     func.error_return %12
   try_continue_1:
-    %13 = memref.load __try_result_3 : i64
-    %14 = memref.load __scope_10 : i64
-    std.call_runtime @mm_scope_exit %14
-    func.return %13
+    %14 = memref.load __try_result_3 : i64
+    %15 = memref.load __scope_10 : i64
+    std.call_runtime @mm_scope_exit %15
+    func.return %14
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %15 = arith.constant {value = 0 : i64}
-    %16 = std.call_runtime @mm_scope_enter %15
-    memref.store %16, __scope_18
-    %17, %18 = func.try_call @register-allocator.middle
-    %19 = arith.constant {value = 99 : i64}
-    memref.store %19, __try_default_1
-    memref.store %17, __try_result_0
-    %20 = arith.constant {value = 0 : i64}
-    %21 = arith.cmpi ne %18, %20
-    cf.cond_br %21 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    %16 = arith.constant {value = 0 : i64}
+    %17 = std.call_runtime @mm_scope_enter %16
+    memref.store %17, __scope_18
+    %18, %19 = func.try_call @register-allocator.middle
+    %20 = arith.constant {value = 99 : i64}
+    memref.store %20, __try_default_1
+    memref.store %18, __try_result_0
+    %21 = arith.constant {value = 0 : i64}
+    %22 = arith.cmpi ne %19, %21
+    cf.cond_br %22 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
-    %22 = memref.load __try_default_1 : i64
-    memref.store %22, __try_result_0
+    %23 = memref.load __try_default_1 : i64
+    memref.store %23, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %23 = memref.load __try_result_0 : i64
-    memref.store %23, __range_val_4
-    %24 = arith.constant {value = 0 : i64}
-    %25 = arith.cmpi lt %23, %24
-    %26 = arith.constant {value = 4294967295 : i64}
-    %27 = arith.cmpi gt %23, %26
-    %28 = arith.ori1 %25, %27
-    cf.cond_br %28 [then: __range_panic_4, else: __range_ok_4]
+    %24 = memref.load __try_result_0 : i64
+    memref.store %24, __range_val_4
+    %25 = arith.constant {value = 0 : i64}
+    %26 = arith.cmpi lt %24, %25
+    %27 = arith.constant {value = 4294967295 : i64}
+    %28 = arith.cmpi gt %24, %27
+    %29 = arith.ori1 %26, %28
+    cf.cond_br %29 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %29 = memref.lea_symdata __panic_msg_32
-    %30 = std.ptr_to_i64 %29
-    std.call_runtime @maxon_panic %30
+    %30 = memref.lea_symdata __panic_msg_32
+    %31 = std.ptr_to_i64 %30
+    std.call_runtime @maxon_panic %31
   __range_ok_4:
-    %31 = memref.load __range_val_4 : i64
-    %32 = memref.load __scope_18 : i64
-    std.call_runtime @mm_scope_exit %32
-    func.return %31
+    %32 = memref.load __range_val_4 : i64
+    %33 = memref.load __scope_18 : i64
+    std.call_runtime @mm_scope_exit %33
+    func.return %32
   }
 }
 === x86
@@ -9647,6 +9650,11 @@ module {
     x86.je register-allocator.middle.try_continue_1
   propagate_error_0:
     x86.mov edx, [rbp-16]
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-32], edx
+    x86.mov rcx, rax
+    x86.call mm_scope_exit
+    x86.mov edx, [rbp-32]
     x86.xor eax, eax
     x86.epilogue
     x86.ret
