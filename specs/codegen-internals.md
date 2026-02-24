@@ -611,64 +611,51 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 10 : i64}
-    %3 = arith.constant {value = 3 : i64}
-    %4 = arith.addi %2, %3
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    %1 = arith.constant {value = 10 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.addi %1, %2
+    memref.store %3, __range_val_0
+    %4 = arith.constant {value = 0 : i64}
+    %5 = arith.cmpi lt %3, %4
+    %6 = arith.constant {value = 4294967295 : i64}
+    %7 = arith.cmpi gt %3, %6
+    %8 = arith.ori1 %5, %7
+    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_11
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @maxon_panic %11
+    %9 = memref.lea_symdata __panic_msg_11
+    %10 = std.ptr_to_i64 %9
+    std.call_runtime @maxon_panic %10
   __range_ok_0:
-    %12 = memref.load __range_val_0 : i64
-    %13 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %13
-    func.return %12
+    %11 = memref.load __range_val_0 : i64
+    func.return %11
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
+    x86.prologue stack_size=16
+    x86.mov eax, 10
+    x86.mov ecx, 3
+    x86.add eax, ecx
     x86.mov [rbp-8], eax
-    x86.mov ecx, 10
-    x86.mov edx, 3
-    x86.add ecx, edx
-    x86.mov [rbp-16], ecx
-    x86.xor ebx, ebx
-    x86.cmp ecx, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rcx, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_11]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -720,67 +707,52 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 20 : i64}
-    %3 = arith.constant {value = 3 : i64}
-    %4 = arith.divsi %2, %3
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    %1 = arith.constant {value = 20 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.divsi %1, %2
+    memref.store %3, __range_val_0
+    %4 = arith.constant {value = 0 : i64}
+    %5 = arith.cmpi lt %3, %4
+    %6 = arith.constant {value = 4294967295 : i64}
+    %7 = arith.cmpi gt %3, %6
+    %8 = arith.ori1 %5, %7
+    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_11
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @maxon_panic %11
+    %9 = memref.lea_symdata __panic_msg_11
+    %10 = std.ptr_to_i64 %9
+    std.call_runtime @maxon_panic %10
   __range_ok_0:
-    %12 = memref.load __range_val_0 : i64
-    %13 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %13
-    func.return %12
+    %11 = memref.load __range_val_0 : i64
+    func.return %11
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 20
-    x86.mov edx, 3
-    x86.mov ebx, edx
-    x86.mov eax, ecx
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
     x86.cqo
-    x86.idiv ebx
-    x86.mov [rbp-16], eax
-    x86.xor ebx, ebx
-    x86.cmp eax, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rax, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
+    x86.idiv ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_11]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -830,74 +802,62 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 20 : i64}
-    %3 = arith.constant {value = 3 : i64}
+    %1 = arith.constant {value = 20 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.trunci %1
     %4 = arith.trunci %2
-    %5 = arith.trunci %3
-    %6 = arith.divsi %4, %5
-    memref.store %6, __range_val_0
-    %7 = arith.constant {value = 0 : i64}
-    %8 = arith.extsi %6
-    %9 = arith.cmpi lt %8, %7
-    %10 = arith.constant {value = 4294967295 : i64}
-    %11 = arith.extsi %6
-    %12 = arith.cmpi gt %11, %10
-    %13 = arith.ori1 %9, %12
-    cf.cond_br %13 [then: __range_panic_0, else: __range_ok_0]
+    %5 = arith.divsi %3, %4
+    memref.store %5, __range_val_0
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.extsi %5
+    %8 = arith.cmpi lt %7, %6
+    %9 = arith.constant {value = 4294967295 : i64}
+    %10 = arith.extsi %5
+    %11 = arith.cmpi gt %10, %9
+    %12 = arith.ori1 %8, %11
+    cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %14 = memref.lea_symdata __panic_msg_9
-    %15 = std.ptr_to_i64 %14
-    std.call_runtime @maxon_panic %15
+    %13 = memref.lea_symdata __panic_msg_9
+    %14 = std.ptr_to_i64 %13
+    std.call_runtime @maxon_panic %14
   __range_ok_0:
-    %16 = memref.load __range_val_0 : i32
-    %17 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %17
-    func.return %16
+    %15 = memref.load __range_val_0 : i32
+    func.return %15
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 20
-    x86.mov edx, 3
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
+    x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov esi, edx
-    x86.mov eax, ebx
+    x86.mov [rbp-12], edx
+    x86.mov eax, edx
     x86.cdq
-    x86.idiv32 esi
-    x86.mov [rbp-12], eax
-    x86.xor edi, edi
-    x86.movsxd r8, eax
-    x86.cmp r8, edi
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rcx, 4294967295
-    x86.movsxd rdx, eax
-    x86.cmp rdx, rcx
+    x86.idiv32 ebx
+    x86.mov [rbp-4], eax
+    x86.xor esi, esi
+    x86.movsxd rdi, eax
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.movsxd rcx, eax
+    x86.cmp rcx, r9
     x86.setg eax
     x86.movzx eax, eaxb
-    x86.or r9, eax
-    x86.test r9, r9
+    x86.or r8, eax
+    x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_9]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-12]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-20], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-20]
+    x86.mov eax, [rbp-4]
     x86.epilogue
     x86.ret
   }
@@ -950,63 +910,31 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 10 : i64}
-    %3 = arith.constant {value = 3 : i64}
-    %4 = arith.cmpi gt %2, %3
-    cf.cond_br %4 [then: check_0, else: check_0.after]
+    %1 = arith.constant {value = 10 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.cmpi gt %1, %2
+    cf.cond_br %3 [then: check_0, else: check_0.after]
   check_0:
-    %5 = arith.constant {value = 0 : i64}
-    %6 = std.call_runtime @mm_scope_enter %5
-    memref.store %6, __scope_6
-    %7 = arith.constant {value = 1 : i64}
-    %8 = memref.load __scope_6 : i64
-    std.call_runtime @mm_scope_exit %8
-    %9 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %9
-    func.return %7
+    %5 = arith.constant {value = 1 : i64}
+    func.return %5
   check_0.after:
-    %10 = arith.constant {value = 0 : i64}
-    %11 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %11
-    func.return %10
+    %6 = arith.constant {value = 0 : i64}
+    func.return %6
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 10
-    x86.mov edx, 3
-    x86.cmp ecx, edx
+    x86.mov eax, 10
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
     x86.jle codegen-internals.main.check_0.after
   check_0:
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-16]
-    x86.call mm_scope_exit
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, rdx
-    x86.call mm_scope_exit
-    x86.mov eax, 1
-    x86.epilogue
     x86.ret
   check_0.after:
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.xor eax, eax
-    x86.epilogue
     x86.ret
   }
 }
@@ -1057,67 +985,52 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 20 : i64}
-    %3 = arith.constant {value = 3 : i64}
-    %4 = arith.remsi %2, %3
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    %1 = arith.constant {value = 20 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.remsi %1, %2
+    memref.store %3, __range_val_0
+    %4 = arith.constant {value = 0 : i64}
+    %5 = arith.cmpi lt %3, %4
+    %6 = arith.constant {value = 4294967295 : i64}
+    %7 = arith.cmpi gt %3, %6
+    %8 = arith.ori1 %5, %7
+    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_11
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @maxon_panic %11
+    %9 = memref.lea_symdata __panic_msg_11
+    %10 = std.ptr_to_i64 %9
+    std.call_runtime @maxon_panic %10
   __range_ok_0:
-    %12 = memref.load __range_val_0 : i64
-    %13 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %13
-    func.return %12
+    %11 = memref.load __range_val_0 : i64
+    func.return %11
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 20
-    x86.mov edx, 3
-    x86.mov ebx, edx
-    x86.mov eax, ecx
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
     x86.cqo
-    x86.idiv ebx
-    x86.mov [rbp-16], edx
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rdx, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
+    x86.idiv ecx
+    x86.mov [rbp-8], edx
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rcx, 4294967295
+    x86.cmp rdx, rcx
+    x86.setg edx
+    x86.movzx edx, edxb
+    x86.or eax, edx
+    x86.test eax, eax
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_11]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -1167,67 +1080,52 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 20 : i64}
-    %3 = arith.constant {value = 3 : i64}
-    %4 = arith.divsi %2, %3
-    memref.store %4, __range_val_0
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.cmpi lt %4, %5
-    %7 = arith.constant {value = 4294967295 : i64}
-    %8 = arith.cmpi gt %4, %7
-    %9 = arith.ori1 %6, %8
-    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+    %1 = arith.constant {value = 20 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.divsi %1, %2
+    memref.store %3, __range_val_0
+    %4 = arith.constant {value = 0 : i64}
+    %5 = arith.cmpi lt %3, %4
+    %6 = arith.constant {value = 4294967295 : i64}
+    %7 = arith.cmpi gt %3, %6
+    %8 = arith.ori1 %5, %7
+    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_9
-    %11 = std.ptr_to_i64 %10
-    std.call_runtime @maxon_panic %11
+    %9 = memref.lea_symdata __panic_msg_9
+    %10 = std.ptr_to_i64 %9
+    std.call_runtime @maxon_panic %10
   __range_ok_0:
-    %12 = memref.load __range_val_0 : i64
-    %13 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %13
-    func.return %12
+    %11 = memref.load __range_val_0 : i64
+    func.return %11
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 20
-    x86.mov edx, 3
-    x86.mov ebx, edx
-    x86.mov eax, ecx
+    x86.prologue stack_size=16
+    x86.mov eax, 20
+    x86.mov ecx, 3
     x86.cqo
-    x86.idiv ebx
-    x86.mov [rbp-16], eax
-    x86.xor ebx, ebx
-    x86.cmp eax, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rax, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
+    x86.idiv ecx
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_9]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -1277,74 +1175,62 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 21 : i64}
-    %3 = arith.constant {value = 3 : i64}
+    %1 = arith.constant {value = 21 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.trunci %1
     %4 = arith.trunci %2
-    %5 = arith.trunci %3
-    %6 = arith.divui %4, %5
-    memref.store %6, __range_val_0
-    %7 = arith.constant {value = 0 : i64}
-    %8 = arith.extui %6
-    %9 = arith.cmpi lt %8, %7
-    %10 = arith.constant {value = 4294967295 : i64}
-    %11 = arith.extui %6
-    %12 = arith.cmpi gt %11, %10
-    %13 = arith.ori1 %9, %12
-    cf.cond_br %13 [then: __range_panic_0, else: __range_ok_0]
+    %5 = arith.divui %3, %4
+    memref.store %5, __range_val_0
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.extui %5
+    %8 = arith.cmpi lt %7, %6
+    %9 = arith.constant {value = 4294967295 : i64}
+    %10 = arith.extui %5
+    %11 = arith.cmpi gt %10, %9
+    %12 = arith.ori1 %8, %11
+    cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %14 = memref.lea_symdata __panic_msg_9
-    %15 = std.ptr_to_i64 %14
-    std.call_runtime @maxon_panic %15
+    %13 = memref.lea_symdata __panic_msg_9
+    %14 = std.ptr_to_i64 %13
+    std.call_runtime @maxon_panic %14
   __range_ok_0:
-    %16 = memref.load __range_val_0 : i32
-    %17 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %17
-    func.return %16
+    %15 = memref.load __range_val_0 : i32
+    func.return %15
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 21
-    x86.mov edx, 3
-    x86.mov ebx, ecx
-    x86.mov esi, edx
-    x86.mov eax, ebx
-    x86.xor edx, edx
-    x86.div32 esi
-    x86.mov [rbp-12], eax
-    x86.xor edi, edi
-    x86.mov r8, eax
-    x86.cmp r8, edi
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rcx, 4294967295
+    x86.prologue stack_size=16
+    x86.mov eax, 21
+    x86.mov ecx, 3
     x86.mov edx, eax
-    x86.cmp rdx, rcx
+    x86.mov ebx, ecx
+    x86.mov [rbp-12], edx
+    x86.mov eax, edx
+    x86.xor edx, edx
+    x86.div32 ebx
+    x86.mov [rbp-4], eax
+    x86.xor esi, esi
+    x86.mov edi, eax
+    x86.cmp edi, esi
+    x86.setl r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4294967295
+    x86.mov ecx, eax
+    x86.cmp rcx, r9
     x86.setg eax
     x86.movzx eax, eaxb
-    x86.or r9, eax
-    x86.test r9, r9
+    x86.or r8, eax
+    x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_9]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-12]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-20], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-20]
+    x86.mov eax, [rbp-4]
     x86.epilogue
     x86.ret
   }
@@ -1395,67 +1281,54 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.float_constant {value = 10 : f64}
-    %3 = arith.float_constant {value = 3 : f64}
-    %4 = arith.addf %2, %3
-    %5 = arith.fptosi %4
-    memref.store %5, __range_val_0
-    %6 = arith.constant {value = 0 : i64}
-    %7 = arith.cmpi lt %5, %6
-    %8 = arith.constant {value = 4294967295 : i64}
-    %9 = arith.cmpi gt %5, %8
-    %10 = arith.ori1 %7, %9
-    cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
+    %1 = arith.float_constant {value = 10 : f64}
+    %2 = arith.float_constant {value = 3 : f64}
+    %3 = arith.addf %1, %2
+    %4 = arith.fptosi %3
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.cmpi lt %4, %5
+    %7 = arith.constant {value = 4294967295 : i64}
+    %8 = arith.cmpi gt %4, %7
+    %9 = arith.ori1 %6, %8
+    cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %11 = memref.lea_symdata __panic_msg_10
-    %12 = std.ptr_to_i64 %11
-    std.call_runtime @maxon_panic %12
+    %10 = memref.lea_symdata __panic_msg_10
+    %11 = std.ptr_to_i64 %10
+    std.call_runtime @maxon_panic %11
   __range_ok_0:
-    %13 = memref.load __range_val_0 : i64
-    %14 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %14
-    func.return %13
+    %12 = memref.load __range_val_0 : i64
+    func.return %12
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
+    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_10]
     x86.movsd xmm1, [rip+__float_3]
     x86.movsd xmm2, xmm0
     x86.addsd xmm2, xmm1
-    x86.cvttsd2si ecx, xmm2
-    x86.mov [rbp-16], ecx
-    x86.xor edx, edx
-    x86.cmp ecx, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
-    x86.mov rsi, 4294967295
-    x86.cmp rcx, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.cvttsd2si eax, xmm2
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -1506,64 +1379,32 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.float_constant {value = 3 : f64}
-    %3 = arith.float_constant {value = 5 : f64}
-    %4 = arith.cmpf lt %2, %3
-    cf.cond_br %4 [then: less_0, else: less_0.after]
+    %1 = arith.float_constant {value = 3 : f64}
+    %2 = arith.float_constant {value = 5 : f64}
+    %3 = arith.cmpf lt %1, %2
+    cf.cond_br %3 [then: less_0, else: less_0.after]
   less_0:
-    %5 = arith.constant {value = 0 : i64}
-    %6 = std.call_runtime @mm_scope_enter %5
-    memref.store %6, __scope_4
-    %7 = arith.constant {value = 1 : i64}
-    %8 = memref.load __scope_4 : i64
-    std.call_runtime @mm_scope_exit %8
-    %9 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %9
-    func.return %7
+    %5 = arith.constant {value = 1 : i64}
+    func.return %5
   less_0.after:
-    %10 = arith.constant {value = 0 : i64}
-    %11 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %11
-    func.return %10
+    %6 = arith.constant {value = 0 : i64}
+    func.return %6
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.movsd xmm0, [rip+__float_3]
     x86.movsd xmm1, [rip+__float_5]
     x86.ucomisd xmm0, xmm1
     x86.jp codegen-internals.main.less_0.after
     x86.jae codegen-internals.main.less_0.after
   less_0:
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-16]
-    x86.call mm_scope_exit
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, rdx
-    x86.call mm_scope_exit
-    x86.mov eax, 1
-    x86.epilogue
     x86.ret
   less_0.after:
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.xor eax, eax
-    x86.epilogue
     x86.ret
   }
 }
@@ -1609,62 +1450,49 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.float_constant {value = 42.9 : f64}
-    %3 = arith.fptosi %2
-    memref.store %3, __range_val_0
-    %4 = arith.constant {value = 0 : i64}
-    %5 = arith.cmpi lt %3, %4
-    %6 = arith.constant {value = 4294967295 : i64}
-    %7 = arith.cmpi gt %3, %6
-    %8 = arith.ori1 %5, %7
-    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
+    %1 = arith.float_constant {value = 42.9 : f64}
+    %2 = arith.fptosi %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %9 = memref.lea_symdata __panic_msg_8
-    %10 = std.ptr_to_i64 %9
-    std.call_runtime @maxon_panic %10
+    %8 = memref.lea_symdata __panic_msg_8
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
   __range_ok_0:
-    %11 = memref.load __range_val_0 : i64
-    %12 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %12
-    func.return %11
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
+    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_42.9]
-    x86.cvttsd2si ecx, xmm0
-    x86.mov [rbp-16], ecx
-    x86.xor edx, edx
-    x86.cmp ecx, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
-    x86.mov rsi, 4294967295
-    x86.cmp rcx, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.cvttsd2si eax, xmm0
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_8]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

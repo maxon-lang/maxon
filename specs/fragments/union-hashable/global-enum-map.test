@@ -54,21 +54,16 @@ module {
   func @union-hashable.setCategoryLevel(category: i64, level: i64) {
   entry:
     x86.prologue stack_size=32
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], edx
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, qword [rip+categoryLevels]
-    x86.mov [rbp-32], ecx
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [rbp-24]
-    x86.mov rcx, [rbp-32]
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, qword [rip+categoryLevels]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, rax
     x86.mov r8, rbx
     x86.call CategoryLevelMap.insert
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
     x86.epilogue
     x86.ret
   }
@@ -106,7 +101,7 @@ module {
   }
   func @union-hashable.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.xor eax, eax
     x86.mov rcx, rax
     x86.call mm_scope_enter
@@ -201,15 +196,8 @@ module {
     x86.test ecx, ecx
     x86.je union-hashable.main.both_2.after
   both_2:
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-65], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-65]
-    x86.call mm_scope_exit
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, rdx
+    x86.mov ecx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue

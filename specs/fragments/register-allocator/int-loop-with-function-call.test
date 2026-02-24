@@ -76,125 +76,89 @@ module {
 module {
   func @register-allocator.double(x: i64) -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = func.param x : StdI64
-    %3 = arith.constant {value = 2 : i64}
-    %4 = arith.muli %2, %3
-    %5 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %5
-    func.return %4
+    %1 = func.param x : StdI64
+    %2 = arith.constant {value = 2 : i64}
+    %3 = arith.muli %1, %2
+    func.return %3
   }
   func @register-allocator.main() -> u32 {
   entry:
+    %5 = arith.constant {value = 0 : i64}
+    memref.store %5, sum
     %6 = arith.constant {value = 0 : i64}
-    %7 = std.call_runtime @mm_scope_enter %6
-    memref.store %7, __scope_4
-    %8 = arith.constant {value = 0 : i64}
-    memref.store %8, sum
-    %9 = arith.constant {value = 0 : i64}
-    memref.store %9, i
+    memref.store %6, i
     cf.br loop_0.header
   loop_0.header:
-    %10 = arith.constant {value = 5 : i64}
-    %11 = memref.load i : i64
-    %12 = arith.cmpi lt %11, %10
-    cf.cond_br %12 [then: loop_0, else: loop_0.exit]
+    %7 = arith.constant {value = 5 : i64}
+    %8 = memref.load i : i64
+    %9 = arith.cmpi lt %8, %7
+    cf.cond_br %9 [then: loop_0, else: loop_0.exit]
   loop_0:
-    %13 = arith.constant {value = 0 : i64}
-    %14 = std.call_runtime @mm_scope_enter %13
-    memref.store %14, __scope_10
-    %15 = memref.load i : i64
-    %16 = func.call @register-allocator.double %15
-    %17 = memref.load sum : i64
-    %18 = arith.addi %17, %16
-    memref.store %18, sum
-    %19 = arith.constant {value = 1 : i64}
-    %20 = memref.load i : i64
-    %21 = arith.addi %20, %19
-    memref.store %21, i
-    %22 = memref.load __scope_10 : i64
-    std.call_runtime @mm_scope_exit %22
+    %11 = memref.load i : i64
+    %12 = func.call @register-allocator.double %11
+    %13 = memref.load sum : i64
+    %14 = arith.addi %13, %12
+    memref.store %14, sum
+    %15 = arith.constant {value = 1 : i64}
+    %16 = memref.load i : i64
+    %17 = arith.addi %16, %15
+    memref.store %17, i
     cf.br loop_0.header
   loop_0.exit:
-    %23 = memref.load sum : i64
-    memref.store %23, __range_val_1
-    %24 = arith.constant {value = 0 : i64}
-    %25 = arith.cmpi lt %23, %24
-    %26 = arith.constant {value = 4294967295 : i64}
-    %27 = arith.cmpi gt %23, %26
-    %28 = arith.ori1 %25, %27
-    cf.cond_br %28 [then: __range_panic_1, else: __range_ok_1]
+    %18 = memref.load sum : i64
+    memref.store %18, __range_val_1
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.cmpi lt %18, %19
+    %21 = arith.constant {value = 4294967295 : i64}
+    %22 = arith.cmpi gt %18, %21
+    %23 = arith.ori1 %20, %22
+    cf.cond_br %23 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %29 = memref.lea_symdata __panic_msg_24
-    %30 = std.ptr_to_i64 %29
-    std.call_runtime @maxon_panic %30
+    %24 = memref.lea_symdata __panic_msg_24
+    %25 = std.ptr_to_i64 %24
+    std.call_runtime @maxon_panic %25
   __range_ok_1:
-    %31 = memref.load __range_val_1 : i64
-    %32 = memref.load __scope_4 : i64
-    std.call_runtime @mm_scope_exit %32
-    func.return %31
+    %26 = memref.load __range_val_1 : i64
+    func.return %26
   }
 }
 === x86
 module {
   func @register-allocator.double(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov [rbp-16], ecx
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 2
-    x86.mov edx, [rbp-16]
-    x86.imul edx, ecx
-    x86.mov ebx, [rbp-8]
-    x86.mov [rbp-24], edx
-    x86.mov rcx, rbx
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
-    x86.epilogue
+    x86.mov eax, 2
+    x86.imul ecx, eax
+    x86.mov eax, ecx
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.mov [rbp-16], ecx
-    x86.xor edx, edx
-    x86.mov [rbp-24], edx
     x86.jmp register-allocator.main.loop_0.header
   loop_0.header:
     x86.mov eax, 5
-    x86.mov ecx, [rbp-24]
+    x86.mov ecx, [rbp-16]
     x86.cmp ecx, eax
     x86.jge register-allocator.main.loop_0.exit
   loop_0:
-    x86.xor eax, eax
+    x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-32], eax
-    x86.mov ecx, [rbp-24]
     x86.call register-allocator.double
-    x86.mov edx, [rbp-16]
-    x86.add edx, eax
-    x86.mov [rbp-16], edx
-    x86.mov ebx, 1
-    x86.mov esi, [rbp-24]
-    x86.add esi, ebx
-    x86.mov [rbp-24], esi
-    x86.mov rcx, [rbp-32]
-    x86.call mm_scope_exit
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, 1
+    x86.mov ebx, [rbp-16]
+    x86.add ebx, edx
+    x86.mov [rbp-16], ebx
     x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -211,11 +175,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-48], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-48]
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

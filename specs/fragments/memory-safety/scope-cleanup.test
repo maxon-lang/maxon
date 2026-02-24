@@ -52,105 +52,79 @@ module {
 module {
   func @memory-safety.createAndDrop() -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_8
-    %2 = arith.constant {value = 42 : i64}
-    %3 = arith.constant {value = 8 : i64}
-    %4 = arith.constant {value = 0 : i64}
-    %5 = std.call_runtime @mm_alloc %3, %4
-    memref.store %5, r
+    %1 = arith.constant {value = 42 : i64}
+    memref.bulk_zero __stk_2, 1
+    %3 = memref.lea __stk_2
+    %4 = std.ptr_to_i64 %3
+    memref.store %4, r
+    %5 = memref.load r : i64
+    memref.store_indirect %1, %5+0
     %6 = memref.load r : i64
-    memref.store_indirect %2, %6+0
-    %7 = memref.load r : i64
-    %8 = memref.load_indirect %7+0
-    %9 = memref.load __scope_8 : i64
-    std.call_runtime @mm_scope_exit %9
-    func.return %8
+    %7 = memref.load_indirect %6+0
+    func.return %7
   }
   func @memory-safety.main() -> u32 {
   entry:
+    %9 = func.call @memory-safety.createAndDrop
+    memref.store %9, __range_val_0
     %10 = arith.constant {value = 0 : i64}
-    %11 = std.call_runtime @mm_scope_enter %10
-    memref.store %11, __scope_13
-    %12 = func.call @memory-safety.createAndDrop
-    memref.store %12, __range_val_0
-    %13 = arith.constant {value = 0 : i64}
-    %14 = arith.cmpi lt %12, %13
-    %15 = arith.constant {value = 4294967295 : i64}
-    %16 = arith.cmpi gt %12, %15
-    %17 = arith.ori1 %14, %16
-    cf.cond_br %17 [then: __range_panic_0, else: __range_ok_0]
+    %11 = arith.cmpi lt %9, %10
+    %12 = arith.constant {value = 4294967295 : i64}
+    %13 = arith.cmpi gt %9, %12
+    %14 = arith.ori1 %11, %13
+    cf.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %18 = memref.lea_symdata __panic_msg_20
-    %19 = std.ptr_to_i64 %18
-    std.call_runtime @maxon_panic %19
+    %15 = memref.lea_symdata __panic_msg_20
+    %16 = std.ptr_to_i64 %15
+    std.call_runtime @maxon_panic %16
   __range_ok_0:
-    %20 = memref.load __range_val_0 : i64
-    %21 = memref.load __scope_13 : i64
-    std.call_runtime @mm_scope_exit %21
-    func.return %20
+    %17 = memref.load __range_val_0 : i64
+    func.return %17
   }
 }
 === x86
 module {
   func @memory-safety.createAndDrop() -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
+    x86.mov eax, 42
+    x86.lea rdi, [rbp-8]
     x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 42
-    x86.mov edx, 8
-    x86.xor ebx, ebx
-    x86.mov rcx, rdx
-    x86.mov rdx, rbx
-    x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov esi, [rbp-16]
-    x86.mov edi, 42
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-16]
-    x86.mov eax, [r8+0]
-    x86.mov r9, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.mov rcx, r9
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.rep_stosq
+    x86.lea rcx, [rbp-8]
+    x86.mov rdx, rcx
+    x86.mov [rbp-16], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, 42
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-16]
+    x86.mov eax, [edi+0]
     x86.epilogue
     x86.ret
   }
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
+    x86.prologue stack_size=16
     x86.call memory-safety.createAndDrop
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
     x86.je memory-safety.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_20]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

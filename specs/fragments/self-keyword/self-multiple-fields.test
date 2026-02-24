@@ -25,50 +25,38 @@ ExitCode: 42
 module {
   func @Point.sum(__self_ptr: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-16], ecx
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+0]
-    x86.mov ebx, [rbp-16]
-    x86.mov esi, [ebx+8]
-    x86.add edx, esi
-    x86.mov edi, [rbp-8]
-    x86.mov [rbp-24], edx
-    x86.mov rcx, rdi
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+8]
+    x86.lea eax, [edx + ebx]
     x86.epilogue
     x86.ret
   }
   func @self-keyword.main() -> u32 {
   entry:
     x86.prologue stack_size=32
+    x86.mov eax, 10
+    x86.mov ecx, 32
+    x86.lea rdi, [rbp-16]
     x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 10
-    x86.mov edx, 32
-    x86.mov ebx, 16
-    x86.xor esi, esi
-    x86.mov rcx, rbx
-    x86.mov rdx, rsi
-    x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov edi, [rbp-16]
-    x86.mov r8, 10
-    x86.mov [edi+0], r8
-    x86.mov r9, [rbp-16]
-    x86.mov eax, 32
-    x86.mov [r9+8], eax
-    x86.mov eax, [rbp-16]
+    x86.mov ecx, 2
+    x86.rep_stosq
+    x86.lea rdx, [rbp-16]
+    x86.mov rbx, rdx
+    x86.mov [rbp-24], ebx
+    x86.mov esi, [rbp-24]
+    x86.mov edi, 10
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-24]
+    x86.mov r9, 32
+    x86.mov [r8+8], r9
+    x86.mov eax, [rbp-24]
     x86.mov rcx, rax
     x86.call Point.sum
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-32], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl ecx
@@ -85,10 +73,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-32], eax
-    x86.call mm_scope_exit
     x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret

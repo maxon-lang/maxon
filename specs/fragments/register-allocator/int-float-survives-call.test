@@ -51,92 +51,65 @@ module {
 module {
   func @register-allocator.getInt() -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 40 : i64}
-    %3 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %3
-    func.return %2
+    %1 = arith.constant {value = 40 : i64}
+    func.return %1
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %4 = arith.constant {value = 0 : i64}
-    %5 = std.call_runtime @mm_scope_enter %4
-    memref.store %5, __scope_2
-    %6 = arith.float_constant {value = 3.14 : f64}
-    %7 = func.call @register-allocator.getInt
-    %8 = arith.fptosi %6
-    %9 = arith.addi %8, %7
-    memref.store %9, __range_val_0
-    %10 = arith.constant {value = 0 : i64}
-    %11 = arith.cmpi lt %9, %10
-    %12 = arith.constant {value = 4294967295 : i64}
-    %13 = arith.cmpi gt %9, %12
-    %14 = arith.ori1 %11, %13
-    cf.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
+    %3 = arith.float_constant {value = 3.14 : f64}
+    %4 = func.call @register-allocator.getInt
+    %5 = arith.fptosi %3
+    %6 = arith.addi %5, %4
+    memref.store %6, __range_val_0
+    %7 = arith.constant {value = 0 : i64}
+    %8 = arith.cmpi lt %6, %7
+    %9 = arith.constant {value = 4294967295 : i64}
+    %10 = arith.cmpi gt %6, %9
+    %11 = arith.ori1 %8, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %15 = memref.lea_symdata __panic_msg_12
-    %16 = std.ptr_to_i64 %15
-    std.call_runtime @maxon_panic %16
+    %12 = memref.lea_symdata __panic_msg_12
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
   __range_ok_0:
-    %17 = memref.load __range_val_0 : i64
-    %18 = memref.load __scope_2 : i64
-    std.call_runtime @mm_scope_exit %18
-    func.return %17
+    %14 = memref.load __range_val_0 : i64
+    func.return %14
   }
 }
 === x86
 module {
   func @register-allocator.getInt() -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.mov eax, 40
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, 40
-    x86.epilogue
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
+    x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd [rbp-24], xmm0
+    x86.movsd [rbp-16], xmm0
     x86.call register-allocator.getInt
-    x86.movsd xmm0, [rbp-24]
+    x86.movsd xmm0, [rbp-16]
     x86.cvttsd2si ecx, xmm0
     x86.add ecx, eax
-    x86.mov [rbp-16], ecx
-    x86.xor edx, edx
-    x86.cmp ecx, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
-    x86.mov rsi, 4294967295
-    x86.cmp rcx, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.mov [rbp-8], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_12]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

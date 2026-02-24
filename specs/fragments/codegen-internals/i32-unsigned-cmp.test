@@ -41,63 +41,31 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.constant {value = 10 : i64}
-    %3 = arith.constant {value = 3 : i64}
-    %4 = arith.cmpi gt %2, %3
-    cf.cond_br %4 [then: check_0, else: check_0.after]
+    %1 = arith.constant {value = 10 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.cmpi gt %1, %2
+    cf.cond_br %3 [then: check_0, else: check_0.after]
   check_0:
-    %5 = arith.constant {value = 0 : i64}
-    %6 = std.call_runtime @mm_scope_enter %5
-    memref.store %6, __scope_6
-    %7 = arith.constant {value = 1 : i64}
-    %8 = memref.load __scope_6 : i64
-    std.call_runtime @mm_scope_exit %8
-    %9 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %9
-    func.return %7
+    %5 = arith.constant {value = 1 : i64}
+    func.return %5
   check_0.after:
-    %10 = arith.constant {value = 0 : i64}
-    %11 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %11
-    func.return %10
+    %6 = arith.constant {value = 0 : i64}
+    func.return %6
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 10
-    x86.mov edx, 3
-    x86.cmp ecx, edx
+    x86.mov eax, 10
+    x86.mov ecx, 3
+    x86.cmp eax, ecx
     x86.jle codegen-internals.main.check_0.after
   check_0:
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-16]
-    x86.call mm_scope_exit
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, rdx
-    x86.call mm_scope_exit
-    x86.mov eax, 1
-    x86.epilogue
     x86.ret
   check_0.after:
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.xor eax, eax
-    x86.epilogue
     x86.ret
   }
 }

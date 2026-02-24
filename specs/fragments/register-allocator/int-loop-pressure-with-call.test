@@ -111,180 +111,148 @@ module {
 module {
   func @register-allocator.identity(x: i64) -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = func.param x : StdI64
-    %3 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %3
-    func.return %2
+    %1 = func.param x : StdI64
+    func.return %1
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %4 = arith.constant {value = 0 : i64}
-    %5 = std.call_runtime @mm_scope_enter %4
-    memref.store %5, __scope_2
-    %6 = arith.constant {value = 1 : i64}
-    memref.store %6, a
-    %7 = arith.constant {value = 2 : i64}
-    memref.store %7, b
-    %8 = arith.constant {value = 3 : i64}
-    memref.store %8, c
-    %9 = arith.constant {value = 4 : i64}
-    memref.store %9, d
-    %10 = arith.constant {value = 5 : i64}
-    memref.store %10, e
-    %11 = arith.constant {value = 6 : i64}
-    memref.store %11, f
-    %12 = arith.constant {value = 0 : i64}
-    memref.store %12, i
+    %3 = arith.constant {value = 1 : i64}
+    memref.store %3, a
+    %4 = arith.constant {value = 2 : i64}
+    memref.store %4, b
+    %5 = arith.constant {value = 3 : i64}
+    memref.store %5, c
+    %6 = arith.constant {value = 4 : i64}
+    memref.store %6, d
+    %7 = arith.constant {value = 5 : i64}
+    memref.store %7, e
+    %8 = arith.constant {value = 6 : i64}
+    memref.store %8, f
+    %9 = arith.constant {value = 0 : i64}
+    memref.store %9, i
     cf.br loop_0.header
   loop_0.header:
-    %13 = arith.constant {value = 3 : i64}
-    %14 = memref.load i : i64
-    %15 = arith.cmpi lt %14, %13
-    cf.cond_br %15 [then: loop_0, else: loop_0.exit]
+    %10 = arith.constant {value = 3 : i64}
+    %11 = memref.load i : i64
+    %12 = arith.cmpi lt %11, %10
+    cf.cond_br %12 [then: loop_0, else: loop_0.exit]
   loop_0:
-    %16 = arith.constant {value = 0 : i64}
-    %17 = std.call_runtime @mm_scope_enter %16
-    memref.store %17, __scope_13
-    %18 = memref.load b : i64
+    %14 = memref.load b : i64
+    %15 = func.call @register-allocator.identity %14
+    %16 = memref.load a : i64
+    %17 = arith.addi %16, %15
+    memref.store %17, a
+    %18 = memref.load d : i64
     %19 = func.call @register-allocator.identity %18
-    %20 = memref.load a : i64
+    %20 = memref.load c : i64
     %21 = arith.addi %20, %19
-    memref.store %21, a
-    %22 = memref.load d : i64
+    memref.store %21, c
+    %22 = memref.load f : i64
     %23 = func.call @register-allocator.identity %22
-    %24 = memref.load c : i64
+    %24 = memref.load e : i64
     %25 = arith.addi %24, %23
-    memref.store %25, c
-    %26 = memref.load f : i64
-    %27 = func.call @register-allocator.identity %26
-    %28 = memref.load e : i64
-    %29 = arith.addi %28, %27
-    memref.store %29, e
-    %30 = arith.constant {value = 1 : i64}
-    %31 = memref.load i : i64
-    %32 = arith.addi %31, %30
-    memref.store %32, i
-    %33 = memref.load __scope_13 : i64
-    std.call_runtime @mm_scope_exit %33
+    memref.store %25, e
+    %26 = arith.constant {value = 1 : i64}
+    %27 = memref.load i : i64
+    %28 = arith.addi %27, %26
+    memref.store %28, i
     cf.br loop_0.header
   loop_0.exit:
-    %34 = memref.load a : i64
-    %35 = memref.load c : i64
-    %36 = arith.addi %34, %35
-    %37 = memref.load d : i64
-    %38 = arith.addi %36, %37
-    %39 = memref.load e : i64
-    %40 = arith.addi %38, %39
-    %41 = memref.load f : i64
-    %42 = arith.addi %40, %41
-    %43 = arith.constant {value = 256 : i64}
-    %44 = arith.remsi %42, %43
-    memref.store %44, __range_val_1
-    %45 = arith.constant {value = 0 : i64}
-    %46 = arith.cmpi lt %44, %45
-    %47 = arith.constant {value = 4294967295 : i64}
-    %48 = arith.cmpi gt %44, %47
-    %49 = arith.ori1 %46, %48
-    cf.cond_br %49 [then: __range_panic_1, else: __range_ok_1]
+    %29 = memref.load a : i64
+    %30 = memref.load c : i64
+    %31 = arith.addi %29, %30
+    %32 = memref.load d : i64
+    %33 = arith.addi %31, %32
+    %34 = memref.load e : i64
+    %35 = arith.addi %33, %34
+    %36 = memref.load f : i64
+    %37 = arith.addi %35, %36
+    %38 = arith.constant {value = 256 : i64}
+    %39 = arith.remsi %37, %38
+    memref.store %39, __range_val_1
+    %40 = arith.constant {value = 0 : i64}
+    %41 = arith.cmpi lt %39, %40
+    %42 = arith.constant {value = 4294967295 : i64}
+    %43 = arith.cmpi gt %39, %42
+    %44 = arith.ori1 %41, %43
+    cf.cond_br %44 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %50 = memref.lea_symdata __panic_msg_45
-    %51 = std.ptr_to_i64 %50
-    std.call_runtime @maxon_panic %51
+    %45 = memref.lea_symdata __panic_msg_45
+    %46 = std.ptr_to_i64 %45
+    std.call_runtime @maxon_panic %46
   __range_ok_1:
-    %52 = memref.load __range_val_1 : i64
-    %53 = memref.load __scope_2 : i64
-    std.call_runtime @mm_scope_exit %53
-    func.return %52
+    %47 = memref.load __range_val_1 : i64
+    func.return %47
   }
 }
 === x86
 module {
   func @register-allocator.identity(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov [rbp-16], ecx
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-16]
-    x86.epilogue
+    x86.mov eax, ecx
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
+    x86.prologue stack_size=80
+    x86.mov eax, 1
     x86.mov [rbp-8], eax
-    x86.mov ecx, 1
+    x86.mov ecx, 2
     x86.mov [rbp-16], ecx
-    x86.mov edx, 2
+    x86.mov edx, 3
     x86.mov [rbp-24], edx
-    x86.mov ebx, 3
+    x86.mov ebx, 4
     x86.mov [rbp-32], ebx
-    x86.mov esi, 4
+    x86.mov esi, 5
     x86.mov [rbp-40], esi
-    x86.mov edi, 5
+    x86.mov edi, 6
     x86.mov [rbp-48], edi
-    x86.mov r8, 6
+    x86.xor r8, r8
     x86.mov [rbp-56], r8
-    x86.xor r9, r9
-    x86.mov [rbp-64], r9
     x86.jmp register-allocator.main.loop_0.header
   loop_0.header:
     x86.mov eax, 3
-    x86.mov ecx, [rbp-64]
+    x86.mov ecx, [rbp-56]
     x86.cmp ecx, eax
     x86.jge register-allocator.main.loop_0.exit
   loop_0:
-    x86.xor eax, eax
+    x86.mov eax, [rbp-16]
     x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-72], eax
-    x86.mov ecx, [rbp-24]
     x86.call register-allocator.identity
-    x86.mov edx, [rbp-16]
-    x86.add edx, eax
-    x86.mov [rbp-16], edx
-    x86.mov rcx, [rbp-40]
+    x86.mov ecx, [rbp-8]
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.mov edx, [rbp-32]
+    x86.mov rcx, rdx
     x86.call register-allocator.identity
-    x86.mov esi, [rbp-32]
-    x86.add esi, eax
-    x86.mov [rbp-32], esi
-    x86.mov rcx, [rbp-56]
+    x86.mov ebx, [rbp-24]
+    x86.add ebx, eax
+    x86.mov [rbp-24], ebx
+    x86.mov rcx, [rbp-48]
     x86.call register-allocator.identity
-    x86.mov r8, [rbp-48]
-    x86.add r8, eax
-    x86.mov [rbp-48], r8
-    x86.mov r9, 1
-    x86.mov eax, [rbp-64]
-    x86.add eax, r9
-    x86.mov [rbp-64], eax
-    x86.mov rcx, [rbp-72]
-    x86.call mm_scope_exit
+    x86.mov edi, [rbp-40]
+    x86.add edi, eax
+    x86.mov [rbp-40], edi
+    x86.mov r8, 1
+    x86.mov r9, [rbp-56]
+    x86.add r9, r8
+    x86.mov [rbp-56], r9
     x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-32]
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
     x86.add eax, ecx
-    x86.mov edx, [rbp-40]
+    x86.mov edx, [rbp-32]
     x86.add eax, edx
-    x86.mov ebx, [rbp-48]
+    x86.mov ebx, [rbp-40]
     x86.add eax, ebx
-    x86.mov esi, [rbp-56]
+    x86.mov esi, [rbp-48]
     x86.add eax, esi
     x86.mov edi, 256
-    x86.mov [rbp-88], eax
+    x86.mov [rbp-72], eax
     x86.cqo
     x86.idiv edi
-    x86.mov [rbp-80], edx
+    x86.mov [rbp-64], edx
     x86.xor r8, r8
     x86.cmp edx, r8
     x86.setl r9
@@ -301,11 +269,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov eax, [rbp-80]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-88], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-88]
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

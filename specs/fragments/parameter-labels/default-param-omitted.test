@@ -15,56 +15,36 @@ ExitCode: 42
 module {
   func @parameter-labels.repeat(value: i64, times: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], edx
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-24]
-    x86.mov edx, [rbp-16]
-    x86.imul edx, ecx
-    x86.mov ebx, [rbp-8]
-    x86.mov [rbp-32], edx
-    x86.mov rcx, rbx
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-32]
-    x86.epilogue
+    x86.imul ecx, edx
+    x86.mov eax, ecx
     x86.ret
   }
   func @parameter-labels.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor eax, eax
+    x86.prologue stack_size=16
+    x86.mov eax, 21
+    x86.mov ecx, 2
+    x86.mov rdx, rcx
     x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 21
-    x86.mov edx, 2
     x86.call parameter-labels.repeat
-    x86.mov [rbp-16], eax
-    x86.xor ebx, ebx
-    x86.cmp eax, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rax, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
+    x86.mov [rbp-8], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je parameter-labels.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_13]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }

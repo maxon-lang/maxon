@@ -39,64 +39,32 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %2 = arith.float_constant {value = 3 : f64}
-    %3 = arith.float_constant {value = 5 : f64}
-    %4 = arith.cmpf lt %2, %3
-    cf.cond_br %4 [then: less_0, else: less_0.after]
+    %1 = arith.float_constant {value = 3 : f64}
+    %2 = arith.float_constant {value = 5 : f64}
+    %3 = arith.cmpf lt %1, %2
+    cf.cond_br %3 [then: less_0, else: less_0.after]
   less_0:
-    %5 = arith.constant {value = 0 : i64}
-    %6 = std.call_runtime @mm_scope_enter %5
-    memref.store %6, __scope_4
-    %7 = arith.constant {value = 1 : i64}
-    %8 = memref.load __scope_4 : i64
-    std.call_runtime @mm_scope_exit %8
-    %9 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %9
-    func.return %7
+    %5 = arith.constant {value = 1 : i64}
+    func.return %5
   less_0.after:
-    %10 = arith.constant {value = 0 : i64}
-    %11 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %11
-    func.return %10
+    %6 = arith.constant {value = 0 : i64}
+    func.return %6
   }
 }
 === x86
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.movsd xmm0, [rip+__float_3]
     x86.movsd xmm1, [rip+__float_5]
     x86.ucomisd xmm0, xmm1
     x86.jp codegen-internals.main.less_0.after
     x86.jae codegen-internals.main.less_0.after
   less_0:
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-16]
-    x86.call mm_scope_exit
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, rdx
-    x86.call mm_scope_exit
-    x86.mov eax, 1
-    x86.epilogue
     x86.ret
   less_0.after:
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.xor eax, eax
-    x86.epilogue
     x86.ret
   }
 }

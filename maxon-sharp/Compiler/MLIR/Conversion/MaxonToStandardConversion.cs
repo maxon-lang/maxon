@@ -1,5 +1,6 @@
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
@@ -9,6 +10,9 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static Dictionary<string, HashSet<string>>? _mutatingParams;
   // Maps param name -> ref pointer var name for the current function being lowered
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
+  // Scope analysis stack for the current function being lowered
+  [ThreadStatic] private static List<ScopeInfo?>? _scopeAnalysisStack;
+  [ThreadStatic] private static Dictionary<string, ScopeInfo>? _funcScopeAnalysis;
 
   public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
     _rdataStringCache = [];
@@ -101,7 +105,6 @@ public static partial class MaxonToStandardConversion {
 
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
       var escapingArrayLiterals = FindEscapingArrayLiterals(func);
-      // Stack-allocated structs have no refcount header — disabled for reference semantics
       var stackAllocIds = new HashSet<int>();
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
@@ -120,6 +123,23 @@ public static partial class MaxonToStandardConversion {
         }
         if (refParamPtrVars.Count > 0)
           Logger.Trace(LogCategory.Mlir, $"Pass-by-ref: {func.Name} receives ref params: {string.Join(", ", refParamPtrVars.Keys)}");
+      }
+
+      // Scope analysis for this function (if available)
+      Dictionary<string, ScopeInfo>? funcScopeAnalysis = null;
+      module.ScopeAnalysis.TryGetValue(func.Name, out funcScopeAnalysis);
+      _funcScopeAnalysis = funcScopeAnalysis;
+      _scopeAnalysisStack = [];
+
+      // Collect stack-allocable struct literal IDs and return alloc IDs from scope analysis
+      var returnAllocIds = new HashSet<int>();
+      if (funcScopeAnalysis != null) {
+        foreach (var scopeInfo in funcScopeAnalysis.Values) {
+          foreach (var id in scopeInfo.StackAllocIds)
+            stackAllocIds.Add(id);
+          if (scopeInfo is { CanStaticReturn: true, ReturnAllocResultId: >= 0 })
+            returnAllocIds.Add(scopeInfo.ReturnAllocResultId);
+        }
       }
 
       // Build the new function signature:
@@ -622,11 +642,15 @@ public static partial class MaxonToStandardConversion {
                 : $"__struct_{structLitOp.Result.Id}";
               var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
 
-              // Allocate memory for the struct (stack for eligible vectors, heap otherwise)
+              // Allocate memory for the struct (stack for eligible, simple for static-free, heap otherwise)
+              // Return allocs in CanStaticReturn scopes use mm_alloc so callers can mm_move them
               bool useStackAlloc = stackAllocIds.Contains(structLitOp.Result.Id);
+              bool isReturnAlloc = returnAllocIds.Contains(structLitOp.Result.Id);
               var structPtr = useStackAlloc
                 ? EmitStackAlloc(newBlock, structType.SizeInBytes)
-                : EmitAlloc(newBlock, structType.SizeInBytes);
+                : (IsCurrentScopeStaticFree() && !isReturnAlloc)
+                  ? EmitAllocSimple(newBlock, structType.SizeInBytes)
+                  : EmitAlloc(newBlock, structType.SizeInBytes);
               EmitStore(newBlock, structPtr, tempName, varTypes);
 
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
@@ -1119,20 +1143,56 @@ public static partial class MaxonToStandardConversion {
               // Legacy op — scope-based cleanup handles this now
               break;
             case MaxonScopeEnterOp scopeEnterOp: {
-              var tagOp = new StdConstI64Op(0); // NULL tag
-              newBlock.AddOp(tagOp);
-              var scopeResult = new StdI64(MlirContext.Current.NextId());
-              newBlock.AddOp(new StdCallRuntimeOp("mm_scope_enter", [tagOp.Result], scopeResult));
-              EmitStore(newBlock, scopeResult, scopeEnterOp.ResultVar, varTypes);
+              var scopeInfo = funcScopeAnalysis?.GetValueOrDefault(scopeEnterOp.ResultVar);
+              _scopeAnalysisStack?.Add(scopeInfo);
+              if (scopeInfo is { NeedsRuntimeFrame: false }
+                  or { CanStaticFree: true }
+                  or { CanStaticReturn: true }) {
+                // All allocations are compile-time managed — elide runtime scope frame
+                var sentinel = new StdConstI64Op(0);
+                newBlock.AddOp(sentinel);
+                EmitStore(newBlock, sentinel.Result, scopeEnterOp.ResultVar, varTypes);
+              } else {
+                var tagOp = new StdConstI64Op(0);
+                newBlock.AddOp(tagOp);
+                var scopeResult = new StdI64(MlirContext.Current.NextId());
+                newBlock.AddOp(new StdCallRuntimeOp("mm_scope_enter", [tagOp.Result], scopeResult));
+                EmitStore(newBlock, scopeResult, scopeEnterOp.ResultVar, varTypes);
+              }
               varTypes[scopeEnterOp.ResultVar] = "i64";
               break;
             }
             case MaxonScopeExitOp scopeExitOp: {
+              var scopeInfo = funcScopeAnalysis?.GetValueOrDefault(scopeExitOp.ScopeVar);
+              // Pop scope from analysis stack
+              if (_scopeAnalysisStack != null) {
+                for (int si = _scopeAnalysisStack.Count - 1; si >= 0; si--) {
+                  if (_scopeAnalysisStack[si]?.ScopeVar == scopeExitOp.ScopeVar) {
+                    _scopeAnalysisStack.RemoveAt(si);
+                    break;
+                  }
+                }
+              }
+              if (scopeInfo is { NeedsRuntimeFrame: false }) {
+                // Scope was elided — nothing to clean up
+                break;
+              }
+              if (scopeInfo is { CanStaticFree: true } or { CanStaticReturn: true }) {
+                EmitStaticFree(newBlock, scopeInfo, varTypes);
+                break;
+              }
               var scopePtr = (StdI64)EmitLoad(newBlock, scopeExitOp.ScopeVar, varTypes);
               newBlock.AddOp(new StdCallRuntimeOp("mm_scope_exit", [scopePtr], null));
               break;
             }
             case MaxonMoveOp moveOp: {
+              // CanStaticReturn: scope frame is elided, so mm_alloc registers the return value
+              // directly in the caller's scope via __mm_current_scope — no mm_move needed
+              if (moveOp.Tag == "return_move") {
+                var moveScopeInfo = funcScopeAnalysis?.GetValueOrDefault(moveOp.DestScopeVar);
+                if (moveScopeInfo is { CanStaticReturn: true })
+                  break;
+              }
               var varPtr = (StdI64)EmitLoad(newBlock, moveOp.VarName, varTypes);
               var scopePtr = (StdI64)EmitLoad(newBlock, moveOp.DestScopeVar, varTypes);
               // For return_move: move to the PARENT scope (caller's scope)

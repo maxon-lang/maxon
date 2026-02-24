@@ -1,4 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler.Mlir.Core;
 
@@ -63,6 +64,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Ambiguous exported type names (same name from different files)
   public HashSet<string> AmbiguousTypeNames { get; } = [];
 
+  // Scope analysis results: funcName -> scopeVar -> ScopeInfo
+  // Populated by ScopeAnalysisPass, consumed by MaxonToStandardConversion
+  public Dictionary<string, Dictionary<string, ScopeInfo>> ScopeAnalysis { get; } = [];
+
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
   }
@@ -86,6 +91,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var n in NonExportedGlobalVarNames) clone.NonExportedGlobalVarNames.Add(n);
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
     foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
+    foreach (var (k, v) in ScopeAnalysis) clone.ScopeAnalysis[k] = v;
     return clone;
   }
 

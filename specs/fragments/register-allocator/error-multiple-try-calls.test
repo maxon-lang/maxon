@@ -118,207 +118,156 @@ module {
 module {
   func @register-allocator.getA() -> i64 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_8
-    %2 = arith.constant {value = 10 : i64}
-    %3 = memref.load __scope_8 : i64
-    std.call_runtime @mm_scope_exit %3
-    func.return %2
+    %1 = arith.constant {value = 10 : i64}
+    func.return %1
   }
   func @register-allocator.getB() -> i64 {
   entry:
-    %4 = arith.constant {value = 0 : i64}
-    %5 = std.call_runtime @mm_scope_enter %4
-    memref.store %5, __scope_10
-    %6 = arith.constant {value = 20 : i64}
-    %7 = memref.load __scope_10 : i64
-    std.call_runtime @mm_scope_exit %7
-    func.return %6
+    %3 = arith.constant {value = 20 : i64}
+    func.return %3
   }
   func @register-allocator.getC() -> i64 {
   entry:
-    %8 = arith.constant {value = 0 : i64}
-    %9 = std.call_runtime @mm_scope_enter %8
-    memref.store %9, __scope_12
-    %10 = arith.constant {value = 0 : i64}
-    %11 = memref.load __scope_12 : i64
-    std.call_runtime @mm_scope_exit %11
-    %12 = arith.constant {value = 1 : i64}
-    %13 = arith.addi %10, %12
-    func.error_return %13
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.constant {value = 1 : i64}
+    %7 = arith.addi %5, %6
+    func.error_return %7
   }
   func @register-allocator.main() -> u32 {
   entry:
-    %14 = arith.constant {value = 0 : i64}
-    %15 = std.call_runtime @mm_scope_enter %14
-    memref.store %15, __scope_14
-    %16, %17 = func.try_call @register-allocator.getA
-    %18 = arith.constant {value = 0 : i64}
-    memref.store %18, __try_default_1
-    memref.store %16, __try_result_0
-    %19 = arith.constant {value = 0 : i64}
-    %20 = arith.cmpi ne %17, %19
-    cf.cond_br %20 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
+    %9, %10 = func.try_call @register-allocator.getA
+    %11 = arith.constant {value = 0 : i64}
+    memref.store %11, __try_default_1
+    memref.store %9, __try_result_0
+    %12 = arith.constant {value = 0 : i64}
+    %13 = arith.cmpi ne %10, %12
+    cf.cond_br %13 [then: otherwise_default_error_2, else: otherwise_default_continue_3]
   otherwise_default_error_2:
-    %21 = memref.load __try_default_1 : i64
-    memref.store %21, __try_result_0
+    %14 = memref.load __try_default_1 : i64
+    memref.store %14, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %22 = memref.load __try_result_0 : i64
-    memref.store %22, a
-    %23, %24 = func.try_call @register-allocator.getB
-    %25 = arith.constant {value = 0 : i64}
-    memref.store %25, __try_default_5
-    memref.store %23, __try_result_4
-    %26 = arith.constant {value = 0 : i64}
-    %27 = arith.cmpi ne %24, %26
-    cf.cond_br %27 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
+    %15 = memref.load __try_result_0 : i64
+    memref.store %15, a
+    %16, %17 = func.try_call @register-allocator.getB
+    %18 = arith.constant {value = 0 : i64}
+    memref.store %18, __try_default_5
+    memref.store %16, __try_result_4
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.cmpi ne %17, %19
+    cf.cond_br %20 [then: otherwise_default_error_6, else: otherwise_default_continue_7]
   otherwise_default_error_6:
-    %28 = memref.load __try_default_5 : i64
-    memref.store %28, __try_result_4
+    %21 = memref.load __try_default_5 : i64
+    memref.store %21, __try_result_4
     cf.br otherwise_default_continue_7
   otherwise_default_continue_7:
-    %29 = memref.load __try_result_4 : i64
-    memref.store %29, b
-    %30, %31 = func.try_call @register-allocator.getC
-    %32 = arith.constant {value = 12 : i64}
-    memref.store %32, __try_default_9
-    memref.store %30, __try_result_8
-    %33 = arith.constant {value = 0 : i64}
-    %34 = arith.cmpi ne %31, %33
-    cf.cond_br %34 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
+    %22 = memref.load __try_result_4 : i64
+    memref.store %22, b
+    %23, %24 = func.try_call @register-allocator.getC
+    %25 = arith.constant {value = 12 : i64}
+    memref.store %25, __try_default_9
+    memref.store %23, __try_result_8
+    %26 = arith.constant {value = 0 : i64}
+    %27 = arith.cmpi ne %24, %26
+    cf.cond_br %27 [then: otherwise_default_error_10, else: otherwise_default_continue_11]
   otherwise_default_error_10:
-    %35 = memref.load __try_default_9 : i64
-    memref.store %35, __try_result_8
+    %28 = memref.load __try_default_9 : i64
+    memref.store %28, __try_result_8
     cf.br otherwise_default_continue_11
   otherwise_default_continue_11:
-    %36 = memref.load __try_result_8 : i64
-    %37 = memref.load a : i64
-    %38 = memref.load b : i64
-    %39 = arith.addi %37, %38
-    %40 = arith.addi %39, %36
-    memref.store %40, __range_val_12
-    %41 = arith.constant {value = 0 : i64}
-    %42 = arith.cmpi lt %40, %41
-    %43 = arith.constant {value = 4294967295 : i64}
-    %44 = arith.cmpi gt %40, %43
-    %45 = arith.ori1 %42, %44
-    cf.cond_br %45 [then: __range_panic_12, else: __range_ok_12]
+    %29 = memref.load __try_result_8 : i64
+    %30 = memref.load a : i64
+    %31 = memref.load b : i64
+    %32 = arith.addi %30, %31
+    %33 = arith.addi %32, %29
+    memref.store %33, __range_val_12
+    %34 = arith.constant {value = 0 : i64}
+    %35 = arith.cmpi lt %33, %34
+    %36 = arith.constant {value = 4294967295 : i64}
+    %37 = arith.cmpi gt %33, %36
+    %38 = arith.ori1 %35, %37
+    cf.cond_br %38 [then: __range_panic_12, else: __range_ok_12]
   __range_panic_12:
-    %46 = memref.lea_symdata __panic_msg_48
-    %47 = std.ptr_to_i64 %46
-    std.call_runtime @maxon_panic %47
+    %39 = memref.lea_symdata __panic_msg_48
+    %40 = std.ptr_to_i64 %39
+    std.call_runtime @maxon_panic %40
   __range_ok_12:
-    %48 = memref.load __range_val_12 : i64
-    %49 = memref.load __scope_14 : i64
-    std.call_runtime @mm_scope_exit %49
-    func.return %48
+    %41 = memref.load __range_val_12 : i64
+    func.return %41
   }
 }
 === x86
 module {
   func @register-allocator.getA() -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov eax, 10
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
     x86.mov eax, 10
     x86.xor edx, edx
-    x86.epilogue
     x86.ret
   }
   func @register-allocator.getB() -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov eax, 20
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
     x86.mov eax, 20
     x86.xor edx, edx
-    x86.epilogue
     x86.ret
   }
   func @register-allocator.getC() -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, rdx
-    x86.call mm_scope_exit
-    x86.mov ebx, 1
-    x86.xor esi, esi
-    x86.lea edx, [esi + ebx]
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov edx, eax
     x86.xor eax, eax
-    x86.epilogue
     x86.ret
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
-    x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
+    x86.prologue stack_size=80
     x86.call register-allocator.getA
     x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je register-allocator.main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov eax, [rbp-16]
-    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
     x86.call register-allocator.getB
     x86.xor ecx, ecx
-    x86.mov [rbp-40], ecx
-    x86.mov [rbp-48], eax
+    x86.mov [rbp-32], ecx
+    x86.mov [rbp-40], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je register-allocator.main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov eax, [rbp-40]
-    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-40], eax
     x86.jmp register-allocator.main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
     x86.call register-allocator.getC
     x86.mov ecx, 12
-    x86.mov [rbp-64], ecx
-    x86.mov [rbp-72], eax
+    x86.mov [rbp-56], ecx
+    x86.mov [rbp-64], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je register-allocator.main.otherwise_default_continue_11
   otherwise_default_error_10:
-    x86.mov eax, [rbp-64]
-    x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-64], eax
     x86.jmp register-allocator.main.otherwise_default_continue_11
   otherwise_default_continue_11:
-    x86.mov eax, [rbp-72]
-    x86.mov ecx, [rbp-32]
-    x86.mov edx, [rbp-56]
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [rbp-48]
     x86.add ecx, edx
     x86.add ecx, eax
-    x86.mov [rbp-80], ecx
+    x86.mov [rbp-72], ecx
     x86.xor ebx, ebx
     x86.cmp ecx, ebx
     x86.setl esi
@@ -335,11 +284,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_12:
-    x86.mov eax, [rbp-80]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-88], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-88]
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }

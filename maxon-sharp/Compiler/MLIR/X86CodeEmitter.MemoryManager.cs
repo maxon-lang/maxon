@@ -90,6 +90,8 @@ public partial class X86CodeEmitter {
     EmitMmMove();
     EmitMmFreeEntry();
     EmitMmFree();
+    EmitMmAllocSimple();
+    EmitMmFreeSimple();
     EmitMmLeakCheck();
   }
 
@@ -1025,6 +1027,41 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free_entry")); EmitDword(0);
 
     DefineLabel("mm_free_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_alloc_simple(size_in_rcx) -> ptr_in_rax
+  // Bare HeapAlloc with HEAP_ZERO_MEMORY — no AllocEntry, no backpointer header.
+  // -------------------------------------------------------------------------
+  private void EmitMmAllocSimple() {
+    // Stack: [rbp-8]=size
+    EmitRuntimeFunctionStart("mm_alloc_simple", 1, 0x30);
+
+    // HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size)
+    EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x08);
+
+    // RAX = allocated pointer, return it directly
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_free_simple(ptr_in_rcx) -> void
+  // Bare HeapFree — no AllocEntry, no unlinking. Skips NULL pointers.
+  // -------------------------------------------------------------------------
+  private void EmitMmFreeSimple() {
+    // Stack: [rbp-8]=ptr
+    EmitRuntimeFunctionStart("mm_free_simple", 1, 0x30);
+
+    // Skip if ptr is NULL
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_simple_done");
+
+    // HeapFree(GetProcessHeap(), 0, ptr)
+    EmitHeapCall("HeapFree", 0, rbpSlotR8: -0x08);
+
+    DefineLabel("mm_free_simple_done");
     EmitRuntimeFunctionEnd();
   }
 

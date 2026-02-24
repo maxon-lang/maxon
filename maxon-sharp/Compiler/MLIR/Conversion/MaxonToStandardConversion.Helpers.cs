@@ -1,5 +1,6 @@
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
+using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
@@ -206,6 +207,48 @@ public static partial class MaxonToStandardConversion {
     var sizeOp = new StdConstI64Op(constSize);
     block.AddOp(sizeOp);
     return EmitAlloc(block, sizeOp.Result);
+  }
+
+  /// <summary>
+  /// Allocates untracked heap memory (no AllocEntry, no scope registration).
+  /// Used when the compiler will emit explicit mm_free_simple at scope exit.
+  /// </summary>
+  private static StdI64 EmitAllocSimple(MlirBlock<StandardOp> block, StdI64 size) {
+    var result = new StdI64(MlirContext.Current.NextId());
+    block.AddOp(new StdCallRuntimeOp("mm_alloc_simple", [size], result));
+    return result;
+  }
+
+  private static StdI64 EmitAllocSimple(MlirBlock<StandardOp> block, long constSize) {
+    var sizeOp = new StdConstI64Op(constSize);
+    block.AddOp(sizeOp);
+    return EmitAllocSimple(block, sizeOp.Result);
+  }
+
+  /// <summary>
+  /// Returns true if the current scope uses static free (compile-time cleanup).
+  /// When true, allocations should use mm_alloc_simple instead of mm_alloc.
+  /// </summary>
+  private static bool IsCurrentScopeStaticFree() {
+    if (_scopeAnalysisStack == null || _scopeAnalysisStack.Count == 0) return false;
+    var current = _scopeAnalysisStack[^1];
+    return current is { CanStaticFree: true } or { CanStaticReturn: true };
+  }
+
+  /// <summary>
+  /// Emits mm_free_simple for each compile-time-managed allocation in reverse order.
+  /// Skips stack-allocated structs (reclaimed by epilogue) and the return value
+  /// in CanStaticReturn scopes (owned by caller's scope via mm_alloc).
+  /// </summary>
+  private static void EmitStaticFree(
+      MlirBlock<StandardOp> block, ScopeInfo scopeInfo, Dictionary<string, string> varTypes) {
+    for (int ai = scopeInfo.Allocations.Count - 1; ai >= 0; ai--) {
+      var alloc = scopeInfo.Allocations[ai];
+      if (scopeInfo.StackAllocIds.Contains(alloc.StructLiteralResultId)) continue;
+      if (scopeInfo.CanStaticReturn && alloc.VarName == scopeInfo.ReturnMoveVar) continue;
+      var allocPtr = (StdI64)EmitLoad(block, alloc.VarName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("mm_free_simple", [allocPtr], null));
+    }
   }
 
   /// <summary>

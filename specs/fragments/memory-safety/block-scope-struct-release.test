@@ -58,51 +58,41 @@ module {
 module {
   func @memory-safety.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_13
-    %2 = arith.constant {value = 0 : i64}
-    memref.store %2, result
-    %3 = arith.constant {value = 1 : i1}
-    cf.cond_br %3 [then: block_0, else: block_0.merge]
+    %1 = arith.constant {value = 0 : i64}
+    memref.store %1, result
+    %2 = arith.constant {value = 1 : i1}
+    cf.cond_br %2 [then: block_0, else: block_0.merge]
   block_0:
-    %4 = arith.constant {value = 0 : i64}
-    %5 = std.call_runtime @mm_scope_enter %4
-    memref.store %5, __scope_16
-    %6 = arith.constant {value = 10 : i64}
-    %7 = arith.constant {value = 20 : i64}
-    %8 = arith.constant {value = 16 : i64}
-    %9 = arith.constant {value = 0 : i64}
-    %10 = std.call_runtime @mm_alloc %8, %9
-    memref.store %10, p
+    %4 = arith.constant {value = 10 : i64}
+    %5 = arith.constant {value = 20 : i64}
+    memref.bulk_zero __stk_6, 2
+    %7 = memref.lea __stk_6
+    %8 = std.ptr_to_i64 %7
+    memref.store %8, p
+    %9 = memref.load p : i64
+    memref.store_indirect %4, %9+0
+    %10 = memref.load p : i64
+    memref.store_indirect %5, %10+8
     %11 = memref.load p : i64
-    memref.store_indirect %6, %11+0
-    %12 = memref.load p : i64
-    memref.store_indirect %7, %12+8
-    %13 = memref.load p : i64
-    %14 = memref.load_indirect %13+0
-    memref.store %14, result
-    %15 = memref.load __scope_16 : i64
-    std.call_runtime @mm_scope_exit %15
+    %12 = memref.load_indirect %11+0
+    memref.store %12, result
     cf.br block_0.merge
   block_0.merge:
-    %16 = memref.load result : i64
-    memref.store %16, __range_val_1
-    %17 = arith.constant {value = 0 : i64}
-    %18 = arith.cmpi lt %16, %17
-    %19 = arith.constant {value = 4294967295 : i64}
-    %20 = arith.cmpi gt %16, %19
-    %21 = arith.ori1 %18, %20
-    cf.cond_br %21 [then: __range_panic_1, else: __range_ok_1]
+    %13 = memref.load result : i64
+    memref.store %13, __range_val_1
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi lt %13, %14
+    %16 = arith.constant {value = 4294967295 : i64}
+    %17 = arith.cmpi gt %13, %16
+    %18 = arith.ori1 %15, %17
+    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %22 = memref.lea_symdata __panic_msg_28
-    %23 = std.ptr_to_i64 %22
-    std.call_runtime @maxon_panic %23
+    %19 = memref.lea_symdata __panic_msg_28
+    %20 = std.ptr_to_i64 %19
+    std.call_runtime @maxon_panic %20
   __range_ok_1:
-    %24 = memref.load __range_val_1 : i64
-    %25 = memref.load __scope_13 : i64
-    std.call_runtime @mm_scope_exit %25
-    func.return %24
+    %21 = memref.load __range_val_1 : i64
+    func.return %21
   }
 }
 === x86
@@ -111,41 +101,32 @@ module {
   entry:
     x86.prologue stack_size=48
     x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
-    x86.mov edx, 1
-    x86.test edx, edx
+    x86.mov ecx, 1
+    x86.test ecx, ecx
     x86.je memory-safety.main.block_0.merge
   block_0:
+    x86.mov eax, 10
+    x86.mov ecx, 20
+    x86.lea rdi, [rbp-24]
     x86.xor eax, eax
-    x86.mov rcx, rax
-    x86.call mm_scope_enter
-    x86.mov [rbp-24], eax
-    x86.mov ecx, 10
-    x86.mov edx, 20
-    x86.mov ebx, 16
-    x86.xor esi, esi
-    x86.mov rcx, rbx
-    x86.mov rdx, rsi
-    x86.call mm_alloc
-    x86.mov [rbp-32], eax
-    x86.mov edi, [rbp-32]
-    x86.mov r8, 10
-    x86.mov [edi+0], r8
-    x86.mov r9, [rbp-32]
-    x86.mov eax, 20
-    x86.mov [r9+8], eax
+    x86.mov ecx, 2
+    x86.rep_stosq
+    x86.lea rdx, [rbp-24]
+    x86.mov rbx, rdx
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-32]
+    x86.mov edi, 10
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-32]
+    x86.mov r9, 20
+    x86.mov [r8+8], r9
     x86.mov eax, [rbp-32]
     x86.mov ecx, [eax+0]
-    x86.mov [rbp-16], ecx
-    x86.mov rcx, [rbp-24]
-    x86.call mm_scope_exit
+    x86.mov [rbp-8], ecx
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov [rbp-40], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
@@ -164,10 +145,6 @@ module {
     x86.call maxon_panic
   __range_ok_1:
     x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-8]
-    x86.mov [rbp-48], eax
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }
