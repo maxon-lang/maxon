@@ -1631,7 +1631,7 @@ Using `==` or `!=` on struct types requires the type to implement the `Equatable
 | `is` | Same reference (same heap object) | bool |
 | `is not` | Different references | bool |
 
-`is` and `is not` compare whether two struct-typed variables refer to the same heap object. They cannot be used on primitive types (`int`, `float`, `bool`, `byte`).
+`is` and `is not` compare whether two struct-typed variables refer to the same heap object. They cannot be used on primitive types (`int`, `float`, `bool`, `byte`) — using them produces error E3068.
 
 ```maxon
 function areSame(a Point, b Point) returns bool

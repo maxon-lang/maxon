@@ -77,10 +77,8 @@ public class CodeEmitter {
     // Emit __chkstk runtime function (for large stack allocations)
     emitter.EmitChkstk();
 
-    // Emit runtime helper functions (string conversion, I/O, process management, etc.)
+    // Runtime helpers must be emitted before user code so call targets are resolved
     emitter.EmitRuntimeFunctions();
-
-    // Emit scope-based memory manager functions (mm_alloc, mm_free, mm_scope_enter/exit, etc.)
     emitter.EmitMemoryManagerFunctions();
 
     // Patch all __chkstk call sites

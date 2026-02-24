@@ -124,6 +124,9 @@ public static class ScopeAnalysisPass {
                 case MaxonCallOp:
                   isFromCall = true;
                   break;
+                default:
+                  throw new InvalidOperationException(
+                    $"ScopeAnalysisPass: unhandled producing op type {producer.GetType().Name} for var '{assignOp.VarName}'");
               }
             } else {
               // Value comes from something we don't track (e.g. parameter, phi) — treat as call

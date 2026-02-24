@@ -35,6 +35,27 @@ public static partial class MaxonToStandardConversion {
 		return (ptrOp.Result, lenOp.Result);
 	}
 
+	/// Allocates a __ManagedMemory child of outerPtr, stores the 4 managed fields
+	/// (buffer, length, capacity=0, elementSize=1), and links it into the outer struct.
+	private static string EmitManagedChild(
+	  StdI64 outerPtr, string tempName, string managedName,
+	  StdI64 bufferPtr, StdI64 lengthVal, int managedFieldOffset,
+	  MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) {
+		var managedPtr = EmitAllocIn(block, 32, outerPtr);
+		EmitStore(block, managedPtr, managedName, varTypes);
+		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, MlirType.I64, varTypes);
+		var capConst = new StdConstI64Op(0);
+		block.AddOp(capConst);
+		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		var elemSizeConst = new StdConstI64Op(1);
+		block.AddOp(elemSizeConst);
+		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		var managedPtrReload = EmitLoad(block, managedName, varTypes);
+		EmitStructFieldStore(block, managedPtrReload, tempName, managedFieldOffset, MlirType.I64, varTypes);
+		return managedName;
+	}
+
 	private static string EmitManagedMemoryLiteral(
 	  string value,
 	  int resultId,
@@ -47,29 +68,12 @@ public static partial class MaxonToStandardConversion {
 		var rdataLabel = $"__{rdataPrefix}_{resultId}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(value, rdataLabel, block, result);
 
-		// Allocate outer struct first so ManagedMemory can be a child
 		var tempName = $"__{tempPrefix}_{resultId}";
 		var outerPtr = EmitAlloc(block, 16);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
-		// Heap-allocate __ManagedMemory as child of outer struct
 		var managedName = $"__{tempPrefix}_managed_{resultId}";
-		var managedPtr = EmitAllocIn(block, 32, outerPtr);
-		EmitStore(block, managedPtr, managedName, varTypes);
-
-		// Store __ManagedMemory fields via heap pointer
-		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, MlirType.I64, varTypes);
-		var capConst = new StdConstI64Op(0);
-		block.AddOp(capConst);
-		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, MlirType.I64, varTypes);
-		var elemSizeConst = new StdConstI64Op(1);
-		block.AddOp(elemSizeConst);
-		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, MlirType.I64, varTypes);
-
-		// Store _managed heap pointer in outer struct at offset 0
-		var managedPtrReload = EmitLoad(block, managedName, varTypes);
-		EmitStructFieldStore(block, managedPtrReload, tempName, 0, MlirType.I64, varTypes);
+		EmitManagedChild(outerPtr, tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
 
 		structVarNames[resultId] = tempName;
 		return tempName;
@@ -95,40 +99,22 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result) {
-		// Array layout: iterIndex (offset 0), managed (offset 8)
-		// EmitManagedMemoryLiteral stores managed at offset 0 (for String layout),
-		// so we build the ByteArray struct manually.
+		// ByteArray layout differs from String: iterIndex at offset 0, managed at offset 8
 		var rdataLabel = $"__bstr_{op.Result.Id}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result,
 		  System.Text.Encoding.Latin1);
 
-		// Allocate outer Array struct first so ManagedMemory can be a child
 		var tempName = $"__bstrtmp_{op.Result.Id}";
 		var outerPtr = EmitAlloc(block, 16);
 		EmitStore(block, outerPtr, tempName, varTypes);
-
-		// Heap-allocate __ManagedMemory as child of outer struct
-		var managedName = $"__bstrtmp_managed_{op.Result.Id}";
-		var managedPtr = EmitAllocIn(block, 32, outerPtr);
-		EmitStore(block, managedPtr, managedName, varTypes);
-
-		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, MlirType.I64, varTypes);
-		var capConst = new StdConstI64Op(0);
-		block.AddOp(capConst);
-		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, MlirType.I64, varTypes);
-		var elemSizeConst = new StdConstI64Op(1);
-		block.AddOp(elemSizeConst);
-		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
 		// Store iterIndex = 0 at offset 0
 		var iterConst = new StdConstI64Op(0);
 		block.AddOp(iterConst);
 		EmitStructFieldStore(block, iterConst.Result, tempName, 0, MlirType.I64, varTypes);
 
-		// Store managed pointer at offset 8
-		var managedPtrReload = EmitLoad(block, managedName, varTypes);
-		EmitStructFieldStore(block, managedPtrReload, tempName, 8, MlirType.I64, varTypes);
+		var managedName = $"__bstrtmp_managed_{op.Result.Id}";
+		EmitManagedChild(outerPtr, tempName, managedName, bufferPtr, lengthVal, 8, block, varTypes);
 
 		structVarNames[op.Result.Id] = tempName;
 	}
@@ -596,27 +582,12 @@ public static partial class MaxonToStandardConversion {
 	  string tempName, StdI64 bufferPtr, StdI64 lengthVal,
 	  bool hasIterPos, MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes, Dictionary<int, string> structVarNames, int resultId) {
-		// Allocate outer struct first so ManagedMemory can be a child
 		int outerSize = hasIterPos ? 16 : 8;
 		var outerPtr = EmitAlloc(block, outerSize);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
-		// Heap-allocate __ManagedMemory as child of outer struct
 		var managedName = $"{tempName}__managed";
-		var managedPtr = EmitAllocIn(block, 32, outerPtr);
-		EmitStore(block, managedPtr, managedName, varTypes);
-		EmitStructFieldStore(block, bufferPtr, managedName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, lengthVal, managedName, ManagedFieldLength, MlirType.I64, varTypes);
-		var capConst = new StdConstI64Op(0);
-		block.AddOp(capConst);
-		EmitStructFieldStore(block, capConst.Result, managedName, ManagedFieldCapacity, MlirType.I64, varTypes);
-		var elemSizeConst = new StdConstI64Op(1);
-		block.AddOp(elemSizeConst);
-		EmitStructFieldStore(block, elemSizeConst.Result, managedName, ManagedFieldElementSize, MlirType.I64, varTypes);
-
-		// Store _managed heap pointer at offset 0
-		var managedPtrReload = EmitLoad(block, managedName, varTypes);
-		EmitStructFieldStore(block, managedPtrReload, tempName, 0, MlirType.I64, varTypes);
+		EmitManagedChild(outerPtr, tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
 
 		if (hasIterPos) {
 			var iterConst = new StdConstI64Op(0);

@@ -182,7 +182,7 @@ public class PeWriter {
       currentRawDataPos += dataSizeAligned;
     }
 
-    // Section Header: .symtab (if present) - symbol table for stack traces and runtime counters
+    // Section Header: .symtab (if present) — read-write because runtime counters (e.g. scope depth) are updated at execution time
     if (hasSymdata) {
       WriteSectionHeader(writer, ".symtab", symdataSize, symdataRva, symdataSizeAligned, currentRawDataPos, 0xC0000040);
       currentRawDataPos += symdataSizeAligned;

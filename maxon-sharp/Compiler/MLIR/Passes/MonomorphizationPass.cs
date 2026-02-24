@@ -516,6 +516,19 @@ public static class MonomorphizationPass {
         return new MaxonBrOp(br.Target);
       case MaxonReleaseOp rel:
         return new MaxonReleaseOp(rel.VarName, rel.StructTypeName);
+      case MaxonScopeEnterOp se:
+        return new MaxonScopeEnterOp(se.ResultVar, se.Tag);
+      case MaxonScopeExitOp sx:
+        return new MaxonScopeExitOp(sx.ScopeVar, sx.Tag);
+      case MaxonMoveOp mo:
+        return new MaxonMoveOp(mo.VarName, mo.DestScopeVar, mo.Tag);
+      case MaxonPanicOp p:
+        return new MaxonPanicOp(p.Message);
+      case MaxonRefEqOp req: {
+        var cloned = new MaxonRefEqOp(mapValue(req.Lhs), mapValue(req.Rhs), req.Negate);
+        valueMap[req.Result.Id] = cloned.Result;
+        return cloned;
+      }
       case MaxonReturnOp ret:
         return new MaxonReturnOp(ret.Value != null ? mapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th:

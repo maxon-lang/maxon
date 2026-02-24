@@ -1820,3 +1820,70 @@ end 'main'
 77
 ```
 
+### Generic function with scope ops (monomorphization)
+
+When a generic function (via interface alias / typealias with) contains scope
+management ops (scope_enter, scope_exit, move), the monomorphization pass must
+clone these ops correctly. Missing handlers would crash the compiler.
+
+<!-- test: generic-function-with-scope-ops -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+  export var value Integer
+end 'Wrapper'
+
+typealias WrapperArray = Array with Wrapper
+
+function firstOrDefault(arr WrapperArray) returns Wrapper
+  var fallback = Wrapper{value: 0}
+  var result = try arr.get(0) otherwise fallback
+  return result
+end 'firstOrDefault'
+
+function main() returns ExitCode
+  var arr = WrapperArray{}
+  var w = Wrapper{value: 42}
+  arr.push(w)
+  var got = firstOrDefault(arr: arr)
+  return got.value
+end 'main'
+```
+```exitcode
+42
+```
+
+### Reference identity in generic context
+
+The `is` operator (MaxonRefEqOp) must be handled by function cloner and
+monomorphization passes when it appears in generic or cloned functions.
+
+<!-- test: ref-identity-in-cloned-function -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+  export var value Integer
+end 'Box'
+
+function isSame(a Box, b Box) returns Integer
+  if a is b 'same'
+    return 1
+  end 'same'
+  return 0
+end 'isSame'
+
+function main() returns ExitCode
+  var x = Box{value: 10}
+  var y = ref x
+  var z = Box{value: 10}
+  var same = isSame(a: x, b: y)
+  var diff = isSame(a: x, b: z)
+  return same + diff
+end 'main'
+```
+```exitcode
+1
+```
+

@@ -149,9 +149,11 @@ public static partial class MaxonToStandardConversion {
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = retEnumType.Name;
       } else if (callResult != null) {
-        // Widen I32/U32 call results to I64 to avoid width mismatches
+        // Widen 32-bit call results to 64-bit — StdU32 extends StdI32 so this catches both;
+        // unsigned values get zero-extended, signed values get sign-extended
         if (callResult is StdI32) {
-          callResult = EnsureI64(callResult is StdU32 u32cr ? new StdI32(u32cr.Id) : callResult, block, signExtend: callResult is not StdU32);
+          bool isUnsigned = callResult is StdU32;
+          callResult = EnsureI64(callResult, block, signExtend: !isUnsigned);
         }
         valueMap[result] = callResult;
       }

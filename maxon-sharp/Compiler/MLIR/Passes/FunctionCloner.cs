@@ -237,6 +237,7 @@ internal class FunctionCloner {
       case MaxonReturnOp ret: return new MaxonReturnOp(ret.Value != null ? MapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName);
       case MaxonPanicOp p: return new MaxonPanicOp(p.Message);
+      case MaxonRefEqOp req: { var c = new MaxonRefEqOp(MapValue(req.Lhs), MapValue(req.Rhs), req.Negate); RegisterResult(req.Result, c.Result); return c; }
 
       // Unary math
       case MaxonTruncOp t: { var c = new MaxonTruncOp(MapValue(t.Input)); RegisterResult(t.Result, c.Result); return c; }

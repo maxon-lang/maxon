@@ -1,0 +1,110 @@
+// Test: ref-identity-in-cloned-function
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+  export var value Integer
+end 'Box'
+
+function isSame(a Box, b Box) returns Integer
+  if a is b 'same'
+    return 1
+  end 'same'
+  return 0
+end 'isSame'
+
+function main() returns ExitCode
+  var x = Box{value: 10}
+  var y = ref x
+  var z = Box{value: 10}
+  var same = isSame(a: x, b: y)
+  var diff = isSame(a: x, b: z)
+  return same + diff
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @memory-safety.isSame(a: i64, b: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [rbp-16]
+    x86.cmp eax, ebx
+    x86.jne memory-safety.isSame.same_0.after
+  same_0:
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  same_0.after:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    x86.prologue stack_size=64
+    x86.xor eax, eax
+    x86.mov rcx, rax
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov ecx, 10
+    x86.mov edx, 8
+    x86.xor ebx, ebx
+    x86.mov rcx, rdx
+    x86.mov rdx, rbx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov esi, [rbp-16]
+    x86.mov edi, 10
+    x86.mov [esi+0], edi
+    x86.mov [rbp-24], eax
+    x86.mov r8, 10
+    x86.lea rdi, [rbp-32]
+    x86.xor eax, eax
+    x86.mov ecx, 1
+    x86.rep_stosq
+    x86.lea r9, [rbp-32]
+    x86.mov rax, r9
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.mov [eax+0], r8
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call memory-safety.isSame
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-40]
+    x86.mov [rbp-56], eax
+    x86.call memory-safety.isSame
+    x86.mov ecx, [rbp-56]
+    x86.add ecx, eax
+    x86.mov [rbp-48], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je memory-safety.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_35]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-8]
+    x86.mov [rbp-56], eax
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-56]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

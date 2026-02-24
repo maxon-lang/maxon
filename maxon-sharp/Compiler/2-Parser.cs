@@ -3687,7 +3687,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         block.AddOp(nestedCloneCall);
         fieldValue = nestedCloneCall.Result!;
       }
-      // Primitives and ranged types: value is copied directly (no clone call needed)
+      // Primitives have value semantics — assignment is already a copy
       fieldValues.Add((field.Name, fieldValue));
     }
 
@@ -3747,7 +3747,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         block.AddOp(nestedEqualsCall);
         fieldEqual = nestedEqualsCall.Result!;
       } else {
-        // Primitives: use == operator
+        // Primitives have value semantics — bitwise equality is sufficient
         var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, selfAccess.Result, otherAccess.Result, fieldKind);
         block.AddOp(cmpOp);
         fieldEqual = cmpOp.Result;
@@ -4584,8 +4584,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Used before break/continue to clean up intermediate block scopes.
   private void EmitReleaseForScopesAbove(string targetScopeVar) {
     if (_currentBlock == null) return;
-    // Exit scopes from innermost until we reach the target scope (not including it)
-    var scopes = _mmScopeStack.ToArray(); // index 0 = top (innermost)
+    // Must exit innermost scopes first to free their allocations before outer scopes
+    var scopes = _mmScopeStack.ToArray();
     foreach (var scope in scopes) {
       if (scope == targetScopeVar) break;
       _currentBlock.AddOp(new MaxonScopeExitOp(scope, "break_cleanup"));
@@ -4601,8 +4601,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (returnVarName != null && _functionScopeVar != null) {
       _currentBlock.AddOp(new MaxonMoveOp(returnVarName, _functionScopeVar, "return_move"));
     }
-    var scopes = _mmScopeStack.ToArray(); // index 0 = top (innermost)
-    // Exit all scopes (innermost to outermost): block scopes + function scope
+    // Must exit innermost scopes first to free their allocations before outer scopes
+    var scopes = _mmScopeStack.ToArray();
     for (int i = 0; i < scopes.Length; i++) {
       _currentBlock.AddOp(new MaxonScopeExitOp(scopes[i], "return_cleanup"));
     }
@@ -5228,7 +5228,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryCallOp);
     EmitErrorFlagCheck(tryCallOp.ErrorFlag, propagateErrorBlock, continueBlock);
 
-    // Propagation block: clean up scopes then re-throw error to caller
+    // Propagation block: must exit scopes before re-throwing so allocations are freed
     var propBlock = _currentFunction!.Body.AddBlock(propagateErrorBlock);
     _currentBlock = propBlock;
     var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
@@ -5340,14 +5340,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // On error use default, on success either cleanup (struct) or go straight to continue
     EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, cleanupBlock ?? continueBlock);
 
-    // Error block (fall-through from cond_br then-path): use default value as result
+    // Error block: try call failed, so adopt the default value as the result
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
     var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
 
-    // Cleanup block (success path): release the unused default value, then continue
+    // Cleanup block: try call succeeded, so the default value is unused and must be freed
     if (needsCleanup) {
       var clnBlock = _currentFunction!.Body.AddBlock(cleanupBlock!);
       _currentBlock = clnBlock;
@@ -5466,8 +5466,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (initValue is MaxonStruct structVal) {
       var kind = MaxonValueKind.Struct;
 
-      // Copy-by-default: when assigning from an existing variable (not ref, not a fresh
-      // allocation), emit a clone call to create a deep copy
+      // Structs are heap-allocated, so assigning from an existing variable must deep-copy
+      // to preserve value semantics (each variable owns its own allocation)
       var effectiveValue = (MaxonValue)initValue;
       var effectiveRef = isRef;
       if (!isRef && IsExistingUserVariableRef(initValue)) {

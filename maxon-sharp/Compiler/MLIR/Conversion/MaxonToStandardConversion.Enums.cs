@@ -398,11 +398,11 @@ public static partial class MaxonToStandardConversion {
         int heapSize = 8 + maxPayload * 8;
         var heapPtr = EmitAlloc(block, heapSize);
 
-        // Store tag at offset 0
+        // Pack the flat tag+payload vars into a single heap object for passing as a value
         var tagVal = EmitLoad(block, $"{enumPrefix}.__tag", varTypes);
         block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
 
-        // Store payload slots
+        // Payload slots follow the tag at 8-byte intervals
         for (int pi = 0; pi < maxPayload; pi++) {
           var payloadVal = EmitLoad(block, $"{enumPrefix}.__payload_{pi}", varTypes);
           block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
