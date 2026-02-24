@@ -25,6 +25,7 @@ public class RegisterManager {
   private readonly Dictionary<X86Register, int> _lastUsed = [];
   private readonly Dictionary<StdValue, long> _constantValues = [];
   private readonly Dictionary<StdValue, X86Register> _registerHints = [];
+  private HashSet<StdValue>? _deferredConstants;
   private int _currentOpIndex;
   private int _scratchIdCounter = -1000;
 
@@ -157,11 +158,20 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Set of constants that should not be eagerly materialized into registers.
+  /// These will be materialized on demand when first consumed via EnsureInRegister,
+  /// avoiding wasted mov instructions when the register would be clobbered before use
+  /// (e.g., return values set before scope cleanup calls).
+  /// </summary>
+  public HashSet<StdValue>? DeferredConstants { set => _deferredConstants = value; }
+
+  /// <summary>
   /// Allocate a register and load an immediate value into it.
-  /// Uses 64-bit register for values that don't fit in 32 bits.
+  /// If the value is in the deferred set, only records it for later rematerialization.
   /// </summary>
   public void EmitLoadImmediate(StdValue result, long immediate, MlirBlock<X86Op> block) {
     _constantValues[result] = immediate;
+    if (_deferredConstants?.Contains(result) == true) return;
     var gpr = AllocateRegister(result, block);
     EmitImmediateToRegister(gpr, immediate, block);
   }

@@ -7,9 +7,8 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 public record AllocInfo(string VarName, string? StructTypeName, bool IsFromCall, int StructLiteralResultId = -1);
 
 // Per-scope analysis results
-public class ScopeInfo {
-  public string ScopeVar { get; }
-  public List<AllocInfo> Allocations { get; } = [];
+public class ScopeInfo(string scopeVar) {
+  public string ScopeVar { get; } = scopeVar; public List<AllocInfo> Allocations { get; } = [];
   public HashSet<string> EscapingVars { get; } = [];
   public HashSet<string> PassedToFunctionVars { get; } = [];
   public bool ReceivesMovedAllocs { get; set; }
@@ -24,8 +23,6 @@ public class ScopeInfo {
   public int ReturnAllocResultId { get; set; } = -1;
   // Struct literal result IDs eligible for stack allocation (per-allocation, not per-scope)
   public HashSet<int> StackAllocIds { get; } = [];
-
-  public ScopeInfo(string scopeVar) { ScopeVar = scopeVar; }
 }
 
 /// <summary>

@@ -456,8 +456,7 @@ module {
     x86.cmp eax, ecx
     x86.jle advent.main.guard_9.after
   guard_9:
-    x86.mov eax, 99
-    x86.mov ecx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, 99
     x86.epilogue
@@ -785,8 +784,7 @@ module {
     x86.cmp eax, ecx
     x86.jle advent.main.guard_9.after
   guard_9:
-    x86.mov eax, 99
-    x86.mov ecx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, 99
     x86.epilogue

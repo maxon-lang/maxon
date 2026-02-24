@@ -126,8 +126,7 @@ public static partial class MaxonToStandardConversion {
       }
 
       // Scope analysis for this function (if available)
-      Dictionary<string, ScopeInfo>? funcScopeAnalysis = null;
-      module.ScopeAnalysis.TryGetValue(func.Name, out funcScopeAnalysis);
+      module.ScopeAnalysis.TryGetValue(func.Name, out Dictionary<string, ScopeInfo>? funcScopeAnalysis);
       _funcScopeAnalysis = funcScopeAnalysis;
       _scopeAnalysisStack = [];
 

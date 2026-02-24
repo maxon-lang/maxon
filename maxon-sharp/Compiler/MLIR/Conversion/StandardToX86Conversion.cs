@@ -117,15 +117,23 @@ public static class StandardToX86Conversion {
 
     // Pre-scan: compute last use index for each StdValue (for dead-value freeing)
     var lastUseOfValue = new Dictionary<StdValue, int>();
+    // Constants only consumed by StdReturnOp can be deferred (not eagerly materialized)
+    var returnOnlyConstants = new HashSet<StdValue>();
+    var usedByNonReturn = new HashSet<StdValue>();
     int scanIdx = 0;
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         foreach (var val in op.ReadValues) {
           lastUseOfValue[val] = scanIdx;
+          if (op is StdReturnOp)
+            returnOnlyConstants.Add(val);
+          else
+            usedByNonReturn.Add(val);
         }
         scanIdx++;
       }
     }
+    returnOnlyConstants.ExceptWith(usedByNonReturn);
     // For tail calls, extend arg lifetimes to the return op (where the tail jmp happens).
     // The call op is skipped, so args must stay live until the return op processes them.
     foreach (var (retOp, callOp) in tailCalls) {
@@ -157,6 +165,7 @@ public static class StandardToX86Conversion {
     string? lastCmpPredicate = null;
 
     var regManager = new RegisterManager();
+    regManager.DeferredConstants = returnOnlyConstants;
     regManager.SetSpillBaseOffset(-varStackSize);
     var sourceBlocks = func.Body.Blocks.ToList();
     int currentOpIndex = 0;
