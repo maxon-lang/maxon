@@ -21,15 +21,14 @@ module {
   func @Box.make(v: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 8
-    x86.xor edx, edx
     x86.mov [rbp-16], ecx
-    x86.mov rcx, rax
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [rbp-16]
-    x86.mov [ecx+0], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [eax+0], ecx
     x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
@@ -37,26 +36,25 @@ module {
   func @static-methods.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov rcx, rax
+    x86.xor rcx, rcx
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov ecx, 42
+    x86.mov rcx, 42
     x86.call Box.make
     x86.mov [rbp-16], eax
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, [edx+0]
-    x86.mov [rbp-24], ebx
-    x86.xor esi, esi
-    x86.cmp ebx, esi
-    x86.setl edi
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-24], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
     x86.movzx edi, edib
-    x86.mov r8, 4294967295
-    x86.cmp rbx, r8
-    x86.setg r9
-    x86.movzx r9, r9b
-    x86.or edi, r9
-    x86.test edi, edi
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je static-methods.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_22]
@@ -65,9 +63,8 @@ module {
   __range_ok_0:
     x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-8]
-    x86.mov [rbp-32], eax
     x86.call mm_scope_exit
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

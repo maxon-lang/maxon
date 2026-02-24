@@ -45,24 +45,22 @@ module {
     x86.prologue stack_size=32
     x86.mov [rbp-8], ecx
     x86.mov eax, [rbp-8]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-8]
     x86.call Coord.getX
     x86.mov ecx, [rbp-8]
     x86.mov [rbp-24], eax
     x86.call Coord.getY
-    x86.mov edx, 16
-    x86.xor ebx, ebx
     x86.mov [rbp-32], eax
-    x86.mov rcx, rdx
-    x86.mov rdx, rbx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, [rbp-24]
+    x86.mov [edx+0], ebx
     x86.mov esi, [rbp-16]
-    x86.mov edi, [rbp-24]
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-16]
-    x86.mov r9, [rbp-32]
-    x86.mov [r8+8], r9
+    x86.mov edi, [rbp-32]
+    x86.mov [esi+8], edi
     x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
@@ -89,45 +87,42 @@ module {
   }
   func @interface-extensions.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
-    x86.xor eax, eax
-    x86.mov rcx, rax
+    x86.prologue stack_size=32
+    x86.xor rcx, rcx
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov ecx, 10
-    x86.mov edx, 32
-    x86.mov ebx, 16
-    x86.xor esi, esi
-    x86.mov rcx, rbx
-    x86.mov rdx, rsi
+    x86.mov eax, 10
+    x86.mov ecx, 32
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov edi, [rbp-16]
-    x86.mov r8, 10
-    x86.mov [edi+0], r8
-    x86.mov r9, [rbp-16]
-    x86.mov eax, 32
-    x86.mov [r9+8], eax
-    x86.mov eax, [rbp-16]
-    x86.mov rcx, rax
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, 10
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-16]
+    x86.mov edi, 32
+    x86.mov [esi+8], edi
+    x86.mov r8, [rbp-16]
+    x86.mov rcx, [rbp-16]
     x86.call Coord.asSimple
     x86.mov [rbp-24], eax
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [eax+0]
-    x86.mov eax, [rbp-24]
-    x86.mov edx, [eax+8]
-    x86.add ecx, edx
-    x86.mov [rbp-32], ecx
-    x86.xor eax, eax
-    x86.cmp ecx, eax
-    x86.setl eax
-    x86.movzx eax, eaxb
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
-    x86.setg ecx
+    x86.mov r9, [rbp-24]
+    x86.mov eax, [r9+0]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [ecx+8]
+    x86.add eax, edx
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
     x86.movzx ecx, ecxb
-    x86.or eax, ecx
-    x86.test eax, eax
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
     x86.je interface-extensions.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_60]
@@ -136,9 +131,8 @@ module {
   __range_ok_0:
     x86.mov eax, [rbp-32]
     x86.mov ecx, [rbp-8]
-    x86.mov [rbp-40], eax
     x86.call mm_scope_exit
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

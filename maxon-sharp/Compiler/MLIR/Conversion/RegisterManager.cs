@@ -25,7 +25,7 @@ public class RegisterManager {
   private readonly Dictionary<X86Register, int> _lastUsed = [];
   private readonly Dictionary<StdValue, long> _constantValues = [];
   private readonly Dictionary<StdValue, X86Register> _registerHints = [];
-  private HashSet<StdValue>? _deferredConstants;
+  private HashSet<StdValue>? _deferredValues;
   private int _currentOpIndex;
   private int _scratchIdCounter = -1000;
 
@@ -150,7 +150,7 @@ public class RegisterManager {
     // Not in a register — must reload from stack
     if (_valueStackHome.TryGetValue(value, out var displacement)) {
       var reloadReg = AllocateRegister(value, block, protect1, protect2);
-      block.AddOp(new X86MovRegMemOp(reloadReg, displacement));
+      block.AddOp(new X86MovRegMemOp(reloadReg, displacement, 8));
       return reloadReg;
     }
 
@@ -158,12 +158,10 @@ public class RegisterManager {
   }
 
   /// <summary>
-  /// Set of constants that should not be eagerly materialized into registers.
-  /// These will be materialized on demand when first consumed via EnsureInRegister,
-  /// avoiding wasted mov instructions when the register would be clobbered before use
-  /// (e.g., return values set before scope cleanup calls).
+  /// Values only consumed by sink ops (return/call) skip eager register materialization.
+  /// Constants are rematerialized via _constantValues; loads are re-fetched from _valueStackHome.
   /// </summary>
-  public HashSet<StdValue>? DeferredConstants { set => _deferredConstants = value; }
+  public HashSet<StdValue>? DeferredValues { set => _deferredValues = value; }
 
   /// <summary>
   /// Allocate a register and load an immediate value into it.
@@ -171,7 +169,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitLoadImmediate(StdValue result, long immediate, MlirBlock<X86Op> block) {
     _constantValues[result] = immediate;
-    if (_deferredConstants?.Contains(result) == true) return;
+    if (_deferredValues?.Contains(result) == true) return;
     var gpr = AllocateRegister(result, block);
     EmitImmediateToRegister(gpr, immediate, block);
   }
@@ -414,7 +412,7 @@ public class RegisterManager {
     // Constants can be rematerialized — no need to store to stack
     if (!_valueStackHome.ContainsKey(existing) && !_constantValues.ContainsKey(existing)) {
       _nextSpillOffset -= 8;
-      block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg));
+      block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg, 8));
       _valueStackHome[existing] = _nextSpillOffset;
     }
     _valueToRegister.Remove(existing);
@@ -433,8 +431,14 @@ public class RegisterManager {
 
   /// <summary>
   /// Load a GPR value from a stack offset.
+  /// For 8-byte loads, records the stack home so call arg placement can load
+  /// directly into the target register instead of going through an intermediate.
+  /// Sub-8-byte loads don't record a stack home because EnsureInRegister
+  /// reloads always use 8-byte movs.
   /// </summary>
   public void EmitLoadFromStack(StdValue result, int offset, int sizeInBytes, MlirBlock<X86Op> block) {
+    if (sizeInBytes == 8)
+      _valueStackHome[result] = offset;
     var gpr = AllocateRegister(result, block);
     block.AddOp(new X86MovRegMemOp(gpr, offset, sizeInBytes));
   }
@@ -729,8 +733,11 @@ public class RegisterManager {
 
   /// <summary>
   /// Ensure a value is in a specific physical register, emitting a mov if needed.
+  /// Hints the allocator to place the value directly in the target register
+  /// when reloading from stack or rematerializing, avoiding a redundant reg-reg mov.
   /// </summary>
   public void EnsureInSpecificRegister(StdValue value, X86Register target, MlirBlock<X86Op> block) {
+    _registerHints[value] = target;
     var reg = EnsureInRegister(value, block);
     if (reg != target && reg != To32Bit(target)) {
       block.AddOp(new X86MovRegRegOp(target, reg));
@@ -800,14 +807,22 @@ public class RegisterManager {
     int?[] argStackHomes = new int?[regArgCount];
     long?[] argConstants = new long?[regArgCount];
     foreach (int i in gprArgs) {
-      if (_valueToRegister.TryGetValue(args[i], out var reg))
-        argSources[i] = To64Bit(reg);
-      else if (_constantValues.TryGetValue(args[i], out var imm))
+      var target64 = To64Bit(CallConvRegs[i]);
+      if (_valueToRegister.TryGetValue(args[i], out var reg)) {
+        var reg64 = To64Bit(reg);
+        // Prefer loading from stack directly into the target register
+        // instead of emitting a reg-reg mov from a non-target register
+        if (reg64 != target64 && _valueStackHome.TryGetValue(args[i], out var disp))
+          argStackHomes[i] = disp;
+        else
+          argSources[i] = reg64;
+      } else if (_constantValues.TryGetValue(args[i], out var imm)) {
         argConstants[i] = imm;
-      else if (_valueStackHome.TryGetValue(args[i], out var disp))
+      } else if (_valueStackHome.TryGetValue(args[i], out var disp)) {
         argStackHomes[i] = disp;
-      else
+      } else {
         throw new InvalidOperationException($"RegisterManager: call arg %{args[i].Id} has no register, no constant, and no stack home");
+      }
     }
 
     // For indirect calls, secure the callee in a non-arg register before
@@ -857,7 +872,7 @@ public class RegisterManager {
           if (argSources[i] is { } srcReg)
             block.AddOp(new X86MovRegRegOp(targetRegs[i], srcReg));
           else
-            block.AddOp(new X86MovRegMemOp(targetRegs[i], argStackHomes[i]!.Value));
+            block.AddOp(new X86MovRegMemOp(targetRegs[i], argStackHomes[i]!.Value, 8));
           placed[i] = true;
           progress = true;
         }
@@ -1136,7 +1151,7 @@ public class RegisterManager {
         && !_constantValues.ContainsKey(value)
         && !(consumedByCall != null && consumedByCall.Contains(value))) {
         _nextSpillOffset -= 8;
-        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg));
+        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg, 8));
         _valueStackHome[value] = _nextSpillOffset;
       }
     }
@@ -1344,8 +1359,8 @@ public class RegisterManager {
       foreach (var i in Enumerable.Range(0, moves.Count).Except(emitted)) {
         var (target, source) = moves[i];
         _nextSpillOffset -= 8;
-        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, source));
-        block.AddOp(new X86MovRegMemOp(target, _nextSpillOffset));
+        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, source, 8));
+        block.AddOp(new X86MovRegMemOp(target, _nextSpillOffset, 8));
         emitted.Add(i);
       }
     }

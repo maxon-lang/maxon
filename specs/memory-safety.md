@@ -668,74 +668,64 @@ module {
     x86.prologue stack_size=16
     x86.mov eax, 1
     x86.mov ecx, 2
-    x86.mov edx, 16
-    x86.xor ebx, ebx
-    x86.mov rcx, rdx
-    x86.mov rdx, rbx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, 1
+    x86.mov [edx+0], ebx
     x86.mov esi, [rbp-8]
-    x86.mov edi, 1
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-8]
-    x86.mov r9, 2
-    x86.mov [r8+8], r9
+    x86.mov edi, 2
+    x86.mov [esi+8], edi
     x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
   }
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=112
-    x86.xor eax, eax
-    x86.mov rcx, rax
+    x86.prologue stack_size=96
+    x86.xor rcx, rcx
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
     x86.call memory-safety.makeRef
     x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+0]
-    x86.mov ebx, 21
-    x86.xor esi, esi
-    x86.mov [rbp-88], edx
-    x86.mov rcx, rbx
-    x86.mov rdx, rsi
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-88], ecx
+    x86.mov rcx, 21
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov rcx, [rbp-88]
-    x86.mov rdx, rax
+    x86.mov rdx, [rbp-24]
     x86.call maxon_i64_to_string
-    x86.mov edi, [rbp-24]
-    x86.mov r8, 16
-    x86.xor r9, r9
+    x86.mov edx, [rbp-24]
     x86.mov [rbp-96], eax
-    x86.mov [rbp-104], edi
-    x86.mov rcx, r8
-    x86.mov rdx, r9
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-32], eax
-    x86.mov ecx, 32
-    x86.xor edx, edx
-    x86.mov r8, rdx
-    x86.mov rdx, rax
+    x86.mov rdx, [rbp-32]
+    x86.mov rcx, 32
+    x86.xor r8, r8
     x86.call mm_alloc_in
     x86.mov [rbp-40], eax
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-96]
-    x86.lea ebx, [edx + ecx]
-    x86.xor ecx, ecx
-    x86.mov rdx, rax
-    x86.mov r8, rcx
-    x86.mov rcx, rbx
+    x86.mov ebx, 1
+    x86.mov esi, [rbp-96]
+    x86.lea edi, [esi + ebx]
+    x86.mov rcx, rdi
+    x86.mov rdx, [rbp-40]
+    x86.xor r8, r8
     x86.call mm_alloc_in
-    x86.xor ecx, ecx
-    x86.mov [rbp-48], ecx
+    x86.xor r8, r8
+    x86.mov [rbp-48], r8
     x86.mov [rbp-56], eax
-    x86.mov eax, [rbp-96]
-    x86.mov [rbp-64], eax
-    x86.mov ecx, [rbp-104]
-    x86.mov [rbp-72], ecx
-    x86.mov [rbp-80], eax
+    x86.mov r9, [rbp-96]
+    x86.mov [rbp-64], r9
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-72], eax
+    x86.mov [rbp-80], r9
     x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-48]
     x86.add eax, ecx
@@ -751,7 +741,7 @@ module {
     x86.xor ecx, ecx
     x86.mov byte ptr [eax+0], ecxb
     x86.mov eax, [rbp-24]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-24]
     x86.call mm_free
     x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-40]
@@ -771,10 +761,10 @@ module {
     x86.mov ecx, [rbp-32]
     x86.mov [ecx+8], eax
     x86.mov eax, [rbp-32]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-32]
     x86.call stdlib.Print.print
     x86.mov eax, [rbp-8]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.xor eax, eax
     x86.epilogue
@@ -1133,37 +1123,32 @@ module {
   func @memory-safety.main() -> u32 {
   entry:
     x86.prologue stack_size=80
-    x86.xor eax, eax
-    x86.mov rcx, rax
+    x86.xor rcx, rcx
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
+    x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
     x86.xor ebx, ebx
-    x86.xor esi, esi
-    x86.mov edi, 8
-    x86.mov r8, 32
-    x86.xor r9, r9
-    x86.mov rcx, r8
-    x86.mov rdx, r9
+    x86.mov esi, 8
+    x86.mov rcx, 32
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
-    x86.xor ecx, ecx
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-16]
-    x86.xor ecx, ecx
-    x86.mov [eax+8], ecx
+    x86.mov edi, [rbp-16]
+    x86.xor r8, r8
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-16]
+    x86.xor eax, eax
+    x86.mov [r9+8], eax
     x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
     x86.mov eax, [rbp-16]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
-    x86.mov eax, 16
-    x86.xor ecx, ecx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
@@ -1173,14 +1158,13 @@ module {
     x86.mov ecx, [rbp-24]
     x86.mov [ecx+8], eax
     x86.mov ecx, [rbp-24]
-    x86.mov edx, 1
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-24]
+    x86.mov r8, 1
     x86.call mm_move
     x86.mov eax, 7
-    x86.mov ecx, 8
-    x86.xor edx, edx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
@@ -1188,12 +1172,12 @@ module {
     x86.mov [eax+0], ecx
     x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-32]
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, [rbp-32]
     x86.call ItemArray.push
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-24]
-    x86.mov rdx, rax
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.xor rdx, rdx
     x86.call ItemArray.get
     x86.xor ecx, ecx
     x86.mov [rbp-80], eax
@@ -1242,9 +1226,8 @@ module {
   __range_ok_5:
     x86.mov eax, [rbp-72]
     x86.mov ecx, [rbp-8]
-    x86.mov [rbp-80], eax
     x86.call mm_scope_exit
-    x86.mov eax, [rbp-80]
+    x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }
@@ -1407,7 +1390,6 @@ module {
     x86.jge memory-safety.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
-    x86.mov [rbp-48], eax
     x86.lea rdi, [rbp-24]
     x86.xor eax, eax
     x86.mov ecx, 1
@@ -1416,7 +1398,7 @@ module {
     x86.mov rdx, rcx
     x86.mov [rbp-32], edx
     x86.mov ebx, [rbp-32]
-    x86.mov esi, [rbp-48]
+    x86.mov esi, [rbp-16]
     x86.mov [ebx+0], esi
     x86.mov edi, [rbp-32]
     x86.mov r8, [edi+0]
@@ -1587,7 +1569,6 @@ module {
     x86.jle memory-safety.compute.check_0.after
   check_0:
     x86.mov eax, [rbp-8]
-    x86.mov [rbp-32], eax
     x86.lea rdi, [rbp-16]
     x86.xor eax, eax
     x86.mov ecx, 1
@@ -1596,7 +1577,7 @@ module {
     x86.mov rdx, rcx
     x86.mov [rbp-24], edx
     x86.mov ebx, [rbp-24]
-    x86.mov esi, [rbp-32]
+    x86.mov esi, [rbp-8]
     x86.mov [ebx+0], esi
     x86.mov edi, [rbp-24]
     x86.mov r8, [edi+0]
@@ -1612,20 +1593,19 @@ module {
   func @memory-safety.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 5
-    x86.mov rcx, rax
+    x86.mov rcx, 5
     x86.call memory-safety.compute
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
     x86.je memory-safety.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_28]

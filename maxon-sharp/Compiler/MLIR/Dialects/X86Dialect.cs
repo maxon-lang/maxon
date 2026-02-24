@@ -143,14 +143,14 @@ public class X86CallIndirectOp(X86Register target) : X86Op {
   public override string Mnemonic => $"x86.call {Target.ToString().ToLower()}";
 }
 
-public class X86MovMemRegOp(int displacement, X86Register src, int sizeInBytes = 8) : X86Op {
+public class X86MovMemRegOp(int displacement, X86Register src, int sizeInBytes) : X86Op {
   public int Displacement { get; } = displacement;
   public X86Register Src { get; } = src;
   public int SizeInBytes { get; } = sizeInBytes;
   public override string Mnemonic => $"x86.mov [rbp{(Displacement >= 0 ? "+" : "")}{Displacement}], {Src.ToString().ToLower()}";
 }
 
-public class X86MovRegMemOp(X86Register dest, int displacement, int sizeInBytes = 8) : X86Op {
+public class X86MovRegMemOp(X86Register dest, int displacement, int sizeInBytes) : X86Op {
   public X86Register Dest { get; } = dest;
   public int Displacement { get; } = displacement;
   public int SizeInBytes { get; } = sizeInBytes;

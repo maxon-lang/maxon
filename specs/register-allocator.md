@@ -2181,22 +2181,20 @@ module {
   func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 30
-    x86.mov ecx, 12
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
+    x86.mov rcx, 30
+    x86.mov rdx, 12
     x86.call register-allocator.add
     x86.mov [rbp-8], eax
-    x86.xor edx, edx
-    x86.cmp eax, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_13]
@@ -2303,21 +2301,20 @@ module {
   func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 20
-    x86.mov ecx, 22
-    x86.mov rdx, rax
+    x86.mov rcx, 22
+    x86.mov rdx, 20
     x86.call register-allocator.add
     x86.mov [rbp-8], eax
-    x86.xor edx, edx
-    x86.cmp eax, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_13]
@@ -3879,7 +3876,7 @@ module {
     x86.jge register-allocator.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-16]
     x86.call register-allocator.double
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
@@ -4247,27 +4244,23 @@ module {
   func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 5
-    x86.mov ecx, 10
-    x86.mov edx, 8
-    x86.mov ebx, 12
-    x86.mov esi, 7
-    x86.mov r8, rdx
-    x86.mov r9, rbx
-    x86.mov rdx, rcx
-    x86.mov rcx, rax
+    x86.mov rcx, 5
+    x86.mov rdx, 10
+    x86.mov r8, 8
+    x86.mov r9, 12
+    x86.mov rsi, 7
     x86.call register-allocator.sum5
     x86.mov [rbp-8], eax
-    x86.xor edi, edi
-    x86.cmp eax, edi
-    x86.setl r8
-    x86.movzx r8, r8b
-    x86.mov r9, 4294967295
-    x86.cmp rax, r9
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
     x86.setg eax
     x86.movzx eax, eaxb
-    x86.or r8, eax
-    x86.test r8, r8
+    x86.or ecx, eax
+    x86.test ecx, ecx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_22]
@@ -4426,35 +4419,30 @@ module {
   func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 1
-    x86.mov ecx, 2
-    x86.mov edx, 3
-    x86.mov ebx, 4
-    x86.mov esi, 5
-    x86.mov edi, 6
-    x86.mov r8, 7
-    x86.mov r9, 8
-    x86.mov eax, 9
     x86.sub rsp, 16
+    x86.mov eax, 9
     x86.mov [rsp+0], eax
-    x86.mov rax, r8
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
-    x86.xchg rbx, r9
     x86.mov rcx, 1
+    x86.mov rdx, 2
+    x86.mov r8, 3
+    x86.mov r9, 4
+    x86.mov rsi, 5
+    x86.mov rdi, 6
+    x86.mov rax, 7
+    x86.mov rbx, 8
     x86.call register-allocator.sum9
     x86.add rsp, 16
     x86.mov [rbp-8], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
-    x86.setl ecx
-    x86.movzx ecx, ecxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_34]
@@ -4605,8 +4593,7 @@ module {
   func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 5
-    x86.mov rcx, rax
+    x86.mov rcx, 5
     x86.call register-allocator.factorial
     x86.mov ecx, 256
     x86.mov [rbp-16], eax
@@ -4615,14 +4602,14 @@ module {
     x86.mov [rbp-8], edx
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.setl eax
-    x86.movzx eax, eaxb
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rax, 4294967295
+    x86.cmp rdx, rax
     x86.setg edx
     x86.movzx edx, edxb
-    x86.or eax, edx
-    x86.test eax, eax
+    x86.or ecx, edx
+    x86.test ecx, ecx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_22]
@@ -4858,17 +4845,18 @@ module {
     x86.jge register-allocator.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
-    x86.mov rcx, rax
+    x86.mov rcx, [rbp-16]
     x86.call register-allocator.identity
     x86.mov ecx, [rbp-8]
     x86.add ecx, eax
     x86.mov [rbp-8], ecx
     x86.mov edx, [rbp-32]
-    x86.mov rcx, rdx
+    x86.mov rcx, [rbp-32]
     x86.call register-allocator.identity
     x86.mov ebx, [rbp-24]
     x86.add ebx, eax
     x86.mov [rbp-24], ebx
+    x86.mov esi, [rbp-48]
     x86.mov rcx, [rbp-48]
     x86.call register-allocator.identity
     x86.mov edi, [rbp-40]
@@ -5580,26 +5568,24 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov eax, 42
-    x86.mov ecx, 1
-    x86.mov edx, 2
-    x86.mov ebx, 3
-    x86.mov esi, 4
-    x86.mov r8, rbx
-    x86.mov r9, rsi
+    x86.mov rcx, 1
+    x86.mov rdx, 2
+    x86.mov r8, 3
+    x86.mov r9, 4
     x86.call register-allocator.useRegs
-    x86.mov edi, 42
-    x86.add edi, eax
-    x86.mov [rbp-8], edi
-    x86.xor r8, r8
-    x86.cmp edi, r8
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rax, 4294967295
-    x86.cmp rdi, rax
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or r9, eax
-    x86.test r9, r9
+    x86.mov ecx, 42
+    x86.add ecx, eax
+    x86.mov [rbp-8], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_21]
@@ -5952,23 +5938,22 @@ module {
   func @register-allocator.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 10
-    x86.mov ecx, 3
-    x86.mov rdx, rax
+    x86.mov rcx, 3
+    x86.mov rdx, 10
     x86.call register-allocator.sub
-    x86.mov edx, 45
-    x86.add eax, edx
+    x86.mov ecx, 45
+    x86.add eax, ecx
     x86.mov [rbp-8], eax
-    x86.xor ebx, ebx
-    x86.cmp eax, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rax, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_15]
@@ -7697,8 +7682,7 @@ module {
     x86.cmp eax, ecx
     x86.jne register-allocator.main.process_0.cmp1
   process_0.case0:
-    x86.mov eax, 10
-    x86.mov rcx, rax
+    x86.mov rcx, 10
     x86.call register-allocator.double
     x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
@@ -7708,8 +7692,7 @@ module {
     x86.cmp eax, ecx
     x86.jne register-allocator.main.process_0.case2
   process_0.case1:
-    x86.mov eax, 20
-    x86.mov rcx, rax
+    x86.mov rcx, 20
     x86.call register-allocator.double
     x86.mov [rbp-16], eax
     x86.jmp register-allocator.main.process_0.merge
@@ -8726,9 +8709,8 @@ module {
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
-    x86.mov eax, 2
-    x86.mov rcx, rax
+    x86.prologue stack_size=48
+    x86.mov rcx, 2
     x86.call register-allocator.lookup
     x86.xor ecx, ecx
     x86.mov [rbp-8], ecx
@@ -8743,7 +8725,7 @@ module {
   otherwise_default_continue_3:
     x86.mov eax, [rbp-16]
     x86.mov [rbp-24], eax
-    x86.mov ecx, 99
+    x86.mov rcx, 99
     x86.call register-allocator.lookup
     x86.mov ecx, 42
     x86.mov [rbp-32], ecx
@@ -8758,7 +8740,6 @@ module {
   otherwise_default_continue_7:
     x86.mov eax, [rbp-40]
     x86.mov ecx, 256
-    x86.mov [rbp-56], eax
     x86.cqo
     x86.idiv ecx
     x86.mov eax, [rbp-24]
