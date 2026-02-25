@@ -125,6 +125,24 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @HashItem.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-24], edx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
+    x86.mov [ecx+0], edx
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
   func @HashBucket.next(__self_ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=64
@@ -138,33 +156,39 @@ module {
     x86.mov ebx, [edx+0]
     x86.mov [rbp-24], ebx
     x86.mov esi, [rbp-24]
-    x86.mov [rbp-56], ecx
+    x86.mov [rbp-64], ecx
     x86.mov rcx, [rbp-24]
     x86.call HashItemArray.count
-    x86.mov edi, [rbp-56]
+    x86.mov edi, [rbp-64]
     x86.cmp edi, eax
     x86.jl HashBucket.next.done_0.after
   done_0:
+    x86.xor rcx, rcx
+    x86.call mm_scope_enter
+    x86.mov [rbp-32], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, [rbp-32]
     x86.call mm_scope_exit
-    x86.mov edx, 1
-    x86.xor ebx, ebx
-    x86.lea edx, [ebx + edx]
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov ebx, 1
+    x86.xor esi, esi
+    x86.lea edx, [esi + ebx]
     x86.xor eax, eax
     x86.epilogue
     x86.ret
   done_0.after:
     x86.mov eax, [rbp-16]
     x86.mov ecx, [eax+0]
-    x86.mov [rbp-32], ecx
+    x86.mov [rbp-40], ecx
     x86.mov edx, [rbp-16]
     x86.mov ebx, [edx+8]
-    x86.mov esi, [rbp-32]
-    x86.mov rcx, [rbp-32]
+    x86.mov esi, [rbp-40]
+    x86.mov rcx, [rbp-40]
     x86.mov rdx, rbx
     x86.call HashItemArray.get
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], eax
     x86.xor edi, edi
     x86.cmp edx, edi
     x86.je HashBucket.next.otherwise_continue_2
@@ -179,25 +203,25 @@ module {
     x86.epilogue
     x86.ret
   otherwise_continue_2:
-    x86.mov eax, [rbp-40]
-    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
     x86.mov ecx, 1
     x86.mov edx, [rbp-16]
     x86.mov ebx, [edx+8]
     x86.add ebx, ecx
     x86.mov esi, [rbp-16]
     x86.mov [esi+8], ebx
-    x86.mov edi, [rbp-48]
+    x86.mov edi, [rbp-56]
     x86.mov r8, [rbp-8]
     x86.mov r9, [r8+8]
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-56]
     x86.mov rdx, r9
     x86.xor r8, r8
     x86.call mm_move
     x86.mov eax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
-    x86.mov eax, [rbp-48]
+    x86.mov eax, [rbp-56]
     x86.xor edx, edx
     x86.epilogue
     x86.ret

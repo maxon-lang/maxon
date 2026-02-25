@@ -52,6 +52,15 @@ public static class DeadFunctionElimination {
             EnqueueCallee(fnRef.FunctionName);
           if (op is MaxonClosureCreateOp closureCreate)
             EnqueueCallee(closureCreate.FunctionName);
+          // Array.get for struct elements needs the element type's clone() method
+          if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemTypeName }) {
+            EnqueueCallee($"{elemTypeName}.clone");
+            // Also enqueue the concrete alias clone when the element type is a
+            // generic alias (e.g. Entry → ____Tuple_Key_Value_String_i64)
+            var resolved = module.ResolveConcreteAlias(elemTypeName);
+            if (resolved != elemTypeName)
+              EnqueueCallee($"{resolved}.clone");
+          }
         }
       }
     }

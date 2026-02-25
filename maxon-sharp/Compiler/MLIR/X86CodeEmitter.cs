@@ -372,8 +372,9 @@ public partial class X86CodeEmitter() {
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, "mm_scope_enter"));
     EmitDword(0);
-    // Save root scope pointer at [rsp+0x28]
+    // Save root scope pointer at [rsp+0x28] and in global __mm_root_scope
     EmitBytes(0x48, 0x89, 0x44, 0x24, 0x28); // MOV [rsp+0x28], rax
+    EmitSymdataStoreI64(X86Register.Rax, "__mm_root_scope");
 
     // call __module_init (initializes globals in root scope)
     if (!string.IsNullOrEmpty(moduleInitFunctionName)) {

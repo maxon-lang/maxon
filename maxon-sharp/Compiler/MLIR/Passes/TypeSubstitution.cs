@@ -94,8 +94,13 @@ internal class TypeSubstitution {
       var resolvedParams = new Dictionary<string, MlirType>();
       foreach (var (paramName, paramType) in aliasInfo.TypeParams) {
         if (paramType is MlirTypeParameterType tp && map.TryGetValue(tp.ParameterName, out var resolved)) {
-          // Resolved type may itself be a type alias — use the concrete type from the registry
-          if (resolved is MlirStructType resolvedSt && map.TryGetValue(resolvedSt.Name, out var deepResolved)) {
+          // Only deep-resolve through the map when the resolved type is one of the
+          // source struct's own internal names (type params or aliases). This avoids
+          // chaining through user types that collide with internal alias names
+          // (e.g., user's "Entry" type vs Map's "typealias Entry = (Key, Value)").
+          if (resolved is MlirStructType resolvedSt
+              && sourceStruct.TypeParams.ContainsKey(resolvedSt.Name)
+              && map.TryGetValue(resolvedSt.Name, out var deepResolved)) {
             resolvedParams[paramName] = deepResolved;
           } else {
             resolvedParams[paramName] = resolved;

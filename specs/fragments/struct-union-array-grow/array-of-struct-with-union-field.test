@@ -238,5 +238,46 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @Entry.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+8]
+    x86.mov [rbp-16], ebx
+    x86.mov eax, [rbp-16]
+    x86.mov ebx, [eax+0]
+    x86.mov [rbp-24], ebx
+    x86.mov eax, [rbp-16]
+    x86.mov ebx, [eax+8]
+    x86.mov [rbp-32], ebx
+    x86.mov [rbp-48], edx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-40], eax
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, [rbp-48]
+    x86.mov [ecx+0], edx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov ebx, [rbp-24]
+    x86.mov [eax+0], ebx
+    x86.mov esi, [rbp-32]
+    x86.mov [eax+8], esi
+    x86.mov edi, [rbp-40]
+    x86.mov [edi+8], eax
+    x86.mov r8, [rbp-40]
+    x86.mov rcx, rax
+    x86.mov rdx, [rbp-40]
+    x86.mov r8, 1
+    x86.call mm_move
+    x86.mov eax, [rbp-40]
+    x86.epilogue
+    x86.ret
+  }
 }
 ---

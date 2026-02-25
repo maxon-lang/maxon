@@ -72,6 +72,33 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     Functions.Add(func);
   }
 
+  /// <summary>
+  /// Resolves a generic type alias (e.g. "Entry" with unresolved Key/Value params)
+  /// to its concrete monomorphized name (e.g. "____Tuple_Key_Value_String_i64").
+  /// Returns the original name if it's already concrete or has no alias info.
+  /// </summary>
+  public string ResolveConcreteAlias(string typeName) {
+    if (!TypeAliasSources.TryGetValue(typeName, out var aliasInfo)) return typeName;
+    if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) return typeName;
+    if (!aliasInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) return typeName;
+
+    // Don't resolve if the name is a concrete user-defined type that happens to
+    // share its name with an unresolved internal alias (e.g., user's "Entry" type
+    // vs Map's "typealias Entry = (Key, Value)")
+    if (TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirStructType st
+        && !st.Fields.Any(f => f.Type is MlirTypeParameterType))
+      return typeName;
+
+    foreach (var (candidateName, candidateInfo) in TypeAliasSources) {
+      if (candidateName == typeName) continue;
+      if (candidateInfo.SourceTypeName != aliasInfo.SourceTypeName) continue;
+      if (candidateInfo.TypeParams == null) continue;
+      if (candidateInfo.TypeParams.Values.Any(t => t is MlirTypeParameterType)) continue;
+      return candidateName;
+    }
+    return typeName;
+  }
+
   public MlirModule<TOp> Clone() {
     var clone = new MlirModule<TOp>();
     clone.Functions.AddRange(Functions);

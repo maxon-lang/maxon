@@ -1519,7 +1519,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var candidates = new Dictionary<string, MlirStructType>();
     foreach (var (name, type) in _typeRegistry) {
       if (type is MlirStructType st && !st.ConformingInterfaces.Contains(interfaceName)
-          && !name.StartsWith("__") && _locallyDefinedTypes.Contains(name)) {
+          && (_locallyDefinedTypes.Contains(name) || st.IsTuple)) {
         candidates[name] = st;
       }
     }
@@ -1532,9 +1532,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         bool allFieldsConform = true;
         foreach (var field in st.Fields) {
-          // Primitives and ranged primitives inherently conform to Cloneable/Equatable
-          if (field.Type is MlirRangedPrimitiveType
-              || (field.Type is not MlirStructType and not MlirUnionType and not MlirEnumType
+          // Primitives, ranged primitives, and enums/unions without associated values
+          // inherently conform to Cloneable/Equatable (they are value types)
+          if (field.Type is MlirRangedPrimitiveType or MlirEnumType
+              || (field.Type is MlirUnionType ut && !ut.HasAssociatedValues)
+              || (field.Type is not MlirStructType and not MlirUnionType
                   and not MlirInterfaceType and not MlirFunctionType and not MlirTypeParameterType))
             continue;
           var fieldTypeName = MlirType.FormatAsSourceName(field.Type);
@@ -5556,13 +5558,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var varInfo = ((ResolvedVar.Local)resolved).Info;
       var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
-      // When reassigning a managed variable from an inner scope, the new value was
-      // allocated in the current scope. Move it to the variable's declaring scope so
-      // it survives the current scope's exit.
+      // When reassigning a managed variable from an inner scope, move it to the
+      // variable's declaring scope so it survives the current scope's exit.
+      // This applies to both fresh allocations and existing variable refs, because
+      // the referenced value may be in a scope that will be destroyed.
       // Skip self-fields: the lowering handles those with mm_move under self.
-      // Skip existing variable refs: those are pointer copies, not fresh allocations.
-      if (varInfo.Kind == MaxonValueKind.Struct && !varInfo.IsSelfField && CurrentScopeVar != varInfo.DeclScopeVar
-          && !IsExistingUserVariableRef(newVal)) {
+      if (varInfo.Kind == MaxonValueKind.Struct && !varInfo.IsSelfField && CurrentScopeVar != varInfo.DeclScopeVar) {
         _currentBlock!.AddOp(new MaxonMoveOp(name, varInfo.DeclScopeVar, "reassign_move"));
       }
       _variables[name] = fnType != null

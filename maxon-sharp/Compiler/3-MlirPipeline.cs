@@ -23,6 +23,9 @@ public class MlirPipeline {
     // Monomorphize generic type methods for concrete aliases
     MonomorphizationPass.Run(module);
 
+    // Synthesize clone() for struct types created during monomorphization
+    CloneSynthesisPass.Run(module);
+
     // Remove original generic functions that were fully monomorphized
     DeadFunctionElimination.Run(module);
 

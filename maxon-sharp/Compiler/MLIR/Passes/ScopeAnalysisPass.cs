@@ -85,8 +85,10 @@ public static class ScopeAnalysisPass {
             break;
           }
 
-          case MaxonScopeExitOp exitOp: {
-            // Pop the matching scope from the stack
+          case MaxonScopeExitOp exitOp when exitOp.Tag == "block_exit": {
+            // Only pop on normal block exits — cleanup exits (return_cleanup,
+            // break_cleanup, continue_cleanup) appear in alternate control flow
+            // blocks and must not disturb the scope stack for subsequent blocks
             for (int i = scopeStack.Count - 1; i >= 0; i--) {
               if (scopeStack[i] == exitOp.ScopeVar) {
                 scopeStack.RemoveAt(i);
@@ -173,6 +175,7 @@ public static class ScopeAnalysisPass {
           }
         }
       }
+
     }
 
     // Compute derived properties for each scope
@@ -208,7 +211,8 @@ public static class ScopeAnalysisPass {
           info.StackAllocIds.Contains(a.StructLiteralResultId)
           || (!a.IsFromCall
             && IsFlatPrimitiveStruct(a.StructTypeName, module)
-            && !info.PassedToFunctionVars.Contains(a.VarName)));
+            && !info.PassedToFunctionVars.Contains(a.VarName)
+            && !nestedInStructField.Contains(a.VarName)));
 
       // CanStaticReturn: the only escaping var is the return value, it's a flat primitive
       // struct literal, and all other allocations qualify for static free.
@@ -227,7 +231,8 @@ public static class ScopeAnalysisPass {
               || info.StackAllocIds.Contains(a.StructLiteralResultId)
               || (!a.IsFromCall
                 && IsFlatPrimitiveStruct(a.StructTypeName, module)
-                && !info.PassedToFunctionVars.Contains(a.VarName)))) {
+                && !info.PassedToFunctionVars.Contains(a.VarName)
+                && !nestedInStructField.Contains(a.VarName)))) {
           info.CanStaticReturn = true;
           info.ReturnAllocResultId = retAlloc.StructLiteralResultId;
         }

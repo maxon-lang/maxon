@@ -20,6 +20,24 @@ Stdout: ```
 ```
 ---
 module {
+  func @Info.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-24], edx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
+    x86.mov [ecx+0], edx
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
   func @byte-string-literal.main() -> u32 {
   entry:
     x86.prologue stack_size=272
@@ -168,7 +186,7 @@ module {
     x86.mov rdx, [rbp-128]
     x86.call maxon_i64_to_string
     x86.mov edi, [rbp-128]
-    x86.lea_rdata r8, [__interp_lit_79]
+    x86.lea_rdata r8, [__interp_lit_87]
     x86.mov r9, r8
     x86.mov ecx, 1
     x86.mov [rbp-248], eax
@@ -445,7 +463,7 @@ module {
   entry:
     x86.mov eax, qword [rip+m]
     x86.mov rcx, rax
-    x86.call mm_free
+    x86.call mm_free_if_nonnull
     x86.ret
   }
 }

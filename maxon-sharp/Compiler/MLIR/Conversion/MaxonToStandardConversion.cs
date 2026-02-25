@@ -464,6 +464,17 @@ public static partial class MaxonToStandardConversion {
                 EmitStore(newBlock, loaded, tempStructName, varTypes);
                 structVarNames[enumPayloadOp.Result.Id] = tempStructName;
                 structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
+              } else if (enumPayloadOp.ResultKind == MaxonValueKind.Enum
+                         && enumPayloadOp.ResultStructTypeName != null
+                         && module.TypeDefs.TryGetValue(enumPayloadOp.ResultStructTypeName, out var payloadEnumDef)
+                         && payloadEnumDef is MlirUnionType payloadEnumType && payloadEnumType.HasAssociatedValues) {
+                // Associated-value enum payload: heap pointer stored in payload slot, unpack to flat vars
+                var tempName = $"__enum_payload_{enumPayloadOp.Result.Id}";
+                var loaded = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset}", varTypes);
+                EmitStore(newBlock, loaded, tempName, varTypes);
+                UnpackEnumHeapToFlatVars(newBlock, tempName, payloadEnumType, varTypes, module.TypeDefs);
+                structVarNames[enumPayloadOp.Result.Id] = tempName;
+                structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
               } else {
                 var loaded2 = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset}", varTypes);
                 valueMap[enumPayloadOp.Result] = loaded2;
@@ -1037,15 +1048,7 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonFieldAssignOp fieldAssign: {
               var structName = structVarNames[fieldAssign.StructValue.Id];
-              if (!valueMap.TryGetValue(fieldAssign.NewValue, out StdValue? mappedVal)) {
-                // NewValue might be a struct var ref (e.g., assigning a String to a field).
-                // In that case, load its heap pointer from the named variable.
-                if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var newValStructName)) {
-                  mappedVal = EmitLoad(newBlock, newValStructName, varTypes);
-                } else {
-                  throw new InvalidOperationException($"MaxonFieldAssignOp: NewValue %{fieldAssign.NewValue.Id} not in valueMap or structVarNames for {structName}.{fieldAssign.FieldName} in func {func.Name}");
-                }
-              }
+
               // Resolve the field type and offset from the struct type definition
               var faParentTypeName = structValueTypes.TryGetValue(fieldAssign.StructValue.Id, out var faptn) ? faptn : null;
               MlirStructType? faParentStructType = null;
@@ -1053,14 +1056,38 @@ public static partial class MaxonToStandardConversion {
                 faParentStructType = fapst;
               var faFieldDef = faParentStructType?.GetField(fieldAssign.FieldName);
 
-              if (faFieldDef != null) {
-                // Store through heap pointer at the field's offset
-                // Struct-typed fields store heap pointers (i64), not the struct type directly
-                var storeType = faFieldDef.Type is MlirStructType ? MlirType.I64 : faFieldDef.Type;
-                EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
+              // Associated-value enum fields need packing from flat vars to a heap pointer
+              if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var faEnumPrefix)
+                  && structValueTypes.TryGetValue(fieldAssign.NewValue.Id, out var faEnumTypeName)
+                  && module.TypeDefs.TryGetValue(faEnumTypeName, out var faEnumTypeDef)
+                  && faEnumTypeDef is MlirUnionType faEnumType && faEnumType.HasAssociatedValues) {
+                var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, faEnumPrefix, faEnumType, varTypes, module.TypeDefs);
+                if (faFieldDef != null) {
+                  EmitStructFieldStore(newBlock, enumHeapPtr, structName, faFieldDef.Offset, MlirType.I64, varTypes);
+                  EmitReparent(newBlock, (StdI64)enumHeapPtr, structName, varTypes);
+                } else {
+                  EmitStore(newBlock, enumHeapPtr, $"{structName}.{fieldAssign.FieldName}", varTypes);
+                }
               } else {
-                // Fallback: store as named variable
-                EmitStore(newBlock, mappedVal, $"{structName}.{fieldAssign.FieldName}", varTypes);
+                if (!valueMap.TryGetValue(fieldAssign.NewValue, out StdValue? mappedVal)) {
+                  if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var newValStructName)) {
+                    mappedVal = EmitLoad(newBlock, newValStructName, varTypes);
+                  } else {
+                    throw new InvalidOperationException($"MaxonFieldAssignOp: NewValue %{fieldAssign.NewValue.Id} not in valueMap or structVarNames for {structName}.{fieldAssign.FieldName} in func {func.Name}");
+                  }
+                }
+
+                if (faFieldDef != null) {
+                  // Struct-typed and union-typed fields store heap pointers (i64)
+                  var storeType = faFieldDef.Type is MlirStructType or MlirUnionType ? MlirType.I64 : faFieldDef.Type;
+                  EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
+                  // Reparent struct/union heap pointers under the parent struct
+                  if (faFieldDef.Type is MlirStructType or MlirUnionType) {
+                    EmitReparent(newBlock, (StdI64)mappedVal, structName, varTypes);
+                  }
+                } else {
+                  EmitStore(newBlock, mappedVal, $"{structName}.{fieldAssign.FieldName}", varTypes);
+                }
               }
               // No write-through needed: self is a heap pointer, and all field stores
               // go through the heap pointer directly, so the caller sees changes.
@@ -1446,15 +1473,33 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonGlobalStoreOp globalStore: {
               if (globalStore.ValueKind == MaxonValueKind.Struct) {
-                // Struct globals store the heap pointer (i64)
+                // Resolve the new heap pointer
+                StdI64 newHeapPtr;
                 if (valueMap.TryGetValue(globalStore.Value, out var mv) && mv is StdI64 i64Val) {
-                  newBlock.AddOp(new StdGlobalStoreI64Op(i64Val, globalStore.GlobalName));
+                  newHeapPtr = i64Val;
                 } else if (structVarNames.TryGetValue(globalStore.Value.Id, out var srcName)) {
-                  var heapPtr = (StdI64)EmitLoad(newBlock, srcName, varTypes);
-                  newBlock.AddOp(new StdGlobalStoreI64Op(heapPtr, globalStore.GlobalName));
+                  newHeapPtr = (StdI64)EmitLoad(newBlock, srcName, varTypes);
                 } else {
                   throw new InvalidOperationException($"Cannot store struct value to global '{globalStore.GlobalName}': no struct tracking info");
                 }
+
+                bool isModuleInit = func.Name == "__module_init" || func.Name.EndsWith(".__module_init");
+                if (!isModuleInit) {
+                  // Free old global value before storing new one.
+                  // Guard against null (global starts as zero before __module_init runs).
+                  var oldGlobalLoad = new StdGlobalLoadI64Op(globalStore.GlobalName);
+                  newBlock.AddOp(oldGlobalLoad);
+                  newBlock.AddOp(new StdCallRuntimeOp("mm_free_if_nonnull", [oldGlobalLoad.Result], null));
+
+                  // Move the new allocation to the root scope so it outlives the current function
+                  var rootScopeResult = new StdI64(MlirContext.Current.NextId());
+                  newBlock.AddOp(new StdCallRuntimeOp("mm_get_root_scope", [], rootScopeResult));
+                  var moveMode = new StdConstI64Op(0); // mode 0 = move to scope
+                  newBlock.AddOp(moveMode);
+                  newBlock.AddOp(new StdCallRuntimeOp("mm_move", [newHeapPtr, rootScopeResult, moveMode.Result], null));
+                }
+
+                newBlock.AddOp(new StdGlobalStoreI64Op(newHeapPtr, globalStore.GlobalName));
               } else {
                 var mappedValue = valueMap[globalStore.Value];
                 var storeOp = globalStore.ValueKind switch {
@@ -1534,7 +1579,7 @@ public static partial class MaxonToStandardConversion {
               LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
-              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
+              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, funcLookup, module);
               break;
             case MaxonManagedMemSetOp memSetOp:
               LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1650,7 +1695,7 @@ public static partial class MaxonToStandardConversion {
       if (meta.TypeName == null) continue;
       var globalLoad = new StdGlobalLoadI64Op(varName);
       block.AddOp(globalLoad);
-      block.AddOp(new StdCallRuntimeOp("mm_free", [globalLoad.Result], null));
+      block.AddOp(new StdCallRuntimeOp("mm_free_if_nonnull", [globalLoad.Result], null));
     }
 
     block.AddOp(new StdReturnOp(null));

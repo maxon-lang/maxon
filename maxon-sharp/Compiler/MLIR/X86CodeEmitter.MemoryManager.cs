@@ -31,6 +31,7 @@ public partial class X86CodeEmitter {
 
   public void EmitMemoryManagerFunctions() {
     DefineSymdata("__mm_current_scope", new byte[8]);
+    DefineSymdata("__mm_root_scope", new byte[8]);
     DefineSymdata("__mm_trace_enabled", BitConverter.GetBytes(Compiler.MmTrace ? (long)1 : (long)0));
     DefineSymdata("__mm_scope_id_counter", new byte[8]);
     DefineSymdata("__mm_alloc_count", new byte[8]);
@@ -79,6 +80,11 @@ public partial class X86CodeEmitter {
       "mm_scope_exit called with wrong scope (not current scope)\0"u8.ToArray());
     DefineSymdata("__mm_panic_alloc_count_underflow",
       "mm_scope_exit: global alloc count went negative (double free?)\0"u8.ToArray());
+    // Debug strings for enhanced panic output
+    DefineSymdata("__mm_debug_move_ptr", "mm_move bad ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_debug_dest", " dest=\0"u8.ToArray());
+    DefineSymdata("__mm_debug_mode", " mode=\0"u8.ToArray());
+    DefineSymdata("__mm_debug_free_ptr", "mm_free bad ptr=\0"u8.ToArray());
 
     EmitMmTracePrintTag();
     EmitMmTracePrintHex();
@@ -90,9 +96,12 @@ public partial class X86CodeEmitter {
     EmitMmMove();
     EmitMmFreeEntry();
     EmitMmFree();
+    EmitMmFreeIfNonnull();
+    EmitMmGetRootScope();
     EmitMmAllocSimple();
     EmitMmFreeSimple();
     EmitMmLeakCheck();
+    EmitMmValidatePtr();
   }
 
   // -------------------------------------------------------------------------
@@ -631,9 +640,24 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
 
-    // If entry == 0, panic (unmanaged pointer)
+    // If entry == 0, print ptr value then panic (unmanaged pointer)
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_move_entry_ok");
+    // Print "mm_move bad ptr=" and the pointer value for debugging
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_debug_move_ptr");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_debug_dest");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // dest_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_debug_mode");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // mode
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_move_unmanaged");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_move_entry_ok");
@@ -934,9 +958,15 @@ public partial class X86CodeEmitter {
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
-    // If entry == NULL, panic — mm_free called on unmanaged pointer
+    // If entry == NULL, print ptr value then panic — mm_free called on unmanaged pointer
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_free_entry_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_debug_free_ptr");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_free_unmanaged");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_free_entry_ok");
@@ -1031,6 +1061,39 @@ public partial class X86CodeEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // mm_free_if_nonnull(user_ptr_in_rcx) -> void
+  // Calls mm_free if ptr is non-null and has a valid backpointer. Silently
+  // skips null pointers — used for global struct reassignment where the old
+  // value may not have been initialized yet.
+  // -------------------------------------------------------------------------
+  private void EmitMmFreeIfNonnull() {
+    EmitRuntimeFunctionStart("mm_free_if_nonnull", 1, 0x30);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_if_nonnull_skip");
+    // Check backpointer: if [ptr-8] == 0, skip (already freed or unmanaged)
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_if_nonnull_skip");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    DefineLabel("mm_free_if_nonnull_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_get_root_scope() -> root_scope_ptr_in_rax
+  // Returns the root scope pointer stored in __mm_root_scope symdata.
+  // Used by global struct reassignment to move values to the root scope.
+  // -------------------------------------------------------------------------
+  private void EmitMmGetRootScope() {
+    EmitRuntimeFunctionStart("mm_get_root_scope", 0, 0x10);
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_root_scope");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
   // mm_alloc_simple(size_in_rcx) -> ptr_in_rax
   // Bare HeapAlloc with HEAP_ZERO_MEMORY — no AllocEntry, no backpointer header.
   // -------------------------------------------------------------------------
@@ -1098,4 +1161,44 @@ public partial class X86CodeEmitter {
     DefineLabel("mm_leak_check_done");
     EmitRuntimeFunctionEnd();
   }
+
+  // Validate a pointer has a valid AllocEntry at [ptr-8]
+  // Args: rcx = user_ptr, rdx = tag_cstr
+  // If ptr is non-null and [ptr-8] == 0, prints diagnostic and panics
+  private void EmitMmValidatePtr() {
+    DefineSymdata("__mm_validate_tag", "MM VALIDATE ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_validate_backptr", " backptr=\0"u8.ToArray());
+    DefineSymdata("__mm_validate_at", " at=\0"u8.ToArray());
+    DefineSymdata("__mm_validate_fail", "VALIDATION FAILED: ptr has no AllocEntry!\n\0"u8.ToArray());
+
+    EmitRuntimeFunctionStart("mm_validate_ptr", 2, 0x30);
+    // [rbp-8] = user_ptr, [rbp-16] = tag_cstr
+
+    // If ptr == NULL, skip (null is sometimes ok)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_validate_done");
+
+    // Load [ptr-8]
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+
+    // If non-zero, skip (valid)
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_validate_done");
+
+    // FAILED: print "MM VALIDATE ptr=0xHEX\n" then panic
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_validate_tag");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_validate_fail");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+
+    DefineLabel("mm_validate_done");
+    EmitRuntimeFunctionEnd();
+  }
+
 }

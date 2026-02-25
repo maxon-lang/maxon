@@ -60,7 +60,9 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes) {
+	  Dictionary<int, string> structValueTypes,
+	  Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+	  MlirModule<MaxonOp> module) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
@@ -69,16 +71,23 @@ public static partial class MaxonToStandardConversion {
 
 		if (op.IsStructElement) {
 			// Struct elements are heap pointers stored in the buffer (8 bytes each).
-			// Load the pointer and store in a temp var. No incref needed —
-			// scope-based memory manager handles lifetime.
+			// Load the pointer, then deep-copy via clone() so the original stays owned
+			// by the array's ManagedMemory and the copy is fully independent.
 			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(loadOp);
+
+			var elemTypeName = module.ResolveConcreteAlias(op.StructElementTypeName!);
+			var cloneName = $"{elemTypeName}.clone";
+			var cloneFunc = ResolveCallee(cloneName, funcLookup);
+			var cloneResult = new StdI64(MlirContext.Current.NextId());
+			block.AddOp(new StdCallOp(cloneFunc.Name, [(StdI64)loadOp.Result], cloneResult));
+
 			var tempName = $"__memget_{MlirContext.Current.NextId()}";
-			EmitStore(block, loadOp.Result, tempName, varTypes);
+			EmitStore(block, cloneResult, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
 			if (op.StructElementTypeName != null)
 				structValueTypes[op.Result.Id] = op.StructElementTypeName;
-			valueMap[op.Result] = loadOp.Result;
+			valueMap[op.Result] = cloneResult;
 		} else {
 			// Determine load type based on result kind
 			// For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen

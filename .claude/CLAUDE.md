@@ -30,7 +30,7 @@ The compiler uses an MLIR-inspired multi-stage pipeline:
 Key directories in `maxon-sharp/Compiler/MLIR/`:
 - `Core/` - MlirOperation, MlirValue, MlirFunction, MlirBlock
 - `Dialects/` - Maxon, Arith, MemRef, Func, Cf, X86 dialects
-- `Conversion/` - Dialect lowering patterns (AstToMaxonDialect, MaxonToStandard, StandardToX86)
+- `Conversion/` - Dialect lowering patterns 
 - `Passes/` - Optimization and transformation passes
 - `Emit/` - X86CodeEmitter for machine code generation
 

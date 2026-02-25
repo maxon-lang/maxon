@@ -143,6 +143,12 @@ internal class FunctionCloner {
       PatchManagedMemoryElementSizes(newFunc);
     }
 
+    // When a generic function's return type resolves to a struct, inject return_move
+    // ops so the return value survives scope cleanup on function exit.
+    if (newReturnType is MlirStructType) {
+      InjectReturnMoveForStructReturns(newFunc);
+    }
+
     return newFunc;
   }
 
@@ -456,9 +462,17 @@ internal class FunctionCloner {
     var resultKind = _typeSubstitution.SubstituteValueKind(memGet.ResultKind, memGet.TypeParamName);
     var paramKey = memGet.TypeParamName ?? "Element";
     var isStructElem = _typeSubstitution.TryGetValue(paramKey, out var getElemType) && getElemType is MlirStructType;
+    string? elemTypeName = null;
+    if (isStructElem && getElemType is MlirStructType st) {
+      // Use st.Name directly — the type was already resolved to its concrete form
+      // by TypeSubstitution.Build. Calling SubstituteName again would incorrectly
+      // resolve user types whose names collide with internal aliases (e.g., user's
+      // "Entry" type vs Map's internal "typealias Entry = (Key, Value)").
+      elemTypeName = st.Name;
+    }
     var cloned = new MaxonManagedMemGetOp(MapValue(memGet.ManagedStruct), MapValue(memGet.Index), resultKind) {
       IsStructElement = isStructElem,
-      StructElementTypeName = isStructElem && getElemType is MlirStructType st ? st.Name : null,
+      StructElementTypeName = elemTypeName,
       TypeParamName = memGet.TypeParamName
     };
     RegisterResult(memGet.Result, cloned.Result);
@@ -550,5 +564,53 @@ internal class FunctionCloner {
       }
     }
     return null;
+  }
+
+  /// <summary>
+  /// When a generic function's return type parameter resolves to a struct, the
+  /// original generic IR has no return_move (because the parser didn't know the
+  /// return was a struct). Inject assign + return_move before each return's
+  /// scope cleanup so the return value survives mm_scope_exit.
+  /// </summary>
+  private static void InjectReturnMoveForStructReturns(MlirFunction<MaxonOp> func) {
+    // Find the function-level scope variable (first scope_enter in entry block)
+    string? funcScopeVar = null;
+    if (func.Body.Blocks.Count > 0) {
+      foreach (var op in func.Body.Blocks[0].Operations) {
+        if (op is MaxonScopeEnterOp se) {
+          funcScopeVar = se.ResultVar;
+          break;
+        }
+      }
+    }
+    if (funcScopeVar == null) return;
+
+    foreach (var block in func.Body.Blocks) {
+      var ops = block.Operations;
+
+      // Check if this block has a return with a value and no preceding return_move
+      bool hasReturnMove = ops.Any(o => o is MaxonMoveOp mo && mo.Tag == "return_move");
+      if (hasReturnMove) continue;
+
+      for (int i = 0; i < ops.Count; i++) {
+        if (ops[i] is not MaxonReturnOp { Value: not null } ret) continue;
+
+        // Find the first return_cleanup scope_exit before this return
+        int insertIdx = i;
+        while (insertIdx > 0 && ops[insertIdx - 1] is MaxonScopeExitOp sx && sx.Tag == "return_cleanup") {
+          insertIdx--;
+        }
+
+        // Inject: assign to temp var, then move to function scope
+        var retVarName = $"__retval_{MlirContext.Current.NextId()}";
+        var assignOp = new MaxonAssignOp(retVarName, ret.Value,
+          isDeclaration: true, isMutable: false, MaxonValueKind.Struct);
+        var moveOp = new MaxonMoveOp(retVarName, funcScopeVar, "return_move");
+
+        ops.Insert(insertIdx, assignOp);
+        ops.Insert(insertIdx + 1, moveOp);
+        break; // Only one return per block
+      }
+    }
   }
 }
