@@ -31,8 +31,8 @@ This reference provides complete syntax and semantics for the Maxon programming 
 12. [Standard Library](#standard-library)
 13. [Build System](#build-system)
 14. [Memory Model](#memory-model)
-    - [Copy-by-Default Assignment](#copy-by-default-assignment)
-    - [Reference Bindings (`ref`)](#reference-bindings-ref)
+    - [Reference-by-Default Assignment](#reference-by-default-assignment)
+    - [Explicit Cloning](#explicit-cloning)
     - [Cloneable Interface](#cloneable-interface)
     - [Ownership System](#ownership-system)
 
@@ -1027,8 +1027,7 @@ let name = "Maxon"
 - Type is always inferred from the initializer
 - Scope is block-scoped
 - Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
-- For struct-typed variables, `var b = a` creates a deep copy (requires `Cloneable`; see [Copy-by-Default Assignment](#copy-by-default-assignment))
-- Use `var b = ref a` to create a reference alias instead of a copy (see [Reference Bindings](#reference-bindings-ref))
+- For struct-typed variables, `var b = a` creates a reference (alias to the same object); use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
 - All variables must be used; unused variables cause a compile error (E3012)
 - The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks.
 
@@ -2697,9 +2696,9 @@ The LSP automatically detects project boundaries and provides:
 
 ## Memory Model
 
-### Copy-by-Default Assignment
+### Reference-by-Default Assignment
 
-Assigning a struct-typed variable to another variable creates a **deep copy**:
+Assigning a struct-typed variable to another variable copies the **heap pointer**, creating a reference (alias) to the same object:
 
 ```maxon
 type Point
@@ -2707,54 +2706,35 @@ type Point
   export var y int
 end 'Point'
 
-// Point auto-conforms to Cloneable (all fields are primitive)
 var a = Point{x: 1, y: 2}
-var b = a               // deep copy -- b is an independent copy of a
+var b = a               // b is an alias for a -- both point to the same object
+b.x = 99
+print("{a.x}")          // 99 -- a and b share the same object
+```
+
+Field mutation through an alias affects the original, because both variables point to the same heap-allocated object. Reassignment, however, rebinds the variable to a new object without affecting the original:
+
+```maxon
+var a = Point{x: 1, y: 2}
+var b = a               // alias
+b = Point{x: 5, y: 6}  // rebinds b to a new object -- a is unaffected
+print("{a.x}")          // 1 -- a still points to the original
+```
+
+Primitives (`int`, `float`, `bool`, `byte`) are value types and are always copied on assignment. Only heap-allocated types (structs, strings, arrays) use reference semantics.
+
+### Explicit Cloning
+
+To create an independent deep copy of a struct, use the `.clone()` method:
+
+```maxon
+var a = Point{x: 1, y: 2}
+var b = a.clone()       // deep copy -- b is independent of a
 b.x = 99
 print("{a.x}")          // 1 -- a is unchanged
 ```
 
-For this to work, the type must implement the `Cloneable` interface. The compiler auto-generates `Cloneable` conformance for structs whose fields are all themselves Cloneable (see [Cloneable Interface](#cloneable-interface) below). If a struct has any non-Cloneable field (for example, an enum or union field), `var b = a` is a compile error (E3077).
-
-Primitives (`int`, `float`, `bool`, `byte`), `String`, and `Array` (when the element type is Cloneable) are all Cloneable, so assignment of these types always copies by default.
-
-### Reference Bindings (`ref`)
-
-To create an alias that shares the same underlying object instead of copying, use the `ref` keyword:
-
-```maxon
-var a = Point{x: 1, y: 2}
-var b = ref a            // b is an alias for a -- both point to the same object
-b.x = 99
-print("{a.x}")           // 99 -- a and b share the same object
-```
-
-**Rules for `ref` bindings:**
-
-| Rule | Error |
-|------|-------|
-| `ref` binding must use `var`, not `let` | E3070 |
-| `ref` cannot target a standalone primitive (e.g., `var r = ref someInt`) | E3071 |
-| A reference cannot escape its scope (e.g., `return ref local` is forbidden) | E3072 |
-| `ref` to a struct field requires the source to be immutable (`let`) | E3076 |
-
-```maxon
-// ref to a field -- source must be let
-let p = Point{x: 10, y: 20}
-var rx = ref p.x          // OK -- p is let
-rx = 42
-print("{p.x}")            // 42
-
-var q = Point{x: 1, y: 2}
-// var rq = ref q.x       // ERROR E3076 -- q is var, not let
-
-// ref cannot escape
-function bad(p Point) returns int
-  var r = ref p.x
-  // return ref r        // ERROR E3072 -- reference cannot escape scope
-  return r
-end 'bad'
-```
+The type must implement the `Cloneable` interface to use `.clone()`. See [Cloneable Interface](#cloneable-interface) below.
 
 ### Cloneable Interface
 
@@ -2773,7 +2753,7 @@ end 'Cloneable'
 - `String`
 - `Array` (when the element type is Cloneable)
 
-**When auto-conformance fails:** If a struct contains a field whose type is not Cloneable (such as an enum or union), the compiler will not auto-generate conformance. Attempting `var b = a` on such a type produces error E3077. You can still use `var b = ref a` to create a reference alias.
+**When auto-conformance fails:** If a struct contains a field whose type is not Cloneable (such as an enum or union), the compiler will not auto-generate conformance. Calling `.clone()` on such a type produces error E3077.
 
 ### Auto-Equatable
 
@@ -2799,15 +2779,15 @@ To compare reference identity (whether two variables point to the same heap obje
 
 ```maxon
 var a = Point{x: 1, y: 2}
-var b = a                   // deep copy
-var c = ref a               // alias
+var b = a.clone()           // deep copy
+var c = a                   // alias (reference to same object)
 a is b                      // false -- different objects
 a is c                      // true -- same object
 ```
 
 ### Scope Cleanup
 
-When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via `ref`), the refcount is incremented. When a variable goes out of scope, `maxon_release` decrements the refcount and frees the memory if it reaches zero.
+When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via assignment), the refcount is incremented. When a variable goes out of scope, `maxon_release` decrements the refcount and frees the memory if it reaches zero.
 
 ```maxon
 function compute() returns int

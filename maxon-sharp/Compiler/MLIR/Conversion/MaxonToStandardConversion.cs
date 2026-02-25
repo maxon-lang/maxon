@@ -408,11 +408,18 @@ public static partial class MaxonToStandardConversion {
               // Struct-typed values store their heap pointer as a single i64 slot
               int slotIdx = 0;
               for (int ai = 0; ai < enumConstructOp.Args.Count; ai++) {
-                if (structVarNames.TryGetValue(enumConstructOp.Args[ai].Id, out var structSrcName)
-                    && enumCase.AssociatedValues![ai].Type is MlirStructType) {
-                  // Struct-typed associated value: store heap pointer as single slot
-                  var heapPtr = EmitLoad(newBlock, structSrcName, varTypes);
-                  EmitStore(newBlock, heapPtr, $"{tempName}.__payload_{slotIdx}", varTypes);
+                if (structVarNames.TryGetValue(enumConstructOp.Args[ai].Id, out var structSrcName)) {
+                  if (structValueTypes.TryGetValue(enumConstructOp.Args[ai].Id, out var nestedEnumTypeName)
+                      && module.TypeDefs.TryGetValue(nestedEnumTypeName, out var nestedEnumDef)
+                      && nestedEnumDef is MlirUnionType nestedEnumType && nestedEnumType.HasAssociatedValues) {
+                    // Associated-value enum: pack flat vars to heap pointer
+                    var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, structSrcName, nestedEnumType, varTypes, module.TypeDefs);
+                    EmitStore(newBlock, enumHeapPtr, $"{tempName}.__payload_{slotIdx}", varTypes);
+                  } else {
+                    // Struct-typed associated value: store heap pointer as single slot
+                    var heapPtr = EmitLoad(newBlock, structSrcName, varTypes);
+                    EmitStore(newBlock, heapPtr, $"{tempName}.__payload_{slotIdx}", varTypes);
+                  }
                   slotIdx++;
                 } else {
                   var argStdVal = valueMap[enumConstructOp.Args[ai]];

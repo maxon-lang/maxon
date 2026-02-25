@@ -20,8 +20,7 @@ Preserves the source code's intent. Code here is not heavily optimized; it exist
 
 * **Types**: `!maxhl.ranged<base, min, max>` (e.g., `!maxhl.ranged<i64, 0, 150>`), `!maxhl.union<cases...>`, `!maxhl.enum<...>`, `!maxhl.struct<Name>`.
 * **Op: maxhl.move**: Marks a variable as moved (transferred ownership).
-* **Op: maxhl.borrow**: Borrows a variable by reference.
-* **Op: maxhl.clone**: Deep copy of a `Cloneable` type.
+* **Op: maxhl.clone**: Explicit deep copy of a `Cloneable` type (invoked via `.clone()`).
 * **Op: maxhl.assert_range**: Emits a runtime panic if an expression falls out of bounds.
 * **Op: maxhl.try**: Represents `try...otherwise` error handling.
 * **Op: maxhl.match**: High-level pattern matching, including Rust-style range patterns.
@@ -29,7 +28,7 @@ Preserves the source code's intent. Code here is not heavily optimized; it exist
 ### 2.2 `MaxMid` (Maxon Mid-Level Dialect)
 The bridge between Maxon semantics and generic compiler concepts. Maxon-specific syntax sugar is removed.
 
-* **Types**: `!maxmid.ptr<T>` (heap references for arrays and var structs), `!maxmid.tagged_union<tag_type, payload_type>`.
+* **Types**: `!maxmid.ptr<T>` (heap references — all structs are reference types), `!maxmid.tagged_union<tag_type, payload_type>`.
 * **Op: maxmid.alloc**: Heap allocation.
 * **Op: maxmid.retain / maxmid.release**: Reference counting ops for scope-based automatic cleanup.
 * **Op: maxmid.construct_tagged**: Lowers union cases and errors to memory layouts (0=ok, 1=err tag).
@@ -59,12 +58,12 @@ These passes enforce the language reference rules before any code is modified.
 * **`-maxon-verify-purity`**: Validates pure/impure function returns. Throws `E3064` if pure results are discarded, or `E3065` if impure results lack explicit discard via `let _ =`.
 * **`-maxon-ownership-checker`**: Performs compile-time dataflow analysis to track `Owned` vs `Moved` states, preventing use-after-move errors.
 * **`-maxon-range-enforcement`**: Checks static constants against `!maxhl.ranged` boundaries and injects `maxhl.assert_range` for runtime checks.
-* **`-maxon-auto-clone`**: Scans struct assignments to enforce deep copy behaviors, throwing `E3077` if the type is uncloneable.
+* **`-maxon-alias-analysis`**: Validates that struct assignments create references (aliases) and that `.clone()` is used for explicit deep copies when needed.
 
 ### Phase 2: Mid-Level Lowering (`MaxHL` to `MaxMid` & Core MLIR)
 * **`-maxon-lower-errors`**: Converts `throws ErrorType` functions to return a `!maxmid.tagged_union`. Lowers `maxhl.try` into conditional branches.
 * **`-maxon-lower-match`**: Flattens `maxhl.match` into sequences of `scf.if` and `cf.switch`, handling range patterns like `1..=5`.
-* **`-maxon-inject-arc`**: Inserts `maxmid.release` at block exits for heap allocations and `maxmid.retain` for `ref` bindings.
+* **`-maxon-inject-arc`**: Inserts `maxmid.release` at block exits for heap allocations and `maxmid.retain` for aliased references.
 * **`-maxon-lower-closures`**: Lambda lifting for closures, capturing variables by reference.
 
 ### Phase 3: SOTA Optimization (Standard MLIR)

@@ -418,7 +418,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   };
 
   // VarInfo now tracks struct type name for struct variables, or function type for function variables
-  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string DeclScopeVar, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false, bool IsRef = false, bool IsSelfField = false);
+  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string DeclScopeVar, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false, bool IsSelfField = false);
 
   private string CurrentScopeVar => _mmScopeStack.Peek();
 
@@ -4945,22 +4945,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Advance(); // consume 'return'
 
     if (!Check(TokenType.Newline) && !Check(TokenType.End) && !Check(TokenType.Eof)) {
-      // Check for 'return ref local' — returning a reference to a local is always an error
-      if (Check(TokenType.Ref)) {
-        Advance(); // consume 'ref'
-        var refExpr = ParseExpression();
-        var refValue = ResolveExprValue(refExpr);
-        // Find the source variable name
-        string? varName = null;
-        if (refValue is MaxonStruct) {
-          varName = FindSourceVariableName(refValue);
-        }
-        throw new CompileError(ErrorCode.SemanticRefEscapesScope,
-          varName != null
-            ? $"cannot return a reference to local variable '{varName}'"
-            : "cannot return a reference to a local variable");
-      }
-
       var expr = ParseExpression();
       string? returnVarName = expr is ExprResult.VarRef rv ? rv.VarName : null;
       var value = ResolveExprValue(expr);
@@ -5374,8 +5358,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// <summary>
   /// Check if a value originates from a user-declared variable reference (MaxonStructVarRefOp
   /// pointing to a non-internal variable name), as opposed to a fresh allocation from a struct
-  /// literal, function call return, or internal temp. Used to determine whether copy-by-default
-  /// cloning is needed.
+  /// literal, function call return, or internal temp. Used to distinguish pointer copies from
+  /// fresh allocations (e.g., to decide whether a reassign_move is needed).
   /// </summary>
   private bool IsExistingUserVariableRef(MaxonValue value) {
     foreach (var op in _currentBlock!.Operations) {
@@ -5384,18 +5368,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return true;
     }
     return false;
-  }
-
-  /// <summary>
-  /// Trace a MaxonValue back through the current block's ops to find the source variable name.
-  /// </summary>
-  private string? FindSourceVariableName(MaxonValue value) {
-    foreach (var op in _currentBlock!.Operations) {
-      if (op is MaxonStructVarRefOp varRef && varRef.Result.Id == value.Id) {
-        return varRef.VarName;
-      }
-    }
-    return null;
   }
 
   private void ParseVarOrLetDecl(bool isMutable) {
@@ -5416,40 +5388,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     Expect(TokenType.Equals);
 
-    // Check for 'ref' keyword: var b = ref a
-    var isRef = false;
-    if (Check(TokenType.Ref)) {
-      Advance(); // consume 'ref'
-      isRef = true;
-      if (!isMutable) {
-        throw new CompileError(ErrorCode.SemanticRefWithLetBinding,
-          "'ref' binding must use 'var', not 'let'");
-      }
-    }
-
     _lastExprCallOp = null;
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr) ?? throw new InvalidOperationException($"Compiler bug: Variable '{name}' initialization expression did not produce a value (this should not happen - please report this bug)");
-
-    // Validate ref targets
-    if (isRef) {
-      var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock!.Operations[^1] : null;
-
-      // ref to standalone primitive is an error (unless it's a field access)
-      if (initValue is not MaxonStruct && lastOp is not MaxonFieldAccessOp) {
-        throw new CompileError(ErrorCode.SemanticRefOnStandalonePrimitive,
-          "'ref' cannot reference a standalone primitive variable; ref targets structs, fields, or array elements");
-      }
-
-      // ref to field/element of a mutable source is an error
-      if (lastOp is MaxonFieldAccessOp fieldAccess) {
-        var sourceVarName = FindSourceVariableName(fieldAccess.StructValue);
-        if (sourceVarName != null && _variables.TryGetValue(sourceVarName, out var sourceVar) && sourceVar.Mutable) {
-          throw new CompileError(ErrorCode.SemanticRefFieldOfMutableSource,
-            $"'ref' to field of mutable variable '{sourceVarName}'; source must be immutable ('let')");
-        }
-      }
-    }
 
     // Mark the underlying call as let-discarded for purity checking
     if (isDiscard) {
@@ -5465,38 +5406,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (initValue is MaxonStruct structVal) {
       var kind = MaxonValueKind.Struct;
-
-      // Structs are heap-allocated, so assigning from an existing variable must deep-copy
-      // to preserve value semantics (each variable owns its own allocation)
-      var effectiveValue = (MaxonValue)initValue;
-      var effectiveRef = isRef;
-      if (!isRef && IsExistingUserVariableRef(initValue)) {
-        if (TypeConformsToInterface(structVal.TypeName, "Cloneable")) {
-          // Deep copy via clone()
-          var cloneCall = new MaxonCallOp($"{structVal.TypeName}.clone", [initValue], MaxonValueKind.Struct, structVal.TypeName);
-          _currentBlock!.AddOp(cloneCall);
-          effectiveValue = cloneCall.Result!;
-          effectiveRef = true; // clone result is fresh allocation, treat as ref
-        } else {
-          throw new CompileError(ErrorCode.SemanticCopyNonCloneable,
-            $"cannot copy type '{structVal.TypeName}': not all fields implement 'Cloneable'");
-        }
-      }
-
-      _currentBlock!.AddOp(new MaxonAssignOp(name, effectiveValue, isDeclaration: true, isMutable: isMutable, kind, isRef: effectiveRef));
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, effectiveValue, _currentBlock!, CurrentScopeVar, structVal.TypeName, IsRef: isRef);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, structVal.TypeName);
     } else if (initValue is MaxonEnum enumVal) {
       var kind = MaxonValueKind.Enum;
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind, isRef: isRef));
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, enumVal.TypeName, IsRef: isRef);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, enumVal.TypeName);
     } else if (initValue is MaxonFunctionPtr) {
       var kind = MaxonValueKind.Function;
       var fnType = GetFunctionTypeFromLastOp();
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind, isRef: isRef));
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, FnTypeName: fnType, IsRef: isRef);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, FnTypeName: fnType);
     } else {
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
@@ -5507,9 +5430,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           && rt is MlirRangedPrimitiveType rpt && rpt.OptimalType == MlirType.F32) {
         kind = MaxonValueKind.Float32;
       }
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind, isRef: isRef));
+      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, StructTypeName: rangedTypeName, IsRef: isRef);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, StructTypeName: rangedTypeName);
     }
   }
 
@@ -5637,7 +5560,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // allocated in the current scope. Move it to the variable's declaring scope so
       // it survives the current scope's exit.
       // Skip self-fields: the lowering handles those with mm_move under self.
-      if (varInfo.Kind == MaxonValueKind.Struct && !varInfo.IsSelfField && CurrentScopeVar != varInfo.DeclScopeVar) {
+      // Skip existing variable refs: those are pointer copies, not fresh allocations.
+      if (varInfo.Kind == MaxonValueKind.Struct && !varInfo.IsSelfField && CurrentScopeVar != varInfo.DeclScopeVar
+          && !IsExistingUserVariableRef(newVal)) {
         _currentBlock!.AddOp(new MaxonMoveOp(name, varInfo.DeclScopeVar, "reassign_move"));
       }
       _variables[name] = fnType != null

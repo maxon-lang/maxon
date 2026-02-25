@@ -88,21 +88,22 @@ let _ = sideEffect()  // discard: no binding, no unused check
 var globalCounter = 0   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
 
-// Copy-by-default for structs (requires Cloneable)
+// Reference-by-default for structs
 var a = Point{x: 1, y: 2}
-var b = a               // deep copy -- b is independent
-b.x = 99               // a.x is still 1
+var b = a               // reference -- b is an alias for a (same object)
+b.x = 99               // a.x is now 99
+b = Point{x: 5, y: 6}  // rebinds b -- a is unaffected
 
-// Reference binding with ref
-var c = ref a           // c is an alias for a (same object)
-c.x = 99               // a.x is now 99
+// Explicit clone for independent copy (requires Cloneable)
+var c = a.clone()       // deep copy -- c is independent
+c.x = 42               // a.x is still 99
 ```
 
 All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `let _ =` can only discard function call results, not literals or other expressions.
 
-**Assignment semantics:** For struct types, `var b = a` creates a deep copy (the type must be `Cloneable`; error E3077 if not). Use `var b = ref a` to create a reference alias instead. `ref` must use `var` (not `let`), cannot target standalone primitives, and references cannot escape their scope.
+**Assignment semantics:** For struct types, `var b = a` creates a reference (alias to the same heap object). Field mutation through the alias affects the original. Reassignment (`b = Point{...}`) rebinds without affecting the original. Use `var b = a.clone()` for an independent deep copy (the type must be `Cloneable`; error E3077 if not). Primitives are always copied by value.
 
-**Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types.
+**Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
 **Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs transfer ownership to the caller and are not freed at scope exit.
 

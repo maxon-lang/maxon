@@ -1,7 +1,7 @@
 ---
 feature: memory-safety
 status: experimental
-keywords: [ref, reference, copy, clone, cloneable, equatable, ownership, region, lifetime]
+keywords: [reference, alias, clone, cloneable, equatable, ownership, region, lifetime]
 category: core
 ---
 
@@ -9,43 +9,37 @@ category: core
 
 ## Documentation
 
-### Copy-by-Default Assignment
+### Reference-by-Default Assignment
 
-In Maxon, assigning a struct variable to another variable creates a **deep copy** by default:
+In Maxon, assigning a struct variable to another variable copies the **heap pointer**, creating an alias (reference) to the same object:
 
 ```text
 var a = Point{x: 1, y: 2}
-var b = a        // b is an independent copy of a
-b.x = 99        // a.x is still 1
+var b = a        // b is an alias — same object as a
+b.x = 99        // a.x is also 99 (shared mutation)
+```
+
+Rebinding a variable to a new struct does not affect the other:
+
+```text
+var a = Point{x: 1, y: 2}
+var b = a
+b = Point{x: 5, y: 6}  // rebinds b; a is unchanged
+```
+
+Primitives are unaffected — `var b = a` copies the value for int, float, bool, and byte.
+
+### Explicit Clone with `.clone()`
+
+To create an independent deep copy, use `.clone()`:
+
+```text
+var a = Point{x: 1, y: 2}
+var b = a.clone()   // b is a new, independent copy
+b.x = 99           // a.x is still 1
 ```
 
 This requires the type to implement the `Cloneable` interface. The compiler auto-generates `Cloneable` conformance for any struct whose fields are all Cloneable (all primitives, String, Array, and Cloneable structs qualify).
-
-### References with `ref`
-
-To create a reference (alias) to an existing struct, use `ref`:
-
-```text
-var a = Point{x: 1, y: 2}
-var b = ref a    // b is a reference to a (same object)
-b.x = 99        // a.x is also 99
-```
-
-References can also target struct fields and array elements:
-
-```text
-let p = Point{x: 1, y: 2}
-var xRef = ref p.x    // reference to the x field
-```
-
-A `ref` to a struct field or array element requires the source container to be immutable (`let`). This prevents dangling references when the source is reassigned.
-
-### Reference Rules
-
-- `ref` target must be `var`, not `let` (`let b = ref a` is an error)
-- `ref` to a standalone primitive is an error (`var b = ref 42`)
-- `ref` to a field/element of a mutable (`var`) container is an error
-- Use `is` to compare reference identity; use `==` for content equality (requires `Equatable`)
 
 ### Equality
 
@@ -63,7 +57,7 @@ Every object is owned by a region (stack frame, struct, or array). When a region
 
 ## Tests
 
-<!-- test: copy-by-default -->
+<!-- test: assignment-creates-alias -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -84,10 +78,10 @@ end 'main'
 0
 ```
 ```stdout
-1
+99
 ```
 
-<!-- test: ref-creates-alias -->
+<!-- test: rebind-does-not-mutate -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -98,8 +92,8 @@ end 'Point'
 
 function main() returns ExitCode
   var a = Point{x: 1, y: 2}
-  var b = ref a
-  b.x = 99
+  var b = a
+  b = Point{x: 99, y: 99}
   print("{a.x}")
   return 0
 end 'main'
@@ -108,79 +102,10 @@ end 'main'
 0
 ```
 ```stdout
-99
+1
 ```
 
-<!-- test: ref-let-binding-error -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Point
-  export var x Integer
-  export var y Integer
-end 'Point'
-
-function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  let b = ref a
-  return 0
-end 'main'
-```
-```maxoncstderr
-error E3070: 'ref' binding must use 'var', not 'let'
-```
-
-<!-- test: ref-standalone-primitive-error -->
-```maxon
-function main() returns ExitCode
-  var a = 42
-  var b = ref a
-  return 0
-end 'main'
-```
-```maxoncstderr
-error E3071: 'ref' cannot reference a standalone primitive variable; ref targets structs, fields, or array elements
-```
-
-<!-- test: ref-field-immutable-ok -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Point
-  export var x Integer
-  export var y Integer
-end 'Point'
-
-function main() returns ExitCode
-  let p = Point{x: 42, y: 10}
-  var r = ref p.x
-  return r
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: ref-field-mutable-error -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Point
-  export var x Integer
-  export var y Integer
-end 'Point'
-
-function main() returns ExitCode
-  var p = Point{x: 1, y: 2}
-  var r = ref p.x
-  return 0
-end 'main'
-```
-```maxoncstderr
-error E3076: 'ref' to field of mutable variable 'p'; source must be immutable ('let')
-```
-
-<!-- test: non-cloneable-copy-error -->
+<!-- test: non-cloneable-assignment-ok -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -196,14 +121,14 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-  var a = Item{color: Color.red, value: 1}
+  var a = Item{color: Color.red, value: 42}
   var b = a
-  print("{b.value}")
-  return 0
+  b.value = 99
+  return a.value
 end 'main'
 ```
-```maxoncstderr
-error E3077: cannot copy type 'Item': not all fields implement 'Cloneable'
+```exitcode
+99
 ```
 
 <!-- test: auto-cloneable -->
@@ -217,7 +142,7 @@ end 'Point'
 
 function main() returns ExitCode
   var a = Point{x: 10, y: 20}
-  var b = a
+  var b = a.clone()
   b.x = 99
   if a is not b 'diff'
     return a.x + a.y
@@ -233,7 +158,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var a = "hello"
-  var b = a
+  var b = a.clone()
   if a is not b 'diff'
     return 1
   end 'diff'
@@ -248,7 +173,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var a = [1, 2, 3]
-  var b = a
+  var b = a.clone()
   if a is not b 'diff'
     return 1
   end 'diff'
@@ -274,7 +199,7 @@ end 'Outer'
 
 function main() returns ExitCode
   var x = Outer{a: Inner{value: 42}, b: 10}
-  var y = x
+  var y = x.clone()
   y.a.value = 99
   y.b = 0
   print("{x.a.value}\n")
@@ -349,7 +274,7 @@ end 'Point'
 
 function main() returns ExitCode
   var a = Point{x: 1, y: 2}
-  var b = ref a
+  var b = a
   if a is b 'same'
     return 1
   end 'same'
@@ -360,7 +285,7 @@ end 'main'
 1
 ```
 
-<!-- test: is-after-copy -->
+<!-- test: is-after-clone -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -371,7 +296,7 @@ end 'Point'
 
 function main() returns ExitCode
   var a = Point{x: 1, y: 2}
-  var b = a
+  var b = a.clone()
   if a is not b 'diff'
     return 1
   end 'diff'
@@ -402,121 +327,6 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR
-=== maxon
-module {
-  func @memory-safety.createAndDrop() -> i64 {
-  entry:
-    __scope_8 = maxon.scope_enter {tag = memory-safety.createAndDrop}
-    %9 = maxon.literal {value = 42 : i64}
-    %10 = maxon.struct_literal @Resource
-    maxon.assign %10 {var = r} {decl = 1 : i1} {mut = 1 : i1}
-    %11 = maxon.struct_var_ref r
-    %12 = maxon.field_access .id %11
-    maxon.scope_exit {scope = __scope_8} {tag = return_cleanup}
-    maxon.return %12
-  }
-  func @memory-safety.main() -> i64 {
-  entry:
-    __scope_13 = maxon.scope_enter {tag = memory-safety.main}
-    %14 = maxon.call @memory-safety.createAndDrop
-    maxon.assign %14 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %15 = maxon.literal {value = 0 : i64}
-    %16 = maxon.binop %14, %15 {op = lt}
-    %17 = maxon.literal {value = 4294967295 : i64}
-    %18 = maxon.binop %14, %17 {op = gt}
-    %19 = maxon.binop %16, %18 {op = or}
-    maxon.cond_br %19 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at scope-cleanup.test:14: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
-  __range_ok_0:
-    %21 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_exit {scope = __scope_13} {tag = return_cleanup}
-    maxon.return %21
-  }
-}
-=== standard
-module {
-  func @memory-safety.createAndDrop() -> i64 {
-  entry:
-    %1 = arith.constant {value = 42 : i64}
-    memref.bulk_zero __stk_2, 1
-    %3 = memref.lea __stk_2
-    %4 = std.ptr_to_i64 %3
-    memref.store %4, r
-    %5 = memref.load r : i64
-    memref.store_indirect %1, %5+0
-    %6 = memref.load r : i64
-    %7 = memref.load_indirect %6+0
-    func.return %7
-  }
-  func @memory-safety.main() -> u32 {
-  entry:
-    %9 = func.call @memory-safety.createAndDrop
-    memref.store %9, __range_val_0
-    %10 = arith.constant {value = 0 : i64}
-    %11 = arith.cmpi lt %9, %10
-    %12 = arith.constant {value = 4294967295 : i64}
-    %13 = arith.cmpi gt %9, %12
-    %14 = arith.ori1 %11, %13
-    cf.cond_br %14 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %15 = memref.lea_symdata __panic_msg_20
-    %16 = std.ptr_to_i64 %15
-    std.call_runtime @maxon_panic %16
-  __range_ok_0:
-    %17 = memref.load __range_val_0 : i64
-    func.return %17
-  }
-}
-=== x86
-module {
-  func @memory-safety.createAndDrop() -> i64 {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 42
-    x86.lea rdi, [rbp-8]
-    x86.xor eax, eax
-    x86.mov ecx, 1
-    x86.rep_stosq
-    x86.lea rcx, [rbp-8]
-    x86.mov rdx, rcx
-    x86.mov [rbp-16], edx
-    x86.mov ebx, [rbp-16]
-    x86.mov esi, 42
-    x86.mov [ebx+0], esi
-    x86.mov edi, [rbp-16]
-    x86.mov eax, [edi+0]
-    x86.epilogue
-    x86.ret
-  }
-  func @memory-safety.main() -> u32 {
-  entry:
-    x86.prologue stack_size=16
-    x86.call memory-safety.createAndDrop
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl ecx
-    x86.movzx ecx, ecxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
-    x86.je memory-safety.main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_20]
-    x86.mov rcx, rax
-    x86.call maxon_panic
-  __range_ok_0:
-    x86.mov eax, [rbp-8]
-    x86.epilogue
-    x86.ret
-  }
-}
-```
 
 <!-- test: return-ownership-transfer -->
 ```maxon
@@ -543,257 +353,6 @@ end 'main'
 ```
 ```stdout
 1
-```
-```RequiredMLIR
-=== maxon
-module {
-  func @memory-safety.makeRef() -> Point {
-  entry:
-    __scope_13 = maxon.scope_enter {tag = memory-safety.makeRef}
-    %14 = maxon.literal {value = 1 : i64}
-    %15 = maxon.literal {value = 2 : i64}
-    %16 = maxon.struct_literal @Point
-    maxon.assign %16 {var = local} {decl = 1 : i1} {mut = 1 : i1}
-    %17 = maxon.struct_var_ref local
-    maxon.move {var = local} {dest = __scope_13} {tag = return_move}
-    maxon.scope_exit {scope = __scope_13} {tag = return_cleanup}
-    maxon.return %17
-  }
-  func @memory-safety.main() -> i64 {
-  entry:
-    __scope_18 = maxon.scope_enter {tag = memory-safety.main}
-    %19 = maxon.call @memory-safety.makeRef
-    maxon.assign %19 {var = p} {decl = 1 : i1} {mut = 1 : i1}
-    %20 = maxon.struct_var_ref p
-    %21 = maxon.field_access .x %20
-    %22 = maxon.string_interp
-    maxon.call @stdlib.Print.print %22
-    %23 = maxon.literal {value = 0 : i64}
-    maxon.scope_exit {scope = __scope_18} {tag = return_cleanup}
-    maxon.return %23
-  }
-}
-=== standard
-module {
-  func @memory-safety.makeRef() -> i64 {
-  entry:
-    %1 = arith.constant {value = 1 : i64}
-    %2 = arith.constant {value = 2 : i64}
-    %3 = arith.constant {value = 16 : i64}
-    %4 = arith.constant {value = 0 : i64}
-    %5 = std.call_runtime @mm_alloc %3, %4
-    memref.store %5, local
-    %6 = memref.load local : i64
-    memref.store_indirect %1, %6+0
-    %7 = memref.load local : i64
-    memref.store_indirect %2, %7+8
-    %8 = memref.load local : i64
-    func.return %8
-  }
-  func @memory-safety.main() -> u32 {
-  entry:
-    %9 = arith.constant {value = 0 : i64}
-    %10 = std.call_runtime @mm_scope_enter %9
-    memref.store %10, __scope_18
-    %11 = func.call @memory-safety.makeRef
-    memref.store %11, p
-    %13 = memref.load p : i64
-    %14 = memref.load_indirect %13+0
-    %15 = arith.constant {value = 21 : i64}
-    %16 = arith.constant {value = 0 : i64}
-    %17 = std.call_runtime @mm_alloc %15, %16
-    memref.store %17, __tostr_buf_17
-    %18 = std.call_runtime @maxon_i64_to_string %14, %17
-    %19 = memref.load __tostr_buf_17 : i64
-    %20 = arith.constant {value = 16 : i64}
-    %21 = arith.constant {value = 0 : i64}
-    %22 = std.call_runtime @mm_alloc %20, %21
-    memref.store %22, __interptmp_22
-    %23 = arith.constant {value = 32 : i64}
-    %24 = arith.constant {value = 0 : i64}
-    %25 = std.call_runtime @mm_alloc_in %23, %22, %24
-    memref.store %25, __interp_managed_22
-    %26 = arith.constant {value = 1 : i64}
-    %27 = arith.addi %18, %26
-    %28 = arith.constant {value = 0 : i64}
-    %29 = std.call_runtime @mm_alloc_in %27, %25, %28
-    %30 = arith.constant {value = 0 : i64}
-    memref.store %30, __interp_offset_22
-    memref.store %29, __interp_buf_22
-    memref.store %18, __interp_totallen_22
-    memref.store %19, __interp_partbuf_22_0
-    memref.store %18, __interp_partlen_22_0
-    %31 = memref.load __interp_buf_22 : i64
-    %32 = memref.load __interp_offset_22 : i64
-    %33 = arith.addi %31, %32
-    %34 = memref.load __interp_partbuf_22_0 : i64
-    %35 = memref.load __interp_partlen_22_0 : i64
-    std.memcopy %34, %33, %35
-    %39 = memref.load __interp_buf_22 : i64
-    %40 = memref.load __interp_totallen_22 : i64
-    %41 = arith.addi %39, %40
-    %42 = arith.constant {value = 0 : i64}
-    memref.store_indirect %42, %41+0
-    %43 = memref.load __tostr_buf_17 : i64
-    std.call_runtime @mm_free %43
-    %44 = memref.load __interp_buf_22 : i64
-    %45 = memref.load __interp_managed_22 : i64
-    memref.store_indirect %44, %45+0
-    %46 = memref.load __interp_totallen_22 : i64
-    %47 = memref.load __interp_managed_22 : i64
-    memref.store_indirect %46, %47+8
-    %48 = memref.load __interp_managed_22 : i64
-    memref.store_indirect %46, %48+16
-    %49 = arith.constant {value = 1 : i64}
-    %50 = memref.load __interp_managed_22 : i64
-    memref.store_indirect %49, %50+24
-    %51 = memref.load __interp_managed_22 : i64
-    %52 = memref.load __interptmp_22 : i64
-    memref.store_indirect %51, %52+0
-    %53 = arith.constant {value = 0 : i64}
-    %54 = memref.load __interptmp_22 : i64
-    memref.store_indirect %53, %54+8
-    %55 = memref.load __interptmp_22 : i64
-    func.call @stdlib.Print.print %55
-    %56 = arith.constant {value = 0 : i64}
-    %57 = memref.load __scope_18 : i64
-    std.call_runtime @mm_scope_exit %57
-    func.return %56
-  }
-}
-=== x86
-module {
-  func @memory-safety.makeRef() -> i64 {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov eax, 1
-    x86.mov ecx, 2
-    x86.mov rcx, 16
-    x86.xor rdx, rdx
-    x86.call mm_alloc
-    x86.mov [rbp-8], eax
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, 1
-    x86.mov [edx+0], ebx
-    x86.mov esi, [rbp-8]
-    x86.mov edi, 2
-    x86.mov [esi+8], edi
-    x86.mov eax, [rbp-8]
-    x86.epilogue
-    x86.ret
-  }
-  func @memory-safety.main() -> u32 {
-  entry:
-    x86.prologue stack_size=96
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.call memory-safety.makeRef
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-88], ecx
-    x86.mov rcx, 21
-    x86.xor rdx, rdx
-    x86.call mm_alloc
-    x86.mov [rbp-24], eax
-    x86.mov rcx, [rbp-88]
-    x86.mov rdx, [rbp-24]
-    x86.call maxon_i64_to_string
-    x86.mov edx, [rbp-24]
-    x86.mov [rbp-96], eax
-    x86.mov rcx, 16
-    x86.xor rdx, rdx
-    x86.call mm_alloc
-    x86.mov [rbp-32], eax
-    x86.mov rdx, [rbp-32]
-    x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
-    x86.mov [rbp-40], eax
-    x86.mov ebx, 1
-    x86.mov esi, [rbp-96]
-    x86.lea edi, [esi + ebx]
-    x86.mov rcx, rdi
-    x86.mov rdx, [rbp-40]
-    x86.xor r8, r8
-    x86.call mm_alloc_in
-    x86.xor r8, r8
-    x86.mov [rbp-48], r8
-    x86.mov [rbp-56], eax
-    x86.mov r9, [rbp-96]
-    x86.mov [rbp-64], r9
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-72], eax
-    x86.mov [rbp-80], r9
-    x86.mov eax, [rbp-56]
-    x86.mov ecx, [rbp-48]
-    x86.add eax, ecx
-    x86.mov ecx, [rbp-72]
-    x86.mov edx, [rbp-80]
-    x86.mov rsi, ecx
-    x86.mov rdi, eax
-    x86.mov rcx, edx
-    x86.rep_movsb
-    x86.mov eax, [rbp-56]
-    x86.mov ecx, [rbp-64]
-    x86.add eax, ecx
-    x86.xor ecx, ecx
-    x86.mov byte ptr [eax+0], ecxb
-    x86.mov eax, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_free
-    x86.mov eax, [rbp-56]
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+0], eax
-    x86.mov eax, [rbp-64]
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+8], eax
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+16], eax
-    x86.mov eax, 1
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+24], eax
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-32]
-    x86.mov [ecx+0], eax
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-32]
-    x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-32]
-    x86.mov rcx, [rbp-32]
-    x86.call stdlib.Print.print
-    x86.mov eax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.xor eax, eax
-    x86.epilogue
-    x86.ret
-  }
-}
-```
-
-<!-- test: ref-escapes-scope-error -->
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-type Point
-  export var x Integer
-  export var y Integer
-end 'Point'
-
-function makeRef() returns Point
-  var local = Point{x: 1, y: 2}
-  return ref local
-end 'makeRef'
-
-function main() returns ExitCode
-  var p = makeRef()
-  return 0
-end 'main'
-```
-```maxoncstderr
-error E3072: cannot return a reference to local variable 'local'
 ```
 
 <!-- test: block-scope-struct-release -->
@@ -1856,7 +1415,7 @@ end 'isSame'
 
 function main() returns ExitCode
   var x = Box{value: 10}
-  var y = ref x
+  var y = x
   var z = Box{value: 10}
   var same = isSame(a: x, b: y)
   var diff = isSame(a: x, b: z)
@@ -1866,4 +1425,3 @@ end 'main'
 ```exitcode
 1
 ```
-

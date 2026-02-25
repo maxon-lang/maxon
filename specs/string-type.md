@@ -1301,12 +1301,12 @@ b
 c
 ```
 
-<!-- test: cow-mutation-copies -->
-### Copy-by-Default Isolates String Mutation
+<!-- test: clone-isolates-string-mutation -->
+### Clone Isolates String Mutation
 ```maxon
 function main() returns ExitCode
   var original = "HELLO"
-  var copy = original
+  var copy = original.clone()
   copy = copy.toLower()
   print("{original}\n")
   print("{copy}\n")
@@ -1321,13 +1321,13 @@ HELLO
 hello
 ```
 
-<!-- test: cow-original-unchanged -->
-### Copy-by-Default Preserves Original
+<!-- test: clone-preserves-original -->
+### Clone Preserves Original
 ```maxon
 function main() returns ExitCode
   var a = "TEST STRING"
-  var b = a
-  var c = a
+  var b = a.clone()
+  var c = a.clone()
   b = b.toLower()
   print("{a}\n")
   print("{b}\n")

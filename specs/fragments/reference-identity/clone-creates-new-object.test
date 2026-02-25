@@ -1,4 +1,4 @@
-// Test: is-after-copy
+// Test: clone-creates-new-object
 typealias Integer = int(i64.min to i64.max)
 
 type Point
@@ -8,14 +8,14 @@ end 'Point'
 
 function main() returns ExitCode
   var a = Point{x: 1, y: 2}
-  var b = a
-  if a is not b 'diff'
+  var b = a.clone()
+  if a is b 'check'
     return 1
-  end 'diff'
+  end 'check'
   return 0
 end 'main'
 ---
-ExitCode: 1
+ExitCode: 0
 ---
 module {
   func @Point.clone(__self_ptr: i64) -> i64 {
@@ -42,7 +42,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @memory-safety.main() -> u32 {
+  func @reference-identity.main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.xor rcx, rcx
@@ -70,15 +70,15 @@ module {
     x86.mov eax, [rbp-32]
     x86.mov ecx, [rbp-40]
     x86.cmp eax, ecx
-    x86.je memory-safety.main.diff_0.after
-  diff_0:
+    x86.jne reference-identity.main.check_0.after
+  check_0:
     x86.mov eax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
-  diff_0.after:
+  check_0.after:
     x86.mov eax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit

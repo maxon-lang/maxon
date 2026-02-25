@@ -1,4 +1,4 @@
-// Test: copy-isolates-mutation
+// Test: is-after-clone
 typealias Integer = int(i64.min to i64.max)
 
 type Point
@@ -8,9 +8,11 @@ end 'Point'
 
 function main() returns ExitCode
   var a = Point{x: 1, y: 2}
-  var b = a
-  b.x = 99
-  return a.x
+  var b = a.clone()
+  if a is not b 'diff'
+    return 1
+  end 'diff'
+  return 0
 end 'main'
 ---
 ExitCode: 1
@@ -40,7 +42,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @reference-identity.main() -> u32 {
+  func @memory-safety.main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.xor rcx, rcx
@@ -65,32 +67,22 @@ module {
     x86.mov rcx, [rbp-32]
     x86.call Point.clone
     x86.mov [rbp-40], eax
-    x86.mov eax, 99
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+0], eax
     x86.mov eax, [rbp-32]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-48], ecx
-    x86.xor eax, eax
-    x86.cmp ecx, eax
-    x86.setl eax
-    x86.movzx eax, eaxb
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
-    x86.setg ecx
-    x86.movzx ecx, ecxb
-    x86.or eax, ecx
-    x86.test eax, eax
-    x86.je reference-identity.main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_28]
-    x86.mov rcx, rax
-    x86.call maxon_panic
-  __range_ok_0:
-    x86.mov eax, [rbp-48]
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, [rbp-40]
+    x86.cmp eax, ecx
+    x86.je memory-safety.main.diff_0.after
+  diff_0:
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
-    x86.mov eax, [rbp-48]
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  diff_0.after:
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.xor eax, eax
     x86.epilogue
     x86.ret
   }
