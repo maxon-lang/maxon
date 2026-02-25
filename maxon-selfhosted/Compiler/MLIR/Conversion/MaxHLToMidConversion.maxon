@@ -1,0 +1,155 @@
+// MaxHL -> Mid-level conversion.
+// Lowers maxhl.* ops to arith/cf/func/memref/runtime dialect ops.
+// Walks the MlirModule structure: functions -> blocks -> ops.
+
+export function lowerMaxHLToMid(module MlirModule) returns MlirModule
+    logDebug(LogCategory.mlir, message: "Lowering MaxHL to Mid dialects")
+    var result = createMlirModule()
+
+    var fi = 0
+    while fi < module.functions.count() 'eachFunc'
+        let srcFunc = try module.functions.get(fi) otherwise 'skipFunc'
+            fi = fi + 1
+            continue
+        end 'skipFunc'
+        var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+
+        var bi = 0
+        while bi < srcFunc.region.blocks.count() 'eachBlock'
+            let srcBlock = try srcFunc.region.blocks.get(bi) otherwise 'skipBlock'
+                bi = bi + 1
+                continue
+            end 'skipBlock'
+            var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+            // Override the auto-assigned id to match source block id
+            dstBlock.id = srcBlock.id
+
+            // Lower ops
+            var oi = 0
+            while oi < srcBlock.ops.count() 'eachOp'
+                let op = try srcBlock.ops.get(oi) otherwise 'skipOp'
+                    oi = oi + 1
+                    continue
+                end 'skipOp'
+                lowerOp(op, dstBlock: dstBlock)
+                oi = oi + 1
+            end 'eachOp'
+
+            // Lower terminator
+            if srcBlock.hasTerminator 'hasTerm'
+                let loweredTerm = lowerTerminator(srcBlock.terminator)
+                dstBlock.terminator = loweredTerm
+                dstBlock.hasTerminator = true
+            end 'hasTerm'
+
+            bi = bi + 1
+        end 'eachBlock'
+
+        // Match block IDs: set nextBlockId from source
+        dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+
+        result.functions.push(dstFunc)
+        fi = fi + 1
+    end 'eachFunc'
+
+    logDebug(LogCategory.mlir, message: "MaxHL->Mid lowering complete")
+    return result
+end 'lowerMaxHLToMid'
+
+function lowerOp(op MlirOp, dstBlock MlirBlock)
+    match op 'dispatch'
+        maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock)
+        arith(a) then dstBlock.ops.push(op)
+        cf(c) then dstBlock.ops.push(op)
+        func(f) then dstBlock.ops.push(op)
+        memref(m) then dstBlock.ops.push(op)
+        runtime(r) then dstBlock.ops.push(op)
+        maxx64(x) then dstBlock.ops.push(op)
+        maxarm64(a) then dstBlock.ops.push(op)
+    end 'dispatch'
+end 'lowerOp'
+
+function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock)
+    match hlOp 'lower'
+        literal(resultId, value) then dstBlock.ops.push(MlirOp.arith(ArithOp.constI64(resultId, value)))
+        floatLiteral(resultId, rawBits) then dstBlock.ops.push(MlirOp.arith(ArithOp.constF64(resultId, rawBits)))
+        varDecl(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
+        varLoad(resultId, slotId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
+        varStore(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
+        add(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.addI64(resultId, leftId, rightId)))
+        sub(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.subI64(resultId, leftId, rightId)))
+        mul(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.mulI64(resultId, leftId, rightId)))
+        div(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.divI64(resultId, leftId, rightId)))
+        mod(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.remI64(resultId, leftId, rightId)))
+        neg(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.negI64(resultId, operandId)))
+        bitNot(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.bitNotI64(resultId, operandId)))
+        bitAnd(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.andI64(resultId, leftId, rightId)))
+        bitOr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.orI64(resultId, leftId, rightId)))
+        bitXor(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.xorI64(resultId, leftId, rightId)))
+        shl(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.shlI64(resultId, leftId, rightId)))
+        shr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.shrI64(resultId, leftId, rightId)))
+        cmpEq(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Eq(resultId, leftId, rightId)))
+        cmpNe(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Ne(resultId, leftId, rightId)))
+        cmpLt(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Lt(resultId, leftId, rightId)))
+        cmpLe(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Le(resultId, leftId, rightId)))
+        cmpGt(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Gt(resultId, leftId, rightId)))
+        cmpGe(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Ge(resultId, leftId, rightId)))
+        floatCmpEq(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpF64Eq(resultId, leftId, rightId)))
+        condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget)))
+        br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
+        call(resultId, callee) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee)))
+        ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
+        printLiteral(data) then dstBlock.ops.push(MlirOp.runtime(RuntimeOp.printLiteral(data)))
+        printInt(valueId) then dstBlock.ops.push(MlirOp.runtime(RuntimeOp.printInt(valueId)))
+    end 'lower'
+end 'lowerMaxHLOp'
+
+function lowerTerminator(op MlirOp) returns MlirOp
+    match op 'dispatch'
+        maxhl(hlOp) then return lowerMaxHLTerminator(hlOp)
+        arith(a) then return op
+        cf(c) then return op
+        func(f) then return op
+        memref(m) then return op
+        runtime(r) then return op
+        maxx64(x) then return op
+        maxarm64(a) then return op
+    end 'dispatch'
+    return op
+end 'lowerTerminator'
+
+function lowerMaxHLTerminator(hlOp MaxHLOp) returns MlirOp
+    match hlOp 'lower'
+        condBr(condId, thenTarget, elseTarget) then return MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget))
+        br(target) then return MlirOp.cf(CfOp.br(target))
+        ret(retValId) then return MlirOp.func(FuncOp.ret(retValId))
+        literal(resultId, value) then return MlirOp.maxhl(hlOp)
+        floatLiteral(resultId, rawBits) then return MlirOp.maxhl(hlOp)
+        varDecl(slotId, valueId) then return MlirOp.maxhl(hlOp)
+        varLoad(resultId, slotId) then return MlirOp.maxhl(hlOp)
+        varStore(slotId, valueId) then return MlirOp.maxhl(hlOp)
+        add(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        sub(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        mul(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        div(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        mod(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        neg(resultId, operandId) then return MlirOp.maxhl(hlOp)
+        bitNot(resultId, operandId) then return MlirOp.maxhl(hlOp)
+        bitAnd(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        bitOr(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        bitXor(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        shl(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        shr(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        cmpEq(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        cmpNe(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        cmpLt(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        cmpLe(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        cmpGt(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        cmpGe(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        floatCmpEq(resultId, leftId, rightId) then return MlirOp.maxhl(hlOp)
+        call(resultId, callee) then return MlirOp.maxhl(hlOp)
+        printLiteral(data) then return MlirOp.maxhl(hlOp)
+        printInt(valueId) then return MlirOp.maxhl(hlOp)
+    end 'lower'
+    return MlirOp.maxhl(hlOp)
+end 'lowerMaxHLTerminator'

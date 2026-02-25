@@ -1,0 +1,825 @@
+// ARM64 (AArch64) machine code emitter — block-based.
+// Emits fixed-width 32-bit instructions from MaxArm64Op dialect ops.
+// Walks MlirModule -> functions -> blocks -> ops.
+// Uses BlockId -> code offset maps for jump resolution.
+// OS-specific stubs are parameterized by OsDescriptor.
+
+typealias MaxArm64Offset = int(0 to u64.max)
+typealias MaxArm64OffsetArray = Array with MaxArm64Offset
+
+// --- Block offset tracking ---
+// Maps BlockId -> code offset for jump fixup resolution.
+
+typealias BlockOffsetMap = Array with MaxArm64Offset
+typealias BlockIdFixupArray = Array with BlockIdFixup
+
+type BlockIdFixup
+    export var instrOffset MaxArm64Offset
+    export var targetBlock BlockId
+    export var isCond bool
+end 'BlockIdFixup'
+
+function blockOffsetMapGet(m BlockOffsetMap, blockId BlockId) returns MaxArm64Offset
+    let result = try m.get(blockId) otherwise 0
+    return result
+end 'blockOffsetMapGet'
+
+function blockOffsetMapSet(m BlockOffsetMap, blockId BlockId, offset MaxArm64Offset)
+    while m.count() <= blockId 'grow'
+        m.push(0)
+    end 'grow'
+    m.set(blockId, value: offset)
+end 'blockOffsetMapSet'
+
+// --- Instruction emit helper ---
+
+function maxArm64EmitInsn(code ByteArray, insn MachineWord)
+    code.push(insn and 0xFF)
+    code.push((insn shr 8) and 0xFF)
+    code.push((insn shr 16) and 0xFF)
+    code.push((insn shr 24) and 0xFF)
+end 'maxArm64EmitInsn'
+
+// --- Register encoding ---
+
+function maxArm64RegNum(reg MaxArm64Register) returns MachineWord
+    match reg 'map'
+        MaxArm64Register.x0 then return 0
+        MaxArm64Register.x1 then return 1
+        MaxArm64Register.x2 then return 2
+        MaxArm64Register.x3 then return 3
+        MaxArm64Register.x4 then return 4
+        MaxArm64Register.x5 then return 5
+        MaxArm64Register.x6 then return 6
+        MaxArm64Register.x7 then return 7
+        MaxArm64Register.x8 then return 8
+        MaxArm64Register.x29 then return 29
+        MaxArm64Register.x30 then return 30
+        MaxArm64Register.sp then return 31
+    end 'map'
+end 'maxArm64RegNum'
+
+// --- Condition code encoding ---
+
+function maxArm64CondNum(cond MaxArm64CondCode) returns MachineWord
+    match cond 'map'
+        MaxArm64CondCode.eq then return 0x0
+        MaxArm64CondCode.ne then return 0x1
+        MaxArm64CondCode.lt then return 0xB
+        MaxArm64CondCode.le then return 0xD
+        MaxArm64CondCode.gt then return 0xC
+        MaxArm64CondCode.ge then return 0xA
+    end 'map'
+end 'maxArm64CondNum'
+
+// --- Instruction helpers ---
+
+// STP X29, X30, [SP, #-frameSize]! (pre-indexed, 64-bit)
+function maxArm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
+    let imm7 = (0 - frameSize) / 8 and 0x7F
+    let insn = 0xA9800000 or (imm7 shl 15) or (30 shl 10) or (31 shl 5) or 29
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitStpPreIndex'
+
+// MOV X29, SP => ADD X29, SP, #0
+function maxArm64EmitMovFpSp(code ByteArray)
+    code.append(b"\xfd\x03\x00\x91")
+end 'maxArm64EmitMovFpSp'
+
+// LDP X29, X30, [SP], #frameSize (post-indexed, 64-bit)
+function maxArm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
+    let imm7 = frameSize / 8 and 0x7F
+    let insn = 0xA8C00000 or (imm7 shl 15) or (30 shl 10) or (31 shl 5) or 29
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitLdpPostIndex'
+
+// RET (return via X30)
+function maxArm64EmitRet(code ByteArray)
+    code.append(b"\xc0\x03\x5f\xd6")
+end 'maxArm64EmitRet'
+
+// MOVZ Xd, #imm16 (no shift)
+function maxArm64EmitMovz(code ByteArray, rd MachineWord, imm16 MachineWord)
+    let insn = 0xD2800000 or ((imm16 and 0xFFFF) shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMovz'
+
+// MOVZ Xd, #imm16, LSL #16
+function maxArm64EmitMovzLsl16(code ByteArray, rd MachineWord, imm16 MachineWord)
+    let insn = 0xD2A00000 or ((imm16 and 0xFFFF) shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMovzLsl16'
+
+// MOVK Xd, #imm16, LSL #16
+function maxArm64EmitMovkLsl16(code ByteArray, rd MachineWord, imm16 MachineWord)
+    let insn = 0xF2A00000 or ((imm16 and 0xFFFF) shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMovkLsl16'
+
+// MOVK Xd, #imm16, LSL #32
+function maxArm64EmitMovkLsl32(code ByteArray, rd MachineWord, imm16 MachineWord)
+    let insn = 0xF2C00000 or ((imm16 and 0xFFFF) shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMovkLsl32'
+
+// MOVK Xd, #imm16, LSL #48
+function maxArm64EmitMovkLsl48(code ByteArray, rd MachineWord, imm16 MachineWord)
+    let insn = 0xF2E00000 or ((imm16 and 0xFFFF) shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMovkLsl48'
+
+// Load a full 64-bit immediate into register Xd using MOVZ + MOVK sequence.
+function maxArm64EmitMovImm(code ByteArray, rd MachineWord, value MachineWord)
+    let chunk0 = value and 0xFFFF
+    let chunk1 = (value shr 16) and 0xFFFF
+    let chunk2 = (value shr 32) and 0xFFFF
+    let chunk3 = (value shr 48) and 0xFFFF
+
+    maxArm64EmitMovz(code, rd: rd, imm16: chunk0)
+    if chunk1 != 0 'k16'
+        maxArm64EmitMovkLsl16(code, rd: rd, imm16: chunk1)
+    end 'k16'
+    if chunk2 != 0 'k32'
+        maxArm64EmitMovkLsl32(code, rd: rd, imm16: chunk2)
+    end 'k32'
+    if chunk3 != 0 'k48'
+        maxArm64EmitMovkLsl48(code, rd: rd, imm16: chunk3)
+    end 'k48'
+end 'maxArm64EmitMovImm'
+
+// STR Xt, [X29, #offset] (unsigned offset, scaled by 8)
+// offset = 16 + slotIndex * 8
+function maxArm64EmitStrSlot(code ByteArray, rt MachineWord, slotIndex VarSlot)
+    let offset = 16 + slotIndex * 8
+    let insn = 0xF9000000 or ((offset / 8) shl 10) or (29 shl 5) or rt
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitStrSlot'
+
+// LDR Xt, [X29, #offset] (unsigned offset, scaled by 8)
+// offset = 16 + slotIndex * 8
+function maxArm64EmitLdrSlot(code ByteArray, rt MachineWord, slotIndex VarSlot)
+    let offset = 16 + slotIndex * 8
+    let insn = 0xF9400000 or ((offset / 8) shl 10) or (29 shl 5) or rt
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitLdrSlot'
+
+// ADD Xd, Xn, Xm (64-bit register)
+function maxArm64EmitAdd(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x8B000000 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitAdd'
+
+// SUB Xd, Xn, Xm (64-bit register)
+function maxArm64EmitSub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0xCB000000 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitSub'
+
+// MUL Xd, Xn, Xm (64-bit register)
+function maxArm64EmitMul(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9B007C00 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMul'
+
+// SDIV Xd, Xn, Xm (signed divide)
+function maxArm64EmitSdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9AC00C00 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitSdiv'
+
+// NEG Xd, Xn => SUB Xd, XZR, Xn
+function maxArm64EmitNeg(code ByteArray, rd MachineWord, rn MachineWord)
+    let insn = 0xCB000000 or (rn shl 16) or (31 shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitNeg'
+
+// MVN Xd, Xn => ORN Xd, XZR, Xn
+function maxArm64EmitMvn(code ByteArray, rd MachineWord, rn MachineWord)
+    let insn = 0xAA2003E0 or (rn shl 16) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMvn'
+
+// AND Xd, Xn, Xm
+function maxArm64EmitAnd(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x8A000000 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitAnd'
+
+// ORR Xd, Xn, Xm
+function maxArm64EmitOrr(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0xAA000000 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitOrr'
+
+// EOR Xd, Xn, Xm
+function maxArm64EmitEor(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0xCA000000 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitEor'
+
+// LSLV Xd, Xn, Xm (variable shift left)
+function maxArm64EmitLslv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9AC02000 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitLslv'
+
+// ASRV Xd, Xn, Xm (variable arithmetic shift right)
+function maxArm64EmitAsrv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9AC02800 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitAsrv'
+
+// MSUB Xd, Xn, Xm, Xa => Xd = Xa - Xn * Xm
+function maxArm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
+    let insn = 0x9B008000 or (rm shl 16) or (ra shl 10) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMsub'
+
+// UDIV Xd, Xn, Xm
+function maxArm64EmitUdiv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    let insn = 0x9AC00800 or (rm shl 16) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitUdiv'
+
+// Remainder: SDIV X2, X0, X1; MSUB X0, X2, X1, X0 => X0 = X0 - (X0/X1)*X1
+function maxArm64EmitRem(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+    maxArm64EmitSdiv(code, rd: 2, rn: rn, rm: rm)
+    maxArm64EmitMsub(code, rd: rd, rn: 2, rm: rm, ra: rn)
+end 'maxArm64EmitRem'
+
+// CMP Xn, Xm => SUBS XZR, Xn, Xm
+function maxArm64EmitCmp(code ByteArray, rn MachineWord, rm MachineWord)
+    let insn = 0xEB00001F or (rm shl 16) or (rn shl 5)
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitCmp'
+
+// CMP Xn, #0
+function maxArm64EmitCmpRegZero(code ByteArray, rn MachineWord)
+    let insn = 0xF100001F or (rn shl 5)
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitCmpRegZero'
+
+// B.cond with imm19 placeholder (patched later)
+function maxArm64EmitCondBranch(code ByteArray, cond MachineWord)
+    let insn = 0x54000000 or cond
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitCondBranch'
+
+// B (unconditional) with imm26 placeholder (patched later)
+function maxArm64EmitBranch(code ByteArray)
+    code.append(b"\x00\x00\x00\x14")
+end 'maxArm64EmitBranch'
+
+// BL (branch and link) with imm26 placeholder (patched later)
+function maxArm64EmitBranchLink(code ByteArray)
+    code.append(b"\x00\x00\x00\x94")
+end 'maxArm64EmitBranchLink'
+
+// SVC #0 (supervisor call for Linux syscalls)
+function maxArm64EmitSvc(code ByteArray)
+    code.append(b"\x01\x00\x00\xd4")
+end 'maxArm64EmitSvc'
+
+// BLR Xn (branch to register with link)
+function maxArm64EmitBlr(code ByteArray, rn MachineWord)
+    let insn = 0xD63F0000 or (rn shl 5)
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitBlr'
+
+// BR Xn (branch to register, no link)
+function maxArm64EmitBr(code ByteArray, rn MachineWord)
+    let insn = 0xD61F0000 or (rn shl 5)
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitBr'
+
+// ADRP Xd, #immhi (4KB page-relative, placeholder -- patched by relocation)
+function maxArm64EmitAdrp(code ByteArray, rd MachineWord)
+    let insn = 0x90000000 or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitAdrp'
+
+// LDR Xd, [Xn, #imm12] (unsigned offset, scaled by 8)
+function maxArm64EmitLdrImm(code ByteArray, rt MachineWord, rn MachineWord, imm12 MachineWord)
+    let insn = 0xF9400000 or ((imm12 / 8) shl 10) or (rn shl 5) or rt
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitLdrImm'
+
+// STRB Wt, [Xn, #offset] (unsigned offset, unscaled byte)
+function maxArm64EmitStrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+    let insn = 0x39000000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitStrb'
+
+// LDRB Wt, [Xn, #offset]
+function maxArm64EmitLdrb(code ByteArray, rt MachineWord, rn MachineWord, offset MachineWord)
+    let insn = 0x39400000 or ((offset and 0xFFF) shl 10) or (rn shl 5) or rt
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitLdrb'
+
+// ADR Xd, #offset (PC-relative, +/- 1MB range)
+function maxArm64EmitAdr(code ByteArray, rd MachineWord, offset MachineWord)
+    let immlo = offset and 0x3
+    let immhi = (offset shr 2) and 0x7FFFF
+    let insn = (immlo shl 29) or 0x10000000 or (immhi shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitAdr'
+
+// SUB Xd, Xn, #imm12 (immediate)
+function maxArm64EmitSubImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
+    let insn = 0xD1000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitSubImm'
+
+// ADD Xd, Xn, #imm12 (immediate)
+function maxArm64EmitAddImm(code ByteArray, rd MachineWord, rn MachineWord, imm12 MachineWord)
+    let insn = 0x91000000 or ((imm12 and 0xFFF) shl 10) or (rn shl 5) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitAddImm'
+
+// CBZ Xn, #offset (compare and branch if zero)
+function maxArm64EmitCbz(code ByteArray, rn MachineWord, imm19 MachineWord)
+    let insn = 0xB4000000 or ((imm19 and 0x7FFFF) shl 5) or rn
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitCbz'
+
+// CBNZ Xn, #offset (compare and branch if not zero)
+function maxArm64EmitCbnz(code ByteArray, rn MachineWord, imm19 MachineWord)
+    let insn = 0xB5000000 or ((imm19 and 0x7FFFF) shl 5) or rn
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitCbnz'
+
+// MOV Xd, Xn => ORR Xd, XZR, Xn
+function maxArm64EmitMovReg(code ByteArray, rd MachineWord, rn MachineWord)
+    let insn = 0xAA0003E0 or (rn shl 16) or rd
+    maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMovReg'
+
+// --- Patch helpers ---
+
+// Patch a B or BL instruction at instrOffset with a PC-relative offset in instruction units.
+function maxArm64PatchBranch(code ByteArray, instrOffset MaxArm64Offset, targetOffset MaxArm64Offset)
+    let relBytes = targetOffset - instrOffset
+    let relInsns = relBytes / 4
+    let origInsn = readDword(code, offset: instrOffset)
+    let patched = (origInsn and 0xFC000000) or (relInsns and 0x3FFFFFF)
+    patchDword(code, offset: instrOffset, value: patched)
+end 'maxArm64PatchBranch'
+
+// Patch a B.cond instruction at instrOffset with a PC-relative offset.
+function maxArm64PatchCondBranch(code ByteArray, instrOffset MaxArm64Offset, targetOffset MaxArm64Offset)
+    let relBytes = targetOffset - instrOffset
+    let relInsns = relBytes / 4
+    let origInsn = readDword(code, offset: instrOffset)
+    let condBits = origInsn and 0xF
+    let patched = 0x54000000 or ((relInsns and 0x7FFFF) shl 5) or condBits
+    patchDword(code, offset: instrOffset, value: patched)
+end 'maxArm64PatchCondBranch'
+
+// --- Label management for function names (call fixups) ---
+
+function maxArm64RecordLabel(labelNames ByteArrayArray, labelOffsets MaxArm64OffsetArray, name ByteArray, offset MaxArm64Offset)
+    logTrace(LogCategory.codegen, message: "ARM64 Label '{String.from(name)}' at code offset {offset}")
+    labelNames.push(name)
+    labelOffsets.push(offset)
+end 'maxArm64RecordLabel'
+
+function maxArm64LookupLabel(labelNames ByteArrayArray, labelOffsets MaxArm64OffsetArray, name ByteArray) returns MaxArm64Offset
+    var i = 0
+    while i < labelNames.count() 'search'
+        let labelName = try labelNames.get(i) otherwise 'next'
+            i = i + 1
+            continue
+        end 'next'
+        if bytesEqual(labelName, b: name) 'found'
+            return try labelOffsets.get(i) otherwise 0
+        end 'found'
+        i = i + 1
+    end 'search'
+    logError(LogCategory.codegen, message: "ARM64 unresolved label '{String.from(name)}'")
+    return 0
+end 'maxArm64LookupLabel'
+
+// --- Fixup types for function calls (by name) ---
+
+type MaxArm64CallFixup
+    export var instrOffset MaxArm64Offset
+    export var targetName ByteArray
+end 'MaxArm64CallFixup'
+typealias MaxArm64CallFixupArray = Array with MaxArm64CallFixup
+
+// --- Fixup resolution ---
+
+// Resolve block-based jump fixups using BlockId -> offset map.
+function maxArm64ResolveBlockJumpFixups(code ByteArray, blockOffsets BlockOffsetMap, jumpFixups BlockIdFixupArray)
+    for fixup in jumpFixups 'resolve'
+        let targetOffset = blockOffsetMapGet(blockOffsets, blockId: fixup.targetBlock)
+        if fixup.isCond 'cond'
+            maxArm64PatchCondBranch(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
+        end 'cond' else 'uncond'
+            maxArm64PatchBranch(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
+        end 'uncond'
+    end 'resolve'
+end 'maxArm64ResolveBlockJumpFixups'
+
+// Resolve call fixups using function name -> offset labels.
+function maxArm64ResolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets MaxArm64OffsetArray, callFixups MaxArm64CallFixupArray)
+    logTrace(LogCategory.codegen, message: "ARM64 resolving {callFixups.count()} call fixups")
+    for fixup in callFixups 'resolve'
+        let targetOffset = maxArm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
+        maxArm64PatchBranch(code, instrOffset: fixup.instrOffset, targetOffset: targetOffset)
+    end 'resolve'
+end 'maxArm64ResolveCallFixups'
+
+// --- OS-parameterized stubs ---
+
+// Emit _start: BL main (patched later), then exit via OsDescriptor strategy
+function maxArm64EmitStart(code ByteArray, osDesc OsDescriptor, callFixups MaxArm64CallFixupArray, relocations RelocationArray) returns MaxArm64Offset
+    let mainCallFixupOffset = code.count()
+    var mainName = ByteArray{}
+    mainName.push(109)
+    mainName.push(97)
+    mainName.push(105)
+    mainName.push(110)
+    callFixups.push(MaxArm64CallFixup{instrOffset: mainCallFixupOffset, targetName: mainName})
+    maxArm64EmitBranchLink(code)
+
+    match osDesc.exit 'exitStrategy'
+        syscall(num) then maxArm64EmitExitSyscall(code, syscallNumber: num)
+        iatCall(slotIdx) then maxArm64EmitExitIat(code, relocations: relocations, slotIndex: slotIdx)
+    end 'exitStrategy'
+
+    return mainCallFixupOffset
+end 'maxArm64EmitStart'
+
+// Exit via syscall: MOV X8, #N; SVC #0
+function maxArm64EmitExitSyscall(code ByteArray, syscallNumber MachineWord)
+    maxArm64EmitMovz(code, rd: 8, imm16: syscallNumber)
+    maxArm64EmitSvc(code)
+end 'maxArm64EmitExitSyscall'
+
+// Exit via IAT (Windows): load ExitProcess from IAT, tail-call with exit code in X0
+function maxArm64EmitExitIat(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
+    maxArm64EmitAdrp(code, rd: 16)
+    maxArm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+    maxArm64EmitBr(code, rn: 16)
+end 'maxArm64EmitExitIat'
+
+// Emit write_stdout stub parameterized by OsDescriptor
+function maxArm64EmitWriteStdout(code ByteArray, osDesc OsDescriptor, relocations RelocationArray) returns MaxArm64Offset
+    let offset = code.count()
+    match osDesc.write 'writeStrategy'
+        syscall(writeNum, fd) then maxArm64EmitWriteStdoutSyscall(code, writeNumber: writeNum, fd: fd)
+        winApi(getHandleSlot, handleConstant, writeFileSlot) then maxArm64EmitWriteStdoutWinApi(code, relocations: relocations, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot)
+    end 'writeStrategy'
+    return offset
+end 'maxArm64EmitWriteStdout'
+
+// write_stdout via syscall: caller X0=ptr, X1=len
+function maxArm64EmitWriteStdoutSyscall(code ByteArray, writeNumber MachineWord, fd MachineWord)
+    maxArm64EmitStpPreIndex(code, frameSize: 32)
+    maxArm64EmitMovFpSp(code)
+
+    // Remap args: caller X0=ptr, X1=len -> syscall X0=fd, X1=ptr, X2=len
+    maxArm64EmitMovReg(code, rd: 2, rn: 1)
+    maxArm64EmitMovReg(code, rd: 1, rn: 0)
+    maxArm64EmitMovz(code, rd: 0, imm16: fd)
+    maxArm64EmitMovz(code, rd: 8, imm16: writeNumber)
+    maxArm64EmitSvc(code)
+
+    maxArm64EmitLdpPostIndex(code, frameSize: 32)
+    maxArm64EmitRet(code)
+end 'maxArm64EmitWriteStdoutSyscall'
+
+// write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
+// Caller: X0=ptr, X1=len
+function maxArm64EmitWriteStdoutWinApi(code ByteArray, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+    maxArm64EmitStpPreIndex(code, frameSize: 80)
+    maxArm64EmitMovFpSp(code)
+
+    // Save args: [FP+16] = X0 (ptr), [FP+24] = X1 (len)
+    maxArm64EmitStrSlot(code, rt: 0, slotIndex: 0)
+    maxArm64EmitStrSlot(code, rt: 1, slotIndex: 1)
+
+    // Zero bytesWritten at [FP+32]
+    maxArm64EmitMovz(code, rd: 2, imm16: 0)
+    maxArm64EmitStrSlot(code, rt: 2, slotIndex: 2)
+
+    // GetStdHandle(STD_OUTPUT_HANDLE): X0 = handleConstant
+    maxArm64EmitMovImm(code, rd: 0, value: handleConstant)
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: getHandleSlot})
+    maxArm64EmitAdrp(code, rd: 16)
+    maxArm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+    maxArm64EmitBlr(code, rn: 16)
+
+    // Save handle to [FP+40]
+    maxArm64EmitStrSlot(code, rt: 0, slotIndex: 3)
+
+    // WriteFile(handle, buffer, length, &bytesWritten, NULL)
+    maxArm64EmitLdrSlot(code, rt: 0, slotIndex: 3)
+    maxArm64EmitLdrSlot(code, rt: 1, slotIndex: 0)
+    maxArm64EmitLdrSlot(code, rt: 2, slotIndex: 1)
+    maxArm64EmitAddImm(code, rd: 3, rn: 29, imm12: 32)
+    maxArm64EmitMovz(code, rd: 4, imm16: 0)
+
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeFileSlot})
+    maxArm64EmitAdrp(code, rd: 16)
+    maxArm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+    maxArm64EmitBlr(code, rn: 16)
+
+    maxArm64EmitLdpPostIndex(code, frameSize: 80)
+    maxArm64EmitRet(code)
+end 'maxArm64EmitWriteStdoutWinApi'
+
+// --- i64_to_string stub ---
+// Input: X0 = value to convert
+// Returns: X0 = pointer to string, X1 = length
+
+function maxArm64EmitI64ToString(code ByteArray) returns MaxArm64Offset
+    let offset = code.count()
+    let frameSize = 80
+
+    maxArm64EmitStpPreIndex(code, frameSize: frameSize)
+    maxArm64EmitMovFpSp(code)
+
+    // Save value in X4
+    maxArm64EmitMovReg(code, rd: 4, rn: 0)
+
+    // Handle zero special case: CBZ X4, zero_case
+    let cbzOffset = code.count()
+    maxArm64EmitCbz(code, rn: 4, imm19: 0)
+
+    // X5 = pointer to end of temp buffer = X29 + 48
+    maxArm64EmitAddImm(code, rd: 5, rn: 29, imm12: 48)
+    // X6 = digit count
+    maxArm64EmitMovz(code, rd: 6, imm16: 0)
+    // X7 = 10 (divisor)
+    maxArm64EmitMovz(code, rd: 7, imm16: 10)
+
+    // digit_loop:
+    let digitLoopOffset = code.count()
+
+    // UDIV X3, X4, X7 => quotient
+    maxArm64EmitUdiv(code, rd: 3, rn: 4, rm: 7)
+    // MSUB X2, X3, X7, X4 => remainder
+    maxArm64EmitMsub(code, rd: 2, rn: 3, rm: 7, ra: 4)
+    // ADD X2, X2, #0x30 ('0')
+    maxArm64EmitAddImm(code, rd: 2, rn: 2, imm12: 0x30)
+    // Decrement buffer pointer
+    maxArm64EmitSubImm(code, rd: 5, rn: 5, imm12: 1)
+    // STRB W2, [X5, #0]
+    maxArm64EmitStrb(code, rt: 2, rn: 5, offset: 0)
+    // Increment digit count
+    maxArm64EmitAddImm(code, rd: 6, rn: 6, imm12: 1)
+    // X4 = quotient
+    maxArm64EmitMovReg(code, rd: 4, rn: 3)
+    // CBNZ X4, digit_loop
+    let cbnzOffset = code.count()
+    let loopRelInsns = (digitLoopOffset - cbnzOffset) / 4
+    maxArm64EmitCbnz(code, rn: 4, imm19: loopRelInsns and 0x7FFFF)
+
+    // Return X0 = X5 (pointer), X1 = X6 (length)
+    maxArm64EmitMovReg(code, rd: 0, rn: 5)
+    maxArm64EmitMovReg(code, rd: 1, rn: 6)
+
+    // B to epilogue
+    let branchToEpilogueOffset = code.count()
+    maxArm64EmitBranch(code)
+
+    // zero_case: patch CBZ to here
+    let zeroCaseOffset = code.count()
+    let cbzRelInsns = (zeroCaseOffset - cbzOffset) / 4
+    let cbzPatched = 0xB4000000 or ((cbzRelInsns and 0x7FFFF) shl 5) or 4
+    patchDword(code, offset: cbzOffset, value: cbzPatched)
+
+    // Store '0' at [X29+47] and return pointer/length
+    maxArm64EmitMovz(code, rd: 2, imm16: 0x30)
+    maxArm64EmitAddImm(code, rd: 0, rn: 29, imm12: 47)
+    maxArm64EmitStrb(code, rt: 2, rn: 0, offset: 0)
+    maxArm64EmitMovz(code, rd: 1, imm16: 1)
+
+    // Epilogue: patch the branch-to-epilogue
+    let epilogueOffset = code.count()
+    maxArm64PatchBranch(code, instrOffset: branchToEpilogueOffset, targetOffset: epilogueOffset)
+
+    maxArm64EmitLdpPostIndex(code, frameSize: frameSize)
+    maxArm64EmitRet(code)
+
+    return offset
+end 'maxArm64EmitI64ToString'
+
+// --- Print operations ---
+
+// printLiteral: jump over data island, then ADR to data, call write_stdout
+function maxArm64EmitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset MaxArm64Offset)
+    let dataLen = data.count()
+    if dataLen == 0 'empty'
+        return
+    end 'empty'
+
+    // B over data island (placeholder, patched after data)
+    let branchOverOffset = code.count()
+    maxArm64EmitBranch(code)
+
+    // Data island
+    let dataOffset = code.count()
+    var dataIdx = 0
+    while dataIdx < dataLen 'copyData'
+        code.push(try data.get(dataIdx) otherwise 0)
+        dataIdx = dataIdx + 1
+    end 'copyData'
+
+    // Pad to 4-byte alignment
+    while code.count() mod 4 != 0 'align'
+        code.push(0)
+    end 'align'
+
+    // Patch branch to land here
+    let afterDataOffset = code.count()
+    maxArm64PatchBranch(code, instrOffset: branchOverOffset, targetOffset: afterDataOffset)
+
+    // ADR X0, data (PC-relative to data island start)
+    let adrOffset = code.count()
+    let adrRel = dataOffset - adrOffset
+    maxArm64EmitAdr(code, rd: 0, offset: adrRel)
+
+    // MOV X1, #dataLen
+    maxArm64EmitMovz(code, rd: 1, imm16: dataLen)
+
+    // BL write_stdout
+    maxArm64PatchBranch(code, instrOffset: code.count(), targetOffset: writeStdoutOffset)
+    maxArm64EmitBranchLink(code)
+    maxArm64PatchBranch(code, instrOffset: code.count() - 4, targetOffset: writeStdoutOffset)
+end 'maxArm64EmitPrintLiteral'
+
+// printInt: value in X0, convert to string then print
+function maxArm64EmitPrintInt(code ByteArray, writeStdoutOffset MaxArm64Offset, i64ToStringOffset MaxArm64Offset)
+    // BL i64_to_string (returns X0=ptr, X1=len)
+    maxArm64EmitBranchLink(code)
+    maxArm64PatchBranch(code, instrOffset: code.count() - 4, targetOffset: i64ToStringOffset)
+
+    // BL write_stdout (X0=ptr, X1=len already set)
+    maxArm64EmitBranchLink(code)
+    maxArm64PatchBranch(code, instrOffset: code.count() - 4, targetOffset: writeStdoutOffset)
+end 'maxArm64EmitPrintInt'
+
+// --- Prologue/Epilogue for user functions ---
+
+function maxArm64ComputeFrameSize(stackSize StackSize) returns StackSize
+    let raw = 16 + stackSize
+    let aligned = (raw + 15) and not 15
+    return aligned
+end 'maxArm64ComputeFrameSize'
+
+function maxArm64EmitPrologue(code ByteArray, stackSize StackSize)
+    let frameSize = maxArm64ComputeFrameSize(stackSize)
+    maxArm64EmitStpPreIndex(code, frameSize: frameSize)
+    maxArm64EmitMovFpSp(code)
+end 'maxArm64EmitPrologue'
+
+function maxArm64EmitEpilogue(code ByteArray, stackSize StackSize)
+    let frameSize = maxArm64ComputeFrameSize(stackSize)
+    maxArm64EmitLdpPostIndex(code, frameSize: frameSize)
+    maxArm64EmitRet(code)
+end 'maxArm64EmitEpilogue'
+
+// Mutable tracker for the current function's stack size
+type MaxArm64StackTracker
+    export var currentStackSize StackSize
+end 'MaxArm64StackTracker'
+
+// --- Block jump handlers ---
+
+function maxArm64HandleCondBranch(code ByteArray, jumpFixups BlockIdFixupArray, condition MaxArm64CondCode, targetBlock BlockId)
+    jumpFixups.push(BlockIdFixup{instrOffset: code.count(), targetBlock: targetBlock, isCond: true})
+    maxArm64EmitCondBranch(code, cond: maxArm64CondNum(condition))
+end 'maxArm64HandleCondBranch'
+
+function maxArm64HandleBranch(code ByteArray, jumpFixups BlockIdFixupArray, targetBlock BlockId)
+    jumpFixups.push(BlockIdFixup{instrOffset: code.count(), targetBlock: targetBlock, isCond: false})
+    maxArm64EmitBranch(code)
+end 'maxArm64HandleBranch'
+
+function maxArm64HandleBranchLink(code ByteArray, callFixups MaxArm64CallFixupArray, linkTarget ByteArray)
+    callFixups.push(MaxArm64CallFixup{instrOffset: code.count(), targetName: linkTarget})
+    maxArm64EmitBranchLink(code)
+end 'maxArm64HandleBranchLink'
+
+// --- Main emitter ---
+
+export function emitMaxArm64(module MlirModule, target TargetTriple, osDesc OsDescriptor) returns CodeResult
+    logDebug(LogCategory.codegen, message: "ARM64: Emitting machine code from MlirModule ({tripleToString(target)})")
+    var code = ByteArray{}
+    code.reserve(1024)
+    var relocations = RelocationArray{}
+    var labelNames = ByteArrayArray{}
+    var labelOffsets = MaxArm64OffsetArray{}
+    var callFixups = MaxArm64CallFixupArray{}
+    var jumpFixups = BlockIdFixupArray{}
+    var blockOffsets = BlockOffsetMap{}
+
+    // Track the current function's stack size for epilogue emission
+    var stackTracker = MaxArm64StackTracker{currentStackSize: 0}
+
+    // Emit _start wrapper (entry point at offset 0)
+    let mainCallFixupOffset = maxArm64EmitStart(code, osDesc: osDesc, callFixups: callFixups, relocations: relocations)
+
+    // Emit runtime stubs
+    logTrace(LogCategory.codegen, message: "ARM64: Emitting runtime stubs at offset {code.count()}")
+    let writeStdoutOff = maxArm64EmitWriteStdout(code, osDesc: osDesc, relocations: relocations)
+    let i64ToStringOff = maxArm64EmitI64ToString(code)
+
+    // Emit all function bodies from MlirModule
+    var fi = 0
+    while fi < module.functions.count() 'eachFunc'
+        let func = try module.functions.get(fi) otherwise 'skipFunc'
+            fi = fi + 1
+            continue
+        end 'skipFunc'
+
+        // Record function label for call fixup resolution
+        maxArm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: func.name, offset: code.count())
+
+        var bi = 0
+        while bi < func.region.blocks.count() 'eachBlock'
+            let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
+                bi = bi + 1
+                continue
+            end 'skipBlock'
+
+            // Record block offset for jump fixup resolution
+            blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
+
+            // Emit ops
+            for op in block.ops 'eachOp'
+                emitMaxArm64Op(op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+            end 'eachOp'
+
+            // Emit terminator
+            if block.hasTerminator 'hasTerm'
+                emitMaxArm64Op(block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+            end 'hasTerm'
+
+            bi = bi + 1
+        end 'eachBlock'
+
+        fi = fi + 1
+    end 'eachFunc'
+
+    // Resolve all fixups
+    maxArm64ResolveCallFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups)
+    maxArm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
+
+    logDebug(LogCategory.codegen, message: "ARM64: Emitted {code.count()} bytes of machine code")
+    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations}
+end 'emitMaxArm64'
+
+// Emit a single MlirOp (expected to be maxarm64 dialect).
+function emitMaxArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, stackTracker MaxArm64StackTracker, writeStdoutOff MaxArm64Offset, i64ToStringOff MaxArm64Offset)
+    match op 'dispatch'
+        maxarm64(a64Op) then emitMaxArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+        arith(a) then break 'dispatch'
+        cf(c) then break 'dispatch'
+        func(f) then break 'dispatch'
+        memref(m) then break 'dispatch'
+        runtime(r) then break 'dispatch'
+        maxhl(h) then break 'dispatch'
+        maxx64(x) then break 'dispatch'
+    end 'dispatch'
+end 'emitMaxArm64Op'
+
+// Emit machine code for a single MaxArm64Op.
+function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, stackTracker MaxArm64StackTracker, writeStdoutOff MaxArm64Offset, i64ToStringOff MaxArm64Offset)
+    match op 'emit'
+        prologue(stackSize) then emitMaxArm64PrologueOp(code, stackSize: stackSize, tracker: stackTracker)
+        epilogue then maxArm64EmitEpilogue(code, stackSize: stackTracker.currentStackSize)
+        movImm(dest, value) then maxArm64EmitMovImm(code, rd: maxArm64RegNum(dest), value: value)
+        strToSlot(slotIndex, src) then maxArm64EmitStrSlot(code, rt: maxArm64RegNum(src), slotIndex: slotIndex)
+        ldrFromSlot(dest, slotIndex) then maxArm64EmitLdrSlot(code, rt: maxArm64RegNum(dest), slotIndex: slotIndex)
+        addRegs(dest, src1, src2) then maxArm64EmitAdd(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        subRegs(dest, src1, src2) then maxArm64EmitSub(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        mulRegs(dest, src1, src2) then maxArm64EmitMul(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        sdivRegs(dest, src1, src2) then maxArm64EmitSdiv(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        remRegs(dest, src1, src2) then maxArm64EmitRem(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        negReg(dest, src) then maxArm64EmitNeg(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src))
+        mvnReg(dest, src) then maxArm64EmitMvn(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src))
+        andRegs(dest, src1, src2) then maxArm64EmitAnd(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        orrRegs(dest, src1, src2) then maxArm64EmitOrr(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        eorRegs(dest, src1, src2) then maxArm64EmitEor(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        lslRegs(dest, src1, src2) then maxArm64EmitLslv(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        asrRegs(dest, src1, src2) then maxArm64EmitAsrv(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        cmpRegs(src1, src2) then maxArm64EmitCmp(code, rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
+        cmpRegZero(src) then maxArm64EmitCmpRegZero(code, rn: maxArm64RegNum(src))
+        condBranch(condition, targetBlock) then maxArm64HandleCondBranch(code, jumpFixups: jumpFixups, condition: condition, targetBlock: targetBlock)
+        branch(targetBlock) then maxArm64HandleBranch(code, jumpFixups: jumpFixups, targetBlock: targetBlock)
+        branchLink(linkTarget) then maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: linkTarget)
+        printLiteral(data) then maxArm64EmitPrintLiteral(code, data: data, writeStdoutOffset: writeStdoutOff)
+        printInt then maxArm64EmitPrintInt(code, writeStdoutOffset: writeStdoutOff, i64ToStringOffset: i64ToStringOff)
+        ret then maxArm64EmitRet(code)
+    end 'emit'
+end 'emitMaxArm64Instruction'
+
+function emitMaxArm64PrologueOp(code ByteArray, stackSize StackSize, tracker MaxArm64StackTracker)
+    tracker.currentStackSize = stackSize
+    maxArm64EmitPrologue(code, stackSize: stackSize)
+end 'emitMaxArm64PrologueOp'

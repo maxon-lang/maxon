@@ -1,8 +1,17 @@
-// X86 dialect ops to machine code bytes.
-// OS-specific stubs are parameterized by OsDescriptor — no separate OS files needed.
+// MaxX64 dialect ops to machine code bytes.
+// Block-based emitter: walks MlirModule -> functions -> blocks -> ops.
+// OS-specific stubs are parameterized by OsDescriptor.
 
-export typealias X86OpArray = Array with X86Op
 typealias CodeOffsetArray = Array with CodeOffset
+
+// Block jump fixup: records where a jump instruction needs its target patched.
+type BlockJumpFixup
+    export var codeOffset CodeOffset
+    export var targetBlockId BlockId
+end 'BlockJumpFixup'
+typealias BlockJumpFixupArray = Array with BlockJumpFixup
+
+// --- Byte emission helpers (identical to X86CodeEmitter) ---
 
 function emitPrologue(code ByteArray, stackSize StackSize)
     // push rbp; mov rbp, rsp
@@ -41,21 +50,21 @@ function emitMovSlot(code ByteArray, slotIndex VarSlot)
 end 'emitMovSlot'
 
 // Load stack slot to a register: mov REG, [rbp - (slotIndex+1)*8]
-function emitLoadSlotToReg(code ByteArray, slotIndex VarSlot, dest X86Register)
+function emitLoadSlotToReg(code ByteArray, slotIndex VarSlot, dest X64Register)
     let offset = (slotIndex + 1) * 8
     match dest 'pickReg'
-        X86Register.rax then emitLoadSlotRax(code, offset: offset)
-        X86Register.rcx then emitLoadSlotRcx(code, offset: offset)
-        X86Register.rdx then emitLoadSlotRax(code, offset: offset)
-        X86Register.rbx then emitLoadSlotRax(code, offset: offset)
-        X86Register.rsp then emitLoadSlotRax(code, offset: offset)
-        X86Register.rbp then emitLoadSlotRax(code, offset: offset)
-        X86Register.rsi then emitLoadSlotRax(code, offset: offset)
-        X86Register.rdi then emitLoadSlotRax(code, offset: offset)
-        X86Register.r8 then emitLoadSlotRax(code, offset: offset)
-        X86Register.r9 then emitLoadSlotRax(code, offset: offset)
-        X86Register.r10 then emitLoadSlotRax(code, offset: offset)
-        X86Register.r11 then emitLoadSlotRax(code, offset: offset)
+        X64Register.rax then emitLoadSlotRax(code, offset: offset)
+        X64Register.rcx then emitLoadSlotRcx(code, offset: offset)
+        X64Register.rdx then emitLoadSlotRax(code, offset: offset)
+        X64Register.rbx then emitLoadSlotRax(code, offset: offset)
+        X64Register.rsp then emitLoadSlotRax(code, offset: offset)
+        X64Register.rbp then emitLoadSlotRax(code, offset: offset)
+        X64Register.rsi then emitLoadSlotRax(code, offset: offset)
+        X64Register.rdi then emitLoadSlotRax(code, offset: offset)
+        X64Register.r8 then emitLoadSlotRax(code, offset: offset)
+        X64Register.r9 then emitLoadSlotRax(code, offset: offset)
+        X64Register.r10 then emitLoadSlotRax(code, offset: offset)
+        X64Register.r11 then emitLoadSlotRax(code, offset: offset)
     end 'pickReg'
 end 'emitLoadSlotToReg'
 
@@ -70,12 +79,6 @@ function emitLoadSlotRcx(code ByteArray, offset VarSlot)
     code.append(b"\x48\x8b\x4d")
     code.push((0 - offset) and 0xFF)
 end 'emitLoadSlotRcx'
-
-// Save RAX to RCX before loading second operand
-function emitMovRcxRax(code ByteArray)
-    // mov rcx, rax  =>  48 89 C1
-    code.append(b"\x48\x89\xc1")
-end 'emitMovRcxRax'
 
 function emitAddRegReg(code ByteArray)
     // add rax, rcx  =>  48 01 C8
@@ -140,9 +143,9 @@ function emitSarRegCl(code ByteArray)
     code.append(b"\x48\xd3\xf8")
 end 'emitSarRegCl'
 
-// cmp rcx, rax (compare left in rcx against right in rax)
+// cmp rax, rcx (sets flags based on rax - rcx)
 function emitCmpRaxRcx(code ByteArray)
-    // cmp rax, rcx  =>  48 39 C8  (sets flags based on rax - rcx)
+    // cmp rax, rcx  =>  48 39 C8
     code.append(b"\x48\x39\xc8")
 end 'emitCmpRaxRcx'
 
@@ -152,62 +155,56 @@ function emitTestRaxRax(code ByteArray)
 end 'emitTestRaxRax'
 
 // ucomisd xmm0, xmm1 (compare float in xmm0 vs xmm1)
-// After push/pop: rcx=left raw bits, rax=right raw bits
-// We need to move them to xmm registers first
 function emitUcomisd(code ByteArray)
     // movq xmm0, rcx; movq xmm1, rax; ucomisd xmm0, xmm1
     code.append(b"\x66\x48\x0f\x6e\xc1\x66\x48\x0f\x6e\xc8\x66\x0f\x2e\xc1")
 end 'emitUcomisd'
 
-// Conditional and unconditional jumps with label fixup
-type JumpFixup
-    export var codeOffset CodeOffset
-    export var targetLabel ByteArray
-end 'JumpFixup'
-typealias JumpFixupArray = Array with JumpFixup
+// Map X64JumpCondition to its x86 Jcc opcode byte (second byte of 0F xx).
 typealias CondJumpOpcode = int(0x80 to 0x8F)
 
-// Map a JumpCondition union to its x86 Jcc opcode byte (second byte of 0F xx).
-function conditionToOpcode(cond JumpCondition) returns CondJumpOpcode
+function conditionToOpcode(cond X64JumpCondition) returns CondJumpOpcode
     match cond 'map'
-        JumpCondition.e then return 0x84
-        JumpCondition.ne then return 0x85
-        JumpCondition.l then return 0x8C
-        JumpCondition.le then return 0x8E
-        JumpCondition.g then return 0x8F
-        JumpCondition.ge then return 0x8D
-        JumpCondition.b then return 0x82
-        JumpCondition.be then return 0x86
-        JumpCondition.a then return 0x87
-        JumpCondition.ae then return 0x83
-        JumpCondition.p then return 0x8A
-        JumpCondition.np then return 0x8B
+        X64JumpCondition.e then return 0x84
+        X64JumpCondition.ne then return 0x85
+        X64JumpCondition.l then return 0x8C
+        X64JumpCondition.le then return 0x8E
+        X64JumpCondition.g then return 0x8F
+        X64JumpCondition.ge then return 0x8D
+        X64JumpCondition.b then return 0x82
+        X64JumpCondition.be then return 0x86
+        X64JumpCondition.a then return 0x87
+        X64JumpCondition.ae then return 0x83
+        X64JumpCondition.p then return 0x8A
+        X64JumpCondition.np then return 0x8B
     end 'map'
 end 'conditionToOpcode'
 
-// Emit a 2-byte conditional jump (0F xx) with rel32 fixup.
-function emitCondJump(code ByteArray, jumpFixups JumpFixupArray, opcode CondJumpOpcode, targetLabel ByteArray)
+// Emit a 2-byte conditional jump (0F xx) with rel32 placeholder, record block fixup.
+function emitCondJumpBlock(code ByteArray, blockFixups BlockJumpFixupArray, opcode CondJumpOpcode, targetBlock BlockId)
     code.push(0x0F)
     code.push(opcode)
-    jumpFixups.push(JumpFixup{codeOffset: code.count(), targetLabel: targetLabel})
+    blockFixups.push(BlockJumpFixup{codeOffset: code.count(), targetBlockId: targetBlock})
     writeDword(code, value: 0)
-end 'emitCondJump'
+end 'emitCondJumpBlock'
 
-function emitJmp(code ByteArray, jumpFixups JumpFixupArray, targetLabel ByteArray)
+// Emit unconditional jump with rel32 placeholder, record block fixup.
+function emitJmpBlock(code ByteArray, blockFixups BlockJumpFixupArray, targetBlock BlockId)
     // jmp rel32  =>  E9 <rel32>
     code.push(0xE9)
-    jumpFixups.push(JumpFixup{codeOffset: code.count(), targetLabel: targetLabel})
+    blockFixups.push(BlockJumpFixup{codeOffset: code.count(), targetBlockId: targetBlock})
     writeDword(code, value: 0)
-end 'emitJmp'
+end 'emitJmpBlock'
 
-function resolveJumpFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, jumpFixups JumpFixupArray)
-    for fixup in jumpFixups 'resolve'
-        let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetLabel)
+// Resolve block jump fixups using the block offset table.
+function resolveBlockFixups(code ByteArray, blockOffsets CodeOffsetArray, blockFixups BlockJumpFixupArray)
+    for fixup in blockFixups 'resolve'
+        let targetOffset = try blockOffsets.get(fixup.targetBlockId) otherwise 0
         let jumpEnd = fixup.codeOffset + 4
         let rel = targetOffset - jumpEnd
-        patchDword(code, offset:fixup.codeOffset, value: rel)
+        patchDword(code, offset: fixup.codeOffset, value: rel)
     end 'resolve'
-end 'resolveJumpFixups'
+end 'resolveBlockFixups'
 
 // Emit a relative call: call <rel32>
 function emitRelativeCall(code ByteArray, targetOffset CodeOffset)
@@ -220,11 +217,9 @@ function emitRelativeCall(code ByteArray, targetOffset CodeOffset)
     code.push((rel shr 24) and 0xFF)
 end 'emitRelativeCall'
 
-
 // --- Runtime Stubs (OS-neutral) ---
 
 // i64_to_string(value_in_rcx, buffer_in_rdx) -> length in RAX
-// Stack: [rbp-8]=value, [rbp-16]=buffer, [rbp-24]=is_negative/length
 function emitI64ToString(code ByteArray) returns CodeOffset
     let offset = code.count()
 
@@ -263,7 +258,7 @@ function emitI64ToString(code ByteArray) returns CodeOffset
     // epilogue label (patch jump from zero case)
     let epilogueOffset = code.count()
     let jmpRel = epilogueOffset - (jmpToEpilogueFixup1 + 4)
-    patchDword(code, offset:jmpToEpilogueFixup1, value: jmpRel)
+    patchDword(code, offset: jmpToEpilogueFixup1, value: jmpRel)
 
     // Epilogue: mov rsp, rbp; pop rbp; ret
     code.append(b"\x48\x89\xec\x5d\xc3")
@@ -295,7 +290,7 @@ function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset Code
 
     // Patch jump
     let afterData = code.count()
-    patchDword(code, offset:jmpFixup, value: afterData - (jmpFixup + 4))
+    patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
 
     // lea rcx, [rip + offset_to_data]
     code.append(b"\x48\x8d\x0d")
@@ -312,7 +307,6 @@ function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset Code
 end 'emitPrintLiteral'
 
 // Emit printInt: value assumed in RAX, convert to string then print
-// Uses stack buffer at [rbp-<high offset>] for the conversion buffer
 function emitPrintInt(code ByteArray, writeStdoutOffset CodeOffset, i64ToStringOffset CodeOffset)
     // mov rcx, rax; lea rdx, [rsp]
     code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
@@ -326,27 +320,6 @@ function emitPrintInt(code ByteArray, writeStdoutOffset CodeOffset, i64ToStringO
     // call write_stdout
     emitRelativeCall(code, targetOffset: writeStdoutOffset)
 end 'emitPrintInt'
-
-// --- Main entry point ---
-
-// Emit X86 code for any OS target using OsDescriptor
-export function emitX86(stdOps StdOpArray, target TargetTriple, osDesc OsDescriptor) returns CodeResult
-    let x86Ops = lowerStdOpsToX86(stdOps, target: target)
-    logDebug(LogCategory.codegen, message: "Emitting machine code for {x86Ops.count()} X86 ops ({tripleToString(target)})")
-    var code = ByteArray{}
-    code.reserve(1024)
-    var relocations = RelocationArray{}
-    var callFixups = CallFixupArray{}
-    var jumpFixups = JumpFixupArray{}
-
-    let mainCallFixupOffset = emitX86Start(code, osDesc: osDesc, relocations: relocations, callFixups: callFixups)
-
-    logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
-    let writeStdoutOff = emitX86WriteStdout(code, osDesc: osDesc, relocations: relocations)
-    let i64ToStringOff = emitI64ToString(code)
-
-    return emitX86Core(x86Ops, code: code, relocations: relocations, callFixups: callFixups, jumpFixups: jumpFixups, mainCallFixupOffset: mainCallFixupOffset, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
-end 'emitX86'
 
 // --- OS-parameterized stubs ---
 
@@ -442,64 +415,9 @@ function emitX86WriteStdoutWinApi(code ByteArray, relocations RelocationArray, g
     code.append(b"\x48\x89\xec\x5d\xc3")
 end 'emitX86WriteStdoutWinApi'
 
-// Core X86 instruction emission loop — OS-neutral
-function emitX86Core(x86Ops X86OpArray, code ByteArray, relocations RelocationArray, callFixups CallFixupArray, jumpFixups JumpFixupArray, mainCallFixupOffset CodeOffset, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset) returns CodeResult
-    var labelNames = ByteArrayArray{}
-    var labelOffsets = CodeOffsetArray{}
+// --- Call fixup resolution (inter-function) ---
 
-    // Emit all function bodies
-    logTrace(LogCategory.codegen, message: "{x86Ops.count()} x86 ops to emit")
-    for op in x86Ops 'opLoop'
-        match op 'emit'
-            funcLabel(name) then recordLabel(labelNames, labelOffsets: labelOffsets, name: name, offset: code.count())
-            callDirect(target) then emitCallFixup(code, callFixups: callFixups, target: target)
-            prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
-            epilogue then emitEpilogue(code)
-            movRegImm(dest, value) then emitMovRegImm(code, value: value)
-            movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex)
-            loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
-            addRegReg(destReg, srcReg) then emitAddRegReg(code)
-            subRegReg(destReg, srcReg) then emitSubRegReg(code)
-            imulRegReg(destReg, srcReg) then emitImulRegReg(code)
-            idivRcx then emitIdivRcx(code)
-            iremRcx then emitIremRcx(code)
-            negReg(reg) then emitNegReg(code)
-            bitNotReg(reg) then emitBitNotReg(code)
-            andRegReg(destReg, srcReg) then emitAndRegReg(code)
-            orRegReg(destReg, srcReg) then emitOrRegReg(code)
-            xorRegReg(destReg, srcReg) then emitXorRegReg(code)
-            shlRegCl(reg) then emitShlRegCl(code)
-            sarRegCl(reg) then emitSarRegCl(code)
-            cmpRaxRcx then emitCmpRaxRcx(code)
-            testRaxRax then emitTestRaxRax(code)
-            condJump(condition, targetLabel) then emitCondJump(code, jumpFixups: jumpFixups, opcode: conditionToOpcode(condition), targetLabel: targetLabel)
-            jmp(targetLabel) then emitJmp(code, jumpFixups: jumpFixups, targetLabel: targetLabel)
-            label(name) then recordLabel(labelNames, labelOffsets: labelOffsets, name: name, offset: code.count())
-            movF64Slot(slotIndex) then emitMovSlot(code, slotIndex: slotIndex)
-            loadF64Slot(slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: X86Register.rax)
-            movF64Rdata(rdataOffset) then emitMovRegImm(code, value: rdataOffset)
-            ucomisd then emitUcomisd(code)
-            printLiteral(data) then emitPrintLiteral(code, data: data, writeStdoutOffset: writeStdoutOff)
-            printInt then emitPrintInt(code, writeStdoutOffset: writeStdoutOff, i64ToStringOffset: i64ToStringOff)
-        end 'emit'
-    end 'opLoop'
-
-    // Resolve all call and jump fixups using recorded labels
-    resolveCallFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups)
-    resolveJumpFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, jumpFixups: jumpFixups)
-
-    logDebug(LogCategory.codegen, message: "Emitted {code.count()} bytes of machine code")
-    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations}
-end 'emitX86Core'
-
-function recordLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray, offset CodeOffset)
-    logTrace(LogCategory.codegen, message: "Label '{String.from(name)}' at code offset {offset}")
-    labelNames.push(name)
-    labelOffsets.push(offset)
-end 'recordLabel'
-
-// Emit call rel32 placeholder — resolved after all functions are emitted.
-// Safe for zero-arg calls where stack is aligned by caller's prologue.
+// Emit call rel32 placeholder -- resolved after all functions are emitted.
 function emitCallFixup(code ByteArray, callFixups CallFixupArray, target ByteArray)
     logTrace(LogCategory.codegen, message: "Call fixup to '{String.from(target)}' at offset {code.count()}")
     code.push(0xE8)
@@ -518,7 +436,6 @@ function resolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffse
     end 'resolve'
 end 'resolveCallFixups'
 
-
 function lookupLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray) returns CodeOffset
     var i = 0
     while i < labelNames.count() 'search'
@@ -534,3 +451,143 @@ function lookupLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, na
     logError(LogCategory.codegen, message: "Unresolved label '{String.from(name)}' -- call will jump to offset 0")
     return 0
 end 'lookupLabel'
+
+function recordLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray, offset CodeOffset)
+    logTrace(LogCategory.codegen, message: "Label '{String.from(name)}' at code offset {offset}")
+    labelNames.push(name)
+    labelOffsets.push(offset)
+end 'recordLabel'
+
+// --- Main entry point ---
+
+// Emit x86-64 machine code from a block-based MlirModule containing MaxX64Ops.
+export function emitX86(module MlirModule, target TargetTriple, osDesc OsDescriptor) returns CodeResult
+    logDebug(LogCategory.codegen, message: "Emitting block-based machine code ({tripleToString(target)})")
+    var code = ByteArray{}
+    code.reserve(1024)
+    var relocations = RelocationArray{}
+    var callFixups = CallFixupArray{}
+
+    let mainCallFixupOffset = emitX86Start(code, osDesc: osDesc, relocations: relocations, callFixups: callFixups)
+
+    logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
+    let writeStdoutOff = emitX86WriteStdout(code, osDesc: osDesc, relocations: relocations)
+    let i64ToStringOff = emitI64ToString(code)
+
+    // Function label tables for inter-function call resolution
+    var funcLabelNames = ByteArrayArray{}
+    var funcLabelOffsets = CodeOffsetArray{}
+
+    // Emit all functions
+    var fi = 0
+    while fi < module.functions.count() 'eachFunc'
+        let func = try module.functions.get(fi) otherwise 'skipFunc'
+            fi = fi + 1
+            continue
+        end 'skipFunc'
+
+        // Record function name -> code offset
+        recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: func.name, offset: code.count())
+
+        // Block offset table for this function (indexed by BlockId)
+        var blockOffsets = CodeOffsetArray{}
+        var bAlloc = 0
+        while bAlloc < func.region.nextBlockId 'alloc'
+            blockOffsets.push(0)
+            bAlloc = bAlloc + 1
+        end 'alloc'
+
+        // Block jump fixups collected during emission, resolved per function
+        var blockFixups = BlockJumpFixupArray{}
+
+        // Emit all blocks in order
+        var bi = 0
+        while bi < func.region.blocks.count() 'eachBlock'
+            let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
+                bi = bi + 1
+                continue
+            end 'skipBlock'
+
+            // Record this block's code offset
+            blockOffsets.set(block.id, value: code.count())
+
+            // Emit all ops in the block
+            var oi = 0
+            while oi < block.ops.count() 'emitOps'
+                let op = try block.ops.get(oi) otherwise 'skipOp'
+                    oi = oi + 1
+                    continue
+                end 'skipOp'
+                emitMaxX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+                oi = oi + 1
+            end 'emitOps'
+
+            // Emit terminator if present (should already be lowered to maxx64 ops
+            // pushed into block.ops by MidToMaxX64, but handle hasTerminator for safety)
+            if block.hasTerminator 'hasTerm'
+                emitMaxX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+            end 'hasTerm'
+
+            bi = bi + 1
+        end 'eachBlock'
+
+        // Resolve block jump fixups for this function
+        resolveBlockFixups(code, blockOffsets: blockOffsets, blockFixups: blockFixups)
+
+        fi = fi + 1
+    end 'eachFunc'
+
+    // Resolve inter-function call fixups
+    resolveCallFixups(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups)
+
+    logDebug(LogCategory.codegen, message: "Emitted {code.count()} bytes of machine code")
+    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations}
+end 'emitX86'
+
+// Emit bytes for a single MlirOp (should be maxx64 at this stage).
+function emitMaxX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset)
+    match op 'dispatch'
+        maxx64(x64Op) then emitMaxX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+        arith(arithOp) then break 'dispatch'
+        cf(cfOp) then break 'dispatch'
+        func(funcOp) then break 'dispatch'
+        memref(memOp) then break 'dispatch'
+        runtime(rtOp) then break 'dispatch'
+        maxarm64(armOp) then break 'dispatch'
+        maxhl(hlOp) then break 'dispatch'
+    end 'dispatch'
+end 'emitMaxX64MlirOp'
+
+// Emit bytes for a single MaxX64Op.
+function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset)
+    match op 'emit'
+        prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
+        MaxX64Op.epilogue then emitEpilogue(code)
+        movRegImm(dest, value) then emitMovRegImm(code, value: value)
+        movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex)
+        loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
+        addRegReg(destReg, srcReg) then emitAddRegReg(code)
+        subRegReg(destReg, srcReg) then emitSubRegReg(code)
+        imulRegReg(destReg, srcReg) then emitImulRegReg(code)
+        MaxX64Op.idivRcx then emitIdivRcx(code)
+        MaxX64Op.iremRcx then emitIremRcx(code)
+        negReg(reg) then emitNegReg(code)
+        bitNotReg(reg) then emitBitNotReg(code)
+        andRegReg(destReg, srcReg) then emitAndRegReg(code)
+        orRegReg(destReg, srcReg) then emitOrRegReg(code)
+        xorRegReg(destReg, srcReg) then emitXorRegReg(code)
+        shlRegCl(reg) then emitShlRegCl(code)
+        sarRegCl(reg) then emitSarRegCl(code)
+        MaxX64Op.cmpRaxRcx then emitCmpRaxRcx(code)
+        MaxX64Op.testRaxRax then emitTestRaxRax(code)
+        condJump(condition, targetBlock) then emitCondJumpBlock(code, blockFixups: blockFixups, opcode: conditionToOpcode(condition), targetBlock: targetBlock)
+        jmp(targetBlock) then emitJmpBlock(code, blockFixups: blockFixups, targetBlock: targetBlock)
+        movF64Slot(slotIndex) then emitMovSlot(code, slotIndex: slotIndex)
+        loadF64Slot(slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: X64Register.rax)
+        movF64Rdata(rdataOffset) then emitMovRegImm(code, value: rdataOffset)
+        MaxX64Op.ucomisd then emitUcomisd(code)
+        printLiteral(data) then emitPrintLiteral(code, data: data, writeStdoutOffset: writeStdoutOff)
+        MaxX64Op.printInt then emitPrintInt(code, writeStdoutOffset: writeStdoutOff, i64ToStringOffset: i64ToStringOff)
+        callDirect(target) then emitCallFixup(code, callFixups: callFixups, target: target)
+    end 'emit'
+end 'emitMaxX64Op'

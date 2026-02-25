@@ -1,5 +1,5 @@
-// Shared helpers for Standard dialect -> target dialect conversion.
-// Used by both StandardToX86Conversion and StandardToArm64Conversion.
+// Shared helpers for Mid dialect -> target dialect conversion.
+// Block-based versions that operate on MlirFunction/MlirBlock instead of flat StdOp arrays.
 
 export typealias SlotIndex = int(i64.min to i64.max)
 export typealias StdOpIndex = int(0 to u64.max)
@@ -38,412 +38,123 @@ export function maxOf(a SlotIndex, b SlotIndex) returns SlotIndex
     return b
 end 'maxOf'
 
-// Info about a constant operation for SSA temp slot allocation.
-export type ConstInfo
-    export var isConst bool
-    export var resultId ValueId
-    export var value ParsedInt
-end 'ConstInfo'
-
-// Extract constant info; returns isConst=false for non-constant ops.
-export function getConstInfo(op StdOp) returns ConstInfo
-    var result = ConstInfo{isConst: false, resultId: 0, value: 0}
-    match op 'check'
-        constI64(resultId, value) then result = ConstInfo{isConst: true, resultId: resultId, value: value}
-        constF64(resultId, rawBits) then result = ConstInfo{isConst: true, resultId: resultId, value: rawBits}
-        funcBegin(name, returnType) then break 'check'
-        funcEnd then break 'check'
-        returnOp(retValId) then break 'check'
-        storeSlot(slotId, valueId) then break 'check'
-        loadSlot(resultId, slotId) then break 'check'
-        addI64(resultId, leftId, rightId) then break 'check'
-        subI64(resultId, leftId, rightId) then break 'check'
-        mulI64(resultId, leftId, rightId) then break 'check'
-        divI64(resultId, leftId, rightId) then break 'check'
-        remI64(resultId, leftId, rightId) then break 'check'
-        negI64(resultId, operandId) then break 'check'
-        bitNotI64(resultId, operandId) then break 'check'
-        andI64(resultId, leftId, rightId) then break 'check'
-        orI64(resultId, leftId, rightId) then break 'check'
-        xorI64(resultId, leftId, rightId) then break 'check'
-        shlI64(resultId, leftId, rightId) then break 'check'
-        shrI64(resultId, leftId, rightId) then break 'check'
-        cmpI64Eq(resultId, leftId, rightId) then break 'check'
-        cmpI64Ne(resultId, leftId, rightId) then break 'check'
-        cmpI64Lt(resultId, leftId, rightId) then break 'check'
-        cmpI64Le(resultId, leftId, rightId) then break 'check'
-        cmpI64Gt(resultId, leftId, rightId) then break 'check'
-        cmpI64Ge(resultId, leftId, rightId) then break 'check'
-        cmpF64Eq(resultId, leftId, rightId) then break 'check'
-        condBr(condId, thenLabel, elseLabel) then break 'check'
-        br(targetLabel) then break 'check'
-        label(name) then break 'check'
-        printLiteral(data) then break 'check'
-        printInt(valueId) then break 'check'
-        call(resultId, callee) then break 'check'
-    end 'check'
-    return result
-end 'getConstInfo'
-
-// Extract function name from a funcBegin op; returns empty ByteArray for other ops.
-export function getFuncBeginName(op StdOp) returns ByteArray
-    var result = ByteArray{}
-    match op 'check'
-        funcBegin(name, returnType) then result = name
-        funcEnd then break 'check'
-        constI64(resultId, value) then break 'check'
-        constF64(resultId, rawBits) then break 'check'
-        returnOp(retValId) then break 'check'
-        storeSlot(slotId, valueId) then break 'check'
-        loadSlot(resultId, slotId) then break 'check'
-        addI64(resultId, leftId, rightId) then break 'check'
-        subI64(resultId, leftId, rightId) then break 'check'
-        mulI64(resultId, leftId, rightId) then break 'check'
-        divI64(resultId, leftId, rightId) then break 'check'
-        remI64(resultId, leftId, rightId) then break 'check'
-        negI64(resultId, operandId) then break 'check'
-        bitNotI64(resultId, operandId) then break 'check'
-        andI64(resultId, leftId, rightId) then break 'check'
-        orI64(resultId, leftId, rightId) then break 'check'
-        xorI64(resultId, leftId, rightId) then break 'check'
-        shlI64(resultId, leftId, rightId) then break 'check'
-        shrI64(resultId, leftId, rightId) then break 'check'
-        cmpI64Eq(resultId, leftId, rightId) then break 'check'
-        cmpI64Ne(resultId, leftId, rightId) then break 'check'
-        cmpI64Lt(resultId, leftId, rightId) then break 'check'
-        cmpI64Le(resultId, leftId, rightId) then break 'check'
-        cmpI64Gt(resultId, leftId, rightId) then break 'check'
-        cmpI64Ge(resultId, leftId, rightId) then break 'check'
-        cmpF64Eq(resultId, leftId, rightId) then break 'check'
-        condBr(condId, thenLabel, elseLabel) then break 'check'
-        br(targetLabel) then break 'check'
-        label(name) then break 'check'
-        printLiteral(data) then break 'check'
-        printInt(valueId) then break 'check'
-        call(resultId, callee) then break 'check'
-    end 'check'
-    return result
-end 'getFuncBeginName'
-
-// Extract else label from a condBr op; returns empty ByteArray for other ops.
-// Extract the condition value ID from a condBr op. Returns -1 for non-condBr ops.
-export function getCondBrCondId(op StdOp) returns ValueId
+// Extract slot index from an MlirOp if it is a memref store/load.
+// Returns -1 for ops that don't reference a slot.
+function getSlotFromMlirOp(op MlirOp) returns SlotIndex
     var result = 0 - 1
-    match op 'check'
-        condBr(condId, thenLabel, elseLabel) then result = condId
-        funcBegin(name, returnType) then break 'check'
-        funcEnd then break 'check'
-        constI64(resultId, value) then break 'check'
-        constF64(resultId, rawBits) then break 'check'
-        returnOp(retValId) then break 'check'
-        storeSlot(slotId, valueId) then break 'check'
-        loadSlot(resultId, slotId) then break 'check'
-        addI64(resultId, leftId, rightId) then break 'check'
-        subI64(resultId, leftId, rightId) then break 'check'
-        mulI64(resultId, leftId, rightId) then break 'check'
-        divI64(resultId, leftId, rightId) then break 'check'
-        remI64(resultId, leftId, rightId) then break 'check'
-        negI64(resultId, operandId) then break 'check'
-        bitNotI64(resultId, operandId) then break 'check'
-        andI64(resultId, leftId, rightId) then break 'check'
-        orI64(resultId, leftId, rightId) then break 'check'
-        xorI64(resultId, leftId, rightId) then break 'check'
-        shlI64(resultId, leftId, rightId) then break 'check'
-        shrI64(resultId, leftId, rightId) then break 'check'
-        cmpI64Eq(resultId, leftId, rightId) then break 'check'
-        cmpI64Ne(resultId, leftId, rightId) then break 'check'
-        cmpI64Lt(resultId, leftId, rightId) then break 'check'
-        cmpI64Le(resultId, leftId, rightId) then break 'check'
-        cmpI64Gt(resultId, leftId, rightId) then break 'check'
-        cmpI64Ge(resultId, leftId, rightId) then break 'check'
-        cmpF64Eq(resultId, leftId, rightId) then break 'check'
-        br(targetLabel) then break 'check'
-        label(name) then break 'check'
-        printLiteral(data) then break 'check'
-        printInt(valueId) then break 'check'
-        call(resultId, callee) then break 'check'
-    end 'check'
+    match op 'outer'
+        memref(memOp) then result = getSlotFromMemRefOp(memOp)
+        arith(arithOp) then break 'outer'
+        cf(cfOp) then break 'outer'
+        func(funcOp) then break 'outer'
+        runtime(rtOp) then break 'outer'
+        maxx64(x64Op) then break 'outer'
+        maxarm64(armOp) then break 'outer'
+        maxhl(hlOp) then break 'outer'
+    end 'outer'
     return result
-end 'getCondBrCondId'
+end 'getSlotFromMlirOp'
 
-export function getCondBrElseLabel(op StdOp) returns ByteArray
-    var result = ByteArray{}
+function getSlotFromMemRefOp(op MemRefOp) returns SlotIndex
     match op 'check'
-        condBr(condId, thenLabel, elseLabel) then result = elseLabel
-        funcBegin(name, returnType) then break 'check'
-        funcEnd then break 'check'
-        constI64(resultId, value) then break 'check'
-        constF64(resultId, rawBits) then break 'check'
-        returnOp(retValId) then break 'check'
-        storeSlot(slotId, valueId) then break 'check'
-        loadSlot(resultId, slotId) then break 'check'
-        addI64(resultId, leftId, rightId) then break 'check'
-        subI64(resultId, leftId, rightId) then break 'check'
-        mulI64(resultId, leftId, rightId) then break 'check'
-        divI64(resultId, leftId, rightId) then break 'check'
-        remI64(resultId, leftId, rightId) then break 'check'
-        negI64(resultId, operandId) then break 'check'
-        bitNotI64(resultId, operandId) then break 'check'
-        andI64(resultId, leftId, rightId) then break 'check'
-        orI64(resultId, leftId, rightId) then break 'check'
-        xorI64(resultId, leftId, rightId) then break 'check'
-        shlI64(resultId, leftId, rightId) then break 'check'
-        shrI64(resultId, leftId, rightId) then break 'check'
-        cmpI64Eq(resultId, leftId, rightId) then break 'check'
-        cmpI64Ne(resultId, leftId, rightId) then break 'check'
-        cmpI64Lt(resultId, leftId, rightId) then break 'check'
-        cmpI64Le(resultId, leftId, rightId) then break 'check'
-        cmpI64Gt(resultId, leftId, rightId) then break 'check'
-        cmpI64Ge(resultId, leftId, rightId) then break 'check'
-        cmpF64Eq(resultId, leftId, rightId) then break 'check'
-        br(targetLabel) then break 'check'
-        label(name) then break 'check'
-        printLiteral(data) then break 'check'
-        printInt(valueId) then break 'check'
-        call(resultId, callee) then break 'check'
+        storeSlot(slotId, valueId) then return slotId
+        loadSlot(resultId, slotId) then return slotId
     end 'check'
-    return result
-end 'getCondBrElseLabel'
+end 'getSlotFromMemRefOp'
 
-// Info about a unary operation for SSA-based lowering.
-export type UnaryOpInfo
-    export var isUnary bool
-    export var resultId ValueId
-    export var operandId ValueId
-end 'UnaryOpInfo'
-
-// Extract unary op info; returns isUnary=false for non-unary ops.
-export function getUnaryOpInfo(op StdOp) returns UnaryOpInfo
-    var result = UnaryOpInfo{isUnary: false, resultId: 0, operandId: 0}
-    match op 'check'
-        negI64(resultId, operandId) then result = UnaryOpInfo{isUnary: true, resultId: resultId, operandId: operandId}
-        bitNotI64(resultId, operandId) then result = UnaryOpInfo{isUnary: true, resultId: resultId, operandId: operandId}
-        constI64(resultId, value) then break 'check'
-        constF64(resultId, rawBits) then break 'check'
-        funcBegin(name, returnType) then break 'check'
-        funcEnd then break 'check'
-        returnOp(retValId) then break 'check'
-        storeSlot(slotId, valueId) then break 'check'
-        loadSlot(resultId, slotId) then break 'check'
-        addI64(resultId, leftId, rightId) then break 'check'
-        subI64(resultId, leftId, rightId) then break 'check'
-        mulI64(resultId, leftId, rightId) then break 'check'
-        divI64(resultId, leftId, rightId) then break 'check'
-        remI64(resultId, leftId, rightId) then break 'check'
-        andI64(resultId, leftId, rightId) then break 'check'
-        orI64(resultId, leftId, rightId) then break 'check'
-        xorI64(resultId, leftId, rightId) then break 'check'
-        shlI64(resultId, leftId, rightId) then break 'check'
-        shrI64(resultId, leftId, rightId) then break 'check'
-        cmpI64Eq(resultId, leftId, rightId) then break 'check'
-        cmpI64Ne(resultId, leftId, rightId) then break 'check'
-        cmpI64Lt(resultId, leftId, rightId) then break 'check'
-        cmpI64Le(resultId, leftId, rightId) then break 'check'
-        cmpI64Gt(resultId, leftId, rightId) then break 'check'
-        cmpI64Ge(resultId, leftId, rightId) then break 'check'
-        cmpF64Eq(resultId, leftId, rightId) then break 'check'
-        condBr(condId, thenLabel, elseLabel) then break 'check'
-        br(targetLabel) then break 'check'
-        label(name) then break 'check'
-        printLiteral(data) then break 'check'
-        printInt(valueId) then break 'check'
-        call(resultId, callee) then break 'check'
-    end 'check'
-    return result
-end 'getUnaryOpInfo'
-
-// Find the max parser-allocated slot in a function body (from storeSlot/loadSlot ops).
-export function computeMaxParserSlot(stdOps StdOpArray, startIndex StdOpIndex) returns SlotIndex
+// Compute max parser-allocated slot across all blocks in a function.
+export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
     var maxSlot = 0 - 1
-    var j = startIndex + 1
-    while j < stdOps.count() 'scan'
-        let op = try stdOps.get(j) otherwise 'scanSkip'
-            j = j + 1
+    var bi = 0
+    while bi < func.region.blocks.count() 'eachBlock'
+        let block = try func.region.blocks.get(bi) otherwise 'skip'
+            bi = bi + 1
             continue
-        end 'scanSkip'
-        match op 'check'
-            funcEnd then break 'scan'
-            storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
-            loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
-            constI64(resultId, value) then break 'check'
-            constF64(resultId, rawBits) then break 'check'
-            returnOp(retValId) then break 'check'
-            addI64(resultId, leftId, rightId) then break 'check'
-            subI64(resultId, leftId, rightId) then break 'check'
-            mulI64(resultId, leftId, rightId) then break 'check'
-            divI64(resultId, leftId, rightId) then break 'check'
-            remI64(resultId, leftId, rightId) then break 'check'
-            negI64(resultId, operandId) then break 'check'
-            bitNotI64(resultId, operandId) then break 'check'
-            andI64(resultId, leftId, rightId) then break 'check'
-            orI64(resultId, leftId, rightId) then break 'check'
-            xorI64(resultId, leftId, rightId) then break 'check'
-            shlI64(resultId, leftId, rightId) then break 'check'
-            shrI64(resultId, leftId, rightId) then break 'check'
-            cmpI64Eq(resultId, leftId, rightId) then break 'check'
-            cmpI64Ne(resultId, leftId, rightId) then break 'check'
-            cmpI64Lt(resultId, leftId, rightId) then break 'check'
-            cmpI64Le(resultId, leftId, rightId) then break 'check'
-            cmpI64Gt(resultId, leftId, rightId) then break 'check'
-            cmpI64Ge(resultId, leftId, rightId) then break 'check'
-            cmpF64Eq(resultId, leftId, rightId) then break 'check'
-            condBr(condId, thenLabel, elseLabel) then break 'check'
-            br(targetLabel) then break 'check'
-            label(name) then break 'check'
-            funcBegin(n, rt) then break 'check'
-            printLiteral(data) then break 'check'
-            printInt(valueId) then break 'check'
-            call(resultId, callee) then break 'check'
-        end 'check'
-        j = j + 1
-    end 'scan'
+        end 'skip'
+        var oi = 0
+        while oi < block.ops.count() 'eachOp'
+            let op = try block.ops.get(oi) otherwise 'skipOp'
+                oi = oi + 1
+                continue
+            end 'skipOp'
+            let slot = getSlotFromMlirOp(op)
+            if slot >= 0 'hasSlot'
+                maxSlot = maxOf(maxSlot, b: slot)
+            end 'hasSlot'
+            oi = oi + 1
+        end 'eachOp'
+        // Also check terminator
+        if block.hasTerminator 'hasTerm'
+            let termSlot = getSlotFromMlirOp(block.terminator)
+            if termSlot >= 0 'hasTermSlot'
+                maxSlot = maxOf(maxSlot, b: termSlot)
+            end 'hasTermSlot'
+        end 'hasTerm'
+        bi = bi + 1
+    end 'eachBlock'
     return maxSlot
-end 'computeMaxParserSlot'
+end 'computeMaxParserSlotInFunc'
 
-// Read-only scan: look back from condBr to find the comparison that produced the condition.
-export function determineJumpKind(stdOps StdOpArray, condIndex StdOpIndex) returns JumpKind
-    var j = condIndex - 1
-    while j >= 0 'scanBack'
-        let prevOp = try stdOps.get(j) otherwise 'scanSkip'
-            j = j - 1
-            continue
-        end 'scanSkip'
-        match prevOp 'checkCmp'
-            cmpI64Eq(resultId, leftId, rightId) then return JumpKind.eq
-            cmpI64Ne(resultId, leftId, rightId) then return JumpKind.ne
-            cmpI64Lt(resultId, leftId, rightId) then return JumpKind.lt
-            cmpI64Le(resultId, leftId, rightId) then return JumpKind.le
-            cmpI64Gt(resultId, leftId, rightId) then return JumpKind.gt
-            cmpI64Ge(resultId, leftId, rightId) then return JumpKind.ge
-            cmpF64Eq(resultId, leftId, rightId) then return JumpKind.feq
-            constI64(resultId, value) then j = j - 1
-            constF64(resultId, rawBits) then j = j - 1
-            returnOp(retValId) then j = j - 1
-            storeSlot(slotId, valueId) then j = j - 1
-            loadSlot(resultId, slotId) then j = j - 1
-            addI64(resultId, leftId, rightId) then j = j - 1
-            subI64(resultId, leftId, rightId) then j = j - 1
-            mulI64(resultId, leftId, rightId) then j = j - 1
-            divI64(resultId, leftId, rightId) then j = j - 1
-            remI64(resultId, leftId, rightId) then j = j - 1
-            negI64(resultId, operandId) then j = j - 1
-            bitNotI64(resultId, operandId) then j = j - 1
-            andI64(resultId, leftId, rightId) then j = j - 1
-            orI64(resultId, leftId, rightId) then j = j - 1
-            xorI64(resultId, leftId, rightId) then j = j - 1
-            shlI64(resultId, leftId, rightId) then j = j - 1
-            shrI64(resultId, leftId, rightId) then j = j - 1
-            condBr(cId, tl, el) then j = j - 1
-            br(targetLabel) then j = j - 1
-            label(name) then j = j - 1
-            printLiteral(data) then j = j - 1
-            printInt(valueId) then j = j - 1
-            funcBegin(name, returnType) then j = j - 1
-            funcEnd then j = j - 1
-            call(resultId, callee) then j = j - 1
-        end 'checkCmp'
-    end 'scanBack'
-    return JumpKind.boolTest
-end 'determineJumpKind'
-
-// Info about a div/rem operation for SSA-based lowering.
-// Shared between X86 and ARM64 since both need identical extraction logic.
-export type DivRemOpInfo
-    export var isDivRem bool
-    export var isRem bool
-    export var resultId ValueId
-    export var leftId ValueId
-    export var rightId ValueId
-end 'DivRemOpInfo'
-
-// Extract div/rem op info; returns isDivRem=false for non-div/rem ops.
-export function getDivRemOpInfo(op StdOp) returns DivRemOpInfo
-    var result = DivRemOpInfo{isDivRem: false, isRem: false, resultId: 0 - 1, leftId: 0, rightId: 0}
+// Check if an MlirOp is an arith op that produces a temp result slot.
+function isTempProducingOp(op MlirOp) returns bool
     match op 'check'
-        divI64(resultId, leftId, rightId) then result = DivRemOpInfo{isDivRem: true, isRem: false, resultId: resultId, leftId: leftId, rightId: rightId}
-        remI64(resultId, leftId, rightId) then result = DivRemOpInfo{isDivRem: true, isRem: true, resultId: resultId, leftId: leftId, rightId: rightId}
-        constI64(resultId, value) then break 'check'
-        constF64(resultId, rawBits) then break 'check'
-        funcBegin(name, returnType) then break 'check'
-        funcEnd then break 'check'
-        returnOp(retValId) then break 'check'
-        storeSlot(slotId, valueId) then break 'check'
-        loadSlot(resultId, slotId) then break 'check'
-        addI64(resultId, leftId, rightId) then break 'check'
-        subI64(resultId, leftId, rightId) then break 'check'
-        mulI64(resultId, leftId, rightId) then break 'check'
-        negI64(resultId, operandId) then break 'check'
-        bitNotI64(resultId, operandId) then break 'check'
-        andI64(resultId, leftId, rightId) then break 'check'
-        orI64(resultId, leftId, rightId) then break 'check'
-        xorI64(resultId, leftId, rightId) then break 'check'
-        shlI64(resultId, leftId, rightId) then break 'check'
-        shrI64(resultId, leftId, rightId) then break 'check'
-        cmpI64Eq(resultId, leftId, rightId) then break 'check'
-        cmpI64Ne(resultId, leftId, rightId) then break 'check'
-        cmpI64Lt(resultId, leftId, rightId) then break 'check'
-        cmpI64Le(resultId, leftId, rightId) then break 'check'
-        cmpI64Gt(resultId, leftId, rightId) then break 'check'
-        cmpI64Ge(resultId, leftId, rightId) then break 'check'
-        cmpF64Eq(resultId, leftId, rightId) then break 'check'
-        condBr(condId, thenLabel, elseLabel) then break 'check'
-        br(targetLabel) then break 'check'
-        label(name) then break 'check'
-        printLiteral(data) then break 'check'
-        printInt(valueId) then break 'check'
-        call(resultId, callee) then break 'check'
+        arith(arithOp) then return true
+        memref(memOp) then return false
+        cf(cfOp) then return false
+        func(funcOp) then return false
+        runtime(rtOp) then return false
+        maxx64(x64Op) then return false
+        maxarm64(armOp) then return false
+        maxhl(hlOp) then return false
     end 'check'
-    return result
-end 'getDivRemOpInfo'
+end 'isTempProducingOp'
 
-// Read-only scan: compute stack frame size by finding max slot, temp slots, and print usage.
-export function computeStackSize(stdOps StdOpArray, startIndex StdOpIndex, shadowSpace StackSize, savedRegsSize StackSize) returns StackSize
+// Check if an MlirOp is a print operation (needs stack buffer).
+function isPrintOp(op MlirOp) returns bool
+    match op 'check'
+        runtime(rtOp) then return true
+        arith(arithOp) then return false
+        memref(memOp) then return false
+        cf(cfOp) then return false
+        func(funcOp) then return false
+        maxx64(x64Op) then return false
+        maxarm64(armOp) then return false
+        maxhl(hlOp) then return false
+    end 'check'
+end 'isPrintOp'
+
+// Compute stack frame size for a function by scanning all blocks.
+export function computeStackSizeForFunc(func MlirFunction, shadowSpace StackSize, savedRegsSize StackSize) returns StackSize
     var maxSlot = 0 - 1
     var hasPrint = false
     var tempSlotCount = 0
 
-    var j = startIndex + 1
-    while j < stdOps.count() 'scan'
-        let op = try stdOps.get(j) otherwise 'scanSkip'
-            j = j + 1
+    var bi = 0
+    while bi < func.region.blocks.count() 'eachBlock'
+        let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
+            bi = bi + 1
             continue
-        end 'scanSkip'
-        match op 'countSlot'
-            funcEnd then break 'scan'
-            storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
-            loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
-            printInt(valueId) then hasPrint = true
-            printLiteral(data) then hasPrint = true
-            constI64(resultId, value) then tempSlotCount = tempSlotCount + 1
-            constF64(resultId, rawBits) then tempSlotCount = tempSlotCount + 1
-            addI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            subI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            mulI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            divI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            remI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            negI64(resultId, operandId) then tempSlotCount = tempSlotCount + 1
-            bitNotI64(resultId, operandId) then tempSlotCount = tempSlotCount + 1
-            andI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            orI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            xorI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            shlI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            shrI64(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            cmpI64Eq(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            cmpI64Ne(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            cmpI64Lt(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            cmpI64Le(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            cmpI64Gt(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            cmpI64Ge(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            cmpF64Eq(resultId, leftId, rightId) then tempSlotCount = tempSlotCount + 1
-            returnOp(retValId) then break 'countSlot'
-            condBr(condId, thenLabel, elseLabel) then break 'countSlot'
-            br(targetLabel) then break 'countSlot'
-            label(name) then break 'countSlot'
-            funcBegin(n, rt) then break 'countSlot'
-            call(resultId, callee) then break 'countSlot'
-        end 'countSlot'
-        j = j + 1
-    end 'scan'
+        end 'skipBlock'
+        var oi = 0
+        while oi < block.ops.count() 'eachOp'
+            let op = try block.ops.get(oi) otherwise 'skipOp'
+                oi = oi + 1
+                continue
+            end 'skipOp'
+            let slot = getSlotFromMlirOp(op)
+            if slot >= 0 'hasSlot'
+                maxSlot = maxOf(maxSlot, b: slot)
+            end 'hasSlot'
+            if isTempProducingOp(op) 'isTemp'
+                tempSlotCount = tempSlotCount + 1
+            end 'isTemp'
+            if isPrintOp(op) 'isPrint'
+                hasPrint = true
+            end 'isPrint'
+            oi = oi + 1
+        end 'eachOp'
+        bi = bi + 1
+    end 'eachBlock'
 
     let totalMaxSlot = maxSlot + tempSlotCount
     let overhead = shadowSpace + savedRegsSize
@@ -463,4 +174,83 @@ export function computeStackSize(stdOps StdOpArray, startIndex StdOpIndex, shado
         stackSize = stackSize + (16 - (stackSize mod 16))
     end 'align'
     return stackSize
-end 'computeStackSize'
+end 'computeStackSizeForFunc'
+
+// Scan backward within a block's ops to find the comparison that produced the condition.
+export function determineJumpKindInBlock(block MlirBlock) returns JumpKind
+    var j = block.ops.count() - 1
+    while j >= 0 'scanBack'
+        let op = try block.ops.get(j) otherwise 'skipBack'
+            j = j - 1
+            continue
+        end 'skipBack'
+        let kind = getJumpKindFromOp(op)
+        if kind >= 0 'found'
+            return decodeJumpKind(kind)
+        end 'found'
+        j = j - 1
+    end 'scanBack'
+    return JumpKind.boolTest
+end 'determineJumpKindInBlock'
+
+// Returns encoded jump kind (0-6) or -1 if not a comparison op.
+function getJumpKindFromOp(op MlirOp) returns SlotIndex
+    match op 'check'
+        arith(arithOp) then return getJumpKindFromArith(arithOp)
+        memref(memOp) then return 0 - 1
+        cf(cfOp) then return 0 - 1
+        func(funcOp) then return 0 - 1
+        runtime(rtOp) then return 0 - 1
+        maxx64(x64Op) then return 0 - 1
+        maxarm64(armOp) then return 0 - 1
+        maxhl(hlOp) then return 0 - 1
+    end 'check'
+end 'getJumpKindFromOp'
+
+function getJumpKindFromArith(op ArithOp) returns SlotIndex
+    match op 'check'
+        cmpI64Eq(resultId, leftId, rightId) then return 0
+        cmpI64Ne(resultId, leftId, rightId) then return 1
+        cmpI64Lt(resultId, leftId, rightId) then return 2
+        cmpI64Le(resultId, leftId, rightId) then return 3
+        cmpI64Gt(resultId, leftId, rightId) then return 4
+        cmpI64Ge(resultId, leftId, rightId) then return 5
+        cmpF64Eq(resultId, leftId, rightId) then return 6
+        constI64(resultId, value) then return 0 - 1
+        constF64(resultId, rawBits) then return 0 - 1
+        addI64(resultId, leftId, rightId) then return 0 - 1
+        subI64(resultId, leftId, rightId) then return 0 - 1
+        mulI64(resultId, leftId, rightId) then return 0 - 1
+        divI64(resultId, leftId, rightId) then return 0 - 1
+        remI64(resultId, leftId, rightId) then return 0 - 1
+        negI64(resultId, operandId) then return 0 - 1
+        bitNotI64(resultId, operandId) then return 0 - 1
+        andI64(resultId, leftId, rightId) then return 0 - 1
+        orI64(resultId, leftId, rightId) then return 0 - 1
+        xorI64(resultId, leftId, rightId) then return 0 - 1
+        shlI64(resultId, leftId, rightId) then return 0 - 1
+        shrI64(resultId, leftId, rightId) then return 0 - 1
+    end 'check'
+end 'getJumpKindFromArith'
+
+function decodeJumpKind(encoded SlotIndex) returns JumpKind
+    if encoded == 0 'isEq'
+        return JumpKind.eq
+    end 'isEq'
+    if encoded == 1 'isNe'
+        return JumpKind.ne
+    end 'isNe'
+    if encoded == 2 'isLt'
+        return JumpKind.lt
+    end 'isLt'
+    if encoded == 3 'isLe'
+        return JumpKind.le
+    end 'isLe'
+    if encoded == 4 'isGt'
+        return JumpKind.gt
+    end 'isGt'
+    if encoded == 5 'isGe'
+        return JumpKind.ge
+    end 'isGe'
+    return JumpKind.feq
+end 'decodeJumpKind'

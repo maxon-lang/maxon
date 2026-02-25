@@ -17,25 +17,31 @@ export function compileProject(project Project) returns String throws CompileErr
             sourcePaths: StringArray{},
             tokenCache: TokenCacheMap{},
             parseCache: ParseCacheMap{},
-            allMaxonOpsCache: MaxonOpsMemo{value: MaxonOpArray{}, computedAt: 0, verifiedAt: 0},
-            allStdOpsCache: StdOpsMemo{value: StdOpArray{}, computedAt: 0, verifiedAt: 0},
+            allModuleCache: MlirModuleMemo{value: createMlirModule(), computedAt: 0, verifiedAt: 0},
+            allMidCache: MlirModuleMemo{value: createMlirModule(), computedAt: 0, verifiedAt: 0},
             codeCache: CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}}, computedAt: 0, verifiedAt: 0},
             dependencies: DependencyArray{},
             activeQueryStack: QueryKeyArray{},
             tokenHits: 0, tokenMisses: 0,
             parseHits: 0, parseMisses: 0,
-            allMaxonOpsHits: 0, allMaxonOpsMisses: 0,
-            allStdOpsHits: 0, allStdOpsMisses: 0,
+            allModuleHits: 0, allModuleMisses: 0,
+            allMidHits: 0, allMidMisses: 0,
             codeHits: 0, codeMisses: 0
         }
         project.dbInitialized = true
     end 'init'
 
+    print("[DBG] before loadSourceFiles")
     try loadSourceFiles(project, path: project.rootPath)
+    print("[DBG] after loadSourceFiles")
+
+    print("[DBG] deps count = {project.db.dependencies.count()}")
 
     logDebug(LogCategory.compiler, message: "Loaded {project.db.sourcePaths.count()} source files (revision {project.db.currentRevision})")
 
+    print("[DBG] before queryCodeResult")
     let codeResult = try queryCodeResult(project)
+    print("[DBG] after queryCodeResult")
 
     let firstPath = try project.db.sourcePaths.get(0) otherwise 'noFiles'
         throw CompileError.noSourceFiles

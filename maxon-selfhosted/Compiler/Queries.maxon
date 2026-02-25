@@ -63,7 +63,7 @@ end 'queryTokens'
 
 // --- Per-file derived query: parse ---
 
-export function queryParseOps(project Project, path String) returns MaxonOpArray throws CompileError
+export function queryParseOps(project Project, path String) returns MlirModule throws CompileError
     let key = QueryKey.parseOps(path)
     recordDependency(project, dependency: key)
 
@@ -91,36 +91,39 @@ export function queryParseOps(project Project, path String) returns MaxonOpArray
     clearDepsFor(project, key: key)
 
     let tokens = try queryTokens(project, path: path)
-    let ops = try parse(project, tokens: tokens, filePath: path)
+    let module = try parse(project, tokens: tokens, filePath: path)
     let nextId = getNextValueId(project)
 
     popQuery(project)
 
     // Store
-    let newMemo = ParseMemo{value: ops, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId}
+    let newMemo = ParseMemo{value: module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId}
     project.db.parseCache.insert(path, value: newMemo)
 
-    return ops
+    return module
 end 'queryParseOps'
 
-// --- Whole-program derived query: all maxon ops ---
+// --- Whole-program derived query: all modules merged ---
 
-export function queryAllMaxonOps(project Project) returns MaxonOpArray throws CompileError
-    let key = QueryKey.allMaxonOps
+export function queryAllModule(project Project) returns MlirModule throws CompileError
+    print("[DBG] queryAllModule enter")
+    let key = QueryKey.allModule
+    print("[DBG] queryAllModule before recordDependency")
     recordDependency(project, dependency: key)
+    print("[DBG] queryAllModule after recordDependency")
 
     // Check cache
-    if project.db.allMaxonOpsCache.computedAt > 0 'hasCache'
-        if areDepsValid(project, key: key, computedAt: project.db.allMaxonOpsCache.computedAt) 'valid'
-            logDebug(LogCategory.compiler, message: "queryAllMaxonOps cache hit")
-            project.db.allMaxonOpsHits = project.db.allMaxonOpsHits + 1
-            project.db.allMaxonOpsCache.verifiedAt = project.db.currentRevision
-            return project.db.allMaxonOpsCache.value
+    if project.db.allModuleCache.computedAt > 0 'hasCache'
+        if areDepsValid(project, key: key, computedAt: project.db.allModuleCache.computedAt) 'valid'
+            logDebug(LogCategory.compiler, message: "queryAllModule cache hit")
+            project.db.allModuleHits = project.db.allModuleHits + 1
+            project.db.allModuleCache.verifiedAt = project.db.currentRevision
+            return project.db.allModuleCache.value
         end 'valid'
     end 'hasCache'
 
-    logDebug(LogCategory.compiler, message: "queryAllMaxonOps computing")
-    project.db.allMaxonOpsMisses = project.db.allMaxonOpsMisses + 1
+    logDebug(LogCategory.compiler, message: "queryAllModule computing")
+    project.db.allModuleMisses = project.db.allModuleMisses + 1
 
     // Compute
     pushQuery(project, key: key)
@@ -130,10 +133,10 @@ export function queryAllMaxonOps(project Project) returns MaxonOpArray throws Co
     // from cache, advance the counter past its IDs to avoid collisions.
     resetValueIds(project)
 
-    // Prepend cached stdlib ops (shared across all projects)
-    let stdlibOps = getStdlibOps(project)
-    var allOps = MaxonOpArray{}
-    allOps.append(stdlibOps)
+    // Prepend cached stdlib module (shared across all projects)
+    let stdlibModule = getStdlibModule(project)
+    var allModule = createMlirModule()
+    mergeModules(allModule, source: stdlibModule)
     setNextValueId(project, id: getStdlibNextValueId())
 
     // Then parse user files
@@ -142,7 +145,7 @@ export function queryAllMaxonOps(project Project) returns MaxonOpArray throws Co
         let path = try project.db.sourcePaths.get(i) otherwise 'err'
             break
         end 'err'
-        let ops = try queryParseOps(project, path: path)
+        let module = try queryParseOps(project, path: path)
         // When a file was served from cache, the parser didn't run so the
         // ValueId counter wasn't advanced. Restore it from the cached memo.
         if project.db.parseCache.contains(path) 'hasCache'
@@ -153,58 +156,64 @@ export function queryAllMaxonOps(project Project) returns MaxonOpArray throws Co
                 setNextValueId(project, id: memo.nextValueIdAfterParse)
             end 'advance'
         end 'hasCache'
-        allOps.append(ops)
+        mergeModules(allModule, source: module)
         i = i + 1
     end 'eachFile'
 
     popQuery(project)
 
     // Store
-    project.db.allMaxonOpsCache = MaxonOpsMemo{value: allOps, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+    project.db.allModuleCache = MlirModuleMemo{value: allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
 
-    return allOps
-end 'queryAllMaxonOps'
+    return allModule
+end 'queryAllModule'
 
-// --- Whole-program derived query: standard ops ---
+// --- Whole-program derived query: mid-level ops ---
 
-export function queryAllStdOps(project Project) returns StdOpArray throws CompileError
-    let key = QueryKey.allStdOps
+export function queryAllMid(project Project) returns MlirModule throws CompileError
+    print("[DBG] queryAllMid enter")
+    let key = QueryKey.allMid
+    print("[DBG] queryAllMid before recordDependency")
     recordDependency(project, dependency: key)
+    print("[DBG] queryAllMid after recordDependency")
 
     // Check cache
-    if project.db.allStdOpsCache.computedAt > 0 'hasCache'
-        if areDepsValid(project, key: key, computedAt: project.db.allStdOpsCache.computedAt) 'valid'
-            logDebug(LogCategory.compiler, message: "queryAllStdOps cache hit")
-            project.db.allStdOpsHits = project.db.allStdOpsHits + 1
-            project.db.allStdOpsCache.verifiedAt = project.db.currentRevision
-            return project.db.allStdOpsCache.value
+    if project.db.allMidCache.computedAt > 0 'hasCache'
+        if areDepsValid(project, key: key, computedAt: project.db.allMidCache.computedAt) 'valid'
+            logDebug(LogCategory.compiler, message: "queryAllMid cache hit")
+            project.db.allMidHits = project.db.allMidHits + 1
+            project.db.allMidCache.verifiedAt = project.db.currentRevision
+            return project.db.allMidCache.value
         end 'valid'
     end 'hasCache'
 
-    logDebug(LogCategory.compiler, message: "queryAllStdOps computing")
-    project.db.allStdOpsMisses = project.db.allStdOpsMisses + 1
+    logDebug(LogCategory.compiler, message: "queryAllMid computing")
+    project.db.allMidMisses = project.db.allMidMisses + 1
 
     // Compute
     pushQuery(project, key: key)
     clearDepsFor(project, key: key)
 
-    let maxonOps = try queryAllMaxonOps(project)
-    try runSemanticChecks(maxonOps)
-    let result = lowerMaxonOpsToStd(maxonOps)
+    let module = try queryAllModule(project)
+    try runSemanticChecks(module)
+    let result = lowerMaxHLToMid(module)
 
     popQuery(project)
 
     // Store
-    project.db.allStdOpsCache = StdOpsMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+    project.db.allMidCache = MlirModuleMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
 
     return result
-end 'queryAllStdOps'
+end 'queryAllMid'
 
 // --- Whole-program derived query: code emission ---
 
 export function queryCodeResult(project Project) returns CodeResult throws CompileError
+    print("[DBG] queryCodeResult enter")
     let key = QueryKey.codeResult
+    print("[DBG] queryCodeResult before recordDependency")
     recordDependency(project, dependency: key)
+    print("[DBG] queryCodeResult after recordDependency")
 
     // Check cache
     let ccAt = project.db.codeCache.computedAt
@@ -224,8 +233,8 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
     pushQuery(project, key: key)
     clearDepsFor(project, key: key)
 
-    let stdOps = try queryAllStdOps(project)
-    let result = try emitBackend(stdOps, target: project.target)
+    let midModule = try queryAllMid(project)
+    let result = try emitBackend(midModule, target: project.target)
 
     popQuery(project)
 

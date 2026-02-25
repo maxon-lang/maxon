@@ -46,10 +46,10 @@ export function resetCounters(project Project)
     project.db.tokenMisses = 0
     project.db.parseHits = 0
     project.db.parseMisses = 0
-    project.db.allMaxonOpsHits = 0
-    project.db.allMaxonOpsMisses = 0
-    project.db.allStdOpsHits = 0
-    project.db.allStdOpsMisses = 0
+    project.db.allModuleHits = 0
+    project.db.allModuleMisses = 0
+    project.db.allMidHits = 0
+    project.db.allMidMisses = 0
     project.db.codeHits = 0
     project.db.codeMisses = 0
 end 'resetCounters'
@@ -65,25 +65,34 @@ export function recordDependency(project Project, dependency QueryKey)
     let dependent = try project.db.activeQueryStack.get(stackLen - 1) otherwise 'err'
         return
     end 'err'
+    print("[DBG] recordDependency: creating Dependency struct")
     let dep = Dependency{dependent: dependent, dependency: dependency}
+    print("[DBG] recordDependency: about to push, deps count = {project.db.dependencies.count()}")
     project.db.dependencies.push(dep)
+    print("[DBG] recordDependency: push done")
 end 'recordDependency'
 
 // Remove all dependency entries where `dependent` matches `key`.
 export function clearDepsFor(project Project, key QueryKey)
+    print("[DBG] clearDepsFor: start, old deps count = {project.db.dependencies.count()}")
     var newDeps = DependencyArray{}
     var i = 0
     while i < project.db.dependencies.count() 'scan'
+        print("[DBG] clearDepsFor: getting dep {i}")
         let dep = try project.db.dependencies.get(i) otherwise 'skip'
             i = i + 1
             continue
         end 'skip'
+        print("[DBG] clearDepsFor: got dep {i}, checking equality")
         if not queryKeysEqual(dep.dependent, b: key) 'keep'
+            print("[DBG] clearDepsFor: pushing dep {i}")
             newDeps.push(dep)
         end 'keep'
         i = i + 1
     end 'scan'
+    print("[DBG] clearDepsFor: reassigning deps, new count = {newDeps.count()}")
     project.db.dependencies = newDeps
+    print("[DBG] clearDepsFor: done")
 end 'clearDepsFor'
 
 // --- Query key equality ---
@@ -93,8 +102,8 @@ export function queryKeysEqual(a QueryKey, b QueryKey) returns bool
         sourceFile(path) then return matchSourceFile(b, path: path)
         tokens(path) then return matchTokens(b, path: path)
         parseOps(path) then return matchParseOps(b, path: path)
-        allMaxonOps then return matchAllMaxonOps(b)
-        allStdOps then return matchAllStdOps(b)
+        allModule then return matchAllModule(b)
+        allMid then return matchAllMid(b)
         codeResult then return matchCodeResult(b)
     end 'matchA'
     return false
@@ -105,8 +114,8 @@ function matchSourceFile(b QueryKey, path String) returns bool
         sourceFile(bPath) then return path == bPath
         tokens(bPath) then return false
         parseOps(bPath) then return false
-        allMaxonOps then return false
-        allStdOps then return false
+        allModule then return false
+        allMid then return false
         codeResult then return false
     end 'matchB'
     return false
@@ -117,8 +126,8 @@ function matchTokens(b QueryKey, path String) returns bool
         sourceFile(bPath) then return false
         tokens(bPath) then return path == bPath
         parseOps(bPath) then return false
-        allMaxonOps then return false
-        allStdOps then return false
+        allModule then return false
+        allMid then return false
         codeResult then return false
     end 'matchB'
     return false
@@ -129,44 +138,44 @@ function matchParseOps(b QueryKey, path String) returns bool
         sourceFile(bPath) then return false
         tokens(bPath) then return false
         parseOps(bPath) then return path == bPath
-        allMaxonOps then return false
-        allStdOps then return false
+        allModule then return false
+        allMid then return false
         codeResult then return false
     end 'matchB'
     return false
 end 'matchParseOps'
 
-function matchAllMaxonOps(b QueryKey) returns bool
+function matchAllModule(b QueryKey) returns bool
     match b 'matchB'
         sourceFile(bPath) then return false
         tokens(bPath) then return false
         parseOps(bPath) then return false
-        allMaxonOps then return true
-        allStdOps then return false
+        allModule then return true
+        allMid then return false
         codeResult then return false
     end 'matchB'
     return false
-end 'matchAllMaxonOps'
+end 'matchAllModule'
 
-function matchAllStdOps(b QueryKey) returns bool
+function matchAllMid(b QueryKey) returns bool
     match b 'matchB'
         sourceFile(bPath) then return false
         tokens(bPath) then return false
         parseOps(bPath) then return false
-        allMaxonOps then return false
-        allStdOps then return true
+        allModule then return false
+        allMid then return true
         codeResult then return false
     end 'matchB'
     return false
-end 'matchAllStdOps'
+end 'matchAllMid'
 
 function matchCodeResult(b QueryKey) returns bool
     match b 'matchB'
         sourceFile(bPath) then return false
         tokens(bPath) then return false
         parseOps(bPath) then return false
-        allMaxonOps then return false
-        allStdOps then return false
+        allModule then return false
+        allMid then return false
         codeResult then return true
     end 'matchB'
     return false
@@ -210,8 +219,8 @@ function isDependencyValid(project Project, dep QueryKey, since Revision) return
         sourceFile(path) then return isInputUnchanged(project, path: path, since: since)
         tokens(path) then return isTokensCacheValidDeep(project, path: path)
         parseOps(path) then return isParseCacheValidDeep(project, path: path)
-        allMaxonOps then return isAllMaxonOpsCacheValidDeep(project)
-        allStdOps then return isAllStdOpsCacheValidDeep(project)
+        allModule then return isAllModuleCacheValidDeep(project)
+        allMid then return isAllMidCacheValidDeep(project)
         codeResult then return isCodeCacheValidDeep(project)
     end 'matchDep'
     return false
@@ -253,31 +262,31 @@ function isParseCacheValidDeep(project Project, path String) returns bool
     return false
 end 'isParseCacheValidDeep'
 
-function isAllMaxonOpsCacheValidDeep(project Project) returns bool
-    if project.db.allMaxonOpsCache.computedAt > 0 'has'
-        if project.db.allMaxonOpsCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+function isAllModuleCacheValidDeep(project Project) returns bool
+    if project.db.allModuleCache.computedAt > 0 'has'
+        if project.db.allModuleCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
             return true
         end 'recentlyVerified'
-        if areDepsValid(project, key: QueryKey.allMaxonOps, computedAt: project.db.allMaxonOpsCache.computedAt) 'depsOk'
-            project.db.allMaxonOpsCache.verifiedAt = project.db.currentRevision
+        if areDepsValid(project, key: QueryKey.allModule, computedAt: project.db.allModuleCache.computedAt) 'depsOk'
+            project.db.allModuleCache.verifiedAt = project.db.currentRevision
             return true
         end 'depsOk'
     end 'has'
     return false
-end 'isAllMaxonOpsCacheValidDeep'
+end 'isAllModuleCacheValidDeep'
 
-function isAllStdOpsCacheValidDeep(project Project) returns bool
-    if project.db.allStdOpsCache.computedAt > 0 'has'
-        if project.db.allStdOpsCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
+function isAllMidCacheValidDeep(project Project) returns bool
+    if project.db.allMidCache.computedAt > 0 'has'
+        if project.db.allMidCache.verifiedAt >= project.db.currentRevision 'recentlyVerified'
             return true
         end 'recentlyVerified'
-        if areDepsValid(project, key: QueryKey.allStdOps, computedAt: project.db.allStdOpsCache.computedAt) 'depsOk'
-            project.db.allStdOpsCache.verifiedAt = project.db.currentRevision
+        if areDepsValid(project, key: QueryKey.allMid, computedAt: project.db.allMidCache.computedAt) 'depsOk'
+            project.db.allMidCache.verifiedAt = project.db.currentRevision
             return true
         end 'depsOk'
     end 'has'
     return false
-end 'isAllStdOpsCacheValidDeep'
+end 'isAllMidCacheValidDeep'
 
 function isCodeCacheValidDeep(project Project) returns bool
     if project.db.codeCache.computedAt > 0 'has'

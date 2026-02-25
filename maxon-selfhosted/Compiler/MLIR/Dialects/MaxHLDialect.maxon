@@ -1,23 +1,36 @@
-// Maxon Dialect Operations
+// MaxHL (Maxon High-Level) Dialect
+// Preserves source-level semantics. Parser emits these ops directly.
+// Lowered to arith/cf/func/memref/runtime by MaxHLToMid pass.
 
-export union MaxonOp
+export union MaxHLOp
+    // Literals
     literal(resultId ValueId, value ParsedInt)
     floatLiteral(resultId ValueId, rawBits ParsedInt)
-    returnOp(retValId ValueId)
+
+    // Variables
     varDecl(slotId VarSlot, valueId ValueId)
     varLoad(resultId ValueId, slotId VarSlot)
+    varStore(slotId VarSlot, valueId ValueId)
+
+    // Integer arithmetic
     add(resultId ValueId, leftId ValueId, rightId ValueId)
     sub(resultId ValueId, leftId ValueId, rightId ValueId)
     mul(resultId ValueId, leftId ValueId, rightId ValueId)
     div(resultId ValueId, leftId ValueId, rightId ValueId)
     mod(resultId ValueId, leftId ValueId, rightId ValueId)
+
+    // Unary
     neg(resultId ValueId, operandId ValueId)
     bitNot(resultId ValueId, operandId ValueId)
+
+    // Bitwise
     bitAnd(resultId ValueId, leftId ValueId, rightId ValueId)
     bitOr(resultId ValueId, leftId ValueId, rightId ValueId)
     bitXor(resultId ValueId, leftId ValueId, rightId ValueId)
     shl(resultId ValueId, leftId ValueId, rightId ValueId)
     shr(resultId ValueId, leftId ValueId, rightId ValueId)
+
+    // Comparisons
     cmpEq(resultId ValueId, leftId ValueId, rightId ValueId)
     cmpNe(resultId ValueId, leftId ValueId, rightId ValueId)
     cmpLt(resultId ValueId, leftId ValueId, rightId ValueId)
@@ -25,13 +38,16 @@ export union MaxonOp
     cmpGt(resultId ValueId, leftId ValueId, rightId ValueId)
     cmpGe(resultId ValueId, leftId ValueId, rightId ValueId)
     floatCmpEq(resultId ValueId, leftId ValueId, rightId ValueId)
-    condBr(condId ValueId, thenLabel ByteArray, elseLabel ByteArray)
-    br(targetLabel ByteArray)
-    label(name ByteArray)
+
+    // Control flow (terminators — placed as block terminators, not regular ops)
+    condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
+    br(target BlockId)
+
+    // Functions
+    call(resultId ValueId, callee ByteArray)
+    ret(retValId ValueId)
+
+    // I/O (bootstrap, will move to runtime dialect)
     printLiteral(data ByteArray)
     printInt(valueId ValueId)
-    funcBegin(name ByteArray, returnType ByteArray)
-    funcEnd
-    call(resultId ValueId, callee ByteArray)
-    varStore(slotId VarSlot, valueId ValueId)
-end 'MaxonOp'
+end 'MaxHLOp'

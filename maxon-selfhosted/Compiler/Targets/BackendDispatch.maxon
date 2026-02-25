@@ -1,12 +1,12 @@
 // Single dispatch point for all CPU+OS backend combinations.
-// CPU emitters consume OsDescriptor to handle OS differences — no CPU×OS dispatch needed.
+// CPU emitters consume OsDescriptor to handle OS differences — no CPU*OS dispatch needed.
 
-export function emitBackend(stdOps StdOpArray, target TargetTriple) returns CodeResult throws CompileError
+export function emitBackend(module MlirModule, target TargetTriple) returns CodeResult throws CompileError
     let osDesc = makeOsDescriptor(target)
     var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}}
     match target.cpu 'cpu'
-        CpuArch.x86_64 then result = emitX86(stdOps, target: target, osDesc: osDesc)
-        CpuArch.aarch64 then result = emitArm64(stdOps, target: target, osDesc: osDesc)
+        CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(module, target: target), target: target, osDesc: osDesc)
+        CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(module, target: target), target: target, osDesc: osDesc)
     end 'cpu'
     return result
 end 'emitBackend'

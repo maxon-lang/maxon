@@ -1,0 +1,330 @@
+// Mid dialect -> MaxX64 dialect conversion.
+// Walks MlirModule functions/blocks/ops and lowers arith/cf/func/memref/runtime
+// ops to MaxX64Op instructions.
+
+export function lowerMidToMaxX64(module MlirModule, target TargetTriple) returns MlirModule
+    logDebug(LogCategory.mlir, message: "Lowering Mid to MaxX64 dialect")
+    var result = createMlirModule()
+
+    var shadowSpace = 32
+    match target.os 'osShadow'
+        Os.windows then shadowSpace = 32
+        Os.linux then shadowSpace = 0
+    end 'osShadow'
+
+    var fi = 0
+    while fi < module.functions.count() 'eachFunc'
+        let srcFunc = try module.functions.get(fi) otherwise 'skipFunc'
+            fi = fi + 1
+            continue
+        end 'skipFunc'
+        let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace)
+        result.functions.push(dstFunc)
+        fi = fi + 1
+    end 'eachFunc'
+
+    logDebug(LogCategory.mlir, message: "Mid->MaxX64 lowering complete")
+    return result
+end 'lowerMidToMaxX64'
+
+function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize) returns MlirFunction
+    var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+    let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: shadowSpace, savedRegsSize: 0)
+    var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
+    var valueSlots = ValueSlotMap{}
+
+    var bi = 0
+    while bi < srcFunc.region.blocks.count() 'eachBlock'
+        let srcBlock = try srcFunc.region.blocks.get(bi) otherwise 'skipBlock'
+            bi = bi + 1
+            continue
+        end 'skipBlock'
+        var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+        // Preserve block ID from source so jump targets resolve correctly
+        dstBlock.id = srcBlock.id
+
+        // Entry block gets prologue
+        if bi == 0 'isEntry'
+            dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.prologue(stackSize)))
+        end 'isEntry'
+
+        // Lower each op in the block
+        var oi = 0
+        while oi < srcBlock.ops.count() 'eachOp'
+            let op = try srcBlock.ops.get(oi) otherwise 'skipOp'
+                oi = oi + 1
+                continue
+            end 'skipOp'
+            nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+            oi = oi + 1
+        end 'eachOp'
+
+        // Lower terminator
+        if srcBlock.hasTerminator 'hasTerm'
+            lowerTerminator(srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+        end 'hasTerm'
+
+        bi = bi + 1
+    end 'eachBlock'
+
+    // Preserve region metadata
+    dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+    return dstFunc
+end 'lowerFunctionToX64'
+
+// Lower a single mid-level op, pushing one or more MaxX64Ops into dstBlock.
+// Returns the updated nextTempSlot.
+function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    match op 'dispatch'
+        arith(arithOp) then return lowerArithOp(arithOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        memref(memOp) then return lowerMemRefOp(memOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        runtime(rtOp) then return lowerRuntimeOp(rtOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        func(funcOp) then return lowerFuncOp(funcOp, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        maxx64(x64Op) then return lowerPassthroughX64(x64Op, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        cf(cfOp) then return nextTempSlot
+        maxarm64(armOp) then return nextTempSlot
+        maxhl(hlOp) then return nextTempSlot
+    end 'dispatch'
+end 'lowerMlirOp'
+
+// Pass through already-lowered MaxX64Ops.
+function lowerPassthroughX64(op MaxX64Op, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
+    dstBlock.ops.push(MlirOp.maxx64(op))
+    return nextTempSlot
+end 'lowerPassthroughX64'
+
+// Lower arith ops: const, binary, unary, compare, shift, div/rem.
+function lowerArithOp(op ArithOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    match op 'lower'
+        constI64(resultId, value) then return lowerConstI64(resultId, value: value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        constF64(resultId, rawBits) then return lowerConstI64(resultId, value: rawBits, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        addI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.addRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        subI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.subRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        mulI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.imulRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        divI64(resultId, leftId, rightId) then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        remI64(resultId, leftId, rightId) then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        negI64(resultId, operandId) then return lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.negReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        bitNotI64(resultId, operandId) then return lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.bitNotReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        andI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.andRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        orI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.orRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        xorI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.xorRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        shlI64(resultId, leftId, rightId) then return lowerShiftOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.shlRegCl(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        shrI64(resultId, leftId, rightId) then return lowerShiftOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.sarRegCl(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpI64Eq(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpI64Ne(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpI64Lt(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpI64Le(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpI64Gt(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpI64Ge(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpF64Eq(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    end 'lower'
+end 'lowerArithOp'
+
+// const -> movRegImm(rax, value) + movSlot(tempSlot, rax)
+function lowerConstI64(resultId ValueId, value ParsedInt, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, value)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerConstI64'
+
+// Binary op: loadSlot(rcx, right) + loadSlot(rax, left) + op + movSlot(temp, rax)
+function lowerBinaryOp(resultId ValueId, leftId ValueId, rightId ValueId, x64Op MaxX64Op, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
+    let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
+    // Load right first so rax load doesn't clobber it
+    if rightSlot >= 0 'hasRight'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    end 'hasRight'
+    if leftSlot >= 0 'hasLeft'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
+    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxx64(x64Op))
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerBinaryOp'
+
+// Shift op: load shift count into rcx, load value into rax, shift, store result.
+function lowerShiftOp(resultId ValueId, leftId ValueId, rightId ValueId, x64Op MaxX64Op, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
+    let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
+    // Shift count must be in rcx (cl)
+    if rightSlot >= 0 'hasRight'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    end 'hasRight'
+    if leftSlot >= 0 'hasLeft'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
+    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxx64(x64Op))
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerShiftOp'
+
+// Compare op: loadSlot(rcx, right) + loadSlot(rax, left) + cmp
+// No temp slot needed; the comparison sets flags consumed by condBr.
+function lowerCmpOp(resultId ValueId, leftId ValueId, rightId ValueId, x64Op MaxX64Op, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
+    let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
+    if rightSlot >= 0 'hasRight'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    end 'hasRight'
+    if leftSlot >= 0 'hasLeft'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
+    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxx64(x64Op))
+    // Record the comparison result so boolTest can find the value
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerCmpOp'
+
+// Div/rem: loadSlot(rcx, right) + loadSlot(rax, left) + idiv/irem + movSlot
+function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
+    let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
+    if rightSlot >= 0 'hasRight'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    end 'hasRight'
+    if leftSlot >= 0 'hasLeft'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
+    end 'hasLeft'
+    if isRem 'emitRem'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iremRcx))
+    end 'emitRem' else 'emitDiv'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.idivRcx))
+    end 'emitDiv'
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerDivRem'
+
+// Unary op: loadSlot(rax, operand) + op + movSlot(temp, rax)
+function lowerUnaryOp(resultId ValueId, operandId ValueId, x64Op MaxX64Op, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
+    if operandSlot >= 0 'hasSlot'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, operandSlot)))
+    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxx64(x64Op))
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerUnaryOp'
+
+// Lower memref ops: storeSlot records mapping, loadSlot records mapping.
+function lowerMemRefOp(op MemRefOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    match op 'lower'
+        storeSlot(slotId, valueId) then lowerStoreSlot(slotId, valueId: valueId, dstBlock: dstBlock, valueSlots: valueSlots)
+        loadSlot(resultId, slotId) then lowerLoadSlot(resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots)
+    end 'lower'
+    return nextTempSlot
+end 'lowerMemRefOp'
+
+function lowerStoreSlot(slotId VarSlot, valueId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(slotId, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
+end 'lowerStoreSlot'
+
+function lowerLoadSlot(resultId ValueId, slotId VarSlot, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, slotId)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+end 'lowerLoadSlot'
+
+// Lower runtime ops.
+function lowerRuntimeOp(op RuntimeOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    match op 'lower'
+        printLiteral(data) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.printLiteral(data)))
+        printInt(valueId) then lowerPrintInt(valueId, dstBlock: dstBlock, valueSlots: valueSlots)
+    end 'lower'
+    return nextTempSlot
+end 'lowerRuntimeOp'
+
+function lowerPrintInt(valueId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    // Load the value into rax before printing
+    let slot = valueSlotMapGet(valueSlots, valueId: valueId)
+    if slot >= 0 'hasSlot'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, slot)))
+    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.printInt))
+end 'lowerPrintInt'
+
+// Lower func ops (non-terminator: just call).
+function lowerFuncOp(op FuncOp, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
+    match op 'lower'
+        call(resultId, callee) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
+        ret(retValId) then break 'lower'
+    end 'lower'
+    return nextTempSlot
+end 'lowerFuncOp'
+
+// Lower block terminator: cf.condBr, cf.br, func.ret.
+function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    match srcBlock.terminator 'dispatch'
+        cf(cfOp) then lowerCfTerminator(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+        func(funcOp) then lowerFuncTerminator(funcOp, dstBlock: dstBlock, valueSlots: valueSlots)
+        arith(arithOp) then break 'dispatch'
+        memref(memOp) then break 'dispatch'
+        runtime(rtOp) then break 'dispatch'
+        maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
+        maxarm64(armOp) then break 'dispatch'
+        maxhl(hlOp) then break 'dispatch'
+    end 'dispatch'
+end 'lowerTerminator'
+
+function lowerCfTerminator(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    match op 'lower'
+        br(target) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.jmp(target)))
+        condBr(condId, thenTarget, elseTarget) then lowerCondBr(condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+    end 'lower'
+end 'lowerCfTerminator'
+
+function lowerCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    let jumpKind = determineJumpKindInBlock(srcBlock)
+    // Emit inverted conditional jump to else block, then unconditional jump to then block.
+    // The inverted condition means: if the condition is NOT met, jump to else.
+    match jumpKind 'emitJump'
+        JumpKind.eq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
+        JumpKind.ne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+        JumpKind.lt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ge, elseTarget)))
+        JumpKind.le then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.g, elseTarget)))
+        JumpKind.gt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.le, elseTarget)))
+        JumpKind.ge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.l, elseTarget)))
+        JumpKind.feq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
+        JumpKind.boolTest then lowerBoolTestCondBr(condId, elseTarget: elseTarget, dstBlock: dstBlock, valueSlots: valueSlots)
+    end 'emitJump'
+    // Unconditional jump to then block
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.jmp(thenTarget)))
+end 'lowerCondBr'
+
+function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    // Load the boolean value into rax, test it, jump to else if zero
+    let condSlot = valueSlotMapGet(valueSlots, valueId: condId)
+    if condSlot >= 0 'hasSlot'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, condSlot)))
+    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRaxRax))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+end 'lowerBoolTestCondBr'
+
+function lowerFuncTerminator(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    match op 'lower'
+        ret(retValId) then lowerReturnOp(retValId, dstBlock: dstBlock, valueSlots: valueSlots)
+        call(resultId, callee) then break 'lower'
+    end 'lower'
+end 'lowerFuncTerminator'
+
+function lowerReturnOp(retValId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    // Load return value into rax if it has a known slot
+    let retSlot = valueSlotMapGet(valueSlots, valueId: retValId)
+    if retSlot >= 0 'hasRetVal'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, retSlot)))
+    end 'hasRetVal'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
+end 'lowerReturnOp'

@@ -1,4 +1,4 @@
-var _cachedStdlibOps = MaxonOpArray{}
+var _cachedStdlibModule = MlirModule{functions: MlirFunctionArray{}}
 var _stdlibLoaded = false
 var _stdlibNextValueId = 0
 
@@ -25,16 +25,16 @@ export function findStdlibPath() returns String
     return ""
 end 'findStdlibPath'
 
-export function getStdlibOps(project Project) returns MaxonOpArray
+export function getStdlibModule(project Project) returns MlirModule
     if _stdlibLoaded 'cached'
-        return _cachedStdlibOps
+        return _cachedStdlibModule
     end 'cached'
 
     let stdlibPath = findStdlibPath()
     if stdlibPath == "" 'noStdlib'
         logDebug(LogCategory.compiler, message: "No stdlib_selfhosted/ found, skipping stdlib")
         _stdlibLoaded = true
-        return _cachedStdlibOps
+        return _cachedStdlibModule
     end 'noStdlib'
 
     logDebug(LogCategory.compiler, message: "Loading stdlib from {stdlibPath}")
@@ -43,7 +43,7 @@ export function getStdlibOps(project Project) returns MaxonOpArray
     var stdlibFiles = StringArray{}
     stdlibFiles.push("{stdlibPath}/StdlibTest.maxon")
 
-    var allOps = MaxonOpArray{}
+    var allModule = createMlirModule()
     var i = 0
     while i < stdlibFiles.count() 'eachFile'
         let filePath = try stdlibFiles.get(i) otherwise 'skip'
@@ -58,24 +58,24 @@ export function getStdlibOps(project Project) returns MaxonOpArray
             end 'readErr'
             logDebug(LogCategory.compiler, message: "  Parsing {filePath}")
             let tokens = tokenize(bytes)
-            let ops = try parse(project, tokens: tokens, filePath: filePath) otherwise 'parseErr'
+            let parsed = try parse(project, tokens: tokens, filePath: filePath) otherwise 'parseErr'
                 logDebug(LogCategory.compiler, message: "  Failed to parse {filePath}")
                 i = i + 1
                 continue
             end 'parseErr'
-            allOps.append(ops)
+            mergeModules(allModule, source: parsed)
         end 'exists'
         i = i + 1
     end 'eachFile'
 
-    _cachedStdlibOps = allOps
+    _cachedStdlibModule = allModule
     _stdlibNextValueId = getNextValueId(project)
     _stdlibLoaded = true
 
-    logDebug(LogCategory.compiler, message: "Stdlib loaded: {stdlibFiles.count()} files, {allOps.count()} ops, nextValueId={_stdlibNextValueId}")
+    logDebug(LogCategory.compiler, message: "Stdlib loaded: {stdlibFiles.count()} files, {allModule.functions.count()} functions, nextValueId={_stdlibNextValueId}")
 
-    return _cachedStdlibOps
-end 'getStdlibOps'
+    return _cachedStdlibModule
+end 'getStdlibModule'
 
 export function getStdlibNextValueId() returns ValueId
     return _stdlibNextValueId

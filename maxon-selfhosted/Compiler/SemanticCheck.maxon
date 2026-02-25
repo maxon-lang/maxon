@@ -1,4 +1,4 @@
-// Semantic validation pass over Maxon dialect ops.
+// Semantic validation pass over the MlirModule.
 // Checks program structure requirements before lowering.
 
 // Sentinel returned by findMainReturnType when main exists but has no return type.
@@ -51,9 +51,9 @@ function dotMainBytes() returns ByteArray
     return s
 end 'dotMainBytes'
 
-export function runSemanticChecks(ops MaxonOpArray) throws CompileError
-    let mainReturnType = findMainReturnType(ops)
-
+export function runSemanticChecks(module MlirModule) throws CompileError
+    // Walk module.functions looking for one named "main" or ending with ".main"
+    let mainReturnType = findMainReturnType(module)
     if mainReturnType.count() == 0 'noMain'
         try raiseSemanticError(ErrorCode.semanticNoMain, message: "No 'main' function found")
     end 'noMain' else 'hasMain'
@@ -64,79 +64,26 @@ export function runSemanticChecks(ops MaxonOpArray) throws CompileError
     end 'hasMain'
 end 'runSemanticChecks'
 
-// Scans ops for a funcBegin named "main" and returns its return type.
-// Returns empty ByteArray if no main function found.
-function findMainReturnType(ops MaxonOpArray) returns ByteArray
+function findMainReturnType(module MlirModule) returns ByteArray
     var i = 0
-    while i < ops.count() 'scan'
-        let op = try ops.get(i) otherwise 'skip'
+    let mn = mainBytes()
+    let dm = dotMainBytes()
+    while i < module.functions.count() 'scan'
+        let func = try module.functions.get(i) otherwise 'skip'
             i = i + 1
             continue
         end 'skip'
-        let result = getMainReturnType(op)
-        if result.count() > 0 'found'
-            return result
-        end 'found'
+        if bytesEqual(func.name, b: mn) or endsWithBytes(func.name, suffix: dm) 'isMain'
+            if func.returnType.count() == 0 'noReturn'
+                return noReturnTypeSentinel()
+            end 'noReturn'
+            return func.returnType
+        end 'isMain'
         i = i + 1
     end 'scan'
     var empty = ByteArray{}
     return empty
 end 'findMainReturnType'
-
-// If op is a funcBegin for "main", returns its return type (or sentinel if none).
-// Returns empty ByteArray for non-main or non-funcBegin ops.
-function getMainReturnType(op MaxonOp) returns ByteArray
-    var result = ByteArray{}
-    match op 'check'
-        funcBegin(name, returnType) then result = matchMainFunc(name, returnType: returnType)
-        literal(resultId, value) then break 'check'
-        floatLiteral(resultId, rawBits) then break 'check'
-        returnOp(retValId) then break 'check'
-        varDecl(slotId, valueId) then break 'check'
-        varLoad(resultId, slotId) then break 'check'
-        add(resultId, leftId, rightId) then break 'check'
-        sub(resultId, leftId, rightId) then break 'check'
-        mul(resultId, leftId, rightId) then break 'check'
-        div(resultId, leftId, rightId) then break 'check'
-        mod(resultId, leftId, rightId) then break 'check'
-        neg(resultId, operandId) then break 'check'
-        bitNot(resultId, operandId) then break 'check'
-        bitAnd(resultId, leftId, rightId) then break 'check'
-        bitOr(resultId, leftId, rightId) then break 'check'
-        bitXor(resultId, leftId, rightId) then break 'check'
-        shl(resultId, leftId, rightId) then break 'check'
-        shr(resultId, leftId, rightId) then break 'check'
-        varStore(slotId, valueId) then break 'check'
-        cmpEq(resultId, leftId, rightId) then break 'check'
-        cmpNe(resultId, leftId, rightId) then break 'check'
-        cmpLt(resultId, leftId, rightId) then break 'check'
-        cmpLe(resultId, leftId, rightId) then break 'check'
-        cmpGt(resultId, leftId, rightId) then break 'check'
-        cmpGe(resultId, leftId, rightId) then break 'check'
-        floatCmpEq(resultId, leftId, rightId) then break 'check'
-        condBr(condId, thenLabel, elseLabel) then break 'check'
-        br(targetLabel) then break 'check'
-        label(name) then break 'check'
-        printLiteral(data) then break 'check'
-        printInt(valueId) then break 'check'
-        funcEnd then break 'check'
-        call(resultId, callee) then break 'check'
-    end 'check'
-    return result
-end 'getMainReturnType'
-
-function matchMainFunc(name ByteArray, returnType ByteArray) returns ByteArray
-    let mn = mainBytes()
-    let dm = dotMainBytes()
-    if bytesEqual(name, b: mn) or endsWithBytes(name, suffix: dm) 'isMain'
-        if returnType.count() == 0 'noReturn'
-            return noReturnTypeSentinel()
-        end 'noReturn'
-        return returnType
-    end 'isMain'
-    var empty = ByteArray{}
-    return empty
-end 'matchMainFunc'
 
 function endsWithBytes(haystack ByteArray, suffix ByteArray) returns bool
     let hLen = haystack.count()
