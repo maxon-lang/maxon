@@ -44,26 +44,28 @@ module {
   func @self-field-method-chain.main() -> u32 {
   entry:
     x86.prologue stack_size=80
-    x86.xor rcx, rcx
+    x86.lea_symdata rax, [__tag_self-field-method-chain_main]
+    x86.mov rcx, rax
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov eax, 1
-    x86.mov ecx, 2
-    x86.mov edx, 3
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], ecx
-    x86.mov [rbp-32], eax
-    x86.xor ebx, ebx
+    x86.mov edx, 1
+    x86.mov ebx, 2
     x86.mov esi, 3
+    x86.mov [rbp-16], esi
+    x86.mov [rbp-24], ebx
+    x86.mov [rbp-32], edx
     x86.xor edi, edi
-    x86.mov r8, 8
+    x86.mov r8, 3
+    x86.xor r9, r9
+    x86.mov eax, 8
+    x86.lea_symdata rcx, [__tag___ManagedMemory]
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-40], eax
-    x86.mov r9, [rbp-40]
-    x86.xor eax, eax
-    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
     x86.mov eax, [rbp-40]
     x86.mov ecx, 3
     x86.mov [eax+8], ecx
@@ -74,8 +76,9 @@ module {
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.xor eax, eax
+    x86.lea_symdata rcx, [__tag_IntArray]
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-48], eax
     x86.mov eax, [rbp-48]
@@ -94,8 +97,10 @@ module {
     x86.mov eax, [rbp-48]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
+    x86.lea_symdata rax, [__tag_Inner]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 8
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-56], eax
     x86.mov eax, [rbp-48]
@@ -106,8 +111,13 @@ module {
     x86.mov rdx, [rbp-56]
     x86.mov r8, 1
     x86.call mm_move
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, [rbp-56]
+    x86.call mm_incref
+    x86.lea_symdata rax, [__tag_Outer]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 8
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-64], eax
     x86.mov eax, [rbp-56]
@@ -118,6 +128,9 @@ module {
     x86.mov rdx, [rbp-64]
     x86.mov r8, 1
     x86.call mm_move
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_incref
     x86.mov eax, [rbp-64]
     x86.mov rcx, [rbp-64]
     x86.call Outer.getInnerCount
@@ -134,11 +147,16 @@ module {
     x86.test ecx, ecx
     x86.je self-field-method-chain.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_52]
+    x86.lea_symdata rax, [__panic_msg_56]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
     x86.mov eax, [rbp-72]
+    x86.mov ecx, [rbp-56]
+    x86.call mm_decref
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
     x86.mov ecx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, [rbp-72]

@@ -34,6 +34,8 @@ This reference provides complete syntax and semantics for the Maxon programming 
     - [Reference-by-Default Assignment](#reference-by-default-assignment)
     - [Explicit Cloning](#explicit-cloning)
     - [Cloneable Interface](#cloneable-interface)
+    - [Auto-Equatable](#auto-equatable)
+    - [Scope Cleanup](#scope-cleanup)
     - [Ownership System](#ownership-system)
 
 ---
@@ -2753,7 +2755,7 @@ end 'Cloneable'
 - `String`
 - `Array` (when the element type is Cloneable)
 
-**When auto-conformance fails:** If a struct contains a field whose type is not Cloneable (such as an enum or union), the compiler will not auto-generate conformance. Calling `.clone()` on such a type produces error E3077.
+**When auto-conformance fails:** If a struct contains a field whose type is not Cloneable (such as a union with associated values), the compiler will not auto-generate conformance. You must implement `clone()` manually or restructure the type.
 
 ### Auto-Equatable
 
@@ -2787,7 +2789,7 @@ a is c                      // true -- same object
 
 ### Scope Cleanup
 
-When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via assignment), the refcount is incremented. When a variable goes out of scope, `maxon_release` decrements the refcount and frees the memory if it reaches zero.
+When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via assignment), the refcount is incremented. When a variable goes out of scope, the runtime decrements the refcount and frees the memory if it reaches zero.
 
 ```maxon
 function compute() returns int

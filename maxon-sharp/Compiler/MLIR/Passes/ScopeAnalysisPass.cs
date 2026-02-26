@@ -11,6 +11,8 @@ public class ScopeInfo(string scopeVar) {
   public string ScopeVar { get; } = scopeVar; public List<AllocInfo> Allocations { get; } = [];
   public HashSet<string> EscapingVars { get; } = [];
   public HashSet<string> PassedToFunctionVars { get; } = [];
+  public List<string> RefcountedVars { get; } = [];
+  public bool HasIntraScopeAliases { get; set; }
   public bool ReceivesMovedAllocs { get; set; }
   public bool ReceivesNonReturnMoves { get; set; }
   public bool NeedsRuntimeFrame { get; set; }
@@ -23,6 +25,8 @@ public class ScopeInfo(string scopeVar) {
   public int ReturnAllocResultId { get; set; } = -1;
   // Struct literal result IDs eligible for stack allocation (per-allocation, not per-scope)
   public HashSet<int> StackAllocIds { get; } = [];
+  // Value IDs from calls to functions that return self (borrowed ref, not new allocation)
+  public HashSet<int> ReturnSelfValueIds { get; } = [];
 }
 
 /// <summary>
@@ -34,7 +38,6 @@ public class ScopeInfo(string scopeVar) {
 public static class ScopeAnalysisPass {
   public static void Run(MlirModule<MaxonOp> module) {
     foreach (var func in module.Functions) {
-      if (func.IsStdlib) continue;
       if (func.Body.Blocks.Count == 0) continue;
       AnalyzeFunction(func, module);
     }
@@ -54,8 +57,20 @@ public static class ScopeAnalysisPass {
     // Track var names whose struct values are used as fields in other struct literals —
     // these get EmitReparent (mm_move mode=1) during lowering, which reads backpointers
     var nestedInStructField = new HashSet<string>();
+    // Map value ID → all var names assigned from that value (for deduplication of __call_tmp_ temps)
+    var valueIdToVarNames = new Dictionary<int, List<string>>();
     // Map value ID → var name for struct var refs
     var structVarRefNames = new Dictionary<int, string>();
+    // Pre-scan: identify scopes that have a block_exit somewhere in the function.
+    // Scopes without any block_exit (only cleanup exits like return_cleanup) need
+    // to be popped on their first cleanup exit, since all paths through them terminate.
+    var scopesWithBlockExit = new HashSet<string>();
+    foreach (var b in func.Body.Blocks) {
+      foreach (var o in b.Operations) {
+        if (o is MaxonScopeExitOp { Tag: "block_exit" } be)
+          scopesWithBlockExit.Add(be.ScopeVar);
+      }
+    }
 
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
@@ -74,6 +89,44 @@ public static class ScopeAnalysisPass {
             break;
           case MaxonStructVarRefOp varRefOp:
             structVarRefNames[varRefOp.Result.Id] = varRefOp.VarName;
+            producingOps[varRefOp.Result.Id] = op;
+            break;
+          // Heap-allocating literal ops — these are struct allocations, not call returns
+          case MaxonStringLiteralOp strLit:
+            producingOps[strLit.Result.Id] = op;
+            break;
+          case MaxonByteStringLiteralOp bstrLit:
+            producingOps[bstrLit.Result.Id] = op;
+            break;
+          case MaxonCharLiteralOp charLit:
+            producingOps[charLit.Result.Id] = op;
+            break;
+          case MaxonStringInterpOp interpOp:
+            producingOps[interpOp.Result.Id] = op;
+            break;
+          case MaxonManagedMemConcatOp concatOp:
+            producingOps[concatOp.Result.Id] = op;
+            break;
+          case MaxonManagedMemCreateOp createOp:
+            producingOps[createOp.Result.Id] = op;
+            break;
+          case MaxonManagedMemSliceOp sliceOp:
+            producingOps[sliceOp.Result.Id] = op;
+            break;
+          case MaxonCStringToManagedOp cstrOp:
+            producingOps[cstrOp.Result.Id] = op;
+            break;
+          case MaxonFieldAccessOp fieldAccOp when fieldAccOp.ResultKind is MaxonValueKind.Struct or MaxonValueKind.Enum:
+            producingOps[fieldAccOp.Result.Id] = op;
+            break;
+          case MaxonEnumStringRawValueOp enumStrOp:
+            producingOps[enumStrOp.Result.Id] = op;
+            break;
+          case MaxonEnumNameOp enumNameOp:
+            producingOps[enumNameOp.Result.Id] = op;
+            break;
+          case MaxonMakeCharFromBytesOp makeCharOp:
+            producingOps[makeCharOp.Result.Id] = op;
             break;
         }
 
@@ -98,8 +151,35 @@ public static class ScopeAnalysisPass {
             break;
           }
 
+          case MaxonScopeExitOp cleanupOp when cleanupOp.Tag != "block_exit": {
+            // Cleanup exits for scopes that have NO block_exit anywhere — all paths
+            // through the scope terminate (return/break/continue/throw), so pop it.
+            // Never pop the function root scope (index 0) — it spans the entire function.
+            if (!scopesWithBlockExit.Contains(cleanupOp.ScopeVar)) {
+              for (int i = scopeStack.Count - 1; i >= 1; i--) {
+                if (scopeStack[i] == cleanupOp.ScopeVar) {
+                  scopeStack.RemoveAt(i);
+                  break;
+                }
+              }
+            }
+            break;
+          }
+
+          case MaxonStructParamOp structParam: {
+            // Struct parameters are borrowed references — not refcounted.
+            // The caller owns the object; the callee just borrows it.
+            break;
+          }
+
+          case MaxonEnumParamOp enumParam: {
+            // Enum parameters are borrowed references — not refcounted.
+            // The caller owns the object; the callee just borrows it.
+            break;
+          }
+
           case MaxonAssignOp { IsDeclaration: true } assignOp
-            when assignOp.ValueKind is MaxonValueKind.Struct or MaxonValueKind.Enum: {
+            when assignOp.ValueKind is MaxonValueKind.Struct: {
             // If the assigned value comes from a struct_var_ref, the source var will be
             // reparented (mm_move mode=1) during lowering — mark it as nested
             if (structVarRefNames.TryGetValue(assignOp.Value.Id, out var srcVarName))
@@ -120,8 +200,29 @@ public static class ScopeAnalysisPass {
                   structLitResultId = structLit.Result.Id;
                   isFromCall = false;
                   break;
-                case MaxonCallOp:
+                case MaxonCallOp callOp:
                   isFromCall = true;
+                  if (funcByName.TryGetValue(callOp.Callee, out var calleeFunc) && calleeFunc.ReturnsSelf)
+                    scopeInfo.ReturnSelfValueIds.Add(assignOp.Value.Id);
+                  break;
+                case MaxonStructVarRefOp:
+                  // Variable alias (var b = a) — not from a call, needs incref
+                  isFromCall = false;
+                  break;
+                // Heap-allocating literal ops — allocations, not call returns
+                case MaxonStringLiteralOp:
+                case MaxonByteStringLiteralOp:
+                case MaxonCharLiteralOp:
+                case MaxonStringInterpOp:
+                case MaxonManagedMemConcatOp:
+                case MaxonManagedMemCreateOp:
+                case MaxonManagedMemSliceOp:
+                case MaxonCStringToManagedOp:
+                case MaxonFieldAccessOp:
+                case MaxonEnumStringRawValueOp:
+                case MaxonEnumNameOp:
+                case MaxonMakeCharFromBytesOp:
+                  isFromCall = false;
                   break;
                 default:
                   throw new InvalidOperationException(
@@ -133,6 +234,35 @@ public static class ScopeAnalysisPass {
             }
 
             scopeInfo.Allocations.Add(new AllocInfo(assignOp.VarName, structTypeName, isFromCall, structLitResultId));
+            // __forin_result_ vars from for-in loops are overwritten each iteration and
+            // hold null after the final failed try_call — excluded from scope-exit decref.
+            // __try_result_ vars from try/otherwise are NOT excluded — they hold either a
+            // call return (success) or a struct literal (error), and need proper refcounting.
+            if (!scopeInfo.RefcountedVars.Contains(assignOp.VarName)
+                && !assignOp.VarName.StartsWith("__forin_result_"))
+              scopeInfo.RefcountedVars.Add(assignOp.VarName);
+
+            // Track all vars assigned from the same value ID (for temp deduplication)
+            if (!valueIdToVarNames.TryGetValue(assignOp.Value.Id, out var varList)) {
+              varList = [];
+              valueIdToVarNames[assignOp.Value.Id] = varList;
+            }
+            varList.Add(assignOp.VarName);
+
+            // Detect intra-scope aliases (var b = a where source is a struct var ref, not a fresh literal or call)
+            if (structVarRefNames.ContainsKey(assignOp.Value.Id)) {
+              scopeInfo.HasIntraScopeAliases = true;
+            }
+            break;
+          }
+
+          case MaxonAssignOp { IsDeclaration: false } reassignOp
+            when reassignOp.ValueKind is MaxonValueKind.Struct or MaxonValueKind.Enum: {
+            // Track reassignment targets for temp dedup: when a user var is reassigned
+            // from a call temp's value, the temp becomes redundant (user var takes ownership)
+            if (valueIdToVarNames.TryGetValue(reassignOp.Value.Id, out var reassignVarList)) {
+              reassignVarList.Add(reassignOp.VarName);
+            }
             break;
           }
 
@@ -178,6 +308,43 @@ public static class ScopeAnalysisPass {
 
     }
 
+    // Remove __call_tmp_ / __interp_tostr_ vars from RefcountedVars when another var
+    // (in any scope) consumes the same value. The other var takes ownership; the temp is redundant.
+    foreach (var (_, info) in scopeInfos) {
+      var rcVarSet = new HashSet<string>(info.RefcountedVars);
+      var tempsToRemove = new HashSet<string>();
+      foreach (var (_, varNames) in valueIdToVarNames) {
+        string? tempVar = null;
+        bool hasUserVar = false;
+        foreach (var vn in varNames) {
+          bool isTemp = vn.StartsWith("__call_tmp_") || vn.StartsWith("__interp_tostr_");
+          if (isTemp && rcVarSet.Contains(vn))
+            tempVar = vn;
+          else if (!isTemp)
+            hasUserVar = true;
+        }
+        if (tempVar != null && hasUserVar) {
+          tempsToRemove.Add(tempVar);
+        }
+      }
+      if (tempsToRemove.Count > 0) {
+        info.RefcountedVars.RemoveAll(v => tempsToRemove.Contains(v));
+        info.Allocations.RemoveAll(a => tempsToRemove.Contains(a.VarName));
+      }
+    }
+
+    // Remove temps for return-self calls from RefcountedVars — they hold borrowed refs,
+    // not owned allocations. The original variable already handles the lifecycle.
+    foreach (var (_, info) in scopeInfos) {
+      if (info.ReturnSelfValueIds.Count == 0) continue;
+      info.RefcountedVars.RemoveAll(v =>
+        (v.StartsWith("__call_tmp_") || v.StartsWith("__callret_"))
+        && valueIdToVarNames.Any(kv => info.ReturnSelfValueIds.Contains(kv.Key) && kv.Value.Contains(v)));
+      info.Allocations.RemoveAll(a =>
+        (a.VarName.StartsWith("__call_tmp_") || a.VarName.StartsWith("__callret_"))
+        && valueIdToVarNames.Any(kv => info.ReturnSelfValueIds.Contains(kv.Key) && kv.Value.Contains(a.VarName)));
+    }
+
     // Compute derived properties for each scope
     foreach (var (scopeVar, info) in scopeInfos) {
       // Per-allocation stack eligibility: flat primitive struct with nonzero size,
@@ -213,6 +380,10 @@ public static class ScopeAnalysisPass {
             && IsFlatPrimitiveStruct(a.StructTypeName, module)
             && !info.PassedToFunctionVars.Contains(a.VarName)
             && !nestedInStructField.Contains(a.VarName)));
+
+      // Aliases mean multiple vars point to the same allocation — can't statically free
+      if (info.HasIntraScopeAliases)
+        info.CanStaticFree = false;
 
       // CanStaticReturn: the only escaping var is the return value, it's a flat primitive
       // struct literal, and all other allocations qualify for static free.
@@ -273,7 +444,7 @@ public static class ScopeAnalysisPass {
     if (typeDef is not MlirStructType structType) return false;
     foreach (var field in structType.Fields) {
       var resolved = MlirType.Resolve(field.Type);
-      // Only allow primitive types (i64, f64, i32, f32, i8, i16, i1, function pointers)
+      // Structs/unions may have child allocations so cannot be flat-freed
       if (resolved is MlirStructType) return false;
       if (resolved is MlirUnionType) return false;
       if (resolved is MlirRangedPrimitiveType) continue; // ranged ints resolve to primitives

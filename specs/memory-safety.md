@@ -381,37 +381,37 @@ end 'main'
 module {
   func @memory-safety.main() -> i64 {
   entry:
-    __scope_13 = maxon.scope_enter {tag = memory-safety.main}
-    %14 = maxon.literal {value = 0 : i64}
-    maxon.assign %14 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %15 = maxon.literal {value = 1 : i1}
-    maxon.cond_br %15 [then: block_0, else: block_0.merge]
+    __scope_15 = maxon.scope_enter {tag = memory-safety.main}
+    %16 = maxon.literal {value = 0 : i64}
+    maxon.assign %16 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.literal {value = 1 : i1}
+    maxon.cond_br %17 [then: block_0, else: block_0.merge]
   block_0:
-    __scope_16 = maxon.scope_enter {tag = if_then}
-    %17 = maxon.literal {value = 10 : i64}
-    %18 = maxon.literal {value = 20 : i64}
-    %19 = maxon.struct_literal @Point
-    maxon.assign %19 {var = p} {decl = 1 : i1} {mut = 1 : i1}
-    %20 = maxon.struct_var_ref p
-    %21 = maxon.field_access .x %20
-    maxon.assign %21 {var = result} {kind = i64} {mut = 1 : i1}
-    maxon.scope_exit {scope = __scope_16} {tag = block_exit}
+    __scope_18 = maxon.scope_enter {tag = if_then}
+    %19 = maxon.literal {value = 10 : i64}
+    %20 = maxon.literal {value = 20 : i64}
+    %21 = maxon.struct_literal @Point
+    maxon.assign %21 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    %22 = maxon.struct_var_ref p
+    %23 = maxon.field_access .x %22
+    maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_exit {scope = __scope_18} {tag = block_exit}
     maxon.br block_0.merge
   block_0.merge:
-    %22 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %22 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %23 = maxon.literal {value = 0 : i64}
-    %24 = maxon.binop %22, %23 {op = lt}
-    %25 = maxon.literal {value = 4294967295 : i64}
-    %26 = maxon.binop %22, %25 {op = gt}
-    %27 = maxon.binop %24, %26 {op = or}
-    maxon.cond_br %27 [then: __range_panic_1, else: __range_ok_1]
+    %24 = maxon.var_ref {var = result} {type = i64}
+    maxon.assign %24 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %25 = maxon.literal {value = 0 : i64}
+    %26 = maxon.binop %24, %25 {op = lt}
+    %27 = maxon.literal {value = 4294967295 : i64}
+    %28 = maxon.binop %24, %27 {op = gt}
+    %29 = maxon.binop %26, %28 {op = or}
+    maxon.cond_br %29 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
     maxon.panic "panic at block-scope-struct-release.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %29 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_exit {scope = __scope_13} {tag = return_cleanup}
-    maxon.return %29
+    %31 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.scope_exit {scope = __scope_15} {tag = return_cleanup}
+    maxon.return %31
   }
 }
 === standard
@@ -425,34 +425,40 @@ module {
   block_0:
     %4 = arith.constant {value = 10 : i64}
     %5 = arith.constant {value = 20 : i64}
-    memref.bulk_zero __stk_6, 2
+    memref.bulk_zero __stk_6, 3
     %7 = memref.lea __stk_6
     %8 = std.ptr_to_i64 %7
-    memref.store %8, p
-    %9 = memref.load p : i64
-    memref.store_indirect %4, %9+0
-    %10 = memref.load p : i64
-    memref.store_indirect %5, %10+8
+    %9 = arith.constant {value = 8 : i64}
+    %10 = arith.addi %8, %9
+    memref.store %10, p
     %11 = memref.load p : i64
-    %12 = memref.load_indirect %11+0
-    memref.store %12, result
+    memref.store_indirect %4, %11+0
+    %12 = memref.load p : i64
+    memref.store_indirect %5, %12+8
+    %13 = memref.load p : i64
+    std.call_runtime @mm_incref %13
+    %14 = memref.load p : i64
+    %15 = memref.load_indirect %14+0
+    memref.store %15, result
+    %16 = memref.load p : i64
+    std.call_runtime @mm_decref %16
     cf.br block_0.merge
   block_0.merge:
-    %13 = memref.load result : i64
-    memref.store %13, __range_val_1
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 4294967295 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
+    %17 = memref.load result : i64
+    memref.store %17, __range_val_1
+    %18 = arith.constant {value = 0 : i64}
+    %19 = arith.cmpi lt %17, %18
+    %20 = arith.constant {value = 4294967295 : i64}
+    %21 = arith.cmpi gt %17, %20
+    %22 = arith.ori1 %19, %21
+    cf.cond_br %22 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %19 = memref.lea_symdata __panic_msg_28
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @maxon_panic %20
+    %23 = memref.lea_symdata __panic_msg_30
+    %24 = std.ptr_to_i64 %23
+    std.call_runtime @maxon_panic %24
   __range_ok_1:
-    %21 = memref.load __range_val_1 : i64
-    func.return %21
+    %25 = memref.load __range_val_1 : i64
+    func.return %25
   }
 }
 === x86
@@ -468,26 +474,34 @@ module {
   block_0:
     x86.mov eax, 10
     x86.mov ecx, 20
-    x86.lea rdi, [rbp-24]
+    x86.lea rdi, [rbp-32]
     x86.xor eax, eax
-    x86.mov ecx, 2
+    x86.mov ecx, 3
     x86.rep_stosq
-    x86.lea rdx, [rbp-24]
+    x86.lea rdx, [rbp-32]
     x86.mov rbx, rdx
-    x86.mov [rbp-32], ebx
-    x86.mov esi, [rbp-32]
-    x86.mov edi, 10
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-32]
-    x86.mov r9, 20
-    x86.mov [r8+8], r9
-    x86.mov eax, [rbp-32]
+    x86.mov esi, 8
+    x86.add ebx, esi
+    x86.mov [rbp-40], ebx
+    x86.mov edi, [rbp-40]
+    x86.mov r8, 10
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-40]
+    x86.mov eax, 20
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_incref
+    x86.mov eax, [rbp-40]
     x86.mov ecx, [eax+0]
     x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_decref
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
     x86.mov eax, [rbp-8]
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -500,11 +514,11 @@ module {
     x86.test edx, edx
     x86.je memory-safety.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_28]
+    x86.lea_symdata rax, [__panic_msg_30]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }
@@ -539,60 +553,61 @@ module {
   entry:
     %0 = maxon.struct_param @Item
     %1 = maxon.field_access .value %0
-    %2 = maxon.struct_literal @Item
-    maxon.return %2
+    __scope_2 = maxon.scope_enter {tag = Item.clone}
+    %3 = maxon.struct_literal @Item
+    maxon.assign %3 {var = __retval_4} {decl = 1 : i1}
+    maxon.move {var = __retval_4} {dest = __scope_2} {tag = return_move}
+    maxon.scope_exit {scope = __scope_2} {tag = return_cleanup}
+    maxon.return %3
   }
   func @memory-safety.main() -> i64 {
   entry:
-    __scope_8 = maxon.scope_enter {tag = memory-safety.main}
-    %9 = maxon.literal {value = 0 : i64}
-    %10 = maxon.literal {value = 0 : i64}
+    __scope_10 = maxon.scope_enter {tag = memory-safety.main}
     %11 = maxon.literal {value = 0 : i64}
     %12 = maxon.literal {value = 0 : i64}
-    %13 = maxon.literal {value = 8 : i64}
-    %14 = maxon.struct_literal @__ManagedMemory
-    %15 = maxon.struct_literal @ItemArray
-    maxon.assign %15 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.literal {value = 7 : i64}
-    %17 = maxon.struct_literal @Item
-    maxon.assign %17 {var = item} {decl = 1 : i1} {mut = 1 : i1}
-    %18 = maxon.struct_var_ref item
-    maxon.call @ItemArray.push %15, %18
-    %19 = maxon.struct_var_ref arr
-    %20 = maxon.literal {value = 0 : i64}
-    %23, %22 = maxon.try_call @ItemArray.get %19, %20
-    %24 = maxon.literal {value = 0 : i64}
-    %25 = maxon.struct_literal @Item
-    maxon.assign %25 {var = __try_default_1} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %23 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
+    %13 = maxon.literal {value = 0 : i64}
+    %14 = maxon.literal {value = 0 : i64}
+    %15 = maxon.literal {value = 8 : i64}
+    %16 = maxon.struct_literal @__ManagedMemory
+    %17 = maxon.struct_literal @ItemArray
+    maxon.assign %17 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.literal {value = 7 : i64}
+    %19 = maxon.struct_literal @Item
+    maxon.assign %19 {var = item} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.struct_var_ref item
+    maxon.call @ItemArray.push %17, %20
+    %21 = maxon.struct_var_ref arr
+    %22 = maxon.literal {value = 0 : i64}
+    %25, %24 = maxon.try_call @ItemArray.get %21, %22
+    %28 = maxon.literal {value = 0 : i64}
+    %29 = maxon.binop %24, %28 {op = ne}
+    maxon.cond_br %29 [then: otherwise_default_error_1, else: otherwise_default_success_2]
+  otherwise_default_error_1:
     %26 = maxon.literal {value = 0 : i64}
-    %27 = maxon.binop %22, %26 {op = ne}
-    maxon.cond_br %27 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
-  otherwise_default_error_2:
-    %28 = maxon.struct_var_ref __try_default_1
-    maxon.assign %28 {var = __try_result_0} {mut = 1 : i1}
+    %27 = maxon.struct_literal @Item
+    maxon.assign %27 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br otherwise_default_continue_3
-  otherwise_default_cleanup_4:
-    maxon.release {var = __try_default_1} {type = Item}
+  otherwise_default_success_2:
+    maxon.assign %25 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %29 = maxon.struct_var_ref __try_result_0
-    maxon.assign %29 {var = got} {decl = 1 : i1} {mut = 1 : i1}
-    %30 = maxon.struct_var_ref got
-    %31 = maxon.field_access .value %30
-    maxon.assign %31 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %32 = maxon.literal {value = 0 : i64}
-    %33 = maxon.binop %31, %32 {op = lt}
-    %34 = maxon.literal {value = 4294967295 : i64}
-    %35 = maxon.binop %31, %34 {op = gt}
-    %36 = maxon.binop %33, %35 {op = or}
-    maxon.cond_br %36 [then: __range_panic_5, else: __range_ok_5]
-  __range_panic_5:
+    %30 = maxon.struct_var_ref __try_result_0
+    maxon.assign %30 {var = got} {decl = 1 : i1} {mut = 1 : i1}
+    %31 = maxon.struct_var_ref got
+    %32 = maxon.field_access .value %31
+    maxon.assign %32 {var = __range_val_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %33 = maxon.literal {value = 0 : i64}
+    %34 = maxon.binop %32, %33 {op = lt}
+    %35 = maxon.literal {value = 4294967295 : i64}
+    %36 = maxon.binop %32, %35 {op = gt}
+    %37 = maxon.binop %34, %36 {op = or}
+    maxon.cond_br %37 [then: __range_panic_4, else: __range_ok_4]
+  __range_panic_4:
     maxon.panic "panic at array-push-struct-incref.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
-  __range_ok_5:
-    %38 = maxon.var_ref {var = __range_val_5} {type = i64}
-    maxon.scope_exit {scope = __scope_8} {tag = return_cleanup}
-    maxon.return %38
+  __range_ok_4:
+    %39 = maxon.var_ref {var = __range_val_4} {type = i64}
+    maxon.scope_exit {scope = __scope_10} {tag = return_cleanup}
+    maxon.return %39
   }
 }
 === standard
@@ -603,100 +618,124 @@ module {
     memref.store %0, self
     %1 = memref.load self : i64
     %2 = memref.load_indirect %1+0
-    %3 = arith.constant {value = 8 : i64}
-    %4 = arith.constant {value = 0 : i64}
-    %5 = std.call_runtime @mm_alloc %3, %4
-    memref.store %5, __struct_2
-    %6 = memref.load __struct_2 : i64
-    memref.store_indirect %2, %6+0
-    %7 = memref.load __struct_2 : i64
-    func.return %7
+    %4 = arith.constant {value = 8 : i64}
+    %5 = memref.lea_symdata __tag_Item
+    %6 = std.ptr_to_i64 %5
+    %7 = std.call_runtime @mm_alloc %4, %6
+    memref.store %7, __retval_4
+    %8 = memref.load __retval_4 : i64
+    memref.store_indirect %2, %8+0
+    %9 = memref.load __retval_4 : i64
+    std.call_runtime @mm_incref %9
+    %10 = memref.load __retval_4 : i64
+    func.return %10
   }
   func @memory-safety.main() -> u32 {
   entry:
-    %8 = arith.constant {value = 0 : i64}
-    %9 = std.call_runtime @mm_scope_enter %8
-    memref.store %9, __scope_8
-    %10 = arith.constant {value = 0 : i64}
-    %11 = arith.constant {value = 0 : i64}
-    %12 = arith.constant {value = 0 : i64}
-    %13 = arith.constant {value = 0 : i64}
-    %14 = arith.constant {value = 8 : i64}
-    %15 = arith.constant {value = 32 : i64}
+    %11 = memref.lea_symdata __tag_memory-safety_main
+    %12 = std.ptr_to_i64 %11
+    %13 = std.call_runtime @mm_scope_enter %12
+    memref.store %13, __scope_10
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.constant {value = 0 : i64}
     %16 = arith.constant {value = 0 : i64}
-    %17 = std.call_runtime @mm_alloc %15, %16
-    memref.store %17, __struct_14
-    %18 = memref.load __struct_14 : i64
-    memref.store_indirect %11, %18+0
-    %19 = memref.load __struct_14 : i64
-    memref.store_indirect %12, %19+8
-    %20 = memref.load __struct_14 : i64
-    memref.store_indirect %13, %20+16
-    %21 = memref.load __struct_14 : i64
-    memref.store_indirect %14, %21+24
-    %22 = arith.constant {value = 16 : i64}
-    %23 = arith.constant {value = 0 : i64}
-    %24 = std.call_runtime @mm_alloc %22, %23
-    memref.store %24, arr
-    %25 = memref.load arr : i64
-    memref.store_indirect %10, %25+0
-    %26 = memref.load __struct_14 : i64
-    %27 = memref.load arr : i64
-    memref.store_indirect %26, %27+8
-    %28 = memref.load arr : i64
-    %29 = arith.constant {value = 1 : i64}
-    std.call_runtime @mm_move %26, %28, %29
-    %30 = arith.constant {value = 7 : i64}
-    %31 = arith.constant {value = 8 : i64}
-    %32 = arith.constant {value = 0 : i64}
-    %33 = std.call_runtime @mm_alloc %31, %32
-    memref.store %33, item
-    %34 = memref.load item : i64
-    memref.store_indirect %30, %34+0
-    %35 = memref.load arr : i64
-    %36 = memref.load item : i64
-    func.call @ItemArray.push %35, %36
-    %37 = arith.constant {value = 0 : i64}
-    %38 = memref.load arr : i64
-    %39, %40 = func.try_call @ItemArray.get %38, %37
-    %41 = arith.constant {value = 0 : i64}
-    memref.bulk_zero __stk_42, 1
-    %43 = memref.lea __stk_42
-    %44 = std.ptr_to_i64 %43
-    memref.store %44, __try_default_1
-    %45 = memref.load __try_default_1 : i64
-    memref.store_indirect %41, %45+0
-    memref.store %39, __try_result_0
-    %47 = arith.constant {value = 0 : i64}
-    %48 = arith.cmpi ne %40, %47
-    cf.cond_br %48 [then: otherwise_default_error_2, else: otherwise_default_cleanup_4]
-  otherwise_default_error_2:
-    %49 = memref.load __try_default_1 : i64
-    memref.store %49, __try_result_0
+    %17 = arith.constant {value = 0 : i64}
+    %18 = arith.constant {value = 8 : i64}
+    %19 = arith.constant {value = 32 : i64}
+    %20 = memref.lea_symdata __tag___ManagedMemory
+    %21 = std.ptr_to_i64 %20
+    %22 = std.call_runtime @mm_alloc %19, %21
+    memref.store %22, __struct_16
+    %23 = memref.load __struct_16 : i64
+    memref.store_indirect %15, %23+0
+    %24 = memref.load __struct_16 : i64
+    memref.store_indirect %16, %24+8
+    %25 = memref.load __struct_16 : i64
+    memref.store_indirect %17, %25+16
+    %26 = memref.load __struct_16 : i64
+    memref.store_indirect %18, %26+24
+    %27 = arith.constant {value = 16 : i64}
+    %28 = memref.lea_symdata __tag_ItemArray
+    %29 = std.ptr_to_i64 %28
+    %30 = std.call_runtime @mm_alloc %27, %29
+    memref.store %30, arr
+    %31 = memref.load arr : i64
+    memref.store_indirect %14, %31+0
+    %32 = memref.load __struct_16 : i64
+    %33 = memref.load arr : i64
+    memref.store_indirect %32, %33+8
+    %34 = memref.load arr : i64
+    %35 = arith.constant {value = 1 : i64}
+    std.call_runtime @mm_move %32, %34, %35
+    %36 = memref.load arr : i64
+    std.call_runtime @mm_incref %36
+    %37 = arith.constant {value = 7 : i64}
+    %38 = arith.constant {value = 8 : i64}
+    %39 = memref.lea_symdata __tag_Item
+    %40 = std.ptr_to_i64 %39
+    %41 = std.call_runtime @mm_alloc %38, %40
+    memref.store %41, item
+    %42 = memref.load item : i64
+    memref.store_indirect %37, %42+0
+    %43 = memref.load item : i64
+    std.call_runtime @mm_incref %43
+    %44 = memref.load arr : i64
+    %45 = memref.load item : i64
+    func.call @ItemArray.push %44, %45
+    %46 = arith.constant {value = 0 : i64}
+    %47 = memref.load arr : i64
+    %48, %49 = func.try_call @ItemArray.get %47, %46
+    memref.store %48, __callret_25
+    %50 = arith.constant {value = 0 : i64}
+    %51 = arith.cmpi ne %49, %50
+    cf.cond_br %51 [then: otherwise_default_error_1, else: otherwise_default_success_2]
+  otherwise_default_error_1:
+    %52 = arith.constant {value = 0 : i64}
+    %53 = arith.constant {value = 8 : i64}
+    %54 = memref.lea_symdata __tag_Item
+    %55 = std.ptr_to_i64 %54
+    %56 = std.call_runtime @mm_alloc %53, %55
+    memref.store %56, __try_result_0
+    %57 = memref.load __try_result_0 : i64
+    memref.store_indirect %52, %57+0
+    %58 = memref.load __try_result_0 : i64
+    std.call_runtime @mm_incref %58
     cf.br otherwise_default_continue_3
-  otherwise_default_cleanup_4:
+  otherwise_default_success_2:
+    %59 = memref.load __callret_25 : i64
+    memref.store %59, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %50 = memref.load __try_result_0 : i64
-    memref.store %50, got
-    %51 = memref.load got : i64
-    %52 = memref.load_indirect %51+0
-    memref.store %52, __range_val_5
-    %53 = arith.constant {value = 0 : i64}
-    %54 = arith.cmpi lt %52, %53
-    %55 = arith.constant {value = 4294967295 : i64}
-    %56 = arith.cmpi gt %52, %55
-    %57 = arith.ori1 %54, %56
-    cf.cond_br %57 [then: __range_panic_5, else: __range_ok_5]
-  __range_panic_5:
-    %58 = memref.lea_symdata __panic_msg_37
-    %59 = std.ptr_to_i64 %58
-    std.call_runtime @maxon_panic %59
-  __range_ok_5:
-    %60 = memref.load __range_val_5 : i64
-    %61 = memref.load __scope_8 : i64
-    std.call_runtime @mm_scope_exit %61
-    func.return %60
+    %60 = memref.load __try_result_0 : i64
+    memref.store %60, got
+    %61 = memref.load got : i64
+    std.call_runtime @mm_incref %61
+    %62 = memref.load got : i64
+    %63 = memref.load_indirect %62+0
+    memref.store %63, __range_val_4
+    %64 = arith.constant {value = 0 : i64}
+    %65 = arith.cmpi lt %63, %64
+    %66 = arith.constant {value = 4294967295 : i64}
+    %67 = arith.cmpi gt %63, %66
+    %68 = arith.ori1 %65, %67
+    cf.cond_br %68 [then: __range_panic_4, else: __range_ok_4]
+  __range_panic_4:
+    %69 = memref.lea_symdata __panic_msg_38
+    %70 = std.ptr_to_i64 %69
+    std.call_runtime @maxon_panic %70
+  __range_ok_4:
+    %71 = memref.load __range_val_4 : i64
+    %72 = memref.load arr : i64
+    std.call_runtime @mm_decref %72
+    %73 = memref.load item : i64
+    std.call_runtime @mm_decref %73
+    %74 = memref.load __try_result_0 : i64
+    std.call_runtime @mm_decref %74
+    %75 = memref.load got : i64
+    std.call_runtime @mm_decref %75
+    %76 = memref.load __scope_10 : i64
+    std.call_runtime @mm_scope_exit %76
+    func.return %71
   }
 }
 === x86
@@ -707,47 +746,57 @@ module {
     x86.mov [rbp-8], ecx
     x86.mov eax, [rbp-8]
     x86.mov edx, [eax+0]
+    x86.lea_symdata rax, [__tag_Item]
+    x86.mov rbx, rax
     x86.mov [rbp-24], edx
+    x86.mov rdx, rbx
     x86.mov rcx, 8
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-16]
     x86.mov edx, [rbp-24]
     x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
     x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
-    x86.xor rcx, rcx
+    x86.prologue stack_size=64
+    x86.lea_symdata rax, [__tag_memory-safety_main]
+    x86.mov rcx, rax
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor eax, eax
-    x86.xor ecx, ecx
     x86.xor edx, edx
     x86.xor ebx, ebx
-    x86.mov esi, 8
+    x86.xor esi, esi
+    x86.xor edi, edi
+    x86.mov r8, 8
+    x86.lea_symdata r9, [__tag___ManagedMemory]
+    x86.mov rax, r9
+    x86.mov rdx, rax
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov edi, [rbp-16]
-    x86.xor r8, r8
-    x86.mov [edi+0], r8
-    x86.mov r9, [rbp-16]
-    x86.xor eax, eax
-    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+8], ecx
     x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
     x86.mov eax, [rbp-16]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
+    x86.lea_symdata rax, [__tag_ItemArray]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
@@ -761,14 +810,21 @@ module {
     x86.mov rdx, [rbp-24]
     x86.mov r8, 1
     x86.call mm_move
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
     x86.mov eax, 7
+    x86.lea_symdata rcx, [__tag_Item]
+    x86.mov rdx, rcx
     x86.mov rcx, 8
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
     x86.mov ecx, 7
     x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
     x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-32]
     x86.mov rcx, [rbp-24]
@@ -778,55 +834,67 @@ module {
     x86.mov rcx, [rbp-24]
     x86.xor rdx, rdx
     x86.call ItemArray.get
-    x86.xor ecx, ecx
-    x86.mov [rbp-80], eax
-    x86.lea rdi, [rbp-40]
-    x86.xor eax, eax
-    x86.mov ecx, 1
-    x86.rep_stosq
-    x86.lea rax, [rbp-40]
-    x86.mov rcx, rax
-    x86.mov [rbp-48], ecx
-    x86.mov eax, [rbp-48]
-    x86.xor ecx, ecx
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-80]
-    x86.mov [rbp-56], eax
+    x86.mov [rbp-40], eax
     x86.xor eax, eax
     x86.cmp edx, eax
-    x86.je memory-safety.main.otherwise_default_cleanup_4
-  otherwise_default_error_2:
-    x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
+    x86.je memory-safety.main.otherwise_default_success_2
+  otherwise_default_error_1:
+    x86.xor eax, eax
+    x86.lea_symdata rcx, [__tag_Item]
+    x86.mov rdx, rcx
+    x86.mov rcx, 8
+    x86.call mm_alloc
+    x86.mov [rbp-48], eax
+    x86.mov ebx, [rbp-48]
+    x86.xor esi, esi
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-48]
+    x86.mov rcx, [rbp-48]
+    x86.call mm_incref
     x86.jmp memory-safety.main.otherwise_default_continue_3
-  otherwise_default_cleanup_4:
+  otherwise_default_success_2:
+    x86.mov eax, [rbp-40]
+    x86.mov [rbp-48], eax
     x86.jmp memory-safety.main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-56]
-    x86.mov [rbp-64], eax
-    x86.mov ecx, [rbp-64]
-    x86.mov edx, [ecx+0]
-    x86.mov [rbp-72], edx
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
-    x86.setl esi
-    x86.movzx esi, esib
-    x86.mov rdi, 4294967295
-    x86.cmp rdx, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or esi, r8
-    x86.test esi, esi
-    x86.je memory-safety.main.__range_ok_5
-  __range_panic_5:
-    x86.lea_symdata rax, [__panic_msg_37]
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-56], eax
+    x86.mov ecx, [rbp-56]
+    x86.call mm_incref
+    x86.mov edx, [rbp-56]
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-64], ebx
+    x86.xor esi, esi
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rbx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je memory-safety.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_symdata rax, [__panic_msg_38]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_5:
-    x86.mov eax, [rbp-72]
-    x86.mov ecx, [rbp-8]
+  __range_ok_4:
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-24]
+    x86.call mm_decref
+    x86.mov eax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-48]
+    x86.call mm_decref
+    x86.mov edx, [rbp-56]
+    x86.mov rcx, [rbp-56]
+    x86.call mm_decref
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
-    x86.mov eax, [rbp-72]
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }
@@ -863,57 +931,57 @@ end 'main'
 module {
   func @memory-safety.main() -> i64 {
   entry:
-    __scope_8 = maxon.scope_enter {tag = memory-safety.main}
-    %9 = maxon.literal {value = 0 : i64}
-    maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %10 = maxon.literal {value = 0 : i64}
-    maxon.assign %10 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    __scope_10 = maxon.scope_enter {tag = memory-safety.main}
+    %11 = maxon.literal {value = 0 : i64}
+    maxon.assign %11 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 0 : i64}
+    maxon.assign %12 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.header:
-    %11 = maxon.literal {value = 3 : i64}
-    %12 = maxon.var_ref {var = i} {type = i64}
-    %13 = maxon.binop %12, %11 {op = lt}
-    maxon.cond_br %13 [then: loop_0, else: loop_0.exit]
+    %13 = maxon.literal {value = 3 : i64}
+    %14 = maxon.var_ref {var = i} {type = i64}
+    %15 = maxon.binop %14, %13 {op = lt}
+    maxon.cond_br %15 [then: loop_0, else: loop_0.exit]
   loop_0:
-    __scope_14 = maxon.scope_enter {tag = while}
-    %15 = maxon.var_ref {var = i} {type = i64}
-    %16 = maxon.struct_literal @Counter
-    maxon.assign %16 {var = c} {decl = 1 : i1} {mut = 1 : i1}
-    %17 = maxon.struct_var_ref c
-    %18 = maxon.field_access .n %17
-    %19 = maxon.literal {value = 1 : i64}
-    %20 = maxon.binop %18, %19 {op = eq}
-    maxon.cond_br %20 [then: check_1, else: check_1.after]
+    __scope_16 = maxon.scope_enter {tag = while}
+    %17 = maxon.var_ref {var = i} {type = i64}
+    %18 = maxon.struct_literal @Counter
+    maxon.assign %18 {var = c} {decl = 1 : i1} {mut = 1 : i1}
+    %19 = maxon.struct_var_ref c
+    %20 = maxon.field_access .n %19
+    %21 = maxon.literal {value = 1 : i64}
+    %22 = maxon.binop %20, %21 {op = eq}
+    maxon.cond_br %22 [then: check_1, else: check_1.after]
   check_1:
-    __scope_21 = maxon.scope_enter {tag = if_then}
-    %22 = maxon.struct_var_ref c
-    %23 = maxon.field_access .n %22
-    maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
-    maxon.scope_exit {scope = __scope_21} {tag = break_cleanup}
-    maxon.scope_exit {scope = __scope_14} {tag = break_cleanup}
+    __scope_23 = maxon.scope_enter {tag = if_then}
+    %24 = maxon.struct_var_ref c
+    %25 = maxon.field_access .n %24
+    maxon.assign %25 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_exit {scope = __scope_23} {tag = break_cleanup}
+    maxon.scope_exit {scope = __scope_16} {tag = break_cleanup}
     maxon.br loop_0.exit
   check_1.after:
-    %24 = maxon.literal {value = 1 : i64}
-    %25 = maxon.var_ref {var = i} {type = i64}
-    %26 = maxon.binop %25, %24 {op = add}
-    maxon.assign %26 {var = i} {kind = i64} {mut = 1 : i1}
-    maxon.scope_exit {scope = __scope_14} {tag = block_exit}
+    %26 = maxon.literal {value = 1 : i64}
+    %27 = maxon.var_ref {var = i} {type = i64}
+    %28 = maxon.binop %27, %26 {op = add}
+    maxon.assign %28 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.scope_exit {scope = __scope_16} {tag = block_exit}
     maxon.br loop_0.header
   loop_0.exit:
-    %27 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %27 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %28 = maxon.literal {value = 0 : i64}
-    %29 = maxon.binop %27, %28 {op = lt}
-    %30 = maxon.literal {value = 4294967295 : i64}
-    %31 = maxon.binop %27, %30 {op = gt}
-    %32 = maxon.binop %29, %31 {op = or}
-    maxon.cond_br %32 [then: __range_panic_2, else: __range_ok_2]
+    %29 = maxon.var_ref {var = result} {type = i64}
+    maxon.assign %29 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %30 = maxon.literal {value = 0 : i64}
+    %31 = maxon.binop %29, %30 {op = lt}
+    %32 = maxon.literal {value = 4294967295 : i64}
+    %33 = maxon.binop %29, %32 {op = gt}
+    %34 = maxon.binop %31, %33 {op = or}
+    maxon.cond_br %34 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
     maxon.panic "panic at release-before-break.test:19: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_2:
-    %34 = maxon.var_ref {var = __range_val_2} {type = i64}
-    maxon.scope_exit {scope = __scope_8} {tag = return_cleanup}
-    maxon.return %34
+    %36 = maxon.var_ref {var = __range_val_2} {type = i64}
+    maxon.scope_exit {scope = __scope_10} {tag = return_cleanup}
+    maxon.return %36
   }
 }
 === standard
@@ -932,44 +1000,52 @@ module {
     cf.cond_br %5 [then: loop_0, else: loop_0.exit]
   loop_0:
     %7 = memref.load i : i64
-    memref.bulk_zero __stk_8, 1
+    memref.bulk_zero __stk_8, 2
     %9 = memref.lea __stk_8
     %10 = std.ptr_to_i64 %9
-    memref.store %10, c
-    %11 = memref.load c : i64
-    memref.store_indirect %7, %11+0
-    %12 = memref.load c : i64
-    %13 = memref.load_indirect %12+0
-    %14 = arith.constant {value = 1 : i64}
-    %15 = arith.cmpi eq %13, %14
-    cf.cond_br %15 [then: check_1, else: check_1.after]
+    %11 = arith.constant {value = 8 : i64}
+    %12 = arith.addi %10, %11
+    memref.store %12, c
+    %13 = memref.load c : i64
+    memref.store_indirect %7, %13+0
+    %14 = memref.load c : i64
+    std.call_runtime @mm_incref %14
+    %15 = memref.load c : i64
+    %16 = memref.load_indirect %15+0
+    %17 = arith.constant {value = 1 : i64}
+    %18 = arith.cmpi eq %16, %17
+    cf.cond_br %18 [then: check_1, else: check_1.after]
   check_1:
-    %17 = memref.load c : i64
-    %18 = memref.load_indirect %17+0
-    memref.store %18, result
+    %20 = memref.load c : i64
+    %21 = memref.load_indirect %20+0
+    memref.store %21, result
+    %22 = memref.load c : i64
+    std.call_runtime @mm_decref %22
     cf.br loop_0.exit
   check_1.after:
-    %19 = arith.constant {value = 1 : i64}
-    %20 = memref.load i : i64
-    %21 = arith.addi %20, %19
-    memref.store %21, i
+    %23 = arith.constant {value = 1 : i64}
+    %24 = memref.load i : i64
+    %25 = arith.addi %24, %23
+    memref.store %25, i
+    %26 = memref.load c : i64
+    std.call_runtime @mm_decref %26
     cf.br loop_0.header
   loop_0.exit:
-    %22 = memref.load result : i64
-    memref.store %22, __range_val_2
-    %23 = arith.constant {value = 0 : i64}
-    %24 = arith.cmpi lt %22, %23
-    %25 = arith.constant {value = 4294967295 : i64}
-    %26 = arith.cmpi gt %22, %25
-    %27 = arith.ori1 %24, %26
-    cf.cond_br %27 [then: __range_panic_2, else: __range_ok_2]
+    %27 = memref.load result : i64
+    memref.store %27, __range_val_2
+    %28 = arith.constant {value = 0 : i64}
+    %29 = arith.cmpi lt %27, %28
+    %30 = arith.constant {value = 4294967295 : i64}
+    %31 = arith.cmpi gt %27, %30
+    %32 = arith.ori1 %29, %31
+    cf.cond_br %32 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %28 = memref.lea_symdata __panic_msg_33
-    %29 = std.ptr_to_i64 %28
-    std.call_runtime @maxon_panic %29
+    %33 = memref.lea_symdata __panic_msg_35
+    %34 = std.ptr_to_i64 %33
+    std.call_runtime @maxon_panic %34
   __range_ok_2:
-    %30 = memref.load __range_val_2 : i64
-    func.return %30
+    %35 = memref.load __range_val_2 : i64
+    func.return %35
   }
 }
 === x86
@@ -989,35 +1065,46 @@ module {
     x86.jge memory-safety.main.loop_0.exit
   loop_0:
     x86.mov eax, [rbp-16]
-    x86.lea rdi, [rbp-24]
+    x86.lea rdi, [rbp-32]
     x86.xor eax, eax
-    x86.mov ecx, 1
+    x86.mov ecx, 2
     x86.rep_stosq
-    x86.lea rcx, [rbp-24]
+    x86.lea rcx, [rbp-32]
     x86.mov rdx, rcx
-    x86.mov [rbp-32], edx
-    x86.mov ebx, [rbp-32]
-    x86.mov esi, [rbp-16]
-    x86.mov [ebx+0], esi
-    x86.mov edi, [rbp-32]
-    x86.mov r8, [edi+0]
-    x86.mov r9, 1
-    x86.cmp r8, r9
+    x86.mov ebx, 8
+    x86.add edx, ebx
+    x86.mov [rbp-40], edx
+    x86.mov esi, [rbp-40]
+    x86.mov edi, [rbp-16]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_incref
+    x86.mov r9, [rbp-40]
+    x86.mov eax, [r9+0]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
     x86.jne memory-safety.main.check_1.after
   check_1:
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-40]
     x86.mov ecx, [eax+0]
     x86.mov [rbp-8], ecx
+    x86.mov edx, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_decref
     x86.jmp memory-safety.main.loop_0.exit
   check_1.after:
     x86.mov eax, 1
     x86.mov ecx, [rbp-16]
     x86.add ecx, eax
     x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_decref
     x86.jmp memory-safety.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -1030,11 +1117,11 @@ module {
     x86.test edx, edx
     x86.je memory-safety.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_33]
+    x86.lea_symdata rax, [__panic_msg_35]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }
@@ -1069,46 +1156,46 @@ end 'main'
 module {
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
-    __scope_8 = maxon.scope_enter {tag = memory-safety.compute}
-    %9 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
-    %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %9, %10 {op = gt} {optimalType = i64}
-    maxon.cond_br %11 [then: check_0, else: check_0.after]
+    __scope_10 = maxon.scope_enter {tag = memory-safety.compute}
+    %11 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %11, %12 {op = gt} {optimalType = i64}
+    maxon.cond_br %13 [then: check_0, else: check_0.after]
   check_0:
-    __scope_12 = maxon.scope_enter {tag = if_then}
-    %13 = maxon.var_ref {var = flag} {type = i64}
-    %14 = maxon.struct_literal @Wrapper
-    maxon.assign %14 {var = w} {decl = 1 : i1} {mut = 1 : i1}
-    %15 = maxon.struct_var_ref w
-    %16 = maxon.field_access .val %15
-    %17 = maxon.literal {value = 1 : i64}
-    %18 = maxon.binop %16, %17 {op = add}
-    maxon.scope_exit {scope = __scope_12} {tag = return_cleanup}
-    maxon.scope_exit {scope = __scope_8} {tag = return_cleanup}
-    maxon.return %18
+    __scope_14 = maxon.scope_enter {tag = if_then}
+    %15 = maxon.var_ref {var = flag} {type = i64}
+    %16 = maxon.struct_literal @Wrapper
+    maxon.assign %16 {var = w} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.struct_var_ref w
+    %18 = maxon.field_access .val %17
+    %19 = maxon.literal {value = 1 : i64}
+    %20 = maxon.binop %18, %19 {op = add}
+    maxon.scope_exit {scope = __scope_14} {tag = return_cleanup}
+    maxon.scope_exit {scope = __scope_10} {tag = return_cleanup}
+    maxon.return %20
   check_0.after:
-    %19 = maxon.literal {value = 0 : i64}
-    maxon.scope_exit {scope = __scope_8} {tag = return_cleanup}
-    maxon.return %19
+    %21 = maxon.literal {value = 0 : i64}
+    maxon.scope_exit {scope = __scope_10} {tag = return_cleanup}
+    maxon.return %21
   }
   func @memory-safety.main() -> i64 {
   entry:
-    __scope_20 = maxon.scope_enter {tag = memory-safety.main}
-    %21 = maxon.literal {value = 5 : i64}
-    %22 = maxon.call @memory-safety.compute %21
-    maxon.assign %22 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %23 = maxon.literal {value = 0 : i64}
-    %24 = maxon.binop %22, %23 {op = lt}
-    %25 = maxon.literal {value = 4294967295 : i64}
-    %26 = maxon.binop %22, %25 {op = gt}
-    %27 = maxon.binop %24, %26 {op = or}
-    maxon.cond_br %27 [then: __range_panic_0, else: __range_ok_0]
+    __scope_22 = maxon.scope_enter {tag = memory-safety.main}
+    %23 = maxon.literal {value = 5 : i64}
+    %24 = maxon.call @memory-safety.compute %23
+    maxon.assign %24 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %25 = maxon.literal {value = 0 : i64}
+    %26 = maxon.binop %24, %25 {op = lt}
+    %27 = maxon.literal {value = 4294967295 : i64}
+    %28 = maxon.binop %24, %27 {op = gt}
+    %29 = maxon.binop %26, %28 {op = or}
+    maxon.cond_br %29 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at release-before-return-in-block.test:17: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %29 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_exit {scope = __scope_20} {tag = return_cleanup}
-    maxon.return %29
+    %31 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_exit {scope = __scope_22} {tag = return_cleanup}
+    maxon.return %31
   }
 }
 === standard
@@ -1122,66 +1209,81 @@ module {
     cf.cond_br %3 [then: check_0, else: check_0.after]
   check_0:
     %5 = memref.load flag : i64
-    memref.bulk_zero __stk_6, 1
+    memref.bulk_zero __stk_6, 2
     %7 = memref.lea __stk_6
     %8 = std.ptr_to_i64 %7
-    memref.store %8, w
-    %9 = memref.load w : i64
-    memref.store_indirect %5, %9+0
-    %10 = memref.load w : i64
-    %11 = memref.load_indirect %10+0
-    %12 = arith.constant {value = 1 : i64}
-    %13 = arith.addi %11, %12
-    func.return %13
+    %9 = arith.constant {value = 8 : i64}
+    %10 = arith.addi %8, %9
+    memref.store %10, w
+    %11 = memref.load w : i64
+    memref.store_indirect %5, %11+0
+    %12 = memref.load w : i64
+    std.call_runtime @mm_incref %12
+    %13 = memref.load w : i64
+    %14 = memref.load_indirect %13+0
+    %15 = arith.constant {value = 1 : i64}
+    %16 = arith.addi %14, %15
+    %17 = memref.load w : i64
+    std.call_runtime @mm_decref %17
+    func.return %16
   check_0.after:
-    %14 = arith.constant {value = 0 : i64}
-    func.return %14
+    %18 = arith.constant {value = 0 : i64}
+    func.return %18
   }
   func @memory-safety.main() -> u32 {
   entry:
-    %16 = arith.constant {value = 5 : i64}
-    %17 = func.call @memory-safety.compute %16
-    memref.store %17, __range_val_0
-    %18 = arith.constant {value = 0 : i64}
-    %19 = arith.cmpi lt %17, %18
-    %20 = arith.constant {value = 4294967295 : i64}
-    %21 = arith.cmpi gt %17, %20
-    %22 = arith.ori1 %19, %21
-    cf.cond_br %22 [then: __range_panic_0, else: __range_ok_0]
+    %20 = arith.constant {value = 5 : i64}
+    %21 = func.call @memory-safety.compute %20
+    memref.store %21, __range_val_0
+    %22 = arith.constant {value = 0 : i64}
+    %23 = arith.cmpi lt %21, %22
+    %24 = arith.constant {value = 4294967295 : i64}
+    %25 = arith.cmpi gt %21, %24
+    %26 = arith.ori1 %23, %25
+    cf.cond_br %26 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %23 = memref.lea_symdata __panic_msg_28
-    %24 = std.ptr_to_i64 %23
-    std.call_runtime @maxon_panic %24
+    %27 = memref.lea_symdata __panic_msg_30
+    %28 = std.ptr_to_i64 %27
+    std.call_runtime @maxon_panic %28
   __range_ok_0:
-    %25 = memref.load __range_val_0 : i64
-    func.return %25
+    %29 = memref.load __range_val_0 : i64
+    func.return %29
   }
 }
 === x86
 module {
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.mov [rbp-8], ecx
     x86.xor eax, eax
     x86.cmp ecx, eax
     x86.jle memory-safety.compute.check_0.after
   check_0:
     x86.mov eax, [rbp-8]
-    x86.lea rdi, [rbp-16]
+    x86.lea rdi, [rbp-24]
     x86.xor eax, eax
-    x86.mov ecx, 1
+    x86.mov ecx, 2
     x86.rep_stosq
-    x86.lea rcx, [rbp-16]
+    x86.lea rcx, [rbp-24]
     x86.mov rdx, rcx
-    x86.mov [rbp-24], edx
-    x86.mov ebx, [rbp-24]
-    x86.mov esi, [rbp-8]
-    x86.mov [ebx+0], esi
-    x86.mov edi, [rbp-24]
-    x86.mov r8, [edi+0]
-    x86.mov r9, 1
-    x86.lea eax, [r8 + r9]
+    x86.mov ebx, 8
+    x86.add edx, ebx
+    x86.mov [rbp-32], edx
+    x86.mov esi, [rbp-32]
+    x86.mov edi, [rbp-8]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
+    x86.mov r9, [rbp-32]
+    x86.mov eax, [r9+0]
+    x86.mov ecx, 1
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-32]
+    x86.mov [rbp-40], eax
+    x86.call mm_decref
+    x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
   check_0.after:
@@ -1207,7 +1309,7 @@ module {
     x86.test ecx, ecx
     x86.je memory-safety.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_28]
+    x86.lea_symdata rax, [__panic_msg_30]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

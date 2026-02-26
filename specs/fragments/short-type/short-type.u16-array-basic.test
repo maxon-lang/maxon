@@ -15,23 +15,26 @@ module {
   func @short-type.main() -> u32 {
   entry:
     x86.prologue stack_size=96
-    x86.xor rcx, rcx
+    x86.lea_symdata rax, [__tag_short-type_main]
+    x86.mov rcx, rax
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor eax, eax
-    x86.mov ecx, 3
     x86.xor edx, edx
-    x86.mov ebx, 2
+    x86.mov ebx, 3
+    x86.xor esi, esi
+    x86.mov edi, 2
+    x86.lea_symdata r8, [__tag___ManagedMemory]
+    x86.mov r9, r8
+    x86.mov rdx, r9
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov esi, [rbp-16]
-    x86.xor edi, edi
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-16]
-    x86.mov r9, 3
-    x86.mov [r8+8], r9
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 3
+    x86.mov [eax+8], ecx
     x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
@@ -39,8 +42,9 @@ module {
     x86.mov ecx, 2
     x86.mov [eax+24], ecx
     x86.xor eax, eax
+    x86.lea_symdata rcx, [__tag___Array_i16]
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
@@ -59,6 +63,9 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
     x86.mov eax, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.xor rdx, rdx
@@ -129,7 +136,10 @@ module {
     x86.call maxon_panic
   __range_ok_13:
     x86.mov eax, [rbp-96]
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.call mm_decref
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, [rbp-96]
     x86.epilogue

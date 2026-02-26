@@ -21,37 +21,37 @@ RequiredMLIR: ```
 module {
   func @memory-safety.main() -> i64 {
   entry:
-    __scope_13 = maxon.scope_enter {tag = memory-safety.main}
-    %14 = maxon.literal {value = 0 : i64}
-    maxon.assign %14 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %15 = maxon.literal {value = 1 : i1}
-    maxon.cond_br %15 [then: block_0, else: block_0.merge]
+    __scope_15 = maxon.scope_enter {tag = memory-safety.main}
+    %16 = maxon.literal {value = 0 : i64}
+    maxon.assign %16 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.literal {value = 1 : i1}
+    maxon.cond_br %17 [then: block_0, else: block_0.merge]
   block_0:
-    __scope_16 = maxon.scope_enter {tag = if_then}
-    %17 = maxon.literal {value = 10 : i64}
-    %18 = maxon.literal {value = 20 : i64}
-    %19 = maxon.struct_literal @Point
-    maxon.assign %19 {var = p} {decl = 1 : i1} {mut = 1 : i1}
-    %20 = maxon.struct_var_ref p
-    %21 = maxon.field_access .x %20
-    maxon.assign %21 {var = result} {kind = i64} {mut = 1 : i1}
-    maxon.scope_exit {scope = __scope_16} {tag = block_exit}
+    __scope_18 = maxon.scope_enter {tag = if_then}
+    %19 = maxon.literal {value = 10 : i64}
+    %20 = maxon.literal {value = 20 : i64}
+    %21 = maxon.struct_literal @Point
+    maxon.assign %21 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    %22 = maxon.struct_var_ref p
+    %23 = maxon.field_access .x %22
+    maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_exit {scope = __scope_18} {tag = block_exit}
     maxon.br block_0.merge
   block_0.merge:
-    %22 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %22 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %23 = maxon.literal {value = 0 : i64}
-    %24 = maxon.binop %22, %23 {op = lt}
-    %25 = maxon.literal {value = 4294967295 : i64}
-    %26 = maxon.binop %22, %25 {op = gt}
-    %27 = maxon.binop %24, %26 {op = or}
-    maxon.cond_br %27 [then: __range_panic_1, else: __range_ok_1]
+    %24 = maxon.var_ref {var = result} {type = i64}
+    maxon.assign %24 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %25 = maxon.literal {value = 0 : i64}
+    %26 = maxon.binop %24, %25 {op = lt}
+    %27 = maxon.literal {value = 4294967295 : i64}
+    %28 = maxon.binop %24, %27 {op = gt}
+    %29 = maxon.binop %26, %28 {op = or}
+    maxon.cond_br %29 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
     maxon.panic "panic at block-scope-struct-release.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %29 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_exit {scope = __scope_13} {tag = return_cleanup}
-    maxon.return %29
+    %31 = maxon.var_ref {var = __range_val_1} {type = i64}
+    maxon.scope_exit {scope = __scope_15} {tag = return_cleanup}
+    maxon.return %31
   }
 }
 === standard
@@ -65,34 +65,40 @@ module {
   block_0:
     %4 = arith.constant {value = 10 : i64}
     %5 = arith.constant {value = 20 : i64}
-    memref.bulk_zero __stk_6, 2
+    memref.bulk_zero __stk_6, 3
     %7 = memref.lea __stk_6
     %8 = std.ptr_to_i64 %7
-    memref.store %8, p
-    %9 = memref.load p : i64
-    memref.store_indirect %4, %9+0
-    %10 = memref.load p : i64
-    memref.store_indirect %5, %10+8
+    %9 = arith.constant {value = 8 : i64}
+    %10 = arith.addi %8, %9
+    memref.store %10, p
     %11 = memref.load p : i64
-    %12 = memref.load_indirect %11+0
-    memref.store %12, result
+    memref.store_indirect %4, %11+0
+    %12 = memref.load p : i64
+    memref.store_indirect %5, %12+8
+    %13 = memref.load p : i64
+    std.call_runtime @mm_incref %13
+    %14 = memref.load p : i64
+    %15 = memref.load_indirect %14+0
+    memref.store %15, result
+    %16 = memref.load p : i64
+    std.call_runtime @mm_decref %16
     cf.br block_0.merge
   block_0.merge:
-    %13 = memref.load result : i64
-    memref.store %13, __range_val_1
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 4294967295 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
+    %17 = memref.load result : i64
+    memref.store %17, __range_val_1
+    %18 = arith.constant {value = 0 : i64}
+    %19 = arith.cmpi lt %17, %18
+    %20 = arith.constant {value = 4294967295 : i64}
+    %21 = arith.cmpi gt %17, %20
+    %22 = arith.ori1 %19, %21
+    cf.cond_br %22 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %19 = memref.lea_symdata __panic_msg_28
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @maxon_panic %20
+    %23 = memref.lea_symdata __panic_msg_30
+    %24 = std.ptr_to_i64 %23
+    std.call_runtime @maxon_panic %24
   __range_ok_1:
-    %21 = memref.load __range_val_1 : i64
-    func.return %21
+    %25 = memref.load __range_val_1 : i64
+    func.return %25
   }
 }
 === x86
@@ -108,26 +114,34 @@ module {
   block_0:
     x86.mov eax, 10
     x86.mov ecx, 20
-    x86.lea rdi, [rbp-24]
+    x86.lea rdi, [rbp-32]
     x86.xor eax, eax
-    x86.mov ecx, 2
+    x86.mov ecx, 3
     x86.rep_stosq
-    x86.lea rdx, [rbp-24]
+    x86.lea rdx, [rbp-32]
     x86.mov rbx, rdx
-    x86.mov [rbp-32], ebx
-    x86.mov esi, [rbp-32]
-    x86.mov edi, 10
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-32]
-    x86.mov r9, 20
-    x86.mov [r8+8], r9
-    x86.mov eax, [rbp-32]
+    x86.mov esi, 8
+    x86.add ebx, esi
+    x86.mov [rbp-40], ebx
+    x86.mov edi, [rbp-40]
+    x86.mov r8, 10
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-40]
+    x86.mov eax, 20
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_incref
+    x86.mov eax, [rbp-40]
     x86.mov ecx, [eax+0]
     x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_decref
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
     x86.mov eax, [rbp-8]
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-48], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -140,11 +154,11 @@ module {
     x86.test edx, edx
     x86.je memory-safety.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_28]
+    x86.lea_symdata rax, [__panic_msg_30]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov eax, [rbp-40]
+    x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret
   }

@@ -40,61 +40,70 @@ module {
   }
   func @reference-identity.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=64
     x86.mov eax, 42
-    x86.lea rdi, [rbp-8]
+    x86.lea rdi, [rbp-16]
     x86.xor eax, eax
-    x86.mov ecx, 1
+    x86.mov ecx, 2
     x86.rep_stosq
-    x86.lea rcx, [rbp-8]
+    x86.lea rcx, [rbp-16]
     x86.mov rdx, rcx
-    x86.mov [rbp-16], edx
-    x86.mov ebx, [rbp-16]
-    x86.mov esi, 42
-    x86.mov [ebx+0], esi
+    x86.mov ebx, 8
+    x86.add edx, ebx
+    x86.mov [rbp-24], edx
+    x86.mov esi, [rbp-24]
     x86.mov edi, 42
-    x86.lea rdi, [rbp-24]
+    x86.mov [esi+0], edi
+    x86.mov r8, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov r9, 42
+    x86.lea rdi, [rbp-40]
     x86.xor eax, eax
-    x86.mov ecx, 1
+    x86.mov ecx, 2
     x86.rep_stosq
-    x86.lea r8, [rbp-24]
-    x86.mov r9, r8
-    x86.mov [rbp-32], r9
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, 42
-    x86.mov [eax+0], ecx
+    x86.lea rax, [rbp-40]
+    x86.mov rcx, rax
+    x86.mov eax, 8
+    x86.add ecx, eax
+    x86.mov [rbp-48], ecx
+    x86.mov eax, [rbp-48]
+    x86.mov [eax+0], r9
+    x86.mov eax, [rbp-48]
+    x86.mov rcx, [rbp-48]
+    x86.call mm_incref
     x86.xor eax, eax
-    x86.mov [rbp-40], eax
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-16]
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, [rbp-24]
     x86.call reference-identity.areSame
     x86.test eax, eax
     x86.je reference-identity.main.same_0.merge
   same_0:
     x86.mov eax, 1
-    x86.mov ecx, [rbp-40]
+    x86.mov ecx, [rbp-56]
     x86.add ecx, eax
-    x86.mov [rbp-40], ecx
+    x86.mov [rbp-56], ecx
     x86.jmp reference-identity.main.same_0.merge
   same_0.merge:
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-32]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-32]
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-48]
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, [rbp-48]
     x86.call reference-identity.areSame
     x86.test eax, eax
     x86.je reference-identity.main.diff_1.merge
   diff_1:
     x86.mov eax, 10
-    x86.mov ecx, [rbp-40]
+    x86.mov ecx, [rbp-56]
     x86.add ecx, eax
-    x86.mov [rbp-40], ecx
+    x86.mov [rbp-56], ecx
     x86.jmp reference-identity.main.diff_1.merge
   diff_1.merge:
-    x86.mov eax, [rbp-40]
-    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-56]
+    x86.mov [rbp-64], eax
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.setl edx
@@ -107,11 +116,17 @@ module {
     x86.test edx, edx
     x86.je reference-identity.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_40]
+    x86.lea_symdata rax, [__panic_msg_42]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
+    x86.mov eax, [rbp-64]
+    x86.mov ecx, [rbp-24]
+    x86.call mm_decref
     x86.mov eax, [rbp-48]
+    x86.mov rcx, [rbp-48]
+    x86.call mm_decref
+    x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
   }

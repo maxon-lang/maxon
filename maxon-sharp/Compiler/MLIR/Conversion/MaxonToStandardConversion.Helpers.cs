@@ -195,18 +195,48 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
-  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, StdI64 size) {
-    var tagOp = new StdConstI64Op(0); // NULL tag
-    block.AddOp(tagOp);
+  /// Emits a symdata null-terminated C string tag and returns its address as StdI64.
+  /// Tags go into symdata (not rdata) so they don't affect RequiredRdata checks.
+  [ThreadStatic] private static Dictionary<string, string>? _symdataTagCache;
+  private static StdI64 EmitTagPtr(MlirBlock<StandardOp> block, string tag) {
+    _symdataTagCache ??= [];
+    var symdataLabel = $"__tag_{tag.Replace('.', '_').Replace(' ', '_')}";
+    if (!_symdataTagCache.TryGetValue(tag, out var existingLabel)) {
+      var nullTerminated = new byte[System.Text.Encoding.UTF8.GetByteCount(tag) + 1];
+      System.Text.Encoding.UTF8.GetBytes(tag, nullTerminated);
+      _resultModule!.SymdataEntries.Add((symdataLabel, nullTerminated, 1));
+      _symdataTagCache[tag] = symdataLabel;
+    } else {
+      symdataLabel = existingLabel;
+    }
+    var leaOp = new StdLeaSymdataOp(symdataLabel);
+    block.AddOp(leaOp);
+    var ptrOp = new StdPtrToI64Op(leaOp.Result);
+    block.AddOp(ptrOp);
+    return ptrOp.Result;
+  }
+
+  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, StdI64 size, string? tag = null) {
+    StdI64 tagPtr;
+    if (tag != null) {
+      tagPtr = EmitTagPtr(block, tag);
+    } else {
+      var tagOp = new StdConstI64Op(0);
+      block.AddOp(tagOp);
+      tagPtr = tagOp.Result;
+    }
     var result = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, tagOp.Result], result));
+    block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, tagPtr], result));
+    if (Compiler.MmTrace) {
+      block.AddOp(new StdCallRuntimeOp("mm_trace_alloc", [result], null));
+    }
     return result;
   }
 
-  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, long constSize) {
+  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, long constSize, string? tag = null) {
     var sizeOp = new StdConstI64Op(constSize);
     block.AddOp(sizeOp);
-    return EmitAlloc(block, sizeOp.Result);
+    return EmitAlloc(block, sizeOp.Result, tag);
   }
 
   /// <summary>
@@ -255,18 +285,51 @@ public static partial class MaxonToStandardConversion {
   /// Allocates memory as a child of a parent allocation. When the parent is freed
   /// via mm_free or mm_scope_exit, children are freed recursively.
   /// </summary>
-  private static StdI64 EmitAllocIn(MlirBlock<StandardOp> block, StdI64 size, StdI64 parentPtr) {
-    var tagOp = new StdConstI64Op(0); // NULL tag
-    block.AddOp(tagOp);
+  private static StdI64 EmitAllocIn(MlirBlock<StandardOp> block, StdI64 size, StdI64 parentPtr, string? tag = null) {
+    StdI64 tagPtr;
+    if (tag != null) {
+      tagPtr = EmitTagPtr(block, tag);
+    } else {
+      var tagOp = new StdConstI64Op(0);
+      block.AddOp(tagOp);
+      tagPtr = tagOp.Result;
+    }
     var result = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("mm_alloc_in", [size, parentPtr, tagOp.Result], result));
+    block.AddOp(new StdCallRuntimeOp("mm_alloc_in", [size, parentPtr, tagPtr], result));
     return result;
   }
 
-  private static StdI64 EmitAllocIn(MlirBlock<StandardOp> block, long constSize, StdI64 parentPtr) {
+  private static StdI64 EmitAllocIn(MlirBlock<StandardOp> block, long constSize, StdI64 parentPtr, string? tag = null) {
     var sizeOp = new StdConstI64Op(constSize);
     block.AddOp(sizeOp);
-    return EmitAllocIn(block, sizeOp.Result, parentPtr);
+    return EmitAllocIn(block, sizeOp.Result, parentPtr, tag);
+  }
+
+  /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation.</summary>
+  private static void EmitIncref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes) {
+    var heapPtr = EmitLoad(block, varName, varTypes);
+    block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
+    if (Compiler.MmTrace) {
+      var tracePtr = EmitLoad(block, varName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [tracePtr], null));
+    }
+  }
+
+  /// <summary>Emit mm_decref(heap_ptr) — decrements reference count, reclaims ownership when zero.</summary>
+  private static void EmitDecref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes) {
+    var heapPtr = EmitLoad(block, varName, varTypes);
+    block.AddOp(new StdCallRuntimeOp("mm_decref", [heapPtr], null));
+    if (Compiler.MmTrace) {
+      var tracePtr = EmitLoad(block, varName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [tracePtr], null));
+    }
+  }
+
+  /// <summary>Emit mm_set_owner(heap_ptr, scope) — transfers ownership to shallower scope.</summary>
+  private static void EmitSetOwner(MlirBlock<StandardOp> block, string varName, string scopeVarName, Dictionary<string, string> varTypes) {
+    var heapPtr = EmitLoad(block, varName, varTypes);
+    var scopePtr = EmitLoad(block, scopeVarName, varTypes);
+    block.AddOp(new StdCallRuntimeOp("mm_set_owner", [heapPtr, scopePtr], null));
   }
 
   /// <summary>
@@ -278,21 +341,30 @@ public static partial class MaxonToStandardConversion {
     var modeOp = new StdConstI64Op(1);
     block.AddOp(modeOp);
     block.AddOp(new StdCallRuntimeOp("mm_move", [childPtr, parentPtr, modeOp.Result], null));
+    if (Compiler.MmTrace)
+      block.AddOp(new StdCallRuntimeOp("mm_trace_move", [childPtr], null));
   }
 
   /// <summary>
   /// Allocates a struct on the stack by creating contiguous field variables and returning
-  /// a LEA address to the base. Uses the same convention as array literal elements.
+  /// a LEA address past a NULL sentinel. The sentinel at [base] is always zero so that
+  /// [user_ptr - 8] == 0, which mm_incref/mm_decref use to detect unmanaged allocations.
   /// </summary>
   private static StdI64 EmitStackAlloc(MlirBlock<StandardOp> block, int sizeInBytes) {
     var tag = $"__stk_{MlirContext.Current.NextId()}";
-    int fieldCount = sizeInBytes / 8;
+    // +1 qword for the NULL sentinel at the front
+    int fieldCount = (sizeInBytes / 8) + 1;
     block.AddOp(new StdBulkZeroOp(tag, fieldCount));
     var leaOp = new StdLeaOp(tag);
     block.AddOp(leaOp);
     var ptrOp = new StdPtrToI64Op(leaOp.Result);
     block.AddOp(ptrOp);
-    return ptrOp.Result;
+    // Offset past the sentinel so user_ptr points to the first real field
+    var offsetOp = new StdConstI64Op(8);
+    block.AddOp(offsetOp);
+    var addOp = new StdAddI64Op(ptrOp.Result, offsetOp.Result);
+    block.AddOp(addOp);
+    return addOp.Result;
   }
 
   // __ManagedMemory field offsets (all fields are 8 bytes)
@@ -421,7 +493,7 @@ public static partial class MaxonToStandardConversion {
       }
       return offset;
     }
-    return payloadIndex; // fallback
+    throw new InvalidOperationException($"No enum case found with {payloadIndex + 1} associated values for flat slot offset calculation");
   }
 
   /// Unpack an associated-value enum's heap pointer into flat __tag/__payload_N variables.
@@ -444,7 +516,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
     int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
     int heapSize = 8 + maxPayload * 8;
-    var heapPtr = EmitAlloc(block, heapSize);
+    var heapPtr = EmitAlloc(block, heapSize, enumType.Name);
     var tagVal = EmitLoad(block, $"{varName}.__tag", varTypes);
     block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
     for (int pi = 0; pi < maxPayload; pi++) {

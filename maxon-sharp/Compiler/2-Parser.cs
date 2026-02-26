@@ -3693,8 +3693,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       fieldValues.Add((field.Name, fieldValue));
     }
 
+    // Scope management: scope_enter → struct literal → assign (triggers incref) →
+    // return_move → scope_exit → return. This ensures the return value has rc=1,
+    // matching the convention that call returns carry one reference.
+    var scopeVar = $"__scope_{MlirContext.Current.NextId()}";
+    block.AddOp(new MaxonScopeEnterOp(scopeVar, cloneName));
+
     var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
     block.AddOp(structLit);
+
+    var retvalName = $"__retval_{MlirContext.Current.NextId()}";
+    block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
+    block.AddOp(new MaxonMoveOp(retvalName, scopeVar, "return_move"));
+    block.AddOp(new MaxonScopeExitOp(scopeVar, "return_cleanup"));
     block.AddOp(new MaxonReturnOp(structLit.Result));
   }
 
@@ -4955,10 +4966,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // For struct returns, mm_move the return value to the caller's scope
       // Self-fields are children of the struct, not scope-owned — don't move them.
       if (value is MaxonStruct) {
-        bool isSelfField = returnVarName != null
-          && _variables.TryGetValue(returnVarName, out var retVarInfo)
-          && retVarInfo.IsSelfField;
-        if (isSelfField) {
+        // Self and self-fields are borrowed references — don't mm_move them
+        bool isSelfOrSelfField = returnVarName == "self"
+          || (returnVarName != null
+            && _variables.TryGetValue(returnVarName, out var retVarInfo)
+            && retVarInfo.IsSelfField);
+        if (isSelfOrSelfField) {
+          if (expr is ExprResult.VarRef { VarName: "self" })
+            _currentFunction!.ReturnsSelf = true;
           returnVarName = null;
         } else if (returnVarName == null) {
           returnVarName = $"__retval_{MlirContext.Current.NextId()}";
@@ -5069,11 +5084,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var callExpr = ParsePrimary();
     _inTryContext = savedTryContext;
 
-    // The callExpr should have generated a MaxonCallOp - we need to replace it with a MaxonTryCallOp
+    // The callExpr should have generated a MaxonCallOp - we need to replace it with a MaxonTryCallOp.
+    // If the call returned a struct, EmitCallReturnTempAssign added a __call_tmp_ assign after it — remove that too.
     var lastOp = _currentBlock!.Operations[^1];
-    if (lastOp is not MaxonCallOp callOp) {
+    MaxonCallOp callOp;
+    if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign && tmpAssign.VarName.StartsWith("__call_tmp_")) {
+      _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+      _variables.Remove(tmpAssign.VarName);
+      lastOp = _currentBlock!.Operations[^1];
+    }
+    if (lastOp is not MaxonCallOp foundCallOp) {
       throw new CompileError(ErrorCode.SemanticUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
     }
+    callOp = foundCallOp;
 
     // Look up the callee to check it actually throws
     var callee = _currentModule!.Functions.FirstOrDefault(f => f.Name == callOp.Callee);
@@ -5307,12 +5330,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ?? (defaultValue is MaxonStruct s ? s.TypeName : null)
       ?? (defaultValue is MaxonEnum e ? e.TypeName : null);
 
-    // Store the default value to a temp variable so it can be used across blocks
+    bool isStructResult = resultKind == MaxonValueKind.Struct && structTypeName != null;
+
+    if (isStructResult) {
+      // For struct results: lazy evaluation — default is only created on error path,
+      // try result is only stored on success path. This avoids incref'ing the invalid
+      // error code on the error path and avoids allocating the default on the success path.
+      return EmitTryOtherwiseDefaultStruct(tryCallOp, resultVarName, defaultValue, resultKind, structTypeName!);
+    }
+
+    // For non-struct results: the original eager pattern is fine (no refcounting involved)
     var defaultVarName = $"__try_default_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
     _variables[defaultVarName] = new VarInfo(resultKind, true, defaultValue, _currentBlock!, CurrentScopeVar, structTypeName);
 
-    // Store the call result (success path value)
     if (tryCallOp.Result != null) {
       _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryCallOp.Result, true, true, resultKind));
       _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, CurrentScopeVar, structTypeName);
@@ -5320,28 +5351,87 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var errorBlock = UniqueLabel("otherwise_default_error");
     var continueBlock = UniqueLabel("otherwise_default_continue");
-    bool needsCleanup = resultKind == MaxonValueKind.Struct && structTypeName != null;
-    var cleanupBlock = needsCleanup ? UniqueLabel("otherwise_default_cleanup") : null;
 
-    // On error use default, on success either cleanup (struct) or go straight to continue
-    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, cleanupBlock ?? continueBlock);
+    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, continueBlock);
 
-    // Error block: try call failed, so adopt the default value as the result
+    // Error block: adopt default value as the result
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
     var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
 
-    // Cleanup block: try call succeeded, so the default value is unused and must be freed
-    if (needsCleanup) {
-      var clnBlock = _currentFunction!.Body.AddBlock(cleanupBlock!);
-      _currentBlock = clnBlock;
-      _currentBlock!.AddOp(new MaxonReleaseOp(defaultVarName, structTypeName!));
-      _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+    // Continue block: load result
+    var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
+    _currentBlock = contBlock;
+
+    var loadedResult = EmitVarRefOp(resultVarName, resultKind, structTypeName);
+    return new ExprResult.Direct(loadedResult);
+  }
+
+  /// <summary>
+  /// Emit try/otherwise default for struct-typed results. Uses lazy evaluation:
+  /// the default is only materialized on the error path, and the try result is only
+  /// stored on the success path. This prevents incref'ing the invalid error code and
+  /// avoids allocating unused defaults.
+  /// </summary>
+  private ExprResult.Direct EmitTryOtherwiseDefaultStruct(
+    MaxonTryCallOp tryCallOp, string resultVarName, MaxonValue defaultValue,
+    MaxonValueKind resultKind, string structTypeName) {
+
+    // Move the default expression ops from the current block to the error block.
+    // The default expression was parsed into _currentBlock — we need to extract those ops.
+    // Strategy: save the ops added by ParseExpression, remove them from entry block,
+    // and re-add them to the error block.
+
+    // Find which ops were added by the default expression parsing. We know the try call op
+    // was the last op before ParseExpression started. Look for ops after the try call.
+    var entryBlock = _currentBlock!;
+    var tryCallIndex = -1;
+    for (int i = entryBlock.Operations.Count - 1; i >= 0; i--) {
+      if (entryBlock.Operations[i] is MaxonTryCallOp) {
+        tryCallIndex = i;
+        break;
+      }
     }
 
-    // Continue block: load from result variable
+    // Extract default expression ops (everything after the try call)
+    var defaultOps = new List<MaxonOp>();
+    if (tryCallIndex >= 0) {
+      for (int i = tryCallIndex + 1; i < entryBlock.Operations.Count; i++) {
+        defaultOps.Add((MaxonOp)entryBlock.Operations[i]);
+      }
+      entryBlock.Operations.RemoveRange(tryCallIndex + 1, defaultOps.Count);
+    }
+
+    var errorBlockLabel = UniqueLabel("otherwise_default_error");
+    var successBlockLabel = UniqueLabel("otherwise_default_success");
+    var continueBlock = UniqueLabel("otherwise_default_continue");
+
+    // Branch: error → error block, success → success block
+    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlockLabel, successBlockLabel);
+
+    // Error block: replay default expression ops, then assign to result var
+    var errBlock = _currentFunction!.Body.AddBlock(errorBlockLabel);
+    _currentBlock = errBlock;
+    foreach (var op in defaultOps) {
+      _currentBlock!.AddOp(op);
+    }
+    _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, defaultValue, true, true, resultKind));
+    _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+
+    // Success block: assign try result to result var
+    var sucBlock = _currentFunction!.Body.AddBlock(successBlockLabel);
+    _currentBlock = sucBlock;
+    if (tryCallOp.Result != null) {
+      _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryCallOp.Result, true, true, resultKind));
+    }
+    _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
+
+    // Register variable from entry scope for later lookups
+    _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result ?? defaultValue, entryBlock, CurrentScopeVar, structTypeName);
+
+    // Continue block: load result
     var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
     _currentBlock = contBlock;
 
@@ -5355,21 +5445,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseLetDecl() {
     ParseVarOrLetDecl(isMutable: false);
-  }
-
-  /// <summary>
-  /// Check if a value originates from a user-declared variable reference (MaxonStructVarRefOp
-  /// pointing to a non-internal variable name), as opposed to a fresh allocation from a struct
-  /// literal, function call return, or internal temp. Used to distinguish pointer copies from
-  /// fresh allocations (e.g., to decide whether a reassign_move is needed).
-  /// </summary>
-  private bool IsExistingUserVariableRef(MaxonValue value) {
-    foreach (var op in _currentBlock!.Operations) {
-      if (op is MaxonStructVarRefOp varRef && varRef.Result.Id == value.Id
-          && !varRef.VarName.StartsWith("__"))
-        return true;
-    }
-    return false;
   }
 
   private void ParseVarOrLetDecl(bool isMutable) {
@@ -6301,7 +6376,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var callExpr = ParsePrimary();
     _inTryContext = false;
 
+    // If the call returned a struct, EmitCallReturnTempAssign added a __call_tmp_ assign — remove it
     var lastOp = _currentBlock!.Operations[^1];
+    if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign2 && tmpAssign2.VarName.StartsWith("__call_tmp_")) {
+      _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+      _variables.Remove(tmpAssign2.VarName);
+      lastOp = _currentBlock!.Operations[^1];
+    }
     if (lastOp is not MaxonCallOp callOp) {
       throw new CompileError(ErrorCode.SemanticUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
     }
@@ -6635,7 +6716,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     string? resultVar = null;
     if (tryCallOp.Result != null) {
-      resultVar = $"__try_result_{_blockCounter++}";
+      resultVar = $"__forin_result_{_blockCounter++}";
       headerBlock.AddOp(new MaxonAssignOp(resultVar, tryCallOp.Result, true, true, elementKind));
       _variables[resultVar] = new VarInfo(elementKind, true, tryCallOp.Result, headerBlock, CurrentScopeVar, elementStructTypeName);
     }
@@ -8961,7 +9042,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var (resultKind, resultStructTypeName) = ResolveCallResultType(toStringFunc.ReturnType, callArgs);
           var callOp = new MaxonCallOp(toStringFunc.Name, callArgs, resultKind, resultStructTypeName);
           _currentBlock!.AddOp(callOp);
-          exprValue = callOp.Result!;
+
+          // Assign to temp variable so refcounting tracks the return value
+          var tempName = $"__interp_tostr_{callOp.Result!.Id}";
+          var assignOp = new MaxonAssignOp(tempName, callOp.Result, true, false, resultKind ?? MaxonValueKind.Struct);
+          _currentBlock!.AddOp(assignOp);
+          _variables[tempName] = new VarInfo(resultKind ?? MaxonValueKind.Struct, false, callOp.Result, _currentBlock!, CurrentScopeVar, resultStructTypeName);
+          exprValue = callOp.Result;
         }
 
         parts.Add((false, null, exprValue, formatSpec, exprOptimalType));
@@ -11154,6 +11241,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
     _lastRangedTypeName = null;
+    // Struct call returns need a temp variable so refcounting tracks the intermediate
+    if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
+      EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
+    }
     return callOp;
   }
 
@@ -11175,7 +11266,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
     _lastRangedTypeName = null;
+    // Struct call returns need a temp variable so refcounting tracks the intermediate
+    if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
+      EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
+    }
     return callOp;
+  }
+
+  /// <summary>
+  /// Assigns a struct call return to a temp variable so refcounting can track the intermediate.
+  /// Without this, chained method calls like a.foo().bar() create untracked struct references.
+  /// </summary>
+  private void EmitCallReturnTempAssign(MaxonCallOp callOp, MaxonValueKind resultKind, string? resultStructTypeName) {
+    var tempName = $"__call_tmp_{callOp.Result!.Id}";
+    var assignOp = new MaxonAssignOp(tempName, callOp.Result, true, false, resultKind);
+    _currentBlock!.AddOp(assignOp);
+    _variables[tempName] = new VarInfo(resultKind, false, callOp.Result, _currentBlock!, CurrentScopeVar, resultStructTypeName);
   }
 
   private static void MarkDiscardedResult(MaxonCallOp callOp, Token callToken) {
@@ -11195,6 +11301,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         callOp.IsLetDiscardResult = true;
         callOp.CallLine = discardToken.Line;
         callOp.CallColumn = discardToken.Column;
+        return;
+      }
+      // EmitCallReturnTempAssign may have added a __call_tmp_ assign after the call op
+      if (lastOp is MaxonAssignOp { VarName: var name } && name.StartsWith("__call_tmp_")
+          && _currentBlock!.Operations.Count > 1
+          && _currentBlock!.Operations[^2] is MaxonCallOp callOp2 && callOp2.Result != null) {
+        callOp2.IsLetDiscardResult = true;
+        callOp2.CallLine = discardToken.Line;
+        callOp2.CallColumn = discardToken.Column;
         return;
       }
     }

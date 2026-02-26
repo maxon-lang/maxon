@@ -156,7 +156,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes) {
+    Dictionary<int, string> structValueTypes,
+    Dictionary<string, MlirType> typeDefs) {
 
     var nameArg = tryCallOp.Args[0];
     // Name is always a String managed struct - load _managed heap pointer, then buffer and length
@@ -173,7 +174,7 @@ public static partial class MaxonToStandardConversion {
     if (hasAssociatedValues) {
       // For associated-value enums, construct as flat struct (tag + payload)
       LowerUnionFromNameAssociated(tryCallOp, enumType, block, valueMap, varTypes,
-        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs);
+        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs, typeDefs);
     } else {
       // Simple/raw-value enum: result is an ordinal/raw value
       LowerUnionFromNameSimple(tryCallOp, enumType, block, valueMap, varTypes, nameBuf, nameLen);
@@ -256,11 +257,12 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     StdI64 nameBuf, StdI64 nameLen,
-    bool hasExtraArgs) {
+    bool hasExtraArgs,
+    Dictionary<string, MlirType> typeDefs) {
 
     // For associated-value enums, store as flat struct (tag + payload)
     var tempName = $"__enum_{tryCallOp.Result!.Id}";
-    int maxPayload = enumType.Cases.Max(c => c.AssociatedValues?.Count ?? 0);
+    int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
 
     // Initialize with default tag=0 and zero payload
     var defaultTag = new StdConstI64Op(0);
@@ -322,9 +324,8 @@ public static partial class MaxonToStandardConversion {
   /// Lower call/try_call arguments for the standard calling convention.
   /// Struct args are passed as heap pointers (i64) directly.
   /// Associated-value enum args are packed into heap blocks and passed as pointers.
-  /// Returns null (no self buffer needed with heap-allocated structs).
   /// </summary>
-  private static string? FlattenCallArgs(
+  private static void FlattenCallArgs(
     List<MaxonValue> args,
     MlirFunction<MaxonOp> calleeFunc,
     MlirBlock<StandardOp> block,
@@ -396,7 +397,7 @@ public static partial class MaxonToStandardConversion {
         // Associated-value enum: pack tag + payload into a heap block
         int maxPayload = GetMaxFlatPayloadSlots(enumArgType, typeDefs);
         int heapSize = 8 + maxPayload * 8;
-        var heapPtr = EmitAlloc(block, heapSize);
+        var heapPtr = EmitAlloc(block, heapSize, enumArgType.Name);
 
         // Pack the flat tag+payload vars into a single heap object for passing as a value
         var tagVal = EmitLoad(block, $"{enumPrefix}.__tag", varTypes);
@@ -448,6 +449,5 @@ public static partial class MaxonToStandardConversion {
         throw new InvalidOperationException($"Unhandled call argument type: {calleeFunc.ParamTypes[i].GetType().Name} for arg {i} in call to '{calleeName}'");
       }
     }
-    return null;
   }
 }

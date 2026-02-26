@@ -133,7 +133,7 @@ public static partial class MaxonToStandardConversion {
           // by substituting a dummy allocation when the pointer is null
           int maxPayloadForSize = GetMaxFlatPayloadSlots(retEnumType, typeDefs);
           int heapSize = 8 + maxPayloadForSize * 8;
-          var dummyPtr = EmitAlloc(block, heapSize);
+          var dummyPtr = EmitAlloc(block, heapSize, "EnumDummy");
           var zeroConst = new StdConstI64Op(0);
           block.AddOp(zeroConst);
           var isNull = new StdCmpI64Op("eq", (StdI64)callResult, zeroConst.Result);
@@ -255,7 +255,7 @@ public static partial class MaxonToStandardConversion {
     if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
       var enumType = (MlirUnionType)typeDefs[enumTypeName];
-      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes);
+      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes, typeDefs);
       // No temp release needed — scope handles cleanup
       return;
     }

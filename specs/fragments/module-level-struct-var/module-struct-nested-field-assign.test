@@ -25,16 +25,21 @@ module {
     x86.mov eax, qword [rip+state]
     x86.mov [rbp-8], eax
     x86.mov ecx, [rbp-8]
-    x86.mov edx, [ecx+0]
-    x86.mov [rbp-16], edx
-    x86.mov ebx, 99
-    x86.mov esi, [rbp-16]
-    x86.mov [esi+0], ebx
-    x86.mov edi, qword [rip+state]
-    x86.mov [rbp-24], edi
-    x86.mov r8, [rbp-24]
-    x86.mov r9, [r8+0]
-    x86.mov [rbp-32], r9
+    x86.call mm_incref
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-16], ebx
+    x86.mov esi, 99
+    x86.mov edi, [rbp-16]
+    x86.mov [edi+0], esi
+    x86.mov r8, qword [rip+state]
+    x86.mov [rbp-24], r8
+    x86.mov r9, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-32], ecx
     x86.mov eax, [rbp-32]
     x86.mov ecx, [eax+0]
     x86.mov [rbp-40], ecx
@@ -50,7 +55,7 @@ module {
     x86.test eax, eax
     x86.je module-level-struct-var.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_32]
+    x86.lea_symdata rax, [__panic_msg_36]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -62,27 +67,30 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.xor eax, eax
+    x86.lea_symdata rcx, [__tag_Inner]
+    x86.mov rdx, rcx
     x86.mov rcx, 8
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
-    x86.xor edx, edx
-    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.xor esi, esi
+    x86.mov [ebx+0], esi
+    x86.lea_symdata rdi, [__tag_Outer]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
     x86.mov rcx, 8
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov ebx, [rbp-8]
-    x86.mov esi, [rbp-16]
-    x86.mov [esi+0], ebx
-    x86.mov edi, [rbp-16]
+    x86.mov r9, [rbp-8]
+    x86.mov eax, [rbp-16]
+    x86.mov [eax+0], r9
+    x86.mov eax, [rbp-16]
     x86.mov rcx, [rbp-8]
     x86.mov rdx, [rbp-16]
     x86.mov r8, 1
     x86.call mm_move
-    x86.mov r8, [rbp-16]
-    x86.mov qword [rip+state], r8
+    x86.mov eax, [rbp-16]
+    x86.mov qword [rip+state], eax
     x86.epilogue
     x86.ret
   }

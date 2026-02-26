@@ -62,78 +62,85 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    %1 = std.call_runtime @mm_scope_enter %0
-    memref.store %1, __scope_0
-    %3 = arith.constant {value = 0 : i64}
-    %4 = arith.constant {value = 1 : i64}
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.constant {value = 8 : i64}
-    %7 = arith.constant {value = 32 : i64}
-    %8 = arith.constant {value = 0 : i64}
-    %9 = std.call_runtime @mm_alloc %7, %8
-    memref.store %9, __struct_6
-    %10 = memref.load __struct_6 : i64
-    memref.store_indirect %3, %10+0
-    %11 = memref.load __struct_6 : i64
-    memref.store_indirect %4, %11+8
+    %0 = memref.lea_symdata __tag_codegen-internals_main
+    %1 = std.ptr_to_i64 %0
+    %2 = std.call_runtime @mm_scope_enter %1
+    memref.store %2, __scope_0
+    %4 = arith.constant {value = 0 : i64}
+    %5 = arith.constant {value = 1 : i64}
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.constant {value = 8 : i64}
+    %8 = arith.constant {value = 32 : i64}
+    %9 = memref.lea_symdata __tag___ManagedMemory
+    %10 = std.ptr_to_i64 %9
+    %11 = std.call_runtime @mm_alloc %8, %10
+    memref.store %11, __struct_6
     %12 = memref.load __struct_6 : i64
-    memref.store_indirect %5, %12+16
+    memref.store_indirect %4, %12+0
     %13 = memref.load __struct_6 : i64
-    memref.store_indirect %6, %13+24
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.constant {value = 16 : i64}
+    memref.store_indirect %5, %13+8
+    %14 = memref.load __struct_6 : i64
+    memref.store_indirect %6, %14+16
+    %15 = memref.load __struct_6 : i64
+    memref.store_indirect %7, %15+24
     %16 = arith.constant {value = 0 : i64}
-    %17 = std.call_runtime @mm_alloc %15, %16
-    memref.store %17, arr
-    %18 = memref.load arr : i64
-    memref.store_indirect %14, %18+0
-    %19 = memref.load __struct_6 : i64
-    %20 = memref.load arr : i64
-    memref.store_indirect %19, %20+8
+    %17 = arith.constant {value = 16 : i64}
+    %18 = memref.lea_symdata __tag_IntArray
+    %19 = std.ptr_to_i64 %18
+    %20 = std.call_runtime @mm_alloc %17, %19
+    memref.store %20, arr
     %21 = memref.load arr : i64
-    %22 = arith.constant {value = 1 : i64}
-    std.call_runtime @mm_move %19, %21, %22
-    %23 = memref.lea_rdata __const_array_codegen-internals.main_arr
-    %24 = std.ptr_to_i64 %23
-    %25 = memref.load arr : i64
-    %26 = memref.load_indirect %25+8
-    memref.store_indirect %24, %26+0
-    %27 = arith.constant {value = 0 : i64}
-    %28 = arith.constant {value = 77 : i64}
-    %29 = memref.load arr : i64
-    func.call @IntArray.set %29, %27, %28
-    %30 = arith.constant {value = 0 : i64}
-    %31 = memref.load arr : i64
-    %32, %33 = func.try_call @IntArray.get %31, %30
+    memref.store_indirect %16, %21+0
+    %22 = memref.load __struct_6 : i64
+    %23 = memref.load arr : i64
+    memref.store_indirect %22, %23+8
+    %24 = memref.load arr : i64
+    %25 = arith.constant {value = 1 : i64}
+    std.call_runtime @mm_move %22, %24, %25
+    %26 = memref.lea_rdata __const_array_codegen-internals.main_arr
+    %27 = std.ptr_to_i64 %26
+    %28 = memref.load arr : i64
+    %29 = memref.load_indirect %28+8
+    memref.store_indirect %27, %29+0
+    %30 = memref.load arr : i64
+    std.call_runtime @mm_incref %30
+    %31 = arith.constant {value = 0 : i64}
+    %32 = arith.constant {value = 77 : i64}
+    %33 = memref.load arr : i64
+    func.call @IntArray.set %33, %31, %32
     %34 = arith.constant {value = 0 : i64}
-    memref.store %34, __try_default_2
-    memref.store %32, __try_result_1
-    %35 = arith.constant {value = 0 : i64}
-    %36 = arith.cmpi ne %33, %35
-    cf.cond_br %36 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %35 = memref.load arr : i64
+    %36, %37 = func.try_call @IntArray.get %35, %34
+    %38 = arith.constant {value = 0 : i64}
+    memref.store %38, __try_default_2
+    memref.store %36, __try_result_1
+    %39 = arith.constant {value = 0 : i64}
+    %40 = arith.cmpi ne %37, %39
+    cf.cond_br %40 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %37 = memref.load __try_default_2 : i64
-    memref.store %37, __try_result_1
+    %41 = memref.load __try_default_2 : i64
+    memref.store %41, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %38 = memref.load __try_result_1 : i64
-    memref.store %38, __range_val_5
-    %39 = arith.constant {value = 0 : i64}
-    %40 = arith.cmpi lt %38, %39
-    %41 = arith.constant {value = 4294967295 : i64}
-    %42 = arith.cmpi gt %38, %41
-    %43 = arith.ori1 %40, %42
-    cf.cond_br %43 [then: __range_panic_5, else: __range_ok_5]
+    %42 = memref.load __try_result_1 : i64
+    memref.store %42, __range_val_5
+    %43 = arith.constant {value = 0 : i64}
+    %44 = arith.cmpi lt %42, %43
+    %45 = arith.constant {value = 4294967295 : i64}
+    %46 = arith.cmpi gt %42, %45
+    %47 = arith.ori1 %44, %46
+    cf.cond_br %47 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %44 = memref.lea_symdata __panic_msg_26
-    %45 = std.ptr_to_i64 %44
-    std.call_runtime @maxon_panic %45
+    %48 = memref.lea_symdata __panic_msg_26
+    %49 = std.ptr_to_i64 %48
+    std.call_runtime @maxon_panic %49
   __range_ok_5:
-    %46 = memref.load __range_val_5 : i64
-    %47 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %47
-    func.return %46
+    %50 = memref.load __range_val_5 : i64
+    %51 = memref.load arr : i64
+    std.call_runtime @mm_decref %51
+    %52 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %52
+    func.return %50
   }
 }
 === x86
@@ -141,23 +148,26 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=48
-    x86.xor rcx, rcx
+    x86.lea_symdata rax, [__tag_codegen-internals_main]
+    x86.mov rcx, rax
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor eax, eax
-    x86.mov ecx, 1
     x86.xor edx, edx
-    x86.mov ebx, 8
+    x86.mov ebx, 1
+    x86.xor esi, esi
+    x86.mov edi, 8
+    x86.lea_symdata r8, [__tag___ManagedMemory]
+    x86.mov r9, r8
+    x86.mov rdx, r9
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov esi, [rbp-16]
-    x86.xor edi, edi
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-16]
-    x86.mov r9, 1
-    x86.mov [r8+8], r9
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.mov [eax+8], ecx
     x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
@@ -165,8 +175,9 @@ module {
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.xor eax, eax
+    x86.lea_symdata rcx, [__tag_IntArray]
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
@@ -185,6 +196,9 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov edx, [eax+8]
     x86.mov [edx+0], ecx
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
     x86.mov eax, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.xor rdx, rdx
@@ -224,7 +238,10 @@ module {
     x86.call maxon_panic
   __range_ok_5:
     x86.mov eax, [rbp-48]
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.call mm_decref
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, [rbp-48]
     x86.epilogue

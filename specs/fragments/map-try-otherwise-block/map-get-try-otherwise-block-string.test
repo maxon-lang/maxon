@@ -30,25 +30,28 @@ module {
     x86.prologue stack_size=48
     x86.mov [rbp-16], ecx
     x86.mov [rbp-24], edx
-    x86.xor rcx, rcx
+    x86.lea_symdata rax, [__tag_map-try-otherwise-block_getValue]
+    x86.mov rbx, rax
+    x86.mov rcx, rbx
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-24]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-24]
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
     x86.call StringMap.get
     x86.mov [rbp-32], eax
-    x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
     x86.je map-try-otherwise-block.getValue.otherwise_continue_1
   otherwise_error_0:
     x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
+    x86.mov ecx, [rbp-32]
+    x86.call mm_decref
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
-    x86.mov edx, 1
-    x86.xor ebx, ebx
-    x86.lea edx, [ebx + edx]
+    x86.mov ebx, 1
+    x86.xor esi, esi
+    x86.lea edx, [esi + ebx]
     x86.xor eax, eax
     x86.epilogue
     x86.ret
@@ -56,12 +59,18 @@ module {
     x86.mov eax, [rbp-32]
     x86.mov [rbp-40], eax
     x86.mov ecx, [rbp-40]
-    x86.mov edx, [rbp-8]
-    x86.mov ebx, [edx+8]
-    x86.mov rdx, rbx
+    x86.call mm_incref
+    x86.mov edx, [rbp-40]
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [ebx+8]
+    x86.mov rcx, [rbp-40]
+    x86.mov rdx, rsi
     x86.xor r8, r8
     x86.call mm_move
-    x86.mov esi, [rbp-8]
+    x86.mov edi, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.mov r8, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, [rbp-40]
@@ -71,33 +80,38 @@ module {
   }
   func @map-try-otherwise-block.main() -> u32 {
   entry:
-    x86.prologue stack_size=224
-    x86.xor rcx, rcx
+    x86.prologue stack_size=192
+    x86.lea_symdata rax, [__tag_map-try-otherwise-block_main]
+    x86.mov rcx, rax
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor eax, eax
-    x86.xor ecx, ecx
     x86.xor edx, edx
     x86.xor ebx, ebx
-    x86.mov esi, 8
+    x86.xor esi, esi
+    x86.xor edi, edi
+    x86.mov r8, 8
+    x86.lea_symdata r9, [__tag___ManagedMemory]
+    x86.mov rax, r9
+    x86.mov rdx, rax
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov edi, [rbp-16]
-    x86.xor r8, r8
-    x86.mov [edi+0], r8
-    x86.mov r9, [rbp-16]
-    x86.xor eax, eax
-    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+8], ecx
     x86.mov eax, [rbp-16]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
     x86.mov eax, [rbp-16]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
+    x86.lea_symdata rax, [__tag_KeyArray]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
@@ -116,8 +130,10 @@ module {
     x86.xor edx, edx
     x86.xor ebx, ebx
     x86.mov esi, 8
+    x86.lea_symdata rdi, [__tag___ManagedMemory]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
@@ -132,8 +148,10 @@ module {
     x86.mov eax, [rbp-32]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
+    x86.lea_symdata rax, [__tag_ValueArray]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-40], eax
     x86.mov eax, [rbp-40]
@@ -152,8 +170,10 @@ module {
     x86.xor edx, edx
     x86.xor ebx, ebx
     x86.mov esi, 8
+    x86.lea_symdata rdi, [__tag___ManagedMemory]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-48], eax
     x86.mov eax, [rbp-48]
@@ -168,8 +188,10 @@ module {
     x86.mov eax, [rbp-48]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
+    x86.lea_symdata rax, [__tag_StateArray]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-56], eax
     x86.mov eax, [rbp-56]
@@ -186,8 +208,10 @@ module {
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
+    x86.lea_symdata rbx, [__tag_StringMap]
+    x86.mov rsi, rbx
+    x86.mov rdx, rsi
     x86.mov rcx, 48
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-64], eax
     x86.mov eax, [rbp-24]
@@ -223,17 +247,24 @@ module {
     x86.mov eax, [rbp-64]
     x86.xor ecx, ecx
     x86.mov [eax+40], ecx
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_incref
     x86.lea_rdata rax, [__str_47]
     x86.mov rcx, rax
     x86.mov eax, 3
+    x86.lea_symdata rdx, [__tag_String]
+    x86.mov rbx, rdx
     x86.mov [rbp-176], ecx
+    x86.mov rdx, rbx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-72], eax
+    x86.lea_symdata rcx, [__tag___ManagedMemory]
+    x86.mov rdx, rcx
+    x86.mov r8, rdx
     x86.mov rdx, [rbp-72]
     x86.mov rcx, 32
-    x86.xor r8, r8
     x86.call mm_alloc_in
     x86.mov [rbp-80], eax
     x86.mov eax, [rbp-80]
@@ -257,14 +288,18 @@ module {
     x86.lea_rdata rax, [__str_48]
     x86.mov rcx, rax
     x86.mov eax, 5
+    x86.lea_symdata rdx, [__tag_String]
+    x86.mov rbx, rdx
     x86.mov [rbp-184], ecx
+    x86.mov rdx, rbx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-88], eax
+    x86.lea_symdata rcx, [__tag___ManagedMemory]
+    x86.mov rdx, rcx
+    x86.mov r8, rdx
     x86.mov rdx, [rbp-88]
     x86.mov rcx, 32
-    x86.xor r8, r8
     x86.call mm_alloc_in
     x86.mov [rbp-96], eax
     x86.mov eax, [rbp-96]
@@ -295,14 +330,18 @@ module {
     x86.lea_rdata rax, [__str_47]
     x86.mov rcx, rax
     x86.mov eax, 3
+    x86.lea_symdata rdx, [__tag_String]
+    x86.mov rbx, rdx
     x86.mov [rbp-192], ecx
+    x86.mov rdx, rbx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-104], eax
+    x86.lea_symdata rcx, [__tag___ManagedMemory]
+    x86.mov rdx, rcx
+    x86.mov r8, rdx
     x86.mov rdx, [rbp-104]
     x86.mov rcx, 32
-    x86.xor r8, r8
     x86.call mm_alloc_in
     x86.mov [rbp-112], eax
     x86.mov eax, [rbp-112]
@@ -328,75 +367,83 @@ module {
     x86.mov rcx, [rbp-64]
     x86.mov rdx, [rbp-104]
     x86.call map-try-otherwise-block.getValue
-    x86.lea_rdata rcx, [__str_54]
-    x86.mov rbx, rcx
-    x86.mov ecx, 4
-    x86.mov [rbp-200], eax
-    x86.mov [rbp-208], edx
-    x86.mov [rbp-216], ebx
-    x86.mov rcx, 16
-    x86.xor rdx, rdx
-    x86.call mm_alloc
     x86.mov [rbp-120], eax
-    x86.mov rdx, [rbp-120]
-    x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.xor eax, eax
+    x86.cmp edx, eax
+    x86.je map-try-otherwise-block.main.otherwise_default_success_2
+  otherwise_default_error_1:
+    x86.lea_rdata rax, [__str_54]
+    x86.mov rcx, rax
+    x86.mov edx, 4
+    x86.lea_symdata rbx, [__tag_String]
+    x86.mov rsi, rbx
+    x86.mov [rbp-176], ecx
+    x86.mov rdx, rsi
+    x86.mov rcx, 16
+    x86.call mm_alloc
     x86.mov [rbp-128], eax
-    x86.mov eax, [rbp-128]
-    x86.mov ecx, [rbp-216]
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-128]
+    x86.lea_symdata rdi, [__tag___ManagedMemory]
+    x86.mov r8, rdi
+    x86.mov rdx, [rbp-128]
+    x86.mov rcx, 32
+    x86.call mm_alloc_in
+    x86.mov [rbp-136], eax
+    x86.mov r9, [rbp-136]
+    x86.mov eax, [rbp-176]
+    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-136]
     x86.mov ecx, 4
     x86.mov [eax+8], ecx
     x86.xor eax, eax
-    x86.mov ecx, [rbp-128]
+    x86.mov ecx, [rbp-136]
     x86.mov [ecx+16], eax
     x86.mov eax, 1
-    x86.mov ecx, [rbp-128]
+    x86.mov ecx, [rbp-136]
     x86.mov [ecx+24], eax
-    x86.mov eax, [rbp-128]
-    x86.mov ecx, [rbp-120]
+    x86.mov eax, [rbp-136]
+    x86.mov ecx, [rbp-128]
     x86.mov [ecx+0], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-120]
+    x86.mov ecx, [rbp-128]
     x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-120]
-    x86.mov [rbp-136], eax
-    x86.mov eax, [rbp-200]
+    x86.mov eax, [rbp-128]
     x86.mov [rbp-144], eax
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-208]
-    x86.cmp ecx, eax
-    x86.je map-try-otherwise-block.main.otherwise_default_cleanup_4
-  otherwise_default_error_2:
-    x86.mov eax, [rbp-136]
-    x86.mov [rbp-144], eax
+    x86.mov eax, [rbp-144]
+    x86.mov rcx, [rbp-144]
+    x86.call mm_incref
     x86.jmp map-try-otherwise-block.main.otherwise_default_continue_3
-  otherwise_default_cleanup_4:
+  otherwise_default_success_2:
+    x86.mov eax, [rbp-120]
+    x86.mov [rbp-144], eax
     x86.jmp map-try-otherwise-block.main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov eax, [rbp-144]
     x86.mov [rbp-152], eax
-    x86.lea_rdata rcx, [__str_48]
-    x86.mov rdx, rcx
-    x86.mov ebx, 5
-    x86.mov [rbp-176], edx
+    x86.mov ecx, [rbp-152]
+    x86.call mm_incref
+    x86.lea_rdata rdx, [__str_48]
+    x86.mov rbx, rdx
+    x86.mov esi, 5
+    x86.lea_symdata rdi, [__tag_String]
+    x86.mov r8, rdi
+    x86.mov [rbp-176], ebx
+    x86.mov rdx, r8
     x86.mov rcx, 16
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-160], eax
+    x86.lea_symdata r9, [__tag___ManagedMemory]
+    x86.mov rcx, r9
     x86.mov rdx, [rbp-160]
+    x86.mov r8, rcx
     x86.mov rcx, 32
-    x86.xor r8, r8
     x86.call mm_alloc_in
     x86.mov [rbp-168], eax
-    x86.mov esi, [rbp-168]
-    x86.mov edi, [rbp-176]
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-168]
-    x86.mov r9, 5
-    x86.mov [r8+8], r9
+    x86.mov eax, [rbp-168]
+    x86.mov ecx, [rbp-176]
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-168]
+    x86.mov ecx, 5
+    x86.mov [eax+8], ecx
     x86.xor eax, eax
     x86.mov ecx, [rbp-168]
     x86.mov [ecx+16], eax
@@ -415,16 +462,32 @@ module {
     x86.mov rdx, [rbp-160]
     x86.call stdlib.String.equals
     x86.test eax, eax
-    x86.je map-try-otherwise-block.main.ok_5.after
-  ok_5:
-    x86.mov eax, [rbp-8]
+    x86.je map-try-otherwise-block.main.ok_4.after
+  ok_4:
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-144]
+    x86.call mm_decref
+    x86.mov edx, [rbp-152]
+    x86.mov rcx, [rbp-152]
+    x86.call mm_decref
+    x86.mov ebx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
-  ok_5.after:
-    x86.mov eax, [rbp-8]
+  ok_4.after:
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-144]
+    x86.call mm_decref
+    x86.mov edx, [rbp-152]
+    x86.mov rcx, [rbp-152]
+    x86.call mm_decref
+    x86.mov ebx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
     x86.xor eax, eax

@@ -71,23 +71,17 @@ public static partial class MaxonToStandardConversion {
 
 		if (op.IsStructElement) {
 			// Struct elements are heap pointers stored in the buffer (8 bytes each).
-			// Load the pointer, then deep-copy via clone() so the original stays owned
-			// by the array's ManagedMemory and the copy is fully independent.
+			// Return a reference to the element — it's parent-owned by the array's
+			// ManagedMemory, so mm_incref/mm_decref are no-ops at runtime.
 			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(loadOp);
 
-			var elemTypeName = module.ResolveConcreteAlias(op.StructElementTypeName!);
-			var cloneName = $"{elemTypeName}.clone";
-			var cloneFunc = ResolveCallee(cloneName, funcLookup);
-			var cloneResult = new StdI64(MlirContext.Current.NextId());
-			block.AddOp(new StdCallOp(cloneFunc.Name, [(StdI64)loadOp.Result], cloneResult));
-
-			var tempName = $"__memget_{MlirContext.Current.NextId()}";
-			EmitStore(block, cloneResult, tempName, varTypes);
+			var tempName = $"__callret_{MlirContext.Current.NextId()}";
+			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
 			if (op.StructElementTypeName != null)
 				structValueTypes[op.Result.Id] = op.StructElementTypeName;
-			valueMap[op.Result] = cloneResult;
+			valueMap[op.Result] = loadOp.Result;
 		} else {
 			// Determine load type based on result kind
 			// For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen
@@ -127,6 +121,8 @@ public static partial class MaxonToStandardConversion {
 			var moveMode = new StdConstI64Op(1);
 			block.AddOp(moveMode);
 			block.AddOp(new StdCallRuntimeOp("mm_move", [(StdI64)srcHeapPtr, managedPtr, moveMode.Result], null));
+			if (Compiler.MmTrace)
+				block.AddOp(new StdCallRuntimeOp("mm_trace_move", [(StdI64)srcHeapPtr], null));
 		} else {
 			// Scalar elements: store directly
 			var value = valueMap[op.Value];
@@ -153,9 +149,9 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(byteSizeOp);
 		// Allocate __ManagedMemory struct first, then buffer as child
 		var tempName = $"__managed_create_{op.Result.Id}";
-		var managedPtr = EmitAlloc(block, 32);
+		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory");
 		EmitStore(block, managedPtr, tempName, varTypes);
-		var allocResult = EmitAllocIn(block, byteSizeOp.Result, managedPtr);
+		var allocResult = EmitAllocIn(block, byteSizeOp.Result, managedPtr, "Buffer");
 		// Store fields via indirect access on the heap object
 		EmitStructFieldStore(block, allocResult, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, count, tempName, ManagedFieldLength, MlirType.I64, varTypes);
@@ -191,10 +187,9 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(newByteSizeOp);
 
 		// Realloc: grows buffer in-place or allocates new, copies old data, frees old
-		var reallocTag = new StdConstI64Op(0);
-		block.AddOp(reallocTag);
+		var reallocTag = EmitTagPtr(block, "Buffer");
 		var newBufferResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_realloc", [oldBuffer, newByteSizeOp.Result, reallocTag.Result], newBufferResult));
+		block.AddOp(new StdCallRuntimeOp("mm_realloc", [oldBuffer, newByteSizeOp.Result, reallocTag], newBufferResult));
 
 		// Update managed struct fields through heap pointer
 		var newBufReload = newBufferResult;
@@ -364,11 +359,11 @@ public static partial class MaxonToStandardConversion {
 
 		// Allocate __ManagedMemory struct first, then buffer as child
 		var tempName = $"__from_cstring_{op.Result.Id}";
-		var managedPtr = EmitAlloc(block, 32);
+		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory");
 		EmitStore(block, managedPtr, tempName, varTypes);
 
 		var lenReload1 = (StdI64)EmitLoad(block, lenVar, varTypes);
-		var allocResult = EmitAllocIn(block, lenReload1, managedPtr);
+		var allocResult = EmitAllocIn(block, lenReload1, managedPtr, "Buffer");
 
 		// Store buffer pointer (alloc clobbers registers)
 		var bufVar = $"__cstr_buf_{op.Result.Id}";

@@ -18,4 +18,6 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   public Dictionary<string, List<string>>? ExtensionWhereConstraints { get; set; }
   // Purity: true if the function has no side effects (set by PurityAnalysisPass)
   public bool IsPure { get; set; } = true;
+  // True when the function returns `self` (borrowed reference, not a new allocation)
+  public bool ReturnsSelf { get; set; }
 }

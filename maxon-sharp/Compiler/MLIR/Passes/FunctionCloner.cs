@@ -118,7 +118,8 @@ internal class FunctionCloner {
       _sourceFunc.ThrowsType) {
       IsStdlib = _sourceFunc.IsStdlib,
       SourceLine = _sourceFunc.SourceLine,
-      SourceColumn = _sourceFunc.SourceColumn
+      SourceColumn = _sourceFunc.SourceColumn,
+      ReturnsSelf = _sourceFunc.ReturnsSelf
     };
 
     Logger.Debug(LogCategory.Mlir, $"  Monomorphized func: {newFuncName}({string.Join(", ", newParamTypes)}) -> {newReturnType}");

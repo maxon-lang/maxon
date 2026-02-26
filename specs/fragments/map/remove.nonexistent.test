@@ -14,21 +14,24 @@ module {
   func @map.main() -> u32 {
   entry:
     x86.prologue stack_size=64
-    x86.xor rcx, rcx
+    x86.lea_symdata rax, [__tag_map_main]
+    x86.mov rcx, rax
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.mov eax, 1
-    x86.mov ecx, 10
-    x86.mov edx, 2
-    x86.mov ebx, 20
-    x86.mov [rbp-16], edx
-    x86.mov [rbp-24], eax
-    x86.xor esi, esi
-    x86.mov edi, 2
+    x86.mov edx, 1
+    x86.mov ebx, 10
+    x86.mov esi, 2
+    x86.mov edi, 20
+    x86.mov [rbp-16], esi
+    x86.mov [rbp-24], edx
     x86.xor r8, r8
-    x86.mov r9, 8
+    x86.mov r9, 2
+    x86.xor eax, eax
+    x86.mov ecx, 8
+    x86.lea_symdata rdx, [__tag___ManagedMemory]
+    x86.mov rsi, rdx
+    x86.mov rdx, rsi
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
@@ -55,8 +58,10 @@ module {
     x86.mov ecx, 2
     x86.xor edx, edx
     x86.mov ebx, 8
+    x86.lea_symdata rsi, [__tag___ManagedMemory]
+    x86.mov rdi, rsi
+    x86.mov rdx, rdi
     x86.mov rcx, 32
-    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-56], eax
     x86.mov eax, [rbp-56]
@@ -88,15 +93,19 @@ module {
     x86.test eax, eax
     x86.je map.main.check_2.after
   check_2:
-    x86.mov eax, [rbp-8]
-    x86.mov rcx, [rbp-8]
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-8]
     x86.call mm_scope_exit
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   check_2.after:
-    x86.mov eax, [rbp-8]
-    x86.mov rcx, [rbp-8]
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-8]
     x86.call mm_scope_exit
     x86.xor eax, eax
     x86.epilogue

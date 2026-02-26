@@ -71,10 +71,10 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = length
     EmitBytes(0x49, 0x0F, 0xAF, 0xC1);       // IMUL RAX, R9 (byteLen = length * elemSize)
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-0x30] = byteLen
-    // mm_alloc_in(size=byteLen, parent_ptr=managedPtr, tag=0)
+    // mm_alloc_in(size=byteLen, parent_ptr=managedPtr, tag="Buffer")
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // RCX = byteLen
     EmitMovRegMem(X86Register.Rdx, -0x28, 8);        // RDX = managedPtr
-    EmitXorRegReg(X86Register.R8, X86Register.R8);    // R8 = NULL tag
+    EmitLeaRegSymdataRel(X86Register.R8, "__rt_tag_buffer"); // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc_in")); EmitDword(0);
     EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-0x38] = new buffer
     // rep movsb: RSI=src, RDI=dst, RCX=count
@@ -111,7 +111,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);  // RCX = length
     // LEA RCX, [RCX+1] for alloc size
     EmitBytes(0x48, 0x8D, 0x49, 0x01); // LEA RCX, [RCX+1]
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cstring"); // RDX = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     // Save new buffer at [rbp-24]
     EmitMovMemReg(-0x18, X86Register.Rax, 8);
@@ -1635,7 +1635,7 @@ public partial class X86CodeEmitter {
 
     // Step 6: Allocate buffer via mm_alloc
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_cmdline_arg"); // RDX = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
 
     // Save buffer pointer
@@ -1871,7 +1871,7 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_find_first_file", 1, 0x40);
     // Allocate block
     EmitMovRegImm(X86Register.Rcx, FindBlockSize);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_find_data"); // RDX = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = block_ptr
     // FindFirstFileA(pattern, &block[8])
@@ -1985,7 +1985,7 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_get_current_directory", 0, 0x40);
     // Allocate 260 bytes (MAX_PATH) for the buffer
     EmitMovRegImm(X86Register.Rcx, 260);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_dir_buffer"); // RDX = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
     // GetCurrentDirectoryA(nBufferLength=260, lpBuffer=buffer)
@@ -2279,7 +2279,7 @@ public partial class X86CodeEmitter {
 
     // Allocate result struct (24 bytes)
     EmitMovRegImm(X86Register.Rcx, CaptureStructSize);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_capture_result"); // RDX = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(resultSlot, X86Register.Rax, 8);
 
@@ -2322,7 +2322,7 @@ public partial class X86CodeEmitter {
 
     // Allocate initial buffer (4096 bytes)
     EmitMovRegImm(X86Register.Rcx, 4096);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = NULL tag
+    EmitLeaRegSymdataRel(X86Register.Rdx, "__rt_tag_pipe_buffer"); // RDX = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // buffer
     EmitMovRegImm(X86Register.Rax, 4096);
@@ -2349,7 +2349,7 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x18, X86Register.Rdx, 8);           // update capacity
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // old buffer
     // RDX already has new size
-    EmitXorRegReg(X86Register.R8, X86Register.R8);      // R8 = NULL tag
+    EmitLeaRegSymdataRel(X86Register.R8, "__rt_tag_pipe_buffer"); // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // update buffer
 

@@ -16,6 +16,7 @@ public static partial class MaxonToStandardConversion {
 
   public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
     _rdataStringCache = [];
+    _symdataTagCache = [];
     var result = new MlirModule<StandardOp>();
     _resultModule = result;
     result.RdataEntries.AddRange(module.RdataEntries);
@@ -445,7 +446,7 @@ public static partial class MaxonToStandardConversion {
                 var loaded = EmitLoad(newBlock, $"{enumPrefix}.__tag", varTypes);
                 valueMap[enumTagOp.Result] = loaded;
               } else {
-                // Fallback: the enum value might be a simple scalar (shouldn't happen for associated-value enums)
+                // Simple enums without associated values pass the ordinal directly
                 valueMap[enumTagOp.Result] = valueMap[enumTagOp.EnumValue];
               }
               break;
@@ -599,6 +600,7 @@ public static partial class MaxonToStandardConversion {
               } else if (enumType.BackingType == MlirType.F64) {
                 ordinalValue = EmitFloatUnionToOrdinal(enumType, (StdF64)stdValue, newBlock);
               } else {
+                // Simple enums (no backing type) and string/char-backed enums store ordinals
                 ordinalValue = (StdI64)stdValue;
               }
               var (nameBuf, nameLen) = EmitUnionNameLookup(enumType, ordinalValue, newBlock, result);
@@ -667,7 +669,7 @@ public static partial class MaxonToStandardConversion {
                 ? EmitStackAlloc(newBlock, structType.SizeInBytes)
                 : (IsCurrentScopeStaticFree() && !isReturnAlloc)
                   ? EmitAllocSimple(newBlock, structType.SizeInBytes)
-                  : EmitAlloc(newBlock, structType.SizeInBytes);
+                  : EmitAlloc(newBlock, structType.SizeInBytes, structLitOp.TypeName);
               EmitStore(newBlock, structPtr, tempName, varTypes);
 
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
@@ -715,6 +717,8 @@ public static partial class MaxonToStandardConversion {
                       case 8:
                         BitConverter.GetBytes(constArrayInfo.Values[i]).CopyTo(rdataBytes, i * elemSize);
                         break;
+                      default:
+                        throw new InvalidOperationException($"Unsupported constant array element size: {elemSize}");
                     }
                   }
                   result.RdataEntries.Add((constArrayInfo.RdataLabel, rdataBytes, elemSize));
@@ -751,7 +755,7 @@ public static partial class MaxonToStandardConversion {
 
                   // Allocate heap buffer as child of the array wrapper so it moves with the array
                   var arrayWrapperPtr = (StdI64)EmitLoad(newBlock, tempName, varTypes);
-                  var heapBuf = EmitAllocIn(newBlock, totalSize.Result, arrayWrapperPtr);
+                  var heapBuf = EmitAllocIn(newBlock, totalSize.Result, arrayWrapperPtr, "Buffer");
                   var copyResult = new StdI64(MlirContext.Current.NextId());
                   newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
 
@@ -776,6 +780,16 @@ public static partial class MaxonToStandardConversion {
                   var castOp = new StdPtrToI64Op(leaOp.Result);
                   newBlock.AddOp(castOp);
                   rdataPtr = castOp.Result;
+
+                  // Reparent struct elements under the array wrapper so Array.get
+                  // returns parent-owned references (mm_incref/mm_decref are no-ops)
+                  var firstElemVarStack = $"{structLitOp.ArrayLiteralTag}.0";
+                  if (varNameToStructType.ContainsKey(firstElemVarStack)) {
+                    for (int ei = 0; ei < structLitOp.ArrayLiteralCount; ei++) {
+                      var elemVar = $"{structLitOp.ArrayLiteralTag}.{ei}";
+                      EmitReparent(newBlock, (StdI64)EmitLoad(newBlock, elemVar, varTypes), tempName, varTypes);
+                    }
+                  }
                 }
 
                 // Set capacity for heap-allocated writable buffers only.
@@ -851,11 +865,35 @@ public static partial class MaxonToStandardConversion {
                   : assignOp.Value is MaxonStruct ms
                     ? ms.TypeName
                     : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'");
-                // With scope-based memory management, all allocations are tracked by the
-                // memory manager. No incref/release needed — scope exit frees everything.
                 if (srcName != dstName) {
+                  // Decref old value before overwriting (reassignment only)
+                  if (!assignOp.IsDeclaration) {
+                    EmitDecref(newBlock, dstName, varTypes);
+                  }
                   var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
                   EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
+                }
+                // Adjust refcount for the new reference.
+                // Skip incref when source is a call return — callee's rc=1 IS our reference.
+                bool isFromCallReturn = srcName.StartsWith("__callret_")
+                  || srcName.StartsWith("__call_tmp_")
+                  || srcName.StartsWith("__interp_tostr_")
+                  || srcName.StartsWith("__forin_result_");
+                if (isFromCallReturn
+                    && !assignOp.VarName.StartsWith("__call_tmp_")
+                    && !assignOp.VarName.StartsWith("__callret_")) {
+                  var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
+                  if (currentScopeInfo?.ReturnSelfValueIds.Contains(assignOp.Value.Id) == true)
+                    isFromCallReturn = false;
+                }
+                if (assignOp.IsDeclaration) {
+                  if (!isFromCallReturn) {
+                    EmitIncref(newBlock, assignOp.VarName, varTypes);
+                  }
+                } else if (srcName != dstName) {
+                  if (!isFromCallReturn) {
+                    EmitIncref(newBlock, assignOp.VarName, varTypes);
+                  }
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
@@ -873,6 +911,8 @@ public static partial class MaxonToStandardConversion {
                     var moveMode = new StdConstI64Op(1);
                     newBlock.AddOp(moveMode);
                     newBlock.AddOp(new StdCallRuntimeOp("mm_move", [heapPtr2, selfPtr, moveMode.Result], null));
+                    if (Compiler.MmTrace)
+                      newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [heapPtr2], null));
                     EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
                   }
                 }
@@ -1173,7 +1213,7 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonReleaseOp:
-              // Legacy op — scope-based cleanup handles this now
+              // TODO: emit mm_decref — currently causes regressions due to double-decref with scope exit
               break;
             case MaxonScopeEnterOp scopeEnterOp: {
               var scopeInfo = funcScopeAnalysis?.GetValueOrDefault(scopeEnterOp.ResultVar);
@@ -1186,11 +1226,13 @@ public static partial class MaxonToStandardConversion {
                 newBlock.AddOp(sentinel);
                 EmitStore(newBlock, sentinel.Result, scopeEnterOp.ResultVar, varTypes);
               } else {
-                var tagOp = new StdConstI64Op(0);
-                newBlock.AddOp(tagOp);
+                var tagPtr = EmitTagPtr(newBlock, scopeEnterOp.Tag);
                 var scopeResult = new StdI64(MlirContext.Current.NextId());
-                newBlock.AddOp(new StdCallRuntimeOp("mm_scope_enter", [tagOp.Result], scopeResult));
+                newBlock.AddOp(new StdCallRuntimeOp("mm_scope_enter", [tagPtr], scopeResult));
                 EmitStore(newBlock, scopeResult, scopeEnterOp.ResultVar, varTypes);
+                if (Compiler.MmTrace) {
+                  newBlock.AddOp(new StdCallRuntimeOp("mm_trace_scope_enter", [scopeResult], null));
+                }
               }
               varTypes[scopeEnterOp.ResultVar] = "i64";
               break;
@@ -1206,8 +1248,16 @@ public static partial class MaxonToStandardConversion {
                   }
                 }
               }
+              // Emit decref for all refcounted vars in this scope (before cleanup)
+              if (scopeInfo?.RefcountedVars.Count > 0) {
+                foreach (var rcVar in scopeInfo.RefcountedVars) {
+                  if (rcVar == scopeInfo.ReturnMoveVar) continue;
+                  if (!varTypes.ContainsKey(rcVar)) continue;
+                  EmitDecref(newBlock, rcVar, varTypes);
+                }
+              }
               if (scopeInfo is { NeedsRuntimeFrame: false }) {
-                // Scope was elided — nothing to clean up
+                // Scope was elided — refcounted vars have been decreffed above
                 break;
               }
               if (scopeInfo is { CanStaticFree: true } or { CanStaticReturn: true }) {
@@ -1215,6 +1265,9 @@ public static partial class MaxonToStandardConversion {
                 break;
               }
               var scopePtr = (StdI64)EmitLoad(newBlock, scopeExitOp.ScopeVar, varTypes);
+              if (Compiler.MmTrace) {
+                newBlock.AddOp(new StdCallRuntimeOp("mm_trace_scope_exit", [scopePtr], null));
+              }
               newBlock.AddOp(new StdCallRuntimeOp("mm_scope_exit", [scopePtr], null));
               break;
             }
@@ -1242,6 +1295,8 @@ public static partial class MaxonToStandardConversion {
               var moveTag = new StdConstI64Op(0);
               newBlock.AddOp(moveTag);
               newBlock.AddOp(new StdCallRuntimeOp("mm_move", [varPtr, destScope, moveTag.Result], null));
+              if (Compiler.MmTrace)
+                newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [varPtr], null));
               break;
             }
             case MaxonTruncOp truncOp: {
@@ -1306,8 +1361,6 @@ public static partial class MaxonToStandardConversion {
                   if (input is StdI64 alreadyI64) {
                     intInput = alreadyI64;
                   } else if (input is StdI32 i32Input) {
-                    // i32 to i64: sign-extend (TODO: implement proper conversion op if needed)
-                    // For now, treat as already compatible since both are integer types
                     throw new InvalidOperationException("i32 to byte conversion not yet implemented");
                   } else if (input is StdF64 f64Input) {
                     var fpToSi = new StdFpToSiOp(f64Input);
@@ -1338,7 +1391,6 @@ public static partial class MaxonToStandardConversion {
                   if (input is StdI64 i64) {
                     valueMap[castOp.Result] = i64;
                   } else if (input is StdI32 i32) {
-                    // i32 to i64: for now pass through (TODO: implement proper sign-extension if needed)
                     throw new InvalidOperationException("i32 to int conversion not yet implemented");
                   } else if (input is StdF64 f64) {
                     var fpToSi = new StdFpToSiOp(f64);
@@ -1465,6 +1517,7 @@ public static partial class MaxonToStandardConversion {
               if (globalLoad.ValueKind == MaxonValueKind.Struct) {
                 var tempName = $"__global_{globalLoad.GlobalName}_{globalLoad.Result.Id}";
                 EmitStore(newBlock, valueMap[globalLoad.Result], tempName, varTypes);
+                EmitIncref(newBlock, tempName, varTypes);
                 structVarNames[globalLoad.Result.Id] = tempName;
                 if (globalLoad.StructTypeName != null)
                   structValueTypes[globalLoad.Result.Id] = globalLoad.StructTypeName;
@@ -1497,6 +1550,8 @@ public static partial class MaxonToStandardConversion {
                   var moveMode = new StdConstI64Op(0); // mode 0 = move to scope
                   newBlock.AddOp(moveMode);
                   newBlock.AddOp(new StdCallRuntimeOp("mm_move", [newHeapPtr, rootScopeResult, moveMode.Result], null));
+                  if (Compiler.MmTrace)
+                    newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [newHeapPtr], null));
                 }
 
                 newBlock.AddOp(new StdGlobalStoreI64Op(newHeapPtr, globalStore.GlobalName));
