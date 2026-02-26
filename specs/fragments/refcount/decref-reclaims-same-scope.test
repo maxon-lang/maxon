@@ -1,0 +1,88 @@
+// Test: decref-reclaims-same-scope
+typealias Integer = int(i64.min to i64.max)
+type Val
+    export var n Integer
+end 'Val'
+function main() returns ExitCode
+    var a = Val{n: 10}
+    var b = a
+    a = Val{n: 20}
+    return a.n + b.n
+end 'main'
+---
+ExitCode: 30
+---
+module {
+  func @refcount.main() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.xor rcx, rcx
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov eax, 10
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, 10
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov esi, [rbp-16]
+    x86.mov [rbp-24], esi
+    x86.mov edi, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov r8, 20
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-32], eax
+    x86.mov r9, [rbp-32]
+    x86.mov ecx, 20
+    x86.mov [r9+0], ecx
+    x86.mov ecx, [rbp-16]
+    x86.call mm_decref
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [eax+0]
+    x86.mov eax, [rbp-24]
+    x86.mov edx, [eax+0]
+    x86.add ecx, edx
+    x86.mov [rbp-40], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je refcount.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_26]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-16]
+    x86.call mm_decref
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-40]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

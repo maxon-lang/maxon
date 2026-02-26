@@ -80,6 +80,10 @@ public static class PurityAnalysisPass {
           // Mutating managed memory metadata (e.g. set_length)
           case MaxonFieldAssignOp fieldAssign when fieldAssign.TypeName == "__ManagedMemory":
             return true;
+          // Swapping heap-pointer fields mutates the parent struct
+          case MaxonSwapFieldOp:
+          case MaxonSwapPayloadOp:
+            return true;
         }
       }
     }

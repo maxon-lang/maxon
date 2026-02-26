@@ -88,7 +88,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   // Set the next pointer of a node in-place
   function setNext(n Node, target Node)
     match n 'set'
-      node(_v, next, _prev) then next = target
+      node(_v, next, _prev) then let _ = swap next with target
       empty then return
     end 'set'
   end 'setNext'
@@ -96,7 +96,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   // Set the prev pointer of a node in-place
   function setPrev(n Node, target Node)
     match n 'set'
-      node(_v, _next, prev) then prev = target
+      node(_v, _next, prev) then let _ = swap prev with target
       empty then return
     end 'set'
   end 'setPrev'
@@ -127,28 +127,28 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   export function prepend(value Element)
     var newNode = Node.node(value, head, Node.empty)
     if size == 0 'wasEmpty'
-      head = newNode
-      tail = newNode
+      let _ = swap head with newNode
+      let _ = swap tail with newNode
     end 'wasEmpty' else 'hasElements'
       setPrev(head, target: newNode)
-      head = newNode
+      let _ = swap head with newNode
     end 'hasElements'
     size = size + 1
-    iterNode = head
+    let _ = swap iterNode with head
   end 'prepend'
 
   /// Add an element to the back of the list. O(1).
   export function append(value Element)
     var newNode = Node.node(value, Node.empty, tail)
     if size == 0 'wasEmpty'
-      head = newNode
-      tail = newNode
+      let _ = swap head with newNode
+      let _ = swap tail with newNode
     end 'wasEmpty' else 'hasElements'
       setNext(tail, target: newNode)
-      tail = newNode
+      let _ = swap tail with newNode
     end 'hasElements'
     size = size + 1
-    iterNode = head
+    let _ = swap iterNode with head
   end 'append'
 
   /// Insert an element at the given index. O(n).
@@ -167,7 +167,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     setNext(before, target: newNode)
     setPrev(after, target: newNode)
     size = size + 1
-    iterNode = head
+    let _ = swap iterNode with head
   end 'insert'
 
   /// Remove and return the first element, throws if empty. O(1).
@@ -178,14 +178,14 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     var result = try nodeValue(head) otherwise 'err'
       throw ArrayError.indexOutOfBounds
     end 'err'
-    head = nodeNext(head)
+    let _ = swap head with nodeNext(head)
     size = size - 1
     if size == 0 'nowEmpty'
-      tail = Node.empty
+      let _ = swap tail with Node.empty
     end 'nowEmpty' else 'stillHas'
       setPrev(head, target: Node.empty)
     end 'stillHas'
-    iterNode = head
+    let _ = swap iterNode with head
     return result
   end 'removeFirst'
 
@@ -197,14 +197,14 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     var result = try nodeValue(tail) otherwise 'err'
       throw ArrayError.indexOutOfBounds
     end 'err'
-    tail = nodePrev(tail)
+    let _ = swap tail with nodePrev(tail)
     size = size - 1
     if size == 0 'nowEmpty'
-      head = Node.empty
+      let _ = swap head with Node.empty
     end 'nowEmpty' else 'stillHas'
       setNext(tail, target: Node.empty)
     end 'stillHas'
-    iterNode = head
+    let _ = swap iterNode with head
     return result
   end 'removeLast'
 
@@ -234,16 +234,16 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     setNext(before, target: after)
     setPrev(after, target: before)
     size = size - 1
-    iterNode = head
+    let _ = swap iterNode with head
     return result
   end 'remove'
 
   /// Remove all elements
   export function clear()
-    head = Node.empty
-    tail = Node.empty
+    let _ = swap head with Node.empty
+    let _ = swap tail with Node.empty
     size = 0
-    iterNode = Node.empty
+    let _ = swap iterNode with Node.empty
   end 'clear'
 
   // Break circular prev references so refcount cleanup can free the chain.
@@ -265,7 +265,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     var result = try nodeValue(iterNode) otherwise 'err'
       throw IterationError.exhausted
     end 'err'
-    iterNode = nodeNext(iterNode)
+    let _ = swap iterNode with nodeNext(iterNode)
     return result
   end 'next'
 end 'List'

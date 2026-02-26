@@ -83,10 +83,11 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 
 ### Keywords
 ```
-and, as, bool, break, continue, default, else, end, enum, export, extern,
-fallthrough, false, float, for, function, gives, if, ignore, implements, in, int, interface, let, match,
-mod, not, or, otherwise, return, shl, shr, static, then, throw, throws, true, try, type,
-typealias, union, var, where, while, xor
+and, as, bool, break, byte, continue, default, else, end, enum, export,
+extends, extension, fallthrough, false, float, for, from, function, gives, if,
+ignore, implements, in, int, interface, is, let, match, not, of, or, otherwise,
+return, returns, self, Self, shl, shr, static, swap, then, throw, throws, to,
+true, try, type, typealias, union, upto, uses, var, where, while, with, xor
 ```
 
 ### Literals
@@ -883,6 +884,26 @@ end 'update'
 ```
 
 When the union variable is declared with `let`, bindings are immutable (read-only copies).
+
+For heap-pointer payloads (structs, strings, unions with associated values), use `swap` instead of direct assignment:
+
+```maxon
+match myNode 'update'
+    node(value, next) then let _ = swap next with Node.empty
+    empty then return
+end 'update'
+```
+
+### Swap Expression
+
+When replacing a heap-pointer field on a struct or an associated value in a union, you must use `swap` instead of direct assignment (error E3070). The `swap` expression atomically replaces the field value and returns the old value to the current scope for proper cleanup:
+
+```maxon
+var old = swap fieldName with newValue         // self field
+let _ = swap variable.field with newValue      // qualified field
+```
+
+Direct assignment to heap-pointer fields is a compile error. Scalar fields (integers, booleans, simple enums without associated values) still support direct assignment.
 
 ### Comparing Union Values
 
@@ -2611,7 +2632,7 @@ var list = IntList{}             // Empty list
 **Adding Elements**
 ```maxon
 list.prepend(1)                  // Add to front — O(1)
-list.append(2)                   // Add to back — O(n), rebuilds chain
+list.append(2)                   // Add to back — O(1)
 list.insert(1, value: 99)       // Insert at index — O(n)
 ```
 
@@ -2625,7 +2646,7 @@ var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayErro
 **Removing Elements**
 ```maxon
 var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
-var popped = try list.removeLast() otherwise 0    // Remove back — O(n)
+var popped = try list.removeLast() otherwise 0    // Remove back — O(1)
 var at2 = try list.remove(at: 2) otherwise 0      // Remove at index — O(n)
 list.clear()                                       // Remove all elements
 ```
@@ -2651,8 +2672,8 @@ end 'loop'
 |-----------|------|
 | `prepend` | O(1) |
 | `removeFirst` | O(1) |
-| `append` | O(n) |
-| `removeLast` | O(n) |
+| `append` | O(1) |
+| `removeLast` | O(1) |
 | `get`, `insert`, `remove(at:)` | O(n) |
 | `first`, `last`, `count`, `isEmpty` | O(1) |
 

@@ -56,7 +56,7 @@ end 'blk'                     // inner goes out of scope, rc = 1
 
 ## Tests
 
-<!-- disabled-test: refcount.basic-aliasing -->
+<!-- test: basic-aliasing -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Point
@@ -73,7 +73,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: refcount.alias-survives-inner-scope -->
+<!-- test: alias-survives-inner-scope -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box
@@ -92,7 +92,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: refcount.reassignment-decrefs-old -->
+<!-- test: reassignment-decrefs-old -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Item
@@ -108,7 +108,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: refcount.multiple-aliases -->
+<!-- test: multiple-aliases -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Data
@@ -125,7 +125,7 @@ end 'main'
 21
 ```
 
-<!-- disabled-test: refcount.clone-independent-refcount -->
+<!-- test: clone-independent-refcount -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Pair
@@ -143,7 +143,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: refcount.struct-field-store -->
+<!-- test: struct-field-store -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Inner
@@ -151,8 +151,8 @@ type Inner
 end 'Inner'
 type Outer
     export var child Inner
-    function setChild(c Inner)
-        self.child = c
+    export function setChild(c Inner)
+        let _ = swap child with c
     end 'setChild'
 end 'Outer'
 function main() returns ExitCode
@@ -166,7 +166,7 @@ end 'main'
 55
 ```
 
-<!-- disabled-test: refcount.return-value-ownership -->
+<!-- test: return-value-ownership -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Result
@@ -185,7 +185,7 @@ end 'main'
 33
 ```
 
-<!-- disabled-test: refcount.array-push-struct -->
+<!-- test: array-push-struct -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Entry
@@ -204,7 +204,7 @@ end 'main'
 15
 ```
 
-<!-- disabled-test: refcount.break-cleans-refs -->
+<!-- test: break-cleans-refs -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Counter
@@ -229,14 +229,14 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: refcount.error-propagation-cleans-refs -->
+<!-- test: error-propagation-cleans-refs -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Wrapper
     export var n Integer
 end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
-function getFirst(arr WrapperArray) returns Wrapper throws
+function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
     var result = try arr.get(0)
     return result
 end 'getFirst'
@@ -251,7 +251,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: refcount.decref-reclaims-same-scope -->
+<!-- test: decref-reclaims-same-scope -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Val
@@ -268,7 +268,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: refcount.decref-drops-last-ref -->
+<!-- test: decref-drops-last-ref -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Tag
@@ -285,7 +285,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: refcount.decref-reclaims-inner-scope -->
+<!-- test: decref-reclaims-inner-scope -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Cell
@@ -306,7 +306,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: refcount.ownership-transfer-to-outer -->
+<!-- test: ownership-transfer-to-outer -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Token
@@ -325,7 +325,7 @@ end 'main'
 50
 ```
 
-<!-- disabled-test: refcount.try-otherwise-struct -->
+<!-- test: try-otherwise-struct -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Fallback
@@ -344,7 +344,7 @@ end 'main'
 52
 ```
 
-<!-- disabled-test: refcount.for-in-struct-array -->
+<!-- test: for-in-struct-array -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Score
@@ -367,7 +367,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: refcount.nested-call-return -->
+<!-- test: nested-call-return -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Num
@@ -388,7 +388,7 @@ end 'main'
 11
 ```
 
-<!-- disabled-test: refcount.function-param-incref -->
+<!-- test: function-param-incref -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Config
@@ -407,7 +407,7 @@ end 'main'
 77
 ```
 
-<!-- disabled-test: refcount.field-access-reference -->
+<!-- test: field-access-reference -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Inner

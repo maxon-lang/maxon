@@ -233,7 +233,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: '==' requires type 'Callback' to implement 'Equatable'
+error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:11:8: '==' requires type 'Callback' to implement 'Equatable'
 ```
 
 <!-- test: auto-equatable -->

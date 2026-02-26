@@ -191,10 +191,8 @@ public partial class X86CodeEmitter {
     EmitBytes(0x88, 0x54, 0x0F, 0x02); // MOV byte [rdi + rcx + 2], dl
     // Shift value right by 4
     EmitBytes(0x48, 0xC1, 0xE8, 0x04); // SHR rax, 4
-    // Decrement counter
+    // Decrement counter and loop while rcx >= 0
     EmitBytes(0x48, 0xFF, 0xC9); // DEC rcx
-    // Loop if rcx >= 0 (signed)
-    EmitBytes(0x48, 0x83, 0xF9, 0x00); // CMP rcx, 0
     EmitJcc("ge", "mm_trace_hex_loop");
 
     // Null-terminate at buf[18]
@@ -747,13 +745,10 @@ public partial class X86CodeEmitter {
     //        [rbp-72]=dest_entry (for mode=1)
     EmitRuntimeFunctionStart("mm_move", 3, 0x80);
 
-    // If ptr == NULL, panic
+    // If ptr == NULL, no-op (nothing to move — e.g., zero-initialized field in swap)
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_move_ptr_ok");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_move_null");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
-    DefineLabel("mm_move_ptr_ok");
+    EmitJcc("z", "mm_move_done");
 
     // Load entry = [ptr - 8]
     EmitSubRegImm(X86Register.Rax, 8);
@@ -1667,8 +1662,6 @@ public partial class X86CodeEmitter {
   // If ptr is non-null and [ptr-8] == 0, prints diagnostic and panics
   private void EmitMmValidatePtr() {
     DefineSymdata("__mm_validate_tag", "MM VALIDATE ptr=\0"u8.ToArray());
-    DefineSymdata("__mm_validate_backptr", " backptr=\0"u8.ToArray());
-    DefineSymdata("__mm_validate_at", " at=\0"u8.ToArray());
     DefineSymdata("__mm_validate_fail", "VALIDATION FAILED: ptr has no AllocEntry!\n\0"u8.ToArray());
 
     EmitRuntimeFunctionStart("mm_validate_ptr", 2, 0x30);

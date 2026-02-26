@@ -41,14 +41,14 @@ m.insert(3, value: 300)    // Map now has {1: 100, 2: 200, 3: 300}
 m.insert(1, value: 150)    // Updates key 1 to 150
 ```
 
-### get(key) Value
+### get(key) returns Value throws MapError
 
-Get the value for a key. Returns a default value (zero-initialized) if the key is not found.
+Get the value for a key. Throws `MapError.keyNotFound` if the key is not in the map.
 
 ```text
 var m = [10: 5, 20: 3]
-m.get(10)          // 5
-m.get(30)          // 0 (default for int)
+var v = try m.get(10) otherwise 0    // 5
+var w = try m.get(30) otherwise 0    // 0 (key not found, fallback used)
 ```
 
 ### contains(key) returns bool

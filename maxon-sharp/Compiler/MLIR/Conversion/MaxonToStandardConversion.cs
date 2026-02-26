@@ -252,6 +252,10 @@ public static partial class MaxonToStandardConversion {
       // Reset per-block since a cached var stored in one branch may not be defined in another.
       var selfFieldCache = new Dictionary<string, string>();
 
+      // Maps self field names to their initial __field_X temp var names (set once at function entry).
+      // Used by MaxonSwapFieldOp to update the stale cached value after a swap.
+      var selfFieldInitVars = new Dictionary<string, string>();
+
       foreach (var block in func.Body.Blocks) {
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
@@ -571,6 +575,46 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             }
+            case MaxonSwapPayloadOp swapPayload: {
+              // Atomically swap an enum payload slot: load old, store new, reparent new, move old to scope
+              var swapEnumPrefix = varNameToStructPrefix.GetValueOrDefault(swapPayload.EnumVarName, swapPayload.EnumVarName);
+              var swapEnumHeapPtr = (StdI64)EmitLoad(newBlock, swapEnumPrefix, varTypes);
+              int swapByteOffset = 8 + swapPayload.PayloadIndex * 8;
+
+              // 1. Load old payload value
+              var oldPayloadLoad = new StdLoadIndirectOp(swapEnumHeapPtr, swapByteOffset, MlirType.I64);
+              newBlock.AddOp(oldPayloadLoad);
+              var oldPayloadValue = (StdI64)oldPayloadLoad.Result;
+
+              // 2. Resolve and store new value into the payload slot
+              if (structVarNames.TryGetValue(swapPayload.NewValue.Id, out var swapPayloadNewStructSrc)) {
+                var childHeapPtr = (StdI64)EmitLoad(newBlock, swapPayloadNewStructSrc, varTypes);
+                newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, swapEnumHeapPtr, swapByteOffset, MlirType.I64));
+                newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [childHeapPtr, swapEnumHeapPtr], null));
+              } else {
+                var newStdVal = valueMap[swapPayload.NewValue];
+                newBlock.AddOp(new StdStoreIndirectOp(newStdVal, swapEnumHeapPtr, swapByteOffset, MlirType.I64));
+              }
+
+              // 3. Move old value to the current scope
+              var swapPayloadScopePtr = (StdI64)EmitLoad(newBlock, swapPayload.ScopeVar, varTypes);
+              var swapPayloadMoveTag = new StdConstI64Op(0);
+              newBlock.AddOp(swapPayloadMoveTag);
+              newBlock.AddOp(new StdCallRuntimeOp("mm_move", [oldPayloadValue, swapPayloadScopePtr, swapPayloadMoveTag.Result], null));
+              if (Compiler.MmTrace)
+                newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [oldPayloadValue], null));
+
+              // 4. Map the result and track struct/enum type
+              valueMap[swapPayload.Result] = oldPayloadValue;
+              var swapPayloadResultType = swapPayload.ResultStructTypeName ?? swapPayload.ResultEnumTypeName;
+              if (swapPayloadResultType != null) {
+                var swapPayloadTempName = $"__swap_payload_{swapPayload.Result.Id}";
+                EmitStore(newBlock, oldPayloadValue, swapPayloadTempName, varTypes);
+                structVarNames[swapPayload.Result.Id] = swapPayloadTempName;
+                structValueTypes[swapPayload.Result.Id] = swapPayloadResultType;
+              }
+              break;
+            }
             case MaxonEnumRawValueOp rawValueOp: {
               // The enum's backing value IS the raw value - just pass through
               var enumStdVal = valueMap[rawValueOp.EnumValue];
@@ -877,14 +921,8 @@ public static partial class MaxonToStandardConversion {
                   if (currentScopeInfo?.ReturnSelfValueIds.Contains(assignOp.Value.Id) == true)
                     isFromCallReturn = false;
                 }
-                if (assignOp.IsDeclaration) {
-                  if (!isFromCallReturn) {
-                    EmitIncref(newBlock, assignOp.VarName, varTypes);
-                  }
-                } else if (srcName != dstName) {
-                  if (!isFromCallReturn) {
-                    EmitIncref(newBlock, assignOp.VarName, varTypes);
-                  }
+                if ((assignOp.IsDeclaration || srcName != dstName) && !isFromCallReturn) {
+                  EmitIncref(newBlock, assignOp.VarName, varTypes);
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
@@ -1029,6 +1067,7 @@ public static partial class MaxonToStandardConversion {
                   // code referencing it by name (across conditional blocks) gets the correct value.
                   if (IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
                     EmitStore(newBlock, nestedPtr, fieldAccess.FieldName, varTypes);
+                    selfFieldInitVars.TryAdd(fieldAccess.FieldName, tempVarName);
                   }
                 } else {
                   // Fallback: try loading as a named variable (legacy path)
@@ -1069,6 +1108,7 @@ public static partial class MaxonToStandardConversion {
                 if (IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
                   EmitStore(newBlock, EmitLoad(newBlock, tempVarName, varTypes), fieldAccess.FieldName, varTypes);
                   varNameToStructPrefix[fieldAccess.FieldName] = fieldAccess.FieldName;
+                  selfFieldInitVars.TryAdd(fieldAccess.FieldName, tempVarName);
                 }
                 structValueTypes[fieldAccess.Result.Id] = fieldAccess.ResultStructTypeName;
               } else {
@@ -1103,9 +1143,9 @@ public static partial class MaxonToStandardConversion {
               }
 
               if (faFieldDef != null) {
-                var storeType = faFieldDef.Type is MlirStructType or MlirUnionType ? MlirType.I64 : faFieldDef.Type;
+                var storeType = faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true } ? MlirType.I64 : faFieldDef.Type;
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
-                if (faFieldDef.Type is MlirStructType or MlirUnionType) {
+                if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
                   EmitReparent(newBlock, (StdI64)mappedVal, structName, varTypes);
                 }
               } else {
@@ -1114,6 +1154,75 @@ public static partial class MaxonToStandardConversion {
               // No write-through needed: self is a heap pointer, and all field stores
               // go through the heap pointer directly, so the caller sees changes.
               if (structName == "self") selfFieldCache.Remove(fieldAssign.FieldName);
+              break;
+            }
+            case MaxonSwapFieldOp swapField: {
+              // Atomically swap a heap-pointer field: load old value, store new, reparent new, move old to scope
+              var swapStructName = structVarNames.TryGetValue(swapField.StructValue.Id, out var ssn) ? ssn : "self";
+              var swapParentTypeName = structValueTypes.TryGetValue(swapField.StructValue.Id, out var sptn) ? sptn : swapField.TypeName;
+              MlirStructType? swapParentStructType = null;
+              if (module.TypeDefs.TryGetValue(swapParentTypeName, out var sptDef) && sptDef is MlirStructType spst)
+                swapParentStructType = spst;
+              var swapFieldDef = swapParentStructType?.GetField(swapField.FieldName);
+              if (swapFieldDef == null)
+                throw new InvalidOperationException($"MaxonSwapFieldOp: field '{swapField.FieldName}' not found on type '{swapParentTypeName}' in func {func.Name}");
+
+              // 1. Load the struct's heap pointer
+              var swapSelfPtr = (StdI64)EmitLoad(newBlock, swapStructName, varTypes);
+
+              // 2. Load old field value (always i64 for heap-pointer fields)
+              var oldFieldLoad = new StdLoadIndirectOp(swapSelfPtr, swapFieldDef.Offset, MlirType.I64);
+              newBlock.AddOp(oldFieldLoad);
+              var oldValue = (StdI64)oldFieldLoad.Result;
+
+              // 3. Resolve the new value
+              StdValue newPtr;
+              if (!valueMap.TryGetValue(swapField.NewValue, out var swapMappedVal)) {
+                if (structVarNames.TryGetValue(swapField.NewValue.Id, out var swapNewStructName)) {
+                  swapMappedVal = EmitLoad(newBlock, swapNewStructName, varTypes);
+                } else {
+                  throw new InvalidOperationException($"MaxonSwapFieldOp: NewValue %{swapField.NewValue.Id} not in valueMap or structVarNames for {swapStructName}.{swapField.FieldName} in func {func.Name}");
+                }
+              }
+              newPtr = swapMappedVal;
+
+              // 4. Store new value into the field slot
+              newBlock.AddOp(new StdStoreIndirectOp(newPtr, swapSelfPtr, swapFieldDef.Offset, MlirType.I64));
+
+              // 4b. For self fields, also update local variables that cache the field value.
+              // The initial MaxonFieldAccessOp stores the field's heap pointer under both
+              // the field name ("keys") and a temp var ("__field_X"). The parser routes
+              // subsequent references through the temp var via structVarNames, so we must
+              // update both to prevent stale reads after the swap.
+              if (swapStructName == "self") {
+                if (varTypes.ContainsKey(swapField.FieldName))
+                  EmitStore(newBlock, newPtr, swapField.FieldName, varTypes);
+                if (selfFieldInitVars.TryGetValue(swapField.FieldName, out var fieldInitVar)
+                    && varTypes.ContainsKey(fieldInitVar))
+                  EmitStore(newBlock, newPtr, fieldInitVar, varTypes);
+              }
+
+              // 5. Reparent new value under the parent struct
+              newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [(StdI64)newPtr, swapSelfPtr], null));
+
+              // 6. Move old value to the current scope so the caller owns it
+              var swapScopePtr = (StdI64)EmitLoad(newBlock, swapField.ScopeVar, varTypes);
+              var swapMoveTag = new StdConstI64Op(0);
+              newBlock.AddOp(swapMoveTag);
+              newBlock.AddOp(new StdCallRuntimeOp("mm_move", [oldValue, swapScopePtr, swapMoveTag.Result], null));
+              if (Compiler.MmTrace)
+                newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [oldValue], null));
+
+              // 7. Map the result to the old value and track struct/enum type
+              valueMap[swapField.Result] = oldValue;
+              var swapFieldResultType = swapField.ResultStructTypeName ?? swapField.ResultEnumTypeName;
+              if (swapFieldResultType != null) {
+                var swapTempName = $"__swap_field_{swapField.Result.Id}";
+                EmitStore(newBlock, oldValue, swapTempName, varTypes);
+                structVarNames[swapField.Result.Id] = swapTempName;
+                structValueTypes[swapField.Result.Id] = swapFieldResultType;
+              }
+              if (swapStructName == "self") selfFieldCache.Remove(swapField.FieldName);
               break;
             }
             case MaxonBinOp binOp: {

@@ -197,6 +197,18 @@ internal class FunctionCloner {
 
   private string SubName(string name) => _typeSubstitution.SubstituteName(name);
 
+  private static MaxonValueKind ValueKindOf(MaxonValue value) => value switch {
+    MaxonStruct => MaxonValueKind.Struct,
+    MaxonEnum => MaxonValueKind.Enum,
+    MaxonInteger => MaxonValueKind.Integer,
+    MaxonFloat => MaxonValueKind.Float,
+    MaxonBool => MaxonValueKind.Bool,
+    MaxonByte => MaxonValueKind.Byte,
+    MaxonShort => MaxonValueKind.Short,
+    MaxonFunctionPtr => MaxonValueKind.Function,
+    _ => throw new InvalidOperationException($"ValueKindOf: unhandled value type {value.GetType().Name}"),
+  };
+
   private bool IsStructTypeParam(string? typeParamName) {
     return typeParamName != null && _structTypeParams.Contains(typeParamName);
   }
@@ -258,6 +270,7 @@ internal class FunctionCloner {
       case MaxonStructVarRefOp sv: { var c = new MaxonStructVarRefOp(sv.VarName, SubName(sv.StructTypeName)); RegisterResult(sv.Result, c.Result); return c; }
       case MaxonFieldAccessOp fa: { var c = new MaxonFieldAccessOp(MapValue(fa.StructValue), SubName(fa.TypeName), fa.FieldName, fa.ResultKind, fa.ResultStructTypeName != null ? SubName(fa.ResultStructTypeName) : null); RegisterResult(fa.Result, c.Result); return c; }
       case MaxonFieldAssignOp fa: return new MaxonFieldAssignOp(MapValue(fa.StructValue), SubName(fa.TypeName), fa.FieldName, MapValue(fa.NewValue));
+      case MaxonSwapFieldOp sf: { var c = new MaxonSwapFieldOp(MapValue(sf.StructValue), SubName(sf.TypeName), sf.FieldName, MapValue(sf.NewValue), ValueKindOf(sf.Result), sf.ScopeVar, sf.ResultStructTypeName != null ? SubName(sf.ResultStructTypeName) : null, sf.ResultEnumTypeName != null ? SubName(sf.ResultEnumTypeName) : null); RegisterResult(sf.Result, c.Result); return c; }
 
       // Control flow
       case MaxonCondBrOp cb: return new MaxonCondBrOp(MapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
@@ -289,6 +302,7 @@ internal class FunctionCloner {
       case MaxonEnumConstructOp ec: { var c = new MaxonEnumConstructOp(SubName(ec.EnumTypeName), ec.CaseName, ec.Ordinal, [.. ec.Args.Select(MapValue)]); RegisterResult(ec.Result, c.Result); return c; }
       case MaxonEnumTagOp et: { var c = new MaxonEnumTagOp(MapValue(et.EnumValue), SubName(et.EnumTypeName)); RegisterResult(et.Result, c.Result); return c; }
       case MaxonEnumPayloadAssignOp epa: return new MaxonEnumPayloadAssignOp(epa.EnumVarName, SubName(epa.EnumTypeName), epa.PayloadIndex, MapValue(epa.NewValue));
+      case MaxonSwapPayloadOp sp: { var c = new MaxonSwapPayloadOp(sp.EnumVarName, SubName(sp.EnumTypeName), sp.PayloadIndex, MapValue(sp.NewValue), ValueKindOf(sp.Result), sp.ScopeVar, sp.ResultStructTypeName != null ? SubName(sp.ResultStructTypeName) : null, sp.ResultEnumTypeName != null ? SubName(sp.ResultEnumTypeName) : null); RegisterResult(sp.Result, c.Result); return c; }
       case MaxonEnumPayloadOp payload: {
         var resultKind = _typeSubstitution.SubstituteValueKind(payload.ResultKind);
         var resultStructTypeName = payload.ResultStructTypeName != null ? SubName(payload.ResultStructTypeName) : null;
@@ -350,7 +364,7 @@ internal class FunctionCloner {
         MaxonByte => MaxonValueKind.Byte,
         MaxonShort => MaxonValueKind.Short,
         MaxonInteger => MaxonValueKind.Integer,
-        MaxonFunctionPtr => MaxonValueKind.Integer,
+        MaxonFunctionPtr => MaxonValueKind.Function,
         _ => throw new InvalidOperationException($"CloneAssignOp: unexpected mapped value type {mappedValue.GetType().Name}")
       };
       if (mappedValue is MaxonStruct assignedStruct) {
@@ -378,9 +392,12 @@ internal class FunctionCloner {
     var paramTypeParam = GetVarTypeParam(param.Name);
     if (param.ValueKind == MaxonValueKind.TypeParameter && IsStructTypeParam(paramTypeParam)) {
       var structTypeName = GetStructTypeName(paramTypeParam!);
-      var cloned = new MaxonStructParamOp(param.Index, param.Name, structTypeName!);
-      RegisterResult(param.Result, cloned.Result);
-      return cloned;
+      if (structTypeName != null) {
+        _structVars.TryAdd(param.Name, structTypeName);
+        var cloned = new MaxonStructParamOp(param.Index, param.Name, structTypeName);
+        RegisterResult(param.Result, cloned.Result);
+        return cloned;
+      }
     }
     if (param.ValueKind == MaxonValueKind.TypeParameter && IsEnumTypeParam(paramTypeParam)) {
       var enumTypeName = GetEnumTypeName(paramTypeParam!);
@@ -439,9 +456,12 @@ internal class FunctionCloner {
     var varTp = GetVarTypeParam(varRef.VarName);
     if (varRef.ValueKind == MaxonValueKind.TypeParameter && IsStructTypeParam(varTp)) {
       var structTypeName = GetStructTypeName(varTp!);
-      var cloned = new MaxonStructVarRefOp(varRef.VarName, structTypeName!);
-      RegisterResult(varRef.Result, cloned.Result);
-      return cloned;
+      if (structTypeName != null) {
+        _structVars.TryAdd(varRef.VarName, structTypeName);
+        var cloned = new MaxonStructVarRefOp(varRef.VarName, structTypeName);
+        RegisterResult(varRef.Result, cloned.Result);
+        return cloned;
+      }
     }
     if (varRef.ValueKind == MaxonValueKind.TypeParameter && IsEnumTypeParam(varTp)) {
       var enumTypeName = GetEnumTypeName(varTp!);

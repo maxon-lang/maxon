@@ -520,7 +520,6 @@ for cp in s.codepoints() 'cp' ... end 'cp'   // codepoints
 
 // Explicit with 'as'
 var f = 5 as float
-var b = 1 as bool          // true
 var by = 255 as byte
 
 // Float to int (no direct cast)
@@ -650,17 +649,16 @@ maxon lsp-server             # Start LSP server for IDE integration
 ### Options (compile/build)
 | Option | Description |
 |--------|-------------|
-| `-v` | Verbose/debug output |
 | `--emit-ir` | Output IR to `<source>.ir` |
-| `--emit-asm` | Output assembly to `<source>.asm` |
-| `--track-memory` | Runtime memory tracking (allocs, moves, refcounts) |
-| `--track-registers` | Compile-time register/stack allocation debug info |
+| `--dump-stages` | Write IR at each pipeline stage |
+| `--mm-trace` | Enable runtime memory manager trace output (stderr) |
+| `--log=LEVEL` | Set log level (none, error, info, debug, trace) |
+| `--log=CAT:LEVEL` | Set log level per category |
 
 ### Test Options (spec-test)
 | Option | Description |
 |--------|-------------|
 | `--filter <pattern>` | Run tests matching pattern |
-| `--verbose` | Detailed test output |
 
 ## The self hosted compiler (currently in development)
 - The source is in maxon-bin-selfhosted

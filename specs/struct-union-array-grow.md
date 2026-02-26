@@ -414,7 +414,7 @@ end 'Outer'
 
 function initOuter(o Outer)
     if not o.initialized 'init'
-        o.inner = Inner{items: IntArray{}, value: 42}
+        let _ = swap o.inner with Inner{items: IntArray{}, value: 42}
         o.initialized = true
     end 'init'
 end 'initOuter'
@@ -463,7 +463,7 @@ end 'createModule'
 
 function initProject(p Project)
     if not p.ready 'init'
-        p.db = Database{
+        let _ = swap p.db with Database{
             memo: Memo{value: createModule(), rev: 0},
             deps: IntArray{}
         }

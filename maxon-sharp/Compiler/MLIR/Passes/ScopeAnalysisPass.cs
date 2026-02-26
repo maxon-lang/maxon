@@ -8,7 +8,8 @@ public record AllocInfo(string VarName, string? StructTypeName, bool IsFromCall,
 
 // Per-scope analysis results
 public class ScopeInfo(string scopeVar) {
-  public string ScopeVar { get; } = scopeVar; public List<AllocInfo> Allocations { get; } = [];
+  public string ScopeVar { get; } = scopeVar;
+  public List<AllocInfo> Allocations { get; } = [];
   public HashSet<string> EscapingVars { get; } = [];
   public HashSet<string> PassedToFunctionVars { get; } = [];
   public List<string> RefcountedVars { get; } = [];
@@ -61,6 +62,8 @@ public static class ScopeAnalysisPass {
     var valueIdToVarNames = new Dictionary<int, List<string>>();
     // Map value ID → var name for struct var refs
     var structVarRefNames = new Dictionary<int, string>();
+    // Map var name → source var name when assigned from a struct var ref (alias tracking)
+    var aliasSourceVar = new Dictionary<string, string>();
     // Pre-scan: identify scopes that have a block_exit somewhere in the function.
     // Scopes without any block_exit (only cleanup exits like return_cleanup) need
     // to be popped on their first cleanup exit, since all paths through them terminate.
@@ -135,6 +138,12 @@ public static class ScopeAnalysisPass {
           case MaxonMakeCharFromBytesOp makeCharOp:
             producingOps[makeCharOp.Result.Id] = op;
             break;
+          case MaxonSwapFieldOp swapFieldOp:
+            producingOps[swapFieldOp.Result.Id] = op;
+            break;
+          case MaxonSwapPayloadOp swapPayloadOp:
+            producingOps[swapPayloadOp.Result.Id] = op;
+            break;
         }
 
         switch (op) {
@@ -142,6 +151,7 @@ public static class ScopeAnalysisPass {
             var info = new ScopeInfo(enterOp.ResultVar);
             scopeInfos[enterOp.ResultVar] = info;
             scopeStack.Add(enterOp.ResultVar);
+            Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: scope_enter {enterOp.ResultVar} (depth={scopeStack.Count})");
             break;
           }
 
@@ -173,15 +183,13 @@ public static class ScopeAnalysisPass {
             break;
           }
 
-          case MaxonStructParamOp structParam: {
+          case MaxonStructParamOp: {
             // Struct parameters are borrowed references — not refcounted.
-            // The caller owns the object; the callee just borrows it.
             break;
           }
 
-          case MaxonEnumParamOp enumParam: {
+          case MaxonEnumParamOp: {
             // Enum parameters are borrowed references — not refcounted.
-            // The caller owns the object; the callee just borrows it.
             break;
           }
 
@@ -240,6 +248,9 @@ public static class ScopeAnalysisPass {
                 case MaxonEnumStringRawValueOp:
                 case MaxonEnumNameOp:
                 case MaxonMakeCharFromBytesOp:
+                // Swap ops return an existing heap object moved to the current scope
+                case MaxonSwapFieldOp:
+                case MaxonSwapPayloadOp:
                   isFromCall = false;
                   break;
                 default:
@@ -252,6 +263,7 @@ public static class ScopeAnalysisPass {
             }
 
             scopeInfo.Allocations.Add(new AllocInfo(assignOp.VarName, structTypeName, isFromCall, structLitResultId));
+            Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: alloc '{assignOp.VarName}' in scope {currentScope} (type={structTypeName}, fromCall={isFromCall}, litId={structLitResultId})");
             // __forin_result_ vars from for-in loops are overwritten each iteration and
             // hold null after the final failed try_call — excluded from scope-exit decref.
             // __try_result_ vars from try/otherwise are NOT excluded — they hold either a
@@ -268,8 +280,9 @@ public static class ScopeAnalysisPass {
             varList.Add(assignOp.VarName);
 
             // Detect intra-scope aliases (var b = a where source is a var ref, not a fresh literal or call)
-            if (structVarRefNames.ContainsKey(assignOp.Value.Id)) {
+            if (structVarRefNames.TryGetValue(assignOp.Value.Id, out var aliasSrcVar)) {
               scopeInfo.HasIntraScopeAliases = true;
+              aliasSourceVar[assignOp.VarName] = aliasSrcVar;
             }
             break;
           }
@@ -281,6 +294,10 @@ public static class ScopeAnalysisPass {
             if (valueIdToVarNames.TryGetValue(reassignOp.Value.Id, out var reassignVarList)) {
               reassignVarList.Add(reassignOp.VarName);
             }
+            // Track alias source for reassignments from struct var refs
+            if (structVarRefNames.TryGetValue(reassignOp.Value.Id, out var reassignSrcVar)) {
+              aliasSourceVar[reassignOp.VarName] = reassignSrcVar;
+            }
             break;
           }
 
@@ -289,6 +306,7 @@ public static class ScopeAnalysisPass {
               var currentScope = scopeStack[^1];
               if (scopeInfos.TryGetValue(currentScope, out var srcInfo)) {
                 srcInfo.EscapingVars.Add(moveOp.VarName);
+                Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: escape '{moveOp.VarName}' from scope {currentScope} -> {moveOp.DestScopeVar} (tag={moveOp.Tag})");
                 if (moveOp.Tag == "return_move")
                   srcInfo.ReturnMoveVars.Add(moveOp.VarName);
               }
@@ -363,6 +381,18 @@ public static class ScopeAnalysisPass {
         && valueIdToVarNames.Any(kv => info.ReturnSelfValueIds.Contains(kv.Key) && kv.Value.Contains(a.VarName)));
     }
 
+    // Build set of vars whose allocations escape indirectly via aliases.
+    // If `result = inner` and `result` escapes, then `inner` escapes indirectly.
+    var allEscapingVars = new HashSet<string>();
+    foreach (var (_, info) in scopeInfos)
+      foreach (var v in info.EscapingVars)
+        allEscapingVars.Add(v);
+    var indirectlyEscaping = new HashSet<string>();
+    foreach (var (aliasVar, sourceVar) in aliasSourceVar) {
+      if (allEscapingVars.Contains(aliasVar))
+        indirectlyEscaping.Add(sourceVar);
+    }
+
     // Compute derived properties for each scope
     foreach (var (scopeVar, info) in scopeInfos) {
       // Per-allocation stack eligibility: flat primitive struct with nonzero size,
@@ -374,6 +404,7 @@ public static class ScopeAnalysisPass {
             && IsFlatPrimitiveStruct(a.StructTypeName, module)
             && GetStructSize(a.StructTypeName, module) > 0
             && !info.EscapingVars.Contains(a.VarName)
+            && !indirectlyEscaping.Contains(a.VarName)
             && !info.PassedToFunctionVars.Contains(a.VarName)
             && !nestedInStructField.Contains(a.VarName)
             && !a.VarName.StartsWith("__arr_")) {
@@ -427,6 +458,18 @@ public static class ScopeAnalysisPass {
           info.ReturnAllocResultId = retAlloc.StructLiteralResultId;
         }
       }
+    }
+
+    // Log final scope analysis results
+    foreach (var (scopeVar, info) in scopeInfos) {
+      var stackIds = info.StackAllocIds.Count > 0 ? $" stackAlloc=[{string.Join(",", info.StackAllocIds)}]" : "";
+      var escaping = info.EscapingVars.Count > 0 ? $" escaping=[{string.Join(",", info.EscapingVars)}]" : "";
+      var refcounted = info.RefcountedVars.Count > 0 ? $" refcounted=[{string.Join(",", info.RefcountedVars)}]" : "";
+      Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: scope {scopeVar} => " +
+        $"allocs={info.Allocations.Count} needsFrame={info.NeedsRuntimeFrame} " +
+        $"canStaticFree={info.CanStaticFree} canStaticReturn={info.CanStaticReturn} " +
+        $"aliases={info.HasIntraScopeAliases} receivesMove={info.ReceivesMovedAllocs}" +
+        $"{stackIds}{escaping}{refcounted}");
     }
 
     // Skip storing results for __module_init's root scope — not safe to optimize

@@ -5580,7 +5580,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (isDiscard) {
       var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock!.Operations[^1] : null;
       var hasCall = lastOp is MaxonCallOp || _lastExprCallOp is MaxonTryCallOp;
-      if (!hasCall) {
+      var hasSwap = lastOp is MaxonSwapFieldOp || lastOp is MaxonSwapPayloadOp;
+      if (!hasCall && !hasSwap) {
         throw new CompileError(ErrorCode.SemanticSelfAssignment,
           "discarding a non-call expression has no effect",
           nameToken.Line, nameToken.Column);
@@ -5738,6 +5739,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newVal, globalInfo.Kind));
     } else {
       var varInfo = ((ResolvedVar.Local)resolved).Info;
+      // Heap-pointer self fields must use 'swap' to prevent orphaned children
+      if (varInfo.IsSelfField && varInfo.StructTypeName != null
+          && _typeRegistry.TryGetValue(varInfo.StructTypeName, out var sfTypeDef)
+          && (sfTypeDef is MlirStructType || (sfTypeDef is MlirUnionType sfu && sfu.HasAssociatedValues))) {
+        throw new CompileError(ErrorCode.SemanticHeapFieldRequiresSwap,
+          $"heap-pointer field '{name}' must use 'swap' instead of direct assignment",
+          nameToken.Line, nameToken.Column);
+      }
       var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
       // When reassigning a managed variable from an inner scope, move it to the
@@ -5750,6 +5759,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
       // Write back to union heap block when assigning to a mutable payload binding
       if (varInfo.PayloadBinding is { } pb) {
+        // Heap-pointer payloads must use 'swap' to prevent orphaned children
+        if (_typeRegistry.TryGetValue(pb.EnumTypeName, out var pbEnumDef) && pbEnumDef is MlirUnionType pbEnumType) {
+          foreach (var c in pbEnumType.Cases) {
+            if (c.AssociatedValues != null && pb.PayloadIndex < c.AssociatedValues.Count) {
+              var payloadType = c.AssociatedValues[pb.PayloadIndex].Type;
+              if (payloadType is MlirStructType
+                  || (payloadType is MlirUnionType pu && pu.HasAssociatedValues)) {
+                throw new CompileError(ErrorCode.SemanticHeapFieldRequiresSwap,
+                  $"heap-pointer payload '{name}' must use 'swap' instead of direct assignment",
+                  nameToken.Line, nameToken.Column);
+              }
+              break;
+            }
+          }
+        }
         _currentBlock!.AddOp(new MaxonEnumPayloadAssignOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex, newVal));
       }
       _variables[name] = fnType != null
@@ -5801,6 +5825,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       throw new CompileError(ErrorCode.ParserImmutableVariable,
         $"cannot assign to field '{structType.Name}.{fieldToken.Value}' because it is immutable (declare with 'var' to make it mutable)",
         errorToken.Line, errorToken.Column);
+    }
+
+    // Heap-pointer fields (struct-typed or associated-value enum) must use 'swap' instead
+    // of direct assignment to prevent orphaned children in the ownership tree.
+    if (field.Type is MlirStructType
+        || (field.Type is MlirUnionType fieldUnion && fieldUnion.HasAssociatedValues)) {
+      throw new CompileError(ErrorCode.SemanticHeapFieldRequiresSwap,
+        $"heap-pointer field '{fieldToken.Value}' must use 'swap' instead of direct assignment",
+        fieldToken.Line, fieldToken.Column);
     }
 
     var newValue = ResolveExprValue(ParseExpression());
@@ -8016,6 +8049,121 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock = allTerminate ? null : mergeBlock;
   }
 
+  private ExprResult ParseSwapExpression() {
+    var swapToken = Advance(); // consume 'swap'
+
+    // Parse the swap target: simple identifier or dotted path
+    var firstToken = Expect(TokenType.Identifier);
+
+    if (Check(TokenType.Dot)) {
+      // Qualified field swap: variable.field
+      Advance(); // consume '.'
+      var fieldToken = ExpectFieldName();
+
+      var resolved = ResolveVariable(firstToken.Value)
+        ?? throw new CompileError(ErrorCode.SemanticUndefinedVariable,
+          $"Undefined variable '{firstToken.Value}'", firstToken.Line, firstToken.Column);
+      if (resolved is not ResolvedVar.Local localVar)
+        throw new CompileError(ErrorCode.SemanticUnexpectedToken,
+          "swap target must be a local variable", firstToken.Line, firstToken.Column);
+
+      if (localVar.Info.StructTypeName == null || localVar.Info.Kind != MaxonValueKind.Struct)
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"'{firstToken.Value}' is not a struct type", firstToken.Line, firstToken.Column);
+
+      var structType = (MlirStructType)_typeRegistry[localVar.Info.StructTypeName];
+      var field = structType.GetField(fieldToken.Value)
+        ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+          $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
+          fieldToken.Line, fieldToken.Column);
+
+      if (!field.IsMutable)
+        throw new CompileError(ErrorCode.ParserImmutableVariable,
+          $"cannot swap immutable field '{structType.Name}.{fieldToken.Value}'",
+          fieldToken.Line, fieldToken.Column);
+
+      Expect(TokenType.With);
+      var newValue = ResolveExprValue(ParseExpression());
+
+      var fieldKind = field.Type.ToValueKind();
+      string? resultStructTypeName = field.Type is MlirStructType fst ? fst.Name : null;
+      string? resultEnumTypeName = field.Type is MlirUnionType fut ? fut.Name : null;
+
+      var structVal = ResolveExprValue(new ExprResult.VarRef(firstToken.Value, localVar.Info));
+      var swapOp = new MaxonSwapFieldOp(structVal, localVar.Info.StructTypeName, fieldToken.Value,
+        newValue, fieldKind, CurrentScopeVar, resultStructTypeName, resultEnumTypeName);
+      _currentBlock!.AddOp(swapOp);
+
+      return new ExprResult.Direct(swapOp.Result);
+    }
+
+    // Simple identifier: either a self-field or a payload binding
+    var identResolved = ResolveVariable(firstToken.Value);
+    if (identResolved is ResolvedVar.Local identLocal) {
+      // Check for mutable payload binding (match-arm enum binding)
+      if (identLocal.Info.PayloadBinding is { } pb) {
+        Expect(TokenType.With);
+        var newValue = ResolveExprValue(ParseExpression());
+
+        // Look up the payload type from the enum definition
+        var enumTypeDef = (MlirUnionType)_typeRegistry[pb.EnumTypeName];
+        MlirType? payloadType = null;
+        foreach (var c in enumTypeDef.Cases) {
+          if (c.AssociatedValues != null && pb.PayloadIndex < c.AssociatedValues.Count) {
+            payloadType = c.AssociatedValues[pb.PayloadIndex].Type;
+            break;
+          }
+        }
+        var payloadKind = payloadType?.ToValueKind() ?? MaxonValueKind.Integer;
+        string? resultStructTypeName = payloadType is MlirStructType pst ? pst.Name : null;
+        string? resultEnumTypeName = payloadType is MlirUnionType put ? put.Name : null;
+
+        var swapPayloadOp = new MaxonSwapPayloadOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex,
+          newValue, payloadKind, CurrentScopeVar, resultStructTypeName, resultEnumTypeName);
+        _currentBlock!.AddOp(swapPayloadOp);
+
+        return new ExprResult.Direct(swapPayloadOp.Result);
+      }
+
+      // Check for self-field
+      if (identLocal.Info.IsSelfField) {
+        var selfInfo = (ResolveVariable("self") as ResolvedVar.Local)?.Info
+          ?? throw new CompileError(ErrorCode.SemanticUnexpectedToken,
+            "'swap' on self-field can only be used inside instance methods",
+            swapToken.Line, swapToken.Column);
+
+        var structType = (MlirStructType)_typeRegistry[selfInfo.StructTypeName!];
+        var field = structType.GetField(firstToken.Value)
+          ?? throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+            $"Type '{structType.Name}' has no field named '{firstToken.Value}'",
+            firstToken.Line, firstToken.Column);
+
+        if (!field.IsMutable)
+          throw new CompileError(ErrorCode.ParserImmutableVariable,
+            $"cannot swap immutable field '{structType.Name}.{firstToken.Value}'",
+            firstToken.Line, firstToken.Column);
+
+        Expect(TokenType.With);
+        var newValue = ResolveExprValue(ParseExpression());
+
+        var fieldKind = field.Type.ToValueKind();
+        string? resultStructTypeName = field.Type is MlirStructType fst ? fst.Name : null;
+        string? resultEnumTypeName = field.Type is MlirUnionType fut ? fut.Name : null;
+
+        var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
+        var swapOp = new MaxonSwapFieldOp(selfVal, selfInfo.StructTypeName!, firstToken.Value,
+          newValue, fieldKind, CurrentScopeVar, resultStructTypeName, resultEnumTypeName);
+        _currentBlock!.AddOp(swapOp);
+
+        return new ExprResult.Direct(swapOp.Result);
+      }
+    }
+
+    throw new CompileError(ErrorCode.SemanticUnexpectedToken,
+      $"swap target '{firstToken.Value}' must be a struct field or a mutable match binding",
+      firstToken.Line, firstToken.Column);
+  }
+
   private ExprResult.Direct ParseMatchExpression() {
     Advance(); // consume 'match'
 
@@ -8255,7 +8403,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         } else {
           var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
           throw new CompileError(ErrorCode.SemanticEqRequiresEquatable,
-            $"'{opStr}' requires type '{lhsStruct.TypeName}' to implement 'Equatable'");
+            $"'{opStr}' requires type '{lhsStruct.TypeName}' to implement 'Equatable'",
+            opToken.Line, opToken.Column);
         }
       }
 
@@ -8350,6 +8499,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private ExprResult ParsePrimary() {
+    if (Check(TokenType.Swap)) {
+      return ParseSwapExpression();
+    }
+
     if (Check(TokenType.Match)) {
       return ParseMatchExpression();
     }

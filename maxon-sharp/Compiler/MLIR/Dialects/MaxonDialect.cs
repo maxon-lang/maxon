@@ -623,6 +623,48 @@ public class MaxonFieldAssignOp(MaxonValue structValue, string typeName, string 
   public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString(), NewValue.ToString()];
 }
 
+// Swaps a struct field value, returning the old value to the current scope
+public class MaxonSwapFieldOp(MaxonValue structValue, string typeName, string fieldName,
+    MaxonValue newValue, MaxonValueKind resultKind, string scopeVar,
+    string? resultStructTypeName = null, string? resultEnumTypeName = null) : MaxonOp {
+  public override string Mnemonic => $"maxon.swap_field .{FieldName}";
+  public MaxonValue StructValue { get; } = structValue;
+  public string TypeName { get; } = typeName;
+  public string FieldName { get; } = fieldName;
+  public MaxonValue NewValue { get; } = newValue;
+  public string ScopeVar { get; } = scopeVar;
+  public string? ResultStructTypeName { get; } = resultStructTypeName;
+  public string? ResultEnumTypeName { get; } = resultEnumTypeName;
+  public MaxonValue Result { get; } = resultStructTypeName != null
+    ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName)
+    : resultEnumTypeName != null
+      ? new MaxonEnum(MlirContext.Current.NextId(), resultEnumTypeName)
+      : resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString(), NewValue.ToString()];
+}
+
+// Swaps an enum payload slot value, returning the old value to the current scope
+public class MaxonSwapPayloadOp(string enumVarName, string enumTypeName, int payloadIndex,
+    MaxonValue newValue, MaxonValueKind resultKind, string scopeVar,
+    string? resultStructTypeName = null, string? resultEnumTypeName = null) : MaxonOp {
+  public override string Mnemonic => $"maxon.swap_payload @{EnumTypeName}[{PayloadIndex}]";
+  public string EnumVarName { get; } = enumVarName;
+  public string EnumTypeName { get; } = enumTypeName;
+  public int PayloadIndex { get; } = payloadIndex;
+  public MaxonValue NewValue { get; } = newValue;
+  public string ScopeVar { get; } = scopeVar;
+  public string? ResultStructTypeName { get; } = resultStructTypeName;
+  public string? ResultEnumTypeName { get; } = resultEnumTypeName;
+  public MaxonValue Result { get; } = resultStructTypeName != null
+    ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName)
+    : resultEnumTypeName != null
+      ? new MaxonEnum(MlirContext.Current.NextId(), resultEnumTypeName)
+      : resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [NewValue.ToString()];
+}
+
 // ============================================================================
 // Global variable operations (for top-level var and static var)
 // ============================================================================

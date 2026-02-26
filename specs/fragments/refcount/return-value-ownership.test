@@ -1,0 +1,75 @@
+// Test: return-value-ownership
+typealias Integer = int(i64.min to i64.max)
+type Result
+    export var code Integer
+end 'Result'
+function makeResult(n Integer) returns Result
+    var r = Result{code: n}
+    return r
+end 'makeResult'
+function main() returns ExitCode
+    var r = makeResult(33)
+    return r.code
+end 'main'
+---
+ExitCode: 33
+---
+module {
+  func @refcount.makeResult(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], ecx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [eax+0], ecx
+    x86.mov edx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov eax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @refcount.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor rcx, rcx
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.mov rcx, 33
+    x86.call refcount.makeResult
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-24], ecx
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je refcount.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-16]
+    x86.call mm_decref
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

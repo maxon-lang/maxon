@@ -36,7 +36,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
     sts.resize(cap)
 
     // Create the set type (copies array structs by value)
-    var result = Self{elements: elems, states: sts, count: 0, capacity: cap}
+    var result = Self{elements: elems, states: sts, count: 0, capacity: cap, iterIndex: 0}
 
     // Insert each element from the array
     for elem in arr 'insert_loop'
@@ -56,8 +56,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
       newElements.resize(16)
       var newStates = StateArray{}
       newStates.resize(16)
-      elements = newElements
-      states = newStates
+      let _ = swap elements with newElements
+      let _ = swap states with newStates
       capacity = 16
     end 'init_empty'
 
@@ -266,19 +266,15 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
       newCapacity = 16
     end 'handle_zero'
 
-    // Save references to old arrays
-    var oldElements = elements
-    var oldStates = states
-
     // Allocate new arrays with preallocated capacity
     var newElements = ElementArray{}
     newElements.resize(newCapacity)
     var newStates = StateArray{}
     newStates.resize(newCapacity)
 
-    // Update type to use new arrays
-    elements = newElements
-    states = newStates
+    // Swap in new arrays, getting back old arrays for rehashing
+    var oldElements = swap elements with newElements
+    var oldStates = swap states with newStates
     capacity = newCapacity
     count = 0
 

@@ -13,10 +13,22 @@ category: type-system
 
 When a union variable is mutable (`var`), match bindings on associated values are also mutable. Assigning to a match binding writes the new value back to the union's heap block in-place.
 
+For scalar bindings (integers, booleans, etc.), use direct assignment:
+
+```text
+var b = Box.full(10)
+match b 'update'
+  full(value) then value = 42
+  empty then return
+end 'update'
+```
+
+For heap-pointer bindings (structs, unions with associated values, strings), use `swap` to make the ownership transfer explicit:
+
 ```text
 var myNode = Node.node(10, Node.empty)
 match myNode 'update'
-  node(value, next) then next = Node.empty
+  node(value, next) then let _ = swap next with Node.empty
   empty then return
 end 'update'
 ```
@@ -151,7 +163,7 @@ function main() returns ExitCode
   var n1 = Node.item(10, Node.empty)
   var n2 = Node.item(32, Node.empty)
   match n1 'link'
-    item(_value, next) then next = n2
+    item(_value, next) then let _ = swap next with n2
     empty then return 0
   end 'link'
   match n1 'read'
@@ -222,7 +234,7 @@ function main() returns ExitCode
   var c2 = Chain.link(32, Chain.tail)
   var c1 = Chain.link(10, Chain.tail)
   match c1 'link1'
-    link(_v, next) then next = c2
+    link(_v, next) then let _ = swap next with c2
     tail then return 0
   end 'link1'
   return sumChain(c1)
@@ -266,7 +278,7 @@ end 'Named'
 function main() returns ExitCode
   var n = Named.named("hello")
   match n 'update'
-    named(name) then name = "world"
+    named(name) then let _ = swap name with "world"
     anonymous then return 0
   end 'update'
   match n 'read'
@@ -297,7 +309,7 @@ end 'Shape'
 function main() returns ExitCode
   var s = Shape.located(Point{x: 1, y: 2})
   match s 'update'
-    located(pos) then pos = Point{x: 10, y: 32}
+    located(pos) then let _ = swap pos with Point{x: 10, y: 32}
     nothing then return 0
   end 'update'
   match s 'read'
