@@ -550,6 +550,27 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             }
+            case MaxonEnumPayloadAssignOp payloadAssign: {
+              // Write a value back to a specific payload slot of an associated-value enum
+              var resolvedPrefix = varNameToStructPrefix.GetValueOrDefault(payloadAssign.EnumVarName, payloadAssign.EnumVarName);
+              var payloadVarName = $"{resolvedPrefix}.__payload_{payloadAssign.PayloadIndex}";
+              if (structVarNames.TryGetValue(payloadAssign.NewValue.Id, out var newStructSrc)) {
+                // Struct or associated-value enum: store the heap pointer
+                if (structValueTypes.TryGetValue(payloadAssign.NewValue.Id, out var nestedTypeName)
+                    && module.TypeDefs.TryGetValue(nestedTypeName, out var nestedTypeDef)
+                    && nestedTypeDef is MlirUnionType nestedUnion && nestedUnion.HasAssociatedValues) {
+                  var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, newStructSrc, nestedUnion, varTypes, module.TypeDefs);
+                  EmitStore(newBlock, enumHeapPtr, payloadVarName, varTypes);
+                } else {
+                  var heapPtr = EmitLoad(newBlock, newStructSrc, varTypes);
+                  EmitStore(newBlock, heapPtr, payloadVarName, varTypes);
+                }
+              } else {
+                var newStdVal = valueMap[payloadAssign.NewValue];
+                EmitStore(newBlock, newStdVal, payloadVarName, varTypes);
+              }
+              break;
+            }
             case MaxonEnumRawValueOp rawValueOp: {
               // The enum's backing value IS the raw value - just pass through
               var enumStdVal = valueMap[rawValueOp.EnumValue];

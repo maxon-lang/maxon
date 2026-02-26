@@ -1,0 +1,127 @@
+// Test: mutate-twice
+typealias Integer = int(i64.min to i64.max)
+
+union Cell
+  empty
+  holding(value Integer)
+end 'Cell'
+
+function main() returns ExitCode
+  var c = Cell.holding(10)
+  match c 'first'
+    holding(value) then value = 20
+    empty then return 0
+  end 'first'
+  match c 'second'
+    holding(value) then value = value + 22
+    empty then return 0
+  end 'second'
+  match c 'read'
+    holding(value) then return value
+    empty then return 0
+  end 'read'
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @mutable-unions.main() -> u32 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov eax, 10
+    x86.mov ecx, 1
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], edx
+    x86.jmp mutable-unions.main.first_0.cmp0
+  first_0.cmp0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.first_0.cmp1
+  first_0.case0:
+    x86.mov eax, 20
+    x86.mov [rbp-16], eax
+    x86.jmp mutable-unions.main.first_0.merge
+  first_0.cmp1:
+    x86.mov eax, [rbp-24]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.first_0.merge
+  first_0.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  first_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-32], ecx
+    x86.mov [rbp-40], eax
+    x86.jmp mutable-unions.main.second_1.cmp0
+  second_1.cmp0:
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.second_1.cmp1
+  second_1.case0:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 22
+    x86.add eax, ecx
+    x86.mov [rbp-16], eax
+    x86.jmp mutable-unions.main.second_1.merge
+  second_1.cmp1:
+    x86.mov eax, [rbp-40]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.second_1.merge
+  second_1.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  second_1.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-48], ecx
+    x86.mov [rbp-56], eax
+    x86.jmp mutable-unions.main.read_2.cmp0
+  read_2.cmp0:
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.read_2.cmp1
+  read_2.case0:
+    x86.mov eax, [rbp-48]
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je mutable-unions.main.__range_ok_3
+  __range_panic_3:
+    x86.lea_symdata rax, [__panic_msg_45]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_3:
+    x86.mov eax, [rbp-64]
+    x86.epilogue
+    x86.ret
+  read_2.cmp1:
+    x86.mov eax, [rbp-56]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.read_2.merge
+  read_2.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  read_2.merge:
+  }
+}
+---

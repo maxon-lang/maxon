@@ -1,0 +1,107 @@
+// Test: mixed-readonly-and-mutable
+typealias Integer = int(i64.min to i64.max)
+
+union Record
+  blank
+  data(id Integer, count Integer)
+end 'Record'
+
+function main() returns ExitCode
+  var e = Record.data(1, 0)
+  match e 'inc'
+    data(id, count) then count = count + id
+    blank then return 0
+  end 'inc'
+  match e 'read'
+    data(id, count) then return id + count
+    blank then return 0
+  end 'read'
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @mutable-unions.main() -> u32 {
+  entry:
+    x86.prologue stack_size=80
+    x86.mov eax, 1
+    x86.xor ecx, ecx
+    x86.mov edx, 1
+    x86.mov [rbp-8], edx
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], ecx
+    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.mov [rbp-40], ecx
+    x86.mov [rbp-48], ebx
+    x86.jmp mutable-unions.main.inc_0.cmp0
+  inc_0.cmp0:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.inc_0.cmp1
+  inc_0.case0:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-40]
+    x86.add ecx, eax
+    x86.mov [rbp-24], ecx
+    x86.jmp mutable-unions.main.inc_0.merge
+  inc_0.cmp1:
+    x86.mov eax, [rbp-48]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.inc_0.merge
+  inc_0.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  inc_0.merge:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-56], ecx
+    x86.mov edx, [rbp-24]
+    x86.mov [rbp-64], edx
+    x86.mov [rbp-72], eax
+    x86.jmp mutable-unions.main.read_1.cmp0
+  read_1.cmp0:
+    x86.mov eax, [rbp-72]
+    x86.mov ecx, 1
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.read_1.cmp1
+  read_1.case0:
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-64]
+    x86.add eax, ecx
+    x86.mov [rbp-80], eax
+    x86.xor edx, edx
+    x86.cmp eax, edx
+    x86.setl ebx
+    x86.movzx ebx, ebxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg edi
+    x86.movzx edi, edib
+    x86.or ebx, edi
+    x86.test ebx, ebx
+    x86.je mutable-unions.main.__range_ok_2
+  __range_panic_2:
+    x86.lea_symdata rax, [__panic_msg_34]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_2:
+    x86.mov eax, [rbp-80]
+    x86.epilogue
+    x86.ret
+  read_1.cmp1:
+    x86.mov eax, [rbp-72]
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne mutable-unions.main.read_1.merge
+  read_1.case1:
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  read_1.merge:
+  }
+}
+---

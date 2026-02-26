@@ -869,6 +869,21 @@ end 'check'
 - Bindings are only in scope within the case body
 - Cases without associated values don't need parentheses
 
+### Mutable Match Bindings
+
+When a union variable is declared with `var`, match bindings on its associated values are mutable. Assigning to a binding writes the new value back to the union in-place:
+
+```maxon
+var box = Box.full(10)
+match box 'update'
+    full(value) then value = 42    // Writes 42 back into box
+    empty then return
+end 'update'
+// box is now Box.full(42)
+```
+
+When the union variable is declared with `let`, bindings are immutable (read-only copies).
+
 ### Comparing Union Values
 
 Union values cannot be compared using `==` or `!=` (error E3066). The only way to inspect a union value is through `match`. This restriction exists to prevent a class of bugs that happen when a new value is added to a union that is unaccounted for and code that handles the union either falls through or uses a default value that is wrong.

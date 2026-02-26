@@ -721,6 +721,16 @@ public class MaxonEnumParamOp(int index, string name, string enumTypeName, Maxon
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// Writes a value back to a specific payload slot in an associated-value enum's heap block
+public class MaxonEnumPayloadAssignOp(string enumVarName, string enumTypeName, int payloadIndex, MaxonValue newValue) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_payload_assign @{EnumTypeName}[{PayloadIndex}]";
+  public string EnumVarName { get; } = enumVarName;
+  public string EnumTypeName { get; } = enumTypeName;
+  public int PayloadIndex { get; } = payloadIndex;
+  public MaxonValue NewValue { get; } = newValue;
+  public override IReadOnlyList<string> PrintableOperands => [NewValue.ToString()];
+}
+
 // Enum var ref: loads an enum from a variable in a different block
 public class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
   public override string Mnemonic => $"maxon.enum_var_ref {VarName}";

@@ -418,7 +418,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   };
 
   // VarInfo now tracks struct type name for struct variables, or function type for function variables
-  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string DeclScopeVar, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false, bool IsSelfField = false);
+  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string DeclScopeVar, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false, bool IsSelfField = false, EnumPayloadBinding? PayloadBinding = null);
+
+  // Tracks a match binding's origin so assignments can write back to the union heap block
+  private record EnumPayloadBinding(string EnumVarName, string EnumTypeName, int PayloadIndex);
 
   private string CurrentScopeVar => _mmScopeStack.Peek();
 
@@ -5740,9 +5743,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (varInfo.Kind == MaxonValueKind.Struct && !varInfo.IsSelfField && CurrentScopeVar != varInfo.DeclScopeVar) {
         _currentBlock!.AddOp(new MaxonMoveOp(name, varInfo.DeclScopeVar, "reassign_move"));
       }
+      // Write back to union heap block when assigning to a mutable payload binding
+      if (varInfo.PayloadBinding is { } pb) {
+        _currentBlock!.AddOp(new MaxonEnumPayloadAssignOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex, newVal));
+      }
       _variables[name] = fnType != null
         ? new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.DeclScopeVar, FnTypeName: fnType)
-        : new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.DeclScopeVar, varInfo.StructTypeName);
+        : new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.DeclScopeVar, varInfo.StructTypeName, PayloadBinding: varInfo.PayloadBinding);
     }
   }
 
@@ -7498,7 +7505,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// For each EnumCasePattern with bindings, extracts payload values from the
   /// original enum scrutinee and declares them as local variables.
   /// </summary>
-  private void EmitUnionCaseBindings(List<MatchPattern> patterns, string origEnumTempName, string enumTypeName) {
+  private void EmitUnionCaseBindings(List<MatchPattern> patterns, string origEnumTempName, string enumTypeName, bool scrutineeMutable, string? scrutineeVarName = null) {
     foreach (var pattern in patterns) {
       if (pattern is not EnumCasePattern { Bindings: { } bindings, AssociatedValues: { } assocValues }) continue;
 
@@ -7516,9 +7523,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var payloadOp = new MaxonEnumPayloadOp(enumVarRef.Result, enumTypeName, i, bindingKind, structTypeName);
         _currentBlock!.AddOp(payloadOp);
 
+        // Write-back targets the original variable so mutations are visible after the match
+        var payloadBinding = scrutineeMutable && scrutineeVarName != null
+          ? new EnumPayloadBinding(scrutineeVarName, enumTypeName, i)
+          : null;
+
         _currentBlock!.AddOp(new MaxonAssignOp(bindingName, payloadOp.Result,
-          isDeclaration: true, isMutable: false, bindingKind));
-        _variables[bindingName] = new VarInfo(bindingKind, false, payloadOp.Result, _currentBlock!, CurrentScopeVar, StructTypeName: structTypeName);
+          isDeclaration: true, isMutable: scrutineeMutable, bindingKind));
+        _variables[bindingName] = new VarInfo(bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, CurrentScopeVar, StructTypeName: structTypeName, PayloadBinding: payloadBinding);
       }
     }
   }
@@ -7855,6 +7867,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     SkipNewlines();
 
     var scrutineeVal = ResolveExprValue(scrutineeExpr);
+    var scrutineeMutable = _lastExprWasMutableVar;
+    var scrutineeVarName = _lastExprVarName;
     var (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName) =
       SetupMatchScrutinee(scrutineeVal, matchLabel);
 
@@ -7940,7 +7954,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Emit payload bindings for associated-value enum patterns
       if (origEnumTempName != null) {
-        EmitUnionCaseBindings(patterns, origEnumTempName, enumTypeName!);
+        EmitUnionCaseBindings(patterns, origEnumTempName, enumTypeName!, scrutineeMutable, scrutineeVarName);
       }
 
       bool caseHasReturn = Check(TokenType.Return);
@@ -8099,9 +8113,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       _currentBlock = caseBodyBlock;
 
-      // Emit payload bindings for associated-value enum patterns
+      // Emit payload bindings for associated-value enum patterns (read-only in match expressions)
       if (origEnumTempName != null) {
-        EmitUnionCaseBindings(patterns, origEnumTempName, enumTypeName!);
+        EmitUnionCaseBindings(patterns, origEnumTempName, enumTypeName!, scrutineeMutable: false);
       }
 
       var caseValue = ResolveExprValue(ParseExpression());
