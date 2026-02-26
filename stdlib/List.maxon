@@ -1,15 +1,15 @@
-/// Linked list with O(1) prepend and front removal, O(n) append and indexed access.
+/// Doubly linked list with O(1) insertion and removal at both ends, O(n) indexed access.
 /// Nodes are represented as a discriminated union: either `empty` or a `node` with
-/// a value and a link to the next node. Because union values are immutable,
-/// mutations rebuild the affected portion of the chain.
+/// a value and links to the next and previous nodes. Because associated-value unions
+/// use heap-pointer reference semantics, mutations to node links propagate in-place.
 /// @category Collections
 
 export union ListNode uses Element
   empty
-  node(value Element, next ListNode)
+  node(value Element, next ListNode, prev ListNode)
 end 'ListNode'
 
-export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with Element
+export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with Element, Disposable
   typealias ElementArray = Array with Element
   typealias Node = ListNode with Element
 
@@ -40,7 +40,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   /// Get the first element, throws if empty
   export function first() returns Element throws ArrayError
     match head 'check'
-      node(v, _next) then return v
+      node(v, _next, _prev) then return v
       empty then throw ArrayError.indexOutOfBounds
     end 'check'
   end 'first'
@@ -48,7 +48,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   /// Get the last element, throws if empty
   export function last() returns Element throws ArrayError
     match tail 'check'
-      node(v, _next) then return v
+      node(v, _next, _prev) then return v
       empty then throw ArrayError.indexOutOfBounds
     end 'check'
   end 'last'
@@ -56,15 +56,23 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   // Extract the next node from a ListNode, returns Node.empty if the node is empty
   function nodeNext(n Node) returns Node
     match n 'check'
-      node(_v, nx) then return nx
+      node(_v, nx, _prev) then return nx
       empty then return Node.empty
     end 'check'
   end 'nodeNext'
 
+  // Extract the previous node from a ListNode, returns Node.empty if the node is empty
+  function nodePrev(n Node) returns Node
+    match n 'check'
+      node(_v, _next, pv) then return pv
+      empty then return Node.empty
+    end 'check'
+  end 'nodePrev'
+
   // Extract the value from a ListNode, throws if empty
   function nodeValue(n Node) returns Element throws ArrayError
     match n 'check'
-      node(v, _next) then return v
+      node(v, _next, _prev) then return v
       empty then throw ArrayError.indexOutOfBounds
     end 'check'
   end 'nodeValue'
@@ -73,21 +81,43 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   function nodeIsEmpty(n Node) returns bool
     match n 'check'
       empty then return true
-      node(_v, _nx) then return false
+      node(_v, _nx, _pv) then return false
     end 'check'
   end 'nodeIsEmpty'
+
+  // Set the next pointer of a node in-place
+  function setNext(n Node, target Node)
+    match n 'set'
+      node(_v, next, _prev) then next = target
+      empty then return
+    end 'set'
+  end 'setNext'
+
+  // Set the prev pointer of a node in-place
+  function setPrev(n Node, target Node)
+    match n 'set'
+      node(_v, _next, prev) then prev = target
+      empty then return
+    end 'set'
+  end 'setPrev'
+
+  // Get the node at a given index by walking from head
+  function nodeAt(idx Index) returns Node
+    var current = head
+    var i = 0
+    while i < idx 'walk'
+      current = nodeNext(current)
+      i = i + 1
+    end 'walk'
+    return current
+  end 'nodeAt'
 
   /// Get element at index (0-based, front to back), throws if out of bounds
   export function get(index Index) returns Element throws ArrayError
     if index >= size 'bounds'
       throw ArrayError.indexOutOfBounds
     end 'bounds'
-    var current = head
-    var i = 0
-    while i < index 'walk'
-      current = nodeNext(current)
-      i = i + 1
-    end 'walk'
+    var current = nodeAt(idx: index)
     return try nodeValue(current) otherwise 'err'
       throw ArrayError.indexOutOfBounds
     end 'err'
@@ -95,38 +125,31 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 
   /// Add an element to the front of the list. O(1).
   export function prepend(value Element)
-    var newNode = Node.node(value, head)
-    head = newNode
+    var newNode = Node.node(value, head, Node.empty)
     if size == 0 'wasEmpty'
+      head = newNode
       tail = newNode
-    end 'wasEmpty'
+    end 'wasEmpty' else 'hasElements'
+      setPrev(head, target: newNode)
+      head = newNode
+    end 'hasElements'
     size = size + 1
     iterNode = head
   end 'prepend'
 
-  /// Add an element to the back of the list. O(n) — rebuilds the chain.
+  /// Add an element to the back of the list. O(1).
   export function append(value Element)
-    var newTail = Node.node(value, Node.empty)
+    var newNode = Node.node(value, Node.empty, tail)
     if size == 0 'wasEmpty'
-      head = newTail
-      tail = newTail
-      size = 1
-      iterNode = head
-      return
-    end 'wasEmpty'
-    head = rebuildAppend(head, newTail: newTail)
-    tail = newTail
+      head = newNode
+      tail = newNode
+    end 'wasEmpty' else 'hasElements'
+      setNext(tail, target: newNode)
+      tail = newNode
+    end 'hasElements'
     size = size + 1
     iterNode = head
   end 'append'
-
-  // Rebuild the chain by walking to the end and appending newTail
-  function rebuildAppend(current Node, newTail Node) returns Node
-    match current 'check'
-      empty then return newTail
-      node(v, nx) then return Node.node(v, rebuildAppend(nx, newTail: newTail))
-    end 'check'
-  end 'rebuildAppend'
 
   /// Insert an element at the given index. O(n).
   export function insert(at Index, value Element)
@@ -138,21 +161,14 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
       append(value)
       return
     end 'back'
-    head = rebuildInsert(head, idx: at, value: value)
+    var before = nodeAt(idx: at - 1)
+    var after = nodeNext(before)
+    var newNode = Node.node(value, after, before)
+    setNext(before, target: newNode)
+    setPrev(after, target: newNode)
     size = size + 1
     iterNode = head
   end 'insert'
-
-  // Rebuild chain with a new node inserted at position idx
-  function rebuildInsert(current Node, idx Index, value Element) returns Node
-    if idx == 0 'here'
-      return Node.node(value, current)
-    end 'here'
-    match current 'step'
-      node(v, nx) then return Node.node(v, rebuildInsert(nx, idx: idx - 1, value: value))
-      empty then return Node.node(value, Node.empty)
-    end 'step'
-  end 'rebuildInsert'
 
   /// Remove and return the first element, throws if empty. O(1).
   export function removeFirst() returns Element throws ArrayError
@@ -166,62 +182,31 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     size = size - 1
     if size == 0 'nowEmpty'
       tail = Node.empty
-    end 'nowEmpty'
+    end 'nowEmpty' else 'stillHas'
+      setPrev(head, target: Node.empty)
+    end 'stillHas'
     iterNode = head
     return result
   end 'removeFirst'
 
-  /// Remove and return the last element, throws if empty. O(n) — rebuilds the chain.
+  /// Remove and return the last element, throws if empty. O(1).
   export function removeLast() returns Element throws ArrayError
     if size == 0 'empty'
       throw ArrayError.indexOutOfBounds
     end 'empty'
-    if size == 1 'single'
-      var result = try first() otherwise 'err'
-        throw ArrayError.indexOutOfBounds
-      end 'err'
-      head = Node.empty
-      tail = Node.empty
-      size = 0
-      iterNode = head
-      return result
-    end 'single'
-    var lastValue = try last() otherwise 'err2'
+    var result = try nodeValue(tail) otherwise 'err'
       throw ArrayError.indexOutOfBounds
-    end 'err2'
-    head = rebuildDropLast(head)
-    size = size - 1
-    tail = findLast(head)
-    iterNode = head
-    return lastValue
-  end 'removeLast'
-
-  // Rebuild chain without the last node
-  function rebuildDropLast(current Node) returns Node
-    if nodeIsEmpty(current) 'base1'
-      return Node.empty
-    end 'base1'
-    var nx = nodeNext(current)
-    if nodeIsEmpty(nx) 'base2'
-      return Node.empty
-    end 'base2'
-    var v = try nodeValue(current) otherwise 'err'
-      return Node.empty
     end 'err'
-    return Node.node(v, rebuildDropLast(nx))
-  end 'rebuildDropLast'
-
-  // Find the last node in the chain
-  function findLast(current Node) returns Node
-    if nodeIsEmpty(current) 'base1'
-      return Node.empty
-    end 'base1'
-    var nx = nodeNext(current)
-    if nodeIsEmpty(nx) 'base2'
-      return current
-    end 'base2'
-    return findLast(nx)
-  end 'findLast'
+    tail = nodePrev(tail)
+    size = size - 1
+    if size == 0 'nowEmpty'
+      head = Node.empty
+    end 'nowEmpty' else 'stillHas'
+      setNext(tail, target: Node.empty)
+    end 'stillHas'
+    iterNode = head
+    return result
+  end 'removeLast'
 
   /// Remove and return element at index, throws if out of bounds. O(n).
   export function remove(at Index) returns Element throws ArrayError
@@ -234,34 +219,24 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
       end 'err1'
       return first
     end 'front'
-    var result = try get(at) otherwise 'err2'
+    if at == size - 1 'back'
+      var last = try removeLast() otherwise 'err2'
+        throw ArrayError.indexOutOfBounds
+      end 'err2'
+      return last
+    end 'back'
+    var target = nodeAt(idx: at)
+    var result = try nodeValue(target) otherwise 'err3'
       throw ArrayError.indexOutOfBounds
-    end 'err2'
-    head = rebuildRemoveAt(head, idx: at)
+    end 'err3'
+    var before = nodePrev(target)
+    var after = nodeNext(target)
+    setNext(before, target: after)
+    setPrev(after, target: before)
     size = size - 1
-    if size == 0 'nowEmpty'
-      tail = Node.empty
-    end 'nowEmpty' else 'stillHas'
-      tail = findLast(head)
-    end 'stillHas'
     iterNode = head
     return result
   end 'remove'
-
-  // Rebuild chain with node at position idx removed
-  function rebuildRemoveAt(current Node, idx Index) returns Node
-    if nodeIsEmpty(current) 'base'
-      return Node.empty
-    end 'base'
-    var v = try nodeValue(current) otherwise 'err'
-      return Node.empty
-    end 'err'
-    var nx = nodeNext(current)
-    if idx == 0 'removeThis'
-      return nx
-    end 'removeThis'
-    return Node.node(v, rebuildRemoveAt(nx, idx: idx - 1))
-  end 'rebuildRemoveAt'
 
   /// Remove all elements
   export function clear()
@@ -270,6 +245,17 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     size = 0
     iterNode = Node.empty
   end 'clear'
+
+  // Break circular prev references so refcount cleanup can free the chain.
+  // Called automatically by the compiler at scope exit.
+  function dispose()
+    var current = head
+    while nodeIsEmpty(current) == false 'walk'
+      var nx = nodeNext(current)
+      setPrev(current, target: Node.empty)
+      current = nx
+    end 'walk'
+  end 'dispose'
 
   /// Get next element in iteration (front to back), throws when exhausted
   export function next() returns Element throws IterationError

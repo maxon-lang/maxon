@@ -35,6 +35,7 @@ public class MlirType {
   // Bare primitives cannot be used as type arguments in `with` clauses — users must create a ranged typealias first.
   // Excludes bool (I1) since it's already a constrained type.
   public bool IsBarePrimitive => this == I8 || this == I64 || this == F64;
+  public virtual bool IsDisposable => false;
   public bool IsUnsigned => this == U8 || this == U16 || this == U32 || this == U64;
   public MlirType ToSigned() => this == U8 ? I8 : this == U16 ? I16 : this == U32 ? I32 : this == U64 ? I64 : this;
   public MlirType ToUnsigned() => this == I8 ? U8 : this == I16 ? U16 : this == I32 ? U32 : this == I64 ? U64 : this;
@@ -91,6 +92,7 @@ public class MlirStructType : MlirType {
   public bool IsInterfaceAlias { get; }
   // Maps type parameter names to required interface names (from where clauses)
   public Dictionary<string, List<string>> WhereConstraints { get; }
+  public override bool IsDisposable => ConformingInterfaces.Contains("Disposable");
 
   public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
     Fields = fields;
@@ -194,6 +196,7 @@ public class MlirUnionType(string name, List<MlirEnumCase> cases, MlirType? back
   public Dictionary<string, List<string>> WhereConstraints { get; } = whereConstraints ?? [];
 
   public bool HasAssociatedValues => Cases.Any(c => c.AssociatedValues is { Count: > 0 });
+  public override bool IsDisposable => ConformingInterfaces.Contains("Disposable");
 
   /// For associated value enums: 8 (tag) + max payload size across all cases.
   /// Each payload field occupies 8 bytes (64-bit slots).

@@ -2876,6 +2876,20 @@ function compute() returns int
 end 'compute'
 ```
 
+**Disposable interface:** Types with circular references that prevent automatic reference-count cleanup can implement the `Disposable` interface. The compiler automatically calls `dispose()` at scope exit before decrementing the reference count:
+
+```maxon
+type MyGraph implements Disposable
+  var nodes NodeArray
+
+  function dispose()
+    // break circular references so refcount cleanup can free nodes
+  end 'dispose'
+end 'MyGraph'
+```
+
+For example, the standard library `List` implements `Disposable` because its doubly-linked nodes create prev/next pointer cycles.
+
 **Return values transfer ownership:** When a struct is returned from a function, its ownership transfers to the caller. The returned variable is not released at scope exit.
 
 ```maxon

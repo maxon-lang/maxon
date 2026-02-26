@@ -156,8 +156,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<int, string> structValueTypes) {
 
     var nameArg = tryCallOp.Args[0];
     // Name is always a String managed struct - load _managed heap pointer, then buffer and length
@@ -259,19 +258,21 @@ public static partial class MaxonToStandardConversion {
     StdI64 nameBuf, StdI64 nameLen,
     bool hasExtraArgs) {
 
-    // For associated-value enums, store as flat struct (tag + payload)
+    // Heap-allocate the enum: [tag:i64 @ 0, payload_0:i64 @ 8, ...]
     var tempName = $"__enum_{tryCallOp.Result!.Id}";
     int maxPayload = GetMaxFlatPayloadSlots(enumType);
+    int heapSize = 8 + maxPayload * 8;
+    var enumPtr = EmitAlloc(block, heapSize, enumType.Name);
+    EmitStore(block, enumPtr, tempName, varTypes);
 
-    // Initialize with default tag=0 and zero payload
+    // Initialize tag=0 and zero payload slots on the heap
     var defaultTag = new StdConstI64Op(0);
     block.AddOp(defaultTag);
-    var tagVarName = $"{tempName}.__tag";
-    EmitStore(block, defaultTag.Result, tagVarName, varTypes);
+    block.AddOp(new StdStoreIndirectOp(defaultTag.Result, enumPtr, 0, MlirType.I64));
     for (int i = 0; i < maxPayload; i++) {
       var zeroPayload = new StdConstI64Op(0);
       block.AddOp(zeroPayload);
-      EmitStore(block, zeroPayload.Result, $"{tempName}.__payload_{i}", varTypes);
+      block.AddOp(new StdStoreIndirectOp(zeroPayload.Result, enumPtr, 8 + i * 8, MlirType.I64));
     }
 
     var noMatchFlag = new StdConstI64Op(1);
@@ -294,22 +295,25 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(selectFlag);
       currentErrorFlag = selectFlag.Result;
 
-      // On match, set the tag
+      // On match, set the tag via indirect load/select/store on the heap
       var tagConst = new StdConstI64Op(enumCase.Ordinal);
       block.AddOp(tagConst);
-      var currentTag = (StdI64)EmitLoad(block, tagVarName, varTypes);
-      var selectTag = new StdSelectI64Op(isMatch, tagConst.Result, currentTag);
+      var currentTag = new StdLoadIndirectOp(enumPtr, 0, MlirType.I64);
+      block.AddOp(currentTag);
+      var selectTag = new StdSelectI64Op(isMatch, tagConst.Result, (StdI64)currentTag.Result);
       block.AddOp(selectTag);
-      EmitStore(block, selectTag.Result, tagVarName, varTypes);
+      block.AddOp(new StdStoreIndirectOp(selectTag.Result, enumPtr, 0, MlirType.I64));
 
       if (hasExtraArgs && caseHasAssocValues) {
         for (int ai = 0; ai < enumCase.AssociatedValues!.Count; ai++) {
           var avArg = tryCallOp.Args[1 + ai];
           var avStdVal = valueMap[avArg];
-          var currentPayload = (StdI64)EmitLoad(block, $"{tempName}.__payload_{ai}", varTypes);
-          var selectPayload = new StdSelectI64Op(isMatch, (StdI64)avStdVal, currentPayload);
+          int byteOffset = 8 + ai * 8;
+          var currentPayload = new StdLoadIndirectOp(enumPtr, byteOffset, MlirType.I64);
+          block.AddOp(currentPayload);
+          var selectPayload = new StdSelectI64Op(isMatch, (StdI64)avStdVal, (StdI64)currentPayload.Result);
           block.AddOp(selectPayload);
-          EmitStore(block, selectPayload.Result, $"{tempName}.__payload_{ai}", varTypes);
+          block.AddOp(new StdStoreIndirectOp(selectPayload.Result, enumPtr, byteOffset, MlirType.I64));
         }
       }
     }
@@ -333,10 +337,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     List<StdValue> newArgs,
     string calleeName,
-    Dictionary<string, MlirType> typeDefs,
     Dictionary<int, string>? fnEnvVarNames = null,
-    List<string?>? argVarNames = null,
-    List<(StdI64 ptr, string typeName)>? enumPackagingBlocks = null) {
+    List<string?>? argVarNames = null) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
 
     // Look up which params the callee mutates
@@ -393,15 +395,8 @@ public static partial class MaxonToStandardConversion {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirUnionType enumArgType && enumArgType.HasAssociatedValues
                  && structVarNames.TryGetValue(arg.Id, out var enumPrefix)) {
-        // Associated-value enum: pack flat vars to heap with reparenting so
-        // heap-pointer children (e.g., String inside ListNode) transfer ownership
-        // to the packed block. Without this, children stay parented under the
-        // original allocation and get freed when it's freed, leaving dangling refs.
-        var heapPtr = PackEnumFlatVarsToHeap(block, enumPrefix, enumArgType, varTypes, typeDefs);
-
-        // Track for post-call release (callee increfs if it stores the pointer)
-        enumPackagingBlocks?.Add((heapPtr, enumArgType.Name));
-
+        // Associated-value enum: already a heap pointer, just load it
+        var heapPtr = EmitLoad(block, enumPrefix, varTypes);
         newArgs.Add(heapPtr);
       } else if (calleeFunc.ParamTypes[i] is MlirUnionType) {
         if (valueMap.TryGetValue(arg, out var enumVal)) {

@@ -180,7 +180,7 @@ public class MaxonParamOp(int index, string name, MaxonValueKind kind) : MaxonOp
         ["index"] = new IntegerAttr(Index, MlirType.I32),
         ["name"] = new StringAttr(Name),
       };
-      if (ValueKind is not MaxonValueKind.TypeParameter)
+      if (ValueKind is not (MaxonValueKind.TypeParameter or MaxonValueKind.Struct or MaxonValueKind.Enum))
         attrs["type"] = new TypeAttr(ValueKind.ToMlirType());
       return attrs;
     }

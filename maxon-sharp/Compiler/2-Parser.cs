@@ -5065,9 +5065,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var value = ResolveExprValue(expr);
       CheckReturnType(value, returnToken);
       value = CheckReturnRange(value, returnToken);
-      // For struct returns, mm_move the return value to the caller's scope
+      // For heap-allocated returns (structs and associated-value enums),
+      // mm_move the return value to the caller's scope.
       // Self-fields are children of the struct, not scope-owned — don't move them.
-      if (value is MaxonStruct) {
+      bool isAssocEnum = value is MaxonEnum me
+        && _typeRegistry.TryGetValue(me.TypeName, out var retEnumTd)
+        && retEnumTd is MlirUnionType { HasAssociatedValues: true };
+      if (value is MaxonStruct || isAssocEnum) {
         // Self and self-fields are borrowed references — don't mm_move them
         bool isSelfOrSelfField = returnVarName == "self"
           || (returnVarName != null
@@ -5078,11 +5082,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             _currentFunction!.ReturnsSelf = true;
           returnVarName = null;
         } else if (returnVarName == null) {
+          var assignKind = isAssocEnum ? MaxonValueKind.Enum : MaxonValueKind.Struct;
           returnVarName = $"__retval_{MlirContext.Current.NextId()}";
-          _currentBlock!.AddOp(new MaxonAssignOp(returnVarName, value, isDeclaration: true, isMutable: false, MaxonValueKind.Struct));
+          _currentBlock!.AddOp(new MaxonAssignOp(returnVarName, value, isDeclaration: true, isMutable: false, assignKind));
         }
       } else {
-        returnVarName = null; // Only move struct/managed values
+        returnVarName = null; // Only move heap-allocated values
       }
       EmitBlockScopedReleaseBeforeReturn(returnVarName);
       _currentBlock!.AddOp(new MaxonReturnOp(value));

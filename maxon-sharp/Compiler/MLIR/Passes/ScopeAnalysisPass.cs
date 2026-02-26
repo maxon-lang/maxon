@@ -18,8 +18,8 @@ public class ScopeInfo(string scopeVar) {
   public bool NeedsRuntimeFrame { get; set; }
   public bool CanStaticFree { get; set; }
   public bool CanStaticReturn { get; set; }
-  // The var name being return-moved (if any) — used to skip mm_move and mm_free_simple
-  public string? ReturnMoveVar { get; set; }
+  // All var names return-moved across different return paths — used to skip mm_decref/mm_free_simple
+  public HashSet<string> ReturnMoveVars { get; } = [];
   // Struct literal result ID of the return allocation — needs mm_alloc (not mm_alloc_simple)
   // so callers can safely mm_move it
   public int ReturnAllocResultId { get; set; } = -1;
@@ -125,6 +125,13 @@ public static class ScopeAnalysisPass {
           case MaxonEnumNameOp enumNameOp:
             producingOps[enumNameOp.Result.Id] = op;
             break;
+          case MaxonEnumConstructOp enumConstructOp:
+            producingOps[enumConstructOp.Result.Id] = op;
+            break;
+          case MaxonEnumVarRefOp enumVarRefOp:
+            structVarRefNames[enumVarRefOp.Result.Id] = enumVarRefOp.VarName;
+            producingOps[enumVarRefOp.Result.Id] = op;
+            break;
           case MaxonMakeCharFromBytesOp makeCharOp:
             producingOps[makeCharOp.Result.Id] = op;
             break;
@@ -178,12 +185,15 @@ public static class ScopeAnalysisPass {
             break;
           }
 
-          // Only struct declarations need per-variable tracking for scope optimization
-          // (static free, stack alloc, scope elision). Enum allocations are managed by
-          // the runtime's allocation list (mm_alloc registers in scope.alloc_head).
+          // Struct and associated-value enum declarations need per-variable tracking for
+          // scope optimization (static free, stack alloc, scope elision) and refcounting.
           case MaxonAssignOp { IsDeclaration: true } assignOp
-            when assignOp.ValueKind is MaxonValueKind.Struct: {
-            // If the assigned value comes from a struct_var_ref, the source var will be
+            when assignOp.ValueKind is MaxonValueKind.Struct
+              || (assignOp.ValueKind is MaxonValueKind.Enum
+                  && assignOp.Value is MaxonEnum assignEnumVal
+                  && module.TypeDefs.TryGetValue(assignEnumVal.TypeName, out var assignEnumTd)
+                  && assignEnumTd is MlirUnionType assignEnumUt && assignEnumUt.HasAssociatedValues): {
+            // If the assigned value comes from a var ref, the source var will be
             // reparented (mm_move mode=1) during lowering — mark it as nested
             if (structVarRefNames.TryGetValue(assignOp.Value.Id, out var srcVarName))
               nestedInStructField.Add(srcVarName);
@@ -203,12 +213,17 @@ public static class ScopeAnalysisPass {
                   structLitResultId = structLit.Result.Id;
                   isFromCall = false;
                   break;
+                case MaxonEnumConstructOp enumConstruct:
+                  structTypeName = enumConstruct.EnumTypeName;
+                  isFromCall = false;
+                  break;
                 case MaxonCallOp callOp:
                   isFromCall = true;
                   if (funcByName.TryGetValue(callOp.Callee, out var calleeFunc) && calleeFunc.ReturnsSelf)
                     scopeInfo.ReturnSelfValueIds.Add(assignOp.Value.Id);
                   break;
                 case MaxonStructVarRefOp:
+                case MaxonEnumVarRefOp:
                   // Variable alias (var b = a) — not from a call, needs incref
                   isFromCall = false;
                   break;
@@ -252,7 +267,7 @@ public static class ScopeAnalysisPass {
             }
             varList.Add(assignOp.VarName);
 
-            // Detect intra-scope aliases (var b = a where source is a struct var ref, not a fresh literal or call)
+            // Detect intra-scope aliases (var b = a where source is a var ref, not a fresh literal or call)
             if (structVarRefNames.ContainsKey(assignOp.Value.Id)) {
               scopeInfo.HasIntraScopeAliases = true;
             }
@@ -275,7 +290,7 @@ public static class ScopeAnalysisPass {
               if (scopeInfos.TryGetValue(currentScope, out var srcInfo)) {
                 srcInfo.EscapingVars.Add(moveOp.VarName);
                 if (moveOp.Tag == "return_move")
-                  srcInfo.ReturnMoveVar = moveOp.VarName;
+                  srcInfo.ReturnMoveVars.Add(moveOp.VarName);
               }
             }
             // Mark the destination scope as receiving moved allocs
@@ -392,16 +407,17 @@ public static class ScopeAnalysisPass {
       // struct literal, and all other allocations qualify for static free.
       // The return value uses mm_alloc (registered in caller's scope via __mm_current_scope),
       // other allocs use mm_alloc_simple/mm_free_simple, and mm_move + mm_scope_exit are skipped.
-      if (info.ReturnMoveVar != null) {
-        var retAlloc = info.Allocations.FirstOrDefault(a => a.VarName == info.ReturnMoveVar);
+      if (info.ReturnMoveVars.Count == 1) {
+        var returnMoveVar = info.ReturnMoveVars.First();
+        var retAlloc = info.Allocations.FirstOrDefault(a => a.VarName == returnMoveVar);
         if (info.EscapingVars.Count == 1
-            && info.EscapingVars.Contains(info.ReturnMoveVar)
+            && info.EscapingVars.Contains(returnMoveVar)
             && !info.ReceivesNonReturnMoves
             && retAlloc != null
             && !retAlloc.IsFromCall
             && IsFlatPrimitiveStruct(retAlloc.StructTypeName, module)
             && info.Allocations.All(a =>
-              a.VarName == info.ReturnMoveVar
+              a.VarName == returnMoveVar
               || info.StackAllocIds.Contains(a.StructLiteralResultId)
               || (!a.IsFromCall
                 && IsFlatPrimitiveStruct(a.StructTypeName, module)

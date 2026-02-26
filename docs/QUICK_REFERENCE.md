@@ -599,13 +599,13 @@ typealias IntList = List with Integer
 var list = IntList{}                  // empty linked list
 
 list.prepend(1)                      // add to front — O(1)
-list.append(2)                       // add to back — O(n)
+list.append(2)                       // add to back — O(1)
 list.insert(1, value: 99)           // insert at index — O(n)
 try list.first() otherwise 0        // first element (throws)
 try list.last() otherwise 0         // last element (throws)
 try list.get(1) otherwise 0         // element at index (throws)
 try list.removeFirst() otherwise 0  // remove front — O(1)
-try list.removeLast() otherwise 0   // remove back — O(n)
+try list.removeLast() otherwise 0   // remove back — O(1)
 try list.remove(at: 2) otherwise 0  // remove at index — O(n)
 list.count()                         // number of elements
 list.isEmpty()                       // check empty
@@ -634,6 +634,7 @@ try c.asciiValue()                   // throws CharacterError
 | `FormattedStringable` | `toString(format) -> String` |
 | `Iterable uses E` | `next() -> E throws IterationError` |
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
+| `Disposable` | `dispose()` (auto-called at scope exit before deallocation) |
 | `Error` | (marker for throwable unions) |
 
 ## Command Line

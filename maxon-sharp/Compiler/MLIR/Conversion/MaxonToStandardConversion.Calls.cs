@@ -94,8 +94,7 @@ public static partial class MaxonToStandardConversion {
       }
     }
 
-    var enumPackagingBlocks = new List<(StdI64 ptr, string typeName)>();
-    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, typeDefs, fnEnvVarNames, argVarNames, enumPackagingBlocks);
+    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, fnEnvVarNames, argVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
     bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirUnionType cret && cret.HasAssociatedValues;
@@ -124,7 +123,7 @@ public static partial class MaxonToStandardConversion {
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = calleeRetStructType.Name;
       } else if (calleeRetAssocEnum && callResult != null) {
-        // Associated-value enum return: unpack heap pointer into flat vars
+        // Associated-value enum return: store heap pointer (no unpacking needed)
         var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;
         var retVarName = $"__callret_{result.Id}";
 
@@ -145,7 +144,6 @@ public static partial class MaxonToStandardConversion {
           EmitStore(block, callResult, retVarName, varTypes);
         }
 
-        UnpackEnumHeapToFlatVars(block, retVarName, retEnumType, varTypes);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = retEnumType.Name;
       } else if (callResult != null) {
@@ -179,64 +177,15 @@ public static partial class MaxonToStandardConversion {
       return;
     }
 
-    // Associated-value enum return: caller expects a heap pointer, not flat vars.
-    // Pack to heap BEFORE any scope cleanup ops (decref/scope_exit) in this block,
-    // then mm_move the packed block to the parent scope so it survives scope_exit.
+    // Associated-value enum return: the enum is already a heap pointer.
+    // Return it the same way as struct returns — mm_move is handled by MaxonMoveOp.
     if (retOp.Value != null
         && structVarNames.TryGetValue(retOp.Value.Id, out var enumRetPrefix)
         && structValueTypes.TryGetValue(retOp.Value.Id, out var enumRetTypeName)
         && typeDefs.TryGetValue(enumRetTypeName, out var enumRetTypeDef)
         && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
-      // Scan backward from end of block to find the first scope cleanup op
-      // (decref, scope_exit). Insert pack-to-heap before the cleanup sequence
-      // so payload values are captured before being freed.
-      var ops = block.Operations;
-      int insertIdx = ops.Count;
-      string? scopeExitVarName = null;
-      for (int si = ops.Count - 1; si >= 0; si--) {
-        if (ops[si] is StdCallRuntimeOp rt && (rt.Callee == "mm_scope_exit"
-            || rt.Callee == "mm_trace_scope_exit")) {
-          insertIdx = si;
-          // Find the scope variable name from the load op feeding this scope_exit
-          if (si > 0 && ops[si - 1] is ILoadOp scopeLoad)
-            scopeExitVarName ??= scopeLoad.VarName;
-        } else if (ops[si] is StdCallRuntimeOp rt2 && (rt2.Callee == "mm_decref"
-            || rt2.Callee == "mm_trace_decref")) {
-          insertIdx = si;
-        } else if (ops[si] is ILoadOp) {
-          // Load ops that feed into the decref/scope_exit above are part of cleanup
-          insertIdx = si;
-        } else {
-          break;
-        }
-      }
-      // Generate pack ops into a temp block, then splice before scope cleanup
-      var tempBlock = new MlirBlock<StandardOp>("__pack_temp");
-      var heapPtr = PackEnumFlatVarsToHeap(tempBlock, enumRetPrefix, enumRetType, varTypes, typeDefs);
-      // Move packed block to parent scope so it survives scope_exit cleanup.
-      // Load the scope's parent pointer (scope_frame+8) and mm_move to it.
-      if (scopeExitVarName != null) {
-        var scopePtr = EmitLoad(tempBlock, scopeExitVarName, varTypes);
-        var scopeAsPtr = new StdPtr(((StdI64)scopePtr).Id);
-        var loadParent = new StdLoadIndirectOp(scopeAsPtr, 8, MlirType.I64);
-        tempBlock.AddOp(loadParent);
-        var zeroMode = new StdConstI64Op(0);
-        tempBlock.AddOp(zeroMode);
-        tempBlock.AddOp(new StdCallRuntimeOp("mm_move",
-          [heapPtr, (StdI64)loadParent.Result, zeroMode.Result]));
-        if (Compiler.MmTrace)
-          tempBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [heapPtr]));
-      }
-      // Store the heap pointer to a temp var
-      var retVarName = $"__enum_ret_{MlirContext.Current.NextId()}";
-      EmitStore(tempBlock, heapPtr, retVarName, varTypes);
-      // Splice temp ops into the main block before scope cleanup
-      for (int pi = 0; pi < tempBlock.Operations.Count; pi++) {
-        ops.Insert(insertIdx + pi, tempBlock.Operations[pi]);
-      }
-      // After scope cleanup, load the saved heap pointer and return
-      var retPtr = EmitLoad(block, retVarName, varTypes);
-      block.AddOp(new StdReturnOp(retPtr));
+      var retHeapPtr = EmitLoad(block, enumRetPrefix, varTypes);
+      block.AddOp(new StdReturnOp(retHeapPtr));
       return;
     }
 
@@ -271,8 +220,8 @@ public static partial class MaxonToStandardConversion {
     if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
         && errorTypeDef is MlirUnionType errorEnumType && errorEnumType.HasAssociatedValues) {
-      // Error return expects a heap pointer in RDX, not flat vars
-      var heapPtr = PackEnumFlatVarsToHeap(block, enumPrefix, errorEnumType, varTypes, typeDefs);
+      // Error return expects a heap pointer in RDX — already a heap pointer
+      var heapPtr = EmitLoad(block, enumPrefix, varTypes);
       block.AddOp(new StdErrorReturnOp(heapPtr));
     } else {
       // Simple error enum: the error value is the ordinal. Add 1 to make non-zero (0 = success).
@@ -305,7 +254,7 @@ public static partial class MaxonToStandardConversion {
     if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
       var enumType = (MlirUnionType)typeDefs[enumTypeName];
-      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes, typeDefs);
+      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes);
       // No temp release needed — scope handles cleanup
       return;
     }

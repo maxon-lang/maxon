@@ -396,44 +396,43 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumConstructOp enumConstructOp: {
-              // Store tag + payload as flat variables, similar to struct literals
+              // Heap-allocate the enum: [tag:i64 @ 0, payload_0:i64 @ 8, payload_1:i64 @ 16, ...]
               var tempName = $"__enum_{enumConstructOp.Result.Id}";
+              var enumTypeDef = (MlirUnionType)module.TypeDefs[enumConstructOp.EnumTypeName];
+              int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
+              int heapSize = 8 + maxPayload * 8;
+              var enumPtr = EmitAlloc(newBlock, heapSize, enumConstructOp.EnumTypeName);
+              EmitStore(newBlock, enumPtr, tempName, varTypes);
+
+              // Store tag at offset 0
               var tagOp = new StdConstI64Op(enumConstructOp.Ordinal);
               newBlock.AddOp(tagOp);
-              EmitStore(newBlock, tagOp.Result, $"{tempName}.__tag", varTypes);
+              newBlock.AddOp(new StdStoreIndirectOp(tagOp.Result, enumPtr, 0, MlirType.I64));
 
-              var enumTypeDef = (MlirUnionType)module.TypeDefs[enumConstructOp.EnumTypeName];
-              var enumCase = enumTypeDef.GetCase(enumConstructOp.CaseName)!;
-
-              // Store associated values as flat payload slots
-              // Struct-typed values store their heap pointer as a single i64 slot
+              // Store associated values as payload slots via indirect stores
               int slotIdx = 0;
               for (int ai = 0; ai < enumConstructOp.Args.Count; ai++) {
+                int byteOffset = 8 + slotIdx * 8;
                 if (structVarNames.TryGetValue(enumConstructOp.Args[ai].Id, out var structSrcName)) {
-                  if (structValueTypes.TryGetValue(enumConstructOp.Args[ai].Id, out var nestedEnumTypeName)
-                      && module.TypeDefs.TryGetValue(nestedEnumTypeName, out var nestedEnumDef)
-                      && nestedEnumDef is MlirUnionType nestedEnumType && nestedEnumType.HasAssociatedValues) {
-                    // Associated-value enum: pack flat vars to heap pointer
-                    var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, structSrcName, nestedEnumType, varTypes, module.TypeDefs);
-                    EmitStore(newBlock, enumHeapPtr, $"{tempName}.__payload_{slotIdx}", varTypes);
-                  } else {
-                    // Struct-typed associated value: store heap pointer as single slot
-                    var heapPtr = EmitLoad(newBlock, structSrcName, varTypes);
-                    EmitStore(newBlock, heapPtr, $"{tempName}.__payload_{slotIdx}", varTypes);
-                  }
+                  // Heap-pointer payload: store and reparent only if scope-owned.
+                  // Parent-owned values (e.g. existing nodes passed as prev pointers)
+                  // stay owned by their current parent — avoids circular ownership.
+                  var childHeapPtr = (StdI64)EmitLoad(newBlock, structSrcName, varTypes);
+                  newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumPtr, byteOffset, MlirType.I64));
+                  newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [childHeapPtr, enumPtr], null));
                   slotIdx++;
                 } else {
+                  // Scalar payload: store directly
                   var argStdVal = valueMap[enumConstructOp.Args[ai]];
-                  EmitStore(newBlock, argStdVal, $"{tempName}.__payload_{slotIdx}", varTypes);
+                  newBlock.AddOp(new StdStoreIndirectOp(argStdVal, enumPtr, byteOffset, MlirType.I64));
                   slotIdx++;
                 }
               }
               // Zero-fill any unused payload slots
-              int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
               for (int ai = slotIdx; ai < maxPayload; ai++) {
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
-                EmitStore(newBlock, zeroOp.Result, $"{tempName}.__payload_{ai}", varTypes);
+                newBlock.AddOp(new StdStoreIndirectOp(zeroOp.Result, enumPtr, 8 + ai * 8, MlirType.I64));
               }
 
               structVarNames[enumConstructOp.Result.Id] = tempName;
@@ -441,10 +440,12 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumTagOp enumTagOp: {
-              // Load the tag from a flattened associated-value enum
               if (structVarNames.TryGetValue(enumTagOp.EnumValue.Id, out var enumPrefix)) {
-                var loaded = EmitLoad(newBlock, $"{enumPrefix}.__tag", varTypes);
-                valueMap[enumTagOp.Result] = loaded;
+                // Associated-value enum: load tag from heap pointer at offset 0
+                var heapPtr = (StdI64)EmitLoad(newBlock, enumPrefix, varTypes);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                newBlock.AddOp(tagLoad);
+                valueMap[enumTagOp.Result] = tagLoad.Result;
               } else {
                 // Simple enums without associated values pass the ordinal directly
                 valueMap[enumTagOp.Result] = valueMap[enumTagOp.EnumValue];
@@ -452,31 +453,35 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumPayloadOp enumPayloadOp: {
-              // Load a payload value from flat payload slots
-              var enumPrefix2 = structVarNames[enumPayloadOp.EnumValue.Id];
+              // Load a payload value from the heap-allocated enum via indirect load
+              var enumVarName = structVarNames[enumPayloadOp.EnumValue.Id];
               int flatSlotOffset = enumPayloadOp.PayloadIndex;
+              var heapPtr = (StdI64)EmitLoad(newBlock, enumVarName, varTypes);
+              int byteOffset = 8 + flatSlotOffset * 8;
 
               if (enumPayloadOp.ResultKind == MaxonValueKind.Struct && enumPayloadOp.ResultStructTypeName != null) {
-                // Struct-typed payload: load single heap pointer from the payload slot
+                // Struct-typed payload: load heap pointer from payload slot
                 var tempStructName = $"__enum_payload_{enumPayloadOp.Result.Id}";
-                var loaded = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset}", varTypes);
-                EmitStore(newBlock, loaded, tempStructName, varTypes);
+                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
+                newBlock.AddOp(loadOp);
+                EmitStore(newBlock, (StdI64)loadOp.Result, tempStructName, varTypes);
                 structVarNames[enumPayloadOp.Result.Id] = tempStructName;
                 structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
               } else if (enumPayloadOp.ResultKind == MaxonValueKind.Enum
                          && enumPayloadOp.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(enumPayloadOp.ResultStructTypeName, out var payloadEnumDef)
                          && payloadEnumDef is MlirUnionType payloadEnumType && payloadEnumType.HasAssociatedValues) {
-                // Associated-value enum payload: heap pointer stored in payload slot, unpack to flat vars
+                // Associated-value enum payload: load heap pointer (no unpacking needed)
                 var tempName = $"__enum_payload_{enumPayloadOp.Result.Id}";
-                var loaded = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset}", varTypes);
-                EmitStore(newBlock, loaded, tempName, varTypes);
-                UnpackEnumHeapToFlatVars(newBlock, tempName, payloadEnumType, varTypes);
+                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
+                newBlock.AddOp(loadOp);
+                EmitStore(newBlock, (StdI64)loadOp.Result, tempName, varTypes);
                 structVarNames[enumPayloadOp.Result.Id] = tempName;
                 structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
               } else {
-                var loaded2 = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset}", varTypes);
-                valueMap[enumPayloadOp.Result] = loaded2;
+                var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
+                newBlock.AddOp(loadOp);
+                valueMap[enumPayloadOp.Result] = loadOp.Result;
               }
               break;
             }
@@ -484,7 +489,7 @@ public static partial class MaxonToStandardConversion {
               // Check if this is an associated-value enum (passed as heap pointer)
               if (module.TypeDefs.TryGetValue(enumParamOp.EnumTypeName, out var epType)
                   && epType is MlirUnionType epEnumType && epEnumType.HasAssociatedValues) {
-                // Receive heap pointer, unpack tag + payload into flat vars
+                // Receive heap pointer — no unpacking needed, heap pointer IS the enum value
                 int ptrFlatIdx = structParamPtrIndex[enumParamOp.Index];
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, enumParamOp.Name, ptrVal));
@@ -500,7 +505,6 @@ public static partial class MaxonToStandardConversion {
                   EmitStore(newBlock, ptrVal, enumParamOp.Name, varTypes);
                 }
 
-                UnpackEnumHeapToFlatVars(newBlock, enumParamOp.Name, epEnumType, varTypes);
                 structVarNames[enumParamOp.Result.Id] = enumParamOp.Name;
                 structValueTypes[enumParamOp.Result.Id] = enumParamOp.EnumTypeName;
               } else if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
@@ -551,23 +555,19 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumPayloadAssignOp payloadAssign: {
-              // Write a value back to a specific payload slot of an associated-value enum
+              // Write a value back to a specific payload slot via heap-pointer indirection
               var resolvedPrefix = varNameToStructPrefix.GetValueOrDefault(payloadAssign.EnumVarName, payloadAssign.EnumVarName);
-              var payloadVarName = $"{resolvedPrefix}.__payload_{payloadAssign.PayloadIndex}";
+              var enumHeapPtr = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
+              int byteOffset = 8 + payloadAssign.PayloadIndex * 8;
+
               if (structVarNames.TryGetValue(payloadAssign.NewValue.Id, out var newStructSrc)) {
-                // Struct or associated-value enum: store the heap pointer
-                if (structValueTypes.TryGetValue(payloadAssign.NewValue.Id, out var nestedTypeName)
-                    && module.TypeDefs.TryGetValue(nestedTypeName, out var nestedTypeDef)
-                    && nestedTypeDef is MlirUnionType nestedUnion && nestedUnion.HasAssociatedValues) {
-                  var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, newStructSrc, nestedUnion, varTypes, module.TypeDefs);
-                  EmitStore(newBlock, enumHeapPtr, payloadVarName, varTypes);
-                } else {
-                  var heapPtr = EmitLoad(newBlock, newStructSrc, varTypes);
-                  EmitStore(newBlock, heapPtr, payloadVarName, varTypes);
-                }
+                // Heap-pointer payload: store and reparent only if scope-owned
+                var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrc, varTypes);
+                newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtr, byteOffset, MlirType.I64));
+                newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [childHeapPtr, enumHeapPtr], null));
               } else {
                 var newStdVal = valueMap[payloadAssign.NewValue];
-                EmitStore(newBlock, newStdVal, payloadVarName, varTypes);
+                newBlock.AddOp(new StdStoreIndirectOp(newStdVal, enumHeapPtr, byteOffset, MlirType.I64));
               }
               break;
             }
@@ -580,13 +580,10 @@ public static partial class MaxonToStandardConversion {
             case MaxonErrorFlagToEnumOp errToEnumOp: {
               if (errToEnumOp.HasAssociatedValues) {
                 // Associated-value error: the error flag IS the heap pointer
-                // Unpack into flat variables (tag + payload slots)
                 var heapPtr = (StdI64)valueMap[errToEnumOp.ErrorFlag];
                 var retVarName = $"__error_enum_{errToEnumOp.Result.Id}";
                 EmitStore(newBlock, heapPtr, retVarName, varTypes);
-
-                var enumType = (MlirUnionType)module.TypeDefs[errToEnumOp.EnumTypeName];
-                UnpackEnumHeapToFlatVars(newBlock, retVarName, enumType, varTypes);
+                // No unpacking — heap pointer IS the enum value
                 structVarNames[errToEnumOp.Result.Id] = retVarName;
                 structValueTypes[errToEnumOp.Result.Id] = errToEnumOp.EnumTypeName;
               } else {
@@ -694,18 +691,10 @@ public static partial class MaxonToStandardConversion {
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                 var field = structType.GetField(fieldName)!;
                 if (structVarNames.TryGetValue(fieldVal.Id, out var nestedStructName)) {
-                  if (structValueTypes.TryGetValue(fieldVal.Id, out var nestedEnumTypeName)
-                      && module.TypeDefs.TryGetValue(nestedEnumTypeName, out var nestedEnumDef)
-                      && nestedEnumDef is MlirUnionType nestedEnumType && nestedEnumType.HasAssociatedValues) {
-                    // Associated-value enums use flat vars but struct fields need a single heap pointer
-                    var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, nestedStructName, nestedEnumType, varTypes, module.TypeDefs);
-                    EmitStructFieldStore(newBlock, enumHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
-                    EmitReparent(newBlock, (StdI64)enumHeapPtr, tempName, varTypes);
-                  } else {
-                    var nestedHeapPtr = EmitLoad(newBlock, nestedStructName, varTypes);
-                    EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
-                    EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
-                  }
+                  // Struct or associated-value enum field: both are heap pointers now
+                  var nestedHeapPtr = EmitLoad(newBlock, nestedStructName, varTypes);
+                  EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
+                  EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
                 } else {
                   var mappedVal = valueMap[fieldVal];
                   var litFieldStoreType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
@@ -851,43 +840,8 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonAssignOp assignOp: {
-              // Associated-value enum assignment: copy tag + payload flat vars
-              if (structVarNames.TryGetValue(assignOp.Value.Id, out var enumSrc)
-                  && structValueTypes.TryGetValue(assignOp.Value.Id, out var enumSrcType)
-                  && module.TypeDefs.TryGetValue(enumSrcType, out var enumTypeForAssign)
-                  && enumTypeForAssign is MlirUnionType assignEnumType && assignEnumType.HasAssociatedValues) {
-                var dstName = assignOp.VarName;
-                // Copy tag
-                var tagLoaded = EmitLoad(newBlock, $"{enumSrc}.__tag", varTypes);
-                EmitStore(newBlock, tagLoaded, $"{dstName}.__tag", varTypes);
-                // Copy payload slots (all are flat i64 slots now)
-                int maxFlatPayload = GetMaxFlatPayloadSlots(assignEnumType);
-                for (int pi = 0; pi < maxFlatPayload; pi++) {
-                  var payloadLoaded = EmitLoad(newBlock, $"{enumSrc}.__payload_{pi}", varTypes);
-                  EmitStore(newBlock, payloadLoaded, $"{dstName}.__payload_{pi}", varTypes);
-                }
-                structVarNames[assignOp.Value.Id] = dstName;
-                structValueTypes[assignOp.Value.Id] = enumSrcType;
-                varNameToStructPrefix[assignOp.VarName] = dstName;
-                // Write-through for self fields: pack flat vars and store to struct
-                if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
-                  var field = selfStructType!.GetField(assignOp.VarName);
-                  if (field != null) {
-                    // Free old field value before overwriting
-                    if (!assignOp.IsDeclaration) {
-                      var oldVal = (StdI64)EmitStructFieldLoad(newBlock, "self", field.Offset, MlirType.I64, varTypes);
-                      newBlock.AddOp(new StdCallRuntimeOp("mm_free", [oldVal], null));
-                    }
-                    var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, dstName, assignEnumType, varTypes, module.TypeDefs);
-                    var selfPtr = (StdI64)EmitLoad(newBlock, "self", varTypes);
-                    var moveMode = new StdConstI64Op(1);
-                    newBlock.AddOp(moveMode);
-                    newBlock.AddOp(new StdCallRuntimeOp("mm_move", [enumHeapPtr, selfPtr, moveMode.Result], null));
-                    EmitStructFieldStore(newBlock, enumHeapPtr, "self", field.Offset, MlirType.I64, varTypes);
-                  }
-                }
-                break;
-              }
+              // Associated-value enums now use heap pointers (like structs) and fall
+              // through to the struct assignment path below.
               // Check structVarNames as fallback to detect struct values that flow
               // through ops not yet updated to track struct kinds.
               if (assignOp.ValueKind == MaxonValueKind.Struct
@@ -934,20 +888,19 @@ public static partial class MaxonToStandardConversion {
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
-                  // Self field: free old child value, re-parent new value under self, then store pointer
                   var field = selfStructType!.GetField(assignOp.VarName);
                   if (field != null) {
-                    if (!assignOp.IsDeclaration && field.Type is MlirStructType) {
-                      // Free old field value (it's a child of self, mm_free unlinks + frees recursively)
-                      var oldVal = (StdI64)EmitStructFieldLoad(newBlock, "self", field.Offset, MlirType.I64, varTypes);
-                      newBlock.AddOp(new StdCallRuntimeOp("mm_free", [oldVal], null));
-                    }
                     var heapPtr2 = EmitLoad(newBlock, dstName, varTypes);
-                    // Move new value under self so it moves with self
-                    var selfPtr = (StdI64)EmitLoad(newBlock, "self", varTypes);
-                    var moveMode = new StdConstI64Op(1);
-                    newBlock.AddOp(moveMode);
-                    newBlock.AddOp(new StdCallRuntimeOp("mm_move", [heapPtr2, selfPtr, moveMode.Result], null));
+                    if (field.Type is MlirStructType
+                        || (field.Type is MlirUnionType fieldUnion && fieldUnion.HasAssociatedValues)) {
+                      // Heap-pointer field: reparent new value under self only if it's
+                      // scope-owned (newly allocated). Parent-owned values (e.g., findLast
+                      // result pointing into existing chain) must not be detached from
+                      // their current owner. Old field values are not eagerly freed —
+                      // they remain in self's child list and are cleaned up at scope exit.
+                      var selfPtr = (StdI64)EmitLoad(newBlock, "self", varTypes);
+                      newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [heapPtr2, selfPtr], null));
+                    }
                     if (Compiler.MmTrace)
                       newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [heapPtr2], null));
                     EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
@@ -1098,7 +1051,7 @@ public static partial class MaxonToStandardConversion {
                          && fieldAccess.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(fieldAccess.ResultStructTypeName, out var faEnumDef)
                          && faEnumDef is MlirUnionType faEnumType && faEnumType.HasAssociatedValues) {
-                // Associated-value enums are heap-allocated like structs but need flat vars for downstream match/payload ops
+                // Associated-value enum field: load heap pointer (no unpacking needed)
                 var tempVarName = $"__field_{fieldAccess.Result.Id}";
                 if (fieldDef != null) {
                   var enumPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, MlirType.I64, varTypes);
@@ -1107,17 +1060,14 @@ public static partial class MaxonToStandardConversion {
                   var loaded = EmitLoad(newBlock, $"{structName}.{fieldAccess.FieldName}", varTypes);
                   EmitStore(newBlock, loaded, tempVarName, varTypes);
                 }
-                UnpackEnumHeapToFlatVars(newBlock, tempVarName, faEnumType, varTypes);
                 structVarNames[fieldAccess.Result.Id] = tempVarName;
-                // Map the field name to the temp prefix so MaxonEnumVarRefOp can find flat vars
                 if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
                   varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
                 }
-                // For self fields, also unpack under the field name so that
+                // For self fields, store the heap pointer under the field name so that
                 // later code referencing it by name (across conditional blocks) gets the correct value.
                 if (IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
                   EmitStore(newBlock, EmitLoad(newBlock, tempVarName, varTypes), fieldAccess.FieldName, varTypes);
-                  UnpackEnumHeapToFlatVars(newBlock, fieldAccess.FieldName, faEnumType, varTypes);
                   varNameToStructPrefix[fieldAccess.FieldName] = fieldAccess.FieldName;
                 }
                 structValueTypes[fieldAccess.Result.Id] = fieldAccess.ResultStructTypeName;
@@ -1144,38 +1094,22 @@ public static partial class MaxonToStandardConversion {
                 faParentStructType = fapst;
               var faFieldDef = faParentStructType?.GetField(fieldAssign.FieldName);
 
-              // Associated-value enum fields need packing from flat vars to a heap pointer
-              if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var faEnumPrefix)
-                  && structValueTypes.TryGetValue(fieldAssign.NewValue.Id, out var faEnumTypeName)
-                  && module.TypeDefs.TryGetValue(faEnumTypeName, out var faEnumTypeDef)
-                  && faEnumTypeDef is MlirUnionType faEnumType && faEnumType.HasAssociatedValues) {
-                var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, faEnumPrefix, faEnumType, varTypes, module.TypeDefs);
-                if (faFieldDef != null) {
-                  EmitStructFieldStore(newBlock, enumHeapPtr, structName, faFieldDef.Offset, MlirType.I64, varTypes);
-                  EmitReparent(newBlock, (StdI64)enumHeapPtr, structName, varTypes);
+              if (!valueMap.TryGetValue(fieldAssign.NewValue, out StdValue? mappedVal)) {
+                if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var newValStructName)) {
+                  mappedVal = EmitLoad(newBlock, newValStructName, varTypes);
                 } else {
-                  EmitStore(newBlock, enumHeapPtr, $"{structName}.{fieldAssign.FieldName}", varTypes);
+                  throw new InvalidOperationException($"MaxonFieldAssignOp: NewValue %{fieldAssign.NewValue.Id} not in valueMap or structVarNames for {structName}.{fieldAssign.FieldName} in func {func.Name}");
+                }
+              }
+
+              if (faFieldDef != null) {
+                var storeType = faFieldDef.Type is MlirStructType or MlirUnionType ? MlirType.I64 : faFieldDef.Type;
+                EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
+                if (faFieldDef.Type is MlirStructType or MlirUnionType) {
+                  EmitReparent(newBlock, (StdI64)mappedVal, structName, varTypes);
                 }
               } else {
-                if (!valueMap.TryGetValue(fieldAssign.NewValue, out StdValue? mappedVal)) {
-                  if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var newValStructName)) {
-                    mappedVal = EmitLoad(newBlock, newValStructName, varTypes);
-                  } else {
-                    throw new InvalidOperationException($"MaxonFieldAssignOp: NewValue %{fieldAssign.NewValue.Id} not in valueMap or structVarNames for {structName}.{fieldAssign.FieldName} in func {func.Name}");
-                  }
-                }
-
-                if (faFieldDef != null) {
-                  // Struct-typed and union-typed fields store heap pointers (i64)
-                  var storeType = faFieldDef.Type is MlirStructType or MlirUnionType ? MlirType.I64 : faFieldDef.Type;
-                  EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
-                  // Reparent struct/union heap pointers under the parent struct
-                  if (faFieldDef.Type is MlirStructType or MlirUnionType) {
-                    EmitReparent(newBlock, (StdI64)mappedVal, structName, varTypes);
-                  }
-                } else {
-                  EmitStore(newBlock, mappedVal, $"{structName}.{fieldAssign.FieldName}", varTypes);
-                }
+                EmitStore(newBlock, mappedVal, $"{structName}.{fieldAssign.FieldName}", varTypes);
               }
               // No write-through needed: self is a heap pointer, and all field stores
               // go through the heap pointer directly, so the caller sees changes.
@@ -1293,11 +1227,19 @@ public static partial class MaxonToStandardConversion {
                   }
                 }
               }
-              // Emit decref for all refcounted vars in this scope (before cleanup)
+              // Emit dispose + decref for all refcounted vars in this scope
               if (scopeInfo?.RefcountedVars.Count > 0) {
                 foreach (var rcVar in scopeInfo.RefcountedVars) {
-                  if (rcVar == scopeInfo.ReturnMoveVar) continue;
+                  if (scopeInfo.ReturnMoveVars.Contains(rcVar)) continue;
                   if (!varTypes.ContainsKey(rcVar)) continue;
+                  // Call dispose() before decref for types implementing Disposable
+                  if (varNameToStructType.TryGetValue(rcVar, out var rcStructType)
+                      && module.TypeDefs.TryGetValue(rcStructType, out var rcTypeDef)
+                      && rcTypeDef.IsDisposable
+                      && funcLookup.ContainsKey($"{rcStructType}.dispose")) {
+                    var disposePtr = EmitLoad(newBlock, rcVar, varTypes);
+                    newBlock.AddOp(new StdCallOp($"{rcStructType}.dispose", [(StdI64)disposePtr], null));
+                  }
                   EmitDecref(newBlock, rcVar, varTypes);
                 }
               }

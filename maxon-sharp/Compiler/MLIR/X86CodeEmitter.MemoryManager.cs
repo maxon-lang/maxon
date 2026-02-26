@@ -127,6 +127,8 @@ public partial class X86CodeEmitter {
     EmitMmFreeEntry();
     EmitMmFree();
     EmitMmFreeIfNonnull();
+    EmitMmFreeChildOf();
+    EmitMmReparentIfScopeOwned();
     EmitMmReparentIfNonnull();
     EmitMmGetRootScope();
     EmitMmAllocSimple();
@@ -1175,6 +1177,86 @@ public partial class X86CodeEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // mm_free_child_of(child_ptr_in_rcx, parent_ptr_in_rdx) -> void
+  // Frees child_ptr ONLY if it is still a direct child of parent_ptr.
+  // If child_ptr has been reparented elsewhere (e.g., captured as an enum
+  // payload), the free is skipped. Used for self-field write-through where
+  // the old field value may have been reparented under the new value.
+  // -------------------------------------------------------------------------
+  private void EmitMmFreeChildOf() {
+    EmitRuntimeFunctionStart("mm_free_child_of", 2, 0x30);
+    // [rbp-8] = child_ptr, [rbp-16] = parent_ptr
+
+    // If child_ptr == NULL, skip
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = child_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_child_of_skip");
+
+    // Load child_entry = [child_ptr - 8]
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — child_entry
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_child_of_skip"); // unmanaged
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = child_entry
+
+    // Load parent_entry = [parent_ptr - 8]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = parent_ptr
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — parent_entry
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_free_child_of_skip"); // parent unmanaged
+
+    // Check child_entry.owner_entry (+48) == parent_entry
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = child_entry
+    EmitBytes(0x48, 0x8B, 0x49, 0x30); // MOV rcx, [rcx+48] — child_entry.owner_entry
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rax); // owner_entry == parent_entry?
+    EmitJcc("ne", "mm_free_child_of_skip"); // not a child of parent, skip
+
+    // Still a child of parent — free it
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // child_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+
+    DefineLabel("mm_free_child_of_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_reparent_if_scope_owned(child_ptr_in_rcx, parent_ptr_in_rdx) -> void
+  // Reparents child under parent ONLY if child is scope-owned (not parent-owned).
+  // Used for self-field write-through: when storing a heap pointer into a struct
+  // field, we only want to reparent newly allocated values (scope-owned), not
+  // values that are already part of some ownership tree (parent-owned), since
+  // reparenting would detach them from their correct owner.
+  // -------------------------------------------------------------------------
+  private void EmitMmReparentIfScopeOwned() {
+    EmitRuntimeFunctionStart("mm_reparent_if_scope_owned", 2, 0x30);
+
+    // If child_ptr == NULL, skip
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = child_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_if_scope_owned_skip");
+
+    // Load child_entry = [child_ptr - 8]
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — child_entry
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_if_scope_owned_skip"); // unmanaged
+
+    // Check if scope-owned: entry.owner_entry (+48) == 0 means scope-owned
+    EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0 — entry.owner_entry
+    EmitJcc("ne", "mm_reparent_if_scope_owned_skip"); // parent-owned, skip
+
+    // Scope-owned — reparent under parent
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // child_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // parent_ptr
+    EmitMovRegImm(X86Register.R8, 1); // mode=1 (reparent)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_move")); EmitDword(0);
+
+    DefineLabel("mm_reparent_if_scope_owned_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
   // mm_reparent_if_nonnull(child_ptr_in_rcx, parent_ptr_in_rdx) -> void
   // Calls mm_move(child, parent, mode=1) if child is non-null and managed.
   // Used to establish parent-child ownership for enum payload slots that
@@ -1543,8 +1625,8 @@ public partial class X86CodeEmitter {
   }
 
   // -------------------------------------------------------------------------
-  // mm_leak_check() -> void
-  // Walks the scope chain and reports any remaining allocations to stderr.
+  // mm_leak_check() -> void (never returns if leaks detected)
+  // Checks global alloc counter; if nonzero, prints leak count and exits with code 101.
   // -------------------------------------------------------------------------
   private void EmitMmLeakCheck() {
     // Stack: [rbp-56..rbp-80]=24-byte string buffer
@@ -1571,6 +1653,10 @@ public partial class X86CodeEmitter {
 
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_leak_suffix");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
+
+    // Leak is a fatal error — terminate with exit code 101
+    EmitMovRegImm(X86Register.Rcx, 101);
+    EmitCallImport("kernel32.dll", "ExitProcess");
 
     DefineLabel("mm_leak_check_done");
     EmitRuntimeFunctionEnd();

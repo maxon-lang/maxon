@@ -280,7 +280,7 @@ public static partial class MaxonToStandardConversion {
     for (int ai = scopeInfo.Allocations.Count - 1; ai >= 0; ai--) {
       var alloc = scopeInfo.Allocations[ai];
       if (scopeInfo.StackAllocIds.Contains(alloc.StructLiteralResultId)) continue;
-      if (scopeInfo.CanStaticReturn && alloc.VarName == scopeInfo.ReturnMoveVar) continue;
+      if (scopeInfo.CanStaticReturn && scopeInfo.ReturnMoveVars.Contains(alloc.VarName)) continue;
       var allocPtr = (StdI64)EmitLoad(block, alloc.VarName, varTypes);
       block.AddOp(new StdCallRuntimeOp("mm_free_simple", [allocPtr], null));
     }
@@ -466,63 +466,4 @@ public static partial class MaxonToStandardConversion {
     return max;
   }
 
-  /// Unpack an associated-value enum's heap pointer into flat __tag/__payload_N variables.
-  /// Downstream code accesses enum values through these flat variables rather than indirection.
-  private static void UnpackEnumHeapToFlatVars(
-    MlirBlock<StandardOp> block, string varName, MlirUnionType enumType,
-    Dictionary<string, string> varTypes) {
-    var tagLoaded = EmitStructFieldLoad(block, varName, 0, MlirType.I64, varTypes);
-    EmitStore(block, tagLoaded, $"{varName}.__tag", varTypes);
-    int maxPayload = GetMaxFlatPayloadSlots(enumType);
-    for (int pi = 0; pi < maxPayload; pi++) {
-      var payloadLoaded = EmitStructFieldLoad(block, varName, 8 + pi * 8, MlirType.I64, varTypes);
-      EmitStore(block, payloadLoaded, $"{varName}.__payload_{pi}", varTypes);
-    }
-  }
-
-  /// Returns payload slot indices that contain heap pointers (struct or associated-value union)
-  /// across any case of the given union type. A slot is included if ANY case stores a
-  /// heap-pointer type at that position.
-  private static HashSet<int> GetHeapPointerSlots(MlirUnionType enumType, Dictionary<string, MlirType> typeDefs) {
-    var slots = new HashSet<int>();
-    foreach (var c in enumType.Cases) {
-      if (c.AssociatedValues == null) continue;
-      for (int i = 0; i < c.AssociatedValues.Count; i++) {
-        var (_, avType) = c.AssociatedValues[i];
-        var resolvedType = typeDefs.TryGetValue(avType.Name, out var td) ? td : avType;
-        bool isHeapPointer = resolvedType is MlirStructType
-          || (resolvedType is MlirUnionType ut && ut.HasAssociatedValues);
-        if (isHeapPointer) {
-          slots.Add(i);
-        }
-      }
-    }
-    return slots;
-  }
-
-  /// Pack flat __tag/__payload_N variables into a new heap-allocated block for storage in struct fields.
-  /// Also reparents any heap-pointer payload slots under the new allocation so the memory
-  /// manager tracks the ownership chain (e.g., ListNode owns its next pointer).
-  private static StdI64 PackEnumFlatVarsToHeap(
-    MlirBlock<StandardOp> block, string varName, MlirUnionType enumType,
-    Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
-    int maxPayload = GetMaxFlatPayloadSlots(enumType);
-    int heapSize = 8 + maxPayload * 8;
-    var heapPtr = EmitAlloc(block, heapSize, enumType.Name);
-    var tagVal = EmitLoad(block, $"{varName}.__tag", varTypes);
-    block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
-    for (int pi = 0; pi < maxPayload; pi++) {
-      var payloadVal = EmitLoad(block, $"{varName}.__payload_{pi}", varTypes);
-      block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
-    }
-
-    // Reparent heap-pointer payload slots under this allocation
-    var heapSlots = GetHeapPointerSlots(enumType, typeDefs);
-    foreach (var slotIdx in heapSlots) {
-      var childPtr = EmitLoad(block, $"{varName}.__payload_{slotIdx}", varTypes);
-      block.AddOp(new StdCallRuntimeOp("mm_reparent_if_nonnull", [(StdI64)childPtr, heapPtr], null));
-    }
-
-    return heapPtr;
-  }
 }
