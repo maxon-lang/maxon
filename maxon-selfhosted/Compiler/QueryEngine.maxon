@@ -65,34 +65,25 @@ export function recordDependency(project Project, dependency QueryKey)
     let dependent = try project.db.activeQueryStack.get(stackLen - 1) otherwise 'err'
         return
     end 'err'
-    print("[DBG] recordDependency: creating Dependency struct")
     let dep = Dependency{dependent: dependent, dependency: dependency}
-    print("[DBG] recordDependency: about to push, deps count = {project.db.dependencies.count()}")
     project.db.dependencies.push(dep)
-    print("[DBG] recordDependency: push done")
 end 'recordDependency'
 
 // Remove all dependency entries where `dependent` matches `key`.
 export function clearDepsFor(project Project, key QueryKey)
-    print("[DBG] clearDepsFor: start, old deps count = {project.db.dependencies.count()}")
     var newDeps = DependencyArray{}
     var i = 0
     while i < project.db.dependencies.count() 'scan'
-        print("[DBG] clearDepsFor: getting dep {i}")
         let dep = try project.db.dependencies.get(i) otherwise 'skip'
             i = i + 1
             continue
         end 'skip'
-        print("[DBG] clearDepsFor: got dep {i}, checking equality")
         if not queryKeysEqual(dep.dependent, b: key) 'keep'
-            print("[DBG] clearDepsFor: pushing dep {i}")
             newDeps.push(dep)
         end 'keep'
         i = i + 1
     end 'scan'
-    print("[DBG] clearDepsFor: reassigning deps, new count = {newDeps.count()}")
     project.db.dependencies = newDeps
-    print("[DBG] clearDepsFor: done")
 end 'clearDepsFor'
 
 // --- Query key equality ---

@@ -1212,9 +1212,6 @@ public static partial class MaxonToStandardConversion {
               newBlock.AddOp(new StdBrOp(br.Target));
               break;
             }
-            case MaxonReleaseOp:
-              // TODO: emit mm_decref — currently causes regressions due to double-decref with scope exit
-              break;
             case MaxonScopeEnterOp scopeEnterOp: {
               var scopeInfo = funcScopeAnalysis?.GetValueOrDefault(scopeEnterOp.ResultVar);
               _scopeAnalysisStack?.Add(scopeInfo);
@@ -1634,7 +1631,7 @@ public static partial class MaxonToStandardConversion {
               LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
-              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, funcLookup, module);
+              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
               break;
             case MaxonManagedMemSetOp memSetOp:
               LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1702,13 +1699,9 @@ public static partial class MaxonToStandardConversion {
                     // structName IS the __ManagedMemory heap pointer, buffer at offset 0
                     return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, structName, ManagedFieldBuffer, MlirType.I64, varTypes);
                   } else {
-                    // Outer struct: load managed field (offset depends on struct), then buffer
-                    // For now, assume managed field is at some known offset. We need type info.
-                    // Load the managed field's heap pointer, then load buffer from it.
-                    var managedPtr = (StdI64)EmitStructFieldLoad(newBlock, structName, 0, MlirType.I64, varTypes);
-                    var managedTmpVar = $"__rt_managed_{MlirContext.Current.NextId()}";
-                    EmitStore(newBlock, managedPtr, managedTmpVar, varTypes);
-                    return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, managedTmpVar, ManagedFieldBuffer, MlirType.I64, varTypes);
+                    throw new InvalidOperationException(
+                      $"MaxonCallRuntimeOp struct arg has unexpected type '{typeName}' — " +
+                      "only __ManagedMemory struct args are supported (extract fields before passing to runtime calls)");
                   }
                 }
                 throw new InvalidOperationException($"MaxonCallRuntimeOp arg {a} not found in valueMap or structVarNames");

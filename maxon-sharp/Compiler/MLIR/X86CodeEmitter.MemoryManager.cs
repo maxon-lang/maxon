@@ -386,6 +386,15 @@ public partial class X86CodeEmitter {
     // Stack: [rbp-8]=scope_ptr, [rbp-40]=current entry, [rbp-48]=next entry
     EmitRuntimeFunctionStart("mm_scope_exit", 1, 0x60);
 
+    // Validate scope_ptr matches __mm_current_scope
+    EmitSymdataLoadI64(X86Register.Rax, "__mm_current_scope");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = scope_ptr arg
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "mm_scope_exit_scope_valid");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_scope_exit_mismatch");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_scope_exit_scope_valid");
+
     // Walk alloc_head: for each entry, call mm_free_entry(entry)
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
     EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — scope.alloc_head

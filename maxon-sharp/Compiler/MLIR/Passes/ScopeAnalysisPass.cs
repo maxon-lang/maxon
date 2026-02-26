@@ -178,6 +178,9 @@ public static class ScopeAnalysisPass {
             break;
           }
 
+          // Only struct declarations need per-variable tracking for scope optimization
+          // (static free, stack alloc, scope elision). Enum allocations are managed by
+          // the runtime's allocation list (mm_alloc registers in scope.alloc_head).
           case MaxonAssignOp { IsDeclaration: true } assignOp
             when assignOp.ValueKind is MaxonValueKind.Struct: {
             // If the assigned value comes from a struct_var_ref, the source var will be

@@ -240,7 +240,6 @@ internal class FunctionCloner {
       // Control flow
       case MaxonCondBrOp cb: return new MaxonCondBrOp(MapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
       case MaxonBrOp br: return new MaxonBrOp(br.Target);
-      case MaxonReleaseOp rel: return new MaxonReleaseOp(rel.VarName, rel.StructTypeName);
       case MaxonReturnOp ret: return new MaxonReturnOp(ret.Value != null ? MapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName);
       case MaxonPanicOp p: return new MaxonPanicOp(p.Message);

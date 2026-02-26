@@ -31,17 +31,11 @@ export function compileProject(project Project) returns String throws CompileErr
         project.dbInitialized = true
     end 'init'
 
-    print("[DBG] before loadSourceFiles")
     try loadSourceFiles(project, path: project.rootPath)
-    print("[DBG] after loadSourceFiles")
-
-    print("[DBG] deps count = {project.db.dependencies.count()}")
 
     logDebug(LogCategory.compiler, message: "Loaded {project.db.sourcePaths.count()} source files (revision {project.db.currentRevision})")
 
-    print("[DBG] before queryCodeResult")
     let codeResult = try queryCodeResult(project)
-    print("[DBG] after queryCodeResult")
 
     let firstPath = try project.db.sourcePaths.get(0) otherwise 'noFiles'
         throw CompileError.noSourceFiles

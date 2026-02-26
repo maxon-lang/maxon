@@ -60,9 +60,7 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes,
-	  Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
-	  MlirModule<MaxonOp> module) {
+	  Dictionary<int, string> structValueTypes) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);

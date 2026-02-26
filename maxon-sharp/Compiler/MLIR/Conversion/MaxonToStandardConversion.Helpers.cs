@@ -325,13 +325,6 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
-  /// <summary>Emit mm_set_owner(heap_ptr, scope) — transfers ownership to shallower scope.</summary>
-  private static void EmitSetOwner(MlirBlock<StandardOp> block, string varName, string scopeVarName, Dictionary<string, string> varTypes) {
-    var heapPtr = EmitLoad(block, varName, varTypes);
-    var scopePtr = EmitLoad(block, scopeVarName, varTypes);
-    block.AddOp(new StdCallRuntimeOp("mm_set_owner", [heapPtr, scopePtr], null));
-  }
-
   /// <summary>
   /// Moves a heap allocation to be a child of newParent (mm_move with mode=1).
   /// Used when storing a struct into an array element or struct field.
