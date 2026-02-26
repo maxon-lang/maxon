@@ -82,9 +82,9 @@ public static class MonomorphizationPass {
       if (sourceType is MlirStructType sourceStruct) {
         assocTypeNames = sourceStruct.AssociatedTypeNames.Count > 0
           ? sourceStruct.AssociatedTypeNames
-          : sourceStruct.TypeParams
+          : [.. sourceStruct.TypeParams
               .Where(kv => kv.Value is MlirTypeParameterType)
-              .Select(kv => kv.Key).ToList();
+              .Select(kv => kv.Key)];
         if (assocTypeNames.Count == 0) {
           continue;
         }
@@ -92,9 +92,9 @@ public static class MonomorphizationPass {
       } else if (sourceType is MlirUnionType sourceUnion) {
         assocTypeNames = sourceUnion.AssociatedTypeNames.Count > 0
           ? sourceUnion.AssociatedTypeNames
-          : sourceUnion.TypeParams
+          : [.. sourceUnion.TypeParams
               .Where(kv => kv.Value is MlirTypeParameterType)
-              .Select(kv => kv.Key).ToList();
+              .Select(kv => kv.Key)];
         if (assocTypeNames.Count == 0) {
           Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: no type params (union)");
           continue;

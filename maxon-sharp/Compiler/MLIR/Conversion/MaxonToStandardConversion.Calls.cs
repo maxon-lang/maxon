@@ -131,7 +131,7 @@ public static partial class MaxonToStandardConversion {
         if (isTryCall) {
           // try_call returns null (0) on error — guard against null dereference
           // by substituting a dummy allocation when the pointer is null
-          int maxPayloadForSize = GetMaxFlatPayloadSlots(retEnumType, typeDefs);
+          int maxPayloadForSize = GetMaxFlatPayloadSlots(retEnumType);
           int heapSize = 8 + maxPayloadForSize * 8;
           var dummyPtr = EmitAlloc(block, heapSize, "EnumDummy");
           var zeroConst = new StdConstI64Op(0);
@@ -145,7 +145,7 @@ public static partial class MaxonToStandardConversion {
           EmitStore(block, callResult, retVarName, varTypes);
         }
 
-        UnpackEnumHeapToFlatVars(block, retVarName, retEnumType, varTypes, typeDefs);
+        UnpackEnumHeapToFlatVars(block, retVarName, retEnumType, varTypes);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = retEnumType.Name;
       } else if (callResult != null) {
@@ -179,14 +179,64 @@ public static partial class MaxonToStandardConversion {
       return;
     }
 
-    // Associated-value enum return: caller expects a heap pointer, not flat vars
+    // Associated-value enum return: caller expects a heap pointer, not flat vars.
+    // Pack to heap BEFORE any scope cleanup ops (decref/scope_exit) in this block,
+    // then mm_move the packed block to the parent scope so it survives scope_exit.
     if (retOp.Value != null
         && structVarNames.TryGetValue(retOp.Value.Id, out var enumRetPrefix)
         && structValueTypes.TryGetValue(retOp.Value.Id, out var enumRetTypeName)
         && typeDefs.TryGetValue(enumRetTypeName, out var enumRetTypeDef)
         && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
-      var heapPtr = PackEnumFlatVarsToHeap(block, enumRetPrefix, enumRetType, varTypes, typeDefs);
-      block.AddOp(new StdReturnOp(heapPtr));
+      // Scan backward from end of block to find the first scope cleanup op
+      // (decref, scope_exit). Insert pack-to-heap before the cleanup sequence
+      // so payload values are captured before being freed.
+      var ops = block.Operations;
+      int insertIdx = ops.Count;
+      string? scopeExitVarName = null;
+      for (int si = ops.Count - 1; si >= 0; si--) {
+        if (ops[si] is StdCallRuntimeOp rt && (rt.Callee == "mm_scope_exit"
+            || rt.Callee == "mm_trace_scope_exit")) {
+          insertIdx = si;
+          // Find the scope variable name from the load op feeding this scope_exit
+          if (si > 0 && ops[si - 1] is ILoadOp scopeLoad)
+            scopeExitVarName ??= scopeLoad.VarName;
+        } else if (ops[si] is StdCallRuntimeOp rt2 && (rt2.Callee == "mm_decref"
+            || rt2.Callee == "mm_trace_decref")) {
+          insertIdx = si;
+        } else if (ops[si] is ILoadOp) {
+          // Load ops that feed into the decref/scope_exit above are part of cleanup
+          insertIdx = si;
+        } else {
+          break;
+        }
+      }
+      // Generate pack ops into a temp block, then splice before scope cleanup
+      var tempBlock = new MlirBlock<StandardOp>("__pack_temp");
+      var heapPtr = PackEnumFlatVarsToHeap(tempBlock, enumRetPrefix, enumRetType, varTypes, typeDefs);
+      // Move packed block to parent scope so it survives scope_exit cleanup.
+      // Load the scope's parent pointer (scope_frame+8) and mm_move to it.
+      if (scopeExitVarName != null) {
+        var scopePtr = EmitLoad(tempBlock, scopeExitVarName, varTypes);
+        var scopeAsPtr = new StdPtr(((StdI64)scopePtr).Id);
+        var loadParent = new StdLoadIndirectOp(scopeAsPtr, 8, MlirType.I64);
+        tempBlock.AddOp(loadParent);
+        var zeroMode = new StdConstI64Op(0);
+        tempBlock.AddOp(zeroMode);
+        tempBlock.AddOp(new StdCallRuntimeOp("mm_move",
+          [heapPtr, (StdI64)loadParent.Result, zeroMode.Result]));
+        if (Compiler.MmTrace)
+          tempBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [heapPtr]));
+      }
+      // Store the heap pointer to a temp var
+      var retVarName = $"__enum_ret_{MlirContext.Current.NextId()}";
+      EmitStore(tempBlock, heapPtr, retVarName, varTypes);
+      // Splice temp ops into the main block before scope cleanup
+      for (int pi = 0; pi < tempBlock.Operations.Count; pi++) {
+        ops.Insert(insertIdx + pi, tempBlock.Operations[pi]);
+      }
+      // After scope cleanup, load the saved heap pointer and return
+      var retPtr = EmitLoad(block, retVarName, varTypes);
+      block.AddOp(new StdReturnOp(retPtr));
       return;
     }
 

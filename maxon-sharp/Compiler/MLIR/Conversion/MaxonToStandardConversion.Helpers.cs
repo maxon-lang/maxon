@@ -453,77 +453,48 @@ public static partial class MaxonToStandardConversion {
     && func.ParamTypes[0] is MlirUnionType;
 
   /// <summary>
-  /// Counts the flat (leaf) fields in a type — 1 for scalars, recursive sum for structs.
+  /// Calculates the max number of payload slots needed across all enum cases.
+  /// Each associated value occupies exactly one slot: scalars store their value
+  /// directly, structs and associated-value enums store a heap pointer.
   /// </summary>
-  private static int CountFlatFields(MlirType type, Dictionary<string, MlirType> typeDefs) {
-    if (type is MlirStructType structType) {
-      return structType.Fields.Sum(f => CountFlatFields(f.Type, typeDefs));
-    }
-    return 1;
-  }
-
-  /// <summary>
-  /// Calculates the max number of flat payload slots needed across all enum cases.
-  /// Struct-typed associated values expand to their flat field count.
-  /// </summary>
-  private static int GetMaxFlatPayloadSlots(MlirUnionType enumType, Dictionary<string, MlirType> typeDefs) {
+  private static int GetMaxFlatPayloadSlots(MlirUnionType enumType) {
     int max = 0;
     foreach (var c in enumType.Cases) {
       if (c.AssociatedValues == null) continue;
-      int caseSlots = c.AssociatedValues.Sum(av => CountFlatFields(av.Type, typeDefs));
-      if (caseSlots > max) max = caseSlots;
+      if (c.AssociatedValues.Count > max) max = c.AssociatedValues.Count;
     }
     return max;
-  }
-
-  /// <summary>
-  /// Calculates the flat slot offset for a given payload index within an enum case.
-  /// For example, if payload_0 is a struct with 2 fields, then payload_1 starts at slot 2.
-  /// Uses the first case that has enough associated values to determine the types.
-  /// </summary>
-  private static int GetFlatSlotOffset(MlirUnionType enumType, int payloadIndex, Dictionary<string, MlirType> typeDefs) {
-    // Find a case that has this payload index to determine preceding types
-    foreach (var c in enumType.Cases) {
-      if (c.AssociatedValues == null || payloadIndex >= c.AssociatedValues.Count) continue;
-      int offset = 0;
-      for (int i = 0; i < payloadIndex; i++) {
-        offset += CountFlatFields(c.AssociatedValues[i].Type, typeDefs);
-      }
-      return offset;
-    }
-    throw new InvalidOperationException($"No enum case found with {payloadIndex + 1} associated values for flat slot offset calculation");
   }
 
   /// Unpack an associated-value enum's heap pointer into flat __tag/__payload_N variables.
   /// Downstream code accesses enum values through these flat variables rather than indirection.
   private static void UnpackEnumHeapToFlatVars(
     MlirBlock<StandardOp> block, string varName, MlirUnionType enumType,
-    Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, string> varTypes) {
     var tagLoaded = EmitStructFieldLoad(block, varName, 0, MlirType.I64, varTypes);
     EmitStore(block, tagLoaded, $"{varName}.__tag", varTypes);
-    int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
+    int maxPayload = GetMaxFlatPayloadSlots(enumType);
     for (int pi = 0; pi < maxPayload; pi++) {
       var payloadLoaded = EmitStructFieldLoad(block, varName, 8 + pi * 8, MlirType.I64, varTypes);
       EmitStore(block, payloadLoaded, $"{varName}.__payload_{pi}", varTypes);
     }
   }
 
-  /// Returns flat slot indices that contain heap pointers (struct or associated-value union)
+  /// Returns payload slot indices that contain heap pointers (struct or associated-value union)
   /// across any case of the given union type. A slot is included if ANY case stores a
   /// heap-pointer type at that position.
   private static HashSet<int> GetHeapPointerSlots(MlirUnionType enumType, Dictionary<string, MlirType> typeDefs) {
     var slots = new HashSet<int>();
     foreach (var c in enumType.Cases) {
       if (c.AssociatedValues == null) continue;
-      int slotIdx = 0;
-      foreach (var (_, avType) in c.AssociatedValues) {
+      for (int i = 0; i < c.AssociatedValues.Count; i++) {
+        var (_, avType) = c.AssociatedValues[i];
         var resolvedType = typeDefs.TryGetValue(avType.Name, out var td) ? td : avType;
         bool isHeapPointer = resolvedType is MlirStructType
           || (resolvedType is MlirUnionType ut && ut.HasAssociatedValues);
         if (isHeapPointer) {
-          slots.Add(slotIdx);
+          slots.Add(i);
         }
-        slotIdx += CountFlatFields(avType, typeDefs);
       }
     }
     return slots;
@@ -535,7 +506,7 @@ public static partial class MaxonToStandardConversion {
   private static StdI64 PackEnumFlatVarsToHeap(
     MlirBlock<StandardOp> block, string varName, MlirUnionType enumType,
     Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
-    int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
+    int maxPayload = GetMaxFlatPayloadSlots(enumType);
     int heapSize = 8 + maxPayload * 8;
     var heapPtr = EmitAlloc(block, heapSize, enumType.Name);
     var tagVal = EmitLoad(block, $"{varName}.__tag", varTypes);

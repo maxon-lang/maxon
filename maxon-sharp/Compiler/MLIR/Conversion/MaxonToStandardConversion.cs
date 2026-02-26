@@ -429,7 +429,7 @@ public static partial class MaxonToStandardConversion {
                 }
               }
               // Zero-fill any unused payload slots
-              int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef, module.TypeDefs);
+              int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
               for (int ai = slotIdx; ai < maxPayload; ai++) {
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
@@ -454,9 +454,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumPayloadOp enumPayloadOp: {
               // Load a payload value from flat payload slots
               var enumPrefix2 = structVarNames[enumPayloadOp.EnumValue.Id];
-              // Calculate the flat slot offset for this payload index
-              var enumType3 = (MlirUnionType)module.TypeDefs[enumPayloadOp.EnumTypeName];
-              int flatSlotOffset = GetFlatSlotOffset(enumType3, enumPayloadOp.PayloadIndex, module.TypeDefs);
+              int flatSlotOffset = enumPayloadOp.PayloadIndex;
 
               if (enumPayloadOp.ResultKind == MaxonValueKind.Struct && enumPayloadOp.ResultStructTypeName != null) {
                 // Struct-typed payload: load single heap pointer from the payload slot
@@ -473,7 +471,7 @@ public static partial class MaxonToStandardConversion {
                 var tempName = $"__enum_payload_{enumPayloadOp.Result.Id}";
                 var loaded = EmitLoad(newBlock, $"{enumPrefix2}.__payload_{flatSlotOffset}", varTypes);
                 EmitStore(newBlock, loaded, tempName, varTypes);
-                UnpackEnumHeapToFlatVars(newBlock, tempName, payloadEnumType, varTypes, module.TypeDefs);
+                UnpackEnumHeapToFlatVars(newBlock, tempName, payloadEnumType, varTypes);
                 structVarNames[enumPayloadOp.Result.Id] = tempName;
                 structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
               } else {
@@ -502,7 +500,7 @@ public static partial class MaxonToStandardConversion {
                   EmitStore(newBlock, ptrVal, enumParamOp.Name, varTypes);
                 }
 
-                UnpackEnumHeapToFlatVars(newBlock, enumParamOp.Name, epEnumType, varTypes, module.TypeDefs);
+                UnpackEnumHeapToFlatVars(newBlock, enumParamOp.Name, epEnumType, varTypes);
                 structVarNames[enumParamOp.Result.Id] = enumParamOp.Name;
                 structValueTypes[enumParamOp.Result.Id] = enumParamOp.EnumTypeName;
               } else if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
@@ -567,7 +565,7 @@ public static partial class MaxonToStandardConversion {
                 EmitStore(newBlock, heapPtr, retVarName, varTypes);
 
                 var enumType = (MlirUnionType)module.TypeDefs[errToEnumOp.EnumTypeName];
-                UnpackEnumHeapToFlatVars(newBlock, retVarName, enumType, varTypes, module.TypeDefs);
+                UnpackEnumHeapToFlatVars(newBlock, retVarName, enumType, varTypes);
                 structVarNames[errToEnumOp.Result.Id] = retVarName;
                 structValueTypes[errToEnumOp.Result.Id] = errToEnumOp.EnumTypeName;
               } else {
@@ -842,7 +840,7 @@ public static partial class MaxonToStandardConversion {
                 var tagLoaded = EmitLoad(newBlock, $"{enumSrc}.__tag", varTypes);
                 EmitStore(newBlock, tagLoaded, $"{dstName}.__tag", varTypes);
                 // Copy payload slots (all are flat i64 slots now)
-                int maxFlatPayload = GetMaxFlatPayloadSlots(assignEnumType, module.TypeDefs);
+                int maxFlatPayload = GetMaxFlatPayloadSlots(assignEnumType);
                 for (int pi = 0; pi < maxFlatPayload; pi++) {
                   var payloadLoaded = EmitLoad(newBlock, $"{enumSrc}.__payload_{pi}", varTypes);
                   EmitStore(newBlock, payloadLoaded, $"{dstName}.__payload_{pi}", varTypes);
@@ -1088,7 +1086,7 @@ public static partial class MaxonToStandardConversion {
                   var loaded = EmitLoad(newBlock, $"{structName}.{fieldAccess.FieldName}", varTypes);
                   EmitStore(newBlock, loaded, tempVarName, varTypes);
                 }
-                UnpackEnumHeapToFlatVars(newBlock, tempVarName, faEnumType, varTypes, module.TypeDefs);
+                UnpackEnumHeapToFlatVars(newBlock, tempVarName, faEnumType, varTypes);
                 structVarNames[fieldAccess.Result.Id] = tempVarName;
                 // Map the field name to the temp prefix so MaxonEnumVarRefOp can find flat vars
                 if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
@@ -1098,7 +1096,7 @@ public static partial class MaxonToStandardConversion {
                 // later code referencing it by name (across conditional blocks) gets the correct value.
                 if (IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
                   EmitStore(newBlock, EmitLoad(newBlock, tempVarName, varTypes), fieldAccess.FieldName, varTypes);
-                  UnpackEnumHeapToFlatVars(newBlock, fieldAccess.FieldName, faEnumType, varTypes, module.TypeDefs);
+                  UnpackEnumHeapToFlatVars(newBlock, fieldAccess.FieldName, faEnumType, varTypes);
                   varNameToStructPrefix[fieldAccess.FieldName] = fieldAccess.FieldName;
                 }
                 structValueTypes[fieldAccess.Result.Id] = fieldAccess.ResultStructTypeName;

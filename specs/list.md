@@ -483,7 +483,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: strings -->
+<!-- test: strings -->
 ```maxon
 typealias StringList = List with String
 

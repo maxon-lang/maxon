@@ -174,7 +174,7 @@ public static partial class MaxonToStandardConversion {
     if (hasAssociatedValues) {
       // For associated-value enums, construct as flat struct (tag + payload)
       LowerUnionFromNameAssociated(tryCallOp, enumType, block, valueMap, varTypes,
-        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs, typeDefs);
+        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs);
     } else {
       // Simple/raw-value enum: result is an ordinal/raw value
       LowerUnionFromNameSimple(tryCallOp, enumType, block, valueMap, varTypes, nameBuf, nameLen);
@@ -257,12 +257,11 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     StdI64 nameBuf, StdI64 nameLen,
-    bool hasExtraArgs,
-    Dictionary<string, MlirType> typeDefs) {
+    bool hasExtraArgs) {
 
     // For associated-value enums, store as flat struct (tag + payload)
     var tempName = $"__enum_{tryCallOp.Result!.Id}";
-    int maxPayload = GetMaxFlatPayloadSlots(enumType, typeDefs);
+    int maxPayload = GetMaxFlatPayloadSlots(enumType);
 
     // Initialize with default tag=0 and zero payload
     var defaultTag = new StdConstI64Op(0);
@@ -394,20 +393,11 @@ public static partial class MaxonToStandardConversion {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirUnionType enumArgType && enumArgType.HasAssociatedValues
                  && structVarNames.TryGetValue(arg.Id, out var enumPrefix)) {
-        // Associated-value enum: pack tag + payload into a heap block
-        int maxPayload = GetMaxFlatPayloadSlots(enumArgType, typeDefs);
-        int heapSize = 8 + maxPayload * 8;
-        var heapPtr = EmitAlloc(block, heapSize, enumArgType.Name);
-
-        // Pack the flat tag+payload vars into a single heap object for passing as a value
-        var tagVal = EmitLoad(block, $"{enumPrefix}.__tag", varTypes);
-        block.AddOp(new StdStoreIndirectOp(tagVal, heapPtr, 0, MlirType.I64));
-
-        // Payload slots follow the tag at 8-byte intervals
-        for (int pi = 0; pi < maxPayload; pi++) {
-          var payloadVal = EmitLoad(block, $"{enumPrefix}.__payload_{pi}", varTypes);
-          block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
-        }
+        // Associated-value enum: pack flat vars to heap with reparenting so
+        // heap-pointer children (e.g., String inside ListNode) transfer ownership
+        // to the packed block. Without this, children stay parented under the
+        // original allocation and get freed when it's freed, leaving dangling refs.
+        var heapPtr = PackEnumFlatVarsToHeap(block, enumPrefix, enumArgType, varTypes, typeDefs);
 
         // Track for post-call release (callee increfs if it stores the pointer)
         enumPackagingBlocks?.Add((heapPtr, enumArgType.Name));
