@@ -66,91 +66,88 @@ module {
 module {
   func @vector.main() -> u32 {
   entry:
-    %0 = memref.lea_symdata __tag_vector_main
-    %1 = std.ptr_to_i64 %0
-    %2 = std.call_runtime @mm_scope_enter %1
-    memref.store %2, __scope_0
+    %0 = arith.constant {value = 0 : i64}
+    %1 = std.call_runtime @mm_scope_enter %0
+    memref.store %1, __scope_0
+    %2 = arith.constant {value = 0 : i64}
     %3 = arith.constant {value = 0 : i64}
+    memref.store %3, __arr_0.2
     %4 = arith.constant {value = 0 : i64}
-    memref.store %4, __arr_0.2
+    memref.store %4, __arr_0.1
     %5 = arith.constant {value = 0 : i64}
-    memref.store %5, __arr_0.1
+    memref.store %5, __arr_0.0
     %6 = arith.constant {value = 0 : i64}
-    memref.store %6, __arr_0.0
-    %7 = arith.constant {value = 0 : i64}
-    %8 = arith.constant {value = 3 : i64}
-    %9 = arith.constant {value = 0 : i64}
-    %10 = arith.constant {value = 8 : i64}
-    %11 = arith.constant {value = 32 : i64}
-    %12 = memref.lea_symdata __tag___ManagedMemory
-    %13 = std.ptr_to_i64 %12
-    %14 = std.call_runtime @mm_alloc %11, %13
-    memref.store %14, __struct_9
+    %7 = arith.constant {value = 3 : i64}
+    %8 = arith.constant {value = 0 : i64}
+    %9 = arith.constant {value = 8 : i64}
+    %10 = arith.constant {value = 32 : i64}
+    %11 = arith.constant {value = 0 : i64}
+    %12 = std.call_runtime @mm_alloc %10, %11
+    memref.store %12, __struct_9
+    %13 = memref.load __struct_9 : i64
+    memref.store_indirect %6, %13+0
+    %14 = memref.load __struct_9 : i64
+    memref.store_indirect %7, %14+8
     %15 = memref.load __struct_9 : i64
-    memref.store_indirect %7, %15+0
+    memref.store_indirect %8, %15+16
     %16 = memref.load __struct_9 : i64
-    memref.store_indirect %8, %16+8
-    %17 = memref.load __struct_9 : i64
-    memref.store_indirect %9, %17+16
-    %18 = memref.load __struct_9 : i64
-    memref.store_indirect %10, %18+24
-    %19 = arith.constant {value = 16 : i64}
-    %20 = memref.lea_symdata __tag_Vec3
-    %21 = std.ptr_to_i64 %20
-    %22 = std.call_runtime @mm_alloc %19, %21
-    memref.store %22, v
+    memref.store_indirect %9, %16+24
+    %17 = arith.constant {value = 16 : i64}
+    %18 = arith.constant {value = 0 : i64}
+    %19 = std.call_runtime @mm_alloc %17, %18
+    memref.store %19, v
+    %20 = memref.load v : i64
+    memref.store_indirect %2, %20+0
+    %21 = memref.load __struct_9 : i64
+    %22 = memref.load v : i64
+    memref.store_indirect %21, %22+8
     %23 = memref.load v : i64
-    memref.store_indirect %3, %23+0
-    %24 = memref.load __struct_9 : i64
-    %25 = memref.load v : i64
-    memref.store_indirect %24, %25+8
-    %26 = memref.load v : i64
-    %27 = arith.constant {value = 1 : i64}
-    std.call_runtime @mm_move %24, %26, %27
-    %28 = memref.lea __arr_0
-    %29 = std.ptr_to_i64 %28
-    %30 = memref.load v : i64
-    %31 = memref.load_indirect %30+8
-    memref.store_indirect %29, %31+0
+    %24 = arith.constant {value = 1 : i64}
+    std.call_runtime @mm_move %21, %23, %24
+    %25 = memref.lea __arr_0
+    %26 = std.ptr_to_i64 %25
+    %27 = memref.load v : i64
+    %28 = memref.load_indirect %27+8
+    memref.store_indirect %26, %28+0
+    %29 = memref.load v : i64
+    std.call_runtime @mm_incref %29
+    %30 = arith.constant {value = 0 : i64}
+    %31 = arith.constant {value = 42 : i64}
     %32 = memref.load v : i64
-    std.call_runtime @mm_incref %32
+    func.call @Vec3.set %32, %30, %31
     %33 = arith.constant {value = 0 : i64}
-    %34 = arith.constant {value = 42 : i64}
-    %35 = memref.load v : i64
-    func.call @Vec3.set %35, %33, %34
-    %36 = arith.constant {value = 0 : i64}
-    %37 = memref.load v : i64
-    %38, %39 = func.try_call @Vec3.get %37, %36
-    %40 = arith.constant {value = 0 : i64}
-    memref.store %40, __try_default_2
-    memref.store %38, __try_result_1
-    %41 = arith.constant {value = 0 : i64}
-    %42 = arith.cmpi ne %39, %41
-    cf.cond_br %42 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %34 = memref.load v : i64
+    %35, %36 = func.try_call @Vec3.get %34, %33
+    %37 = arith.constant {value = 0 : i64}
+    memref.store %37, __try_default_2
+    memref.store %35, __try_result_1
+    %38 = arith.constant {value = 0 : i64}
+    %39 = arith.cmpi ne %36, %38
+    cf.cond_br %39 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %43 = memref.load __try_default_2 : i64
-    memref.store %43, __try_result_1
+    %40 = memref.load __try_default_2 : i64
+    memref.store %40, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %44 = memref.load __try_result_1 : i64
-    memref.store %44, __range_val_5
-    %45 = arith.constant {value = 0 : i64}
-    %46 = arith.cmpi lt %44, %45
-    %47 = arith.constant {value = 4294967295 : i64}
-    %48 = arith.cmpi gt %44, %47
-    %49 = arith.ori1 %46, %48
-    cf.cond_br %49 [then: __range_panic_5, else: __range_ok_5]
+    %41 = memref.load __try_result_1 : i64
+    memref.store %41, __range_val_5
+    %42 = arith.constant {value = 0 : i64}
+    %43 = arith.cmpi lt %41, %42
+    %44 = arith.constant {value = 4294967295 : i64}
+    %45 = arith.cmpi gt %41, %44
+    %46 = arith.ori1 %43, %45
+    cf.cond_br %46 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %50 = memref.lea_symdata __panic_msg_28
-    %51 = std.ptr_to_i64 %50
-    std.call_runtime @maxon_panic %51
+    %47 = memref.lea_symdata __panic_msg_28
+    %48 = std.ptr_to_i64 %47
+    std.call_runtime @maxon_panic %48
   __range_ok_5:
-    %52 = memref.load __range_val_5 : i64
-    %53 = memref.load v : i64
-    std.call_runtime @mm_decref %53
-    %54 = memref.load __scope_0 : i64
-    std.call_runtime @mm_scope_exit %54
-    func.return %52
+    %49 = memref.load __range_val_5 : i64
+    %50 = memref.load v : i64
+    std.call_runtime @mm_decref %50
+    %51 = memref.load __scope_0 : i64
+    std.call_runtime @mm_scope_exit %51
+    func.return %49
   }
 }
 === x86
@@ -158,25 +155,22 @@ module {
   func @vector.main() -> u32 {
   entry:
     x86.prologue stack_size=80
-    x86.lea_symdata rax, [__tag_vector_main]
-    x86.mov rcx, rax
+    x86.xor rcx, rcx
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
-    x86.xor edx, edx
-    x86.xor ebx, ebx
-    x86.mov [rbp-16], ebx
-    x86.xor esi, esi
-    x86.mov [rbp-24], esi
-    x86.xor edi, edi
-    x86.mov [rbp-32], edi
-    x86.xor r8, r8
-    x86.mov r9, 3
     x86.xor eax, eax
-    x86.mov ecx, 8
-    x86.lea_symdata rbx, [__tag___ManagedMemory]
-    x86.mov rsi, rbx
-    x86.mov rdx, rsi
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.xor edx, edx
+    x86.mov [rbp-24], edx
+    x86.xor ebx, ebx
+    x86.mov [rbp-32], ebx
+    x86.xor esi, esi
+    x86.mov edi, 3
+    x86.xor r8, r8
+    x86.mov r9, 8
     x86.mov rcx, 32
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-40], eax
     x86.mov eax, [rbp-40]
@@ -191,10 +185,8 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
-    x86.lea_symdata rax, [__tag_Vec3]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
     x86.mov rcx, 16
+    x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-48], eax
     x86.mov eax, [rbp-48]

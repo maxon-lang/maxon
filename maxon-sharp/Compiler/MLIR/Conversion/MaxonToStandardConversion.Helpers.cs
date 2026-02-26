@@ -195,10 +195,15 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
-  /// Emits a symdata null-terminated C string tag and returns its address as StdI64.
-  /// Tags go into symdata (not rdata) so they don't affect RequiredRdata checks.
+  /// Returns a tag pointer for memory manager calls. When --mm-trace is enabled,
+  /// emits a symdata C string and returns its address; otherwise returns NULL (0).
   [ThreadStatic] private static Dictionary<string, string>? _symdataTagCache;
   private static StdI64 EmitTagPtr(MlirBlock<StandardOp> block, string tag) {
+    if (!Compiler.MmTrace) {
+      var nullOp = new StdConstI64Op(0);
+      block.AddOp(nullOp);
+      return nullOp.Result;
+    }
     _symdataTagCache ??= [];
     var symdataLabel = $"__tag_{tag.Replace('.', '_').Replace(' ', '_')}";
     if (!_symdataTagCache.TryGetValue(tag, out var existingLabel)) {

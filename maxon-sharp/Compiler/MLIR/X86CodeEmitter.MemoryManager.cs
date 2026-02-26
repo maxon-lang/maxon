@@ -69,15 +69,15 @@ public partial class X86CodeEmitter {
       DefineSymdata("__mm_tag_owned_suffix", " owned)\0"u8.ToArray());
       DefineSymdata("__mm_tag_close_paren", ")\0"u8.ToArray());
       DefineSymdata("__mm_tag_space2", "  \0"u8.ToArray());
+      // Runtime allocation tags — only needed for trace output
+      DefineSymdata("__rt_tag_buffer", "Buffer\0"u8.ToArray());
+      DefineSymdata("__rt_tag_cstring", "CString\0"u8.ToArray());
+      DefineSymdata("__rt_tag_cmdline_arg", "CmdLineArg\0"u8.ToArray());
+      DefineSymdata("__rt_tag_find_data", "FindData\0"u8.ToArray());
+      DefineSymdata("__rt_tag_dir_buffer", "DirBuffer\0"u8.ToArray());
+      DefineSymdata("__rt_tag_capture_result", "CaptureResult\0"u8.ToArray());
+      DefineSymdata("__rt_tag_pipe_buffer", "PipeBuffer\0"u8.ToArray());
     }
-    // Runtime allocation tags — used by runtime functions that call mm_alloc/mm_alloc_in
-    DefineSymdata("__rt_tag_buffer", "Buffer\0"u8.ToArray());
-    DefineSymdata("__rt_tag_cstring", "CString\0"u8.ToArray());
-    DefineSymdata("__rt_tag_cmdline_arg", "CmdLineArg\0"u8.ToArray());
-    DefineSymdata("__rt_tag_find_data", "FindData\0"u8.ToArray());
-    DefineSymdata("__rt_tag_dir_buffer", "DirBuffer\0"u8.ToArray());
-    DefineSymdata("__rt_tag_capture_result", "CaptureResult\0"u8.ToArray());
-    DefineSymdata("__rt_tag_pipe_buffer", "PipeBuffer\0"u8.ToArray());
 
     // Panic messages for invalid memory manager calls
     DefineSymdata("__mm_panic_free_null",
