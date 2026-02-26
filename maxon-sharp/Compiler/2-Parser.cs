@@ -633,7 +633,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType))
         module.TypeDefs[aliasName] = aliasType;
       var typeParams = aliasType is MlirStructType st && st.TypeParams.Count > 0
-        ? new Dictionary<string, MlirType>(st.TypeParams) : null;
+        ? new Dictionary<string, MlirType>(st.TypeParams)
+        : aliasType is MlirUnionType ut && ut.TypeParams != null && ut.TypeParams.Count > 0
+          ? new Dictionary<string, MlirType>(ut.TypeParams) : null;
       bool isExported = _exportedTypeAliases.Contains(aliasName);
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
           isExported, _isStdlib, _sourceFilePath);
@@ -1868,15 +1870,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
 
-    var (conformingInterfaces, _) = ParseConformanceClause();
+    var associatedTypeNames = ParseUsesClause();
+    var (conformingInterfaces, conformanceTypeParams) = ParseConformanceClause();
+    var whereConstraints = ParseWhereClause(associatedTypeNames);
 
     // Temporary entry so ParseTypeRef can resolve forward references
     if (!_typeRegistry.TryGetValue(enumName, out MlirType? value)) {
-      value = new MlirUnionType(enumName, [], null, conformingInterfaces);
+      value = new MlirUnionType(enumName, [], null, conformingInterfaces,
+        associatedTypeNames: associatedTypeNames);
       _typeRegistry[enumName] = value;
     } else if (value is MlirUnionType existingPre && existingPre.ConformingInterfaces.Count == 0 && conformingInterfaces.Count > 0) {
       // Pre-registered entry had no conforming interfaces; update with parsed ones
-      value = new MlirUnionType(enumName, [.. existingPre.Cases], existingPre.BackingType, conformingInterfaces);
+      value = new MlirUnionType(enumName, [.. existingPre.Cases], existingPre.BackingType, conformingInterfaces,
+        associatedTypeNames: associatedTypeNames);
       _typeRegistry[enumName] = value;
     }
 
@@ -2075,7 +2081,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (!finalInterfaces.Contains("Equatable")) finalInterfaces.Add("Equatable");
     }
 
-    var finalEnumType = new MlirUnionType(enumName, cases, backingType, finalInterfaces);
+    var finalEnumType = new MlirUnionType(enumName, cases, backingType, finalInterfaces,
+      associatedTypeNames: associatedTypeNames,
+      typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
+      whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null);
     _typeRegistry[enumName] = finalEnumType;
 
     // Pre-register synthetic hash() and equals() methods for enums without associated values
@@ -2083,6 +2092,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       PreRegisterSyntheticUnionMethods(module, enumName, finalEnumType);
     }
 
+    RemoveAssociatedTypePlaceholders(associatedTypeNames);
     _currentTypeName = null;
 
     if (isExported) _exportedTypes.Add(enumName);
@@ -2908,23 +2918,45 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return;
       }
 
+      // Generic union alias: typealias IntNode = ListNode with Integer
+      if (sourceType is MlirUnionType sourceUnion && sourceUnion.AssociatedTypeNames.Count > 0) {
+        Expect(TokenType.With);
+
+        var concreteTypes = ParseWithTypeArgs(sourceUnion.AssociatedTypeNames.Count);
+        RejectBarePrimitiveTypeArgs(concreteTypes, aliasNameToken);
+
+        if (concreteTypes.Count != sourceUnion.AssociatedTypeNames.Count)
+          throw new CompileError(ErrorCode.ParserExpectedType,
+            $"Type '{sourceName}' expects {sourceUnion.AssociatedTypeNames.Count} type argument(s), got {concreteTypes.Count}",
+            aliasNameToken.Line, aliasNameToken.Column);
+
+        var substitution = new Dictionary<string, MlirType>();
+        for (int i = 0; i < sourceUnion.AssociatedTypeNames.Count; i++) {
+          substitution[sourceUnion.AssociatedTypeNames[i]] = concreteTypes[i];
+        }
+
+        ValidateUnionWhereConstraints(sourceUnion, substitution, sourceName, aliasNameToken);
+        RegisterConcreteUnionAlias(aliasName, sourceName, sourceUnion, substitution);
+        return;
+      }
+
       if (sourceType is not MlirStructType sourceStruct)
-        throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' is not a struct type", sourceNameToken.Line, sourceNameToken.Column);
+        throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' is not a struct or union type", sourceNameToken.Line, sourceNameToken.Column);
 
       if (sourceStruct.AssociatedTypeNames.Count == 0)
         throw new CompileError(ErrorCode.ParserExpectedType, $"Type '{sourceName}' has no associated types", sourceNameToken.Line, sourceNameToken.Column);
 
       Expect(TokenType.With);
 
-      var concreteTypes = new List<MlirType>();
+      var concreteTypes2 = new List<MlirType>();
       var constParams = new Dictionary<string, long>();
 
       if (Check(TokenType.LeftParen)) {
         Advance(); // consume '('
-        concreteTypes.Add(ParseTypeRef());
+        concreteTypes2.Add(ParseTypeRef());
         while (Check(TokenType.Comma)) {
           Advance();
-          concreteTypes.Add(ParseTypeRef());
+          concreteTypes2.Add(ParseTypeRef());
         }
         Expect(TokenType.RightParen);
       } else {
@@ -2933,25 +2965,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var intToken = Advance();
           constParams["__capacity"] = ParseIntegerLiteral(intToken);
         }
-        concreteTypes.Add(ParseTypeRef());
+        concreteTypes2.Add(ParseTypeRef());
       }
 
-      RejectBarePrimitiveTypeArgs(concreteTypes, aliasNameToken);
+      RejectBarePrimitiveTypeArgs(concreteTypes2, aliasNameToken);
 
-      if (concreteTypes.Count != sourceStruct.AssociatedTypeNames.Count)
+      if (concreteTypes2.Count != sourceStruct.AssociatedTypeNames.Count)
         throw new CompileError(ErrorCode.ParserExpectedType,
-          $"Type '{sourceName}' expects {sourceStruct.AssociatedTypeNames.Count} type argument(s), got {concreteTypes.Count}",
+          $"Type '{sourceName}' expects {sourceStruct.AssociatedTypeNames.Count} type argument(s), got {concreteTypes2.Count}",
           aliasNameToken.Line, aliasNameToken.Column);
 
       // Build substitution map: associated type name -> concrete type
-      var substitution = new Dictionary<string, MlirType>();
+      var substitution2 = new Dictionary<string, MlirType>();
       for (int i = 0; i < sourceStruct.AssociatedTypeNames.Count; i++) {
-        substitution[sourceStruct.AssociatedTypeNames[i]] = concreteTypes[i];
+        substitution2[sourceStruct.AssociatedTypeNames[i]] = concreteTypes2[i];
       }
 
-      ValidateWhereConstraints(sourceStruct, substitution, sourceName, aliasNameToken);
+      ValidateWhereConstraints(sourceStruct, substitution2, sourceName, aliasNameToken);
 
-      RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution,
+      RegisterConcreteTypeAlias(aliasName, sourceName, sourceStruct, substitution2,
         constParams.Count > 0 ? constParams : null);
 
     } finally { _parsingTypeAliasRhs = false; _resolvingTypeAliases.Remove(aliasName); }
@@ -2988,6 +3020,68 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     Logger.Debug(LogCategory.Parser, $"Registering type alias: {aliasName} -> {sourceName}");
     _typeAliasSources[aliasName] = sourceName;
+  }
+
+  private void RegisterConcreteUnionAlias(
+      string aliasName,
+      string sourceName,
+      MlirUnionType sourceUnion,
+      Dictionary<string, MlirType> substitution) {
+    // Create concrete alias type first so self-referential cases resolve correctly
+    var concreteAliasType = new MlirUnionType(aliasName, [],
+      sourceUnion.BackingType,
+      [.. sourceUnion.ConformingInterfaces],
+      typeParams: substitution.Count > 0 ? substitution : null);
+    _typeRegistry[aliasName] = concreteAliasType;
+
+    // Build full substitution including self-reference: ListNode → IntNode
+    var fullSubstitution = new Dictionary<string, MlirType>(substitution) {
+      [sourceName] = concreteAliasType,
+      ["Self"] = concreteAliasType
+    };
+
+    var concreteCases = new List<MlirEnumCase>();
+    foreach (var c in sourceUnion.Cases) {
+      if (c.AssociatedValues is { Count: > 0 }) {
+        var concreteValues = new List<(string Name, MlirType Type)>();
+        foreach (var (name, type) in c.AssociatedValues) {
+          var newType = fullSubstitution.TryGetValue(type.Name, out var concreteType)
+            ? concreteType
+            : type;
+          concreteValues.Add((name, newType));
+        }
+        concreteCases.Add(new MlirEnumCase(c.Name, c.Ordinal, associatedValues: concreteValues));
+      } else {
+        concreteCases.Add(c);
+      }
+    }
+
+    // Update the already-registered type with concrete cases
+    _typeRegistry[aliasName] = new MlirUnionType(aliasName, concreteCases,
+      sourceUnion.BackingType,
+      [.. sourceUnion.ConformingInterfaces],
+      typeParams: substitution.Count > 0 ? substitution : null);
+
+    Logger.Debug(LogCategory.Parser, $"Registering union type alias: {aliasName} -> {sourceName}");
+    _typeAliasSources[aliasName] = sourceName;
+  }
+
+  private void ValidateUnionWhereConstraints(
+      MlirUnionType sourceUnion, Dictionary<string, MlirType> substitution,
+      string sourceName, Token errorToken) {
+    if (_skipWhereValidation) return;
+    foreach (var (paramName, requiredInterfaces) in sourceUnion.WhereConstraints) {
+      if (!substitution.TryGetValue(paramName, out var concreteType)) continue;
+      if (concreteType is MlirTypeParameterType) continue;
+
+      var concreteTypeName = MlirType.FormatAsSourceName(concreteType);
+      foreach (var requiredInterface in requiredInterfaces) {
+        if (!TypeConformsToInterface(concreteTypeName, requiredInterface))
+          throw new CompileError(ErrorCode.SemanticWhereConstraintViolation,
+            $"Type '{concreteTypeName}' does not satisfy constraint '{requiredInterface}' required by type parameter '{paramName}' of '{sourceName}'",
+            errorToken.Line, errorToken.Column);
+      }
+    }
   }
 
   /// Parses a range bound in a ranged typealias: a numeric literal, negative literal, or type.min/type.max.
@@ -3565,8 +3659,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentTypeName = enumName;
     Logger.Debug(LogCategory.Parser, $"Parsing enum: {enumName}");
 
-    // Skip conformance clause (already captured during pre-scan)
+    // Skip uses/conformance/where clauses (already captured during pre-scan)
+    var associatedTypeNames = ParseUsesClause();
     ParseConformanceClause();
+    ParseWhereClause(associatedTypeNames);
 
     SkipNewlines();
 
@@ -3592,6 +3688,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     _currentTypeName = null;
+    RemoveAssociatedTypePlaceholders(associatedTypeNames);
     ExpectEndLabel(enumName);
   }
 
@@ -4180,7 +4277,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // Register all fields of 'self' as directly accessible variables
       foreach (var field in structType.Fields) {
         var fieldKind = field.Type.ToValueKind();
-        var fieldStructName = field.Type is MlirStructType fst ? fst.Name : null;
+        string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
+          : field.Type is MlirUnionType fut ? fut.Name
+          : null;
         var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, fieldKind, fieldStructName);
         _currentBlock!.AddOp(fieldAccessOp);
         _variables[field.Name] = new VarInfo(fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, CurrentScopeVar, fieldStructName, IsSelfField: true);
@@ -8429,6 +8528,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var kwMemberName = PeekNext().Value;
         var kwEnumCase = kwEnumType.GetCase(kwMemberName);
         if (kwEnumCase != null) {
+          _usedTypeAliases.Add(token.Value);
           Advance(); // consume '.'
           Advance(); // consume keyword case name
           if (kwEnumType.HasAssociatedValues) {
@@ -8483,6 +8583,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var memberName = PeekNext().Value;
           var enumCase = enumType.GetCase(memberName);
           if (enumCase != null) {
+            _usedTypeAliases.Add(token.Value);
             Advance(); // consume '.'
             Advance(); // consume case name
 
@@ -8496,18 +8597,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
                   if (ai > 0) Expect(TokenType.Comma);
                   var argExpr = ParseExpression();
                   var argVal = ResolveExprValue(argExpr);
-                  // Type-check the argument
+                  // Type-check the argument (skip for type parameters — checked after monomorphization)
                   var expectedType = enumCase.AssociatedValues[ai].Type;
-                  var actualKind = DetermineValueKind(argVal);
-                  var expectedKind = expectedType.ToValueKind();
-                  if (actualKind != expectedKind) {
-                    // Determine source-level name for the actual type
-                    var actualTypeName = argVal is MaxonStruct ms
-                      ? ms.TypeName
-                      : MlirType.FormatAsSourceName(actualKind.ToMlirType());
-                    throw new CompileError(ErrorCode.SemanticTypeMismatch,
-                      $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
-                      Current().Line, Current().Column);
+                  if (expectedType is not MlirTypeParameterType) {
+                    var actualKind = DetermineValueKind(argVal);
+                    var expectedKind = expectedType.ToValueKind();
+                    if (actualKind != expectedKind) {
+                      var actualTypeName = argVal is MaxonStruct ms
+                        ? ms.TypeName
+                        : MlirType.FormatAsSourceName(actualKind.ToMlirType());
+                      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+                        $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
+                        Current().Line, Current().Column);
+                    }
                   }
                   args.Add(argVal);
                 }
@@ -9782,6 +9884,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             // For struct-typed fields, emit a zero-initialized struct literal (recursively for nested structs)
             var zeroResult = EmitZeroStructLiteral(fieldStructType, structType.TypeParams);
             fieldValues.Add((field.Name, zeroResult));
+          } else if (field.Type is MlirUnionType fieldUnionType && fieldUnionType.HasAssociatedValues) {
+            // Associated-value union fields need a heap-allocated default (first case with zero args)
+            var defaultCase = fieldUnionType.Cases[0];
+            var zeroArgs = new List<MaxonValue>();
+            if (defaultCase.AssociatedValues != null) {
+              foreach (var _ in defaultCase.AssociatedValues) {
+                var zeroVal = new MaxonLiteralOp(0L);
+                _currentBlock!.AddOp(zeroVal);
+                zeroArgs.Add(zeroVal.Result);
+              }
+            }
+            var enumConstruct = new MaxonEnumConstructOp(fieldUnionType.Name, defaultCase.Name, 0, zeroArgs);
+            _currentBlock!.AddOp(enumConstruct);
+            fieldValues.Add((field.Name, enumConstruct.Result));
           } else {
             // Zero-initialize primitive fields not provided
             var zeroVal = new MaxonLiteralOp(0L);
@@ -9833,6 +9949,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (subField.Type is MlirStructType nestedType) {
         var nestedResult = EmitZeroStructLiteral(nestedType, typeParams);
         zeroFields.Add((subField.Name, nestedResult));
+      } else if (subField.Type is MlirUnionType nestedUnionType && nestedUnionType.HasAssociatedValues) {
+        var defaultCase = nestedUnionType.Cases[0];
+        var zeroArgs = new List<MaxonValue>();
+        if (defaultCase.AssociatedValues != null) {
+          foreach (var _ in defaultCase.AssociatedValues) {
+            var zeroVal = new MaxonLiteralOp(0L);
+            _currentBlock!.AddOp(zeroVal);
+            zeroArgs.Add(zeroVal.Result);
+          }
+        }
+        var enumConstruct = new MaxonEnumConstructOp(nestedUnionType.Name, defaultCase.Name, 0, zeroArgs);
+        _currentBlock!.AddOp(enumConstruct);
+        zeroFields.Add((subField.Name, enumConstruct.Result));
       } else {
         long value = 0L;
         // For __ManagedMemory.element_size, determine from Element type parameter

@@ -2579,6 +2579,68 @@ format_int(value int) String    // Format int as string
 format_float(value float) String // Format float as string
 ```
 
+### List
+
+`List` is a generic linked list. Nodes are represented as a discriminated union (`ListNode`): either `empty` or a `node` with a value and a link to the next node. Because union values are immutable, mutations rebuild the affected portion of the chain.
+
+**Creating a List**
+
+Create a concrete List type with `typealias`, then initialize with `{}`:
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+var list = IntList{}             // Empty list
+```
+
+**Adding Elements**
+```maxon
+list.prepend(1)                  // Add to front — O(1)
+list.append(2)                   // Add to back — O(n), rebuilds chain
+list.insert(1, value: 99)       // Insert at index — O(n)
+```
+
+**Accessing Elements**
+```maxon
+var first = try list.first() otherwise 0   // First element (throws ArrayError)
+var last = try list.last() otherwise 0     // Last element (throws ArrayError)
+var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayError)
+```
+
+**Removing Elements**
+```maxon
+var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
+var popped = try list.removeLast() otherwise 0    // Remove back — O(n)
+var at2 = try list.remove(at: 2) otherwise 0      // Remove at index — O(n)
+list.clear()                                       // Remove all elements
+```
+
+**Query**
+```maxon
+list.count()                     // Number of elements
+list.isEmpty()                   // true if empty
+```
+
+**Iteration**
+
+`List` implements `Iterable with Element`, so it supports `for`-`in` loops:
+```maxon
+for item in list 'loop'
+    print("{item}")
+end 'loop'
+```
+
+**Complexity Summary**
+
+| Operation | Time |
+|-----------|------|
+| `prepend` | O(1) |
+| `removeFirst` | O(1) |
+| `append` | O(n) |
+| `removeLast` | O(n) |
+| `get`, `insert`, `remove(at:)` | O(n) |
+| `first`, `last`, `count`, `isEmpty` | O(1) |
+
 ---
 
 ## Build System

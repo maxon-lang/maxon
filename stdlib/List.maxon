@@ -1,0 +1,285 @@
+/// Linked list with O(1) prepend and front removal, O(n) append and indexed access.
+/// Nodes are represented as a discriminated union: either `empty` or a `node` with
+/// a value and a link to the next node. Because union values are immutable,
+/// mutations rebuild the affected portion of the chain.
+/// @category Collections
+
+export union ListNode uses Element
+  empty
+  node(value Element, next ListNode)
+end 'ListNode'
+
+export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with Element
+  typealias ElementArray = Array with Element
+  typealias Node = ListNode with Element
+
+  var head Node
+  var tail Node
+  var size Count
+  var iterNode Node
+
+  // InitableFromArrayLiteral conformance — called by compiler for `List from [1, 2, 3]`
+  static function init(arr ElementArray) returns Self
+    var result = Self{}
+    for item in arr 'build'
+      result.append(item)
+    end 'build'
+    return result
+  end 'init'
+
+  /// Get the number of elements in the list
+  export function count() returns Count
+    return size
+  end 'count'
+
+  /// Check if the list is empty
+  export function isEmpty() returns bool
+    return size == 0
+  end 'isEmpty'
+
+  /// Get the first element, throws if empty
+  export function first() returns Element throws ArrayError
+    match head 'check'
+      node(v, _next) then return v
+      empty then throw ArrayError.indexOutOfBounds
+    end 'check'
+  end 'first'
+
+  /// Get the last element, throws if empty
+  export function last() returns Element throws ArrayError
+    match tail 'check'
+      node(v, _next) then return v
+      empty then throw ArrayError.indexOutOfBounds
+    end 'check'
+  end 'last'
+
+  // Extract the next node from a ListNode, returns Node.empty if the node is empty
+  function nodeNext(n Node) returns Node
+    match n 'check'
+      node(_v, nx) then return nx
+      empty then return Node.empty
+    end 'check'
+  end 'nodeNext'
+
+  // Extract the value from a ListNode, throws if empty
+  function nodeValue(n Node) returns Element throws ArrayError
+    match n 'check'
+      node(v, _next) then return v
+      empty then throw ArrayError.indexOutOfBounds
+    end 'check'
+  end 'nodeValue'
+
+  // Check if a node is empty
+  function nodeIsEmpty(n Node) returns bool
+    match n 'check'
+      empty then return true
+      node(_v, _nx) then return false
+    end 'check'
+  end 'nodeIsEmpty'
+
+  /// Get element at index (0-based, front to back), throws if out of bounds
+  export function get(index Index) returns Element throws ArrayError
+    if index >= size 'bounds'
+      throw ArrayError.indexOutOfBounds
+    end 'bounds'
+    var current = head
+    var i = 0
+    while i < index 'walk'
+      current = nodeNext(current)
+      i = i + 1
+    end 'walk'
+    return try nodeValue(current) otherwise 'err'
+      throw ArrayError.indexOutOfBounds
+    end 'err'
+  end 'get'
+
+  /// Add an element to the front of the list. O(1).
+  export function prepend(value Element)
+    var newNode = Node.node(value, head)
+    head = newNode
+    if size == 0 'wasEmpty'
+      tail = newNode
+    end 'wasEmpty'
+    size = size + 1
+    iterNode = head
+  end 'prepend'
+
+  /// Add an element to the back of the list. O(n) — rebuilds the chain.
+  export function append(value Element)
+    var newTail = Node.node(value, Node.empty)
+    if size == 0 'wasEmpty'
+      head = newTail
+      tail = newTail
+      size = 1
+      iterNode = head
+      return
+    end 'wasEmpty'
+    head = rebuildAppend(head, newTail: newTail)
+    tail = newTail
+    size = size + 1
+    iterNode = head
+  end 'append'
+
+  // Rebuild the chain by walking to the end and appending newTail
+  function rebuildAppend(current Node, newTail Node) returns Node
+    match current 'check'
+      empty then return newTail
+      node(v, nx) then return Node.node(v, rebuildAppend(nx, newTail: newTail))
+    end 'check'
+  end 'rebuildAppend'
+
+  /// Insert an element at the given index. O(n).
+  export function insert(at Index, value Element)
+    if at == 0 'front'
+      prepend(value)
+      return
+    end 'front'
+    if at >= size 'back'
+      append(value)
+      return
+    end 'back'
+    head = rebuildInsert(head, idx: at, value: value)
+    size = size + 1
+    iterNode = head
+  end 'insert'
+
+  // Rebuild chain with a new node inserted at position idx
+  function rebuildInsert(current Node, idx Index, value Element) returns Node
+    if idx == 0 'here'
+      return Node.node(value, current)
+    end 'here'
+    match current 'step'
+      node(v, nx) then return Node.node(v, rebuildInsert(nx, idx: idx - 1, value: value))
+      empty then return Node.node(value, Node.empty)
+    end 'step'
+  end 'rebuildInsert'
+
+  /// Remove and return the first element, throws if empty. O(1).
+  export function removeFirst() returns Element throws ArrayError
+    if size == 0 'empty'
+      throw ArrayError.indexOutOfBounds
+    end 'empty'
+    var result = try nodeValue(head) otherwise 'err'
+      throw ArrayError.indexOutOfBounds
+    end 'err'
+    head = nodeNext(head)
+    size = size - 1
+    if size == 0 'nowEmpty'
+      tail = Node.empty
+    end 'nowEmpty'
+    iterNode = head
+    return result
+  end 'removeFirst'
+
+  /// Remove and return the last element, throws if empty. O(n) — rebuilds the chain.
+  export function removeLast() returns Element throws ArrayError
+    if size == 0 'empty'
+      throw ArrayError.indexOutOfBounds
+    end 'empty'
+    if size == 1 'single'
+      var result = try first() otherwise 'err'
+        throw ArrayError.indexOutOfBounds
+      end 'err'
+      head = Node.empty
+      tail = Node.empty
+      size = 0
+      iterNode = head
+      return result
+    end 'single'
+    var lastValue = try last() otherwise 'err2'
+      throw ArrayError.indexOutOfBounds
+    end 'err2'
+    head = rebuildDropLast(head)
+    size = size - 1
+    tail = findLast(head)
+    iterNode = head
+    return lastValue
+  end 'removeLast'
+
+  // Rebuild chain without the last node
+  function rebuildDropLast(current Node) returns Node
+    if nodeIsEmpty(current) 'base1'
+      return Node.empty
+    end 'base1'
+    var nx = nodeNext(current)
+    if nodeIsEmpty(nx) 'base2'
+      return Node.empty
+    end 'base2'
+    var v = try nodeValue(current) otherwise 'err'
+      return Node.empty
+    end 'err'
+    return Node.node(v, rebuildDropLast(nx))
+  end 'rebuildDropLast'
+
+  // Find the last node in the chain
+  function findLast(current Node) returns Node
+    if nodeIsEmpty(current) 'base1'
+      return Node.empty
+    end 'base1'
+    var nx = nodeNext(current)
+    if nodeIsEmpty(nx) 'base2'
+      return current
+    end 'base2'
+    return findLast(nx)
+  end 'findLast'
+
+  /// Remove and return element at index, throws if out of bounds. O(n).
+  export function remove(at Index) returns Element throws ArrayError
+    if at >= size 'bounds'
+      throw ArrayError.indexOutOfBounds
+    end 'bounds'
+    if at == 0 'front'
+      var first = try removeFirst() otherwise 'err1'
+        throw ArrayError.indexOutOfBounds
+      end 'err1'
+      return first
+    end 'front'
+    var result = try get(at) otherwise 'err2'
+      throw ArrayError.indexOutOfBounds
+    end 'err2'
+    head = rebuildRemoveAt(head, idx: at)
+    size = size - 1
+    if size == 0 'nowEmpty'
+      tail = Node.empty
+    end 'nowEmpty' else 'stillHas'
+      tail = findLast(head)
+    end 'stillHas'
+    iterNode = head
+    return result
+  end 'remove'
+
+  // Rebuild chain with node at position idx removed
+  function rebuildRemoveAt(current Node, idx Index) returns Node
+    if nodeIsEmpty(current) 'base'
+      return Node.empty
+    end 'base'
+    var v = try nodeValue(current) otherwise 'err'
+      return Node.empty
+    end 'err'
+    var nx = nodeNext(current)
+    if idx == 0 'removeThis'
+      return nx
+    end 'removeThis'
+    return Node.node(v, rebuildRemoveAt(nx, idx: idx - 1))
+  end 'rebuildRemoveAt'
+
+  /// Remove all elements
+  export function clear()
+    head = Node.empty
+    tail = Node.empty
+    size = 0
+    iterNode = Node.empty
+  end 'clear'
+
+  /// Get next element in iteration (front to back), throws when exhausted
+  export function next() returns Element throws IterationError
+    if nodeIsEmpty(iterNode) 'done'
+      throw IterationError.exhausted
+    end 'done'
+    var result = try nodeValue(iterNode) otherwise 'err'
+      throw IterationError.exhausted
+    end 'err'
+    iterNode = nodeNext(iterNode)
+    return result
+  end 'next'
+end 'List'

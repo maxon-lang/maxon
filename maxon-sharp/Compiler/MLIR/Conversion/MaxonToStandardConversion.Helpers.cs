@@ -508,7 +508,30 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// Returns flat slot indices that contain heap pointers (struct or associated-value union)
+  /// across any case of the given union type. A slot is included if ANY case stores a
+  /// heap-pointer type at that position.
+  private static HashSet<int> GetHeapPointerSlots(MlirUnionType enumType, Dictionary<string, MlirType> typeDefs) {
+    var slots = new HashSet<int>();
+    foreach (var c in enumType.Cases) {
+      if (c.AssociatedValues == null) continue;
+      int slotIdx = 0;
+      foreach (var (_, avType) in c.AssociatedValues) {
+        var resolvedType = typeDefs.TryGetValue(avType.Name, out var td) ? td : avType;
+        bool isHeapPointer = resolvedType is MlirStructType
+          || (resolvedType is MlirUnionType ut && ut.HasAssociatedValues);
+        if (isHeapPointer) {
+          slots.Add(slotIdx);
+        }
+        slotIdx += CountFlatFields(avType, typeDefs);
+      }
+    }
+    return slots;
+  }
+
   /// Pack flat __tag/__payload_N variables into a new heap-allocated block for storage in struct fields.
+  /// Also reparents any heap-pointer payload slots under the new allocation so the memory
+  /// manager tracks the ownership chain (e.g., ListNode owns its next pointer).
   private static StdI64 PackEnumFlatVarsToHeap(
     MlirBlock<StandardOp> block, string varName, MlirUnionType enumType,
     Dictionary<string, string> varTypes, Dictionary<string, MlirType> typeDefs) {
@@ -521,6 +544,14 @@ public static partial class MaxonToStandardConversion {
       var payloadVal = EmitLoad(block, $"{varName}.__payload_{pi}", varTypes);
       block.AddOp(new StdStoreIndirectOp(payloadVal, heapPtr, 8 + pi * 8, MlirType.I64));
     }
+
+    // Reparent heap-pointer payload slots under this allocation
+    var heapSlots = GetHeapPointerSlots(enumType, typeDefs);
+    foreach (var slotIdx in heapSlots) {
+      var childPtr = EmitLoad(block, $"{varName}.__payload_{slotIdx}", varTypes);
+      block.AddOp(new StdCallRuntimeOp("mm_reparent_if_nonnull", [(StdI64)childPtr, heapPtr], null));
+    }
+
     return heapPtr;
   }
 }

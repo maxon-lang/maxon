@@ -127,6 +127,7 @@ public partial class X86CodeEmitter {
     EmitMmFreeEntry();
     EmitMmFree();
     EmitMmFreeIfNonnull();
+    EmitMmReparentIfNonnull();
     EmitMmGetRootScope();
     EmitMmAllocSimple();
     EmitMmFreeSimple();
@@ -1170,6 +1171,31 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
     DefineLabel("mm_free_if_nonnull_skip");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_reparent_if_nonnull(child_ptr_in_rcx, parent_ptr_in_rdx) -> void
+  // Calls mm_move(child, parent, mode=1) if child is non-null and managed.
+  // Used to establish parent-child ownership for enum payload slots that
+  // contain heap pointers (e.g., ListNode.next).
+  // -------------------------------------------------------------------------
+  private void EmitMmReparentIfNonnull() {
+    EmitRuntimeFunctionStart("mm_reparent_if_nonnull", 2, 0x30);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = child_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_if_nonnull_skip");
+    // Check backpointer: if [ptr-8] == 0, skip (unmanaged)
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_reparent_if_nonnull_skip");
+    // mm_move(child_ptr, parent_ptr, mode=1)
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // child_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // parent_ptr
+    EmitMovRegImm(X86Register.R8, 1); // mode=1 (reparent)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_move")); EmitDword(0);
+    DefineLabel("mm_reparent_if_nonnull_skip");
     EmitRuntimeFunctionEnd();
   }
 

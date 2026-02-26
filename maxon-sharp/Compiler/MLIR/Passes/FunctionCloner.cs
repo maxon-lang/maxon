@@ -19,6 +19,7 @@ internal class FunctionCloner {
   private readonly Dictionary<string, string> _varTypeParams = [];
   private readonly HashSet<string> _structTypeParams = [];
   private readonly Dictionary<string, string> _structVars = [];
+  private readonly Dictionary<string, MaxonValueKind> _resolvedVarKinds = [];
 
   // Derived from source function
   private readonly HashSet<int> _elementPolymorphicIndices = [];
@@ -259,11 +260,26 @@ internal class FunctionCloner {
       case MaxonMaxOp ma: { var c = new MaxonMaxOp(MapValue(ma.Lhs), MapValue(ma.Rhs)); RegisterResult(ma.Result, c.Result); return c; }
 
       // Enum ops
-      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.IntValue); RegisterResult(el.Result, c.Result); return c; }
-      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, ep.EnumTypeName, ep.BackingKind); RegisterResult(ep.Result, c.Result); return c; }
-      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, ev.EnumTypeName, ev.BackingKind); RegisterResult(ev.Result, c.Result); return c; }
-      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(MapValue(er.EnumValue), er.EnumTypeName, er.ResultKind); RegisterResult(er.Result, c.Result); return c; }
-      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(MapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); RegisterResult(ef.Result, c.Result); return c; }
+      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(SubName(el.EnumTypeName), el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(SubName(el.EnumTypeName), el.CaseName, el.IntValue); RegisterResult(el.Result, c.Result); return c; }
+      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, SubName(ep.EnumTypeName), ep.BackingKind); RegisterResult(ep.Result, c.Result); return c; }
+      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, SubName(ev.EnumTypeName), ev.BackingKind); RegisterResult(ev.Result, c.Result); return c; }
+      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(MapValue(er.EnumValue), SubName(er.EnumTypeName), er.ResultKind); RegisterResult(er.Result, c.Result); return c; }
+      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(MapValue(ef.ErrorFlag), SubName(ef.EnumTypeName), ef.BackingKind, ef.HasAssociatedValues); RegisterResult(ef.Result, c.Result); return c; }
+      case MaxonEnumConstructOp ec: { var c = new MaxonEnumConstructOp(SubName(ec.EnumTypeName), ec.CaseName, ec.Ordinal, [.. ec.Args.Select(MapValue)]); RegisterResult(ec.Result, c.Result); return c; }
+      case MaxonEnumTagOp et: { var c = new MaxonEnumTagOp(MapValue(et.EnumValue), SubName(et.EnumTypeName)); RegisterResult(et.Result, c.Result); return c; }
+      case MaxonEnumPayloadOp payload: {
+        var resultKind = _typeSubstitution.SubstituteValueKind(payload.ResultKind);
+        var resultStructTypeName = payload.ResultStructTypeName != null ? SubName(payload.ResultStructTypeName) : null;
+        // When substitution resolved a type parameter to a concrete struct/union type,
+        // populate the type name so downstream lowering can track it correctly
+        if (resultStructTypeName == null && resultKind == MaxonValueKind.Struct && _concreteElementType is MlirStructType payloadSt)
+          resultStructTypeName = payloadSt.Name;
+        if (resultStructTypeName == null && resultKind == MaxonValueKind.Enum && _concreteElementType is MlirUnionType payloadUn)
+          resultStructTypeName = payloadUn.Name;
+        var c = new MaxonEnumPayloadOp(MapValue(payload.EnumValue), SubName(payload.EnumTypeName), payload.PayloadIndex, resultKind, resultStructTypeName);
+        RegisterResult(payload.Result, c.Result);
+        return c;
+      }
 
       // Global ops
       case MaxonGlobalLoadOp gl: { var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind); RegisterResult(gl.Result, c.Result); return c; }
@@ -300,16 +316,32 @@ internal class FunctionCloner {
     var valueKind = assign.ValueKind;
     var mappedValue = MapValue(assign.Value);
     if (valueKind == MaxonValueKind.TypeParameter) {
-      if (mappedValue is MaxonStruct ms) {
-        _structVars.TryAdd(assign.VarName, ms.TypeName);
-        return new MaxonAssignOp(assign.VarName, mappedValue, assign.IsDeclaration, assign.IsMutable, MaxonValueKind.Struct);
+      // Derive the kind from the mapped value itself — it was already resolved
+      // correctly by the producing op (e.g., ResolveTypeParameterResult for calls).
+      // Using SubstituteValueKind here would re-resolve through the wrong type param
+      // (e.g., default "Element" → Entry tuple → Struct when the var actually holds a Key).
+      valueKind = mappedValue switch {
+        MaxonStruct => MaxonValueKind.Struct,
+        MaxonEnum => MaxonValueKind.Enum,
+        MaxonFloat => MaxonValueKind.Float,
+        MaxonBool => MaxonValueKind.Bool,
+        MaxonByte => MaxonValueKind.Byte,
+        MaxonShort => MaxonValueKind.Short,
+        MaxonInteger => MaxonValueKind.Integer,
+        MaxonFunctionPtr => MaxonValueKind.Integer,
+        _ => throw new InvalidOperationException($"CloneAssignOp: unexpected mapped value type {mappedValue.GetType().Name}")
+      };
+      if (mappedValue is MaxonStruct assignedStruct) {
+        _structVars.TryAdd(assign.VarName, assignedStruct.TypeName);
       }
-      valueKind = _substituteToFloat && mappedValue is MaxonFloat
-        ? MaxonValueKind.Float
-        : _typeSubstitution.SubstituteValueKind(valueKind);
+      // Record the resolved kind so CloneVarRefOp can use it instead of re-resolving
+      _resolvedVarKinds[assign.VarName] = valueKind;
     }
     if (valueKind == MaxonValueKind.Float) {
       _floatVars.Add(assign.VarName);
+    }
+    if (valueKind == MaxonValueKind.Struct && mappedValue is MaxonStruct assignStruct) {
+      _structVars.TryAdd(assign.VarName, assignStruct.TypeName);
     }
     return new MaxonAssignOp(assign.VarName, mappedValue, assign.IsDeclaration, assign.IsMutable, valueKind);
   }
@@ -328,6 +360,16 @@ internal class FunctionCloner {
     }
     if (valueKind == MaxonValueKind.Float) {
       _floatVars.Add(param.Name);
+    }
+    if (valueKind == MaxonValueKind.Struct) {
+      // SubstituteValueKind resolved to a struct — promote to typed param
+      var structTypeName = _typeSubstitution.TryGetValue(paramTypeParam ?? "Element", out var ct) ? ct.Name : null;
+      if (structTypeName != null) {
+        _structVars.TryAdd(param.Name, structTypeName);
+        var structParam = new MaxonStructParamOp(param.Index, param.Name, structTypeName);
+        RegisterResult(param.Result, structParam.Result);
+        return structParam;
+      }
     }
     var scalarParam = new MaxonParamOp(param.Index, param.Name, valueKind);
     RegisterResult(param.Result, scalarParam.Result);
@@ -348,9 +390,28 @@ internal class FunctionCloner {
       RegisterResult(varRef.Result, cloned.Result);
       return cloned;
     }
-    var valueKind = _typeSubstitution.SubstituteValueKind(varRef.ValueKind, varTp);
+    // Use previously resolved kind from assignment when available — this avoids
+    // re-resolving through SubstituteValueKind which may use wrong type param
+    // (e.g., default "Element" maps to Entry tuple when the var holds a Key value)
+    MaxonValueKind valueKind;
+    if (varRef.ValueKind == MaxonValueKind.TypeParameter
+        && _resolvedVarKinds.TryGetValue(varRef.VarName, out var resolvedKind)) {
+      valueKind = resolvedKind;
+    } else {
+      valueKind = _typeSubstitution.SubstituteValueKind(varRef.ValueKind, varTp);
+    }
     if (_substituteToFloat && _floatVars.Contains(varRef.VarName)) {
       valueKind = MaxonValueKind.Float;
+    }
+    if (valueKind == MaxonValueKind.Struct) {
+      // SubstituteValueKind resolved to a struct type — must use typed variant
+      var typeName = _typeSubstitution.TryGetValue(varTp ?? "Element", out var ct) ? ct.Name : null;
+      if (typeName != null) {
+        _structVars.TryAdd(varRef.VarName, typeName);
+        var cloned = new MaxonStructVarRefOp(varRef.VarName, typeName);
+        RegisterResult(varRef.Result, cloned.Result);
+        return cloned;
+      }
     }
     var scalarRef = new MaxonVarRefOp(varRef.VarName, valueKind);
     RegisterResult(varRef.Result, scalarRef.Result);
@@ -358,8 +419,7 @@ internal class FunctionCloner {
   }
 
   /// For Eq/Ne where operands resolved to structs, convert to equals() method call.
-  /// Check mappedLhs type rather than OperandKind because SubstituteValueKind maps
-  /// struct types to Integer, so the original TypeParameter kind is lost by this point.
+  /// Check mappedLhs type because it carries the concrete struct type name needed for the call.
   private MaxonOp CloneBinOp(MaxonBinOp binOp, List<MaxonOp> extraOps) {
     var mappedLhs = MapValue(binOp.Lhs);
     var mappedRhs = MapValue(binOp.Rhs);
@@ -487,7 +547,9 @@ internal class FunctionCloner {
   }
 
   /// When a call returns TypeParameter and the self arg is a concrete inner alias,
-  /// resolve the Element type to determine if the result should be Struct.
+  /// resolve through the inner alias's Element type param to get the correct result kind.
+  /// This handles cases like Array<Color>.get() where the outer type's Element is Entry
+  /// but the inner array's Element is Color.
   private void ResolveTypeParameterResult(
       MaxonValueKind? originalKind, List<MaxonValue> newArgs,
       ref MaxonValueKind? resultKind, ref string? resultStructTypeName) {
@@ -501,9 +563,17 @@ internal class FunctionCloner {
           if (elemType is MlirStructType elemStruct) {
             resultKind = MaxonValueKind.Struct;
             resultStructTypeName = elemStruct.Name;
-          } else if (elemType is MlirUnionType elemEnum) {
+          } else if (elemType is MlirUnionType elemEnum && elemEnum.HasAssociatedValues) {
             resultKind = MaxonValueKind.Enum;
             resultStructTypeName = elemEnum.Name;
+          } else if (elemType is MlirUnionType) {
+            // Simple enum without associated values — treated as integer
+            resultKind = MaxonValueKind.Integer;
+            resultStructTypeName = null;
+          } else {
+            // Primitive type — resolve to its value kind
+            resultKind = elemType.ToValueKind();
+            resultStructTypeName = null;
           }
         }
         break;

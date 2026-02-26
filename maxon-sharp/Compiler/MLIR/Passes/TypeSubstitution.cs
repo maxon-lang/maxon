@@ -41,9 +41,17 @@ internal class TypeSubstitution {
     };
 
     // Map associated type names (from uses clause) to concrete types.
+    // For types without a uses clause (e.g., tuples), fall back to TypeParams keys,
+    // then to the alias's own typeParams keys (for auto-created types where the source
+    // struct carries no generic info but the alias does).
     // Re-resolve through module.TypeDefs to pick up fully-parsed types
     // (alias type params may reference stale placeholders from pre-scan ordering)
-    foreach (var assocTypeName in sourceStruct.AssociatedTypeNames) {
+    IEnumerable<string> paramNames = sourceStruct.AssociatedTypeNames.Count > 0
+      ? sourceStruct.AssociatedTypeNames
+      : sourceStruct.TypeParams
+          .Where(kv => kv.Value is MlirTypeParameterType)
+          .Select(kv => kv.Key);
+    foreach (var assocTypeName in paramNames) {
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
         if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved) && resolved != concreteType) {
           map[assocTypeName] = resolved;
@@ -80,26 +88,63 @@ internal class TypeSubstitution {
       }
     }
 
-    // Resolve inner type aliases to their concrete aliases.
-    // For Map<Key=String, Value=i64>, "KeyArray = Array with Key" resolves to StringArray,
-    // "ValueArray = Array with Value" resolves to IntArray, etc.
-    // Uses the full substitution map (includes conformance params like Element -> StringIntPair).
+    ResolveInnerTypeAliases(map, sourceStruct.TypeParams, module);
+
+    return new TypeSubstitution(map);
+  }
+
+  /// Builds a type substitution for a concrete alias of a generic union type.
+  public static TypeSubstitution BuildForUnion(
+      MlirUnionType sourceUnion,
+      Dictionary<string, MlirType> typeParams,
+      string concreteAliasName,
+      MlirModule<MaxonOp> module) {
+    MlirType concreteAliasType = module.TypeDefs.TryGetValue(concreteAliasName, out var existing)
+      ? existing
+      : new MlirUnionType(concreteAliasName, []);
+
+    var map = new Dictionary<string, MlirType> {
+      [sourceUnion.Name] = concreteAliasType,
+      ["Self"] = concreteAliasType
+    };
+
+    foreach (var assocTypeName in sourceUnion.AssociatedTypeNames) {
+      if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
+        if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved) && resolved != concreteType) {
+          map[assocTypeName] = resolved;
+        } else {
+          map[assocTypeName] = concreteType;
+        }
+      }
+    }
+
+    ResolveInnerTypeAliases(map, sourceUnion.TypeParams, module);
+
+    return new TypeSubstitution(map);
+  }
+
+  /// Resolves inner type aliases (e.g., KeyArray, ValueArray) to their concrete aliases
+  /// by substituting type parameters through the current map. Handles deep resolution
+  /// when a resolved type is itself an internal alias name (e.g., Entry → StringIntPair).
+  private static void ResolveInnerTypeAliases(
+      Dictionary<string, MlirType> map,
+      Dictionary<string, MlirType> sourceTypeParams,
+      MlirModule<MaxonOp> module) {
     foreach (var (innerAliasName, aliasInfo) in module.TypeAliasSources.ToList()) {
       if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
       bool hasOurTypeParams = aliasInfo.TypeParams.Values.Any(t =>
         t is MlirTypeParameterType tp && map.ContainsKey(tp.ParameterName));
       if (!hasOurTypeParams) continue;
 
-      // Resolve the inner alias's type params through the substitution map
       var resolvedParams = new Dictionary<string, MlirType>();
       foreach (var (paramName, paramType) in aliasInfo.TypeParams) {
         if (paramType is MlirTypeParameterType tp && map.TryGetValue(tp.ParameterName, out var resolved)) {
           // Only deep-resolve through the map when the resolved type is one of the
-          // source struct's own internal names (type params or aliases). This avoids
+          // source type's own internal names (type params or aliases). This avoids
           // chaining through user types that collide with internal alias names
           // (e.g., user's "Entry" type vs Map's "typealias Entry = (Key, Value)").
           if (resolved is MlirStructType resolvedSt
-              && sourceStruct.TypeParams.ContainsKey(resolvedSt.Name)
+              && sourceTypeParams.ContainsKey(resolvedSt.Name)
               && map.TryGetValue(resolvedSt.Name, out var deepResolved)) {
             resolvedParams[paramName] = deepResolved;
           } else {
@@ -115,8 +160,6 @@ internal class TypeSubstitution {
         map[innerAliasName] = concreteInnerType;
       }
     }
-
-    return new TypeSubstitution(map);
   }
 
   /// Searches TypeAliasSources for a concrete alias whose source type matches and whose
@@ -142,7 +185,6 @@ internal class TypeSubstitution {
     // Auto-create a concrete alias if the source type exists and all params are resolved
     if (resolvedParams.Values.Any(t => t is MlirTypeParameterType)) return null;
     if (!module.TypeDefs.TryGetValue(sourceTypeName, out var sourceType)) return null;
-    if (sourceType is not MlirStructType sourceStruct) return null;
 
     var paramSuffix = string.Join("_", resolvedParams.Values.Select(t => t.Name));
     var autoAliasName = $"__{sourceTypeName}_{paramSuffix}";
@@ -150,40 +192,80 @@ internal class TypeSubstitution {
       return value;
     }
 
-    var concreteFields = new List<MlirStructField>();
-    foreach (var field in sourceStruct.Fields) {
-      var fieldType = resolvedParams.TryGetValue(field.Type.Name, out var concreteType)
-        ? concreteType
-        : field.Type;
-      concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
-    }
-    var newType = new MlirStructType(autoAliasName, concreteFields,
-      conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
-      typeParams: resolvedParams);
+    if (sourceType is MlirStructType sourceStruct) {
+      var concreteFields = new List<MlirStructField>();
+      foreach (var field in sourceStruct.Fields) {
+        var fieldType = resolvedParams.TryGetValue(field.Type.Name, out var concreteType)
+          ? concreteType
+          : field.Type;
+        concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
+      }
+      var newType = new MlirStructType(autoAliasName, concreteFields,
+        conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
+        typeParams: resolvedParams);
 
-    // Apply conditional conformances from extension blocks
-    foreach (var (ccSourceType, interfaces, whereConstraints) in module.ConditionalConformances) {
-      if (ccSourceType != sourceTypeName) continue;
-      bool satisfied = true;
-      foreach (var (paramName, requiredInterfaces) in whereConstraints) {
-        if (!resolvedParams.TryGetValue(paramName, out var ccConcreteType)) { satisfied = false; break; }
-        if (ccConcreteType is MlirTypeParameterType) { satisfied = false; break; }
-        var concreteTypeName = MlirType.FormatAsSourceName(ccConcreteType);
-        foreach (var iface in requiredInterfaces) {
-          if (!MonomorphizationPass.TypeConformsToInterface(concreteTypeName, iface, module)) { satisfied = false; break; }
+      // Apply conditional conformances from extension blocks
+      foreach (var (ccSourceType, interfaces, whereConstraints) in module.ConditionalConformances) {
+        if (ccSourceType != sourceTypeName) continue;
+        bool satisfied = true;
+        foreach (var (paramName, requiredInterfaces) in whereConstraints) {
+          if (!resolvedParams.TryGetValue(paramName, out var ccConcreteType)) { satisfied = false; break; }
+          if (ccConcreteType is MlirTypeParameterType) { satisfied = false; break; }
+          var concreteTypeName = MlirType.FormatAsSourceName(ccConcreteType);
+          foreach (var iface in requiredInterfaces) {
+            if (!MonomorphizationPass.TypeConformsToInterface(concreteTypeName, iface, module)) { satisfied = false; break; }
+          }
+          if (!satisfied) break;
         }
-        if (!satisfied) break;
+        if (satisfied) {
+          foreach (var iface in interfaces)
+            if (!newType.ConformingInterfaces.Contains(iface))
+              newType.ConformingInterfaces.Add(iface);
+        }
       }
-      if (satisfied) {
-        foreach (var iface in interfaces)
-          if (!newType.ConformingInterfaces.Contains(iface))
-            newType.ConformingInterfaces.Add(iface);
-      }
+
+      module.TypeDefs[autoAliasName] = newType;
+      module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
+      return newType;
     }
 
-    module.TypeDefs[autoAliasName] = newType;
-    module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
-    return newType;
+    if (sourceType is MlirUnionType sourceUnion) {
+      // Self-referential substitution: source union name → concrete alias
+      var autoAliasPlaceholder = new MlirUnionType(autoAliasName, [],
+        sourceUnion.BackingType,
+        [.. sourceUnion.ConformingInterfaces],
+        typeParams: resolvedParams);
+      module.TypeDefs[autoAliasName] = autoAliasPlaceholder;
+
+      var fullParams = new Dictionary<string, MlirType>(resolvedParams) {
+        [sourceTypeName] = autoAliasPlaceholder,
+        ["Self"] = autoAliasPlaceholder
+      };
+
+      var concreteCases = new List<MlirEnumCase>();
+      foreach (var c in sourceUnion.Cases) {
+        if (c.AssociatedValues is { Count: > 0 }) {
+          var concreteValues = new List<(string Name, MlirType Type)>();
+          foreach (var (name, type) in c.AssociatedValues) {
+            var newCaseType = fullParams.TryGetValue(type.Name, out var ct) ? ct : type;
+            concreteValues.Add((name, newCaseType));
+          }
+          concreteCases.Add(new MlirEnumCase(c.Name, c.Ordinal, associatedValues: concreteValues));
+        } else {
+          concreteCases.Add(c);
+        }
+      }
+
+      var newUnionType = new MlirUnionType(autoAliasName, concreteCases,
+        sourceUnion.BackingType,
+        [.. sourceUnion.ConformingInterfaces],
+        typeParams: resolvedParams);
+      module.TypeDefs[autoAliasName] = newUnionType;
+      module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
+      return newUnionType;
+    }
+
+    return null;
   }
 
   // --- Queries ---
@@ -210,6 +292,11 @@ internal class TypeSubstitution {
         return newType;
       }
     }
+    if (type is MlirUnionType ut) {
+      if (_map.TryGetValue(ut.Name, out var newType)) {
+        return newType;
+      }
+    }
     if (type is MlirFunctionType ft) {
       var newParams = ft.ParameterTypes.Select(p => SubstituteType(p)).ToList();
       var newReturn = ft.ReturnType != null ? SubstituteType(ft.ReturnType) : null;
@@ -222,8 +309,8 @@ internal class TypeSubstitution {
 
   /// <summary>
   /// Resolves TypeParameter kinds to concrete kinds based on the type substitution.
-  /// Struct and Enum element types resolve to Integer because they are stored as i64 pointers
-  /// in managed memory and passed as scalars through generic function bodies.
+  /// Struct types resolve to Struct, associated-value enums to Enum, and simple
+  /// enums to Integer (no heap pointer needed). Primitives resolve to their native kinds.
   /// </summary>
   public MaxonValueKind SubstituteValueKind(MaxonValueKind kind, string? typeParamName = null) {
     if (kind != MaxonValueKind.TypeParameter) return kind;
@@ -239,7 +326,9 @@ internal class TypeSubstitution {
       { } t when t == MlirType.I1 => MaxonValueKind.Bool,
       { } t when t == MlirType.I8 => MaxonValueKind.Byte,
       { } t when t == MlirType.I16 || t == MlirType.U16 => MaxonValueKind.Short,
-      MlirStructType or MlirUnionType => MaxonValueKind.Integer,
+      MlirStructType => MaxonValueKind.Struct,
+      MlirUnionType ut when ut.HasAssociatedValues => MaxonValueKind.Enum,
+      MlirUnionType => MaxonValueKind.Integer,
       MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
       MlirTypeParameterType => MaxonValueKind.TypeParameter,
       _ => throw new InvalidOperationException($"SubstituteValueKind: unsupported type '{concreteType}' for param '{paramKey}'")

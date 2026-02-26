@@ -76,10 +76,34 @@ public static class MonomorphizationPass {
       var sourceTypeName = aliasInfo.SourceTypeName;
 
       if (!module.TypeDefs.TryGetValue(sourceTypeName, out var sourceType)) continue;
-      if (sourceType is not MlirStructType sourceStruct) continue;
-      if (sourceStruct.AssociatedTypeNames.Count == 0) continue;
 
-      var typeSubstitution = TypeSubstitution.Build(sourceStruct, aliasInfo.TypeParams, aliasName, module);
+      List<string> assocTypeNames;
+      TypeSubstitution typeSubstitution;
+      if (sourceType is MlirStructType sourceStruct) {
+        assocTypeNames = sourceStruct.AssociatedTypeNames.Count > 0
+          ? sourceStruct.AssociatedTypeNames
+          : sourceStruct.TypeParams
+              .Where(kv => kv.Value is MlirTypeParameterType)
+              .Select(kv => kv.Key).ToList();
+        if (assocTypeNames.Count == 0) {
+          continue;
+        }
+        typeSubstitution = TypeSubstitution.Build(sourceStruct, aliasInfo.TypeParams, aliasName, module);
+      } else if (sourceType is MlirUnionType sourceUnion) {
+        assocTypeNames = sourceUnion.AssociatedTypeNames.Count > 0
+          ? sourceUnion.AssociatedTypeNames
+          : sourceUnion.TypeParams
+              .Where(kv => kv.Value is MlirTypeParameterType)
+              .Select(kv => kv.Key).ToList();
+        if (assocTypeNames.Count == 0) {
+          Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: no type params (union)");
+          continue;
+        }
+        typeSubstitution = TypeSubstitution.BuildForUnion(sourceUnion, aliasInfo.TypeParams, aliasName, module);
+      } else {
+        Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: not struct or union ({sourceType.GetType().Name})");
+        continue;
+      }
 
       var sourcePrefix = $"{sourceTypeName}.";
       var sourceSuffix = $".{sourceTypeName}.";
@@ -88,7 +112,7 @@ public static class MonomorphizationPass {
         bool isSuffixMatch = !isSourceMethod && func.Name.Contains(sourceSuffix);
 
         if (!isSourceMethod && !isSuffixMatch) continue;
-        if (!NeedsSpecialization(func, sourceStruct)) continue;
+        if (!NeedsSpecializationForType(func, assocTypeNames, sourceTypeName)) continue;
 
         // Skip conditional extension methods whose where constraints aren't satisfied
         if (func.ExtensionWhereConstraints != null
@@ -114,14 +138,16 @@ public static class MonomorphizationPass {
     return specializations;
   }
 
-  private static bool NeedsSpecialization(MlirFunction<MaxonOp> func, MlirStructType sourceStruct) {
+  private static bool NeedsSpecializationForType(MlirFunction<MaxonOp> func, List<string> assocTypeNames, string sourceTypeName) {
     foreach (var paramType in func.ParamTypes) {
       if (paramType is MlirTypeParameterType) return true;
-      if (IsAssociatedType(paramType, sourceStruct)) return true;
+      if (paramType is MlirStructType st && (st.Name == sourceTypeName || st.Name == "Self" || assocTypeNames.Any(n => st.Name.Contains(n)))) return true;
+      if (paramType is MlirUnionType ut && (ut.Name == sourceTypeName || ut.Name == "Self" || assocTypeNames.Any(n => ut.Name.Contains(n)))) return true;
     }
 
     if (func.ReturnType is MlirTypeParameterType) return true;
-    if (func.ReturnType != null && IsAssociatedType(func.ReturnType, sourceStruct)) return true;
+    if (func.ReturnType is MlirStructType retSt && (retSt.Name == sourceTypeName || retSt.Name == "Self" || assocTypeNames.Any(n => retSt.Name.Contains(n)))) return true;
+    if (func.ReturnType is MlirUnionType retUt && (retUt.Name == sourceTypeName || retUt.Name == "Self" || assocTypeNames.Any(n => retUt.Name.Contains(n)))) return true;
 
     return false;
   }
@@ -155,17 +181,6 @@ public static class MonomorphizationPass {
     if (module.PrimitiveConformances.TryGetValue(typeName, out var extInterfaces)
         && extInterfaces.Contains(interfaceName))
       return true;
-    return false;
-  }
-
-  private static bool IsAssociatedType(MlirType type, MlirStructType sourceStruct) {
-    if (type is not MlirStructType st) return false;
-    if (st.Name == sourceStruct.Name || st.Name == "Self") return true;
-
-    foreach (var assocName in sourceStruct.AssociatedTypeNames) {
-      if (st.Name.Contains(assocName)) return true;
-    }
-
     return false;
   }
 

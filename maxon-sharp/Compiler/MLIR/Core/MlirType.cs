@@ -185,10 +185,13 @@ public class MlirEnumCase(string name, int ordinal, object? rawValue = null,
   public List<(string Name, MlirType Type)>? AssociatedValues { get; } = associatedValues;
 }
 
-public class MlirUnionType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null) : MlirType(name) {
+public class MlirUnionType(string name, List<MlirEnumCase> cases, MlirType? backingType = null, List<string>? conformingInterfaces = null, List<string>? associatedTypeNames = null, Dictionary<string, MlirType>? typeParams = null, Dictionary<string, List<string>>? whereConstraints = null) : MlirType(name) {
   public List<MlirEnumCase> Cases { get; } = cases;
   public MlirType? BackingType { get; } = backingType;
   public List<string> ConformingInterfaces { get; } = conformingInterfaces ?? [];
+  public List<string> AssociatedTypeNames { get; } = associatedTypeNames ?? [];
+  public Dictionary<string, MlirType> TypeParams { get; } = typeParams ?? [];
+  public Dictionary<string, List<string>> WhereConstraints { get; } = whereConstraints ?? [];
 
   public bool HasAssociatedValues => Cases.Any(c => c.AssociatedValues is { Count: > 0 });
 

@@ -850,6 +850,23 @@ public static partial class MaxonToStandardConversion {
                 structVarNames[assignOp.Value.Id] = dstName;
                 structValueTypes[assignOp.Value.Id] = enumSrcType;
                 varNameToStructPrefix[assignOp.VarName] = dstName;
+                // Write-through for self fields: pack flat vars and store to struct
+                if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
+                  var field = selfStructType!.GetField(assignOp.VarName);
+                  if (field != null) {
+                    // Free old field value before overwriting
+                    if (!assignOp.IsDeclaration) {
+                      var oldVal = (StdI64)EmitStructFieldLoad(newBlock, "self", field.Offset, MlirType.I64, varTypes);
+                      newBlock.AddOp(new StdCallRuntimeOp("mm_free", [oldVal], null));
+                    }
+                    var enumHeapPtr = PackEnumFlatVarsToHeap(newBlock, dstName, assignEnumType, varTypes, module.TypeDefs);
+                    var selfPtr = (StdI64)EmitLoad(newBlock, "self", varTypes);
+                    var moveMode = new StdConstI64Op(1);
+                    newBlock.AddOp(moveMode);
+                    newBlock.AddOp(new StdCallRuntimeOp("mm_move", [enumHeapPtr, selfPtr, moveMode.Result], null));
+                    EmitStructFieldStore(newBlock, enumHeapPtr, "self", field.Offset, MlirType.I64, varTypes);
+                  }
+                }
                 break;
               }
               // Check structVarNames as fallback to detect struct values that flow
@@ -858,7 +875,8 @@ public static partial class MaxonToStandardConversion {
                   || structVarNames.ContainsKey(assignOp.Value.Id)) {
                 // Struct assignment: copy the heap pointer (alias, not deep copy)
                 // Copy-by-default cloning is handled at the parser level via clone() calls.
-                var srcName = structVarNames[assignOp.Value.Id];
+                if (!structVarNames.TryGetValue(assignOp.Value.Id, out var srcName))
+                  throw new InvalidOperationException($"MaxonAssignOp: structVarNames missing key {assignOp.Value.Id} for assign to '{assignOp.VarName}' (ValueKind={assignOp.ValueKind}) in func {func.Name}");
                 var dstName = assignOp.VarName;
                 var structTypeName = structValueTypes.TryGetValue(assignOp.Value.Id, out var svt)
                   ? svt
@@ -1072,6 +1090,17 @@ public static partial class MaxonToStandardConversion {
                 }
                 UnpackEnumHeapToFlatVars(newBlock, tempVarName, faEnumType, varTypes, module.TypeDefs);
                 structVarNames[fieldAccess.Result.Id] = tempVarName;
+                // Map the field name to the temp prefix so MaxonEnumVarRefOp can find flat vars
+                if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
+                  varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
+                }
+                // For self fields, also unpack under the field name so that
+                // later code referencing it by name (across conditional blocks) gets the correct value.
+                if (IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
+                  EmitStore(newBlock, EmitLoad(newBlock, tempVarName, varTypes), fieldAccess.FieldName, varTypes);
+                  UnpackEnumHeapToFlatVars(newBlock, fieldAccess.FieldName, faEnumType, varTypes, module.TypeDefs);
+                  varNameToStructPrefix[fieldAccess.FieldName] = fieldAccess.FieldName;
+                }
                 structValueTypes[fieldAccess.Result.Id] = fieldAccess.ResultStructTypeName;
               } else {
                 // Scalar field: load via indirect access through heap pointer

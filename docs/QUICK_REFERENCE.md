@@ -585,6 +585,27 @@ s.remove(element)                    // bool
 s.count()                            // int
 ```
 
+### List
+```maxon
+typealias IntList = List with Integer
+var list = IntList{}                  // empty linked list
+
+list.prepend(1)                      // add to front — O(1)
+list.append(2)                       // add to back — O(n)
+list.insert(1, value: 99)           // insert at index — O(n)
+try list.first() otherwise 0        // first element (throws)
+try list.last() otherwise 0         // last element (throws)
+try list.get(1) otherwise 0         // element at index (throws)
+try list.removeFirst() otherwise 0  // remove front — O(1)
+try list.removeLast() otherwise 0   // remove back — O(n)
+try list.remove(at: 2) otherwise 0  // remove at index — O(n)
+list.count()                         // number of elements
+list.isEmpty()                       // check empty
+list.clear()                         // remove all
+
+for item in list 'loop' ... end 'loop'  // iteration (Iterable)
+```
+
 ### Character
 ```maxon
 c.byteLength()
