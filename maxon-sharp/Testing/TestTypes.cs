@@ -28,6 +28,10 @@ public class TestCase {
   /// When non-null, the test compiles multiple files instead of a single source.
   /// </summary>
   public List<(string FileName, string Source)>? SourceFiles { get; init; }
+  /// <summary>
+  /// When true, compile with --mm-trace enabled.
+  /// </summary>
+  public bool MmTrace { get; init; }
 }
 
 /// <summary>
@@ -60,6 +64,11 @@ public class SuccessExpectation : TestExpectation {
   /// Each line is a typed value (e.g. "i8 0", "i64 42").
   /// </summary>
   public string? RequiredData { get; init; }
+  /// <summary>
+  /// When true, compile with --mm-trace enabled so runtime memory operations
+  /// produce trace output on stderr.
+  /// </summary>
+  public bool MmTrace { get; set; }
 }
 
 /// <summary>
@@ -90,6 +99,10 @@ public class Fragment {
   /// When non-null, the test compiles multiple files instead of a single source.
   /// </summary>
   public List<(string FileName, string Source)>? SourceFiles { get; init; }
+  /// <summary>
+  /// When true, compile with --mm-trace enabled.
+  /// </summary>
+  public bool MmTrace { get; init; }
 }
 
 /// <summary>

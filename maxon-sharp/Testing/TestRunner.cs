@@ -273,6 +273,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           } else {
             irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
           }
+          Compiler.Compiler.MmTrace = false;
           var irResult = new Compiler.Compiler().Compile(irSources, exePath, returnIr: true);
           if (irTempDir != null) {
             try { Directory.Delete(irTempDir, recursive: true); } catch { }
@@ -325,6 +326,12 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               FilePath = fragment.FilePath
             };
           }
+        }
+
+        // Recompile with MmTrace if RequiredMLIR check overwrote the exe without it
+        if (fragment.MmTrace && successExpectation.RequiredMLIR != null) {
+          Compiler.Compiler.MmTrace = true;
+          CompileToExecutable(fragment, exePath);
         }
 
         // Run the executable if we have runtime expectations
@@ -419,6 +426,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       }
 
       try {
+        Compiler.Compiler.MmTrace = fragment.MmTrace;
         var result = new Compiler.Compiler().Compile(sources, outputPath);
         var error = result.Error;
         // Normalize temp directory paths to just filenames for multi-file tests

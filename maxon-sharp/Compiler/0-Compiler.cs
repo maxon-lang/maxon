@@ -32,7 +32,8 @@ public record CompileResult(
 public class Compiler {
   private readonly MlirContext _context = new();
 
-  public static bool MmTrace { get; set; }
+  [ThreadStatic] private static bool _mmTrace;
+  public static bool MmTrace { get => _mmTrace; set => _mmTrace = value; }
 
   public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;

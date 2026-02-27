@@ -32,6 +32,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
   private int _closureCounter;
+  private int _discardCounter;
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Stack<MatchContext> _matchStack = new();
   private bool _inTryContext;
@@ -5567,6 +5568,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
     var isDiscard = name == "_";
+    if (isDiscard) {
+      name = $"__discard_{_discardCounter++}";
+    }
     if (!isDiscard) {
       _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
     }
@@ -8049,7 +8053,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock = allTerminate ? null : mergeBlock;
   }
 
-  private ExprResult ParseSwapExpression() {
+  private ExprResult.Direct ParseSwapExpression() {
     var swapToken = Advance(); // consume 'swap'
 
     // Parse the swap target: simple identifier or dotted path
