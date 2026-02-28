@@ -34,16 +34,13 @@ export function getOrCreateProject(mgr ProjectManager, filePath String) returns 
         let normalizedRoot = normalizePath(root)
 
         // Check if we already have a project for this root
-        var i = 0
-        let keyCount = mgr.keys.count()
-        while i < keyCount 'search'
+        for i in 0 upto mgr.keys.count() 'search'
             let key = try mgr.keys.get(i) otherwise ""
             if key == normalizedRoot 'match'
                 return try mgr.projects.get(i) otherwise 'unreachable2'
                     throw CompileError.fileNotFound
                 end 'unreachable2'
             end 'match'
-            i = i + 1
         end 'search'
 
         // Create a new directory project
@@ -57,16 +54,13 @@ export function getOrCreateProject(mgr ProjectManager, filePath String) returns 
     let normalizedFile = normalizePath(filePath)
 
     // Check if we already have a project for this exact file
-    var j = 0
-    let keyCount2 = mgr.keys.count()
-    while j < keyCount2 'search2'
+    for j in 0 upto mgr.keys.count() 'search2'
         let key = try mgr.keys.get(j) otherwise ""
         if key == normalizedFile 'match2'
             return try mgr.projects.get(j) otherwise 'unreachable3'
                 throw CompileError.fileNotFound
             end 'unreachable3'
         end 'match2'
-        j = j + 1
     end 'search2'
 
     let singleProject = createProject(filePath, isSingleFile: true, target: detectHostTriple())
@@ -90,17 +84,14 @@ end 'findProjectForFile'
 // Returns the index of the project containing filePath, or -1 if none.
 function findProjectIndexForFile(mgr ProjectManager, filePath String) returns Index
     let normalized = normalizePath(filePath)
-    var i = 0
     let count = mgr.projects.count()
-    while i < count 'scan'
+    for i in 0 upto count 'scan'
         let project = try mgr.projects.get(i) otherwise 'skip'
-            i = i + 1
             continue
         end 'skip'
         if projectContainsFile(project, filePath: normalized) 'contains'
             return i
         end 'contains'
-        i = i + 1
     end 'scan'
     return 0 - 1
 end 'findProjectIndexForFile'
@@ -120,8 +111,7 @@ end 'projectContainsFile'
 // Returns the directory containing build.maxon, or "" if not found.
 export function findProjectRoot(filePath String) returns String
     var dir = directoryOf(filePath)
-    var attempts = 0
-    while attempts < 20 'search'
+    for attempts in 0 upto 20 'search'
         if dir.isEmpty() 'empty'
             return ""
         end 'empty'
@@ -139,7 +129,6 @@ export function findProjectRoot(filePath String) returns String
             return ""
         end 'atRoot'
         dir = parent
-        attempts = attempts + 1
     end 'search'
     return ""
 end 'findProjectRoot'

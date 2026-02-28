@@ -137,24 +137,19 @@ export function queryAllModule(project Project) returns MlirModule throws Compil
     setNextValueId(project, id: getStdlibNextValueId())
 
     // Then parse user files
-    var i = 0
-    while i < project.db.sourcePaths.count() 'eachFile'
-        let path = try project.db.sourcePaths.get(i) otherwise 'err'
-            break
-        end 'err'
+    for path in project.db.sourcePaths 'eachFile'
         let module = try queryParseOps(project, path: path)
         // When a file was served from cache, the parser didn't run so the
         // ValueId counter wasn't advanced. Restore it from the cached memo.
         if project.db.parseCache.contains(path) 'hasCache'
             let memo = try project.db.parseCache.get(path) otherwise 'skipAdv'
-                break
+                continue
             end 'skipAdv'
             if memo.nextValueIdAfterParse > getNextValueId(project) 'advance'
                 setNextValueId(project, id: memo.nextValueIdAfterParse)
             end 'advance'
         end 'hasCache'
         mergeModules(allModule, source: module)
-        i = i + 1
     end 'eachFile'
 
     popQuery(project)

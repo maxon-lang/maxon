@@ -282,10 +282,8 @@ function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset Code
 
     // Data island
     let dataOffset = code.count()
-    var dataIdx = 0
-    while dataIdx < dataLen 'copyData'
-        code.push(try data.get(dataIdx) otherwise 0)
-        dataIdx = dataIdx + 1
+    for dataByte in data 'copyData'
+        code.push(dataByte)
     end 'copyData'
 
     // Patch jump
@@ -437,16 +435,13 @@ function resolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffse
 end 'resolveCallFixups'
 
 function lookupLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray) returns CodeOffset
-    var i = 0
-    while i < labelNames.count() 'search'
+    for i in 0 upto labelNames.count() 'search'
         let labelName = try labelNames.get(i) otherwise 'next'
-            i = i + 1
             continue
         end 'next'
         if bytesEqual(labelName, b: name) 'found'
             return try labelOffsets.get(i) otherwise 0
         end 'found'
-        i = i + 1
     end 'search'
     logError(LogCategory.codegen, message: "Unresolved label '{String.from(name)}' -- call will jump to offset 0")
     return 0
@@ -479,47 +474,27 @@ export function emitX86(module MlirModule, target TargetTriple, osDesc OsDescrip
     var funcLabelOffsets = CodeOffsetArray{}
 
     // Emit all functions
-    var fi = 0
-    while fi < module.functions.count() 'eachFunc'
-        let func = try module.functions.get(fi) otherwise 'skipFunc'
-            fi = fi + 1
-            continue
-        end 'skipFunc'
-
+    for func in module.functions 'eachFunc'
         // Record function name -> code offset
         recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: func.name, offset: code.count())
 
         // Block offset table for this function (indexed by BlockId)
         var blockOffsets = CodeOffsetArray{}
-        var bAlloc = 0
-        while bAlloc < func.region.nextBlockId 'alloc'
+        for bAlloc in 0 upto func.region.nextBlockId 'alloc'
             blockOffsets.push(0)
-            bAlloc = bAlloc + 1
         end 'alloc'
 
         // Block jump fixups collected during emission, resolved per function
         var blockFixups = BlockJumpFixupArray{}
 
         // Emit all blocks in order
-        var bi = 0
-        while bi < func.region.blocks.count() 'eachBlock'
-            let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
-                bi = bi + 1
-                continue
-            end 'skipBlock'
-
+        for block in func.region.blocks 'eachBlock'
             // Record this block's code offset
             blockOffsets.set(block.id, value: code.count())
 
             // Emit all ops in the block
-            var oi = 0
-            while oi < block.ops.count() 'emitOps'
-                let op = try block.ops.get(oi) otherwise 'skipOp'
-                    oi = oi + 1
-                    continue
-                end 'skipOp'
+            for op in block.ops 'emitOps'
                 emitMaxX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
-                oi = oi + 1
             end 'emitOps'
 
             // Emit terminator if present (should already be lowered to maxx64 ops
@@ -527,14 +502,10 @@ export function emitX86(module MlirModule, target TargetTriple, osDesc OsDescrip
             if block.hasTerminator 'hasTerm'
                 emitMaxX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
             end 'hasTerm'
-
-            bi = bi + 1
         end 'eachBlock'
 
         // Resolve block jump fixups for this function
         resolveBlockFixups(code, blockOffsets: blockOffsets, blockFixups: blockFixups)
-
-        fi = fi + 1
     end 'eachFunc'
 
     // Resolve inter-function call fixups

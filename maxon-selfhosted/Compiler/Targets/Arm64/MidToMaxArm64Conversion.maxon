@@ -15,12 +15,7 @@ export function lowerMidToMaxArm64(module MlirModule, target TargetTriple) retur
     logDebug(LogCategory.mlir, message: "Lowering Mid to MaxArm64 dialect for {tripleToString(target)}")
     var result = createMlirModule()
 
-    var fi = 0
-    while fi < module.functions.count() 'eachFunc'
-        let srcFunc = try module.functions.get(fi) otherwise 'skipFunc'
-            fi = fi + 1
-            continue
-        end 'skipFunc'
+    for srcFunc in module.functions 'eachFunc'
         var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
 
         // Compute stack size and max parser slot across all blocks in this function
@@ -31,12 +26,7 @@ export function lowerMidToMaxArm64(module MlirModule, target TargetTriple) retur
         // Emit prologue as first op in first block
         var isFirstBlock = true
 
-        var bi = 0
-        while bi < srcFunc.region.blocks.count() 'eachBlock'
-            let srcBlock = try srcFunc.region.blocks.get(bi) otherwise 'skipBlock'
-                bi = bi + 1
-                continue
-            end 'skipBlock'
+        for srcBlock in srcFunc.region.blocks 'eachBlock'
             var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
             dstBlock.id = srcBlock.id
 
@@ -47,27 +37,18 @@ export function lowerMidToMaxArm64(module MlirModule, target TargetTriple) retur
             end 'emitPrologue'
 
             // Lower ops
-            var oi = 0
-            while oi < srcBlock.ops.count() 'eachOp'
-                let op = try srcBlock.ops.get(oi) otherwise 'skipOp'
-                    oi = oi + 1
-                    continue
-                end 'skipOp'
+            for op in srcBlock.ops 'eachOp'
                 nextTempSlot = lowerMidOpToArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-                oi = oi + 1
             end 'eachOp'
 
             // Lower terminator (pass srcBlock so condBr can scan source ops for cmp kind)
             if srcBlock.hasTerminator 'hasTerm'
                 lowerMidTerminatorToArm64(srcBlock.terminator, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
             end 'hasTerm'
-
-            bi = bi + 1
         end 'eachBlock'
 
         dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
         result.functions.push(dstFunc)
-        fi = fi + 1
     end 'eachFunc'
 
     logDebug(LogCategory.mlir, message: "Mid->MaxArm64 lowering complete")
@@ -526,22 +507,10 @@ function computeMidStackSize(func MlirFunction, savedRegsSize StackSize) returns
     var hasPrint = false
     var tempSlotCount = 0
 
-    var bi = 0
-    while bi < func.region.blocks.count() 'eachBlock'
-        let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
-            bi = bi + 1
-            continue
-        end 'skipBlock'
-        var oi = 0
-        while oi < block.ops.count() 'eachOp'
-            let op = try block.ops.get(oi) otherwise 'skipOp'
-                oi = oi + 1
-                continue
-            end 'skipOp'
+    for block in func.region.blocks 'eachBlock'
+        for op in block.ops 'eachOp'
             countOpForStackSize(op, maxSlot: maxSlot, hasPrint: hasPrint, tempSlotCount: tempSlotCount)
-            oi = oi + 1
         end 'eachOp'
-        bi = bi + 1
     end 'eachBlock'
 
     let totalMaxSlot = maxSlot + tempSlotCount
@@ -621,18 +590,8 @@ end 'countRuntimeForStackSize'
 // Compute maximum parser-allocated slot across all blocks of a function.
 function computeMidMaxParserSlot(func MlirFunction) returns SlotIndex
     var maxSlot = 0 - 1
-    var bi = 0
-    while bi < func.region.blocks.count() 'eachBlock'
-        let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
-            bi = bi + 1
-            continue
-        end 'skipBlock'
-        var oi = 0
-        while oi < block.ops.count() 'eachOp'
-            let op = try block.ops.get(oi) otherwise 'skipOp'
-                oi = oi + 1
-                continue
-            end 'skipOp'
+    for block in func.region.blocks 'eachBlock'
+        for op in block.ops 'eachOp'
             match op 'check'
                 memref(mOp) then maxSlot = checkMemRefSlot(mOp, maxSlot: maxSlot)
                 arith(a) then break 'check'
@@ -643,9 +602,7 @@ function computeMidMaxParserSlot(func MlirFunction) returns SlotIndex
                 maxx64(x) then break 'check'
                 maxarm64(a) then break 'check'
             end 'check'
-            oi = oi + 1
         end 'eachOp'
-        bi = bi + 1
     end 'eachBlock'
     return maxSlot
 end 'computeMidMaxParserSlot'

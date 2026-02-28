@@ -386,10 +386,8 @@ function parseVarAssignment(project Project, tokens TokenArray, startPos TokenIn
 end 'parseVarAssignment'
 
 function appendBytes(dst ByteArray, src ByteArray)
-    var i = 0
-    while i < src.count() 'copy'
-        dst.push(try src.get(i) otherwise 0)
-        i = i + 1
+    for b in src 'copy'
+        dst.push(b)
     end 'copy'
 end 'appendBytes'
 
@@ -1150,13 +1148,11 @@ end 'lookupVariable'
 
 // Look up a compile-time string constant. Returns empty ByteArray if not found.
 function lookupStringConst(project Project, name ByteArray) returns ByteArray
-    var i = 0
-    while i < project.stringConstNames.count() 'lookup'
+    for i in 0 upto project.stringConstNames.count() 'lookup'
         let cn = try project.stringConstNames.get(i) otherwise ByteArray{}
         if bytesEqual(cn, b: name) 'found'
             return try project.stringConstValues.get(i) otherwise ByteArray{}
         end 'found'
-        i = i + 1
     end 'lookup'
     var empty = ByteArray{}
     return empty

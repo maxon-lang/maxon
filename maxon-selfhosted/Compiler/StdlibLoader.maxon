@@ -4,8 +4,7 @@ var _stdlibNextValueId = 0
 
 export function findStdlibPath() returns String
     var dir = Directory.currentDirectory()
-    var attempts = 0
-    while attempts < 10 'search'
+    for attempts in 0 upto 10 'search'
         let candidate = "{dir}/stdlib_selfhosted"
         if Directory.exists(candidate) 'found'
             return candidate
@@ -16,11 +15,9 @@ export function findStdlibPath() returns String
                 return ""
             end 'noParent'
             dir = dir.slice(dir.startIndex(), endIndex: lastBs)
-            attempts = attempts + 1
             continue
         end 'tryBackslash'
         dir = dir.slice(dir.startIndex(), endIndex: lastSlash)
-        attempts = attempts + 1
     end 'search'
     return ""
 end 'findStdlibPath'
@@ -44,28 +41,20 @@ export function getStdlibModule(project Project) returns MlirModule
     stdlibFiles.push("{stdlibPath}/StdlibTest.maxon")
 
     var allModule = createMlirModule()
-    var i = 0
-    while i < stdlibFiles.count() 'eachFile'
-        let filePath = try stdlibFiles.get(i) otherwise 'skip'
-            i = i + 1
-            continue
-        end 'skip'
+    for filePath in stdlibFiles 'eachFile'
         if File.exists(filePath) 'exists'
             let bytes = try File.readBinary(filePath) otherwise 'readErr'
                 logDebug(LogCategory.compiler, message: "  Failed to read {filePath}")
-                i = i + 1
                 continue
             end 'readErr'
             logDebug(LogCategory.compiler, message: "  Parsing {filePath}")
             let tokens = tokenize(bytes)
             let parsed = try parse(project, tokens: tokens, filePath: filePath) otherwise 'parseErr'
                 logDebug(LogCategory.compiler, message: "  Failed to parse {filePath}")
-                i = i + 1
                 continue
             end 'parseErr'
             mergeModules(allModule, source: parsed)
         end 'exists'
-        i = i + 1
     end 'eachFile'
 
     _cachedStdlibModule = allModule

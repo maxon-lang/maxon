@@ -12,15 +12,9 @@ export function lowerMidToMaxX64(module MlirModule, target TargetTriple) returns
         Os.linux then shadowSpace = 0
     end 'osShadow'
 
-    var fi = 0
-    while fi < module.functions.count() 'eachFunc'
-        let srcFunc = try module.functions.get(fi) otherwise 'skipFunc'
-            fi = fi + 1
-            continue
-        end 'skipFunc'
+    for srcFunc in module.functions 'eachFunc'
         let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace)
         result.functions.push(dstFunc)
-        fi = fi + 1
     end 'eachFunc'
 
     logDebug(LogCategory.mlir, message: "Mid->MaxX64 lowering complete")
@@ -33,38 +27,27 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize) returns
     var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
     var valueSlots = ValueSlotMap{}
 
-    var bi = 0
-    while bi < srcFunc.region.blocks.count() 'eachBlock'
-        let srcBlock = try srcFunc.region.blocks.get(bi) otherwise 'skipBlock'
-            bi = bi + 1
-            continue
-        end 'skipBlock'
+    var isFirstBlock = true
+    for srcBlock in srcFunc.region.blocks 'eachBlock'
         var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
         // Preserve block ID from source so jump targets resolve correctly
         dstBlock.id = srcBlock.id
 
         // Entry block gets prologue
-        if bi == 0 'isEntry'
+        if isFirstBlock 'isEntry'
             dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.prologue(stackSize)))
+            isFirstBlock = false
         end 'isEntry'
 
         // Lower each op in the block
-        var oi = 0
-        while oi < srcBlock.ops.count() 'eachOp'
-            let op = try srcBlock.ops.get(oi) otherwise 'skipOp'
-                oi = oi + 1
-                continue
-            end 'skipOp'
+        for op in srcBlock.ops 'eachOp'
             nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-            oi = oi + 1
         end 'eachOp'
 
         // Lower terminator
         if srcBlock.hasTerminator 'hasTerm'
             lowerTerminator(srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
         end 'hasTerm'
-
-        bi = bi + 1
     end 'eachBlock'
 
     // Preserve region metadata

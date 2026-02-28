@@ -384,16 +384,13 @@ function maxArm64RecordLabel(labelNames ByteArrayArray, labelOffsets MaxArm64Off
 end 'maxArm64RecordLabel'
 
 function maxArm64LookupLabel(labelNames ByteArrayArray, labelOffsets MaxArm64OffsetArray, name ByteArray) returns MaxArm64Offset
-    var i = 0
-    while i < labelNames.count() 'search'
+    for i in 0 upto labelNames.count() 'search'
         let labelName = try labelNames.get(i) otherwise 'next'
-            i = i + 1
             continue
         end 'next'
         if bytesEqual(labelName, b: name) 'found'
             return try labelOffsets.get(i) otherwise 0
         end 'found'
-        i = i + 1
     end 'search'
     logError(LogCategory.codegen, message: "ARM64 unresolved label '{String.from(name)}'")
     return 0
@@ -623,10 +620,8 @@ function maxArm64EmitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOff
 
     // Data island
     let dataOffset = code.count()
-    var dataIdx = 0
-    while dataIdx < dataLen 'copyData'
-        code.push(try data.get(dataIdx) otherwise 0)
-        dataIdx = dataIdx + 1
+    for dataByte in data 'copyData'
+        code.push(dataByte)
     end 'copyData'
 
     // Pad to 4-byte alignment
@@ -730,23 +725,11 @@ export function emitMaxArm64(module MlirModule, target TargetTriple, osDesc OsDe
     let i64ToStringOff = maxArm64EmitI64ToString(code)
 
     // Emit all function bodies from MlirModule
-    var fi = 0
-    while fi < module.functions.count() 'eachFunc'
-        let func = try module.functions.get(fi) otherwise 'skipFunc'
-            fi = fi + 1
-            continue
-        end 'skipFunc'
-
+    for func in module.functions 'eachFunc'
         // Record function label for call fixup resolution
         maxArm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: func.name, offset: code.count())
 
-        var bi = 0
-        while bi < func.region.blocks.count() 'eachBlock'
-            let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
-                bi = bi + 1
-                continue
-            end 'skipBlock'
-
+        for block in func.region.blocks 'eachBlock'
             // Record block offset for jump fixup resolution
             blockOffsetMapSet(blockOffsets, blockId: block.id, offset: code.count())
 
@@ -759,11 +742,7 @@ export function emitMaxArm64(module MlirModule, target TargetTriple, osDesc OsDe
             if block.hasTerminator 'hasTerm'
                 emitMaxArm64Op(block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
             end 'hasTerm'
-
-            bi = bi + 1
         end 'eachBlock'
-
-        fi = fi + 1
     end 'eachFunc'
 
     // Resolve all fixups

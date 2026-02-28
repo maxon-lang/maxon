@@ -15,14 +15,13 @@ export function setSourceFile(project Project, path String, content ByteArray)
         let existingContent = existing.content
         if existingContent.count() == content.count() 'sameLen'
             var same = true
-            var i = 0
-            while i < content.count() and same 'cmp'
+            for i in 0 upto content.count() 'cmp'
                 let a = try existingContent.get(i) otherwise 0
                 let b = try content.get(i) otherwise 1
                 if a != b 'diff'
                     same = false
+                    break
                 end 'diff'
-                i = i + 1
             end 'cmp'
             if same 'unchanged'
                 logTrace(LogCategory.compiler, message: "  unchanged, skipping")
@@ -72,16 +71,10 @@ end 'recordDependency'
 // Remove all dependency entries where `dependent` matches `key`.
 export function clearDepsFor(project Project, key QueryKey)
     var newDeps = DependencyArray{}
-    var i = 0
-    while i < project.db.dependencies.count() 'scan'
-        let dep = try project.db.dependencies.get(i) otherwise 'skip'
-            i = i + 1
-            continue
-        end 'skip'
+    for dep in project.db.dependencies 'scan'
         if not queryKeysEqual(dep.dependent, b: key) 'keep'
             newDeps.push(dep)
         end 'keep'
-        i = i + 1
     end 'scan'
     project.db.dependencies = newDeps
 end 'clearDepsFor'
@@ -187,18 +180,12 @@ end 'isInputUnchanged'
 
 // Walk dependency entries for `key` and verify all upstream inputs are unchanged.
 export function areDepsValid(project Project, key QueryKey, computedAt Revision) returns bool
-    var i = 0
-    while i < project.db.dependencies.count() 'scan'
-        let dep = try project.db.dependencies.get(i) otherwise 'skip'
-            i = i + 1
-            continue
-        end 'skip'
+    for dep in project.db.dependencies 'scan'
         if queryKeysEqual(dep.dependent, b: key) 'match'
             if not isDependencyValid(project, dep: dep.dependency, since: computedAt) 'invalid'
                 return false
             end 'invalid'
         end 'match'
-        i = i + 1
     end 'scan'
     return true
 end 'areDepsValid'

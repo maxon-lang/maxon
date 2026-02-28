@@ -141,8 +141,7 @@ typealias SpecTestArray = Array with SpecTest
 // Find the project root by walking up from cwd looking for a specs/ directory.
 function findProjectRoot() returns String throws CompileError
   var dir = Directory.currentDirectory()
-  var attempts = 0
-  while attempts < 10 'search'
+  for attempts in 0 upto 10 'search'
     let specsPath = "{dir}/specs"
     if Directory.exists(specsPath) 'found'
       return dir
@@ -153,11 +152,9 @@ function findProjectRoot() returns String throws CompileError
         throw CompileError.directoryNotFound
       end 'noParent'
       dir = dir.slice(dir.startIndex(), endIndex: lastBs)
-      attempts = attempts + 1
       continue
     end 'tryBackslash'
     dir = dir.slice(dir.startIndex(), endIndex: lastSlash)
-    attempts = attempts + 1
   end 'search'
   throw CompileError.directoryNotFound
 end 'findProjectRoot'
@@ -243,13 +240,11 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
           end 'skipArgs'
           // Skip past "Args: " (6 chars)
           var argsIdx = argsStart
-          var skipCount = 0
-          while skipCount < 6 'skipPrefix'
+          for skipCount in 0 upto 6 'skipPrefix'
             argsIdx = try blockLine.indexAfter(argsIdx) otherwise 'skipArgs2'
               i = i + 1
               continue
             end 'skipArgs2'
-            skipCount = skipCount + 1
           end 'skipPrefix'
           let argsEnd = try blockLine.findFirst(" -->") otherwise 'skipArgs3'
             i = i + 1
