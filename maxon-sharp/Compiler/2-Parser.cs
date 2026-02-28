@@ -4891,6 +4891,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       if (afterIdent.Type == TokenType.LeftParen) {
+        // Check for __Builtins static method call
+        if (nameToken.Value == "__Builtins") {
+          Advance(); // consume '__Builtins'
+          Advance(); // consume '.'
+          var methodToken = Advance(); // consume method name
+          Advance(); // consume '('
+          EmitBuiltinsStaticMethod(methodToken);
+          return;
+        }
+
         // Check for static/qualified function call: Type.method(...)
         if (ResolveMethodName(qualifiedName) != null) {
           ParseQualifiedCallStatement();
@@ -6001,17 +6011,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseCallStatement() {
     var token = Advance(); // consume identifier
 
-    // Handle stdlib-only compiler builtins (__managed_*, __file_*, __process_*, __map_*, etc.)
-    if (IsCompilerBuiltin(token.Value)) {
-      if (!_isStdlib)
-        throw new CompileError(ErrorCode.ParserCompilerBuiltinNotInStdlib,
-          $"Compiler builtin '{token.Value}' can only be used in stdlib",
-          token.Line, token.Column);
-      Advance(); // consume '('
-      TryEmitManagedMemoryBuiltin(token);
-      return;
-    }
-
     var siblingCall = TrySiblingMethodCall(token);
     if (siblingCall != null) {
       MarkDiscardedResult(siblingCall, token);
@@ -6023,8 +6022,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var callOp = CreateFunctionCall(token, args, callee);
     MarkDiscardedResult(callOp, token);
   }
-
-  private static bool IsCompilerBuiltin(string name) => CompilerBuiltins.ContainsKey(name);
 
   /// <summary>
   /// Parses element_size argument which must be a compile-time integer literal (e.g., 1, 8).
@@ -6041,8 +6038,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   public record BuiltinInfo(string HelpText, Func<Parser, MaxonValue?> Handler);
 
   public static readonly Dictionary<string, BuiltinInfo> CompilerBuiltins = new() {
-    ["__managed_write_stdout"] = new(
-      "Writes a __ManagedMemory buffer to stdout.\n\n`__managed_write_stdout(managed) returns int`",
+    ["writeStdout"] = new(
+      "Writes a __ManagedMemory buffer to stdout.\n\n`__Builtins.writeStdout(managed) returns int`",
       p => {
         var managed = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
@@ -6050,8 +6047,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
-    ["__managed_write_stderr"] = new(
-      "Writes a __ManagedMemory buffer to stderr.\n\n`__managed_write_stderr(managed) returns int`",
+    ["writeStderr"] = new(
+      "Writes a __ManagedMemory buffer to stderr.\n\n`__Builtins.writeStderr(managed) returns int`",
       p => {
         var managed = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
@@ -6060,33 +6057,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return op.Result;
       }),
     // === Command Line intrinsics ===
-    ["__command_line_count"] = RuntimeCallIntrinsic(
-      "Returns the number of command line arguments.\n\n`__command_line_count() returns int`",
+    ["commandLineCount"] = RuntimeCallIntrinsic(
+      "Returns the number of command line arguments.\n\n`__Builtins.commandLineCount() returns int`",
       "maxon_command_line_count", 0, true),
-    ["__command_line_arg"] = RuntimeCallToManaged(
-      "Returns a __ManagedMemory for the command line argument at the given index.\n\n`__command_line_arg(index) returns __ManagedMemory`",
+    ["commandLineArg"] = RuntimeCallToManaged(
+      "Returns a __ManagedMemory for the command line argument at the given index.\n\n`__Builtins.commandLineArg(index) returns __ManagedMemory`",
       "maxon_command_line_arg", 1, freeCString: true),
     // === File I/O intrinsics ===
-    ["__file_open_read"] = ManagedToCStringRuntimeCall(
-      "Opens a file for reading, returns handle or -1.\n\n`__file_open_read(managed) returns int`",
+    ["fileOpenRead"] = ManagedToCStringRuntimeCall(
+      "Opens a file for reading, returns handle or -1.\n\n`__Builtins.fileOpenRead(managed) returns int`",
       "maxon_file_open_read"),
-    ["__file_size"] = RuntimeCallIntrinsic(
-      "Returns the size of an open file handle.\n\n`__file_size(handle) returns int`",
+    ["fileSize"] = RuntimeCallIntrinsic(
+      "Returns the size of an open file handle.\n\n`__Builtins.fileSize(handle) returns int`",
       "maxon_file_size", 1, true),
-    ["__file_read"] = RuntimeCallIntrinsic(
-      "Reads bytes from file into managed memory.\n\n`__file_read(handle, managed, size) returns int`",
+    ["fileRead"] = RuntimeCallIntrinsic(
+      "Reads bytes from file into managed memory.\n\n`__Builtins.fileRead(handle, managed, size) returns int`",
       "maxon_file_read", 3, true),
-    ["__file_close"] = RuntimeCallIntrinsic(
-      "Closes a file handle.\n\n`__file_close(handle)`",
+    ["fileClose"] = RuntimeCallIntrinsic(
+      "Closes a file handle.\n\n`__Builtins.fileClose(handle)`",
       "maxon_file_close", 1, false),
-    ["__file_delete"] = ManagedToCStringRuntimeCall(
-      "Deletes a file. Returns 0 on success, non-zero on failure.\n\n`__file_delete(managed) returns int`",
+    ["fileDelete"] = ManagedToCStringRuntimeCall(
+      "Deletes a file. Returns 0 on success, non-zero on failure.\n\n`__Builtins.fileDelete(managed) returns int`",
       "maxon_file_delete"),
-    ["__write_file"] = TwoManagedToCStringRuntimeCall(
-      "Writes text content to a file. Returns 0 on success.\n\n`__write_file(path_managed, content_managed) returns int`",
+    ["writeFile"] = TwoManagedToCStringRuntimeCall(
+      "Writes text content to a file. Returns 0 on success.\n\n`__Builtins.writeFile(path_managed, content_managed) returns int`",
       "maxon_write_file"),
-    ["__write_file_binary"] = new(
-      "Writes binary content to a file. Returns 0 on success.\n\n`__write_file_binary(path_managed, array) returns int`",
+    ["writeFileBinary"] = new(
+      "Writes binary content to a file. Returns 0 on success.\n\n`__Builtins.writeFileBinary(path_managed, array) returns int`",
       p => {
         var pathManaged = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.Comma);
@@ -6106,55 +6103,55 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return op.Result;
       }),
     // === Directory intrinsics ===
-    ["__find_first_file"] = ManagedToCStringRuntimeCall(
-      "Opens a file search. Returns handle or 0.\n\n`__find_first_file(managed) returns int`",
+    ["findFirstFile"] = ManagedToCStringRuntimeCall(
+      "Opens a file search. Returns handle or 0.\n\n`__Builtins.findFirstFile(managed) returns int`",
       "maxon_find_first_file"),
-    ["__find_filename"] = RuntimeCallToManaged(
-      "Gets the current filename from a search handle as __ManagedMemory.\n\n`__find_filename(handle) returns __ManagedMemory`",
+    ["findFilename"] = RuntimeCallToManaged(
+      "Gets the current filename from a search handle as __ManagedMemory.\n\n`__Builtins.findFilename(handle) returns __ManagedMemory`",
       "maxon_find_filename", 1, freeCString: false),
-    ["__find_next_file"] = RuntimeCallIntrinsic(
-      "Advances to next file. Returns non-zero if found.\n\n`__find_next_file(handle) returns int`",
+    ["findNextFile"] = RuntimeCallIntrinsic(
+      "Advances to next file. Returns non-zero if found.\n\n`__Builtins.findNextFile(handle) returns int`",
       "maxon_find_next_file", 1, true),
-    ["__find_close"] = RuntimeCallIntrinsic(
-      "Closes a file search handle.\n\n`__find_close(handle)`",
+    ["findClose"] = RuntimeCallIntrinsic(
+      "Closes a file search handle.\n\n`__Builtins.findClose(handle)`",
       "maxon_find_close", 1, false),
-    ["__directory_exists"] = ManagedToCStringRuntimeCallBool(
-      "Checks if a directory exists. Returns true/false.\n\n`__directory_exists(managed) returns bool`",
+    ["directoryExists"] = ManagedToCStringRuntimeCallBool(
+      "Checks if a directory exists. Returns true/false.\n\n`__Builtins.directoryExists(managed) returns bool`",
       "maxon_directory_exists"),
-    ["__create_directory"] = ManagedToCStringRuntimeCallBool(
-      "Creates a directory. Returns true on success, false on failure.\n\n`__create_directory(managed) returns bool`",
+    ["createDirectory"] = ManagedToCStringRuntimeCallBool(
+      "Creates a directory. Returns true on success, false on failure.\n\n`__Builtins.createDirectory(managed) returns bool`",
       "maxon_create_directory"),
-    ["__get_current_directory"] = RuntimeCallToManaged(
-      "Gets the current working directory as __ManagedMemory.\n\n`__get_current_directory() returns __ManagedMemory`",
+    ["getCurrentDirectory"] = RuntimeCallToManaged(
+      "Gets the current working directory as __ManagedMemory.\n\n`__Builtins.getCurrentDirectory() returns __ManagedMemory`",
       "maxon_get_current_directory", 0, freeCString: true),
     // === Process intrinsics ===
-    ["__process_create"] = TwoManagedToCStringRuntimeCall(
-      "Creates a process. Returns handle.\n\n`__process_create(cmd_managed, cwd_managed) returns int`",
+    ["processCreate"] = TwoManagedToCStringRuntimeCall(
+      "Creates a process. Returns handle.\n\n`__Builtins.processCreate(cmd_managed, cwd_managed) returns int`",
       "maxon_process_create"),
-    ["__process_wait"] = RuntimeCallIntrinsic(
-      "Waits for process. Returns 0=completed, 1=timeout, -1=error.\n\n`__process_wait(handle, timeoutMs) returns int`",
+    ["processWait"] = RuntimeCallIntrinsic(
+      "Waits for process. Returns 0=completed, 1=timeout, -1=error.\n\n`__Builtins.processWait(handle, timeoutMs) returns int`",
       "maxon_process_wait", 2, true),
-    ["__process_get_exit_code"] = RuntimeCallIntrinsic(
-      "Gets exit code of completed process.\n\n`__process_get_exit_code(handle) returns int`",
+    ["processGetExitCode"] = RuntimeCallIntrinsic(
+      "Gets exit code of completed process.\n\n`__Builtins.processGetExitCode(handle) returns int`",
       "maxon_process_get_exit_code", 1, true),
-    ["__process_close"] = RuntimeCallIntrinsic(
-      "Closes a process handle.\n\n`__process_close(handle)`",
+    ["processClose"] = RuntimeCallIntrinsic(
+      "Closes a process handle.\n\n`__Builtins.processClose(handle)`",
       "maxon_process_close", 1, false),
-    ["__process_create_with_capture"] = TwoManagedToCStringRuntimeCall(
-      "Creates a process with stdout/stderr capture. Returns capture struct pointer.\n\n`__process_create_with_capture(cmd_managed, cwd_managed) returns int`",
+    ["processCreateWithCapture"] = TwoManagedToCStringRuntimeCall(
+      "Creates a process with stdout/stderr capture. Returns capture struct pointer.\n\n`__Builtins.processCreateWithCapture(cmd_managed, cwd_managed) returns int`",
       "maxon_process_create_with_capture"),
-    ["__process_get_handle"] = RuntimeCallIntrinsic(
-      "Gets hProcess from capture struct.\n\n`__process_get_handle(capture_ptr) returns int`",
+    ["processGetHandle"] = RuntimeCallIntrinsic(
+      "Gets hProcess from capture struct.\n\n`__Builtins.processGetHandle(capture_ptr) returns int`",
       "maxon_process_get_handle", 1, true),
-    ["__process_read_stdout"] = RuntimeCallToManaged(
-      "Reads stdout from capture struct. Returns __ManagedMemory.\n\n`__process_read_stdout(capture_ptr) returns __ManagedMemory`",
+    ["processReadStdout"] = RuntimeCallToManaged(
+      "Reads stdout from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStdout(capture_ptr) returns __ManagedMemory`",
       "maxon_process_read_stdout", 1, freeCString: true),
-    ["__process_read_stderr"] = RuntimeCallToManaged(
-      "Reads stderr from capture struct. Returns __ManagedMemory.\n\n`__process_read_stderr(capture_ptr) returns __ManagedMemory`",
+    ["processReadStderr"] = RuntimeCallToManaged(
+      "Reads stderr from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStderr(capture_ptr) returns __ManagedMemory`",
       "maxon_process_read_stderr", 1, freeCString: true),
     // === Primitive type intrinsics ===
-    ["__float_to_bits"] = new(
-      "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__float_to_bits(value) returns int`",
+    ["floatToBits"] = new(
+      "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__Builtins.floatToBits(value) returns int`",
       p => {
         var value = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
@@ -6224,9 +6221,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return (kind, null);
   }
 
-  /// <summary>
-  /// Creates a CompilerBuiltinInfo that parses N arguments and emits a MaxonCallRuntimeOp.
-  /// </summary>
   /// Converts a single managed arg to cstring, calls a runtime function, returns its result.
   private static BuiltinInfo ManagedToCStringRuntimeCall(string doc, string runtimeName) {
     return new(doc, p => {
@@ -6295,6 +6289,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     });
   }
 
+  /// Parses N arguments and emits a MaxonCallRuntimeOp.
   private static BuiltinInfo RuntimeCallIntrinsic(string doc, string runtimeName, int argCount, bool hasResult) {
     return new(doc, p => {
       var args = new List<MaxonValue>();
@@ -6580,7 +6575,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// Emits builtin __ManagedMemory instance method calls as MaxonOps.
-  /// Each case produces the same op that the corresponding CompilerBuiltins intrinsic creates.
   /// The opening '(' has already been consumed.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedMemoryMethod(
     string structTypeName, string methodName, MaxonValue selfValue) {
@@ -6753,10 +6747,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Handles compiler builtin intrinsics.
+  /// Dispatches a __Builtins static method call.
   /// Called after consuming '('. Returns the result value (or null for void builtins).
   /// </summary>
-  private MaxonValue? TryEmitManagedMemoryBuiltin(Token token) {
+  private MaxonValue? EmitBuiltinsStaticMethod(Token token) {
     if (CompilerBuiltins.TryGetValue(token.Value, out var info))
       return info.Handler(this);
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Unknown builtin '{token.Value}'", token.Line, token.Column);
@@ -9204,6 +9198,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             staticMethodToken.Line, staticMethodToken.Column);
         }
 
+        // Check for __Builtins static methods
+        if (token.Value == "__Builtins") {
+          Advance(); // consume '.'
+          var staticMethodToken = Advance(); // consume method name
+          Expect(TokenType.LeftParen);
+          var builtinResult = EmitBuiltinsStaticMethod(staticMethodToken);
+          if (builtinResult != null)
+            return ParseFieldAccessChain(new ExprResult.Direct(builtinResult), token);
+          if (_inTryContext)
+            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"__Builtins.{staticMethodToken.Value} does not return a value",
+            staticMethodToken.Line, staticMethodToken.Column);
+        }
+
         // Check for compile-time constant
         if (_topLevelConstants.TryGetValue(qualifiedName, out var constVal)) {
           Advance(); // consume '.'
@@ -9356,20 +9365,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var (op, result) = makeOp2(arg1, arg2);
           _currentBlock!.AddOp(op);
           return new ExprResult.Direct(result);
-        }
-        // Handle compiler builtins in expression context
-        if (IsCompilerBuiltin(token.Value)) {
-          if (!_isStdlib)
-            throw new CompileError(ErrorCode.ParserCompilerBuiltinNotInStdlib,
-              $"Compiler builtin '{token.Value}' can only be used in stdlib",
-              token.Line, token.Column);
-          Advance(); // consume '('
-          var builtinResult = TryEmitManagedMemoryBuiltin(token);
-          if (builtinResult != null)
-            return new ExprResult.Direct(builtinResult);
-          if (_inTryContext)
-            return new ExprResult.Direct(new MaxonInteger(MlirContext.Current.NextId()));
-          throw new CompileError(ErrorCode.ParserExpectedExpression, $"Builtin '{token.Value}' does not return a value", token.Line, token.Column);
         }
         // Check for sibling method call: bare methodName() inside an instance method resolves to self.methodName()
         var siblingCallOp = TrySiblingMethodCall(token);

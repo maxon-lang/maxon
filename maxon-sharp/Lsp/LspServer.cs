@@ -247,22 +247,6 @@ public class LspServer {
       });
     }
 
-    // Add built-in types
-    items.Add(new CompletionItem { Label = "int", Kind = CompletionItemKind.TypeParameter, Detail = "64-bit signed integer" });
-    items.Add(new CompletionItem { Label = "float", Kind = CompletionItemKind.TypeParameter, Detail = "64-bit floating point" });
-    items.Add(new CompletionItem { Label = "bool", Kind = CompletionItemKind.TypeParameter, Detail = "Boolean type" });
-    items.Add(new CompletionItem { Label = "byte", Kind = CompletionItemKind.TypeParameter, Detail = "8-bit unsigned integer" });
-
-    // Add compiler builtins
-    foreach (var (name, info) in Parser.CompilerBuiltins) {
-      items.Add(new CompletionItem {
-        Label = name,
-        Kind = CompletionItemKind.Function,
-        Detail = "Stdlib only. " + info.HelpText,
-        InsertText = name
-      });
-    }
-
     return new CompletionList(items, isIncomplete: false);
   }
 
@@ -297,19 +281,6 @@ public class LspServer {
           Range = GetWordRange(position, line, word)
         };
       }
-    }
-
-    // Check if it's a compiler builtin
-    if (Parser.CompilerBuiltins.TryGetValue(word, out var builtinInfo)) {
-      return new Hover {
-        Contents = new MarkedStringsOrMarkupContent(
-          new MarkupContent {
-            Kind = MarkupKind.Markdown,
-            Value = $"**{word}** (builtin, stdlib only)\n\n{builtinInfo.HelpText}"
-          }
-        ),
-        Range = GetWordRange(position, line, word)
-      };
     }
 
     // Check if it's an operator
@@ -1181,10 +1152,6 @@ public class LspServer {
 
     // Reject keywords (unless inside enum body where they're case names)
     if (Lexer.KeywordMap.ContainsKey(word) && !IsInsideEnumBody(lines, (int)position.Line))
-      return null;
-
-    // Reject compiler builtins
-    if (Parser.CompilerBuiltins.ContainsKey(word))
       return null;
 
     // Must be able to find a definition for this symbol

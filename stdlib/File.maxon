@@ -23,7 +23,7 @@ export typealias ByteArray = Array with Byte
 export type File
   /// Open file for reading, throwing if not found
   static function openForRead(path String) returns FileHandle throws FileReadError
-    let handle = __file_open_read(path.managed)
+    let handle = __Builtins.fileOpenRead(path.managed)
     if handle < 0 'notFound'
       throw FileReadError.notFound
     end 'notFound'
@@ -33,10 +33,10 @@ export type File
   /// Read file into a managed memory
   static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
     let handle = try openForRead(path)
-    let size = __file_size(handle)
+    let size = __Builtins.fileSize(handle)
     var managed = __ManagedMemory.create(size + extraBytes, 1)
-    let bytesRead = __file_read(handle, managed, size)
-    __file_close(handle)
+    let bytesRead = __Builtins.fileRead(handle, managed, size)
+    __Builtins.fileClose(handle)
     managed.setLength(bytesRead)
     return managed
   end 'readFileData'
@@ -57,7 +57,7 @@ export type File
 
   /// Write string content to a text file
   export static function writeText(path String, content String) throws FileWriteError
-    let res = __write_file(path.managed, content.managed)
+    let res = __Builtins.writeFile(path.managed, content.managed)
     if res != 0 'failed'
       throw FileWriteError.failed
     end 'failed'
@@ -65,7 +65,7 @@ export type File
 
   /// Write binary content to a file
   export static function writeBinary(path String, content ByteArray) throws FileWriteError
-    let res = __write_file_binary(path.managed, content)
+    let res = __Builtins.writeFileBinary(path.managed, content)
     if res != 0 'failed'
       throw FileWriteError.failed
     end 'failed'
@@ -73,17 +73,17 @@ export type File
 
   /// Check if a file exists at the given path
   export static function exists(path String) returns bool
-    let handle = __file_open_read(path.managed)
+    let handle = __Builtins.fileOpenRead(path.managed)
     if handle < 0 'notFound'
       return false
     end 'notFound'
-    __file_close(handle)
+    __Builtins.fileClose(handle)
     return true
   end 'exists'
 
   /// Delete a file at the given path
   export static function delete(path String) throws FileDeleteError
-    let res = __file_delete(path.managed)
+    let res = __Builtins.fileDelete(path.managed)
     if res != 0 'failed'
       throw FileDeleteError.notFound
     end 'failed'

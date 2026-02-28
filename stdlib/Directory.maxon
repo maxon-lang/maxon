@@ -12,32 +12,32 @@ export type Directory
   /// List files and directories in a path
   export static function list(path String) returns StringArray throws DirectoryListError
     var pattern = "{path}\\*"
-    var handle = __find_first_file(pattern.managed)
+    var handle = __Builtins.findFirstFile(pattern.managed)
     if handle == 0 'notFound'
       throw DirectoryListError.notFound
     end 'notFound'
     var result = StringArray{}
-    var managed = __find_filename(handle)
+    var managed = __Builtins.findFilename(handle)
     var name = String{managed: managed, _iterPos: 0}
     if name != "." and name != ".." 'notDot1'
       result.push(name)
     end 'notDot1'
-    var nextResult = __find_next_file(handle)
+    var nextResult = __Builtins.findNextFile(handle)
     while nextResult != 0 'loop'
-      managed = __find_filename(handle)
+      managed = __Builtins.findFilename(handle)
       name = String{managed: managed, _iterPos: 0}
       if name != "." and name != ".." 'notDot2'
         result.push(name)
       end 'notDot2'
-      nextResult = __find_next_file(handle)
+      nextResult = __Builtins.findNextFile(handle)
     end 'loop'
-    __find_close(handle)
+    __Builtins.findClose(handle)
     return result
   end 'list'
 
   /// Check if a path exists and is a directory
   export static function exists(path String) returns bool
-    return __directory_exists(path.managed)
+    return __Builtins.directoryExists(path.managed)
   end 'exists'
 
   /// Alias for exists
@@ -47,12 +47,12 @@ export type Directory
 
   /// Create a directory at the given path. Returns true on success.
   export static function create(path String) returns bool
-    return __create_directory(path.managed)
+    return __Builtins.createDirectory(path.managed)
   end 'create'
 
   /// Get the current working directory
   export static function currentDirectory() returns String
-    let managed = __get_current_directory()
+    let managed = __Builtins.getCurrentDirectory()
     return String{managed: managed, _iterPos: 0}
   end 'currentDirectory'
 end 'Directory'

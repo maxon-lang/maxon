@@ -35,6 +35,8 @@ The user will describe the feature they want. You will create the spec, write th
 
 ### Phase 3: Implement Incrementally
 
+Use an agent to implement the feature incrementally, test by test:
+
 8. Enable the first test by removing `disabled-` from its marker comment.
 9. Build the compiler: `cd maxon-sharp && dotnet build`
 10. Run the spec tests: `maxon.exe spec-test --filter=<feature-name>`

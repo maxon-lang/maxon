@@ -33,15 +33,15 @@ export type Process
   /// @returns The process exit code, or -1 on error
   export static function execute(command String, timeoutMs Duration) returns Offset
     var empty = ""
-    let handle = __process_create(command.managed, empty.managed)
-    let waitResult = __process_wait(handle, timeoutMs)
+    let handle = __Builtins.processCreate(command.managed, empty.managed)
+    let waitResult = __Builtins.processWait(handle, timeoutMs)
     // waitResult: 0 = completed, 1 = timeout, -1 = error
     if waitResult != 0 'check'
-      __process_close(handle)
+      __Builtins.processClose(handle)
       return -1
     end 'check'
-    let exitCode = __process_get_exit_code(handle)
-    __process_close(handle)
+    let exitCode = __Builtins.processGetExitCode(handle)
+    __Builtins.processClose(handle)
     return exitCode
   end 'execute'
 
@@ -49,27 +49,27 @@ export type Process
   /// Use captureStdout/captureStderr to read output, then captureWait to finish.
   export static function captureStart(command String) returns ProcessHandle
     var empty = ""
-    return __process_create_with_capture(command.managed, empty.managed)
+    return __Builtins.processCreateWithCapture(command.managed, empty.managed)
   end 'captureStart'
 
   /// Read all stdout from a capture handle as a String. Must call before captureWait.
   export static function captureStdout(capturePtr ProcessHandle) returns String
-    let managed = __process_read_stdout(capturePtr)
+    let managed = __Builtins.processReadStdout(capturePtr)
     return String{managed: managed, _iterPos: 0}
   end 'captureStdout'
 
   /// Read all stderr from a capture handle as a String. Must call before captureWait.
   export static function captureStderr(capturePtr ProcessHandle) returns String
-    let managed = __process_read_stderr(capturePtr)
+    let managed = __Builtins.processReadStderr(capturePtr)
     return String{managed: managed, _iterPos: 0}
   end 'captureStderr'
 
   /// Wait for a captured process to complete and return its exit code.
   export static function captureWait(capturePtr ProcessHandle, timeoutMs Duration) returns Offset
-    let hProcess = __process_get_handle(capturePtr)
-    __process_wait(hProcess, timeoutMs)
-    let ec = __process_get_exit_code(hProcess)
-    __process_close(hProcess)
+    let hProcess = __Builtins.processGetHandle(capturePtr)
+    __Builtins.processWait(hProcess, timeoutMs)
+    let ec = __Builtins.processGetExitCode(hProcess)
+    __Builtins.processClose(hProcess)
     return ec
   end 'captureWait'
 end 'Process'

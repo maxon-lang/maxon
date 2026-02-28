@@ -1,0 +1,46 @@
+// Test: builtins-type.directory-exists
+function main() returns ExitCode
+  let cwd = Directory.currentDirectory()
+  if Directory.exists(cwd) 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @builtins-type.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor rcx, rcx
+    x86.call mm_scope_enter
+    x86.mov [rbp-8], eax
+    x86.call stdlib.Directory.currentDirectory
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call stdlib.Directory.exists
+    x86.test eax, eax
+    x86.je builtins-type.main.check_0.after
+  check_0:
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov eax, 1
+    x86.epilogue
+    x86.ret
+  }
+}
+---
