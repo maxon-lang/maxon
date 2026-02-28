@@ -86,7 +86,7 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 and, as, bool, break, byte, continue, default, else, end, enum, export,
 extends, extension, fallthrough, false, float, for, from, function, gives, if,
 ignore, implements, in, int, interface, is, let, match, not, of, or, otherwise,
-return, returns, self, Self, shl, shr, static, swap, then, throw, throws, to,
+return, returns, self, Self, shl, shr, static, then, throw, throws, to,
 true, try, type, typealias, union, upto, uses, var, where, while, with, xor
 ```
 
@@ -884,26 +884,6 @@ end 'update'
 ```
 
 When the union variable is declared with `let`, bindings are immutable (read-only copies).
-
-For heap-pointer payloads (structs, strings, unions with associated values), use `swap` instead of direct assignment:
-
-```maxon
-match myNode 'update'
-    node(value, next) then let _ = swap next with Node.empty
-    empty then return
-end 'update'
-```
-
-### Swap Expression
-
-When replacing a heap-pointer field on a struct or an associated value in a union, you must use `swap` instead of direct assignment (error E3070). The `swap` expression atomically replaces the field value and returns the old value to the current scope for proper cleanup:
-
-```maxon
-var old = swap fieldName with newValue         // self field
-let _ = swap variable.field with newValue      // qualified field
-```
-
-Direct assignment to heap-pointer fields is a compile error. Scalar fields (integers, booleans, simple enums without associated values) still support direct assignment.
 
 ### Comparing Union Values
 

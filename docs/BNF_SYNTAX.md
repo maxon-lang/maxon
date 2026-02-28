@@ -48,7 +48,7 @@ KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
               | 'match' | 'not' | 'of' | 'or' | 'otherwise'
               | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
-              | 'static' | 'swap' | 'then' | 'throw' | 'throws' | 'to'
+              | 'static' | 'then' | 'throw' | 'throws' | 'to'
               | 'true' | 'try' | 'type' | 'typealias' | 'union' | 'upto'
               | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
 ```
@@ -629,16 +629,7 @@ try_expr      = 'try' expression 'otherwise' otherwise_clause
               | 'try' expression
 ```
 
-### 6.6 Swap Expression
-
-```
-swap_expr     = 'swap' swap_target 'with' expression
-
-swap_target   = IDENTIFIER
-              | IDENTIFIER '.' IDENTIFIER
-```
-
-### 6.7 Function and Method Calls
+### 6.6 Function and Method Calls
 
 ```
 call_expr     = IDENTIFIER '(' [ arg_list ] ')'

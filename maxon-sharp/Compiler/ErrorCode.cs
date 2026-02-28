@@ -82,7 +82,6 @@ public enum ErrorCode {
   SemanticSelfAssignment = 3067,
   SemanticRefIdentityOnPrimitive = 3068,
   SemanticEqRequiresEquatable = 3069,
-  SemanticHeapFieldRequiresSwap = 3070,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

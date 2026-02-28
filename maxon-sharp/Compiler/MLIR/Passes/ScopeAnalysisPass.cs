@@ -141,12 +141,6 @@ public static class ScopeAnalysisPass {
           case MaxonMakeCharFromBytesOp makeCharOp:
             producingOps[makeCharOp.Result.Id] = op;
             break;
-          case MaxonSwapFieldOp swapFieldOp:
-            producingOps[swapFieldOp.Result.Id] = op;
-            break;
-          case MaxonSwapPayloadOp swapPayloadOp:
-            producingOps[swapPayloadOp.Result.Id] = op;
-            break;
         }
 
         switch (op) {
@@ -258,9 +252,6 @@ public static class ScopeAnalysisPass {
                 case MaxonEnumStringRawValueOp:
                 case MaxonEnumNameOp:
                 case MaxonMakeCharFromBytesOp:
-                // Swap ops return an existing heap object moved to the current scope
-                case MaxonSwapFieldOp:
-                case MaxonSwapPayloadOp:
                   isFromCall = false;
                   break;
                 default:

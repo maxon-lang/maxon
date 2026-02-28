@@ -56,8 +56,8 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
       newElements.resize(16)
       var newStates = StateArray{}
       newStates.resize(16)
-      let _ = swap elements with newElements
-      let _ = swap states with newStates
+      elements = newElements
+      states = newStates
       capacity = 16
     end 'init_empty'
 
@@ -272,9 +272,11 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
     var newStates = StateArray{}
     newStates.resize(newCapacity)
 
-    // Swap in new arrays, getting back old arrays for rehashing
-    var oldElements = swap elements with newElements
-    var oldStates = swap states with newStates
+    // Save old arrays for rehashing, then replace with new ones
+    var oldElements = elements
+    var oldStates = states
+    elements = newElements
+    states = newStates
     capacity = newCapacity
     count = 0
 

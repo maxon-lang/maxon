@@ -59,7 +59,6 @@ public enum TokenType {
   Default,
   Upto,
   Is,
-  Swap,
   // Types
   Int,
   Float,
@@ -206,7 +205,6 @@ public class Lexer(string source) {
     { "default", new(TokenType.Default, "Default case in a match statement.", false) },
     { "upto", new(TokenType.Upto, "Exclusive upper bound in range patterns.", false) },
     { "is", new(TokenType.Is, "Reference identity operator. Returns true if two variables refer to the same object. Use 'is not' for inequality.", false) },
-    { "swap", new(TokenType.Swap, "Swaps a heap-pointer field value, returning the old value to the current scope. Required instead of direct assignment for heap-pointer fields.", false) },
   };
 
   // Operator map: { operator_text, TokenType, OperatorCategory, help_text }

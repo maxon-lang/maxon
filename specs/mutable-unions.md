@@ -23,12 +23,12 @@ match b 'update'
 end 'update'
 ```
 
-For heap-pointer bindings (structs, unions with associated values, strings), use `swap` to make the ownership transfer explicit:
+For heap-pointer bindings (structs, unions with associated values, strings), use direct assignment:
 
 ```text
 var myNode = Node.node(10, Node.empty)
 match myNode 'update'
-  node(value, next) then let _ = swap next with Node.empty
+  node(value, next) then next = Node.empty
   empty then return
 end 'update'
 ```
@@ -163,7 +163,7 @@ function main() returns ExitCode
   var n1 = Node.item(10, Node.empty)
   var n2 = Node.item(32, Node.empty)
   match n1 'link'
-    item(_value, next) then let _ = swap next with n2
+    item(_value, next) then next = n2
     empty then return 0
   end 'link'
   match n1 'read'
@@ -234,7 +234,7 @@ function main() returns ExitCode
   var c2 = Link.link(32, Link.tail)
   var c1 = Link.link(10, Link.tail)
   match c1 'link1'
-    link(_v, next) then let _ = swap next with c2
+    link(_v, next) then next = c2
     tail then return 0
   end 'link1'
   return sumChain(c1)
@@ -278,7 +278,7 @@ end 'Named'
 function main() returns ExitCode
   var n = Named.named("hello")
   match n 'update'
-    named(name) then let _ = swap name with "world"
+    named(name) then name = "world"
     anonymous then return 0
   end 'update'
   match n 'read'
@@ -309,7 +309,7 @@ end 'Shape'
 function main() returns ExitCode
   var s = Shape.located(Point{x: 1, y: 2})
   match s 'update'
-    located(pos) then let _ = swap pos with Point{x: 10, y: 32}
+    located(pos) then pos = Point{x: 10, y: 32}
     nothing then return 0
   end 'update'
   match s 'read'

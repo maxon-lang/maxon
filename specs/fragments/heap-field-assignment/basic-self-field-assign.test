@@ -1,70 +1,55 @@
-// Test: basic-self-field-swap
+// Test: basic-self-field-assign
 typealias Integer = int(i64.min to i64.max)
 
 type Container
   export var value Integer
   export var child Container
 
-  export function replaceChild(newChild Container) returns Integer
-    var old = swap child with newChild
-    return old.value
+  export function replaceChild(newChild Container)
+    child = newChild
   end 'replaceChild'
 end 'Container'
 
 function main() returns ExitCode
   var c = Container{value: 1, child: Container{value: 10, child: Container{}}}
-  var result = c.replaceChild(Container{value: 20, child: Container{}})
-  if result == 10 'check1'
-    if c.child.value == 20 'check2'
-      return 0
-    end 'check2'
-  end 'check1'
+  c.replaceChild(Container{value: 20, child: Container{}})
+  if c.child.value == 20 'check'
+    return 0
+  end 'check'
   return 1
 end 'main'
 ---
 ExitCode: 0
 ---
 module {
-  func @Container.replaceChild(__self_ptr: i64, newChild: i64) -> i64 {
+  func @Container.replaceChild(__self_ptr: i64, newChild: i64) {
   entry:
-    x86.prologue stack_size=48
-    x86.mov [rbp-16], ecx
-    x86.mov [rbp-24], edx
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+8]
-    x86.mov edx, [rbp-24]
-    x86.mov [eax+8], edx
-    x86.mov [rbp-40], ecx
-    x86.mov rcx, [rbp-24]
-    x86.mov rdx, [rbp-16]
-    x86.call mm_reparent_if_scope_owned
-    x86.mov ebx, [rbp-8]
-    x86.mov rcx, [rbp-40]
-    x86.mov rdx, [rbp-8]
-    x86.xor r8, r8
-    x86.call mm_move
-    x86.mov esi, [rbp-40]
-    x86.mov [rbp-32], esi
-    x86.mov edi, [rbp-32]
-    x86.mov rcx, [rbp-32]
-    x86.call mm_incref
-    x86.mov r8, [rbp-32]
-    x86.mov eax, [r8+0]
-    x86.mov r9, [rbp-32]
-    x86.mov [rbp-48], eax
-    x86.mov rcx, [rbp-32]
-    x86.call mm_decref
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
     x86.mov eax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-48]
+    x86.mov ebx, [eax+8]
+    x86.mov [rbp-16], ebx
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-24]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-8]
+    x86.call mm_reparent_if_scope_owned
+    x86.mov edi, [rbp-8]
+    x86.mov r8, [rbp-16]
+    x86.mov [edi+8], r8
     x86.epilogue
     x86.ret
   }
-  func @swap-expression.main() -> u32 {
+  func @heap-field-assignment.main() -> u32 {
   entry:
     x86.prologue stack_size=96
     x86.xor rcx, rcx
@@ -198,19 +183,15 @@ module {
     x86.mov rcx, [rbp-48]
     x86.mov rdx, [rbp-80]
     x86.call Container.replaceChild
-    x86.mov ecx, 10
-    x86.cmp eax, ecx
-    x86.jne swap-expression.main.check1_0.merge
-  check1_0:
     x86.mov eax, [rbp-48]
     x86.mov ecx, [eax+8]
     x86.mov [rbp-88], ecx
-    x86.mov edx, [rbp-88]
-    x86.mov ebx, [edx+0]
-    x86.mov esi, 20
-    x86.cmp ebx, esi
-    x86.jne swap-expression.main.check2_1.after
-  check2_1:
+    x86.mov eax, [rbp-88]
+    x86.mov ecx, [eax+0]
+    x86.mov eax, 20
+    x86.cmp ecx, eax
+    x86.jne heap-field-assignment.main.check_0.after
+  check_0:
     x86.mov eax, [rbp-48]
     x86.mov rcx, [rbp-48]
     x86.call mm_decref
@@ -219,9 +200,7 @@ module {
     x86.xor eax, eax
     x86.epilogue
     x86.ret
-  check2_1.after:
-    x86.jmp swap-expression.main.check1_0.merge
-  check1_0.merge:
+  check_0.after:
     x86.mov eax, [rbp-48]
     x86.mov rcx, [rbp-48]
     x86.call mm_decref

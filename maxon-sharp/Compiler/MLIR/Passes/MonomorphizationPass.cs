@@ -639,24 +639,6 @@ public static class MonomorphizationPass {
       }
       case MaxonFieldAssignOp fa:
         return new MaxonFieldAssignOp(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, mapValue(fa.NewValue));
-      case MaxonSwapFieldOp sf: {
-        var cloned = new MaxonSwapFieldOp(mapValue(sf.StructValue), sub.SubstituteName(sf.TypeName), sf.FieldName, mapValue(sf.NewValue),
-          sf.Result is MaxonStruct ? MaxonValueKind.Struct : sf.Result is MaxonEnum ? MaxonValueKind.Enum : MaxonValueKind.Integer,
-          sf.ScopeVar,
-          sf.ResultStructTypeName != null ? sub.SubstituteName(sf.ResultStructTypeName) : null,
-          sf.ResultEnumTypeName != null ? sub.SubstituteName(sf.ResultEnumTypeName) : null);
-        valueMap[sf.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonSwapPayloadOp sp: {
-        var cloned = new MaxonSwapPayloadOp(sp.EnumVarName, sub.SubstituteName(sp.EnumTypeName), sp.PayloadIndex, mapValue(sp.NewValue),
-          sp.Result is MaxonStruct ? MaxonValueKind.Struct : sp.Result is MaxonEnum ? MaxonValueKind.Enum : MaxonValueKind.Integer,
-          sp.ScopeVar,
-          sp.ResultStructTypeName != null ? sub.SubstituteName(sp.ResultStructTypeName) : null,
-          sp.ResultEnumTypeName != null ? sub.SubstituteName(sp.ResultEnumTypeName) : null);
-        valueMap[sp.Result.Id] = cloned.Result;
-        return cloned;
-      }
       case MaxonManagedMemGetOp memGet: {
         var cloned = new MaxonManagedMemGetOp(mapValue(memGet.ManagedStruct), mapValue(memGet.Index), memGet.ResultKind) {
           IsStructElement = memGet.IsStructElement,

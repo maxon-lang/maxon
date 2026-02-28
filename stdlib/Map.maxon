@@ -63,9 +63,9 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
       newValues.resize(16)
       var newStates = StateArray{}
       newStates.resize(16)
-      let _ = swap keys with newKeys
-      let _ = swap values with newValues
-      let _ = swap states with newStates
+      keys = newKeys
+      values = newValues
+      states = newStates
       capacity = 16
     end 'init_empty'
 
@@ -337,10 +337,13 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     var newStates = StateArray{}
     newStates.resize(newCapacity)
 
-    // Swap in new arrays, getting back old arrays for rehashing
-    var oldKeys = swap keys with newKeys
-    var oldValues = swap values with newValues
-    var oldStates = swap states with newStates
+    // Save old arrays for rehashing, then replace with new ones
+    var oldKeys = keys
+    var oldValues = values
+    var oldStates = states
+    keys = newKeys
+    values = newValues
+    states = newStates
     capacity = newCapacity
     count = 0
 

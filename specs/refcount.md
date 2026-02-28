@@ -152,7 +152,7 @@ end 'Inner'
 type Outer
     export var child Inner
     export function setChild(c Inner)
-        let _ = swap child with c
+        child = c
     end 'setChild'
 end 'Outer'
 function main() returns ExitCode

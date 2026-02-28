@@ -781,7 +781,7 @@ public partial class X86CodeEmitter {
     //        [rbp-72]=dest_entry (for mode=1)
     EmitRuntimeFunctionStart("mm_move", 3, 0x80);
 
-    // If ptr == NULL, no-op (nothing to move — e.g., zero-initialized field in swap)
+    // If ptr == NULL, no-op (nothing to move — e.g., zero-initialized field)
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_move_done");

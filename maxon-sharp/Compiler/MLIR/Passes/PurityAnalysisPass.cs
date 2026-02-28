@@ -78,10 +78,6 @@ public static class PurityAnalysisPass {
           case MaxonManagedMemConcatOp:
           case MaxonManagedMemSetLengthOp:
             return true;
-          // Swapping heap-pointer fields mutates the parent struct
-          case MaxonSwapFieldOp:
-          case MaxonSwapPayloadOp:
-            return true;
           // Chain mutation operations modify the chain data structure in-place
           case MaxonChainInsertValueOp:
           case MaxonChainInsertRelativeValueOp:
