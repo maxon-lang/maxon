@@ -6070,9 +6070,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["fileSize"] = RuntimeCallIntrinsic(
       "Returns the size of an open file handle.\n\n`__Builtins.fileSize(handle) returns int`",
       "maxon_file_size", 1, true),
-    ["fileRead"] = RuntimeCallIntrinsic(
-      "Reads bytes from file into managed memory.\n\n`__Builtins.fileRead(handle, managed, size) returns int`",
-      "maxon_file_read", 3, true),
+    ["fileRead"] = new(
+      "Reads bytes from file into managed memory, clamped to capacity.\n\n`__Builtins.fileRead(handle, managed, size) returns int`",
+      p => {
+        var handle = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var managed = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.Comma);
+        var size = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        // Extract buffer pointer and capacity from managed struct for bounds-safe read
+        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(bufferRef);
+        var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        p._currentBlock!.AddOp(capacityRef);
+        var op = new MaxonCallRuntimeOp("maxon_file_read", [handle, bufferRef.Result, size, capacityRef.Result], true);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
     ["fileClose"] = RuntimeCallIntrinsic(
       "Closes a file handle.\n\n`__Builtins.fileClose(handle)`",
       "maxon_file_close", 1, false),

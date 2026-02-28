@@ -11,9 +11,12 @@ category: type-system
 
 ### Overview
 
-`__Builtins` is a compiler builtin type that provides static methods for low-level system operations. These methods are only available in the standard library (stdlib) and cannot be called directly from user code.
+`__Builtins` is a compiler builtin type that provides static methods for low-level system operations. While accessible from any code, most users should prefer the stdlib wrappers: `print()`, `File`, `Directory`, `Process`, `CommandLine`.
 
-User code should use the stdlib wrappers instead: `print()`, `File`, `Directory`, `Process`, `CommandLine`.
+All methods include safety checks to prevent crashes and memory corruption:
+- Buffer reads are clamped to capacity
+- Out-of-bounds argument indices return empty values
+- Null/invalid handles are handled gracefully
 
 ### Available Static Methods
 
@@ -58,7 +61,7 @@ User code should use the stdlib wrappers instead: `print()`, `File`, `Directory`
 
 ## Tests
 
-These tests verify the __Builtins type works through the stdlib wrappers (since builtins are stdlib-only).
+These tests verify the __Builtins type works both through stdlib wrappers and directly.
 
 <!-- test: builtins-type.print-via-stdlib -->
 ```maxon
@@ -112,4 +115,90 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: builtins-type.command-line-arg-out-of-bounds -->
+<!-- Args: one -->
+```maxon
+function main() returns ExitCode
+  let managed = __Builtins.commandLineArg(9999)
+  let s = String{managed: managed, _iterPos: 0}
+  if s == "" 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-type.find-filename-null-handle -->
+```maxon
+function main() returns ExitCode
+  let managed = __Builtins.findFilename(0)
+  let s = String{managed: managed, _iterPos: 0}
+  if s == "" 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-type.find-next-null-handle -->
+```maxon
+function main() returns ExitCode
+  let result = __Builtins.findNextFile(0)
+  if result == 0 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-type.find-close-null-handle -->
+```maxon
+function main() returns ExitCode
+  __Builtins.findClose(0)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-type.float-to-bits -->
+```maxon
+function main() returns ExitCode
+  let bits = __Builtins.floatToBits(1.0)
+  // IEEE 754: 1.0 = 0x3FF0000000000000 = 4607182418800017408
+  if bits == 4607182418800017408 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-type.direct-write-stdout -->
+```maxon
+function main() returns ExitCode
+  let s = "direct\n"
+  __Builtins.writeStdout(s.managed)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+direct
 ```

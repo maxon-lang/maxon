@@ -1,0 +1,28 @@
+// Test: builtins-type.find-next-null-handle
+function main() returns ExitCode
+  let result = __Builtins.findNextFile(0)
+  if result == 0 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @builtins-type.main() -> u32 {
+  entry:
+    x86.xor rcx, rcx
+    x86.call maxon_find_next_file
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.jne builtins-type.main.check_0.after
+  check_0:
+    x86.xor eax, eax
+    x86.ret
+  check_0.after:
+    x86.mov eax, 1
+    x86.ret
+  }
+}
+---

@@ -18,6 +18,8 @@ public partial class X86CodeEmitter {
   }
 
   public void EmitRuntimeFunctions() {
+    // Static empty C string used by null-guard paths (find*, process capture, etc.)
+    DefineSymdata("__rt_empty_cstring", [0x00]);
     EmitMaxonBoundsCheck();
     EmitMaxonCowCheck();
     EmitMaxonToCString();
@@ -1667,8 +1669,28 @@ public partial class X86CodeEmitter {
     // Step 3: Save wargv pointer
     EmitMovMemReg(-0x10, X86Register.Rax, 8);
 
+    // Step 3b: Bounds check — if index < 0 or index >= argc, return empty string
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);           // index (signed 64-bit)
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("s", "rt_cla_oob");                          // index < 0 → out of bounds
+    EmitMovRegMem(X86Register.Rdx, -0x30, 4);           // argc (32-bit, zero-extended)
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("b", "rt_cla_inbounds");                     // index < argc → in bounds
+    DefineLabel("rt_cla_oob");
+    // Free wargv before returning
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCallImport("kernel32.dll", "LocalFree");
+    // Allocate 1-byte buffer with null terminator
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitTagOrNull(X86Register.Rdx, "__rt_tag_cmdline_arg");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
+    EmitBytes(0xC6, 0x00, 0x00);                         // MOV byte [RAX], 0
+    EmitJmp("rt_cla_return");
+    DefineLabel("rt_cla_inbounds");
+
     // Step 4: Get wargv[index] — the wide string pointer
-    // Load index into RCX
+    // Load wargv into RAX, index into RCX
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
     // MOV RAX, [RAX + RCX*8]: REX.W 8B 04 C8
     EmitBytes(0x48, 0x8B, 0x04, 0xC8);
@@ -1727,6 +1749,7 @@ public partial class X86CodeEmitter {
 
     // Step 9: Return buffer pointer
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    DefineLabel("rt_cla_return");
     EmitRuntimeFunctionEnd();
   }
 
@@ -1772,24 +1795,31 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_file_read(handle, buffer_ptr, size) -> bytes read
-  /// ReadFile(handle, buffer, size, &bytesRead, NULL)
-  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=size, [rbp-32]=bytesRead
+  /// maxon_file_read(handle, buffer_ptr, size, capacity) -> bytes read
+  /// Clamps size to capacity, then calls ReadFile(handle, buffer, clampedSize, &bytesRead, NULL).
+  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=size, [rbp-32]=capacity, [rbp-40]=bytesRead
   /// </summary>
   private void EmitMaxonFileRead() {
-    EmitRuntimeFunctionStart("maxon_file_read", 3, 0x40);
+    EmitRuntimeFunctionStart("maxon_file_read", 4, 0x50);
     // Zero the bytesRead slot
     EmitMovRegImm(X86Register.Rax, 0);
-    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    // Clamp size to capacity: if size > capacity, use capacity
+    EmitMovRegMem(X86Register.R8, -0x18, 8);           // size
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);          // capacity
+    EmitCmpRegReg(X86Register.R8, X86Register.Rax);
+    EmitJcc("be", "rt_fread_ok");                       // size <= capacity → no clamp
+    EmitMovRegReg(X86Register.R8, X86Register.Rax);    // clamp: size = capacity
+    DefineLabel("rt_fread_ok");
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: hFile
     EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // arg2: lpBuffer
-    EmitMovRegMem(X86Register.R8, -0x18, 8);           // arg3: nNumberOfBytesToRead
-    // LEA R9, [rbp-0x20] (arg4: &bytesRead)
-    EmitBytes(0x4C, 0x8D, 0x4D, 0xE0);
+    // R8 already has clamped size                      // arg3: nNumberOfBytesToRead
+    // LEA R9, [rbp-0x28] (arg4: &bytesRead)
+    EmitBytes(0x4C, 0x8D, 0x4D, 0xD8);
     // [rsp+0x20] = NULL (lpOverlapped)
     EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
     EmitCallImport("kernel32.dll", "ReadFile");
-    EmitMovRegMem(X86Register.Rax, -0x20, 8);         // return bytesRead
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);         // return bytesRead
     EmitRuntimeFunctionEnd();
   }
 
@@ -1961,44 +1991,61 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_find_filename(block_ptr) -> cstring pointer to cFileName in the block
-  /// Returns block_ptr + 8 + 44 = block_ptr + 52
+  /// Returns block_ptr + 8 + 44 = block_ptr + 52, or empty string if block_ptr is null.
   /// </summary>
   private void EmitMaxonFindFilename() {
     EmitRuntimeFunctionStart("maxon_find_filename", 1);
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_ffn_valid");
+    // Null block_ptr: return pointer to static empty string
+    EmitLeaRegSymdataRel(X86Register.Rax, "__rt_empty_cstring");
+    EmitJmp("rt_ffn_done");
+    DefineLabel("rt_ffn_valid");
     EmitAddRegImm(X86Register.Rax, FindBlockFindDataOffset + FindDataFileNameOffset);
+    DefineLabel("rt_ffn_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_find_next_file(block_ptr) -> non-zero if found, 0 if done
-  /// Calls FindNextFileA(handle, &findData).
+  /// Calls FindNextFileA(handle, &findData). Returns 0 if block_ptr is null.
   /// Stack: [rbp-8]=block_ptr
   /// </summary>
   private void EmitMaxonFindNextFile() {
     EmitRuntimeFunctionStart("maxon_find_next_file", 1, 0x40);
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_fnf_valid");
+    // Null block_ptr: return 0 (no more files)
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("rt_fnf_done");
+    DefineLabel("rt_fnf_valid");
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
     EmitMovRegMem(X86Register.Rdx, -0x08, 8); // block_ptr
     EmitAddRegImm(X86Register.Rdx, FindBlockFindDataOffset); // arg2: &findData
     EmitCallImport("kernel32.dll", "FindNextFileA");
     // RAX = non-zero if found, 0 if no more files
+    DefineLabel("rt_fnf_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_find_close(block_ptr) -> void
-  /// Calls FindClose(handle), then frees the block.
+  /// Calls FindClose(handle), then frees the block. No-op if block_ptr is null.
   /// Stack: [rbp-8]=block_ptr
   /// </summary>
   private void EmitMaxonFindClose() {
     EmitRuntimeFunctionStart("maxon_find_close", 1, 0x40);
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_fc_done");
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
     EmitCallImport("kernel32.dll", "FindClose");
     // Free block
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    DefineLabel("rt_fc_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -2440,6 +2487,20 @@ public partial class X86CodeEmitter {
     EmitJmp("rt_prp_loop");
 
     DefineLabel("rt_prp_done");
+    // Ensure buffer has room for null terminator: if total_read >= capacity, realloc
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);           // total_read
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);           // capacity
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("b", "rt_prp_nullterm");                     // total_read < capacity → skip realloc
+    // Realloc to total_read + 1
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // old buffer
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8);           // total_read
+    EmitAddRegImm(X86Register.Rdx, 1);                  // new size = total_read + 1
+    EmitMovMemReg(-0x18, X86Register.Rdx, 8);           // update capacity
+    EmitTagOrNull(X86Register.R8, "__rt_tag_pipe_buffer"); // R8 = tag
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);           // update buffer
+    DefineLabel("rt_prp_nullterm");
     // Null-terminate: buffer[total_read] = 0
     EmitMovRegMem(X86Register.Rax, -0x10, 8);           // buffer
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);           // total_read
@@ -2456,36 +2517,70 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_process_get_handle(capture_struct_ptr) -> hProcess handle.
-  /// Extracts hProcess from the capture struct.
+  /// Extracts hProcess from the capture struct. Returns 0 if capture_ptr is null.
   /// </summary>
   private void EmitMaxonProcessGetHandle() {
     EmitRuntimeFunctionStart("maxon_process_get_handle", 1);
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    // Null capture_ptr: RAX is already 0 from the TEST, so just skip to done
+    EmitJcc("z", "rt_pgh_done");
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, 0x00);
+    DefineLabel("rt_pgh_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_process_read_stdout(capture_struct_ptr) -> cstring_ptr.
   /// Reads stdout pipe from capture struct, returns null-terminated heap string.
+  /// Returns empty string if capture_ptr is null or pipe handle is 0.
   /// </summary>
   private void EmitMaxonProcessReadStdout() {
     EmitRuntimeFunctionStart("maxon_process_read_stdout", 1, 0x30);
     EmitMovRegMem(X86Register.Rax, -0x08, 8);           // capture struct
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_prso_empty");
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x08); // hStdoutRead
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("nz", "rt_prso_read");
+    DefineLabel("rt_prso_empty");
+    // Return pointer to static empty string
+    EmitLeaRegSymdataRel(X86Register.Rax, "__rt_empty_cstring");
+    EmitJmp("rt_prso_done");
+    DefineLabel("rt_prso_read");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_process_read_pipe")); EmitDword(0);
+    // Zero the pipe handle in capture struct to prevent double-close
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);           // reload capture struct
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rcx, 0x08, X86Register.Rdx); // captureStruct[0x08] = 0
+    DefineLabel("rt_prso_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_process_read_stderr(capture_struct_ptr) -> cstring_ptr.
   /// Reads stderr pipe from capture struct, returns null-terminated heap string.
+  /// Returns empty string if capture_ptr is null or pipe handle is 0.
   /// </summary>
   private void EmitMaxonProcessReadStderr() {
     EmitRuntimeFunctionStart("maxon_process_read_stderr", 1, 0x30);
     EmitMovRegMem(X86Register.Rax, -0x08, 8);           // capture struct
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_prse_empty");
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x10); // hStderrRead
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("nz", "rt_prse_read");
+    DefineLabel("rt_prse_empty");
+    // Return pointer to static empty string
+    EmitLeaRegSymdataRel(X86Register.Rax, "__rt_empty_cstring");
+    EmitJmp("rt_prse_done");
+    DefineLabel("rt_prse_read");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_process_read_pipe")); EmitDword(0);
+    // Zero the pipe handle in capture struct to prevent double-close
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);           // reload capture struct
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rcx, 0x10, X86Register.Rdx); // captureStruct[0x10] = 0
+    DefineLabel("rt_prse_done");
     EmitRuntimeFunctionEnd();
   }
 

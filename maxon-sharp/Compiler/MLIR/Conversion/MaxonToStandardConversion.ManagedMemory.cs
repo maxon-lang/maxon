@@ -397,33 +397,43 @@ public static partial class MaxonToStandardConversion {
 		var cstrVar = $"__cstr_ptr_{op.Result.Id}";
 		EmitStore(block, cstrPtr, cstrVar, varTypes);
 
-		// Allocate __ManagedMemory struct first, then buffer as child
+		// Allocate __ManagedMemory struct first, then buffer as child.
+		// Allocate strlen+1 bytes so the null terminator is within the allocation,
+		// preventing out-of-bounds reads in maxon_to_cstring.
 		var tempName = $"__from_cstring_{op.Result.Id}";
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory");
 		EmitStore(block, managedPtr, tempName, varTypes);
 
 		var lenReload1 = (StdI64)EmitLoad(block, lenVar, varTypes);
-		var allocResult = EmitAllocIn(block, lenReload1, managedPtr, "Buffer");
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var allocSize = new StdAddI64Op(lenReload1, oneConst.Result);
+		block.AddOp(allocSize);
+		var allocResult = EmitAllocIn(block, allocSize.Result, managedPtr, "Buffer");
 
 		// Store buffer pointer (alloc clobbers registers)
 		var bufVar = $"__cstr_buf_{op.Result.Id}";
 		EmitStore(block, allocResult, bufVar, varTypes);
 
-		// Copy bytes from cstring to new buffer
+		// Copy strlen+1 bytes from cstring (includes the null terminator)
 		var bufReload = (StdI64)EmitLoad(block, bufVar, varTypes);
 		var cstrReload = (StdI64)EmitLoad(block, cstrVar, varTypes);
 		var lenReload2 = (StdI64)EmitLoad(block, lenVar, varTypes);
+		var copySize = new StdAddI64Op(lenReload2, oneConst.Result);
+		block.AddOp(copySize);
 		var copyResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [bufReload, cstrReload, lenReload2], copyResult));
+		block.AddOp(new StdCallRuntimeOp("maxon_memcpy", [bufReload, cstrReload, copySize.Result], copyResult));
 
 		// Store fields via indirect access on the heap object
 		var bufFinal = (StdI64)EmitLoad(block, bufVar, varTypes);
 		var lenFinal = (StdI64)EmitLoad(block, lenVar, varTypes);
+		var capOp = new StdAddI64Op(lenFinal, oneConst.Result);
+		block.AddOp(capOp);
 		var elemSizeOp = new StdConstI64Op(1);
 		block.AddOp(elemSizeOp);
 		EmitStructFieldStore(block, bufFinal, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, lenFinal, tempName, ManagedFieldLength, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, lenFinal, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, capOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, elemSizeOp.Result, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		structVarNames[op.Result.Id] = tempName;
 	}
