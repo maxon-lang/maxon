@@ -742,7 +742,7 @@ public static partial class MaxonToStandardConversion {
                   // Reparenting would steal ownership from the chain, causing the node to be freed
                   // when the wrapper goes out of scope (even though the chain still needs it).
                   bool isChainNodeData = structValueTypes.TryGetValue(fieldVal.Id, out var nestedTypeName)
-                    && nestedTypeName == "__ChainNodeData";
+                    && IsChainNodeType(nestedTypeName, module.TypeDefs);
                   if (!isChainNodeData)
                     EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
                 } else {
@@ -909,7 +909,9 @@ public static partial class MaxonToStandardConversion {
                 if (srcName != dstName) {
                   // Decref old value before overwriting (reassignment only)
                   if (!assignOp.IsDeclaration) {
-                    EmitDecref(newBlock, dstName, varTypes);
+                    var navScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
+                    if (navScopeInfo?.ChainNavBorrowedVars.Contains(assignOp.VarName) != true)
+                      EmitDecref(newBlock, dstName, varTypes);
                   }
                   var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
                   EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
@@ -919,13 +921,19 @@ public static partial class MaxonToStandardConversion {
                 bool isFromCallReturn = srcName.StartsWith("__callret_")
                   || srcName.StartsWith("__call_tmp_")
                   || srcName.StartsWith("__interp_tostr_")
-                  || srcName.StartsWith("__forin_result_");
+                  || srcName.StartsWith("__forin_result_")
+                  || srcName.StartsWith("__chain_nav_");
                 if (isFromCallReturn
                     && !assignOp.VarName.StartsWith("__call_tmp_")
                     && !assignOp.VarName.StartsWith("__callret_")) {
                   var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
                   if (currentScopeInfo?.ReturnSelfValueIds.Contains(assignOp.Value.Id) == true)
                     isFromCallReturn = false;
+                }
+                if (!isFromCallReturn) {
+                  var navScopeInfo2 = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
+                  if (navScopeInfo2?.ChainNavBorrowedVars.Contains(assignOp.VarName) == true)
+                    isFromCallReturn = true;
                 }
                 if ((assignOp.IsDeclaration || srcName != dstName) && !isFromCallReturn) {
                   EmitIncref(newBlock, assignOp.VarName, varTypes);
@@ -1169,9 +1177,7 @@ public static partial class MaxonToStandardConversion {
               MlirStructType? swapParentStructType = null;
               if (module.TypeDefs.TryGetValue(swapParentTypeName, out var sptDef) && sptDef is MlirStructType spst)
                 swapParentStructType = spst;
-              var swapFieldDef = swapParentStructType?.GetField(swapField.FieldName);
-              if (swapFieldDef == null)
-                throw new InvalidOperationException($"MaxonSwapFieldOp: field '{swapField.FieldName}' not found on type '{swapParentTypeName}' in func {func.Name}");
+              var swapFieldDef = (swapParentStructType?.GetField(swapField.FieldName)) ?? throw new InvalidOperationException($"MaxonSwapFieldOp: field '{swapField.FieldName}' not found on type '{swapParentTypeName}' in func {func.Name}");
 
               // 1. Load the struct's heap pointer
               var swapSelfPtr = (StdI64)EmitLoad(newBlock, swapStructName, varTypes);
@@ -1348,7 +1354,7 @@ public static partial class MaxonToStandardConversion {
                 foreach (var rcVar in scopeInfo.RefcountedVars) {
                   if (scopeInfo.ReturnMoveVars.Contains(rcVar)) continue;
                   if (!varTypes.ContainsKey(rcVar)) continue;
-                  if (varNameToStructType.TryGetValue(rcVar, out var rcStructType) && rcStructType == "__ChainData") {
+                  if (varNameToStructType.TryGetValue(rcVar, out var rcStructType) && IsChainType(rcStructType, module.TypeDefs)) {
                     var chainPtr = (StdI64)EmitLoad(newBlock, rcVar, varTypes);
                     newBlock.AddOp(new StdCallRuntimeOp("maxon_chain_clear", [chainPtr], null));
                   }

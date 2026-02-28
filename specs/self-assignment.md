@@ -9,7 +9,7 @@ category: diagnostics
 
 ## Documentation
 
-Maxon detects self-assignment — assigning a variable to itself — and reports it as a compile error, since it has no effect and is likely a bug. Similarly, discarding a non-call expression with `let _ =` is an error.
+Maxon detects self-assignment — assigning a variable to itself — and reports it as a compile error, since it has no effect and is likely a bug. Similarly, `let _ =` requires a function call on the right-hand side; using it with any other expression is an error.
 
 ### Example Errors
 
@@ -26,12 +26,12 @@ error E3067: specs/fragments/self-assignment/docs-example-1.test:4:3: self-assig
 
 ```maxon
 function main() returns ExitCode
-  let _ = 0  // Error: discarding a non-call expression has no effect
+  let _ = 0  // Error: expected a function call
   return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/docs-example-2.test:3:7: discarding a non-call expression has no effect
+error E3067: specs/fragments/self-assignment/docs-example-2.test:3:7: expected a function call
 ```
 
 ## Tests
@@ -105,5 +105,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.discard-literal.test:4:7: discarding a non-call expression has no effect
+error E3067: specs/fragments/self-assignment/self-assignment.discard-literal.test:4:7: expected a function call
 ```

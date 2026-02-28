@@ -524,23 +524,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ]);
     }
 
-    // Register __ChainData opaque struct type (head pointer, tail pointer, count)
-    if (!_typeRegistry.ContainsKey("__ChainData")) {
-      _typeRegistry["__ChainData"] = new MlirStructType("__ChainData", [
+    // Register Chain as builtin type: [head:i64, tail:i64, count:i64]
+    if (!_typeRegistry.ContainsKey("Chain")) {
+      var chainType = new MlirStructType("Chain", [
         new MlirStructField("head", MlirType.I64, false, true),
         new MlirStructField("tail", MlirType.I64, false, true),
         new MlirStructField("count", MlirType.I64, false, true),
       ]);
+      chainType.AssociatedTypeNames.Add("Element");
+      _typeRegistry["Chain"] = chainType;
     }
 
-    // Register __ChainNodeData opaque struct type (next, prev, chain, value)
-    if (!_typeRegistry.ContainsKey("__ChainNodeData")) {
-      _typeRegistry["__ChainNodeData"] = new MlirStructType("__ChainNodeData", [
+    // Register ChainNode as builtin type: [next:i64, prev:i64, chain:i64, value:i64]
+    if (!_typeRegistry.ContainsKey("ChainNode")) {
+      var nodeType = new MlirStructType("ChainNode", [
         new MlirStructField("next", MlirType.I64, false, true),
         new MlirStructField("prev", MlirType.I64, false, true),
         new MlirStructField("chain", MlirType.I64, false, true),
         new MlirStructField("value", MlirType.I64, false, true),
       ]);
+      nodeType.AssociatedTypeNames.Add("Element");
+      _typeRegistry["ChainNode"] = nodeType;
     }
 
     SeedFromModule(seedModule, module);
@@ -626,20 +630,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
     }
-    if (!_typeRegistry.ContainsKey("__ChainData")) {
-      _typeRegistry["__ChainData"] = new MlirStructType("__ChainData", [
+    if (!_typeRegistry.ContainsKey("Chain")) {
+      var chainType = new MlirStructType("Chain", [
         new MlirStructField("head", MlirType.I64, false, true),
         new MlirStructField("tail", MlirType.I64, false, true),
         new MlirStructField("count", MlirType.I64, false, true),
       ]);
+      chainType.AssociatedTypeNames.Add("Element");
+      _typeRegistry["Chain"] = chainType;
     }
-    if (!_typeRegistry.ContainsKey("__ChainNodeData")) {
-      _typeRegistry["__ChainNodeData"] = new MlirStructType("__ChainNodeData", [
+    if (!_typeRegistry.ContainsKey("ChainNode")) {
+      var nodeType = new MlirStructType("ChainNode", [
         new MlirStructField("next", MlirType.I64, false, true),
         new MlirStructField("prev", MlirType.I64, false, true),
         new MlirStructField("chain", MlirType.I64, false, true),
         new MlirStructField("value", MlirType.I64, false, true),
       ]);
+      nodeType.AssociatedTypeNames.Add("Element");
+      _typeRegistry["ChainNode"] = nodeType;
     }
   }
 
@@ -4877,7 +4885,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           _ => throw new InvalidOperationException()
         };
         if (structTypeName != null) {
-          var instanceMethodName = $"{structTypeName}.{_tokens[_pos + 2].Value}";
+          var methodFieldName = _tokens[_pos + 2].Value;
+
+          // Try builtin Chain/ChainNode method interception before normal method resolution
+          var baseTypeName = ResolveBaseTypeName(structTypeName);
+          if (baseTypeName is "Chain" or "ChainNode") {
+            Advance(); // consume variable name
+            Advance(); // consume '.'
+            var methodToken = Advance(); // consume method name
+            Advance(); // consume '('
+            MaxonValue structVal = resolved switch {
+              ResolvedVar.Local(var info) => info.Value,
+              ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
+              _ => throw new InvalidOperationException()
+            };
+            var (handled, _) = TryEmitBuiltinChainMethod(structTypeName, methodFieldName, structVal);
+            if (handled) {
+              return;
+            }
+            throw new CompileError(ErrorCode.ParserExpectedExpression,
+              $"Unknown method '{methodFieldName}' on builtin type '{baseTypeName}'",
+              methodToken.Line, methodToken.Column);
+          }
+
+          var instanceMethodName = $"{structTypeName}.{methodFieldName}";
           var resolvedName = ResolveMethodName(instanceMethodName);
           if (resolvedName != null) {
             ParseInstanceMethodCallStatement(nameToken.Value, resolved!, resolvedName);
@@ -5000,6 +5031,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var fieldToken = ExpectFieldName();
 
       if (Check(TokenType.LeftParen)) {
+        // Try builtin Chain/ChainNode method
+        var baseNestedType = ResolveBaseTypeName(currentStructTypeName);
+        if (baseNestedType is "Chain" or "ChainNode") {
+          Advance(); // consume '('
+          var (handled, _) = TryEmitBuiltinChainMethod(currentStructTypeName, fieldToken.Value, currentValue);
+          if (handled) {
+            // Builtin chain methods don't need discarded-result tracking
+            return;
+          }
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Unknown method '{fieldToken.Value}' on builtin type '{baseNestedType}'",
+            fieldToken.Line, fieldToken.Column);
+        }
+
         // This is the method call at the end of the chain
         var methodName = $"{currentStructTypeName}.{fieldToken.Value}";
         var resolvedName = ResolveMethodName(methodName)
@@ -5038,6 +5083,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       EmitFieldAssignment(selfInfo.StructTypeName!, selfVal, fieldToken, selfToken);
     } else if (Check(TokenType.LeftParen)) {
       // self.method(...)
+      // Try builtin Chain/ChainNode method
+      var baseSelfType = ResolveBaseTypeName(selfInfo.StructTypeName!);
+      if (baseSelfType is "Chain" or "ChainNode") {
+        Advance(); // consume '('
+        var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
+        var (handled, _) = TryEmitBuiltinChainMethod(selfInfo.StructTypeName!, fieldToken.Value, selfVal);
+        if (handled) {
+          // Builtin chain methods don't need discarded-result tracking
+          return;
+        }
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"Unknown method '{fieldToken.Value}' on builtin type '{baseSelfType}'",
+          fieldToken.Line, fieldToken.Column);
+      }
       var methodName = $"{selfInfo.StructTypeName}.{fieldToken.Value}";
       var resolvedName = ResolveMethodName(methodName)
         ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined method '{fieldToken.Value}' on type '{selfInfo.StructTypeName}'", fieldToken.Line, fieldToken.Column);
@@ -5057,6 +5116,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var nextFieldToken = ExpectFieldName();
 
         if (Check(TokenType.LeftParen)) {
+          // Try builtin Chain/ChainNode method
+          var baseChainType = ResolveBaseTypeName(currentStructTypeName);
+          if (baseChainType is "Chain" or "ChainNode") {
+            Advance(); // consume '('
+            var (handled, _) = TryEmitBuiltinChainMethod(currentStructTypeName, nextFieldToken.Value, currentValue);
+            if (handled) {
+              // Builtin chain methods don't need discarded-result tracking
+              return;
+            }
+            throw new CompileError(ErrorCode.ParserExpectedExpression,
+              $"Unknown method '{nextFieldToken.Value}' on builtin type '{baseChainType}'",
+              nextFieldToken.Line, nextFieldToken.Column);
+          }
+
           // Terminal method call
           var methodName = $"{currentStructTypeName}.{nextFieldToken.Value}";
           var resolvedName = ResolveMethodName(methodName)
@@ -5624,7 +5697,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         && _currentBlock!.Operations.Count > 1 && _currentBlock!.Operations[^2] is MaxonCallOp;
       if (!hasCall && !hasSwap && !hasCallTmp) {
         throw new CompileError(ErrorCode.SemanticSelfAssignment,
-          "discarding a non-call expression has no effect",
+          "expected a function call",
           nameToken.Line, nameToken.Column);
       }
       MarkLetDiscardResult(nameToken);
@@ -6304,215 +6377,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
-    // === Chain (doubly-linked list) intrinsics ===
-    ["__chain_create"] = new(
-      "Creates an empty chain data structure.\n\n`__chain_create() returns __ChainData`",
-      p => {
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainCreateOp();
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_insert_first"] = new(
-      "Inserts a value at the head of the chain, returning the new node.\n\n`__chain_insert_first(chain, value) returns __ChainNodeData`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var value = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var valueKind = p.GetTypeParamString("Element");
-        var op = new MaxonChainInsertValueOp(chain, value, atHead: true, valueKind);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_insert_last"] = new(
-      "Inserts a value at the tail of the chain, returning the new node.\n\n`__chain_insert_last(chain, value) returns __ChainNodeData`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var value = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var valueKind = p.GetTypeParamString("Element");
-        var op = new MaxonChainInsertValueOp(chain, value, atHead: false, valueKind);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_insert_after"] = new(
-      "Inserts a value after the target node, returning the new node.\n\n`__chain_insert_after(chain, target, value) returns __ChainNodeData`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var target = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var value = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var valueKind = p.GetTypeParamString("Element");
-        var op = new MaxonChainInsertRelativeValueOp(chain, target, value, after: true, valueKind);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_insert_before"] = new(
-      "Inserts a value before the target node, returning the new node.\n\n`__chain_insert_before(chain, target, value) returns __ChainNodeData`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var target = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var value = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var valueKind = p.GetTypeParamString("Element");
-        var op = new MaxonChainInsertRelativeValueOp(chain, target, value, after: false, valueKind);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_reinsert_first"] = new(
-      "Moves an existing node to the head of the chain.\n\n`__chain_reinsert_first(chain, node)`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainReinsertOp(chain, node, atHead: true);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__chain_reinsert_last"] = new(
-      "Moves an existing node to the tail of the chain.\n\n`__chain_reinsert_last(chain, node)`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainReinsertOp(chain, node, atHead: false);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__chain_reinsert_after"] = new(
-      "Moves an existing node to the position after the target node.\n\n`__chain_reinsert_after(chain, target, node)`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var target = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainReinsertRelativeOp(chain, target, node, after: true);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__chain_reinsert_before"] = new(
-      "Moves an existing node to the position before the target node.\n\n`__chain_reinsert_before(chain, target, node)`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var target = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainReinsertRelativeOp(chain, target, node, after: false);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__chain_detach"] = new(
-      "Detaches a node from the chain without freeing it.\n\n`__chain_detach(chain, node)`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainDetachOp(chain, node);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__chain_remove"] = new(
-      "Removes a node from the chain, extracts its value, unlinks and frees the node.\n\n`__chain_remove(chain, node) returns Element`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var valueKind = p.GetTypeParamString("Element");
-        var op = new MaxonChainRemoveOp(chain, node, valueKind);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_count"] = new(
-      "Returns the number of nodes in the chain.\n\n`__chain_count(chain) returns int`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainCountOp(chain);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_node_value"] = new(
-      "Returns the value stored in a chain node.\n\n`__chain_node_value(node) returns Element`",
-      p => {
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var valueKind = p.GetTypeParamString("Element");
-        var op = new MaxonChainNodeValueOp(node, valueKind);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__chain_node_set_value"] = new(
-      "Replaces the value stored in a chain node.\n\n`__chain_node_set_value(node, value)`",
-      p => {
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var value = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var valueKind = p.GetTypeParamString("Element");
-        var op = new MaxonChainNodeSetValueOp(node, value, valueKind);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__chain_clear"] = new(
-      "Removes all nodes from the chain, freeing each node.\n\n`__chain_clear(chain)`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonChainClearOp(chain);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    // === Chain throwing intrinsics (intercepted during lowering) ===
-    ["__chain_head"] = new(
-      "Returns the head node of the chain. Throws if the chain is empty.\n\n`__chain_head(chain) returns __ChainNodeData throws ChainError`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var callOp = new MaxonCallOp("__chain_head", [chain], MaxonValueKind.Struct, "__ChainNodeData");
-        p._currentBlock!.AddOp(callOp);
-        return callOp.Result;
-      }),
-    ["__chain_tail"] = new(
-      "Returns the tail node of the chain. Throws if the chain is empty.\n\n`__chain_tail(chain) returns __ChainNodeData throws ChainError`",
-      p => {
-        var chain = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var callOp = new MaxonCallOp("__chain_tail", [chain], MaxonValueKind.Struct, "__ChainNodeData");
-        p._currentBlock!.AddOp(callOp);
-        return callOp.Result;
-      }),
-    ["__chain_node_next"] = new(
-      "Returns the next node after this one. Throws if this is the last node.\n\n`__chain_node_next(node) returns __ChainNodeData throws ChainError`",
-      p => {
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var callOp = new MaxonCallOp("__chain_node_next", [node], MaxonValueKind.Struct, "__ChainNodeData");
-        p._currentBlock!.AddOp(callOp);
-        return callOp.Result;
-      }),
-    ["__chain_node_prev"] = new(
-      "Returns the previous node before this one. Throws if this is the first node.\n\n`__chain_node_prev(node) returns __ChainNodeData throws ChainError`",
-      p => {
-        var node = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var callOp = new MaxonCallOp("__chain_node_prev", [node], MaxonValueKind.Struct, "__ChainNodeData");
-        p._currentBlock!.AddOp(callOp);
-        return callOp.Result;
-      }),
   };
 
   private static readonly Dictionary<string, (MlirType Type, MaxonValueKind Kind)> PrimitiveTypes = new() {
@@ -6556,22 +6420,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Get a type parameter's resolved type name as a string (e.g., "int", "String", "Element").
-  /// Returns the concrete type name when the parameter is resolved, or the parameter name itself
-  /// when still unresolved (generic context). Used for chain ops' valueKind string parameter.
-  /// </summary>
-  private string GetTypeParamString(string paramName) {
-    if (_currentTypeName != null
-        && _typeRegistry.TryGetValue(_currentTypeName, out var typeInfo)
-        && typeInfo is MlirStructType structType) {
-      if (structType.TypeParams.TryGetValue(paramName, out var paramType)) {
-        return MlirType.FormatAsSourceName(paramType);
-      }
-    }
-    return paramName;
-  }
-
-  /// <summary>
   /// Creates a CompilerBuiltinInfo that parses N arguments and emits a MaxonCallRuntimeOp.
   /// </summary>
   private static BuiltinInfo RuntimeCallIntrinsic(string doc, string runtimeName, int argCount, bool hasResult) {
@@ -6586,6 +6434,261 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       p._currentBlock!.AddOp(op);
       return op.Result;
     });
+  }
+
+  /// Returns the base source type name for a type (e.g., "IntChain" -> "Chain").
+  /// Returns the type name itself if it's not an alias.
+  private string ResolveBaseTypeName(string typeName) {
+    return _typeAliasSources.TryGetValue(typeName, out var source) ? source : typeName;
+  }
+
+  /// Gets the Element type parameter name for a chain-family type (Chain or ChainNode alias).
+  /// Returns the concrete element type name (e.g., "Integer", "String").
+  private string GetChainElementType(string structTypeName) {
+    if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is MlirStructType st) {
+      if (st.TypeParams.TryGetValue("Element", out var elemType))
+        return MlirType.FormatAsSourceName(elemType);
+    }
+    return "Element";
+  }
+
+  /// Gets the MaxonValueKind for the Element type of a chain-family type.
+  private MaxonValueKind GetChainElementKind(string structTypeName) {
+    if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is MlirStructType st) {
+      if (st.TypeParams.TryGetValue("Element", out var elemType))
+        return elemType.ToValueKind();
+    }
+    return MaxonValueKind.Integer;
+  }
+
+  /// Ensures a concrete ChainNode alias exists with the same Element type as the given Chain type.
+  /// For example, if chainTypeName is "EChain" (alias for Chain with Element=Integer),
+  /// this creates/finds "__ChainNode_Integer" with TypeParams["Element"]=Integer.
+  /// Returns the concrete ChainNode alias name, or "ChainNode" if no Element type can be resolved.
+  private string EnsureConcreteChainNodeAlias(string chainTypeName) {
+    if (!_typeRegistry.TryGetValue(chainTypeName, out var typeInfo) || typeInfo is not MlirStructType chainStruct)
+      return "ChainNode";
+    if (!chainStruct.TypeParams.TryGetValue("Element", out var elemType))
+      return "ChainNode";
+
+    var elemName = MlirType.FormatAsSourceName(elemType);
+    var aliasName = $"__ChainNode_{elemName}";
+
+    if (!_typeRegistry.ContainsKey(aliasName)) {
+      var nodeBase = (MlirStructType)_typeRegistry["ChainNode"];
+      RegisterConcreteTypeAlias(aliasName, "ChainNode", nodeBase,
+        new Dictionary<string, MlirType> { ["Element"] = elemType });
+    }
+    _typeAliasSources.TryAdd(aliasName, "ChainNode");
+    return aliasName;
+  }
+
+  /// Skips an optional argument label (e.g., "value:" in `insertFirst(value: 42)`).
+  /// Maxon supports labeled arguments but chain intrinsics parse them directly.
+  private void TrySkipArgLabel() {
+    if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+      Advance(); // skip label
+      Advance(); // skip ':'
+    }
+  }
+
+  /// Tries to emit a builtin Chain or ChainNode method call directly as MaxonOps.
+  /// Returns (true, result) if handled, (false, null) if not a builtin chain method.
+  /// The opening '(' has already been consumed.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinChainMethod(string structTypeName, string methodName, MaxonValue selfValue) {
+    var baseType = ResolveBaseTypeName(structTypeName);
+
+    if (baseType == "Chain") {
+      var valueKind = GetChainElementType(structTypeName);
+      var elementKind = GetChainElementKind(structTypeName);
+      var concreteNodeAlias = EnsureConcreteChainNodeAlias(structTypeName);
+      switch (methodName) {
+        case "insertFirst": {
+          // insertFirst(value Element) returns ChainNode
+          TrySkipArgLabel();
+          var value = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainInsertValueOp(selfValue, value, atHead: true, valueKind);
+          _currentBlock!.AddOp(op);
+          op.Result.TypeName = concreteNodeAlias;
+          return (true, op.Result);
+        }
+        case "insertLast": {
+          // insertLast(value Element) returns ChainNode
+          TrySkipArgLabel();
+          var value = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainInsertValueOp(selfValue, value, atHead: false, valueKind);
+          _currentBlock!.AddOp(op);
+          op.Result.TypeName = concreteNodeAlias;
+          return (true, op.Result);
+        }
+        case "insertAfter": {
+          // insertAfter(target ChainNode, value Element) returns ChainNode
+          TrySkipArgLabel();
+          var target = ResolveExprValue(ParseExpression());
+          Expect(TokenType.Comma);
+          TrySkipArgLabel();
+          var value = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainInsertRelativeValueOp(selfValue, target, value, after: true, valueKind);
+          _currentBlock!.AddOp(op);
+          op.Result.TypeName = concreteNodeAlias;
+          return (true, op.Result);
+        }
+        case "insertBefore": {
+          // insertBefore(target ChainNode, value Element) returns ChainNode
+          TrySkipArgLabel();
+          var target = ResolveExprValue(ParseExpression());
+          Expect(TokenType.Comma);
+          TrySkipArgLabel();
+          var value = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainInsertRelativeValueOp(selfValue, target, value, after: false, valueKind);
+          _currentBlock!.AddOp(op);
+          op.Result.TypeName = concreteNodeAlias;
+          return (true, op.Result);
+        }
+        case "reinsertFirst": {
+          // reinsertFirst(node ChainNode)
+          TrySkipArgLabel();
+          var node = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainReinsertOp(selfValue, node, atHead: true);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+        case "reinsertLast": {
+          // reinsertLast(node ChainNode)
+          TrySkipArgLabel();
+          var node = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainReinsertOp(selfValue, node, atHead: false);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+        case "reinsertAfter": {
+          // reinsertAfter(target ChainNode, node ChainNode)
+          TrySkipArgLabel();
+          var target = ResolveExprValue(ParseExpression());
+          Expect(TokenType.Comma);
+          TrySkipArgLabel();
+          var node = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainReinsertRelativeOp(selfValue, target, node, after: true);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+        case "reinsertBefore": {
+          // reinsertBefore(target ChainNode, node ChainNode)
+          TrySkipArgLabel();
+          var target = ResolveExprValue(ParseExpression());
+          Expect(TokenType.Comma);
+          TrySkipArgLabel();
+          var node = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainReinsertRelativeOp(selfValue, target, node, after: false);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+        case "detach": {
+          // detach(node ChainNode)
+          TrySkipArgLabel();
+          var node = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainDetachOp(selfValue, node);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+        case "remove": {
+          // remove(node ChainNode) returns Element
+          TrySkipArgLabel();
+          var node = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainRemoveOp(selfValue, node, valueKind, elementKind);
+          _currentBlock!.AddOp(op);
+          return (true, op.Result);
+        }
+        case "head": {
+          // head() returns ChainNode throws ChainError
+          Expect(TokenType.RightParen);
+          var callOp = new MaxonCallOp("__chain_head", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
+          _currentBlock!.AddOp(callOp);
+          return (true, callOp.Result);
+        }
+        case "tail": {
+          // tail() returns ChainNode throws ChainError
+          Expect(TokenType.RightParen);
+          var callOp = new MaxonCallOp("__chain_tail", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
+          _currentBlock!.AddOp(callOp);
+          return (true, callOp.Result);
+        }
+        case "count": {
+          // count() returns int
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainCountOp(selfValue);
+          _currentBlock!.AddOp(op);
+          return (true, op.Result);
+        }
+        case "isEmpty": {
+          // isEmpty() returns bool — implemented as count() == 0
+          Expect(TokenType.RightParen);
+          var countOp = new MaxonChainCountOp(selfValue);
+          _currentBlock!.AddOp(countOp);
+          var zeroLit = new MaxonLiteralOp(0L);
+          _currentBlock!.AddOp(zeroLit);
+          var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, countOp.Result, zeroLit.Result, MaxonValueKind.Integer);
+          _currentBlock!.AddOp(cmpOp);
+          return (true, cmpOp.Result);
+        }
+        case "clear": {
+          // clear()
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainClearOp(selfValue);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+      }
+    }
+
+    if (baseType == "ChainNode") {
+      var valueKind = GetChainElementType(structTypeName);
+      var elementKind = GetChainElementKind(structTypeName);
+      switch (methodName) {
+        case "next": {
+          // next() returns ChainNode throws ChainError — preserve concrete alias
+          Expect(TokenType.RightParen);
+          var callOp = new MaxonCallOp("__chain_node_next", [selfValue], MaxonValueKind.Struct, structTypeName);
+          _currentBlock!.AddOp(callOp);
+          return (true, callOp.Result);
+        }
+        case "prev": {
+          // prev() returns ChainNode throws ChainError — preserve concrete alias
+          Expect(TokenType.RightParen);
+          var callOp = new MaxonCallOp("__chain_node_prev", [selfValue], MaxonValueKind.Struct, structTypeName);
+          _currentBlock!.AddOp(callOp);
+          return (true, callOp.Result);
+        }
+        case "value": {
+          // value() returns Element
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainNodeValueOp(selfValue, valueKind, elementKind);
+          _currentBlock!.AddOp(op);
+          return (true, op.Result);
+        }
+        case "setValue": {
+          // setValue(v Element)
+          TrySkipArgLabel();
+          var value = ResolveExprValue(ParseExpression());
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainNodeSetValueOp(selfValue, value, valueKind);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+      }
+    }
+
+    return (false, null); // not a builtin chain method
   }
 
   /// <summary>
@@ -9459,17 +9562,32 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Check for method call: expr.method(...)
       if (Check(TokenType.LeftParen)) {
+        // Try builtin Chain/ChainNode method
+        var baseExprType = ResolveBaseTypeName(userTypeName);
+        if (baseExprType is "Chain" or "ChainNode") {
+          Advance(); // consume '('
+          var structVal = ResolveExprValue(result);
+          var (handled, chainResult) = TryEmitBuiltinChainMethod(userTypeName, fieldName, structVal);
+          if (handled) {
+            result = new ExprResult.Direct(chainResult ?? structVal);
+            continue;
+          }
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Unknown method '{fieldName}' on builtin type '{baseExprType}'",
+            fieldToken.Line, fieldToken.Column);
+        }
+
         var qualifiedMethodName = $"{userTypeName}.{fieldName}";
         Logger.Debug(LogCategory.Parser, $"Resolving method: {qualifiedMethodName}");
         var resolvedMethodName = ResolveMethodName(qualifiedMethodName);
         Logger.Debug(LogCategory.Parser, $"Resolved to: {resolvedMethodName}");
         if (resolvedMethodName != null) {
           Advance(); // consume '('
-          var structVal = ResolveExprValue(result);
+          var methodStructVal = ResolveExprValue(result);
           var qualifiedFuncToken = new Token(TokenType.Identifier, resolvedMethodName, fieldToken.Line, fieldToken.Column);
-          var (allArgs, structCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, structVal);
+          var (allArgs, structCallee) = ParseInstanceMethodCallArgs(qualifiedFuncToken, methodStructVal);
           var callOp = CreateFunctionCall(qualifiedFuncToken, allArgs, structCallee);
-          result = new ExprResult.Direct(callOp.Result ?? structVal);
+          result = new ExprResult.Direct(callOp.Result ?? methodStructVal);
           continue;
         }
 
@@ -10198,6 +10316,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private ExprResult.Direct ParseStructLiteral(string typeName) {
     Advance(); // consume '{'
+
+    // Builtin Chain creation: emit MaxonChainCreateOp for zero-init Chain literals
+    var baseTypeName = ResolveBaseTypeName(typeName);
+    if (baseTypeName == "Chain") {
+      SkipNewlines();
+      Expect(TokenType.RightBrace);
+      var op = new MaxonChainCreateOp();
+      _currentBlock!.AddOp(op);
+      op.Result.TypeName = typeName;
+      return new ExprResult.Direct(op.Result);
+    }
+
     var structType = (MlirStructType)_typeRegistry[typeName];
     var fieldValues = new List<(string, MaxonValue)>();
     var providedFields = new HashSet<string>();

@@ -279,7 +279,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:7: discarding a non-call expression has no effect
+error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:7: expected a function call
 ```
 
 <!-- test: tuple-partial-discard -->

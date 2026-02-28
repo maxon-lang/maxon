@@ -1060,7 +1060,7 @@ public class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonV
 // Creates a new empty chain data structure
 public class MaxonChainCreateOp : MaxonOp {
   public override string Mnemonic => "maxon.chain_create";
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ChainData");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "Chain");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
@@ -1071,7 +1071,7 @@ public class MaxonChainInsertValueOp(MaxonValue chain, MaxonValue value, bool at
   public MaxonValue Value { get; } = value;
   public bool AtHead { get; } = atHead;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ChainNodeData");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "ChainNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Value.ToString()];
 }
@@ -1084,7 +1084,7 @@ public class MaxonChainInsertRelativeValueOp(MaxonValue chain, MaxonValue target
   public MaxonValue Value { get; } = value;
   public bool After { get; } = after;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ChainNodeData");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "ChainNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Target.ToString(), Value.ToString()];
 }
@@ -1117,12 +1117,14 @@ public class MaxonChainDetachOp(MaxonValue chain, MaxonValue node) : MaxonOp {
 }
 
 // Removes a node from the chain: extracts value, unlinks node, frees node memory
-public class MaxonChainRemoveOp(MaxonValue chain, MaxonValue node, string valueKind) : MaxonOp {
+public class MaxonChainRemoveOp(MaxonValue chain, MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => "maxon.chain_remove";
   public MaxonValue Chain { get; } = chain;
   public MaxonValue Node { get; } = node;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), valueKind);
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
+    ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Node.ToString()];
 }
@@ -1137,11 +1139,13 @@ public class MaxonChainCountOp(MaxonValue chain) : MaxonOp {
 }
 
 // Loads the value stored in a chain node
-public class MaxonChainNodeValueOp(MaxonValue node, string valueKind) : MaxonOp {
+public class MaxonChainNodeValueOp(MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
   public override string Mnemonic => "maxon.chain_node_value";
   public MaxonValue Node { get; } = node;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), valueKind);
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
+    ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Node.ToString()];
 }

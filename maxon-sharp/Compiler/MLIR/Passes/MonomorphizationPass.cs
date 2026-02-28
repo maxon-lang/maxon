@@ -724,9 +724,19 @@ public static class MonomorphizationPass {
       case MaxonChainReinsertOp cr: return new MaxonChainReinsertOp(mapValue(cr.Chain), mapValue(cr.Node), cr.AtHead);
       case MaxonChainReinsertRelativeOp crr: return new MaxonChainReinsertRelativeOp(mapValue(crr.Chain), mapValue(crr.Target), mapValue(crr.Node), crr.After);
       case MaxonChainDetachOp cd: return new MaxonChainDetachOp(mapValue(cd.Chain), mapValue(cd.Node));
-      case MaxonChainRemoveOp crm: { var c = new MaxonChainRemoveOp(mapValue(crm.Chain), mapValue(crm.Node), sub.SubstituteName(crm.ValueKind)); valueMap[crm.Result.Id] = c.Result; return c; }
+      case MaxonChainRemoveOp crm: {
+        var newVK = sub.SubstituteName(crm.ValueKind);
+        var newRK = sub.TryGetValue(crm.ValueKind, out var rvt) ? rvt.ToValueKind() : crm.ResultKind;
+        var c = new MaxonChainRemoveOp(mapValue(crm.Chain), mapValue(crm.Node), newVK, newRK);
+        valueMap[crm.Result.Id] = c.Result; return c;
+      }
       case MaxonChainCountOp cc: { var c = new MaxonChainCountOp(mapValue(cc.Chain)); valueMap[cc.Result.Id] = c.Result; return c; }
-      case MaxonChainNodeValueOp cnv: { var c = new MaxonChainNodeValueOp(mapValue(cnv.Node), sub.SubstituteName(cnv.ValueKind)); valueMap[cnv.Result.Id] = c.Result; return c; }
+      case MaxonChainNodeValueOp cnv: {
+        var newVK = sub.SubstituteName(cnv.ValueKind);
+        var newRK = sub.TryGetValue(cnv.ValueKind, out var nvt) ? nvt.ToValueKind() : cnv.ResultKind;
+        var c = new MaxonChainNodeValueOp(mapValue(cnv.Node), newVK, newRK);
+        valueMap[cnv.Result.Id] = c.Result; return c;
+      }
       case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(mapValue(cns.Node), mapValue(cns.Value), sub.SubstituteName(cns.ValueKind));
       case MaxonChainClearOp ccl: return new MaxonChainClearOp(mapValue(ccl.Chain));
 

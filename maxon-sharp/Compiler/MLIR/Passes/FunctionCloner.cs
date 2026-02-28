@@ -348,9 +348,17 @@ internal class FunctionCloner {
       case MaxonChainReinsertOp cr: return new MaxonChainReinsertOp(MapValue(cr.Chain), MapValue(cr.Node), cr.AtHead);
       case MaxonChainReinsertRelativeOp crr: return new MaxonChainReinsertRelativeOp(MapValue(crr.Chain), MapValue(crr.Target), MapValue(crr.Node), crr.After);
       case MaxonChainDetachOp cd: return new MaxonChainDetachOp(MapValue(cd.Chain), MapValue(cd.Node));
-      case MaxonChainRemoveOp crm: { var c = new MaxonChainRemoveOp(MapValue(crm.Chain), MapValue(crm.Node), SubName(crm.ValueKind)); RegisterResult(crm.Result, c.Result); return c; }
+      case MaxonChainRemoveOp crm: {
+        var newRK = _typeSubstitution.TryGetValue(crm.ValueKind, out var rvt) ? rvt.ToValueKind() : crm.ResultKind;
+        var c = new MaxonChainRemoveOp(MapValue(crm.Chain), MapValue(crm.Node), SubName(crm.ValueKind), newRK);
+        RegisterResult(crm.Result, c.Result); return c;
+      }
       case MaxonChainCountOp cc: { var c = new MaxonChainCountOp(MapValue(cc.Chain)); RegisterResult(cc.Result, c.Result); return c; }
-      case MaxonChainNodeValueOp cnv: { var c = new MaxonChainNodeValueOp(MapValue(cnv.Node), SubName(cnv.ValueKind)); RegisterResult(cnv.Result, c.Result); return c; }
+      case MaxonChainNodeValueOp cnv: {
+        var newRK = _typeSubstitution.TryGetValue(cnv.ValueKind, out var nvt) ? nvt.ToValueKind() : cnv.ResultKind;
+        var c = new MaxonChainNodeValueOp(MapValue(cnv.Node), SubName(cnv.ValueKind), newRK);
+        RegisterResult(cnv.Result, c.Result); return c;
+      }
       case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(MapValue(cns.Node), MapValue(cns.Value), SubName(cns.ValueKind));
       case MaxonChainClearOp ccl: return new MaxonChainClearOp(MapValue(ccl.Chain));
 

@@ -288,7 +288,7 @@ class Program {
   static int RunExecutable(string executablePath) {
     var process = new Process {
       StartInfo = new ProcessStartInfo {
-        FileName = executablePath,
+        FileName = Path.GetFullPath(executablePath),
         UseShellExecute = false,
         RedirectStandardOutput = true,
         RedirectStandardError = true,

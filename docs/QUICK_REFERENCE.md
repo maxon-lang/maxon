@@ -99,7 +99,7 @@ var c = a.clone()       // deep copy -- c is independent
 c.x = 42               // a.x is still 99
 ```
 
-All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `let _ =` can only discard function call results, not literals or other expressions.
+All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `let _ =` requires a function call on the right-hand side (`let _ = 42` is an error).
 
 **Assignment semantics:** For struct types, `var b = a` creates a reference (alias to the same heap object). Field mutation through the alias affects the original. Reassignment (`b = Point{...}`) rebinds without affecting the original. Use `var b = a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
 

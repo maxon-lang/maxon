@@ -1,3 +1,4 @@
+using System.Linq;
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
 
@@ -16,6 +17,29 @@ public static partial class MaxonToStandardConversion {
   private const int NodeChainOffset = 16;
   private const int NodeValueOffset = 24;
   private const int ChainNodeDataSize = 32;
+
+  /// Whether a type name refers to a Chain-family type (Chain itself or a concrete alias like EChain).
+  private static bool IsChainType(string typeName, Dictionary<string, MlirType>? typeDefs = null) {
+    if (typeName == "Chain") return true;
+    if (typeDefs != null && typeDefs.TryGetValue(typeName, out var resolved)
+        && resolved is MlirStructType st && st.Name == typeName
+        && st.Fields.Count == 3
+        && st.Fields[0].Name == "head" && st.Fields[1].Name == "tail" && st.Fields[2].Name == "count")
+      return true;
+    return false;
+  }
+
+  /// Whether a type name refers to a ChainNode-family type (ChainNode itself or a concrete alias).
+  private static bool IsChainNodeType(string typeName, Dictionary<string, MlirType>? typeDefs = null) {
+    if (typeName == "ChainNode") return true;
+    if (typeDefs != null && typeDefs.TryGetValue(typeName, out var resolved)
+        && resolved is MlirStructType st && st.Name == typeName
+        && st.Fields.Count == 4
+        && st.Fields[0].Name == "next" && st.Fields[1].Name == "prev"
+        && st.Fields[2].Name == "chain" && st.Fields[3].Name == "value")
+      return true;
+    return false;
+  }
 
   /// Whether a chain element's valueKind represents a heap-allocated type (struct/string/etc.)
   /// rather than a primitive (int/float/bool/byte).
@@ -53,7 +77,7 @@ public static partial class MaxonToStandardConversion {
     var tempName = $"__chain_{op.Result.Id}";
     EmitStore(block, chainPtr, tempName, varTypes);
     structVarNames[op.Result.Id] = tempName;
-    structValueTypes[op.Result.Id] = "__ChainData";
+    structValueTypes[op.Result.Id] = op.Result.TypeName;
   }
 
   /// <summary>
@@ -111,7 +135,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(new StdCallRuntimeOp(rtName, [chainPtrReload, nodePtrReload], null));
 
     structVarNames[op.Result.Id] = nodeTempName;
-    structValueTypes[op.Result.Id] = "__ChainNodeData";
+    structValueTypes[op.Result.Id] = op.Result.TypeName;
   }
 
   /// <summary>
@@ -168,7 +192,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(new StdCallRuntimeOp(rtName, [chainPtrReload, targetPtr, nodePtrReload], null));
 
     structVarNames[op.Result.Id] = nodeTempName;
-    structValueTypes[op.Result.Id] = "__ChainNodeData";
+    structValueTypes[op.Result.Id] = op.Result.TypeName;
   }
 
   /// <summary>
@@ -287,20 +311,25 @@ public static partial class MaxonToStandardConversion {
     var valueTempName = $"__chain_removed_{op.Result.Id}";
     EmitStore(block, extractedValue, valueTempName, varTypes);
 
-    if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
+    // Resolve the current scope for reparenting allocations.
+    var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
+    // Fallback: scope stack may be depleted by branch-sibling scope_exits in try/otherwise
+    if (currentScopeInfo == null && _funcScopeAnalysis != null) {
+      currentScopeInfo = _funcScopeAnalysis.Values
+        .FirstOrDefault(s => s.ScopeVar != null && varTypes.ContainsKey(s.ScopeVar));
+    }
+
+    if (IsChainHeapValueKind(op.ValueKind, typeDefs) && currentScopeInfo != null) {
       // Struct value: force-detach from node's child list and move to current scope.
       // Must use mode=2 (force to scope) because the value is parent-owned (child
       // of the chain node), and mode=0 is a no-op for parent-owned allocations.
-      var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-      if (currentScopeInfo != null) {
-        var scopePtr = (StdI64)EmitLoad(block, currentScopeInfo.ScopeVar, varTypes);
-        var valueReload = (StdI64)EmitLoad(block, valueTempName, varTypes);
-        var moveMode = new StdConstI64Op(2);
-        block.AddOp(moveMode);
-        block.AddOp(new StdCallRuntimeOp("mm_move", [valueReload, scopePtr, moveMode.Result], null));
-        if (Compiler.MmTrace)
-          block.AddOp(new StdCallRuntimeOp("mm_trace_move", [valueReload], null));
-      }
+      var scopePtr = (StdI64)EmitLoad(block, currentScopeInfo.ScopeVar, varTypes);
+      var valueReload = (StdI64)EmitLoad(block, valueTempName, varTypes);
+      var moveMode = new StdConstI64Op(2);
+      block.AddOp(moveMode);
+      block.AddOp(new StdCallRuntimeOp("mm_move", [valueReload, scopePtr, moveMode.Result], null));
+      if (Compiler.MmTrace)
+        block.AddOp(new StdCallRuntimeOp("mm_trace_move", [valueReload], null));
     }
 
     // Free the node (it's been unlinked and its value extracted)
@@ -356,9 +385,14 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(valueLoad);
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
-      // Struct/heap value: register as borrowed reference (node owns it)
+      // Heap value: incref so the caller has an owned reference that
+      // survives if the node is freed (e.g. by chain.clear or chain.remove)
       var tempName = $"__chain_val_{op.Result.Id}";
       EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
+      var valForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("mm_incref", [valForIncref], null));
+      if (Compiler.MmTrace)
+        block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [valForIncref], null));
       structVarNames[op.Result.Id] = tempName;
       structValueTypes[op.Result.Id] = op.ValueKind;
     } else {
@@ -383,17 +417,11 @@ public static partial class MaxonToStandardConversion {
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
-      // Load old value and free it if non-null
+      // Load and free old value — node always has a valid value pointer
+      // because LowerChainInsertValue stores one at allocation time
       var oldValueLoad = new StdLoadIndirectOp(nodePtr, NodeValueOffset, MlirType.I64);
       block.AddOp(oldValueLoad);
       var oldValue = (StdI64)oldValueLoad.Result;
-
-      // Free old value if non-zero
-      var zeroConst = new StdConstI64Op(0);
-      block.AddOp(zeroConst);
-      var isNonNull = new StdCmpI64Op("ne", oldValue, zeroConst.Result);
-      block.AddOp(isNonNull);
-      // Use conditional free via runtime — mm_free handles null safely
       block.AddOp(new StdCallRuntimeOp("mm_free", [oldValue], null));
 
       // Store new value and reparent under node
@@ -483,30 +511,20 @@ public static partial class MaxonToStandardConversion {
     var isNull = new StdCmpI64Op("eq", loadedPtr, zeroConst.Result);
     block.AddOp(isNull);
 
+    // Compute error flag: 0 on success, or the error ordinal+1 on null.
+    // ChainError.empty (ordinal 0) -> flag 1, ChainError.endOfChain (ordinal 1) -> flag 2.
+    var errorOrdinal = isNodeNav ? 2 : 1;
+    var errorConst = new StdConstI64Op(errorOrdinal);
+    block.AddOp(errorConst);
+    var successConst = new StdConstI64Op(0);
+    block.AddOp(successConst);
+    var selectFlag = new StdSelectI64Op(isNull.Result, errorConst.Result, successConst.Result);
+    block.AddOp(selectFlag);
+    EmitStore(block, selectFlag.Result, "__error_flag", varTypes);
+
+    // For try-calls, also expose the error flag through the valueMap
     if (isTryCall && errorFlagValue != null) {
-      // Set error flag: 0 on success, 1 on error (ChainError.empty ordinal 0 + 1 = 1,
-      // or ChainError.endOfChain ordinal 1 + 1 = 2). Use 1 for both — the error type
-      // distinguishes: chain ops use .empty, node ops use .endOfChain.
-      var errorOrdinal = isNodeNav ? 2 : 1; // endOfChain=1 (+1=2), empty=0 (+1=1)
-      var errorConst = new StdConstI64Op(errorOrdinal);
-      block.AddOp(errorConst);
-      var successConst = new StdConstI64Op(0);
-      block.AddOp(successConst);
-      var selectFlag = new StdSelectI64Op(isNull.Result, errorConst.Result, successConst.Result);
-      block.AddOp(selectFlag);
       valueMap[errorFlagValue] = selectFlag.Result;
-      EmitStore(block, selectFlag.Result, "__error_flag", varTypes);
-    } else {
-      // Non-try call: auto-propagation — set error flag for the error return mechanism.
-      // The parser emits error propagation after the call, which reads __error_flag.
-      var errorOrdinal = isNodeNav ? 2 : 1;
-      var errorConst = new StdConstI64Op(errorOrdinal);
-      block.AddOp(errorConst);
-      var successConst = new StdConstI64Op(0);
-      block.AddOp(successConst);
-      var selectFlag = new StdSelectI64Op(isNull.Result, errorConst.Result, successConst.Result);
-      block.AddOp(selectFlag);
-      EmitStore(block, selectFlag.Result, "__error_flag", varTypes);
     }
 
     // Register result as a ChainNode (even if null — the error path handles that)
@@ -514,7 +532,7 @@ public static partial class MaxonToStandardConversion {
       var tempName = $"__chain_nav_{result.Id}";
       EmitStore(block, loadedPtr, tempName, varTypes);
       structVarNames[result.Id] = tempName;
-      structValueTypes[result.Id] = "__ChainNodeData";
+      structValueTypes[result.Id] = result is MaxonStruct ms ? ms.TypeName : "ChainNode";
     }
 
     return true;

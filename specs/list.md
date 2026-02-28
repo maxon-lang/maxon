@@ -549,64 +549,25 @@ hello world!!!!!!!!!!!!!!
 ```
 ```stderr
   scope_enter list.testRemove (depth=1)
-  alloc __ChainData rc=0
   alloc EChain rc=0
-  move __ChainData
   alloc StringList rc=0
   move EChain
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
+  alloc_in ChainNode
+  move String
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
+  alloc_in ChainNode
+  move String
     scope_enter stdlib.List.removeFirst (depth=2)
-      scope_enter stdlib.Chain.head (depth=3)
-      incref ChainNode rc=0
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.head (0 owned)
-    incref __ChainNode_String rc=2
-      scope_enter stdlib.Chain.remove (depth=3)
-      move String
-      free ChainNode
-      incref String rc=1
-      move String
-      scope_exit stdlib.Chain.remove (0 owned)
+    incref ChainNode rc=0
     move String
-    decref __ChainNode_String rc=1
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.removeFirst (1 owned)
-    free __ChainNode_String
+    free ChainNode
+    incref String rc=1
+    move String
+    scope_exit stdlib.List.removeFirst (0 owned)
   incref String rc=2
   alloc String rc=0
   alloc_in __ManagedMemory
@@ -623,12 +584,79 @@ hello world!!!!!!!!!!!!!!
   free __ManagedMemory
   free String
   free ChainNode
-  free __ChainData
   free EChain
   free StringList
   free __ManagedMemory
   free String
   free Buffer
+  free __ManagedMemory
+  free String
+  free Buffer
+  free __ManagedMemory
+  free String
+```
+
+<!-- test: memory.remove-returns-string -->
+<!-- MmTrace -->
+```maxon
+typealias StringList = List with String
+
+function testRemove() returns String
+  var list = StringList{}
+  list.append("hello world!!!!!!!!!!!!!!")
+  list.append("goodbye world!!!!!!!!!!!!!")
+  return try list.removeFirst() otherwise "none"
+end 'testRemove'
+
+function main() returns ExitCode
+  var removed = testRemove()
+  print("{removed}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
+```
+```stderr
+  scope_enter list.main (depth=1)
+    scope_enter list.testRemove (depth=2)
+    alloc EChain rc=0
+    alloc StringList rc=0
+    move EChain
+    incref StringList rc=1
+    alloc String rc=0
+    alloc_in __ManagedMemory
+    alloc_in ChainNode
+    move String
+    alloc String rc=0
+    alloc_in __ManagedMemory
+    alloc_in ChainNode
+    move String
+      scope_enter stdlib.List.removeFirst (depth=3)
+      incref ChainNode rc=0
+      move String
+      free ChainNode
+      incref String rc=1
+      move String
+      scope_exit stdlib.List.removeFirst (0 owned)
+    incref String rc=2
+    move String
+    decref StringList rc=0
+    decref String rc=1
+    scope_exit list.testRemove (1 owned)
+    free __ManagedMemory
+    free String
+    free ChainNode
+    free EChain
+    free StringList
+  alloc String rc=0
+  alloc_in __ManagedMemory
+  alloc_in Buffer
+  decref String rc=0
+  scope_exit list.main (2 owned)
   free __ManagedMemory
   free String
   free Buffer
@@ -663,66 +691,33 @@ end 'main'
 ```
 ```stderr
   scope_enter list.testClear (depth=1)
-  alloc __ChainData rc=0
   alloc EChain rc=0
-  move __ChainData
   alloc StringList rc=0
   move EChain
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
+  alloc_in ChainNode
+  move String
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
+  alloc_in ChainNode
+  move String
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
-  free __ManagedMemory
-  free String
-  free ChainNode
-  free __ManagedMemory
-  free String
-  free ChainNode
-  free __ManagedMemory
-  free String
-  free ChainNode
+  alloc_in ChainNode
+  move String
+    scope_enter stdlib.List.clear (depth=2)
+    free __ManagedMemory
+    free String
+    free ChainNode
+    free __ManagedMemory
+    free String
+    free ChainNode
+    free __ManagedMemory
+    free String
+    free ChainNode
+    scope_exit stdlib.List.clear (0 owned)
   alloc ToStringBuf rc=0
   alloc String rc=0
   alloc_in __ManagedMemory
@@ -730,7 +725,6 @@ end 'main'
   free ToStringBuf
   decref StringList rc=0
   scope_exit list.testClear (2 owned)
-  free __ChainData
   free EChain
   free StringList
   free Buffer
@@ -765,66 +759,33 @@ end 'main'
 ```
 ```stderr
   scope_enter list.main (depth=1)
-  alloc __ChainData rc=0
   alloc EChain rc=0
-  move __ChainData
   alloc StringList rc=0
   move EChain
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
+  alloc_in ChainNode
+  move String
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
+  alloc_in ChainNode
+  move String
   alloc String rc=0
   alloc_in __ManagedMemory
-    scope_enter stdlib.List.append (depth=2)
-      scope_enter stdlib.Chain.insertLast (depth=3)
-      alloc_in ChainNode
-      move String
-      incref ChainNode rc=0
-      alloc __ChainNode_String rc=0
-      incref __ChainNode_String rc=1
-      move __ChainNode_String
-      decref ChainNode rc=0
-      scope_exit stdlib.Chain.insertLast (0 owned)
-    decref __ChainNode_String rc=0
-    scope_exit stdlib.List.append (1 owned)
-    free __ChainNode_String
-  free __ManagedMemory
-  free String
-  free ChainNode
-  free __ManagedMemory
-  free String
-  free ChainNode
-  free __ManagedMemory
-  free String
-  free ChainNode
+  alloc_in ChainNode
+  move String
+    scope_enter stdlib.List.clear (depth=2)
+    free __ManagedMemory
+    free String
+    free ChainNode
+    free __ManagedMemory
+    free String
+    free ChainNode
+    free __ManagedMemory
+    free String
+    free ChainNode
+    scope_exit stdlib.List.clear (0 owned)
   alloc ToStringBuf rc=0
   alloc String rc=0
   alloc_in __ManagedMemory
@@ -832,7 +793,6 @@ end 'main'
   free ToStringBuf
   decref StringList rc=0
   scope_exit list.main (2 owned)
-  free __ChainData
   free EChain
   free StringList
   free Buffer
