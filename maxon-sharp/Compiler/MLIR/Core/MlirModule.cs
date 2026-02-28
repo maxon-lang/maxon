@@ -11,7 +11,13 @@ public class MlirGlobal(string name, MlirType type, MlirAttribute? initValue = n
 
 // Represents a type alias with its source type, type parameter substitutions, and visibility metadata
 public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>? TypeParams,
-    bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null);
+    bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null) {
+  /// Checks if a type name refers to __ManagedMemory, either directly or via a type alias.
+  public static bool IsManagedMemoryType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
+    if (typeName == "__ManagedMemory") return true;
+    return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__ManagedMemory";
+  }
+}
 
 // Metadata for constant array literals that can be placed in .rdata
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);

@@ -108,7 +108,7 @@ public static class ConstantArrayAnalysisPass {
         }
         if (allConstant) {
           // Extract element_size from the __ManagedMemory struct
-          MaxonStructLiteralOp? managedStruct = (arrayStructLit.TypeName == "__ManagedMemory"
+          MaxonStructLiteralOp? managedStruct = (TypeAliasInfo.IsManagedMemoryType(arrayStructLit.TypeName, module.TypeAliasSources)
               ? arrayStructLit
               : FindManagedMemoryStruct(arrayStructLit, structLiterals)) ?? throw new InvalidOperationException(
                   $"ConstantArrayAnalysisPass: cannot find __ManagedMemory struct for array '{assignOp.VarName}' in {func.Name}");

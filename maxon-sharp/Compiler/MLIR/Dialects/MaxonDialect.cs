@@ -880,6 +880,7 @@ public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, Ma
   public MaxonValue Value { get; } = value;
   public MaxonValueKind ElementKind { get; } = elementKind;
   public bool IsStructElement { get; init; }
+  public string? TypeParamName { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
 }
 

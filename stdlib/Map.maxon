@@ -1,13 +1,15 @@
 /// Hash map with open addressing and linear probing for key-value storage.
 /// @category Collections
 
-// Map receives __ManagedMemorys directly for literal initialization via BuiltinDictionaryLiteral.
+// Map receives managed memory buffers directly for literal initialization via BuiltinDictionaryLiteral.
 
 export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable with Entry where Key is Hashable and Equatable
   typealias KeyArray = Array with Key
   typealias ValueArray = Array with Value
   typealias StateArray = Array with SlotState
   typealias Entry = (Key, Value)
+  typealias KeyMemory = __ManagedMemory with Key
+  typealias ValueMemory = __ManagedMemory with Value
 
   var keys KeyArray              // Key storage
   var values ValueArray          // Value storage
@@ -17,8 +19,8 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
   var iterIndex Index                    // Iteration state
 
   // Default type for dictionary literals - compiler discovers this via BuiltinDictionaryLiteral interface
-  static function init(initKeys __ManagedMemory, initValues __ManagedMemory) returns Self
-    // Get number of elements in the managed memorys
+  static function init(initKeys KeyMemory, initValues ValueMemory) returns Self
+    // Get number of elements in the managed memory buffers
     var numElements = initKeys.length()
 
     // Calculate capacity: at least 16, or next power of 2 above numElements * 2
@@ -39,10 +41,10 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     var result = Self{keys: ks, values: vs, states: sts, count: 0, capacity: cap, iterIndex: 0}
 
     // Insert each key-value pair from the init arrays
-    // Use __map_get_init_key/value which look up "Key"/"Value" generic params
+    // Extract key-value pairs from managed memory via generic type params
     for i in 0 upto numElements 'insert_loop'
-      var k = __map_get_init_key(initKeys, i)
-      var v = __map_get_init_value(initValues, i)
+      var k = initKeys.get(i)
+      var v = initValues.get(i)
       result.insert(key: k, value: v)
     end 'insert_loop'
 

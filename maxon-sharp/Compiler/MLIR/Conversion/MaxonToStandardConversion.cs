@@ -796,7 +796,7 @@ public static partial class MaxonToStandardConversion {
 
                   // Load element_size from the managed memory struct that was already lowered
                   StdI64 elemSizeVal;
-                  if (structLitOp.TypeName == "__ManagedMemory") {
+                  if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
                     elemSizeVal = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
                   } else {
                     var managedFieldForSize = structType.GetField("managed")!;
@@ -856,7 +856,7 @@ public static partial class MaxonToStandardConversion {
                 bool isConstantBuffer = module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id);
                 bool isHeapEscapeBuffer = escapingArrayLiterals.Contains(structLitOp.Result.Id) && !isConstantBuffer;
                 bool bufferIsWritable = isHeapEscapeBuffer;
-                if (structLitOp.TypeName == "__ManagedMemory") {
+                if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
                   // buffer is directly on this struct at offset 0
                   var bufferField = structType.GetField("buffer")!;
                   EmitStructFieldStore(newBlock, rdataPtr, tempName, bufferField.Offset, MlirType.I64, varTypes);
@@ -1822,7 +1822,7 @@ public static partial class MaxonToStandardConversion {
                   if (!structValueTypes.TryGetValue(a.Id, out var typeName))
                     throw new InvalidOperationException($"MaxonCallRuntimeOp struct arg {a} has no type in structValueTypes");
                   // Load buffer from managed struct via heap pointer indirection
-                  if (typeName == "__ManagedMemory") {
+                  if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)) {
                     // structName IS the __ManagedMemory heap pointer, buffer at offset 0
                     return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, structName, ManagedFieldBuffer, MlirType.I64, varTypes);
                   } else {

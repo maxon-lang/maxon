@@ -522,6 +522,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("capacity", MlirType.I64, false, true),
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
+      mmType.AssociatedTypeNames.Add("Element");
       mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
       _typeRegistry["__ManagedMemory"] = mmType;
     }
@@ -633,6 +634,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("capacity", MlirType.I64, false, true),
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
+      mmType.AssociatedTypeNames.Add("Element");
       mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
       _typeRegistry["__ManagedMemory"] = mmType;
     }
@@ -6174,35 +6176,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["__process_read_stderr"] = RuntimeCallIntrinsic(
       "Reads stderr from capture struct. Returns cstring pointer.\n\n`__process_read_stderr(capture_ptr) returns int`",
       "maxon_process_read_stderr", 1, true),
-    // === Map intrinsics ===
-    ["__map_get_init_key"] = new(
-      "Gets a key from initialization managed memory at given index.\n\n`__map_get_init_key(managed, index) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var kind = p.GetTypeParamKind("Key");
-        var op = new MaxonManagedMemGetOp(managed, index, kind) {
-          TypeParamName = kind == MaxonValueKind.TypeParameter ? "Key" : null
-        };
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__map_get_init_value"] = new(
-      "Gets a value from initialization managed memory at given index.\n\n`__map_get_init_value(managed, index) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var kind = p.GetTypeParamKind("Value");
-        var op = new MaxonManagedMemGetOp(managed, index, kind) {
-          TypeParamName = kind == MaxonValueKind.TypeParameter ? "Value" : null
-        };
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
     // === Primitive type intrinsics ===
     ["__float_to_bits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__float_to_bits(value) returns int`",
@@ -6253,6 +6226,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     // No matching type parameter - default to Integer for non-generic types
     return MaxonValueKind.Integer;
+  }
+
+  /// <summary>
+  /// Resolves the element kind for a __ManagedMemory alias by looking up the concrete
+  /// type's "Element" type parameter. For example, a typealias KeyMemory = __ManagedMemory with Key
+  /// will resolve to (TypeParameter, "Key").
+  /// </summary>
+  private (MaxonValueKind kind, string? typeParamName) GetManagedMemElementKind(string structTypeName) {
+    if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo)
+        && typeInfo is MlirStructType structType
+        && structType.TypeParams.TryGetValue("Element", out var elemType)) {
+      if (elemType is MlirTypeParameterType tpt)
+        return (MaxonValueKind.TypeParameter, tpt.ParameterName);
+      return (elemType.ToValueKind(), null);
+    }
+    // Fallback: use enclosing type's "Element" param (existing behavior)
+    var kind = GetElementKind();
+    if (kind == MaxonValueKind.TypeParameter)
+      return (kind, "Element");
+    return (kind, null);
   }
 
   /// <summary>
@@ -6538,7 +6531,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (baseType is "__Chain" or "__ChainNode")
       return TryEmitBuiltinChainMethod(structTypeName, methodName, selfValue);
     if (baseType == "__ManagedMemory")
-      return TryEmitBuiltinManagedMemoryMethod(methodName, selfValue);
+      return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, selfValue);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
   }
 
@@ -6546,7 +6539,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Each case produces the same op that the corresponding CompilerBuiltins intrinsic creates.
   /// The opening '(' has already been consumed.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedMemoryMethod(
-    string methodName, MaxonValue selfValue) {
+    string structTypeName, string methodName, MaxonValue selfValue) {
     switch (methodName) {
       case "length": {
         Expect(TokenType.RightParen);
@@ -6578,7 +6571,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         TrySkipArgLabel();
         var index = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGetOp(selfValue, index, GetElementKind());
+        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonManagedMemGetOp(selfValue, index, elementKind) {
+          TypeParamName = typeParamName
+        };
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
@@ -6589,7 +6585,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         TrySkipArgLabel();
         var value = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemSetOp(selfValue, index, value, GetElementKind());
+        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonManagedMemSetOp(selfValue, index, value, elementKind) {
+          TypeParamName = typeParamName
+        };
         _currentBlock!.AddOp(op);
         return (true, null);
       }
@@ -10430,7 +10429,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         // Type-check: struct field must match value's struct type
         if (field.Type is MlirStructType fieldStructType && value is MaxonStruct valueStruct) {
-          if (valueStruct.TypeName != fieldStructType.Name) {
+          if (ResolveBaseTypeName(valueStruct.TypeName) != ResolveBaseTypeName(fieldStructType.Name)) {
             throw new CompileError(ErrorCode.SemanticTypeMismatch,
               $"Type mismatch: field '{fieldNameToken.Value}' expects '{fieldStructType.Name}' but got '{valueStruct.TypeName}'",
               fieldNameToken.Line, fieldNameToken.Column);
@@ -10464,7 +10463,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (!providedFields.Contains(field.Name)) {
         if (field.DefaultValue == null) {
           // Fixed-capacity type with managed __ManagedMemory field
-          if (field.Name == "managed" && field.Type.Name == "__ManagedMemory" &&
+          if (field.Name == "managed" && ResolveBaseTypeName(field.Type.Name) == "__ManagedMemory" &&
               structType.ConstParams.TryGetValue("__capacity", out var capacity)) {
             // Determine element type from struct's type parameters
             if (!structType.TypeParams.TryGetValue("Element", out var elemType)) {
@@ -10592,7 +10591,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       } else {
         long value = 0L;
         // For __ManagedMemory.element_size, determine from Element type parameter
-        if (structType.Name == "__ManagedMemory" && subField.Name == "element_size") {
+        if (ResolveBaseTypeName(structType.Name) == "__ManagedMemory" && subField.Name == "element_size") {
           if (typeParams.TryGetValue("Element", out var elemType)) {
             value = elemType.ElementSize;
           }

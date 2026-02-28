@@ -12,6 +12,7 @@ internal class FunctionCloner {
   private readonly MlirFunction<MaxonOp> _sourceFunc;
   private readonly string _concreteTypeName;
   private readonly TypeSubstitution _typeSubstitution;
+  private readonly Dictionary<string, TypeAliasInfo> _typeAliasSources;
 
   // Cloning state
   private readonly Dictionary<int, MaxonValue> _valueMap = [];
@@ -31,10 +32,12 @@ internal class FunctionCloner {
   public FunctionCloner(
       MlirFunction<MaxonOp> sourceFunc,
       string concreteTypeName,
-      TypeSubstitution typeSubstitution) {
+      TypeSubstitution typeSubstitution,
+      Dictionary<string, TypeAliasInfo> typeAliasSources) {
     _sourceFunc = sourceFunc;
     _concreteTypeName = concreteTypeName;
     _typeSubstitution = typeSubstitution;
+    _typeAliasSources = typeAliasSources;
 
     // Derive element-polymorphic param indices from function signature types
     for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
@@ -196,6 +199,9 @@ internal class FunctionCloner {
   // --- State query helpers ---
 
   private string SubName(string name) => _typeSubstitution.SubstituteName(name);
+
+  private bool IsManagedMemoryType(string typeName) =>
+    TypeAliasInfo.IsManagedMemoryType(typeName, _typeAliasSources);
 
   private static MaxonValueKind ValueKindOf(MaxonValue value) => value switch {
     MaxonStruct => MaxonValueKind.Struct,
@@ -613,7 +619,7 @@ internal class FunctionCloner {
     var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, MapValue(fv.Value))).ToList();
 
     // For __ManagedMemory structs, substitute element_size based on the Element type substitution.
-    if (structLit.TypeName == "__ManagedMemory" && _concreteElementType != null) {
+    if (IsManagedMemoryType(structLit.TypeName) && _concreteElementType != null) {
       for (int i = 0; i < newFieldValues.Count; i++) {
         if (newFieldValues[i].FieldName == "element_size") {
           int elementSize = _concreteElementType?.ElementSize ?? 8;
@@ -656,11 +662,15 @@ internal class FunctionCloner {
   }
 
   private MaxonManagedMemSetOp CloneManagedMemSetOp(MaxonManagedMemSetOp memSet) {
-    var elementKind = _typeSubstitution.SubstituteValueKind(memSet.ElementKind);
-    var isHeapPtrElem = _typeSubstitution.TryGetValue("Element", out var setElemType)
+    var elementKind = _typeSubstitution.SubstituteValueKind(memSet.ElementKind, memSet.TypeParamName);
+    var paramKey = memSet.TypeParamName ?? "Element";
+    var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var setElemType)
       && (setElemType is MlirStructType || setElemType is MlirUnionType { HasAssociatedValues: true });
     var mappedValue = MapValue(memSet.Value);
-    return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, elementKind) { IsStructElement = isHeapPtrElem };
+    return new MaxonManagedMemSetOp(MapValue(memSet.ManagedStruct), MapValue(memSet.Index), mappedValue, elementKind) {
+      IsStructElement = isHeapPtrElem,
+      TypeParamName = memSet.TypeParamName
+    };
   }
 
   /// When a call returns TypeParameter and the self arg is a concrete inner alias,
@@ -705,7 +715,7 @@ internal class FunctionCloner {
     foreach (var block in func.Body.Blocks) {
       var managedMemOps = new Dictionary<int, (MaxonStructLiteralOp Op, int BlockIndex)>();
       for (int i = 0; i < block.Operations.Count; i++) {
-        if (block.Operations[i] is MaxonStructLiteralOp mmOp && mmOp.TypeName == "__ManagedMemory") {
+        if (block.Operations[i] is MaxonStructLiteralOp mmOp && IsManagedMemoryType(mmOp.TypeName)) {
           managedMemOps[mmOp.Result.Id] = (mmOp, i);
         }
       }
@@ -714,7 +724,7 @@ internal class FunctionCloner {
 
       for (int i = 0; i < block.Operations.Count; i++) {
         if (block.Operations[i] is not MaxonStructLiteralOp wrapperOp) continue;
-        if (wrapperOp.TypeName == "__ManagedMemory") continue;
+        if (IsManagedMemoryType(wrapperOp.TypeName)) continue;
 
         foreach (var (fieldName, fieldVal) in wrapperOp.FieldValues) {
           if (fieldName != "managed") continue;
