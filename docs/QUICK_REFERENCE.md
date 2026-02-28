@@ -633,7 +633,6 @@ try c.asciiValue()                   // throws CharacterError
 | `FormattedStringable` | `toString(format) -> String` |
 | `Iterable uses E` | `next() -> E throws IterationError` |
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
-| `Disposable` | `dispose()` (auto-called at scope exit before deallocation) |
 | `Error` | (marker for throwable unions) |
 
 ## Command Line

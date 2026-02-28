@@ -40,36 +40,18 @@ public static class DeadFunctionElimination {
       }
     }
 
-    // Enqueue dispose() for types that implement the Disposable interface.
-    // The compiler auto-calls dispose() at scope exit before mm_decref.
-    void EnqueueDisposeIfDisposable(string typeName) {
-      if (!module.TypeDefs.TryGetValue(typeName, out var typeDef)) return;
-      if (!typeDef.IsDisposable) return;
-      var disposeName = $"{typeName}.dispose";
-      if (funcByName.ContainsKey(disposeName))
-        EnqueueCallee(disposeName);
-    }
-
     while (queue.Count > 0) {
       var name = queue.Dequeue();
       if (!funcByName.TryGetValue(name, out var func)) continue;
 
       foreach (var block in func.Body.Blocks) {
         foreach (var op in block.Operations) {
-          if (op is MaxonCallOp call) {
+          if (op is MaxonCallOp call)
             EnqueueCallee(call.Callee);
-            // If calling a method on type T, also keep T.dispose if T is Disposable
-            var dotIdx = call.Callee.LastIndexOf('.');
-            if (dotIdx > 0)
-              EnqueueDisposeIfDisposable(call.Callee[..dotIdx]);
-          }
           if (op is MaxonFunctionRefOp fnRef)
             EnqueueCallee(fnRef.FunctionName);
           if (op is MaxonClosureCreateOp closureCreate)
             EnqueueCallee(closureCreate.FunctionName);
-          // Struct instantiation needs dispose() if the type is Disposable
-          if (op is MaxonStructLiteralOp structLit)
-            EnqueueDisposeIfDisposable(structLit.TypeName);
           // Array.get for struct elements needs the element type's clone() method
           if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemTypeName }) {
             EnqueueCallee($"{elemTypeName}.clone");

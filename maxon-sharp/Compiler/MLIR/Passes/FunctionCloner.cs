@@ -341,6 +341,19 @@ internal class FunctionCloner {
       case MaxonScopeExitOp sx: return new MaxonScopeExitOp(sx.ScopeVar, sx.Tag);
       case MaxonMoveOp mo: return new MaxonMoveOp(mo.VarName, mo.DestScopeVar, mo.Tag);
 
+      // Chain (doubly-linked list) ops
+      case MaxonChainCreateOp: { var c = new MaxonChainCreateOp(); RegisterResult(((MaxonChainCreateOp)op).Result, c.Result); return c; }
+      case MaxonChainInsertValueOp ci: { var c = new MaxonChainInsertValueOp(MapValue(ci.Chain), MapValue(ci.Value), ci.AtHead, SubName(ci.ValueKind)); RegisterResult(ci.Result, c.Result); return c; }
+      case MaxonChainInsertRelativeValueOp cir: { var c = new MaxonChainInsertRelativeValueOp(MapValue(cir.Chain), MapValue(cir.Target), MapValue(cir.Value), cir.After, SubName(cir.ValueKind)); RegisterResult(cir.Result, c.Result); return c; }
+      case MaxonChainReinsertOp cr: return new MaxonChainReinsertOp(MapValue(cr.Chain), MapValue(cr.Node), cr.AtHead);
+      case MaxonChainReinsertRelativeOp crr: return new MaxonChainReinsertRelativeOp(MapValue(crr.Chain), MapValue(crr.Target), MapValue(crr.Node), crr.After);
+      case MaxonChainDetachOp cd: return new MaxonChainDetachOp(MapValue(cd.Chain), MapValue(cd.Node));
+      case MaxonChainRemoveOp crm: { var c = new MaxonChainRemoveOp(MapValue(crm.Chain), MapValue(crm.Node), SubName(crm.ValueKind)); RegisterResult(crm.Result, c.Result); return c; }
+      case MaxonChainCountOp cc: { var c = new MaxonChainCountOp(MapValue(cc.Chain)); RegisterResult(cc.Result, c.Result); return c; }
+      case MaxonChainNodeValueOp cnv: { var c = new MaxonChainNodeValueOp(MapValue(cnv.Node), SubName(cnv.ValueKind)); RegisterResult(cnv.Result, c.Result); return c; }
+      case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(MapValue(cns.Node), MapValue(cns.Value), SubName(cns.ValueKind));
+      case MaxonChainClearOp ccl: return new MaxonChainClearOp(MapValue(ccl.Chain));
+
       default:
         throw new InvalidOperationException($"Monomorphization: unhandled op type {op.GetType().Name}");
     }

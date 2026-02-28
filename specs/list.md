@@ -10,7 +10,7 @@ category: collections
 
 A `List` is a doubly linked list collection. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
 
-Internally, each node is represented as a discriminated union (`ListNode`) that is either `empty` or contains a value with links to the previous and next nodes.
+Internally, List is backed by a `Chain` — a doubly linked chain of nodes that supports O(1) insertion and removal at both ends.
 
 ### Creating a List
 
@@ -549,110 +549,65 @@ hello world!!!!!!!!!!!!!!
 ```
 ```stderr
   scope_enter list.testRemove (depth=1)
-  alloc Node rc=0
-  alloc Node rc=0
-  alloc Node rc=0
+  alloc __ChainData rc=0
+  alloc EChain rc=0
+  move __ChainData
   alloc StringList rc=0
-  move Node
-  move Node
-  move Node
+  move EChain
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter if_then (depth=3)
-      move Node
-      incref Node rc=0
-      move Node
-      incref Node rc=0
-      decref Node rc=0
-      scope_exit if_then (0 owned)
-    move Node
-    incref Node rc=0
-    decref __ListNode_String rc=0
-    decref Node rc=0
-    scope_exit stdlib.List.append (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter else (depth=3)
-        scope_enter stdlib.List.setNext (depth=4)
-        incref __ListNode_String rc=0
-          scope_enter match_case (depth=5)
-          incref String rc=0
-          incref __ListNode_String rc=0
-          incref Node rc=0
-          move __ListNode_String
-          incref __ListNode_String rc=0
-          decref String rc=0
-          decref __ListNode_String rc=0
-          scope_exit match_case (0 owned)
-        decref __ListNode_String rc=0
-        scope_exit stdlib.List.setNext (0 owned)
-      move __ListNode_String
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit else (0 owned)
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.append (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
     scope_enter stdlib.List.removeFirst (depth=2)
-      scope_enter stdlib.List.nodeValue (depth=3)
-      incref __ListNode_String rc=0
-        scope_enter match_case (depth=4)
-        incref String rc=0
-        incref __ListNode_String rc=0
-        incref Node rc=0
-        incref String rc=0
-        move String
-        decref String rc=0
-        scope_exit match_case (0 owned)
-      decref __ListNode_String rc=0
-      scope_exit stdlib.List.nodeValue (0 owned)
-    incref String rc=0
-      scope_enter stdlib.List.nodeNext (depth=3)
-      incref __ListNode_String rc=0
-        scope_enter match_case (depth=4)
-        incref String rc=0
-        incref __ListNode_String rc=0
-        incref Node rc=0
-        move __ListNode_String
-        decref String rc=0
-        scope_exit match_case (0 owned)
-      decref __ListNode_String rc=0
-      scope_exit stdlib.List.nodeNext (0 owned)
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-      scope_enter stdlib.List.setPrev (depth=3)
-      incref __ListNode_String rc=0
-        scope_enter match_case (depth=4)
-        incref String rc=0
-        incref __ListNode_String rc=0
-        incref __ListNode_String rc=0
-        move __ListNode_String
-        incref __ListNode_String rc=0
-        decref String rc=0
-        decref __ListNode_String rc=0
-        scope_exit match_case (0 owned)
-      decref __ListNode_String rc=0
-      scope_exit stdlib.List.setPrev (0 owned)
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    incref String rc=0
+      scope_enter stdlib.Chain.head (depth=3)
+      incref ChainNode rc=0
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.head (0 owned)
+    incref __ChainNode_String rc=2
+      scope_enter stdlib.Chain.remove (depth=3)
+      move String
+      free ChainNode
+      incref String rc=1
+      move String
+      scope_exit stdlib.Chain.remove (0 owned)
     move String
-    decref String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.removeFirst (0 owned)
-  incref String rc=0
+    decref __ChainNode_String rc=1
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.removeFirst (1 owned)
+    free __ChainNode_String
+  incref String rc=2
   alloc String rc=0
   alloc_in __ManagedMemory
   alloc_in Buffer
@@ -661,72 +616,18 @@ hello world!!!!!!!!!!!!!!
   alloc_in __ManagedMemory
   alloc_in Buffer
   free ToStringBuf
-    scope_enter stdlib.List.dispose (depth=2)
-    incref __ListNode_String rc=0
-      scope_enter stdlib.List.nodeIsEmpty (depth=3)
-      incref __ListNode_String rc=0
-        scope_enter match_case (depth=4)
-        incref String rc=0
-        incref __ListNode_String rc=0
-        incref __ListNode_String rc=0
-        decref String rc=0
-        scope_exit match_case (0 owned)
-      decref __ListNode_String rc=0
-      scope_exit stdlib.List.nodeIsEmpty (0 owned)
-      scope_enter while (depth=3)
-        scope_enter stdlib.List.nodeNext (depth=4)
-        incref __ListNode_String rc=0
-          scope_enter match_case (depth=5)
-          incref String rc=0
-          incref __ListNode_String rc=0
-          incref __ListNode_String rc=0
-          move __ListNode_String
-          decref String rc=0
-          scope_exit match_case (0 owned)
-        decref __ListNode_String rc=0
-        scope_exit stdlib.List.nodeNext (0 owned)
-      alloc __ListNode_String rc=0
-        scope_enter stdlib.List.setPrev (depth=4)
-        incref __ListNode_String rc=0
-          scope_enter match_case (depth=5)
-          incref String rc=0
-          incref __ListNode_String rc=0
-          incref __ListNode_String rc=0
-          move __ListNode_String
-          incref __ListNode_String rc=0
-          decref String rc=0
-          decref __ListNode_String rc=0
-          scope_exit match_case (0 owned)
-        decref __ListNode_String rc=0
-        scope_exit stdlib.List.setPrev (0 owned)
-      decref __ListNode_String rc=0
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit while (0 owned)
-      scope_enter stdlib.List.nodeIsEmpty (depth=3)
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit stdlib.List.nodeIsEmpty (0 owned)
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.dispose (0 owned)
   decref StringList rc=0
+  decref String rc=1
   decref String rc=0
-  decref String rc=0
-  scope_exit list.testRemove (3 owned)
-  free Node
-  free Node
-  free Node
+  scope_exit list.testRemove (4 owned)
   free __ManagedMemory
   free String
-  free __ListNode_String
-  free __ManagedMemory
-  free String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
+  free ChainNode
+  free __ChainData
+  free EChain
   free StringList
+  free __ManagedMemory
+  free String
   free Buffer
   free __ManagedMemory
   free String
@@ -762,135 +663,75 @@ end 'main'
 ```
 ```stderr
   scope_enter list.testClear (depth=1)
-  alloc Node rc=0
-  alloc Node rc=0
-  alloc Node rc=0
+  alloc __ChainData rc=0
+  alloc EChain rc=0
+  move __ChainData
   alloc StringList rc=0
-  move Node
-  move Node
-  move Node
+  move EChain
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter if_then (depth=3)
-      move Node
-      incref Node rc=0
-      move Node
-      incref Node rc=0
-      decref Node rc=0
-      scope_exit if_then (0 owned)
-    move Node
-    incref Node rc=0
-    decref __ListNode_String rc=0
-    decref Node rc=0
-    scope_exit stdlib.List.append (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter else (depth=3)
-        scope_enter stdlib.List.setNext (depth=4)
-        incref __ListNode_String rc=0
-          scope_enter match_case (depth=5)
-          incref String rc=0
-          incref __ListNode_String rc=0
-          incref Node rc=0
-          move __ListNode_String
-          incref __ListNode_String rc=0
-          decref String rc=0
-          decref __ListNode_String rc=0
-          scope_exit match_case (0 owned)
-        decref __ListNode_String rc=0
-        scope_exit stdlib.List.setNext (0 owned)
-      move __ListNode_String
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit else (0 owned)
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.append (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter else (depth=3)
-        scope_enter stdlib.List.setNext (depth=4)
-        incref __ListNode_String rc=0
-          scope_enter match_case (depth=5)
-          incref String rc=0
-          incref __ListNode_String rc=0
-          incref __ListNode_String rc=0
-          move __ListNode_String
-          incref __ListNode_String rc=0
-          decref String rc=0
-          decref __ListNode_String rc=0
-          scope_exit match_case (0 owned)
-        decref __ListNode_String rc=0
-        scope_exit stdlib.List.setNext (0 owned)
-      move __ListNode_String
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit else (0 owned)
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.append (0 owned)
-    scope_enter stdlib.List.clear (depth=2)
-    alloc __ListNode_String rc=0
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.clear (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
+  free __ManagedMemory
+  free String
+  free ChainNode
+  free __ManagedMemory
+  free String
+  free ChainNode
+  free __ManagedMemory
+  free String
+  free ChainNode
   alloc ToStringBuf rc=0
   alloc String rc=0
   alloc_in __ManagedMemory
   alloc_in Buffer
   free ToStringBuf
-    scope_enter stdlib.List.dispose (depth=2)
-    incref __ListNode_String rc=0
-      scope_enter stdlib.List.nodeIsEmpty (depth=3)
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit stdlib.List.nodeIsEmpty (0 owned)
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.dispose (0 owned)
   decref StringList rc=0
   scope_exit list.testClear (2 owned)
-  free Node
-  free Node
-  free Node
-  free __ManagedMemory
-  free String
-  free __ListNode_String
-  free __ManagedMemory
-  free String
-  free __ListNode_String
-  free __ManagedMemory
-  free String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
+  free __ChainData
+  free EChain
   free StringList
   free Buffer
   free __ManagedMemory
@@ -924,135 +765,75 @@ end 'main'
 ```
 ```stderr
   scope_enter list.main (depth=1)
-  alloc Node rc=0
-  alloc Node rc=0
-  alloc Node rc=0
+  alloc __ChainData rc=0
+  alloc EChain rc=0
+  move __ChainData
   alloc StringList rc=0
-  move Node
-  move Node
-  move Node
+  move EChain
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter if_then (depth=3)
-      move Node
-      incref Node rc=0
-      move Node
-      incref Node rc=0
-      decref Node rc=0
-      scope_exit if_then (0 owned)
-    move Node
-    incref Node rc=0
-    decref __ListNode_String rc=0
-    decref Node rc=0
-    scope_exit stdlib.List.append (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter else (depth=3)
-        scope_enter stdlib.List.setNext (depth=4)
-        incref __ListNode_String rc=0
-          scope_enter match_case (depth=5)
-          incref String rc=0
-          incref __ListNode_String rc=0
-          incref Node rc=0
-          move __ListNode_String
-          incref __ListNode_String rc=0
-          decref String rc=0
-          decref __ListNode_String rc=0
-          scope_exit match_case (0 owned)
-        decref __ListNode_String rc=0
-        scope_exit stdlib.List.setNext (0 owned)
-      move __ListNode_String
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit else (0 owned)
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.append (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
   alloc String rc=0
   alloc_in __ManagedMemory
     scope_enter stdlib.List.append (depth=2)
-    alloc __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    incref __ListNode_String rc=1
-      scope_enter else (depth=3)
-        scope_enter stdlib.List.setNext (depth=4)
-        incref __ListNode_String rc=0
-          scope_enter match_case (depth=5)
-          incref String rc=0
-          incref __ListNode_String rc=0
-          incref __ListNode_String rc=0
-          move __ListNode_String
-          incref __ListNode_String rc=0
-          decref String rc=0
-          decref __ListNode_String rc=0
-          scope_exit match_case (0 owned)
-        decref __ListNode_String rc=0
-        scope_exit stdlib.List.setNext (0 owned)
-      move __ListNode_String
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit else (0 owned)
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.append (0 owned)
-    scope_enter stdlib.List.clear (depth=2)
-    alloc __ListNode_String rc=0
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    alloc __ListNode_String rc=0
-    move __ListNode_String
-    incref __ListNode_String rc=0
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.clear (0 owned)
+      scope_enter stdlib.Chain.insertLast (depth=3)
+      alloc_in ChainNode
+      move String
+      incref ChainNode rc=0
+      alloc __ChainNode_String rc=0
+      incref __ChainNode_String rc=1
+      move __ChainNode_String
+      decref ChainNode rc=0
+      scope_exit stdlib.Chain.insertLast (0 owned)
+    decref __ChainNode_String rc=0
+    scope_exit stdlib.List.append (1 owned)
+    free __ChainNode_String
+  free __ManagedMemory
+  free String
+  free ChainNode
+  free __ManagedMemory
+  free String
+  free ChainNode
+  free __ManagedMemory
+  free String
+  free ChainNode
   alloc ToStringBuf rc=0
   alloc String rc=0
   alloc_in __ManagedMemory
   alloc_in Buffer
   free ToStringBuf
-    scope_enter stdlib.List.dispose (depth=2)
-    incref __ListNode_String rc=0
-      scope_enter stdlib.List.nodeIsEmpty (depth=3)
-      incref __ListNode_String rc=0
-      decref __ListNode_String rc=0
-      scope_exit stdlib.List.nodeIsEmpty (0 owned)
-    decref __ListNode_String rc=0
-    scope_exit stdlib.List.dispose (0 owned)
   decref StringList rc=0
   scope_exit list.main (2 owned)
-  free Node
-  free Node
-  free Node
-  free __ManagedMemory
-  free String
-  free __ListNode_String
-  free __ManagedMemory
-  free String
-  free __ListNode_String
-  free __ManagedMemory
-  free String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
-  free __ListNode_String
+  free __ChainData
+  free EChain
   free StringList
   free Buffer
   free __ManagedMemory

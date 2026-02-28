@@ -84,6 +84,16 @@ public static class PurityAnalysisPass {
           case MaxonSwapFieldOp:
           case MaxonSwapPayloadOp:
             return true;
+          // Chain mutation operations modify the chain data structure in-place
+          case MaxonChainInsertValueOp:
+          case MaxonChainInsertRelativeValueOp:
+          case MaxonChainReinsertOp:
+          case MaxonChainReinsertRelativeOp:
+          case MaxonChainDetachOp:
+          case MaxonChainRemoveOp:
+          case MaxonChainClearOp:
+          case MaxonChainNodeSetValueOp:
+            return true;
         }
       }
     }

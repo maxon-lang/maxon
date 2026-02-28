@@ -738,7 +738,13 @@ public static partial class MaxonToStandardConversion {
                   // Struct or associated-value enum field: both are heap pointers now
                   var nestedHeapPtr = EmitLoad(newBlock, nestedStructName, varTypes);
                   EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
-                  EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
+                  // ChainNode data stays owned by its chain — the wrapper holds a borrowed pointer.
+                  // Reparenting would steal ownership from the chain, causing the node to be freed
+                  // when the wrapper goes out of scope (even though the chain still needs it).
+                  bool isChainNodeData = structValueTypes.TryGetValue(fieldVal.Id, out var nestedTypeName)
+                    && nestedTypeName == "__ChainNodeData";
+                  if (!isChainNodeData)
+                    EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
                 } else {
                   var mappedVal = valueMap[fieldVal];
                   var litFieldStoreType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
@@ -886,10 +892,10 @@ public static partial class MaxonToStandardConversion {
             case MaxonAssignOp assignOp: {
               // Associated-value enums now use heap pointers (like structs) and fall
               // through to the struct assignment path below.
-              // Check structVarNames as fallback to detect struct values that flow
-              // through ops not yet updated to track struct kinds.
-              if (assignOp.ValueKind == MaxonValueKind.Struct
-                  || structVarNames.ContainsKey(assignOp.Value.Id)) {
+              // Check structVarNames as the authoritative source: chain ops like
+              // chain_node_value report MaxonStruct result type even for primitives,
+              // so ValueKind alone is not reliable.
+              if (structVarNames.ContainsKey(assignOp.Value.Id)) {
                 // Struct assignment: copy the heap pointer (alias, not deep copy)
                 // Copy-by-default cloning is handled at the parser level via clone() calls.
                 if (!structVarNames.TryGetValue(assignOp.Value.Id, out var srcName))
@@ -1336,19 +1342,23 @@ public static partial class MaxonToStandardConversion {
                   }
                 }
               }
-              // Emit dispose + decref for all refcounted vars in this scope
+              // Clear chain variables before decref — unlinks all nodes so they
+              // can be freed cleanly by the scope exit.
               if (scopeInfo?.RefcountedVars.Count > 0) {
                 foreach (var rcVar in scopeInfo.RefcountedVars) {
                   if (scopeInfo.ReturnMoveVars.Contains(rcVar)) continue;
                   if (!varTypes.ContainsKey(rcVar)) continue;
-                  // Call dispose() before decref for types implementing Disposable
-                  if (varNameToStructType.TryGetValue(rcVar, out var rcStructType)
-                      && module.TypeDefs.TryGetValue(rcStructType, out var rcTypeDef)
-                      && rcTypeDef.IsDisposable
-                      && funcLookup.ContainsKey($"{rcStructType}.dispose")) {
-                    var disposePtr = EmitLoad(newBlock, rcVar, varTypes);
-                    newBlock.AddOp(new StdCallOp($"{rcStructType}.dispose", [(StdI64)disposePtr], null));
+                  if (varNameToStructType.TryGetValue(rcVar, out var rcStructType) && rcStructType == "__ChainData") {
+                    var chainPtr = (StdI64)EmitLoad(newBlock, rcVar, varTypes);
+                    newBlock.AddOp(new StdCallRuntimeOp("maxon_chain_clear", [chainPtr], null));
                   }
+                }
+              }
+              // Emit decref for all refcounted vars in this scope
+              if (scopeInfo?.RefcountedVars.Count > 0) {
+                foreach (var rcVar in scopeInfo.RefcountedVars) {
+                  if (scopeInfo.ReturnMoveVars.Contains(rcVar)) continue;
+                  if (!varTypes.ContainsKey(rcVar)) continue;
                   EmitDecref(newBlock, rcVar, varTypes);
                 }
               }
@@ -1368,6 +1378,12 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonMoveOp moveOp: {
+              // Skip move for primitive values: after monomorphization, a generic function
+              // may have move ops for return values that resolved to primitives. Only heap-
+              // allocated values (structs/strings) tracked in varNameToStructPrefix need moves.
+              if (!varNameToStructPrefix.ContainsKey(moveOp.VarName)
+                  && !varNameToStructType.ContainsKey(moveOp.VarName))
+                break;
               // CanStaticReturn: scope frame is elided, so mm_alloc registers the return value
               // directly in the caller's scope via __mm_current_scope — no mm_move needed
               if (moveOp.Tag == "return_move") {
@@ -1814,6 +1830,40 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             }
+            // Chain (doubly-linked list) operations
+            case MaxonChainCreateOp chainCreateOp:
+              LowerChainCreate(chainCreateOp, newBlock, varTypes, structVarNames, structValueTypes);
+              break;
+            case MaxonChainInsertValueOp chainInsertOp:
+              LowerChainInsertValue(chainInsertOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              break;
+            case MaxonChainInsertRelativeValueOp chainInsertRelOp:
+              LowerChainInsertRelativeValue(chainInsertRelOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              break;
+            case MaxonChainReinsertOp chainReinsertOp:
+              LowerChainReinsert(chainReinsertOp, newBlock, varTypes, structVarNames);
+              break;
+            case MaxonChainReinsertRelativeOp chainReinsertRelOp:
+              LowerChainReinsertRelative(chainReinsertRelOp, newBlock, varTypes, structVarNames);
+              break;
+            case MaxonChainDetachOp chainDetachOp:
+              LowerChainDetach(chainDetachOp, newBlock, varTypes, structVarNames);
+              break;
+            case MaxonChainRemoveOp chainRemoveOp:
+              LowerChainRemove(chainRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              break;
+            case MaxonChainCountOp chainCountOp:
+              LowerChainCount(chainCountOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
+            case MaxonChainNodeValueOp chainNodeValueOp:
+              LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              break;
+            case MaxonChainNodeSetValueOp chainNodeSetValueOp:
+              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
+              break;
+            case MaxonChainClearOp chainClearOp:
+              LowerChainClear(chainClearOp, newBlock, varTypes, structVarNames);
+              break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }

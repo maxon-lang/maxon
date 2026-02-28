@@ -138,6 +138,12 @@ public partial class X86CodeEmitter {
     EmitMmSetOwner();
     EmitMmLeakCheck();
     EmitMmValidatePtr();
+    EmitChainInsertFirst();
+    EmitChainInsertLast();
+    EmitChainInsertAfter();
+    EmitChainInsertBefore();
+    EmitChainUnlink();
+    EmitChainClear();
     if (Compiler.MmTrace) {
       EmitMmTraceScopeEnter();
       EmitMmTraceScopeExit();
@@ -736,8 +742,9 @@ public partial class X86CodeEmitter {
   // -------------------------------------------------------------------------
   // mm_move(user_ptr_in_rcx, dest_ptr_in_rdx, mode_in_r8) -> void
   // Unified move: transfers allocation ownership to a new owner.
-  //   mode=0: dest is a scope pointer (move to scope's alloc list)
+  //   mode=0: dest is a scope pointer (move to scope's alloc list); no-op for parent-owned
   //   mode=1: dest is an allocation's user pointer (reparent under allocation)
+  //   mode=2: dest is a scope pointer (force detach to scope, even if parent-owned)
   // -------------------------------------------------------------------------
   private void EmitMmMove() {
     // Stack: [rbp-8]=user_ptr, [rbp-16]=dest_ptr, [rbp-24]=mode,
@@ -874,10 +881,10 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — entry.next = NULL
     EmitBytes(0x48, 0x89, 0x48, 0x18); // MOV [rax+24], rcx — entry.prev = NULL
 
-    // Branch on mode: 0 = scope, 1 = reparent under allocation
+    // Branch on mode: 0 = scope, 1 = reparent under allocation, 2 = force to scope
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = mode
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_move_to_parent");
+    EmitBytes(0x48, 0x83, 0xF8, 0x01); // CMP rax, 1
+    EmitJcc("e", "mm_move_to_parent");
 
     // ===== Mode 0: Link into dest scope's alloc list =====
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = dest_scope
@@ -1885,6 +1892,378 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_entry_tag")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Chain/ChainNode runtime helpers — doubly-linked intrusive list for Chain<T>
+  // ==========================================================================
+  //
+  // ChainNode layout (at user pointer, before the T payload):
+  //   +0   next   (ptr to next ChainNode)
+  //   +8   prev   (ptr to prev ChainNode)
+  //   +16  chain  (ptr to owning Chain, or 0 if detached)
+  //
+  // Chain layout:
+  //   +0   head   (ptr to first ChainNode)
+  //   +8   tail   (ptr to last ChainNode)
+  //   +16  count  (u64)
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_insert_first(chain_ptr_rcx, node_ptr_rdx) -> void
+  // Insert node at head of chain. Auto-detaches from old chain if needed.
+  // Stack: [rbp-8]=chain_ptr, [rbp-16]=node_ptr
+  // -------------------------------------------------------------------------
+  private void EmitChainInsertFirst() {
+    EmitRuntimeFunctionStart("maxon_chain_insert_first", 2, 0x40);
+
+    // Auto-detach: if node.chain != 0, unlink from old chain first
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — node.chain
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_insert_first_no_detach");
+    // call maxon_chain_unlink(node.chain, node_ptr)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // rdx = node_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
+    DefineLabel("chain_insert_first_no_detach");
+
+    // old_head = [chain+0]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x8B, 0x48, 0x00); // MOV rcx, [rax+0] — old_head
+    // rcx = old_head
+
+    // node.next = old_head
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = node_ptr
+    EmitBytes(0x48, 0x89, 0x0A); // MOV [rdx], rcx — node.next = old_head
+
+    // node.prev = 0
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitBytes(0x48, 0x89, 0x42, 0x08); // MOV [rdx+8], rax — node.prev = 0
+
+    // node.chain = chain_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x42, 0x10); // MOV [rdx+16], rax — node.chain = chain_ptr
+
+    // if old_head != 0: old_head.prev = node_ptr
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "chain_insert_first_no_old_head");
+    EmitBytes(0x48, 0x89, 0x51, 0x08); // MOV [rcx+8], rdx — old_head.prev = node_ptr
+    DefineLabel("chain_insert_first_no_old_head");
+
+    // chain.head = node_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = node_ptr
+    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx — chain.head = node_ptr
+
+    // if chain.tail == 0: chain.tail = node_ptr
+    EmitBytes(0x48, 0x83, 0x78, 0x08, 0x00); // CMP qword [rax+8], 0
+    EmitJcc("ne", "chain_insert_first_tail_ok");
+    EmitBytes(0x48, 0x89, 0x50, 0x08); // MOV [rax+8], rdx — chain.tail = node_ptr
+    DefineLabel("chain_insert_first_tail_ok");
+
+    // chain.count++
+    EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_insert_last(chain_ptr_rcx, node_ptr_rdx) -> void
+  // Insert node at tail of chain. Auto-detaches from old chain if needed.
+  // Stack: [rbp-8]=chain_ptr, [rbp-16]=node_ptr
+  // -------------------------------------------------------------------------
+  private void EmitChainInsertLast() {
+    EmitRuntimeFunctionStart("maxon_chain_insert_last", 2, 0x40);
+
+    // Auto-detach: if node.chain != 0, unlink from old chain first
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — node.chain
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_insert_last_no_detach");
+    // call maxon_chain_unlink(node.chain, node_ptr)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // rdx = node_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
+    DefineLabel("chain_insert_last_no_detach");
+
+    // old_tail = [chain+8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] — old_tail
+    // rcx = old_tail
+
+    // node.next = 0
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = node_ptr
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitBytes(0x48, 0x89, 0x02); // MOV [rdx], rax — node.next = 0
+
+    // node.prev = old_tail
+    EmitBytes(0x48, 0x89, 0x4A, 0x08); // MOV [rdx+8], rcx — node.prev = old_tail
+
+    // node.chain = chain_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x42, 0x10); // MOV [rdx+16], rax — node.chain = chain_ptr
+
+    // if old_tail != 0: old_tail.next = node_ptr
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "chain_insert_last_no_old_tail");
+    EmitBytes(0x48, 0x89, 0x11); // MOV [rcx], rdx — old_tail.next = node_ptr
+    DefineLabel("chain_insert_last_no_old_tail");
+
+    // chain.tail = node_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = node_ptr
+    EmitBytes(0x48, 0x89, 0x50, 0x08); // MOV [rax+8], rdx — chain.tail = node_ptr
+
+    // if chain.head == 0: chain.head = node_ptr
+    EmitBytes(0x48, 0x83, 0x38, 0x00); // CMP qword [rax], 0
+    EmitJcc("ne", "chain_insert_last_head_ok");
+    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx — chain.head = node_ptr
+    DefineLabel("chain_insert_last_head_ok");
+
+    // chain.count++
+    EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_insert_after(chain_ptr_rcx, target_ptr_rdx, node_ptr_r8) -> void
+  // Insert node after target in chain. Auto-detaches from old chain if needed.
+  // Stack: [rbp-8]=chain_ptr, [rbp-16]=target_ptr, [rbp-24]=node_ptr
+  // -------------------------------------------------------------------------
+  private void EmitChainInsertAfter() {
+    EmitRuntimeFunctionStart("maxon_chain_insert_after", 3, 0x40);
+
+    // Auto-detach: if node.chain != 0, unlink from old chain first
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = node_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — node.chain
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_insert_after_no_detach");
+    // call maxon_chain_unlink(node.chain, node_ptr)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // rdx = node_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
+    DefineLabel("chain_insert_after_no_detach");
+
+    // after = [target+0] (target.next)
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = target_ptr
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — after = target.next
+    // rax = after
+
+    // node.next = after
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
+    EmitBytes(0x48, 0x89, 0x01); // MOV [rcx], rax — node.next = after
+
+    // node.prev = target_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = target_ptr
+    EmitBytes(0x48, 0x89, 0x51, 0x08); // MOV [rcx+8], rdx — node.prev = target_ptr
+
+    // node.chain = chain_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x51, 0x10); // MOV [rcx+16], rdx — node.chain = chain_ptr
+
+    // target.next = node_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = target_ptr
+    EmitBytes(0x48, 0x89, 0x0A); // MOV [rdx], rcx — target.next = node_ptr
+
+    // if after != 0: after.prev = node_ptr; else: chain.tail = node_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_insert_after_was_tail");
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — after.prev = node_ptr
+    EmitJmp("chain_insert_after_linked");
+    DefineLabel("chain_insert_after_was_tail");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — chain.tail = node_ptr
+    DefineLabel("chain_insert_after_linked");
+
+    // chain.count++
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_insert_before(chain_ptr_rcx, target_ptr_rdx, node_ptr_r8) -> void
+  // Insert node before target in chain. Auto-detaches from old chain if needed.
+  // Stack: [rbp-8]=chain_ptr, [rbp-16]=target_ptr, [rbp-24]=node_ptr
+  // -------------------------------------------------------------------------
+  private void EmitChainInsertBefore() {
+    EmitRuntimeFunctionStart("maxon_chain_insert_before", 3, 0x40);
+
+    // Auto-detach: if node.chain != 0, unlink from old chain first
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = node_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — node.chain
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_insert_before_no_detach");
+    // call maxon_chain_unlink(node.chain, node_ptr)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // rdx = node_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
+    DefineLabel("chain_insert_before_no_detach");
+
+    // before = [target+8] (target.prev)
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = target_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] — before = target.prev
+    // rax = before
+
+    // node.next = target_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = target_ptr
+    EmitBytes(0x48, 0x89, 0x11); // MOV [rcx], rdx — node.next = target_ptr
+
+    // node.prev = before
+    EmitBytes(0x48, 0x89, 0x41, 0x08); // MOV [rcx+8], rax — node.prev = before
+
+    // node.chain = chain_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x51, 0x10); // MOV [rcx+16], rdx — node.chain = chain_ptr
+
+    // target.prev = node_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = target_ptr
+    EmitBytes(0x48, 0x89, 0x4A, 0x08); // MOV [rdx+8], rcx — target.prev = node_ptr
+
+    // if before != 0: before.next = node_ptr; else: chain.head = node_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_insert_before_was_head");
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — before.next = node_ptr
+    EmitJmp("chain_insert_before_linked");
+    DefineLabel("chain_insert_before_was_head");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — chain.head = node_ptr
+    DefineLabel("chain_insert_before_linked");
+
+    // chain.count++
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_unlink(chain_ptr_rcx, node_ptr_rdx) -> void
+  // Unlink node from chain. No-op if node.chain == 0. Does NOT free.
+  // Stack: [rbp-8]=chain_ptr, [rbp-16]=node_ptr
+  // -------------------------------------------------------------------------
+  private void EmitChainUnlink() {
+    EmitRuntimeFunctionStart("maxon_chain_unlink", 2, 0x40);
+
+    // If node.chain == 0, no-op
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — node.chain
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_unlink_done");
+
+    // prev = [node+8], next = [node+0]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
+    EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] — prev
+    EmitBytes(0x48, 0x8B, 0x10); // MOV rdx, [rax] — next
+    // rcx = prev, rdx = next
+
+    // Reconnect: if prev != 0: prev.next = next; else: chain.head = next
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "chain_unlink_no_prev");
+    EmitBytes(0x48, 0x89, 0x11); // MOV [rcx], rdx — prev.next = next
+    EmitJmp("chain_unlink_prev_done");
+    DefineLabel("chain_unlink_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx — chain.head = next
+    DefineLabel("chain_unlink_prev_done");
+
+    // if next != 0: next.prev = prev; else: chain.tail = prev
+    EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
+    EmitJcc("z", "chain_unlink_no_next");
+    EmitBytes(0x48, 0x89, 0x4A, 0x08); // MOV [rdx+8], rcx — next.prev = prev
+    EmitJmp("chain_unlink_next_done");
+    DefineLabel("chain_unlink_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — chain.tail = prev
+    DefineLabel("chain_unlink_next_done");
+
+    // Clear node's links: node.next = 0, node.prev = 0, node.chain = 0
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — node.next = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — node.prev = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — node.chain = 0
+
+    // chain.count--
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0xFF, 0x48, 0x10); // DEC qword [rax+16]
+
+    DefineLabel("chain_unlink_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_clear(chain_ptr_rcx, scope_ptr_rdx) -> void
+  // Walk chain head→next, for each node: if refcount == 0 free it,
+  // if refcount > 0 rescue it by mm_move to scope.
+  // Stack: [rbp-8]=chain_ptr, [rbp-16]=scope_ptr, [rbp-40]=current, [rbp-48]=next,
+  //        [rbp-56]=entry
+  // -------------------------------------------------------------------------
+  private void EmitChainClear() {
+    EmitRuntimeFunctionStart("maxon_chain_clear", 2, 0x60);
+
+    // current = [chain+0] — chain.head
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — chain.head
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current
+
+    DefineLabel("chain_clear_loop");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "chain_clear_loop_done");
+
+    // Save next before modifying: next = [current+0]
+    EmitBytes(0x48, 0x8B, 0x48, 0x00); // MOV rcx, [rax+0] — current.next
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = next
+
+    // Zero node's chain links
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — node.next = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — node.prev = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — node.chain = 0
+
+    // Get AllocEntry from user ptr: entry = [current - 8]
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry ptr from backpointer
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = entry
+
+    // Check refcount: [entry+72]
+    EmitBytes(0x48, 0x83, 0x78, 0x48, 0x00); // CMP qword [rax+72], 0
+    EmitJcc("ne", "chain_clear_rescue");
+
+    // refcount == 0: free the node via mm_free(user_ptr) which unlinks
+    // from the parent entry (e.g., __ChainNode_Integer wrapper) before freeing
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = current (user ptr)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    EmitJmp("chain_clear_advance");
+
+    // refcount > 0: rescue by mm_move(current, scope, 0)
+    DefineLabel("chain_clear_rescue");
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = current (user ptr)
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = scope_ptr
+    EmitMovRegImm(X86Register.R8, 0); // R8 = mode 0 (scope transfer)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_move")); EmitDword(0);
+
+    DefineLabel("chain_clear_advance");
+    // current = next
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitJmp("chain_clear_loop");
+
+    DefineLabel("chain_clear_loop_done");
+
+    // Zero chain metadata: head = 0, tail = 0, count = 0
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitMovRegImm(X86Register.Rcx, 0);
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — chain.head = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — chain.tail = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — chain.count = 0
+
     EmitRuntimeFunctionEnd();
   }
 

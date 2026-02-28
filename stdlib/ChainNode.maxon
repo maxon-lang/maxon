@@ -1,0 +1,33 @@
+/// Handle to a node in a Chain. Provides traversal and value access.
+/// The node stays alive as long as this handle exists (refcount-based).
+/// @category Collections
+
+export type ChainNode uses Element
+  export var node __ChainNodeData
+
+  /// Get the next node in the chain, throws if at end
+  export function next() returns Self throws ChainError
+    var nextNode = try __chain_node_next(node) otherwise 'err'
+      throw ChainError.endOfChain
+    end 'err'
+    return Self{node: nextNode}
+  end 'next'
+
+  /// Get the previous node in the chain, throws if at beginning
+  export function prev() returns Self throws ChainError
+    var prevNode = try __chain_node_prev(node) otherwise 'err'
+      throw ChainError.endOfChain
+    end 'err'
+    return Self{node: prevNode}
+  end 'prev'
+
+  /// Get the value stored in this node
+  export function value() returns Element
+    return __chain_node_value(node)
+  end 'value'
+
+  /// Replace the value stored in this node
+  export function setValue(v Element)
+    __chain_node_set_value(node, v)
+  end 'setValue'
+end 'ChainNode'

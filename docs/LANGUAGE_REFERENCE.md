@@ -2617,7 +2617,7 @@ format_float(value float) String // Format float as string
 
 ### List
 
-`List` is a generic linked list. Nodes are represented as a discriminated union (`ListNode`): either `empty` or a `node` with a value and a link to the next node. Because union values are immutable, mutations rebuild the affected portion of the chain.
+`List` is a generic doubly linked list backed by a `Chain` for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
 
 **Creating a List**
 
@@ -2896,20 +2896,6 @@ function compute() returns int
   return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
 end 'compute'
 ```
-
-**Disposable interface:** Types with circular references that prevent automatic reference-count cleanup can implement the `Disposable` interface. The compiler automatically calls `dispose()` at scope exit before decrementing the reference count:
-
-```maxon
-type MyGraph implements Disposable
-  var nodes NodeArray
-
-  function dispose()
-    // break circular references so refcount cleanup can free nodes
-  end 'dispose'
-end 'MyGraph'
-```
-
-For example, the standard library `List` implements `Disposable` because its doubly-linked nodes create prev/next pointer cycles.
 
 **Return values transfer ownership:** When a struct is returned from a function, its ownership transfers to the caller. The returned variable is not released at scope exit.
 

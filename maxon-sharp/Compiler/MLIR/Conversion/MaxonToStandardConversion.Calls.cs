@@ -76,6 +76,12 @@ public static partial class MaxonToStandardConversion {
     List<bool>? argMutabilities = null,
     List<string?>? argVarNames = null) {
 
+    // Intercept synthetic chain navigation calls before resolving the callee
+    // (these are not real functions in the module)
+    if (TryLowerChainNavigation(callee, args, result, isTryCall, block, valueMap,
+        varTypes, structVarNames, structValueTypes, errorFlagValue))
+      return;
+
     var calleeFunc = ResolveCallee(callee, funcLookup);
     var resolvedCallee = calleeFunc.Name;
     var calleeRetStructType = ResolveStructReturnType(calleeFunc.ReturnType, typeDefs);
@@ -198,6 +204,12 @@ public static partial class MaxonToStandardConversion {
       } else {
         retHeapPtr = valueMap[retOp.Value];
       }
+      block.AddOp(new StdReturnOp(retHeapPtr));
+    } else if (retOp.Value != null && structVarNames.TryGetValue(retOp.Value.Id, out var fallbackSrcName)) {
+      // Value is a heap pointer (registered by chain/managed-memory ops) but the
+      // function's return type is unresolved (e.g., type parameter "Element" in a
+      // generic template function). Return the heap pointer as i64.
+      var retHeapPtr = EmitLoad(block, fallbackSrcName, varTypes);
       block.AddOp(new StdReturnOp(retHeapPtr));
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;

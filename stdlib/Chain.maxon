@@ -1,0 +1,96 @@
+/// Doubly linked list chain with O(1) insertion, removal, and node-level access.
+/// Chain owns its nodes via parent-child memory hierarchy. Nodes are accessed
+/// through ChainNode handles with refcount-based lifetime.
+/// @category Collections
+
+export type Chain uses Element
+  typealias ElementArray = Array with Element
+  typealias CNode = ChainNode with Element
+
+  var chain __ChainData
+
+  /// Create and insert a value at the front, returns a handle to the new node
+  export function insertFirst(value Element) returns CNode
+    var nodeData = __chain_insert_first(chain, value)
+    return CNode{node: nodeData}
+  end 'insertFirst'
+
+  /// Create and insert a value at the back, returns a handle to the new node
+  export function insertLast(value Element) returns CNode
+    var nodeData = __chain_insert_last(chain, value)
+    return CNode{node: nodeData}
+  end 'insertLast'
+
+  /// Create and insert a value after the given node, returns handle to new node
+  export function insertAfter(target CNode, value Element) returns CNode
+    var nodeData = __chain_insert_after(chain, target.node, value)
+    return CNode{node: nodeData}
+  end 'insertAfter'
+
+  /// Create and insert a value before the given node, returns handle to new node
+  export function insertBefore(target CNode, value Element) returns CNode
+    var nodeData = __chain_insert_before(chain, target.node, value)
+    return CNode{node: nodeData}
+  end 'insertBefore'
+
+  /// Reinsert an existing node at the front (auto-detaches from current position)
+  export function reinsertFirst(node CNode)
+    __chain_reinsert_first(chain, node.node)
+  end 'reinsertFirst'
+
+  /// Reinsert an existing node at the back (auto-detaches from current position)
+  export function reinsertLast(node CNode)
+    __chain_reinsert_last(chain, node.node)
+  end 'reinsertLast'
+
+  /// Reinsert an existing node after the target (auto-detaches from current position)
+  export function reinsertAfter(target CNode, node CNode)
+    __chain_reinsert_after(chain, target.node, node.node)
+  end 'reinsertAfter'
+
+  /// Reinsert an existing node before the target (auto-detaches from current position)
+  export function reinsertBefore(target CNode, node CNode)
+    __chain_reinsert_before(chain, target.node, node.node)
+  end 'reinsertBefore'
+
+  /// Detach a node from the chain without freeing it (no-op if already detached)
+  export function detach(node CNode)
+    __chain_detach(chain, node.node)
+  end 'detach'
+
+  /// Remove a node: extract its value and free the node
+  export function remove(node CNode) returns Element
+    return __chain_remove(chain, node.node)
+  end 'remove'
+
+  /// Get a handle to the first node, throws if empty
+  export function head() returns CNode throws ChainError
+    var nodeData = try __chain_head(chain) otherwise 'err'
+      throw ChainError.empty
+    end 'err'
+    return CNode{node: nodeData}
+  end 'head'
+
+  /// Get a handle to the last node, throws if empty
+  export function tail() returns CNode throws ChainError
+    var nodeData = try __chain_tail(chain) otherwise 'err'
+      throw ChainError.empty
+    end 'err'
+    return CNode{node: nodeData}
+  end 'tail'
+
+  /// Get the number of elements
+  export function count() returns Count
+    return __chain_count(chain)
+  end 'count'
+
+  /// Check if the chain is empty
+  export function isEmpty() returns bool
+    return __chain_count(chain) == 0
+  end 'isEmpty'
+
+  /// Remove all elements, freeing all nodes
+  export function clear()
+    __chain_clear(chain)
+  end 'clear'
+end 'Chain'

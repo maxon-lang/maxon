@@ -213,37 +213,50 @@ public static class MonomorphizationPass {
       funcLookup[f.Name] = f;
     }
 
+    // Iterate to a fixed point: rewrite calls, propagate types across all blocks
+    // in the function, then rewrite again until no more rewrites are found.
+    // This handles chains like: insertLast() -> n1 -> n1.next() -> fwd -> fwd.value()
+    // where each rewrite enables the next through type propagation.
     foreach (var func in module.Functions) {
-      foreach (var block in func.Body.Blocks) {
-        for (int i = 0; i < block.Operations.Count; i++) {
-          var op = block.Operations[i];
+      bool anyRewrites = true;
+      while (anyRewrites) {
+        anyRewrites = false;
+        foreach (var block in func.Body.Blocks) {
+          for (int i = 0; i < block.Operations.Count; i++) {
+            var op = block.Operations[i];
 
-          if (op is MaxonCallOp call) {
-            var newCallee = ResolveCalleeRewrite(call.Callee, call.ResultStructTypeName, call.Args, calleeMap);
-            if (newCallee != null) {
-              Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
-              var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
-                call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
-              // Update the result value's type name to match the resolved type
-              if (newResultStructTypeName != null && call.Result is MaxonStruct resultStruct
-                  && resultStruct.TypeName != newResultStructTypeName) {
-                resultStruct.TypeName = newResultStructTypeName;
-              }
-              if (call is MaxonTryCallOp tryCall) {
-                var newOp = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName);
-                CopyCallMetadata(call, newOp);
-                block.Operations[i] = newOp;
-              } else {
-                var newOp = new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
-                CopyCallMetadata(call, newOp);
-                block.Operations[i] = newOp;
-              }
-              if (newResultKind != call.ResultKind && call.Result != null) {
-                UpdateSubsequentAssignOps(block, i + 1, call.Result, newResultKind);
+            if (op is MaxonCallOp call) {
+              var newCallee = ResolveCalleeRewrite(call.Callee, call.ResultStructTypeName, call.Args, calleeMap);
+              if (newCallee != null) {
+                anyRewrites = true;
+                Logger.Debug(LogCategory.Mlir, $"  Rewrote call {call.Callee} -> {newCallee} in {func.Name}");
+                var (newResultKind, newResultStructTypeName) = ResolveMonomorphizedResultType(
+                  call.ResultKind, call.ResultStructTypeName, newCallee, funcLookup);
+                // Update the result value's type name to match the resolved type
+                if (newResultStructTypeName != null && call.Result is MaxonStruct resultStruct
+                    && resultStruct.TypeName != newResultStructTypeName) {
+                  resultStruct.TypeName = newResultStructTypeName;
+                }
+                if (call is MaxonTryCallOp tryCall) {
+                  var newOp = new MaxonTryCallOp(newCallee, tryCall.Args, tryCall.Result, tryCall.ErrorFlag, newResultKind, newResultStructTypeName);
+                  CopyCallMetadata(call, newOp);
+                  block.Operations[i] = newOp;
+                } else {
+                  var newOp = new MaxonCallOp(newCallee, call.Args, call.Result, newResultKind, newResultStructTypeName);
+                  CopyCallMetadata(call, newOp);
+                  block.Operations[i] = newOp;
+                }
+                if (newResultKind != call.ResultKind && call.Result != null) {
+                  UpdateSubsequentAssignOps(block, i + 1, call.Result, newResultKind);
+                }
               }
             }
           }
         }
+        // After rewriting all blocks, propagate type names across the entire function
+        // so that variables defined in one block (e.g., entry) have their concrete types
+        // visible in continuation blocks (e.g., otherwise_continue_1)
+        PropagateStructTypeNames(func);
       }
     }
   }
@@ -269,6 +282,63 @@ public static class MonomorphizationPass {
     for (int j = startIndex; j < block.Operations.Count; j++) {
       if (block.Operations[j] is MaxonAssignOp assign && assign.Value == result) {
         block.Operations[j] = new MaxonAssignOp(assign.VarName, assign.Value, assign.IsDeclaration, assign.IsMutable, newKind.Value);
+      }
+    }
+  }
+
+  /// <summary>
+  /// After call rewrites, propagate concrete struct type names through assignment chains
+  /// across ALL blocks in a function. Variables flow across blocks (e.g., a variable
+  /// assigned in entry can be referenced in otherwise_continue_1), so propagation must
+  /// span the entire function body.
+  /// </summary>
+  private static void PropagateStructTypeNames(MlirFunction<MaxonOp> func) {
+    // Map: variable name -> concrete struct type name
+    var varTypes = new Dictionary<string, string>();
+    // Map: value ID -> concrete struct type name
+    var valueTypes = new Dictionary<int, string>();
+
+    // Seed from all call results across all blocks.
+    // Use indexed iteration to avoid "collection modified during enumeration"
+    // when this runs inside the fixed-point rewrite loop.
+    for (int bi = 0; bi < func.Body.Blocks.Count; bi++) {
+      var ops = func.Body.Blocks[bi].Operations;
+      for (int oi = 0; oi < ops.Count; oi++) {
+        if (ops[oi] is MaxonCallOp call && call.Result is MaxonStruct callResult) {
+          valueTypes[callResult.Id] = callResult.TypeName;
+        }
+      }
+    }
+
+    // Multi-pass: propagate through assignment chains across all blocks until stable
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      for (int bi = 0; bi < func.Body.Blocks.Count; bi++) {
+        var ops = func.Body.Blocks[bi].Operations;
+        for (int oi = 0; oi < ops.Count; oi++) {
+          var op = ops[oi];
+          if (op is MaxonAssignOp assign) {
+            if (valueTypes.TryGetValue(assign.Value.Id, out var concreteType)) {
+              if (!varTypes.ContainsKey(assign.VarName)) {
+                varTypes[assign.VarName] = concreteType;
+                changed = true;
+              }
+            }
+          }
+          if (op is MaxonStructVarRefOp varRef) {
+            if (varTypes.TryGetValue(varRef.VarName, out var knownType)) {
+              if (!valueTypes.ContainsKey(varRef.Result.Id)) {
+                valueTypes[varRef.Result.Id] = knownType;
+                changed = true;
+              }
+              if (varRef.Result.TypeName != knownType) {
+                varRef.Result.TypeName = knownType;
+                changed = true;
+              }
+            }
+          }
+        }
       }
     }
   }
@@ -647,6 +717,19 @@ public static class MonomorphizationPass {
         if (indirect.Result != null && cloned.Result != null) valueMap[indirect.Result.Id] = cloned.Result;
         return cloned;
       }
+      // Chain (doubly-linked list) ops
+      case MaxonChainCreateOp: { var c = new MaxonChainCreateOp(); valueMap[((MaxonChainCreateOp)op).Result.Id] = c.Result; return c; }
+      case MaxonChainInsertValueOp ci: { var c = new MaxonChainInsertValueOp(mapValue(ci.Chain), mapValue(ci.Value), ci.AtHead, sub.SubstituteName(ci.ValueKind)); valueMap[ci.Result.Id] = c.Result; return c; }
+      case MaxonChainInsertRelativeValueOp cir: { var c = new MaxonChainInsertRelativeValueOp(mapValue(cir.Chain), mapValue(cir.Target), mapValue(cir.Value), cir.After, sub.SubstituteName(cir.ValueKind)); valueMap[cir.Result.Id] = c.Result; return c; }
+      case MaxonChainReinsertOp cr: return new MaxonChainReinsertOp(mapValue(cr.Chain), mapValue(cr.Node), cr.AtHead);
+      case MaxonChainReinsertRelativeOp crr: return new MaxonChainReinsertRelativeOp(mapValue(crr.Chain), mapValue(crr.Target), mapValue(crr.Node), crr.After);
+      case MaxonChainDetachOp cd: return new MaxonChainDetachOp(mapValue(cd.Chain), mapValue(cd.Node));
+      case MaxonChainRemoveOp crm: { var c = new MaxonChainRemoveOp(mapValue(crm.Chain), mapValue(crm.Node), sub.SubstituteName(crm.ValueKind)); valueMap[crm.Result.Id] = c.Result; return c; }
+      case MaxonChainCountOp cc: { var c = new MaxonChainCountOp(mapValue(cc.Chain)); valueMap[cc.Result.Id] = c.Result; return c; }
+      case MaxonChainNodeValueOp cnv: { var c = new MaxonChainNodeValueOp(mapValue(cnv.Node), sub.SubstituteName(cnv.ValueKind)); valueMap[cnv.Result.Id] = c.Result; return c; }
+      case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(mapValue(cns.Node), mapValue(cns.Value), sub.SubstituteName(cns.ValueKind));
+      case MaxonChainClearOp ccl: return new MaxonChainClearOp(mapValue(ccl.Chain));
+
       default:
         throw new InvalidOperationException($"Interface alias specialization: unhandled op type {op.GetType().Name}");
     }
