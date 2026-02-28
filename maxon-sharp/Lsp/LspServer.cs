@@ -631,6 +631,7 @@ public class LspServer {
   private static Hover MakeTypeHover(MlirType mlirType, string word, Position position, string line) {
     string kind;
     string details = "";
+    string? docString = null;
     if (mlirType is MlirStructType structType) {
       kind = "type";
       var fields = structType.Fields
@@ -638,6 +639,7 @@ public class LspServer {
         .Select(f => $"  export var {f.Name} {f.Type.Name}");
       if (fields.Any())
         details = "\n\n" + string.Join("\n", fields);
+      docString = structType.DocString;
     } else if (mlirType is MlirEnumType) {
       kind = "enum";
     } else if (mlirType is MlirUnionType) {
@@ -648,11 +650,12 @@ public class LspServer {
       kind = "type";
     }
 
+    var docPart = docString != null ? $"\n\n{docString}" : "";
     return new Hover {
       Contents = new MarkedStringsOrMarkupContent(
         new MarkupContent {
           Kind = MarkupKind.Markdown,
-          Value = $"```maxon\n{kind} {word}\n```{details}"
+          Value = $"```maxon\n{kind} {word}\n```{details}{docPart}"
         }
       ),
       Range = GetWordRange(position, line, word)

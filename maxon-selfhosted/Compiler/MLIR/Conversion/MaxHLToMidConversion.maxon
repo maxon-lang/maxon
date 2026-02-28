@@ -6,33 +6,17 @@ export function lowerMaxHLToMid(module MlirModule) returns MlirModule
     logDebug(LogCategory.mlir, message: "Lowering MaxHL to Mid dialects")
     var result = createMlirModule()
 
-    var fi = 0
-    while fi < module.functions.count() 'eachFunc'
-        let srcFunc = try module.functions.get(fi) otherwise 'skipFunc'
-            fi = fi + 1
-            continue
-        end 'skipFunc'
+    for srcFunc in module.functions 'eachFunc'
         var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
 
-        var bi = 0
-        while bi < srcFunc.region.blocks.count() 'eachBlock'
-            let srcBlock = try srcFunc.region.blocks.get(bi) otherwise 'skipBlock'
-                bi = bi + 1
-                continue
-            end 'skipBlock'
+        for srcBlock in srcFunc.region.blocks 'eachBlock'
             var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
             // Override the auto-assigned id to match source block id
             dstBlock.id = srcBlock.id
 
             // Lower ops
-            var oi = 0
-            while oi < srcBlock.ops.count() 'eachOp'
-                let op = try srcBlock.ops.get(oi) otherwise 'skipOp'
-                    oi = oi + 1
-                    continue
-                end 'skipOp'
+            for op in srcBlock.ops 'eachOp'
                 lowerOp(op, dstBlock: dstBlock)
-                oi = oi + 1
             end 'eachOp'
 
             // Lower terminator
@@ -41,15 +25,12 @@ export function lowerMaxHLToMid(module MlirModule) returns MlirModule
                 dstBlock.terminator = loweredTerm
                 dstBlock.hasTerminator = true
             end 'hasTerm'
-
-            bi = bi + 1
         end 'eachBlock'
 
         // Match block IDs: set nextBlockId from source
         dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
 
         result.functions.push(dstFunc)
-        fi = fi + 1
     end 'eachFunc'
 
     logDebug(LogCategory.mlir, message: "MaxHL->Mid lowering complete")

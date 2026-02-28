@@ -86,6 +86,7 @@ public class MlirStructField(string name, MlirType type, bool isExported, bool i
 
 public class MlirStructType : MlirType {
   public override bool IsHeapAllocated => true;
+  public string? DocString { get; set; }
   public List<MlirStructField> Fields { get; }
   public List<string> AssociatedTypeNames { get; }
   public List<string> ConformingInterfaces { get; }

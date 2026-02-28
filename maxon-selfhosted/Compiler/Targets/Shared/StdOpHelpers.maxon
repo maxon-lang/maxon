@@ -65,23 +65,12 @@ end 'getSlotFromMemRefOp'
 // Compute max parser-allocated slot across all blocks in a function.
 export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
     var maxSlot = 0 - 1
-    var bi = 0
-    while bi < func.region.blocks.count() 'eachBlock'
-        let block = try func.region.blocks.get(bi) otherwise 'skip'
-            bi = bi + 1
-            continue
-        end 'skip'
-        var oi = 0
-        while oi < block.ops.count() 'eachOp'
-            let op = try block.ops.get(oi) otherwise 'skipOp'
-                oi = oi + 1
-                continue
-            end 'skipOp'
+    for block in func.region.blocks 'eachBlock'
+        for op in block.ops 'eachOp'
             let slot = getSlotFromMlirOp(op)
             if slot >= 0 'hasSlot'
                 maxSlot = maxOf(maxSlot, b: slot)
             end 'hasSlot'
-            oi = oi + 1
         end 'eachOp'
         // Also check terminator
         if block.hasTerminator 'hasTerm'
@@ -90,7 +79,6 @@ export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
                 maxSlot = maxOf(maxSlot, b: termSlot)
             end 'hasTermSlot'
         end 'hasTerm'
-        bi = bi + 1
     end 'eachBlock'
     return maxSlot
 end 'computeMaxParserSlotInFunc'
@@ -129,18 +117,8 @@ export function computeStackSizeForFunc(func MlirFunction, shadowSpace StackSize
     var hasPrint = false
     var tempSlotCount = 0
 
-    var bi = 0
-    while bi < func.region.blocks.count() 'eachBlock'
-        let block = try func.region.blocks.get(bi) otherwise 'skipBlock'
-            bi = bi + 1
-            continue
-        end 'skipBlock'
-        var oi = 0
-        while oi < block.ops.count() 'eachOp'
-            let op = try block.ops.get(oi) otherwise 'skipOp'
-                oi = oi + 1
-                continue
-            end 'skipOp'
+    for block in func.region.blocks 'eachBlock'
+        for op in block.ops 'eachOp'
             let slot = getSlotFromMlirOp(op)
             if slot >= 0 'hasSlot'
                 maxSlot = maxOf(maxSlot, b: slot)
@@ -151,9 +129,7 @@ export function computeStackSizeForFunc(func MlirFunction, shadowSpace StackSize
             if isPrintOp(op) 'isPrint'
                 hasPrint = true
             end 'isPrint'
-            oi = oi + 1
         end 'eachOp'
-        bi = bi + 1
     end 'eachBlock'
 
     let totalMaxSlot = maxSlot + tempSlotCount

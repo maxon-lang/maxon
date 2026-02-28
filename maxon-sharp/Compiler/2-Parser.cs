@@ -532,6 +532,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("count", MlirType.I64, false, true),
       ]);
       chainType.AssociatedTypeNames.Add("Element");
+      chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, and element count.\n\nSee the `chain` stdlib module for operations.";
       _typeRegistry["Chain"] = chainType;
     }
 
@@ -544,6 +545,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("value", MlirType.I64, false, true),
       ]);
       nodeType.AssociatedTypeNames.Add("Element");
+      nodeType.DocString = "Compiler builtin node for a `Chain` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning chain, and the element value.";
       _typeRegistry["ChainNode"] = nodeType;
     }
 
@@ -637,6 +639,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("count", MlirType.I64, false, true),
       ]);
       chainType.AssociatedTypeNames.Add("Element");
+      chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, and element count.\n\nSee the `chain` stdlib module for operations.";
       _typeRegistry["Chain"] = chainType;
     }
     if (!_typeRegistry.ContainsKey("ChainNode")) {
@@ -647,6 +650,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("value", MlirType.I64, false, true),
       ]);
       nodeType.AssociatedTypeNames.Add("Element");
+      nodeType.DocString = "Compiler builtin node for a `Chain` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning chain, and the element value.";
       _typeRegistry["ChainNode"] = nodeType;
     }
   }
