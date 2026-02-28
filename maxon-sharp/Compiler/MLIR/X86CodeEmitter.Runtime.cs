@@ -18,6 +18,7 @@ public partial class X86CodeEmitter {
   }
 
   public void EmitRuntimeFunctions() {
+    EmitMaxonBoundsCheck();
     EmitMaxonCowCheck();
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
@@ -59,6 +60,24 @@ public partial class X86CodeEmitter {
     EmitMaxonStrlen();
     EmitMaxonMemcpy();
     EmitMaxonMemcmp();
+  }
+
+  /// <summary>
+  /// maxon_bounds_check(index_rcx, limit_rdx, msg_r8): panic if (unsigned)index >= (unsigned)limit.
+  /// A single unsigned comparison catches both negative indices and indices >= limit.
+  /// </summary>
+  private void EmitMaxonBoundsCheck() {
+    EmitRuntimeFunctionStart("maxon_bounds_check", 3);
+    // CMP rcx, rdx (unsigned comparison: index vs limit)
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("b", "rt_bounds_ok"); // JAE would panic; JB means index < limit → OK
+    // Tail-call maxon_panic so its stack walk sees the *caller's* frame, not ours
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = msg_r8 (saved at [rbp-0x18])
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitJmp("maxon_panic");
+    DefineLabel("rt_bounds_ok");
+    EmitRuntimeFunctionEnd();
   }
 
   /// <summary>

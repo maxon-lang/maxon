@@ -1766,6 +1766,9 @@ public static partial class MaxonToStandardConversion {
             case MaxonManagedMemGrowOp memGrowOp:
               LowerManagedMemGrow(memGrowOp, newBlock, valueMap, varTypes, structVarNames);
               break;
+            case MaxonManagedMemSetLengthOp setLenOp:
+              LowerManagedMemSetLength(setLenOp, newBlock, valueMap, varTypes, structVarNames);
+              break;
             case MaxonManagedMemShiftOp memShiftOp:
               LowerManagedMemShift(memShiftOp, newBlock, valueMap, varTypes, structVarNames);
               break;

@@ -76,9 +76,7 @@ public static class PurityAnalysisPass {
           case MaxonManagedMemShiftOp:
           case MaxonManagedMemByteSetOp:
           case MaxonManagedMemConcatOp:
-            return true;
-          // Mutating managed memory metadata (e.g. set_length)
-          case MaxonFieldAssignOp fieldAssign when fieldAssign.TypeName == "__ManagedMemory":
+          case MaxonManagedMemSetLengthOp:
             return true;
           // Swapping heap-pointer fields mutates the parent struct
           case MaxonSwapFieldOp:

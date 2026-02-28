@@ -9,6 +9,19 @@ public static partial class MaxonToStandardConversion {
 	// ============================================================================
 
 	/// <summary>
+	/// Emit a runtime bounds check: panics if (unsigned)index >= (unsigned)limit.
+	/// Uses the maxon_bounds_check runtime function with a pre-defined panic message.
+	/// </summary>
+	private static void EmitBoundsCheck(
+	  MlirBlock<StandardOp> block, StdI64 index, StdI64 limit, string panicSymdataLabel) {
+		var leaOp = new StdLeaSymdataOp(panicSymdataLabel);
+		block.AddOp(leaOp);
+		var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
+		block.AddOp(ptrToI64);
+		block.AddOp(new StdCallRuntimeOp("maxon_bounds_check", [index, limit, ptrToI64.Result], null));
+	}
+
+	/// <summary>
 	/// Resolve the struct variable name for a managed memory value.
 	/// The managed value may be tracked as a struct variable or may need to be loaded.
 	/// </summary>
@@ -62,9 +75,11 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<int, string> structVarNames,
 	  Dictionary<int, string> structValueTypes) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
+		var index = (StdI64)valueMap[op.Index];
+		EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
-		var index = (StdI64)valueMap[op.Index];
 		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
 		if (op.IsStructElement) {
@@ -105,8 +120,11 @@ public static partial class MaxonToStandardConversion {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
-		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+		// Check against capacity after COW (COW updates capacity from 0 to length)
+		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
+		EmitBoundsCheck(block, index, capacity, "__mm_panic_index_oob");
+		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
 		if (op.IsStructElement) {
@@ -174,8 +192,17 @@ public static partial class MaxonToStandardConversion {
 		// Load element_size from the managed struct via heap pointer
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
-		EmitCowCheck(block, managedVarName, varTypes, elemSize);
+		// Validate newCapacity >= currentCapacity (before COW check, which may change capacity)
+		var oldCap = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		var newCap = (StdI64)valueMap[op.NewCapacity];
+		// Check: oldCap < newCap + 1, i.e. oldCap <= newCap. Use unsigned compare.
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var newCapPlusOne = new StdAddI64Op(newCap, oneConst.Result);
+		block.AddOp(newCapPlusOne);
+		EmitBoundsCheck(block, oldCap, newCapPlusOne.Result, "__mm_panic_grow_shrink");
+
+		EmitCowCheck(block, managedVarName, varTypes, elemSize);
 
 		// Load buffer pointer (now guaranteed to be heap-allocated after COW check)
 		var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
@@ -213,9 +240,15 @@ public static partial class MaxonToStandardConversion {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
-		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+		// Check after COW (COW updates capacity from 0 to length)
+		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
 		var count = (StdI64)valueMap[op.Count];
+		EmitBoundsCheck(block, index, capacity, "__mm_panic_shift_oob");
+		var endOp = new StdAddI64Op(index, count);
+		block.AddOp(endOp);
+		EmitBoundsCheck(block, endOp.Result, capacity, "__mm_panic_shift_oob");
+		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
 		if (op.ShiftRight) {
 			// Shift right: copy from [index+count-1] down to [index], moving each one position right
@@ -264,8 +297,13 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
-		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
+		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		var byteLimitOp = new StdMulI64Op(length, elemSize);
+		block.AddOp(byteLimitOp);
 		var index = (StdI64)valueMap[op.Index];
+		EmitBoundsCheck(block, index, byteLimitOp.Result, "__mm_panic_byte_oob");
+		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		// Compute address: buffer + index (element size is 1 byte)
 		var addrOp = new StdAddI64Op(buffer, index);
 		block.AddOp(addrOp);
@@ -321,12 +359,16 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		var byteLimitOp = new StdMulI64Op(length, elemSize);
+		block.AddOp(byteLimitOp);
+		var index = (StdI64)valueMap[op.Index];
+		EmitBoundsCheck(block, index, byteLimitOp.Result, "__mm_panic_byte_oob");
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
 
 		// Now perform the actual byte write using the writable buffer
 		var bufReload = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldBuffer, MlirType.I64, varTypes);
-		var index = (StdI64)valueMap[op.Index];
 		var value = valueMap[op.Value];
 		var addrOp = new StdAddI64Op(bufReload, index);
 		block.AddOp(addrOp);
@@ -435,6 +477,28 @@ public static partial class MaxonToStandardConversion {
 		var result = new StdI64(MlirContext.Current.NextId());
 		block.AddOp(new StdCallRuntimeOp("maxon_write_stderr", [cstrPtr], result));
 		valueMap[op.Result] = result;
+	}
+
+	/// <summary>
+	/// Set length with capacity validation: panics if newLength > capacity.
+	/// </summary>
+	private static void LowerManagedMemSetLength(
+	  MaxonManagedMemSetLengthOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<int, string> structVarNames) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		var newLength = (StdI64)valueMap[op.NewLength];
+		// Check newLength <= capacity: reframe as newLength < capacity + 1
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var capPlusOne = new StdAddI64Op(capacity, oneConst.Result);
+		block.AddOp(capPlusOne);
+		EmitBoundsCheck(block, newLength, capPlusOne.Result, "__mm_panic_setlength_oob");
+		// Store the new length
+		EmitStructFieldStore(block, newLength, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 	}
 
 	private static void LowerPanic(

@@ -677,6 +677,8 @@ public static class MonomorphizationPass {
       }
       case MaxonManagedMemGrowOp mg:
         return new MaxonManagedMemGrowOp(mapValue(mg.ManagedStruct), mapValue(mg.NewCapacity));
+      case MaxonManagedMemSetLengthOp sl:
+        return new MaxonManagedMemSetLengthOp(mapValue(sl.ManagedStruct), mapValue(sl.NewLength));
       case MaxonManagedMemShiftOp ms:
         return new MaxonManagedMemShiftOp(mapValue(ms.ManagedStruct), mapValue(ms.Index), mapValue(ms.Count), ms.ShiftRight);
       case MaxonManagedMemConcatOp mc: {

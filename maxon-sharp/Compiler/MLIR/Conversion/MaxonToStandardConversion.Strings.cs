@@ -740,11 +740,23 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<int, string> structVarNames) {
 
 		var srcVarName = ResolveManagedVarName(op.Managed, structVarNames);
-		var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
-		var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+		var srcLength = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, MlirType.I64, varTypes);
 
 		var start = (StdI64)valueMap[op.Start];
 		var end = (StdI64)valueMap[op.End];
+
+		// Bounds checks: end <= length and start <= end
+		var sliceOneConst = new StdConstI64Op(1);
+		block.AddOp(sliceOneConst);
+		var lengthPlusOne = new StdAddI64Op(srcLength, sliceOneConst.Result);
+		block.AddOp(lengthPlusOne);
+		EmitBoundsCheck(block, end, lengthPlusOne.Result, "__mm_panic_slice_oob");
+		var endPlusOne = new StdAddI64Op(end, sliceOneConst.Result);
+		block.AddOp(endPlusOne);
+		EmitBoundsCheck(block, start, endPlusOne.Result, "__mm_panic_slice_oob");
+
+		var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
+		var srcElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
 		// Convert element index to byte offset: start * element_size
 		var startBytesOp = new StdMulI64Op(start, srcElemSize);

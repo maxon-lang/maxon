@@ -9,23 +9,23 @@ category: dev
 
 ## Documentation
 
-`__ManagedMemory` is a compiler builtin type providing heap-backed buffer storage. It has instance methods for element access, mutation, and buffer management, as well as static methods for creation.
+`__ManagedMemory` is a compiler builtin type providing heap-backed buffer storage. It has instance methods for element access, mutation, and buffer management, as well as static methods for creation. All element-access and mutation methods perform runtime bounds checking and panic on invalid access.
 
 ### Instance Methods
 
 - `length()` returns int
 - `capacity()` returns int
 - `elementSize()` returns int
-- `setLength(n)` — set element count
-- `get(index)` returns Element
-- `set(index, value)`
-- `grow(newCapacity)`
-- `shiftRight(index, count)`
-- `shiftLeft(index, count)`
-- `byteAt(index)` returns int
-- `setByte(index, value)`
+- `setLength(n)` — set element count (panics if n > capacity)
+- `get(index)` returns Element (panics if index >= length)
+- `set(index, value)` (panics if index >= capacity)
+- `grow(newCapacity)` (panics if newCapacity < current capacity)
+- `shiftRight(index, count)` (panics if index or index+count >= capacity)
+- `shiftLeft(index, count)` (panics if index or index+count >= capacity)
+- `byteAt(index)` returns int (panics if index >= length * elementSize)
+- `setByte(index, value)` (panics if index >= length * elementSize)
 - `concat(other)` returns __ManagedMemory
-- `slice(start, end)` returns __ManagedMemory
+- `slice(start, end)` returns __ManagedMemory (panics if end > length or start > end)
 - `toCString()` returns int
 - `makeCharFromBytes(pos, len)` returns int
 
@@ -171,4 +171,172 @@ end 'main'
 ```
 ```exitcode
 100
+```
+
+### Bounds checking
+
+<!-- test: bounds-get-oob -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(1)
+  arr.push(2)
+  arr.push(3)
+  arr.push(4)
+  var v = arr.managed.get(10)
+  return v
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+__ManagedMemory: index out of bounds
+Stack trace:
+  in managed-memory-methods.main
+  in _start
+```
+
+<!-- test: bounds-set-oob -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(1)
+  arr.push(2)
+  arr.push(3)
+  arr.push(4)
+  arr.managed.set(10, 99)
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+__ManagedMemory: index out of bounds
+Stack trace:
+  in managed-memory-methods.main
+  in _start
+```
+
+<!-- test: bounds-setlength-exceeds-capacity -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(1)
+  arr.managed.setLength(100)
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+__ManagedMemory: setLength exceeds capacity
+Stack trace:
+  in managed-memory-methods.main
+  in _start
+```
+
+<!-- test: bounds-byte-oob -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(1)
+  arr.push(2)
+  var b = arr.managed.byteAt(100)
+  return b
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+__ManagedMemory: byte index out of bounds
+Stack trace:
+  in managed-memory-methods.main
+  in _start
+```
+
+<!-- test: bounds-slice-oob -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(1)
+  arr.push(2)
+  arr.push(3)
+  arr.push(4)
+  let sliced = arr.managed.slice(0, 10)
+  return sliced.length()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+__ManagedMemory: slice out of bounds
+Stack trace:
+  in managed-memory-methods.main
+  in _start
+```
+
+<!-- test: bounds-valid-operations -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.managed.grow(8)
+  arr.managed.setLength(4)
+  arr.managed.set(0, 10)
+  arr.managed.set(1, 20)
+  arr.managed.set(2, 30)
+  arr.managed.set(3, 40)
+  var sum = arr.managed.get(0) + arr.managed.get(1) + arr.managed.get(2) + arr.managed.get(3)
+  return sum
+end 'main'
+```
+```exitcode
+100
+```
+
+<!-- test: bounds-negative-index -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(1)
+  arr.push(2)
+  arr.push(3)
+  arr.push(4)
+  var v = arr.managed.get(0 - 1)
+  return v
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+__ManagedMemory: index out of bounds
+Stack trace:
+  in managed-memory-methods.main
+  in _start
 ```

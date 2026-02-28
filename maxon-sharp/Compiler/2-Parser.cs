@@ -6570,7 +6570,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         TrySkipArgLabel();
         var newLen = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var op = new MaxonFieldAssignOp(selfValue, "__ManagedMemory", "length", newLen);
+        var op = new MaxonManagedMemSetLengthOp(selfValue, newLen);
         _currentBlock!.AddOp(op);
         return (true, null);
       }

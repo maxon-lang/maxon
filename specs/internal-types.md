@@ -33,20 +33,22 @@ end 'MyBuffer'
 
 ### __ManagedMemory Methods
 
+All methods that access buffer elements perform runtime bounds checking and panic on out-of-bounds access.
+
 Instance methods:
 - `length()` returns int — element count
 - `capacity()` returns int — allocated capacity
 - `elementSize()` returns int — bytes per element
-- `setLength(n)` — set element count
-- `get(index)` returns Element — read element at index
-- `set(index, value)` — write element at index
-- `grow(newCapacity)` — grow buffer via realloc
-- `shiftRight(index, count)` — shift elements right
-- `shiftLeft(index, count)` — shift elements left
-- `byteAt(index)` returns int — read single byte
-- `setByte(index, value)` — write single byte
+- `setLength(n)` — set element count (panics if n > capacity)
+- `get(index)` returns Element — read element at index (panics if index >= length)
+- `set(index, value)` — write element at index (panics if index >= capacity)
+- `grow(newCapacity)` — grow buffer via realloc (panics if newCapacity < current capacity)
+- `shiftRight(index, count)` — shift elements right (panics if index or index+count >= capacity)
+- `shiftLeft(index, count)` — shift elements left (panics if index or index+count >= capacity)
+- `byteAt(index)` returns int — read single byte (panics if index >= length * elementSize)
+- `setByte(index, value)` — write single byte (panics if index >= length * elementSize)
 - `concat(other)` returns __ManagedMemory — concatenate buffers
-- `slice(start, end)` returns __ManagedMemory — create slice [start, end)
+- `slice(start, end)` returns __ManagedMemory — create slice [start, end) (panics if end > length or start > end)
 - `toCString()` returns int — raw buffer pointer
 - `makeCharFromBytes(pos, len)` returns int — extract character
 

@@ -902,6 +902,14 @@ public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapac
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewCapacity.ToString()];
 }
 
+// Set length of managed memory with capacity validation
+public class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonValue newLength) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_set_length";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue NewLength { get; } = newLength;
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewLength.ToString()];
+}
+
 // Shift elements right/left in managed buffer
 // Element size is read from the managed struct's element_size field at runtime.
 public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, MaxonValue count, bool shiftRight) : MaxonOp {

@@ -110,6 +110,19 @@ public partial class X86CodeEmitter {
       "mm_scope_exit: allocation has non-zero refcount\n\0"u8.ToArray());
     DefineSymdata("__mm_panic_decref_negative",
       "mm_decref: refcount went negative\n\0"u8.ToArray());
+    // Panic strings for __ManagedMemory bounds checks
+    DefineSymdata("__mm_panic_index_oob",
+      "__ManagedMemory: index out of bounds\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_byte_oob",
+      "__ManagedMemory: byte index out of bounds\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_shift_oob",
+      "__ManagedMemory: shift out of bounds\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_slice_oob",
+      "__ManagedMemory: slice out of bounds\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_setlength_oob",
+      "__ManagedMemory: setLength exceeds capacity\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_grow_shrink",
+      "__ManagedMemory: grow cannot shrink capacity\n\0"u8.ToArray());
 
     EmitMmTracePrintTag();
     EmitMmTracePrintHex();
