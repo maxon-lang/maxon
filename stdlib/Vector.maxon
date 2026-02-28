@@ -17,23 +17,23 @@ export type Vector uses Element implements BuiltinArrayLiteral, Iterable with El
 
   /// Get the fixed size of the vector
   export function count() returns Count
-    return __managed_memory_len(managed)
+    return managed.length()
   end 'count'
 
   /// Get element at index, throws if out of bounds
   export function get(index Index) returns Element throws ArrayError
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if index >= len 'upper'
       throw ArrayError.indexOutOfBounds
     end 'upper'
-    return __managed_memory_get_unchecked(managed, index)
+    return managed.get(index)
   end 'get'
 
   /// Set element at index (no-op if index out of bounds)
   export function set(index Index, value Element)
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if index < len 'inbounds'
-      __managed_memory_set_at(managed, index, value)
+      managed.set(index, value)
     end 'inbounds'
   end 'set'
 
@@ -43,11 +43,11 @@ export type Vector uses Element implements BuiltinArrayLiteral, Iterable with El
 
   /// Get next element in iteration, throws when exhausted
   export function next() returns Element throws IterationError
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if iterIndex >= len 'done'
       throw IterationError.exhausted
     end 'done'
-    var value = __managed_memory_get_unchecked(managed, iterIndex)
+    var value = managed.get(iterIndex)
     iterIndex = iterIndex + 1
     return value
   end 'next'

@@ -848,7 +848,7 @@ public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueK
 // Managed memory operations (for __ManagedMemory builtin intrinsics)
 // ============================================================================
 
-// Get element at index from managed buffer: __managed_memory_get_unchecked(managed, index)
+// Get element at index from managed buffer: managed.get(index)
 // Element size is read from the managed struct's element_size field at runtime.
 // When IsStructElement is true, the element data is stored inline in the buffer
 // and the result is a pointer to the element's location (not a loaded value).
@@ -869,7 +869,7 @@ public class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue index, Ma
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
 }
 
-// Set element at index in managed buffer: __managed_memory_set_at(managed, index, value)
+// Set element at index in managed buffer: managed.set(index, value)
 // Element size is read from the managed struct's element_size field at runtime.
 // When IsStructElement is true, the value is a pointer to struct data and the
 // full struct is copied inline into the buffer (not just the pointer).
@@ -883,7 +883,7 @@ public class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue index, Ma
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
 }
 
-// Create a new heap-allocated managed memory: __managed_memory_create(count, elemSize)
+// Create a new heap-allocated managed memory: __ManagedMemory.create(count, elemSize)
 public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_create";
   public MaxonValue Count { get; } = count;
@@ -893,7 +893,7 @@ public class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) : MaxonO
   public override IReadOnlyList<string> PrintableOperands => [Count.ToString()];
 }
 
-// Grow managed memory to new capacity: __managed_memory_grow(managed, newCap)
+// Grow managed memory to new capacity: managed.grow(newCap)
 // Element size is read from the managed struct's element_size field at runtime.
 public class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue newCapacity) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_grow";
@@ -913,7 +913,7 @@ public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, 
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
 }
 
-// Get byte at index in managed buffer: __managed_memory_byte_at(managed, index) -> byte
+// Get byte at index in managed buffer: managed.byteAt(index)
 public class MaxonManagedMemByteGetOp(MaxonValue managedStruct, MaxonValue index) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_byte_get";
   public MaxonValue ManagedStruct { get; } = managedStruct;
@@ -923,7 +923,7 @@ public class MaxonManagedMemByteGetOp(MaxonValue managedStruct, MaxonValue index
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
 }
 
-// Set byte at index in managed buffer: __managed_memory_set_byte(managed, index, value)
+// Set byte at index in managed buffer: managed.setByte(index, value)
 public class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValue index, MaxonValue value) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_byte_set";
   public MaxonValue ManagedStruct { get; } = managedStruct;
@@ -1060,7 +1060,7 @@ public class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonV
 // Creates a new empty chain data structure
 public class MaxonChainCreateOp : MaxonOp {
   public override string Mnemonic => "maxon.chain_create";
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "Chain");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__Chain");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
@@ -1071,7 +1071,7 @@ public class MaxonChainInsertValueOp(MaxonValue chain, MaxonValue value, bool at
   public MaxonValue Value { get; } = value;
   public bool AtHead { get; } = atHead;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "ChainNode");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ChainNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Value.ToString()];
 }
@@ -1084,7 +1084,7 @@ public class MaxonChainInsertRelativeValueOp(MaxonValue chain, MaxonValue target
   public MaxonValue Value { get; } = value;
   public bool After { get; } = after;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "ChainNode");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ChainNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Target.ToString(), Value.ToString()];
 }

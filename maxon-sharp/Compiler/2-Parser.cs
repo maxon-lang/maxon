@@ -516,29 +516,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Register __ManagedMemory opaque struct type (buffer pointer, length, capacity, element_size)
     if (!_typeRegistry.ContainsKey("__ManagedMemory")) {
-      _typeRegistry["__ManagedMemory"] = new MlirStructType("__ManagedMemory", [
+      var mmType = new MlirStructType("__ManagedMemory", [
         new MlirStructField("buffer", MlirType.I64, false, true),
         new MlirStructField("length", MlirType.I64, false, true),
         new MlirStructField("capacity", MlirType.I64, false, true),
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
+      mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
+      _typeRegistry["__ManagedMemory"] = mmType;
     }
 
     // Register Chain as builtin type: [head:i64, tail:i64, count:i64]
-    if (!_typeRegistry.ContainsKey("Chain")) {
-      var chainType = new MlirStructType("Chain", [
+    if (!_typeRegistry.ContainsKey("__Chain")) {
+      var chainType = new MlirStructType("__Chain", [
         new MlirStructField("head", MlirType.I64, false, true),
         new MlirStructField("tail", MlirType.I64, false, true),
         new MlirStructField("count", MlirType.I64, false, true),
       ]);
       chainType.AssociatedTypeNames.Add("Element");
       chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, and element count.\n\nSee the `chain` stdlib module for operations.";
-      _typeRegistry["Chain"] = chainType;
+      _typeRegistry["__Chain"] = chainType;
     }
 
     // Register ChainNode as builtin type: [next:i64, prev:i64, chain:i64, value:i64]
-    if (!_typeRegistry.ContainsKey("ChainNode")) {
-      var nodeType = new MlirStructType("ChainNode", [
+    if (!_typeRegistry.ContainsKey("__ChainNode")) {
+      var nodeType = new MlirStructType("__ChainNode", [
         new MlirStructField("next", MlirType.I64, false, true),
         new MlirStructField("prev", MlirType.I64, false, true),
         new MlirStructField("chain", MlirType.I64, false, true),
@@ -546,7 +548,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ]);
       nodeType.AssociatedTypeNames.Add("Element");
       nodeType.DocString = "Compiler builtin node for a `Chain` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning chain, and the element value.";
-      _typeRegistry["ChainNode"] = nodeType;
+      _typeRegistry["__ChainNode"] = nodeType;
     }
 
     SeedFromModule(seedModule, module);
@@ -625,25 +627,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void EnsureManagedMemoryType() {
     if (!_typeRegistry.ContainsKey("__ManagedMemory")) {
-      _typeRegistry["__ManagedMemory"] = new MlirStructType("__ManagedMemory", [
+      var mmType = new MlirStructType("__ManagedMemory", [
         new MlirStructField("buffer", MlirType.I64, false, true),
         new MlirStructField("length", MlirType.I64, false, true),
         new MlirStructField("capacity", MlirType.I64, false, true),
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
+      mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
+      _typeRegistry["__ManagedMemory"] = mmType;
     }
-    if (!_typeRegistry.ContainsKey("Chain")) {
-      var chainType = new MlirStructType("Chain", [
+    if (!_typeRegistry.ContainsKey("__Chain")) {
+      var chainType = new MlirStructType("__Chain", [
         new MlirStructField("head", MlirType.I64, false, true),
         new MlirStructField("tail", MlirType.I64, false, true),
         new MlirStructField("count", MlirType.I64, false, true),
       ]);
       chainType.AssociatedTypeNames.Add("Element");
       chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, and element count.\n\nSee the `chain` stdlib module for operations.";
-      _typeRegistry["Chain"] = chainType;
+      _typeRegistry["__Chain"] = chainType;
     }
-    if (!_typeRegistry.ContainsKey("ChainNode")) {
-      var nodeType = new MlirStructType("ChainNode", [
+    if (!_typeRegistry.ContainsKey("__ChainNode")) {
+      var nodeType = new MlirStructType("__ChainNode", [
         new MlirStructField("next", MlirType.I64, false, true),
         new MlirStructField("prev", MlirType.I64, false, true),
         new MlirStructField("chain", MlirType.I64, false, true),
@@ -651,7 +655,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ]);
       nodeType.AssociatedTypeNames.Add("Element");
       nodeType.DocString = "Compiler builtin node for a `Chain` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning chain, and the element value.";
-      _typeRegistry["ChainNode"] = nodeType;
+      _typeRegistry["__ChainNode"] = nodeType;
     }
   }
 
@@ -1434,15 +1438,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var associatedTypeNames = ParseUsesClause();
     var (conformingInterfaces, conformanceTypeParams) = ParseConformanceClause();
     var whereConstraints = ParseWhereClause(associatedTypeNames);
-
-    // Builtin* interfaces are reserved for stdlib types
-    if (!_isStdlib) {
-      var builtinInterface = conformingInterfaces.FirstOrDefault(i => i.StartsWith("Builtin"));
-      if (builtinInterface != null)
-        throw new CompileError(ErrorCode.SemanticTypeMismatch,
-          $"Interface '{builtinInterface}' can only be implemented by stdlib types",
-          typeNameToken.Line, typeNameToken.Column);
-    }
 
     SkipNewlines();
 
@@ -4913,9 +4908,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (structTypeName != null) {
           var methodFieldName = _tokens[_pos + 2].Value;
 
-          // Try builtin Chain/ChainNode method interception before normal method resolution
+          // Try builtin type method interception before normal method resolution
           var baseTypeName = ResolveBaseTypeName(structTypeName);
-          if (baseTypeName is "Chain" or "ChainNode") {
+          if (IsBuiltinMethodType(baseTypeName)) {
             Advance(); // consume variable name
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
@@ -4925,7 +4920,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
               _ => throw new InvalidOperationException()
             };
-            var (handled, _) = TryEmitBuiltinChainMethod(structTypeName, methodFieldName, structVal);
+            var (handled, _) = TryEmitBuiltinTypeMethod(structTypeName, methodFieldName, structVal);
             if (handled) {
               return;
             }
@@ -5057,13 +5052,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var fieldToken = ExpectFieldName();
 
       if (Check(TokenType.LeftParen)) {
-        // Try builtin Chain/ChainNode method
+        // Try builtin type method
         var baseNestedType = ResolveBaseTypeName(currentStructTypeName);
-        if (baseNestedType is "Chain" or "ChainNode") {
+        if (IsBuiltinMethodType(baseNestedType)) {
           Advance(); // consume '('
-          var (handled, _) = TryEmitBuiltinChainMethod(currentStructTypeName, fieldToken.Value, currentValue);
+          var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, fieldToken.Value, currentValue);
           if (handled) {
-            // Builtin chain methods don't need discarded-result tracking
+            // Builtin type methods don't need discarded-result tracking
             return;
           }
           throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -5109,14 +5104,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       EmitFieldAssignment(selfInfo.StructTypeName!, selfVal, fieldToken, selfToken);
     } else if (Check(TokenType.LeftParen)) {
       // self.method(...)
-      // Try builtin Chain/ChainNode method
+      // Try builtin type method
       var baseSelfType = ResolveBaseTypeName(selfInfo.StructTypeName!);
-      if (baseSelfType is "Chain" or "ChainNode") {
+      if (IsBuiltinMethodType(baseSelfType)) {
         Advance(); // consume '('
         var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
-        var (handled, _) = TryEmitBuiltinChainMethod(selfInfo.StructTypeName!, fieldToken.Value, selfVal);
+        var (handled, _) = TryEmitBuiltinTypeMethod(selfInfo.StructTypeName!, fieldToken.Value, selfVal);
         if (handled) {
-          // Builtin chain methods don't need discarded-result tracking
+          // Builtin type methods don't need discarded-result tracking
           return;
         }
         throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -5142,13 +5137,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var nextFieldToken = ExpectFieldName();
 
         if (Check(TokenType.LeftParen)) {
-          // Try builtin Chain/ChainNode method
+          // Try builtin type method
           var baseChainType = ResolveBaseTypeName(currentStructTypeName);
-          if (baseChainType is "Chain" or "ChainNode") {
+          if (IsBuiltinMethodType(baseChainType)) {
             Advance(); // consume '('
-            var (handled, _) = TryEmitBuiltinChainMethod(currentStructTypeName, nextFieldToken.Value, currentValue);
+            var (handled, _) = TryEmitBuiltinTypeMethod(currentStructTypeName, nextFieldToken.Value, currentValue);
             if (handled) {
-              // Builtin chain methods don't need discarded-result tracking
+              // Builtin type methods don't need discarded-result tracking
               return;
             }
             throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -6006,7 +6001,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseCallStatement() {
     var token = Advance(); // consume identifier
 
-    // Handle compiler builtins (__managed_memory_*, __cstring_*, __make_char_*)
+    // Handle stdlib-only compiler builtins (__cstring_*, __file_*, __process_*, __map_*, etc.)
     if (IsCompilerBuiltin(token.Value)) {
       if (!_isStdlib)
         throw new CompileError(ErrorCode.ParserCompilerBuiltinNotInStdlib,
@@ -6046,183 +6041,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   public record BuiltinInfo(string HelpText, Func<Parser, MaxonValue?> Handler);
 
   public static readonly Dictionary<string, BuiltinInfo> CompilerBuiltins = new() {
-    ["__managed_memory_len"] = new(
-      "Returns the length (number of elements) of a managed memory buffer.\n\n`__managed_memory_len(memory) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_capacity"] = new(
-      "Returns the capacity of a managed memory buffer.\n\n`__managed_memory_capacity(memory) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_element_size"] = new(
-      "Returns the element size (in bytes) of a managed memory buffer.\n\n`__managed_memory_element_size(memory) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonFieldAccessOp(managed, "__ManagedMemory", "element_size", MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_set_length"] = new(
-      "Sets the length of a managed memory buffer.\n\n`__managed_memory_set_length(memory, length)`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var newLen = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonFieldAssignOp(managed, "__ManagedMemory", "length", newLen);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__managed_memory_get_unchecked"] = new(
-      "Gets the element at the given index without bounds checking.\n\n`__managed_memory_get_unchecked(memory, index) returns Element`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGetOp(managed, index, p.GetElementKind());
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_set_at"] = new(
-      "Sets the element at the given index in a managed memory buffer.\n\n`__managed_memory_set_at(memory, index, value)`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var value = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var elementKind = p.GetElementKind();
-        var op = new MaxonManagedMemSetOp(managed, index, value, elementKind);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__managed_memory_create"] = new(
-      "Allocates a new heap-backed managed memory buffer with the given initial capacity.\n\n`__managed_memory_create(capacity, element_size) returns __ManagedMemory`",
-      p => {
-        var count = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        int elementSize = p.ParseElementSizeConstant();
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemCreateOp(count, elementSize);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_grow"] = new(
-      "Grows a managed memory buffer to a new capacity using realloc.\n\n`__managed_memory_grow(memory, new_capacity)`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var newCap = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemGrowOp(managed, newCap);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__managed_memory_shift_right"] = new(
-      "Shifts elements right in the buffer starting at the given index, creating a gap.\n\n`__managed_memory_shift_right(memory, index, count)`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var count = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemShiftOp(managed, index, count, shiftRight: true);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__managed_memory_shift_left"] = new(
-      "Shifts elements left in the buffer starting at the given index, closing a gap.\n\n`__managed_memory_shift_left(memory, index, count)`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var count = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemShiftOp(managed, index, count, shiftRight: false);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__managed_memory_byte_at"] = new(
-      "Gets a single byte at the given index, zero-extended to int.\n\n`__managed_memory_byte_at(memory, index) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemByteGetOp(managed, index);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_set_byte"] = new(
-      "Sets a single byte at the given index in a managed memory buffer.\n\n`__managed_memory_set_byte(memory, index, value)`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var value = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemByteSetOp(managed, index, value);
-        p._currentBlock!.AddOp(op);
-        return null;
-      }),
-    ["__managed_memory_concat"] = new(
-      "Concatenates two managed memory buffers into a new buffer.\n\n`__managed_memory_concat(lhs, rhs) returns __ManagedMemory`",
-      p => {
-        var lhs = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var rhs = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemConcatOp(lhs, rhs);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_slice"] = new(
-      "Creates a new buffer from a slice of the source buffer [start, end).\n\n`__managed_memory_slice(memory, start, end) returns __ManagedMemory`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var start = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var end = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemSliceOp(managed, start, end);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__managed_memory_to_cstring"] = new(
-      "Returns the raw buffer pointer from a managed memory struct as a C string.\n\n`__managed_memory_to_cstring(memory) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonManagedToCStringOp(managed);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__cstring_to_managed"] = new(
-      "Converts a null-terminated C string pointer to a managed memory buffer.\n\n`__cstring_to_managed(cstring_ptr) returns __ManagedMemory`",
-      p => {
-        var cstrPtr = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonCStringToManagedOp(cstrPtr);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
     ["__cstring_write_stdout"] = new(
       "Writes a null-terminated C string to stdout.\n\n`__cstring_write_stdout(cstring_ptr) returns int`",
       p => {
@@ -6238,19 +6056,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var cstrPtr = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
         var op = new MaxonCStringWriteStderrOp(cstrPtr);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["__make_char_from_bytes"] = new(
-      "Creates a Character value from bytes in a managed memory buffer at the given position.\n\n`__make_char_from_bytes(memory, position, length) returns int`",
-      p => {
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var pos = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var len = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonMakeCharFromBytesOp(managed, pos, len);
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
@@ -6467,7 +6272,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     });
   }
 
-  /// Returns the base source type name for a type (e.g., "IntChain" -> "Chain").
+  /// Returns the base source type name for a type (e.g., "IntChain" -> "__Chain").
   /// Returns the type name itself if it's not an alias.
   private string ResolveBaseTypeName(string typeName) {
     return _typeAliasSources.TryGetValue(typeName, out var source) ? source : typeName;
@@ -6498,19 +6303,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// Returns the concrete ChainNode alias name, or "ChainNode" if no Element type can be resolved.
   private string EnsureConcreteChainNodeAlias(string chainTypeName) {
     if (!_typeRegistry.TryGetValue(chainTypeName, out var typeInfo) || typeInfo is not MlirStructType chainStruct)
-      return "ChainNode";
+      return "__ChainNode";
     if (!chainStruct.TypeParams.TryGetValue("Element", out var elemType))
-      return "ChainNode";
+      return "__ChainNode";
 
     var elemName = MlirType.FormatAsSourceName(elemType);
     var aliasName = $"__ChainNode_{elemName}";
 
     if (!_typeRegistry.ContainsKey(aliasName)) {
-      var nodeBase = (MlirStructType)_typeRegistry["ChainNode"];
-      RegisterConcreteTypeAlias(aliasName, "ChainNode", nodeBase,
+      var nodeBase = (MlirStructType)_typeRegistry["__ChainNode"];
+      RegisterConcreteTypeAlias(aliasName, "__ChainNode", nodeBase,
         new Dictionary<string, MlirType> { ["Element"] = elemType });
     }
-    _typeAliasSources.TryAdd(aliasName, "ChainNode");
+    _typeAliasSources.TryAdd(aliasName, "__ChainNode");
     return aliasName;
   }
 
@@ -6529,7 +6334,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinChainMethod(string structTypeName, string methodName, MaxonValue selfValue) {
     var baseType = ResolveBaseTypeName(structTypeName);
 
-    if (baseType == "Chain") {
+    if (baseType == "__Chain") {
       var valueKind = GetChainElementType(structTypeName);
       var elementKind = GetChainElementKind(structTypeName);
       var concreteNodeAlias = EnsureConcreteChainNodeAlias(structTypeName);
@@ -6682,7 +6487,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
-    if (baseType == "ChainNode") {
+    if (baseType == "__ChainNode") {
       var valueKind = GetChainElementType(structTypeName);
       var elementKind = GetChainElementKind(structTypeName);
       switch (methodName) {
@@ -6720,6 +6525,188 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     return (false, null); // not a builtin chain method
+  }
+
+  private static bool IsBuiltinMethodType(string baseTypeName) =>
+    baseTypeName is "__Chain" or "__ChainNode" or "__ManagedMemory";
+
+  /// Unified dispatch for builtin type instance methods.
+  /// Routes to Chain/ChainNode or ManagedMemory handlers based on the resolved base type.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinTypeMethod(
+    string structTypeName, string methodName, MaxonValue selfValue) {
+    var baseType = ResolveBaseTypeName(structTypeName);
+    if (baseType is "__Chain" or "__ChainNode")
+      return TryEmitBuiltinChainMethod(structTypeName, methodName, selfValue);
+    if (baseType == "__ManagedMemory")
+      return TryEmitBuiltinManagedMemoryMethod(methodName, selfValue);
+    throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
+  }
+
+  /// Emits builtin __ManagedMemory instance method calls as MaxonOps.
+  /// Each case produces the same op that the corresponding CompilerBuiltins intrinsic creates.
+  /// The opening '(' has already been consumed.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedMemoryMethod(
+    string methodName, MaxonValue selfValue) {
+    switch (methodName) {
+      case "length": {
+        Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "length", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "capacity": {
+        Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "elementSize": {
+        Expect(TokenType.RightParen);
+        var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "element_size", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "setLength": {
+        TrySkipArgLabel();
+        var newLen = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonFieldAssignOp(selfValue, "__ManagedMemory", "length", newLen);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+      case "get": {
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemGetOp(selfValue, index, GetElementKind());
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "set": {
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var value = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemSetOp(selfValue, index, value, GetElementKind());
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+      case "grow": {
+        TrySkipArgLabel();
+        var newCap = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemGrowOp(selfValue, newCap);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+      case "shiftRight": {
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var count = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: true);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+      case "shiftLeft": {
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var count = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: false);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+      case "byteAt": {
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemByteGetOp(selfValue, index);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "setByte": {
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var value = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemByteSetOp(selfValue, index, value);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+      case "concat": {
+        TrySkipArgLabel();
+        var other = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemConcatOp(selfValue, other);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "slice": {
+        TrySkipArgLabel();
+        var start = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var end = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemSliceOp(selfValue, start, end);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "toCString": {
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedToCStringOp(selfValue);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "makeCharFromBytes": {
+        TrySkipArgLabel();
+        var pos = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var len = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonMakeCharFromBytesOp(selfValue, pos, len);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedMemory static method calls (create, fromCString).
+  /// The opening '(' has already been consumed.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedMemoryStaticMethod(string methodName) {
+    switch (methodName) {
+      case "create": {
+        TrySkipArgLabel();
+        var count = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var elementSize = ParseElementSizeConstant();
+        Expect(TokenType.RightParen);
+        var op = new MaxonManagedMemCreateOp(count, elementSize);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "fromCString": {
+        TrySkipArgLabel();
+        var cstrPtr = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonCStringToManagedOp(cstrPtr);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+    }
+    return (false, null);
   }
 
   /// <summary>
@@ -9149,6 +9136,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
 
+        // Check for __ManagedMemory static methods
+        if (ResolveBaseTypeName(token.Value) == "__ManagedMemory" &&
+            PeekNext().Value is "create" or "fromCString") {
+          Advance(); // consume '.'
+          var staticMethodToken = Advance(); // consume method name
+          Expect(TokenType.LeftParen);
+          var (handled, staticResult) = TryEmitBuiltinManagedMemoryStaticMethod(staticMethodToken.Value);
+          if (handled && staticResult != null)
+            return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Unknown static method '{staticMethodToken.Value}' on __ManagedMemory",
+            staticMethodToken.Line, staticMethodToken.Column);
+        }
+
         // Check for compile-time constant
         if (_topLevelConstants.TryGetValue(qualifiedName, out var constVal)) {
           Advance(); // consume '.'
@@ -9608,12 +9609,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Check for method call: expr.method(...)
       if (Check(TokenType.LeftParen)) {
-        // Try builtin Chain/ChainNode method
+        // Try builtin type method
         var baseExprType = ResolveBaseTypeName(userTypeName);
-        if (baseExprType is "Chain" or "ChainNode") {
+        if (IsBuiltinMethodType(baseExprType)) {
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
-          var (handled, chainResult) = TryEmitBuiltinChainMethod(userTypeName, fieldName, structVal);
+          var (handled, chainResult) = TryEmitBuiltinTypeMethod(userTypeName, fieldName, structVal);
           if (handled) {
             result = new ExprResult.Direct(chainResult ?? structVal);
             continue;
@@ -10366,7 +10367,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Builtin Chain creation: emit MaxonChainCreateOp for zero-init Chain literals
     var baseTypeName = ResolveBaseTypeName(typeName);
-    if (baseTypeName == "Chain") {
+    if (baseTypeName == "__Chain") {
       SkipNewlines();
       Expect(TokenType.RightBrace);
       var op = new MaxonChainCreateOp();

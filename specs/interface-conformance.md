@@ -252,7 +252,7 @@ end 'main'
 42
 ```
 
-<!-- test: error.builtin-interface-stdlib-only -->
+<!-- test: builtin-interface-user-code -->
 ```maxon
 type MyCollection uses Element implements BuiltinArrayLiteral
   var managed __ManagedMemory
@@ -266,6 +266,6 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```maxoncstderr
-error E3005: specs/fragments/interface-conformance/error.builtin-interface-stdlib-only.test:2:6: Interface 'BuiltinArrayLiteral' can only be implemented by stdlib types
+```exitcode
+0
 ```

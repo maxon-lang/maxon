@@ -1,34 +1,58 @@
 ---
 feature: internal-types
 status: stable
-keywords: [internal, opaque, __ManagedMemory, stdlib, restriction]
+keywords: [internal, opaque, __ManagedMemory, __Chain, __ChainNode, builtin]
 category: type-system
 ---
 
-# Internal Types
+# Builtin Types
 
 ## Documentation
 
-### Internal Types
+### Builtin Types
 
-Types starting with an underscore are internal to the standard library and cannot be used in user code. These types provide low-level implementation details that are not part of the public API.
+Types prefixed with `__` are compiler builtin types. They are registered by the compiler and have builtin methods that are intercepted during parsing.
 
-The most common internal type is `__ManagedMemory`, which provides the underlying storage for the stdlib `Array` type. While user code cannot directly use `__ManagedMemory`, it is automatically used behind the scenes when working with arrays.
+The builtin types are:
+- `__ManagedMemory` — heap-backed buffer storage used by `Array`, `String`, and other collections
+- `__Chain` — doubly-linked list container
+- `__ChainNode` — node in a `__Chain`
+- `__ChainError` — error type for chain operations
 
-### Using Arrays in User Code
+### Using __ManagedMemory
 
-User code should use the public `Array` type from the standard library with a type alias:
+`__ManagedMemory` provides low-level heap buffer operations. Most user code should use higher-level types like `Array` or `String`, but `__ManagedMemory` can be used directly for custom collection types.
 
 ```text
 typealias Int = int(i64.min to i64.max)
-typealias IntArray = Array with Int
 
-var arr = IntArray{}
-arr.push(42)
-print(arr.count())
+type MyBuffer uses Element
+  var managed __ManagedMemory
+end 'MyBuffer'
 ```
 
-The internal `__ManagedMemory` type is used internally by the `Array` implementation but is not accessible to user code.
+### __ManagedMemory Methods
+
+Instance methods:
+- `length()` returns int — element count
+- `capacity()` returns int — allocated capacity
+- `elementSize()` returns int — bytes per element
+- `setLength(n)` — set element count
+- `get(index)` returns Element — read element at index
+- `set(index, value)` — write element at index
+- `grow(newCapacity)` — grow buffer via realloc
+- `shiftRight(index, count)` — shift elements right
+- `shiftLeft(index, count)` — shift elements left
+- `byteAt(index)` returns int — read single byte
+- `setByte(index, value)` — write single byte
+- `concat(other)` returns __ManagedMemory — concatenate buffers
+- `slice(start, end)` returns __ManagedMemory — create slice [start, end)
+- `toCString()` returns int — raw buffer pointer
+- `makeCharFromBytes(pos, len)` returns int — extract character
+
+Static methods:
+- `__ManagedMemory.create(capacity, elementSize)` returns __ManagedMemory
+- `__ManagedMemory.fromCString(ptr)` returns __ManagedMemory
 
 ## Tests
 

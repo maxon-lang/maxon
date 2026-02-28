@@ -8,9 +8,9 @@ category: collections
 
 ## Documentation
 
-A `Chain` is a doubly linked list with O(1) insertion, removal, and node-level access. Unlike `List`, which provides index-based access, `Chain` exposes node handles (`ChainNode`) that allow direct traversal and manipulation.
+A `__Chain` is a doubly linked list with O(1) insertion, removal, and node-level access. Unlike `List`, which provides index-based access, `__Chain` exposes node handles (`__ChainNode`) that allow direct traversal and manipulation.
 
-Chain owns its nodes via a parent-child memory hierarchy. Nodes are accessed through `ChainNode` handles with refcount-based lifetime.
+__Chain owns its nodes via a parent-child memory hierarchy. Nodes are accessed through `__ChainNode` handles with refcount-based lifetime.
 
 ### Creating a Chain
 
@@ -18,7 +18,7 @@ Create an empty chain with an explicit element type:
 
 ```text
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 var chain = IntChain{}
 ```
 
@@ -48,35 +48,35 @@ end 'err2'
 
 ### Methods
 
-#### insertFirst(value Element) returns ChainNode
+#### insertFirst(value Element) returns __ChainNode
 
 Insert a value at the front. Returns a handle to the new node.
 
-#### insertLast(value Element) returns ChainNode
+#### insertLast(value Element) returns __ChainNode
 
 Insert a value at the back. Returns a handle to the new node.
 
-#### insertAfter(target ChainNode, value Element) returns ChainNode
+#### insertAfter(target __ChainNode, value Element) returns __ChainNode
 
 Insert a value after the given node. Returns a handle to the new node.
 
-#### insertBefore(target ChainNode, value Element) returns ChainNode
+#### insertBefore(target __ChainNode, value Element) returns __ChainNode
 
 Insert a value before the given node. Returns a handle to the new node.
 
-#### head() returns ChainNode throws ChainError
+#### head() returns __ChainNode throws __ChainError
 
-Get a handle to the first node. Throws `ChainError.empty` if the chain is empty.
+Get a handle to the first node. Throws `__ChainError.empty` if the chain is empty.
 
-#### tail() returns ChainNode throws ChainError
+#### tail() returns __ChainNode throws __ChainError
 
-Get a handle to the last node. Throws `ChainError.empty` if the chain is empty.
+Get a handle to the last node. Throws `__ChainError.empty` if the chain is empty.
 
-#### remove(node ChainNode) returns Element
+#### remove(node __ChainNode) returns Element
 
 Remove a node from the chain, returning its value and freeing the node.
 
-#### detach(node ChainNode)
+#### detach(node __ChainNode)
 
 Detach a node from the chain without freeing it.
 
@@ -92,7 +92,7 @@ Check if the chain is empty.
 
 Remove all elements, freeing all nodes.
 
-### ChainNode Methods
+### __ChainNode Methods
 
 #### value() returns Element
 
@@ -102,20 +102,20 @@ Get the value stored in this node.
 
 Replace the value stored in this node.
 
-#### next() returns ChainNode throws ChainError
+#### next() returns __ChainNode throws __ChainError
 
-Get the next node. Throws `ChainError.endOfChain` if at the end.
+Get the next node. Throws `__ChainError.endOfChain` if at the end.
 
-#### prev() returns ChainNode throws ChainError
+#### prev() returns __ChainNode throws __ChainError
 
-Get the previous node. Throws `ChainError.endOfChain` if at the beginning.
+Get the previous node. Throws `__ChainError.endOfChain` if at the beginning.
 
 ## Tests
 
 <!-- test: core.create-empty -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -136,7 +136,7 @@ end 'main'
 <!-- test: core.insert-first -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -157,7 +157,7 @@ end 'main'
 <!-- test: core.insert-last -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -178,7 +178,7 @@ end 'main'
 <!-- test: core.insert-first-multiple -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -206,7 +206,7 @@ end 'main'
 <!-- test: core.insert-last-multiple -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -234,7 +234,7 @@ end 'main'
 <!-- test: core.insert-after -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -275,7 +275,7 @@ end 'main'
 <!-- test: core.insert-before -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -316,7 +316,7 @@ end 'main'
 <!-- test: core.remove -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -346,7 +346,7 @@ end 'main'
 <!-- test: core.detach -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -377,7 +377,7 @@ end 'main'
 <!-- test: core.count -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -411,7 +411,7 @@ end 'main'
 <!-- test: node.value -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -430,7 +430,7 @@ end 'main'
 <!-- test: node.next-prev -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -474,7 +474,7 @@ end 'main'
 <!-- test: node.set-value -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -501,7 +501,7 @@ end 'main'
 
 <!-- test: node.set-value-old-survives -->
 ```maxon
-typealias StringChain = Chain with String
+typealias StringChain = __Chain with String
 
 function main() returns ExitCode
   var chain = StringChain{}
@@ -524,7 +524,7 @@ replacement!!!!!!!!!!!!!!
 <!-- test: core.clear -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -556,7 +556,7 @@ end 'main'
 <!-- test: core.head-empty-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -578,7 +578,7 @@ caught
 <!-- test: core.tail-empty-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -600,7 +600,7 @@ caught
 <!-- test: node.next-end-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -630,7 +630,7 @@ caught
 <!-- test: node.prev-begin-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -660,7 +660,7 @@ caught
 <!-- test: core.reinsert-first -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -701,7 +701,7 @@ end 'main'
 <!-- test: core.reinsert-last -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -742,7 +742,7 @@ end 'main'
 <!-- test: core.remove-head -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -777,7 +777,7 @@ end 'main'
 <!-- test: core.remove-tail -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}
@@ -812,7 +812,7 @@ end 'main'
 <!-- test: core.remove-all -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntChain = Chain with Integer
+typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
   var chain = IntChain{}

@@ -2633,7 +2633,7 @@ format_float(value float) String // Format float as string
 
 ### List
 
-`List` is a generic doubly linked list backed by `Chain` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
+`List` is a generic doubly linked list backed by `__Chain` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
 
 **Creating a List**
 

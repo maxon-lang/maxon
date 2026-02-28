@@ -10,7 +10,7 @@ category: collections
 
 A `List` is a doubly linked list collection. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
 
-Internally, List is backed by a `Chain` — a doubly linked chain of nodes that supports O(1) insertion and removal at both ends.
+Internally, List is backed by a `__Chain` — a doubly linked chain of nodes that supports O(1) insertion and removal at both ends.
 
 ### Creating a List
 
@@ -555,21 +555,21 @@ hello world!!!!!!!!!!!!!!
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
     scope_enter stdlib.List.removeFirst (depth=2)
-    incref ChainNode rc=1
-    incref ChainNode rc=2
+    incref __ChainNode rc=1
+    incref __ChainNode rc=2
     move String
-    decref ChainNode rc=1
+    decref __ChainNode rc=1
     incref String rc=1
     move String
-    decref ChainNode rc=0
-    decref ChainNode rc=0
+    decref __ChainNode rc=0
+    decref __ChainNode rc=0
     scope_exit stdlib.List.removeFirst (0 owned)
   incref String rc=2
   alloc String rc=0
@@ -584,10 +584,10 @@ hello world!!!!!!!!!!!!!!
   decref String rc=1
   decref String rc=0
   scope_exit list.testRemove (4 owned)
-  free ChainNode
+  free __ChainNode
   free __ManagedMemory
   free String
-  free ChainNode
+  free __ChainNode
   free EChain
   free StringList
   free __ManagedMemory
@@ -633,31 +633,31 @@ hello world!!!!!!!!!!!!!!
     incref StringList rc=1
     alloc String rc=0
     alloc_in __ManagedMemory
-    alloc_in ChainNode
+    alloc_in __ChainNode
     move String
     alloc String rc=0
     alloc_in __ManagedMemory
-    alloc_in ChainNode
+    alloc_in __ChainNode
     move String
       scope_enter stdlib.List.removeFirst (depth=3)
-      incref ChainNode rc=1
-      incref ChainNode rc=2
+      incref __ChainNode rc=1
+      incref __ChainNode rc=2
       move String
-      decref ChainNode rc=1
+      decref __ChainNode rc=1
       incref String rc=1
       move String
-      decref ChainNode rc=0
-      decref ChainNode rc=0
+      decref __ChainNode rc=0
+      decref __ChainNode rc=0
       scope_exit stdlib.List.removeFirst (0 owned)
     incref String rc=2
     move String
     decref StringList rc=0
     decref String rc=1
     scope_exit list.testRemove (1 owned)
-    free ChainNode
+    free __ChainNode
     free __ManagedMemory
     free String
-    free ChainNode
+    free __ChainNode
     free EChain
     free StringList
   alloc String rc=0
@@ -705,26 +705,26 @@ end 'main'
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
     scope_enter stdlib.List.clear (depth=2)
     free __ManagedMemory
     free String
-    free ChainNode
+    free __ChainNode
     free __ManagedMemory
     free String
-    free ChainNode
+    free __ChainNode
     free __ManagedMemory
     free String
-    free ChainNode
+    free __ChainNode
     scope_exit stdlib.List.clear (0 owned)
   alloc ToStringBuf rc=0
   alloc String rc=0
@@ -773,26 +773,26 @@ end 'main'
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
     scope_enter stdlib.List.clear (depth=2)
     free __ManagedMemory
     free String
-    free ChainNode
+    free __ChainNode
     free __ManagedMemory
     free String
-    free ChainNode
+    free __ChainNode
     free __ManagedMemory
     free String
-    free ChainNode
+    free __ChainNode
     scope_exit stdlib.List.clear (0 owned)
   alloc ToStringBuf rc=0
   alloc String rc=0
@@ -841,20 +841,20 @@ hello world!!!!!!!!!!!!!!
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
     scope_enter list.clearList (depth=2)
       scope_enter stdlib.List.first (depth=3)
-      incref ChainNode rc=1
-      incref ChainNode rc=2
+      incref __ChainNode rc=1
+      incref __ChainNode rc=2
       incref String rc=1
       move String
-      decref ChainNode rc=1
-      decref ChainNode rc=0
+      decref __ChainNode rc=1
+      decref __ChainNode rc=0
       scope_exit stdlib.List.first (0 owned)
     incref String rc=2
       scope_enter stdlib.List.clear (depth=3)
-      free ChainNode
+      free __ChainNode
       scope_exit stdlib.List.clear (1 owned)
     move String
     decref String rc=1
@@ -902,19 +902,19 @@ hello world!!!!!!!!!!!!!!
   incref StringList rc=1
   alloc String rc=0
   alloc_in __ManagedMemory
-  alloc_in ChainNode
+  alloc_in __ChainNode
   move String
     scope_enter stdlib.List.first (depth=2)
-    incref ChainNode rc=1
-    incref ChainNode rc=2
+    incref __ChainNode rc=1
+    incref __ChainNode rc=2
     incref String rc=1
     move String
-    decref ChainNode rc=1
-    decref ChainNode rc=0
+    decref __ChainNode rc=1
+    decref __ChainNode rc=0
     scope_exit stdlib.List.first (0 owned)
   incref String rc=2
     scope_enter stdlib.List.clear (depth=2)
-    free ChainNode
+    free __ChainNode
     scope_exit stdlib.List.clear (1 owned)
   alloc String rc=0
   alloc_in __ManagedMemory

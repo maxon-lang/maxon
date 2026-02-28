@@ -20,7 +20,7 @@ public static partial class MaxonToStandardConversion {
 
   /// Whether a type name refers to a Chain-family type (Chain itself or a concrete alias like EChain).
   private static bool IsChainType(string typeName, Dictionary<string, MlirType>? typeDefs = null) {
-    if (typeName == "Chain") return true;
+    if (typeName == "__Chain") return true;
     if (typeDefs != null && typeDefs.TryGetValue(typeName, out var resolved)
         && resolved is MlirStructType st && st.Name == typeName
         && st.Fields.Count == 3
@@ -31,7 +31,7 @@ public static partial class MaxonToStandardConversion {
 
   /// Whether a type name refers to a ChainNode-family type (ChainNode itself or a concrete alias).
   private static bool IsChainNodeType(string typeName, Dictionary<string, MlirType>? typeDefs = null) {
-    if (typeName == "ChainNode") return true;
+    if (typeName == "__ChainNode") return true;
     if (typeDefs != null && typeDefs.TryGetValue(typeName, out var resolved)
         && resolved is MlirStructType st && st.Name == typeName
         && st.Fields.Count == 4
@@ -65,7 +65,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes) {
 
-    var chainPtr = EmitAlloc(block, ChainDataSize, "Chain");
+    var chainPtr = EmitAlloc(block, ChainDataSize, "__Chain");
 
     // Zero-initialize head, tail, count
     var zero = new StdConstI64Op(0);
@@ -97,7 +97,7 @@ public static partial class MaxonToStandardConversion {
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
 
     // Allocate node as child of chain
-    var nodePtr = EmitAllocIn(block, ChainNodeDataSize, chainPtr, "ChainNode");
+    var nodePtr = EmitAllocIn(block, ChainNodeDataSize, chainPtr, "__ChainNode");
 
     // Zero-initialize link fields (runtime insert will set them)
     var zero = new StdConstI64Op(0);
@@ -155,7 +155,7 @@ public static partial class MaxonToStandardConversion {
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
 
     // Allocate node as child of chain
-    var nodePtr = EmitAllocIn(block, ChainNodeDataSize, chainPtr, "ChainNode");
+    var nodePtr = EmitAllocIn(block, ChainNodeDataSize, chainPtr, "__ChainNode");
 
     // Zero-initialize link fields
     var zero = new StdConstI64Op(0);
@@ -553,7 +553,7 @@ public static partial class MaxonToStandardConversion {
       if (Compiler.MmTrace)
         block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [nodeForIncref], null));
       structVarNames[result.Id] = tempName;
-      structValueTypes[result.Id] = result is MaxonStruct ms ? ms.TypeName : "ChainNode";
+      structValueTypes[result.Id] = result is MaxonStruct ms ? ms.TypeName : "__ChainNode";
     }
 
     return true;

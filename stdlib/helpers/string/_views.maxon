@@ -9,17 +9,17 @@ export type ByteView implements Iterable with Byte
   var _pos Index
 
   export function next() returns Byte throws IterationError
-    if _pos >= __managed_memory_len(_managed) 'at_end'
+    if _pos >= _managed.length() 'at_end'
       throw IterationError.exhausted
     end 'at_end'
-    var b = __managed_memory_byte_at(_managed, _pos)
+    var b = _managed.byteAt(_pos)
     _pos = _pos + 1
     return b
   end 'next'
 
   /// Get the number of bytes
   export function count() returns Count
-    return __managed_memory_len(_managed)
+    return _managed.length()
   end 'count'
 end 'ByteView'
 
@@ -32,7 +32,7 @@ export type CodepointView implements Iterable with Codepoint
   var _pos Index
 
   export function next() returns Codepoint throws IterationError
-    if _pos >= __managed_memory_len(_managed) 'at_end'
+    if _pos >= _managed.length() 'at_end'
       throw IterationError.exhausted
     end 'at_end'
     var cp = utf8DecodeAt(_managed, pos: _pos)
@@ -45,7 +45,7 @@ export type CodepointView implements Iterable with Codepoint
   export function count() returns Count
     var count = 0
     var pos = 0
-    var len = __managed_memory_len(_managed)
+    var len = _managed.length()
     while pos < len 'count_loop'
       var bytes = utf8ByteLengthAt(_managed, pos: pos)
       pos = pos + bytes
@@ -72,7 +72,7 @@ export type UTF16View implements Iterable with CodeUnit16
       return low
     end 'has_pending'
 
-    if _bytePos >= __managed_memory_len(_managed) 'at_end'
+    if _bytePos >= _managed.length() 'at_end'
       throw IterationError.exhausted
     end 'at_end'
 
@@ -95,7 +95,7 @@ export type UTF16View implements Iterable with CodeUnit16
   export function count() returns Count
     var count = 0
     var pos = 0
-    var len = __managed_memory_len(_managed)
+    var len = _managed.length()
     while pos < len 'count_loop'
       var cp = utf8DecodeAt(_managed, pos: pos)
       var bytes = utf8ByteLengthAt(_managed, pos: pos)

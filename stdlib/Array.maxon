@@ -37,41 +37,41 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Create a deep copy of this array with independent backing storage
   export function clone() returns Self
-    var len = __managed_memory_len(managed)
-    var newManaged = __managed_memory_slice(managed, 0, len)
+    var len = managed.length()
+    var newManaged = managed.slice(0, len)
     return Self{managed: newManaged, iterIndex: 0}
   end 'clone'
 
   /// Get the number of elements in the array
   export function count() returns Count
-    return __managed_memory_len(managed)
+    return managed.length()
   end 'count'
 
   /// Get the current capacity (allocated space)
   export function capacity() returns Count
-    return __managed_memory_capacity(managed)
+    return managed.capacity()
   end 'capacity'
 
   /// Check if array is empty
   export function isEmpty() returns bool
-    return __managed_memory_len(managed) == 0
+    return managed.length() == 0
   end 'isEmpty'
 
   /// Get first element, throws if empty
   export function first() returns Element throws ArrayError
-    if __managed_memory_len(managed) == 0 'empty'
+    if managed.length() == 0 'empty'
       throw ArrayError.indexOutOfBounds
     end 'empty'
-    return __managed_memory_get_unchecked(managed, 0)
+    return managed.get(0)
   end 'first'
 
   /// Get last element, throws if empty
   export function last() returns Element throws ArrayError
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if len == 0 'empty'
       throw ArrayError.indexOutOfBounds
     end 'empty'
-    return __managed_memory_get_unchecked(managed, len - 1)
+    return managed.get(len - 1)
   end 'last'
 
   // =========================================================================
@@ -80,18 +80,18 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Get element at index, throws if out of bounds
   export function get(index Index) returns Element throws ArrayError
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if index >= len 'upper'
       throw ArrayError.indexOutOfBounds
     end 'upper'
-    return __managed_memory_get_unchecked(managed, index)
+    return managed.get(index)
   end 'get'
 
   /// Set element at index (no-op if index out of bounds)
   export function set(index Index, value Element)
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if index < len 'inbounds'
-      __managed_memory_set_at(managed, index, value)
+      managed.set(index, value)
     end 'inbounds'
   end 'set'
 
@@ -101,7 +101,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Create a new array from elements [start, endIndex)
   export function slice(start Index, endIndex Index) returns Self
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     var s = start
     var e = endIndex
     // Clamp to valid range
@@ -109,9 +109,9 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
       e = len
     end 'clamp_end'
     if s >= e 'empty_slice'
-      return Self{managed: __managed_memory_slice(managed, 0, 0), iterIndex: 0}
+      return Self{managed: managed.slice(0, 0), iterIndex: 0}
     end 'empty_slice'
-    return Self{managed: __managed_memory_slice(managed, s, e), iterIndex: 0}
+    return Self{managed: managed.slice(s, e), iterIndex: 0}
   end 'slice'
 
   // =========================================================================
@@ -120,7 +120,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Ensure capacity for at least requiredLen elements, growing if needed
   function ensureCapacity(requiredLen Count)
-    var cap = __managed_memory_capacity(managed)
+    var cap = managed.capacity()
     if requiredLen > cap 'grow'
       // Double capacity until sufficient, minimum 4
       var newCap = cap
@@ -130,38 +130,38 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
       while newCap < requiredLen 'double'
         newCap = newCap * 2
       end 'double'
-      __managed_memory_grow(managed, newCap)
+      managed.grow(newCap)
     end 'grow'
   end 'ensureCapacity'
 
   /// Append element to end
   export function push(value Element)
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     ensureCapacity(len + 1)
-    __managed_memory_set_at(managed, len, value)
-    __managed_memory_set_length(managed, len + 1)
+    managed.set(len, value)
+    managed.setLength(len + 1)
   end 'push'
 
   /// Append all elements from another array
   export function append(other Self)
-    let _ = swap managed with __managed_memory_concat(managed, other.managed)
+    let _ = swap managed with managed.concat(other.managed)
   end 'append'
 
   /// Remove and return last element, throws if empty
   export function pop() returns Element throws ArrayError
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if len == 0 'empty'
       throw ArrayError.indexOutOfBounds
     end 'empty'
     var newLen = len - 1
-    var value = __managed_memory_get_unchecked(managed, newLen)
-    __managed_memory_set_length(managed, newLen)
+    var value = managed.get(newLen)
+    managed.setLength(newLen)
     return value
   end 'pop'
 
   /// Insert element at index, shifting elements to the right (clamps index to [0, count])
   export function insert(at Index, value Element)
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     var index = at
 
     // Clamp index to valid range
@@ -174,17 +174,17 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
     // Shift elements right to make room
     if index < len 'shift'
-      __managed_memory_shift_right(managed, index, 1)
+      managed.shiftRight(index, 1)
     end 'shift'
 
     // Insert element and update length
-    __managed_memory_set_at(managed, index, value)
-    __managed_memory_set_length(managed, len + 1)
+    managed.set(index, value)
+    managed.setLength(len + 1)
   end 'insert'
 
   /// Remove and return element at index, shifting elements to the left (throws if out of bounds)
   export function remove(at Index) returns Element throws ArrayError
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
 
     // Check bounds
     if at >= len 'upper'
@@ -192,20 +192,20 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
     end 'upper'
 
     // Save element before shifting
-    var value = __managed_memory_get_unchecked(managed, at)
+    var value = managed.get(at)
 
     // Shift elements left to fill gap
     if at < len - 1 'shift'
-      __managed_memory_shift_left(managed, at, 1)
+      managed.shiftLeft(at, 1)
     end 'shift'
 
-    __managed_memory_set_length(managed, len - 1)
+    managed.setLength(len - 1)
     return value
   end 'remove'
 
   /// Remove all elements from the array (keeps capacity)
   export function clear()
-    __managed_memory_set_length(managed, 0)
+    managed.setLength(0)
   end 'clear'
 
   // =========================================================================
@@ -214,9 +214,9 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Reserve space by ensuring array has at least minCapacity slots
   export function reserve(minCapacity Count)
-    var cap = __managed_memory_capacity(managed)
+    var cap = managed.capacity()
     if minCapacity > cap 'grow'
-      __managed_memory_grow(managed, minCapacity)
+      managed.grow(minCapacity)
     end 'grow'
   end 'reserve'
 
@@ -224,7 +224,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
   /// New elements are zero-initialized
   export function resize(newLength Count)
     reserve(newLength)
-    __managed_memory_set_length(managed, newLength)
+    managed.setLength(newLength)
   end 'resize'
 
   // =========================================================================
@@ -233,11 +233,11 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Get next element in iteration, throws when exhausted
   export function next() returns Element throws IterationError
-    var len = __managed_memory_len(managed)
+    var len = managed.length()
     if iterIndex >= len 'done'
       throw IterationError.exhausted
     end 'done'
-    var value = __managed_memory_get_unchecked(managed, iterIndex)
+    var value = managed.get(iterIndex)
     iterIndex = iterIndex + 1
     return value
   end 'next'
@@ -300,11 +300,11 @@ end 'Array'
 // Uses raw byte-level hashing (djb2) over the managed memory buffer
 export extension Array implements Hashable, Equatable where Element is Hashable and Equatable
   export function hash() returns HashValue
-    var byteLen = __managed_memory_len(managed) * __managed_memory_element_size(managed)
+    var byteLen = managed.length() * managed.elementSize()
     var h = 5381
     var i = 0
     while i < byteLen 'hash_loop'
-      var b = __managed_memory_byte_at(managed, i)
+      var b = managed.byteAt(i)
       h = h * 33 + b
       i = i + 1
     end 'hash_loop'
@@ -312,15 +312,15 @@ export extension Array implements Hashable, Equatable where Element is Hashable 
   end 'hash'
 
   export function equals(other Self) returns bool
-    var selfLen = __managed_memory_len(managed)
-    var otherLen = __managed_memory_len(other.managed)
+    var selfLen = managed.length()
+    var otherLen = other.managed.length()
     if selfLen != otherLen 'len'
       return false
     end 'len'
-    var byteLen = selfLen * __managed_memory_element_size(managed)
+    var byteLen = selfLen * managed.elementSize()
     var i = 0
     while i < byteLen 'cmp'
-      if __managed_memory_byte_at(managed, i) != __managed_memory_byte_at(other.managed, i) 'ne'
+      if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
         return false
       end 'ne'
       i = i + 1
