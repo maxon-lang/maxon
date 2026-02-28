@@ -66,7 +66,7 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
 	  string? allocTag = null) {
-		var rdataLabel = $"__{rdataPrefix}_{resultId}";
+		var rdataLabel = $"__{rdataPrefix}_{NextRdataId()}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(value, rdataLabel, block, result);
 
 		var tempName = $"__{tempPrefix}_{resultId}";
@@ -101,7 +101,7 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result) {
 		// ByteArray layout differs from String: iterIndex at offset 0, managed at offset 8
-		var rdataLabel = $"__bstr_{op.Result.Id}";
+		var rdataLabel = $"__bstr_{NextRdataId()}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result,
 		  System.Text.Encoding.Latin1);
 
@@ -153,7 +153,7 @@ public static partial class MaxonToStandardConversion {
 			if (IsLiteral) {
 				if (string.IsNullOrEmpty(LiteralValue)) continue;
 
-				var litId = MlirContext.Current.NextId();
+				var litId = NextRdataId();
 				var rdataLabel = $"__interp_lit_{litId}";
 				partInfos.Add(EmitRdataLiteral(LiteralValue!, rdataLabel, block, result));
 			} else {
@@ -386,7 +386,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, bufResult, bufVarName, varTypes);
 
 		// Emit format spec as rdata literal
-		var fmtId = MlirContext.Current.NextId();
+		var fmtId = NextRdataId();
 		var fmtLabel = $"__fmt_spec_{fmtId}";
 		var fmtUtf8 = System.Text.Encoding.UTF8.GetBytes(formatSpec);
 		var fmtNull = new byte[fmtUtf8.Length + 1];
@@ -493,11 +493,11 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  MlirModule<StandardOp> result) {
 
-		var fallbackLabel = $"__enum_name_fallback_{MlirContext.Current.NextId()}";
+		var fallbackLabel = $"__enum_name_fallback_{NextRdataId()}";
 		var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
 
 		foreach (var enumCase in enumType.Cases) {
-			var caseLabel = $"__enum_name_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+			var caseLabel = $"__enum_name_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
 			var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, caseLabel, block, result);
 
 			// Int-backed enums use raw values at runtime; simple enums use ordinals
@@ -531,14 +531,14 @@ public static partial class MaxonToStandardConversion {
 	  MlirModule<StandardOp> result) {
 
 		// Initialize with a fallback "?" value
-		var fallbackLabel = $"__strenum_fallback_{MlirContext.Current.NextId()}";
+		var fallbackLabel = $"__strenum_fallback_{NextRdataId()}";
 		var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
 
 		// For each case, compare ordinal and conditionally select the case's string
 		foreach (var enumCase in enumType.Cases) {
 			if (enumCase.RawValue is not string strValue) continue;
 
-			var caseLabel = $"__strenum_case_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+			var caseLabel = $"__strenum_case_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
 			var (caseBuf, caseLen) = EmitRdataLiteral(strValue, caseLabel, block, result);
 
 			var ordConst = new StdConstI64Op(enumCase.Ordinal);
@@ -646,11 +646,11 @@ public static partial class MaxonToStandardConversion {
 	private static (StdI64 Buffer, StdI64 Length) EmitUnionNameLookup(
 	  MlirUnionType enumType, StdI64 ordinalValue,
 	  MlirBlock<StandardOp> block, MlirModule<StandardOp> result) {
-		var fallbackLabel = $"__enumname_fallback_{MlirContext.Current.NextId()}";
+		var fallbackLabel = $"__enumname_fallback_{NextRdataId()}";
 		var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
 
 		foreach (var enumCase in enumType.Cases) {
-			var caseLabel = $"__enumname_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+			var caseLabel = $"__enumname_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
 			var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, caseLabel, block, result);
 
 			var ordConst = new StdConstI64Op(enumCase.Ordinal);

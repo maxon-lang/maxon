@@ -285,7 +285,7 @@ module {
     %13 = arith.cmpi ne %11, %12
     cf.cond_br %13 [then: otherwise_default_error_1, else: otherwise_default_success_2]
   otherwise_default_error_1:
-    %14 = memref.lea_rdata __str_11
+    %14 = memref.lea_rdata __str_0
     %15 = std.ptr_to_i64 %14
     %16 = arith.constant {value = 0 : i64}
     %17 = arith.constant {value = 16 : i64}
@@ -396,7 +396,7 @@ module {
     x86.cmp edx, ecx
     x86.je advent.main.otherwise_default_success_2
   otherwise_default_error_1:
-    x86.lea_rdata rax, [__str_11]
+    x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.xor edx, edx
     x86.mov [rbp-80], ecx
@@ -623,7 +623,7 @@ module {
     %14 = arith.cmpi ne %12, %13
     cf.cond_br %14 [then: otherwise_default_error_1, else: otherwise_default_success_2]
   otherwise_default_error_1:
-    %15 = memref.lea_rdata __str_11
+    %15 = memref.lea_rdata __str_0
     %16 = std.ptr_to_i64 %15
     %17 = arith.constant {value = 0 : i64}
     %18 = arith.constant {value = 16 : i64}
@@ -736,7 +736,7 @@ module {
     x86.cmp edx, ecx
     x86.je advent.main.otherwise_default_success_2
   otherwise_default_error_1:
-    x86.lea_rdata rax, [__str_11]
+    x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.xor edx, edx
     x86.mov [rbp-80], ecx

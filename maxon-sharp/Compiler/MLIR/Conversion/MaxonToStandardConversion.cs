@@ -13,6 +13,8 @@ public static partial class MaxonToStandardConversion {
   // Scope analysis stack for the current function being lowered
   [ThreadStatic] private static List<ScopeInfo?>? _scopeAnalysisStack;
   [ThreadStatic] private static Dictionary<string, ScopeInfo>? _funcScopeAnalysis;
+  [ThreadStatic] private static int _nextRdataId;
+  private static int NextRdataId() => _nextRdataId++;
 
   public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
     _rdataStringCache = [];
@@ -101,6 +103,8 @@ public static partial class MaxonToStandardConversion {
       // Reset IDs after stdlib for stable test output
       if (!hasResetAfterStdlib && !func.IsStdlib) {
         MlirContext.Current.ResetIds();
+        _nextRdataId = 0;
+        _rdataStringCache = [];
         hasResetAfterStdlib = true;
       }
 

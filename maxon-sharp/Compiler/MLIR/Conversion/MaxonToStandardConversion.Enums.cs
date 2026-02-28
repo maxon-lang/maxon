@@ -121,7 +121,7 @@ public static partial class MaxonToStandardConversion {
 
     foreach (var enumCase in enumType.Cases) {
       var caseString = (string)enumCase.RawValue!;
-      var rdataLabel = $"__enum_frv_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var rdataLabel = $"__enum_frv_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
       var (caseBuf, caseLen) = EmitRdataLiteral(caseString, rdataLabel, block, _resultModule!);
       var bothMatch = EmitStringEquals(inputBuf, inputLen, caseBuf, caseLen, block);
 
@@ -196,7 +196,7 @@ public static partial class MaxonToStandardConversion {
     StdI64 currentResult = defaultResult.Result;
 
     foreach (var enumCase in enumType.Cases) {
-      var rdataLabel = $"__enum_fn_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var rdataLabel = $"__enum_fn_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
       var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, rdataLabel, block, _resultModule!);
       var isMatch = EmitStringEquals(nameBuf, nameLen, caseBuf, caseLen, block);
 
@@ -285,7 +285,7 @@ public static partial class MaxonToStandardConversion {
       // For dynamic name (no extra args), skip cases that need associated values
       if (!hasExtraArgs && caseHasAssocValues) continue;
 
-      var rdataLabel = $"__enum_fna_{enumType.Name}_{enumCase.Name}_{MlirContext.Current.NextId()}";
+      var rdataLabel = $"__enum_fna_{enumType.Name}_{enumCase.Name}_{NextRdataId()}";
       var (caseBuf, caseLen) = EmitRdataLiteral(enumCase.Name, rdataLabel, block, _resultModule!);
       var isMatch = EmitStringEquals(nameBuf, nameLen, caseBuf, caseLen, block);
 
