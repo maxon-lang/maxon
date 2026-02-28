@@ -248,17 +248,10 @@ export extension Array where Element is Equatable
   typealias ElementArray = Array with Element
 
   export function contains(element Element) returns bool
-    var i = 0
-    let len = count()
-    while i < len 'scan'
-      let item = try get(i) otherwise 'skip'
-        i = i + 1
-        continue
-      end 'skip'
+    for item in self 'scan'
       if item == element 'found'
         return true
       end 'found'
-      i = i + 1
     end 'scan'
     return false
   end 'contains'
@@ -302,11 +295,9 @@ export extension Array implements Hashable, Equatable where Element is Hashable 
   export function hash() returns HashValue
     var byteLen = managed.length() * managed.elementSize()
     var h = 5381
-    var i = 0
-    while i < byteLen 'hash_loop'
+    for i in 0 upto byteLen 'hash_loop'
       var b = managed.byteAt(i)
       h = h * 33 + b
-      i = i + 1
     end 'hash_loop'
     return h and 0xFFFFFFFF
   end 'hash'
@@ -318,12 +309,10 @@ export extension Array implements Hashable, Equatable where Element is Hashable 
       return false
     end 'len'
     var byteLen = selfLen * managed.elementSize()
-    var i = 0
-    while i < byteLen 'cmp'
+    for i in 0 upto byteLen 'cmp'
       if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
         return false
       end 'ne'
-      i = i + 1
     end 'cmp'
     return true
   end 'equals'

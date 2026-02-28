@@ -7375,14 +7375,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     PushScope("for_range");
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek()));
+
+    // Increment happens in a separate block after the body so that the loop
+    // variable's stack slot is not overwritten before the body uses it.
+    // continue jumps to the increment block (not the header) so the counter
+    // still advances.
+    var incrLabel = $"{loopLabel}.incr";
+    _loopStack.Push(new LoopContext(loopSourceLabel, incrLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek()));
 
     // Bind loop variable: let i = __range_current
     var loadedCurrent = EmitVarRefOp(counterVarName, elementKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(itemName, loadedCurrent, isDeclaration: true, isMutable: false, elementKind));
     _variables[itemName] = new VarInfo(elementKind, false, loadedCurrent, bodyBlock, CurrentScopeVar, structTypeName);
 
-    // Increment counter: __range_current = __range_current + 1
+    // Parse the body statements
+    ParseBodyUntilEnd();
+    PopScope();
+    _loopStack.Pop();
+    ExpectEndLabel(loopSourceLabel);
+
+    // Branch to increment block (unless body ended with a terminator)
+    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonBrOp(incrLabel));
+    }
+
+    // Increment block: advance counter and jump back to header
+    var incrBlock = _currentFunction!.Body.AddBlock(incrLabel);
+    _currentBlock = incrBlock;
+
     var preIncrementVal = EmitVarRefOp(counterVarName, elementKind, structTypeName);
     if (elementKind == MaxonValueKind.Struct && structTypeName != null) {
       // Use Strideable.advancedBy(1)
@@ -7405,16 +7425,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, addOp.Result, isDeclaration: false, isMutable: true, elementKind));
     }
 
-    // Parse the body statements
-    ParseBodyUntilEnd();
-    PopScope();
-    _loopStack.Pop();
-    ExpectEndLabel(loopSourceLabel);
-
-    // Branch back to header
-    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
-      _currentBlock.AddOp(new MaxonBrOp(headerLabel));
-    }
+    _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
 
     // Exit block
     var exitBlock = _currentFunction!.Body.AddBlock(exitLabel);

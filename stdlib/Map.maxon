@@ -40,12 +40,10 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
     // Insert each key-value pair from the init arrays
     // Use __map_get_init_key/value which look up "Key"/"Value" generic params
-    var i = 0
-    while i < numElements 'insert_loop'
+    for i in 0 upto numElements 'insert_loop'
       var k = __map_get_init_key(initKeys, i)
       var v = __map_get_init_value(initValues, i)
       result.insert(key: k, value: v)
-      i = i + 1
     end 'insert_loop'
 
     return result
@@ -345,8 +343,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
     count = 0
 
     // Rehash all occupied entries from old arrays
-    var i = 0
-    while i < oldCapacity 'rehash'
+    for i in 0 upto oldCapacity 'rehash'
       var state = try oldStates.get(i) otherwise SlotState.Empty
 
       var isOccupied = match state 'so1'
@@ -356,16 +353,13 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
       end 'so1'
       if isOccupied 'occupied'
         var key = try oldKeys.get(i) otherwise 'skip_key'
-        i = i + 1
-        continue 'rehash'
+          continue 'rehash'
         end 'skip_key'
         var value = try oldValues.get(i) otherwise 'skip_val'
-        i = i + 1
-        continue 'rehash'
+          continue 'rehash'
         end 'skip_val'
         insert(key: key, value: value)
       end 'occupied'
-      i = i + 1
     end 'rehash'
   end 'grow'
 end 'Map'
