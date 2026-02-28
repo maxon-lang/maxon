@@ -431,6 +431,7 @@ loop_var      = IDENTIFIER
               | '(' IDENTIFIER { ',' IDENTIFIER } ')'
 
 iterable_expr = expression ('to' | 'upto') expression          (* range form *)
+              | expression '.' 'enumerated' '(' ')'            (* enumerated form *)
               | expression                                      (* iterator form *)
 ```
 

@@ -537,7 +537,8 @@ internal class FunctionCloner {
     var mappedLhs = MapValue(binOp.Lhs);
     var mappedRhs = MapValue(binOp.Rhs);
     if (binOp.Operator is MaxonBinOperator.Eq or MaxonBinOperator.Ne
-        && mappedLhs is MaxonStruct lhsStruct) {
+        && mappedLhs is MaxonStruct lhsStruct
+        && !_typeSubstitution.IsPrimitiveAlias(lhsStruct.TypeName)) {
       var equalsCallee = $"{lhsStruct.TypeName}.equals";
       var callOp = new MaxonCallOp(equalsCallee, [mappedLhs, mappedRhs], MaxonValueKind.Bool, null);
       if (binOp.Operator == MaxonBinOperator.Ne) {

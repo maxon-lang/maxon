@@ -277,6 +277,30 @@ internal class TypeSubstitution {
   public IEnumerable<string> Keys => _map.Keys;
   public IEnumerable<KeyValuePair<string, MlirType>> Entries => _map;
 
+  /// Returns true if the given type name is a primitive type after substitution.
+  /// Checks both as a map key (e.g., "Item") and as an already-resolved name (e.g., "Int").
+  /// Used to avoid emitting equals() calls for types that were originally type parameters
+  /// but resolved to primitives after monomorphization.
+  public bool IsPrimitiveAlias(string typeName) {
+    // Direct lookup: typeName is a type parameter key (e.g., "Item" → Int)
+    if (_map.TryGetValue(typeName, out var concreteType))
+      return IsPrimitiveMlirType(concreteType);
+    // Reverse lookup: typeName is the resolved name (e.g., "Int") — check if any map
+    // value with that name is primitive
+    foreach (var entry in _map.Values) {
+      if (entry.Name == typeName)
+        return IsPrimitiveMlirType(entry);
+    }
+    return false;
+  }
+
+  private static bool IsPrimitiveMlirType(MlirType type) => type switch {
+    { } t when t == MlirType.I64 || t == MlirType.F64 || t == MlirType.F32
+            || t == MlirType.I1 || t == MlirType.I8 || t == MlirType.I16 || t == MlirType.U16 => true,
+    MlirRangedPrimitiveType => true,
+    _ => false
+  };
+
   // --- Substitution Operations ---
 
   /// <summary>
@@ -290,6 +314,12 @@ internal class TypeSubstitution {
     if (type is MlirStructType st) {
       if (_map.TryGetValue(st.Name, out var newType)) {
         return newType;
+      }
+      // Tuple types with unresolved type parameters (e.g., __Tuple_i64_Element)
+      // need recursive field substitution to produce concrete tuple types
+      if (st.IsTuple && st.Fields.Any(f => f.Type is MlirTypeParameterType tpp && _map.ContainsKey(tpp.ParameterName))) {
+        var resolvedFieldTypes = st.Fields.Select(f => SubstituteType(f.Type)).ToList();
+        return MlirStructType.CreateTupleType(resolvedFieldTypes);
       }
     }
     if (type is MlirUnionType ut) {

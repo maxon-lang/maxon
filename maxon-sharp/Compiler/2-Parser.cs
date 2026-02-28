@@ -1323,6 +1323,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private List<MlirType> ParseWithTypeArgs(int expectedCount) {
     if (Check(TokenType.LeftParen)) {
+      // When expecting a single type arg, let ParseTypeRef handle it —
+      // (A, B) is a tuple type, not two separate type arguments
+      if (expectedCount == 1) {
+        return [ParseTypeRef()];
+      }
       Advance(); // consume '('
       var types = new List<MlirType> { ParseTypeRef() };
       while (Check(TokenType.Comma)) {
@@ -2998,13 +3003,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var constParams = new Dictionary<string, long>();
 
       if (Check(TokenType.LeftParen)) {
-        Advance(); // consume '('
-        concreteTypes2.Add(ParseTypeRef());
-        while (Check(TokenType.Comma)) {
-          Advance();
+        // When expecting a single type arg, let ParseTypeRef handle it —
+        // (A, B) is a tuple type, not two separate type arguments
+        if (sourceStruct.AssociatedTypeNames.Count == 1) {
           concreteTypes2.Add(ParseTypeRef());
+        } else {
+          Advance(); // consume '('
+          concreteTypes2.Add(ParseTypeRef());
+          while (Check(TokenType.Comma)) {
+            Advance();
+            concreteTypes2.Add(ParseTypeRef());
+          }
+          Expect(TokenType.RightParen);
         }
-        Expect(TokenType.RightParen);
       } else {
         // Check for "with N Type" form: integer followed by type
         if (Check(TokenType.IntegerLiteral)) {
@@ -3012,6 +3023,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           constParams["__capacity"] = ParseIntegerLiteral(intToken);
         }
         concreteTypes2.Add(ParseTypeRef());
+        // Parse remaining comma-separated type args for multi-parameter generics
+        while (concreteTypes2.Count < sourceStruct.AssociatedTypeNames.Count && Check(TokenType.Comma)) {
+          Advance();
+          concreteTypes2.Add(ParseTypeRef());
+        }
       }
 
       RejectBarePrimitiveTypeArgs(concreteTypes2, aliasNameToken);
@@ -3108,7 +3124,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       [.. sourceUnion.ConformingInterfaces],
       typeParams: substitution.Count > 0 ? substitution : null);
 
-    Logger.Debug(LogCategory.Parser, $"Registering union type alias: {aliasName} -> {sourceName}");
     _typeAliasSources[aliasName] = sourceName;
   }
 
@@ -4326,6 +4341,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
           : field.Type is MlirUnionType fut ? fut.Name
           : null;
+        // Type parameter fields with where constraints: treat as struct with the param name
+        // so method calls can be resolved through the interface during monomorphization
+        if (fieldStructName == null && field.Type is MlirTypeParameterType tp
+            && structType.WhereConstraints.ContainsKey(tp.ParameterName)) {
+          fieldStructName = tp.ParameterName;
+          fieldKind = MaxonValueKind.Struct;
+        }
         var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, fieldKind, fieldStructName);
         _currentBlock!.AddOp(fieldAccessOp);
         _variables[field.Name] = new VarInfo(fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, CurrentScopeVar, fieldStructName, IsSelfField: true);
@@ -5220,6 +5242,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             && _typeRegistry.TryGetValue(actualTuple.TypeName, out var actualType)
             && actualType is MlirStructType actualStructType && actualStructType.IsTuple
             && actualStructType.Fields.Count == expectedStruct.Fields.Count) {
+          return;
+        }
+        // Allow returning concrete tuples when expected type has unresolved type parameters
+        if (value is MaxonStruct && expectedStruct.IsTuple
+            && expectedStruct.Fields.Any(f => f.Type is MlirTypeParameterType)) {
           return;
         }
         var actualName = value is MaxonStruct s ? s.TypeName : value.GetType().Name.Replace("Maxon", "").ToLower();
@@ -8745,6 +8772,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (rhsVal is MaxonEnum && TryCoerceConstantsToBackingType(rhsVal, out var rhsCoerced, out _) && rhsCoerced is MaxonStruct)
         rhsVal = rhsCoerced!;
 
+      // Constrained type parameter comparison: field (Struct kind from where-clause
+      // promotion) vs parameter (TypeParameter/Integer kind). Both reference the same
+      // type parameter and are i64 at runtime — emit integer comparison.
+      // ValidateTypeParameterConstraints already verified the where clause above.
+      {
+        bool isTypeParamStruct(MaxonValue v) =>
+          v is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var reg) && reg is MlirTypeParameterType;
+        if (isTypeParamStruct(lhsVal) || isTypeParamStruct(rhsVal)) {
+          var tpBinOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, MaxonValueKind.Integer);
+          _currentBlock!.AddOp(tpBinOp);
+          lhs = new ExprResult.Direct(tpBinOp.Result);
+          continue;
+        }
+      }
+
       // Struct equality/inequality via Equatable interface
       if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne
           && lhsVal is MaxonStruct lhsStruct && rhsVal is MaxonStruct rhsStruct
@@ -10042,14 +10084,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return autoAliasName;
     }
 
-    // For sub-word primitives (Short, Byte), auto-create an alias so Element type is bound
-    if (elementKind == MaxonValueKind.Short || elementKind == MaxonValueKind.Byte) {
-      var elemMlirType = KindToMlirType(elementKind)!;
-      var autoAliasName = $"__Array_{elemMlirType.Name}";
+    // Auto-create alias for all primitive element types so monomorphization
+    // can produce concrete specializations (e.g., for .enumerated() on int arrays)
+    var primMlirType = KindToMlirType(elementKind);
+    if (primMlirType != null) {
+      var autoAliasName = $"__Array_{primMlirType.Name}";
       if (!_typeRegistry.ContainsKey(autoAliasName)
           && _typeRegistry.TryGetValue("Array", out var arrayType)
           && arrayType is MlirStructType arrayStruct) {
-        var substitution = new Dictionary<string, MlirType> { ["Element"] = elemMlirType };
+        var substitution = new Dictionary<string, MlirType> { ["Element"] = primMlirType };
         RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
       }
       return autoAliasName;
@@ -11758,7 +11801,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var resolved = ResolveInnerAliasToConcreteType(innerAlias.Name, selfStruct.TypeParams);
             if (resolved != null) { resolvedReturnParams[paramName] = resolved; continue; }
           }
-          resolvedReturnParams[paramName] = sourceBinding;
+          // Source binding is still unresolved — resolve through the concrete alias's TypeParams
+          if (sourceBinding is MlirTypeParameterType sourceTp
+              && selfStruct.TypeParams.TryGetValue(sourceTp.ParameterName, out var concreteSelfBinding)) {
+            resolvedReturnParams[paramName] = concreteSelfBinding;
+          } else {
+            resolvedReturnParams[paramName] = sourceBinding;
+          }
+        }
+        // Generic base types with no TypeParams — fall back to the
+        // concrete alias's TypeParams (e.g., StringArray.TypeParams["Element"] = String)
+        else if (selfStruct.TypeParams.TryGetValue(tp.ParameterName, out var selfBinding)) {
+          resolvedReturnParams[paramName] = selfBinding;
         }
       } else if (paramType is MlirStructType innerStruct
                  && _typeAliasSources.ContainsKey(innerStruct.Name)) {
@@ -11806,6 +11860,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
       var elemKind = elemType.ToValueKind();
       return FindArrayTypeAliasForElement(elemKind);
+    }
+
+    // Auto-create concrete alias for multi-param generic types (e.g., EnumeratedIterator with Source, Element)
+    if (_typeRegistry.TryGetValue(returnSourceName, out var returnSourceReg)
+        && returnSourceReg is MlirStructType returnSourceStruct) {
+      var mangledName = $"__{returnSourceName}_{string.Join("_", resolvedReturnParams.Values.Select(t => t.Name))}";
+      if (!_typeRegistry.ContainsKey(mangledName)) {
+        RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(resolvedReturnParams));
+      }
+      return mangledName;
     }
 
     return null;
@@ -12457,7 +12521,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         $"'{opStr}' requires reference types (structs), not primitive values",
         isToken.Line, isToken.Column);
     }
-    if (lhsStruct.TypeName != rhsStruct.TypeName) {
+    var lhsBase = ResolveBaseTypeName(lhsStruct.TypeName);
+    var rhsBase = ResolveBaseTypeName(rhsStruct.TypeName);
+    if (lhsBase != rhsBase) {
       var opStr = negate ? "is not" : "is";
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
         $"'{opStr}' requires both operands to be the same type, got '{lhsStruct.TypeName}' and '{rhsStruct.TypeName}'",

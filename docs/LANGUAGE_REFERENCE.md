@@ -1878,6 +1878,22 @@ end 'Strideable'
 
 The standard library provides `Strideable` conformance for `int` and `Character`.
 
+**Iterating with an index:**
+
+Append `.enumerated()` to any iterable to get a zero-based index alongside each element:
+
+```maxon
+var names = ["Alice", "Bob", "Charlie"]
+for (i, name) in names.enumerated() 'loop'
+    print("{i}: {name}\n")
+end 'loop'
+// 0: Alice
+// 1: Bob
+// 2: Charlie
+```
+
+This works on all iterable types (Array, String, Map, Set, List, etc.). The `EnumeratedIterator` is a lazy wrapper that tracks the index — no intermediate collection is created.
+
 **Notes:**
 - Loop variable is immutable (like `let`)
 - Ranges use `to` for inclusive end and `upto` for exclusive end

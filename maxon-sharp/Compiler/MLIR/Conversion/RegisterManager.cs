@@ -1412,7 +1412,8 @@ public class RegisterManager {
     } else if (fieldType == MlirType.I16 || fieldType == MlirType.U16) {
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovWordIndirectRegOp(baseReg, fieldOffset, srcReg));
-    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirUnionType) {
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirUnionType || fieldType is MlirStructType) {
+      // Struct fields are heap pointers (i64)
       var srcReg = EnsureInRegister(value, block, protect1: baseReg);
       block.AddOp(new X86MovIndirectMemRegOp(baseReg, fieldOffset, srcReg));
     } else {
@@ -1434,7 +1435,8 @@ public class RegisterManager {
     } else if (fieldType == MlirType.I16 || fieldType == MlirType.U16) {
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovzxRegWordIndirectOp(destGpr, baseReg, fieldOffset));
-    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirUnionType) {
+    } else if (fieldType == MlirType.I64 || fieldType == MlirType.Fn || fieldType is MlirUnionType || fieldType is MlirStructType) {
+      // Struct fields are heap pointers (i64) — load the 64-bit pointer value
       var destGpr = AllocateRegister(result, block, protect1: baseReg);
       block.AddOp(new X86MovRegIndirectMemOp(destGpr, baseReg, fieldOffset));
     } else {

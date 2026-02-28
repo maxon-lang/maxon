@@ -52,7 +52,7 @@ The user will describe the feature they want. You will create the spec, write th
 
 ### Phase 4: Validation & Cleanup
 
-14. Run the full spec test suite: `maxon.exe spec-test` to ensure no regressions.
+14. Run the full spec test suite: `maxon.exe spec-test` to ensure no regressions. Don't investigate if test failures were pre-existing, just fix them.
 15. If any tests from other specs broke, investigate and fix.
 16. Review all code changes:
     - Eliminate duplicated code — refactor shared logic into helper methods.

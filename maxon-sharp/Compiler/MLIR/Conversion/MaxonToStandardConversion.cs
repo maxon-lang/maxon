@@ -1237,10 +1237,20 @@ public static partial class MaxonToStandardConversion {
                 break;
               }
 
-              if (!valueMap.TryGetValue(binOp.Lhs, out StdValue? lhs))
-                throw new InvalidOperationException($"BinOp LHS %{binOp.Lhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
-              if (!valueMap.TryGetValue(binOp.Rhs, out StdValue? rhs))
-                throw new InvalidOperationException($"BinOp RHS %{binOp.Rhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
+              // Load operand from valueMap; fall back to structVarNames for type-parameter
+              // fields promoted to Struct kind (they store heap pointers as i64 values)
+              if (!valueMap.TryGetValue(binOp.Lhs, out StdValue? lhs)) {
+                if (structVarNames.TryGetValue(binOp.Lhs.Id, out var lhsStructVar))
+                  lhs = EmitLoad(newBlock, lhsStructVar, varTypes);
+                else
+                  throw new InvalidOperationException($"BinOp LHS %{binOp.Lhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
+              }
+              if (!valueMap.TryGetValue(binOp.Rhs, out StdValue? rhs)) {
+                if (structVarNames.TryGetValue(binOp.Rhs.Id, out var rhsStructVar))
+                  rhs = EmitLoad(newBlock, rhsStructVar, varTypes);
+                else
+                  throw new InvalidOperationException($"BinOp RHS %{binOp.Rhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
+              }
 
               // Use OptimalType to select narrower/unsigned ops
               if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType is MlirType ot) {

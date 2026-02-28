@@ -187,6 +187,9 @@ for char in string 'loop' ... end 'loop'
 for i in 1 to 5 'loop' ... end 'loop'       // inclusive: 1, 2, 3, 4, 5
 for i in 1 upto 5 'loop' ... end 'loop'     // exclusive: 1, 2, 3, 4
 for c in 'a' to 'z' 'loop' ... end 'loop'   // character range
+
+// Enumerated (index + value)
+for (i, item) in array.enumerated() 'loop' ... end 'loop'
 ```
 
 ### Match Statement

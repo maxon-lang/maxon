@@ -47,6 +47,12 @@ public static class MonomorphizationPass {
 
       foreach (var func in newFunctions) {
         module.Functions.Add(func);
+        // Register tuple return types created by type substitution (e.g., __Tuple_i64_String
+        // from substituting Element→String in __Tuple_i64_Element)
+        if (func.ReturnType is MlirStructType retSt && retSt.IsTuple
+            && !module.TypeDefs.ContainsKey(retSt.Name)) {
+          module.TypeDefs[retSt.Name] = retSt;
+        }
       }
 
       allSpecializations.AddRange(specializations);
