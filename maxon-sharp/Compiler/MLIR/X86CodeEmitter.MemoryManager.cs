@@ -416,18 +416,34 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — entry.next
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = next
 
-    // Panic if entry has non-zero refcount
+    // Check refcount: if > 0, escalate to parent scope instead of freeing
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current entry
     EmitBytes(0x48, 0x83, 0x78, 0x48, 0x00); // CMP qword [rax+72], 0 — entry.refcount
-    EmitJcc("e", "mm_scope_exit_refcount_ok");
+    EmitJcc("e", "mm_scope_exit_refcount_zero");
+
+    // refcount > 0: escalate to parent scope
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
+    EmitBytes(0x48, 0x8B, 0x50, 0x08); // MOV rdx, [rax+8] — scope.parent_scope
+    EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
+    EmitJcc("nz", "mm_scope_exit_has_parent");
+    // No parent (root scope): panic — leaked reference
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_scope_exit_refcount");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
-    DefineLabel("mm_scope_exit_refcount_ok");
+    DefineLabel("mm_scope_exit_has_parent");
+    // mm_move(entry.user_ptr, parent_scope, mode=0)
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — entry.user_ptr
+    // RDX already = parent_scope
+    EmitMovRegImm(X86Register.R8, 0); // mode=0 (scope transfer)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_move")); EmitDword(0);
+    EmitJmp("mm_scope_exit_advance");
 
-    // Call mm_free_entry(current entry)
+    DefineLabel("mm_scope_exit_refcount_zero");
+    // refcount == 0: free as before
     EmitMovRegMem(X86Register.Rcx, -0x28, 8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free_entry")); EmitDword(0);
 
+    DefineLabel("mm_scope_exit_advance");
     // Advance to next
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
@@ -968,14 +984,16 @@ public partial class X86CodeEmitter {
 
   // -------------------------------------------------------------------------
   // mm_free_entry(entry_ptr_in_rcx) -> void (internal)
-  // Recursively frees all children, then frees the payload and entry itself.
+  // Walks children: rescues those with refcount > 0 to current scope (via
+  // mm_move mode=2), recursively frees the rest. Then frees the payload
+  // and entry itself.
   // -------------------------------------------------------------------------
   private void EmitMmFreeEntry() {
     // Stack: [rbp-8]=entry_ptr, [rbp-40]=current_child, [rbp-48]=next_child,
     //        [rbp-56]=user_ptr, [rbp-64]=heap_free_arg
     EmitRuntimeFunctionStart("mm_free_entry", 1, 0x80);
 
-    // Walk entry.child_head: for each child, recursively call mm_free_entry
+    // Walk entry.child_head: for each child, check refcount before freeing
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
     EmitBytes(0x48, 0x8B, 0x40, 0x20); // MOV rax, [rax+32] — entry.child_head
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current_child
@@ -985,15 +1003,30 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_free_entry_children_done");
 
-    // Save next before recursing
+    // Save next before any modification
     EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] — child.next
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = next_child
 
-    // Recurse: mm_free_entry(current_child)
+    // Check child.refcount: if > 0, rescue instead of freeing
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current_child (entry)
+    EmitBytes(0x48, 0x83, 0x78, 0x48, 0x00); // CMP qword [rax+72], 0 — child.refcount
+    EmitJcc("ne", "mm_free_entry_rescue_child");
+
+    // refcount == 0: Recurse — mm_free_entry(current_child)
     EmitMovRegMem(X86Register.Rcx, -0x28, 8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free_entry")); EmitDword(0);
+    EmitJmp("mm_free_entry_child_advance");
 
-    // Advance
+    // refcount > 0: Rescue — mm_move(child.user_ptr, __mm_current_scope, mode=2)
+    DefineLabel("mm_free_entry_rescue_child");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current_child (entry)
+    EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — child.user_ptr (entry+0)
+    EmitSymdataLoadI64(X86Register.Rdx, "__mm_current_scope");
+    EmitMovRegImm(X86Register.R8, 2); // mode=2 (force detach to scope)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_move")); EmitDword(0);
+
+    DefineLabel("mm_free_entry_child_advance");
+    // Advance: current_child = next_child
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
     EmitJmp("mm_free_entry_child_loop");
@@ -1342,8 +1375,8 @@ public partial class X86CodeEmitter {
 
   // -------------------------------------------------------------------------
   // mm_incref(user_ptr_in_rcx) -> void
-  // Increments refcount for a managed, scope-owned allocation.
-  // Skips NULL, unmanaged (no backpointer), and parent-owned allocations.
+  // Increments refcount for any managed allocation (scope-owned or parent-owned).
+  // Skips NULL and unmanaged (no backpointer) allocations.
   // -------------------------------------------------------------------------
   private void EmitMmIncref() {
     EmitRuntimeFunctionStart("mm_incref", 1, 0x30);
@@ -1361,10 +1394,6 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_incref_done");
 
-    // Parent-owned check: entry.owner_entry != 0 means parent-owned
-    EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0 — entry.owner_entry
-    EmitJcc("ne", "mm_incref_done");
-
     // Increment refcount: entry.refcount += 1
     EmitBytes(0x48, 0xFF, 0x40, 0x48); // INC qword [rax+72] — entry.refcount++
 
@@ -1376,7 +1405,8 @@ public partial class X86CodeEmitter {
   // mm_decref(user_ptr_in_rcx) -> void
   // Decrements refcount. When it reaches zero, reclaims the allocation to the
   // current scope by unlinking from the old scope and linking into current.
-  // Skips NULL, unmanaged, and parent-owned allocations.
+  // Skips NULL and unmanaged allocations. For parent-owned allocations,
+  // decrements refcount but does not reclaim (parent still owns it).
   // -------------------------------------------------------------------------
   private void EmitMmDecref() {
     // Stack: [rbp-8]=user_ptr, [rbp-16]=entry, [rbp-24]=old_owner_scope,
@@ -1397,9 +1427,12 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_decref_done");
 
-    // Parent-owned check: entry.owner_entry != 0
+    // Parent-owned with refcount 0: skip (never incref'd, nothing to decrement)
     EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0 — entry.owner_entry
-    EmitJcc("ne", "mm_decref_done");
+    EmitJcc("e", "mm_decref_do_dec"); // scope-owned → always decrement
+    EmitBytes(0x48, 0x83, 0x78, 0x48, 0x00); // CMP qword [rax+72], 0 — entry.refcount
+    EmitJcc("e", "mm_decref_done"); // parent-owned + refcount==0 → skip
+    DefineLabel("mm_decref_do_dec");
 
     // Decrement refcount: entry.refcount -= 1
     EmitBytes(0x48, 0xFF, 0x48, 0x48); // DEC qword [rax+72] — entry.refcount--
@@ -1415,7 +1448,11 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x83, 0x78, 0x48, 0x00); // CMP qword [rax+72], 0 — entry.refcount
     EmitJcc("ne", "mm_decref_done");
 
-    // Refcount is zero — reclaim ownership to current scope
+    // If parent-owned, just stop — parent still owns the allocation
+    EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0 — entry.owner_entry
+    EmitJcc("ne", "mm_decref_done");
+
+    // Scope-owned and refcount is zero — reclaim ownership to current scope
     EmitSymdataLoadI64(X86Register.Rdx, "__mm_current_scope");
     EmitMovMemReg(-0x38, X86Register.Rdx, 8); // [rbp-56] = current_scope
 

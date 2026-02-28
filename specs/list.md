@@ -562,11 +562,14 @@ hello world!!!!!!!!!!!!!!
   alloc_in ChainNode
   move String
     scope_enter stdlib.List.removeFirst (depth=2)
-    incref ChainNode rc=0
+    incref ChainNode rc=1
+    incref ChainNode rc=2
     move String
-    free ChainNode
+    decref ChainNode rc=1
     incref String rc=1
     move String
+    decref ChainNode rc=0
+    decref ChainNode rc=0
     scope_exit stdlib.List.removeFirst (0 owned)
   incref String rc=2
   alloc String rc=0
@@ -581,6 +584,7 @@ hello world!!!!!!!!!!!!!!
   decref String rc=1
   decref String rc=0
   scope_exit list.testRemove (4 owned)
+  free ChainNode
   free __ManagedMemory
   free String
   free ChainNode
@@ -636,17 +640,21 @@ hello world!!!!!!!!!!!!!!
     alloc_in ChainNode
     move String
       scope_enter stdlib.List.removeFirst (depth=3)
-      incref ChainNode rc=0
+      incref ChainNode rc=1
+      incref ChainNode rc=2
       move String
-      free ChainNode
+      decref ChainNode rc=1
       incref String rc=1
       move String
+      decref ChainNode rc=0
+      decref ChainNode rc=0
       scope_exit stdlib.List.removeFirst (0 owned)
     incref String rc=2
     move String
     decref StringList rc=0
     decref String rc=1
     scope_exit list.testRemove (1 owned)
+    free ChainNode
     free __ManagedMemory
     free String
     free ChainNode
@@ -795,6 +803,130 @@ end 'main'
   scope_exit list.main (2 owned)
   free EChain
   free StringList
+  free Buffer
+  free __ManagedMemory
+  free String
+```
+
+<!-- test: memory.value-survives-clear-and-return -->
+<!-- MmTrace -->
+```maxon
+typealias StringList = List with String
+
+function clearList(list StringList) returns String
+  var val = try list.first() otherwise "none"
+  list.clear()
+  return val
+end 'clearList'
+
+function main() returns ExitCode
+  var list = StringList{}
+  list.append("hello world!!!!!!!!!!!!!!")
+  var result = clearList(list)
+  print("{result}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
+```
+```stderr
+  scope_enter list.main (depth=1)
+  alloc EChain rc=0
+  alloc StringList rc=0
+  move EChain
+  incref StringList rc=1
+  alloc String rc=0
+  alloc_in __ManagedMemory
+  alloc_in ChainNode
+  move String
+    scope_enter list.clearList (depth=2)
+      scope_enter stdlib.List.first (depth=3)
+      incref ChainNode rc=1
+      incref ChainNode rc=2
+      incref String rc=1
+      move String
+      decref ChainNode rc=1
+      decref ChainNode rc=0
+      scope_exit stdlib.List.first (0 owned)
+    incref String rc=2
+      scope_enter stdlib.List.clear (depth=3)
+      free ChainNode
+      scope_exit stdlib.List.clear (1 owned)
+    move String
+    decref String rc=1
+    scope_exit list.clearList (0 owned)
+  alloc String rc=0
+  alloc_in __ManagedMemory
+  alloc_in Buffer
+  decref StringList rc=0
+  decref String rc=0
+  scope_exit list.main (3 owned)
+  free EChain
+  free StringList
+  free __ManagedMemory
+  free String
+  free Buffer
+  free __ManagedMemory
+  free String
+```
+
+<!-- test: memory.value-survives-clear -->
+<!-- MmTrace -->
+```maxon
+typealias StringList = List with String
+
+function main() returns ExitCode
+  var list = StringList{}
+  list.append("hello world!!!!!!!!!!!!!!")
+  var val = try list.first() otherwise "none"
+  list.clear()
+  print("{val}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
+```
+```stderr
+  scope_enter list.main (depth=1)
+  alloc EChain rc=0
+  alloc StringList rc=0
+  move EChain
+  incref StringList rc=1
+  alloc String rc=0
+  alloc_in __ManagedMemory
+  alloc_in ChainNode
+  move String
+    scope_enter stdlib.List.first (depth=2)
+    incref ChainNode rc=1
+    incref ChainNode rc=2
+    incref String rc=1
+    move String
+    decref ChainNode rc=1
+    decref ChainNode rc=0
+    scope_exit stdlib.List.first (0 owned)
+  incref String rc=2
+    scope_enter stdlib.List.clear (depth=2)
+    free ChainNode
+    scope_exit stdlib.List.clear (1 owned)
+  alloc String rc=0
+  alloc_in __ManagedMemory
+  alloc_in Buffer
+  decref StringList rc=0
+  decref String rc=1
+  decref String rc=0
+  scope_exit list.main (3 owned)
+  free EChain
+  free StringList
+  free __ManagedMemory
+  free String
   free Buffer
   free __ManagedMemory
   free String

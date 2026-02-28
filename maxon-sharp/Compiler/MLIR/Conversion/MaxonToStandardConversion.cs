@@ -909,9 +909,7 @@ public static partial class MaxonToStandardConversion {
                 if (srcName != dstName) {
                   // Decref old value before overwriting (reassignment only)
                   if (!assignOp.IsDeclaration) {
-                    var navScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-                    if (navScopeInfo?.ChainNavBorrowedVars.Contains(assignOp.VarName) != true)
-                      EmitDecref(newBlock, dstName, varTypes);
+                    EmitDecref(newBlock, dstName, varTypes);
                   }
                   var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
                   EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
@@ -929,11 +927,6 @@ public static partial class MaxonToStandardConversion {
                   var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
                   if (currentScopeInfo?.ReturnSelfValueIds.Contains(assignOp.Value.Id) == true)
                     isFromCallReturn = false;
-                }
-                if (!isFromCallReturn) {
-                  var navScopeInfo2 = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-                  if (navScopeInfo2?.ChainNavBorrowedVars.Contains(assignOp.VarName) == true)
-                    isFromCallReturn = true;
                 }
                 if ((assignOp.IsDeclaration || srcName != dstName) && !isFromCallReturn) {
                   EmitIncref(newBlock, assignOp.VarName, varTypes);

@@ -332,9 +332,12 @@ public static partial class MaxonToStandardConversion {
         block.AddOp(new StdCallRuntimeOp("mm_trace_move", [valueReload], null));
     }
 
-    // Free the node (it's been unlinked and its value extracted)
-    var nodePtrForFree = (StdI64)EmitLoad(block, nodeVarName, varTypes);
-    block.AddOp(new StdCallRuntimeOp("mm_free", [nodePtrForFree], null));
+    // Release the node: decref instead of force-free so that any outstanding
+    // navigation references keep the node alive until their scope exit.
+    var nodePtrForDecref = (StdI64)EmitLoad(block, nodeVarName, varTypes);
+    block.AddOp(new StdCallRuntimeOp("mm_decref", [nodePtrForDecref], null));
+    if (Compiler.MmTrace)
+      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [nodePtrForDecref], null));
 
     // Register the extracted value
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
@@ -385,14 +388,11 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(valueLoad);
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
-      // Heap value: incref so the caller has an owned reference that
-      // survives if the node is freed (e.g. by chain.clear or chain.remove)
+      // Heap value: return a borrowed pointer. The assignment incref (from
+      // MaxonAssignOp) provides the caller's reference. mm_free_entry rescues
+      // children with rc > 0, so the value survives container destruction.
       var tempName = $"__chain_val_{op.Result.Id}";
       EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
-      var valForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
-      block.AddOp(new StdCallRuntimeOp("mm_incref", [valForIncref], null));
-      if (Compiler.MmTrace)
-        block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [valForIncref], null));
       structVarNames[op.Result.Id] = tempName;
       structValueTypes[op.Result.Id] = op.ValueKind;
     } else {
@@ -403,7 +403,8 @@ public static partial class MaxonToStandardConversion {
 
   /// <summary>
   /// Lowers MaxonChainNodeSetValueOp: replaces the value in a chain node.
-  /// For struct types, frees the old value and reparents the new one under the node.
+  /// For struct types, detaches the old value to current scope and decrefs it,
+  /// then reparents the new value under the node.
   /// </summary>
   private static void LowerChainNodeSetValue(
     MaxonChainNodeSetValueOp op,
@@ -417,12 +418,26 @@ public static partial class MaxonToStandardConversion {
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
-      // Load and free old value — node always has a valid value pointer
-      // because LowerChainInsertValue stores one at allocation time
+      // Load old value pointer from node
       var oldValueLoad = new StdLoadIndirectOp(nodePtr, NodeValueOffset, MlirType.I64);
       block.AddOp(oldValueLoad);
       var oldValue = (StdI64)oldValueLoad.Result;
-      block.AddOp(new StdCallRuntimeOp("mm_free", [oldValue], null));
+
+      // Detach old value from node to current scope via mm_move mode=2.
+      // Scope exit will free it (rc=0) or decref it (rc>0 from node.value()).
+      var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
+      if (currentScopeInfo == null && _funcScopeAnalysis != null) {
+        currentScopeInfo = _funcScopeAnalysis.Values
+          .FirstOrDefault(s => s.ScopeVar != null && varTypes.ContainsKey(s.ScopeVar));
+      }
+      if (currentScopeInfo != null) {
+        var scopePtr = (StdI64)EmitLoad(block, currentScopeInfo.ScopeVar, varTypes);
+        var detachMode = new StdConstI64Op(2);
+        block.AddOp(detachMode);
+        block.AddOp(new StdCallRuntimeOp("mm_move", [oldValue, scopePtr, detachMode.Result], null));
+        if (Compiler.MmTrace)
+          block.AddOp(new StdCallRuntimeOp("mm_trace_move", [oldValue], null));
+      }
 
       // Store new value and reparent under node
       var valueSrcName = structVarNames[op.Value.Id];
@@ -531,6 +546,12 @@ public static partial class MaxonToStandardConversion {
     if (result != null) {
       var tempName = $"__chain_nav_{result.Id}";
       EmitStore(block, loadedPtr, tempName, varTypes);
+      // Incref the ChainNode so it survives until scope exit decref.
+      // mm_incref is a no-op for NULL, so safe even on the error path.
+      var nodeForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
+      block.AddOp(new StdCallRuntimeOp("mm_incref", [nodeForIncref], null));
+      if (Compiler.MmTrace)
+        block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [nodeForIncref], null));
       structVarNames[result.Id] = tempName;
       structValueTypes[result.Id] = result is MaxonStruct ms ? ms.TypeName : "ChainNode";
     }

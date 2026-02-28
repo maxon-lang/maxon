@@ -8,6 +8,10 @@ public class MlirType {
   public int? SourceLine { get; set; }
   public int? SourceColumn { get; set; }
 
+  /// True for types that are heap-allocated and need refcounting (structs and
+  /// associated-value enums). Simple enums and primitives return false.
+  public virtual bool IsHeapAllocated => false;
+
   public MlirType(string name, int sizeInBytes) {
     Name = name;
     SizeInBytes = sizeInBytes;
@@ -81,6 +85,7 @@ public class MlirStructField(string name, MlirType type, bool isExported, bool i
 }
 
 public class MlirStructType : MlirType {
+  public override bool IsHeapAllocated => true;
   public List<MlirStructField> Fields { get; }
   public List<string> AssociatedTypeNames { get; }
   public List<string> ConformingInterfaces { get; }
@@ -193,6 +198,7 @@ public class MlirUnionType(string name, List<MlirEnumCase> cases, MlirType? back
   public Dictionary<string, List<string>> WhereConstraints { get; } = whereConstraints ?? [];
 
   public bool HasAssociatedValues => Cases.Any(c => c.AssociatedValues is { Count: > 0 });
+  public override bool IsHeapAllocated => HasAssociatedValues;
 
   /// For associated value enums: 8 (tag) + max payload size across all cases.
   /// Each payload field occupies 8 bytes (64-bit slots).

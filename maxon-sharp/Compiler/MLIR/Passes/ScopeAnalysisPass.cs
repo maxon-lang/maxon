@@ -28,10 +28,6 @@ public class ScopeInfo(string scopeVar) {
   public HashSet<int> StackAllocIds { get; } = [];
   // Value IDs from calls to functions that return self (borrowed ref, not new allocation)
   public HashSet<int> ReturnSelfValueIds { get; } = [];
-  // Value IDs from chain navigation calls (head/tail/next/prev) — borrowed pointers
-  public HashSet<int> ChainNavValueIds { get; } = [];
-  // Var names holding chain navigation borrowed pointers (both temps and user vars)
-  public HashSet<string> ChainNavBorrowedVars { get; set; } = [];
 }
 
 /// <summary>
@@ -135,6 +131,9 @@ public static class ScopeAnalysisPass {
           case MaxonEnumConstructOp enumConstructOp:
             producingOps[enumConstructOp.Result.Id] = op;
             break;
+          case MaxonEnumPayloadOp enumPayloadOp:
+            producingOps[enumPayloadOp.Result.Id] = op;
+            break;
           case MaxonEnumVarRefOp enumVarRefOp:
             structVarRefNames[enumVarRefOp.Result.Id] = enumVarRefOp.VarName;
             producingOps[enumVarRefOp.Result.Id] = op;
@@ -204,7 +203,12 @@ public static class ScopeAnalysisPass {
               || (assignOp.ValueKind is MaxonValueKind.Enum
                   && assignOp.Value is MaxonEnum assignEnumVal
                   && module.TypeDefs.TryGetValue(assignEnumVal.TypeName, out var assignEnumTd)
-                  && assignEnumTd is MlirUnionType assignEnumUt && assignEnumUt.HasAssociatedValues): {
+                  && assignEnumTd.IsHeapAllocated)
+              || (producingOps.TryGetValue(assignOp.Value.Id, out var payloadProducer)
+                  && payloadProducer is MaxonEnumPayloadOp payloadOp
+                  && payloadOp.ResultStructTypeName != null
+                  && module.TypeDefs.TryGetValue(payloadOp.ResultStructTypeName, out var payloadTd)
+                  && payloadTd.IsHeapAllocated): {
             // If the assigned value comes from a var ref, the source var will be
             // reparented (mm_move mode=1) during lowering — mark it as nested
             if (structVarRefNames.TryGetValue(assignOp.Value.Id, out var srcVarName))
@@ -233,8 +237,7 @@ public static class ScopeAnalysisPass {
                   isFromCall = true;
                   if (funcByName.TryGetValue(callOp.Callee, out var calleeFunc) && calleeFunc.ReturnsSelf)
                     scopeInfo.ReturnSelfValueIds.Add(assignOp.Value.Id);
-                  if (callOp.Callee is "__chain_head" or "__chain_tail" or "__chain_node_next" or "__chain_node_prev")
-                    scopeInfo.ChainNavValueIds.Add(assignOp.Value.Id);
+                  // ChainNavValueIds tracking removed — incref/decref are always balanced now
                   break;
                 case MaxonStructVarRefOp:
                 case MaxonEnumVarRefOp:
@@ -251,6 +254,7 @@ public static class ScopeAnalysisPass {
                 case MaxonManagedMemSliceOp:
                 case MaxonCStringToManagedOp:
                 case MaxonFieldAccessOp:
+                case MaxonEnumPayloadOp:
                 case MaxonEnumStringRawValueOp:
                 case MaxonEnumNameOp:
                 case MaxonMakeCharFromBytesOp:
@@ -396,28 +400,6 @@ public static class ScopeAnalysisPass {
       info.Allocations.RemoveAll(a =>
         (a.VarName.StartsWith("__call_tmp_") || a.VarName.StartsWith("__callret_"))
         && valueIdToVarNames.Any(kv => info.ReturnSelfValueIds.Contains(kv.Key) && kv.Value.Contains(a.VarName)));
-    }
-
-    // Remove vars holding chain navigation borrowed pointers from RefcountedVars.
-    // Chain navigation (head/tail/next/prev) returns a pointer borrowed from the chain —
-    // the scope does not own it. chain.remove() frees nodes; scope exit must not decref.
-    foreach (var (_, info) in scopeInfos) {
-      if (info.ChainNavValueIds.Count == 0) continue;
-      var borrowed = new HashSet<string>();
-      foreach (var (vid, varNames) in valueIdToVarNames) {
-        if (info.ChainNavValueIds.Contains(vid))
-          foreach (var vn in varNames) borrowed.Add(vn);
-      }
-      bool changed = true;
-      while (changed) {
-        changed = false;
-        foreach (var (aliasVar, srcVar) in aliasSourceVar)
-          if (borrowed.Contains(srcVar) && borrowed.Add(aliasVar))
-            changed = true;
-      }
-      info.ChainNavBorrowedVars = borrowed;
-      info.RefcountedVars.RemoveAll(v => borrowed.Contains(v));
-      info.Allocations.RemoveAll(a => borrowed.Contains(a.VarName));
     }
 
     // Build set of vars whose allocations escape indirectly via aliases.

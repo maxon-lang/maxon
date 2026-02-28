@@ -499,6 +499,28 @@ end 'main'
 99
 ```
 
+<!-- test: node.set-value-old-survives -->
+```maxon
+typealias StringChain = Chain with String
+
+function main() returns ExitCode
+  var chain = StringChain{}
+  var node = chain.insertFirst("hello world!!!!!!!!!!!!!!")
+  var old = node.value()
+  node.setValue(v: "replacement!!!!!!!!!!!!!!")
+  print("{old}\n")
+  print("{node.value()}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
+replacement!!!!!!!!!!!!!!
+```
+
 <!-- test: core.clear -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
