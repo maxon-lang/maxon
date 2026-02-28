@@ -1016,22 +1016,22 @@ public class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
-// Write a C string to stdout, returns number of bytes written
-public class MaxonCStringWriteStdoutOp(MaxonValue cstrPtr) : MaxonOp {
-  public override string Mnemonic => "maxon.cstring_write_stdout";
-  public MaxonValue CstrPtr { get; } = cstrPtr;
+// Write managed memory buffer to stdout, returns number of bytes written
+public class MaxonManagedWriteStdoutOp(MaxonValue managed) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_write_stdout";
+  public MaxonValue Managed { get; } = managed;
   public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
 }
 
-// Write a C string to stderr, returns number of bytes written
-public class MaxonCStringWriteStderrOp(MaxonValue cstrPtr) : MaxonOp {
-  public override string Mnemonic => "maxon.cstring_write_stderr";
-  public MaxonValue CstrPtr { get; } = cstrPtr;
+// Write managed memory buffer to stderr, returns number of bytes written
+public class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_write_stderr";
+  public MaxonValue Managed { get; } = managed;
   public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
 }
 
 // Write error message to stderr and terminate with exit code 1

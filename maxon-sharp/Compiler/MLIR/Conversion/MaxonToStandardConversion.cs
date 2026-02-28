@@ -1784,11 +1784,11 @@ public static partial class MaxonToStandardConversion {
             case MaxonManagedToCStringOp toCStringOp:
               LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes, structVarNames);
               break;
-            case MaxonCStringWriteStdoutOp writeStdoutOp:
-              LowerCStringWriteStdout(writeStdoutOp, newBlock, valueMap);
+            case MaxonManagedWriteStdoutOp managedWriteStdoutOp:
+              LowerManagedWriteStdout(managedWriteStdoutOp, newBlock, valueMap, varTypes, structVarNames);
               break;
-            case MaxonCStringWriteStderrOp writeStderrOp:
-              LowerCStringWriteStderr(writeStderrOp, newBlock, valueMap);
+            case MaxonManagedWriteStderrOp managedWriteStderrOp:
+              LowerManagedWriteStderr(managedWriteStderrOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonPanicOp panicOp:
               LowerPanic(panicOp, newBlock, result);

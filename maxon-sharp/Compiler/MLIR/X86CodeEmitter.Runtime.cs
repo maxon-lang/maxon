@@ -23,6 +23,8 @@ public partial class X86CodeEmitter {
     EmitMaxonToCString();
     EmitMaxonWriteStdout();
     EmitMaxonWriteStderr();
+    EmitMaxonManagedWriteStdout();
+    EmitMaxonManagedWriteStderr();
     EmitMaxonPanic();
     EmitMaxonPanicPrintFrame();
     EmitMaxonI64ToString();
@@ -229,6 +231,39 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitRuntimeFunctionEnd();
   }
+
+  /// <summary>
+  /// Emits a managed write function: takes (buffer_rcx, length_rdx), writes to the given
+  /// std handle, returns bytes_written_rax. Used for both stdout and stderr variants.
+  /// </summary>
+  private void EmitMaxonManagedWrite(string functionName, long stdHandle) {
+    // Stack layout: [rbp-8]=buffer(rcx), [rbp-16]=length(rdx), [rbp-24]=handle, [rbp-32]=bytesWritten
+    EmitRuntimeFunctionStart(functionName, 2, 0x40);
+    // Zero the bytesWritten slot so upper 4 bytes are clean (WriteFile writes a DWORD)
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // [rbp-32] = 0
+    EmitMovRegImm(X86Register.Rcx, stdHandle);
+    EmitCallImport("kernel32.dll", "GetStdHandle");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = handle
+    // WriteFile(handle, buffer, nNumberOfBytesToWrite, &bytesWritten, lpOverlapped)
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);  // arg1: handle
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);  // arg2: buffer
+    EmitMovRegMem(X86Register.R8, -0x10, 8);   // arg3: length
+    // arg4: LEA R9, [rbp-0x20] (&bytesWritten)
+    EmitBytes(0x4C, 0x8D, 0x4D, 0xE0);
+    // arg5: lpOverlapped = NULL at [rsp+0x20]
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
+    EmitCallImport("kernel32.dll", "WriteFile");
+    // Return bytes written
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  private void EmitMaxonManagedWriteStdout() =>
+    EmitMaxonManagedWrite("maxon_managed_write_stdout", -11); // STD_OUTPUT_HANDLE
+
+  private void EmitMaxonManagedWriteStderr() =>
+    EmitMaxonManagedWrite("maxon_managed_write_stderr", -12); // STD_ERROR_HANDLE
 
   /// <summary>
   /// maxon_panic(cstr_ptr_in_rcx): write message to stderr, print stack trace, then ExitProcess(1).

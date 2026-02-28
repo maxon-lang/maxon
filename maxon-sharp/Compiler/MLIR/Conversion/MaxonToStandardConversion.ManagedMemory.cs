@@ -450,34 +450,40 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
-	/// __cstring_write_stdout(cstrPtr): write a null-terminated C string to stdout.
-	/// Calls maxon_write_stdout runtime function which uses GetStdHandle + WriteFile.
-	/// Returns the number of bytes written.
+	/// Write managed memory buffer to a stream via runtime call with (buffer, length) args.
+	/// Extracts buffer pointer and length from the managed struct, avoiding cstring conversion.
 	/// </summary>
-	private static void LowerCStringWriteStdout(
-	  MaxonCStringWriteStdoutOp op,
+	private static void LowerManagedWrite(
+	  string runtimeName,
+	  MaxonValue managedValue,
+	  MaxonValue resultValue,
 	  MlirBlock<StandardOp> block,
-	  Dictionary<MaxonValue, StdValue> valueMap) {
-		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<int, string> structVarNames) {
+		var managedVarName = ResolveManagedVarName(managedValue, structVarNames);
+		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var result = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("maxon_write_stdout", [cstrPtr], result));
-		valueMap[op.Result] = result;
+		block.AddOp(new StdCallRuntimeOp(runtimeName, [buffer, length], result));
+		valueMap[resultValue] = result;
 	}
 
-	/// <summary>
-	/// __cstring_write_stderr(cstrPtr): write a null-terminated C string to stderr.
-	/// Calls maxon_write_stderr runtime function which uses GetStdHandle + WriteFile.
-	/// Returns the number of bytes written.
-	/// </summary>
-	private static void LowerCStringWriteStderr(
-	  MaxonCStringWriteStderrOp op,
+	private static void LowerManagedWriteStdout(
+	  MaxonManagedWriteStdoutOp op,
 	  MlirBlock<StandardOp> block,
-	  Dictionary<MaxonValue, StdValue> valueMap) {
-		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
-		var result = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("maxon_write_stderr", [cstrPtr], result));
-		valueMap[op.Result] = result;
-	}
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<int, string> structVarNames) =>
+		LowerManagedWrite("maxon_managed_write_stdout", op.Managed, op.Result, block, valueMap, varTypes, structVarNames);
+
+	private static void LowerManagedWriteStderr(
+	  MaxonManagedWriteStderrOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<int, string> structVarNames) =>
+		LowerManagedWrite("maxon_managed_write_stderr", op.Managed, op.Result, block, valueMap, varTypes, structVarNames);
 
 	/// <summary>
 	/// Set length with capacity validation: panics if newLength > capacity.

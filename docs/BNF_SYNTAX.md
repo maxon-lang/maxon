@@ -329,7 +329,6 @@ constraint    = IDENTIFIER 'is' IDENTIFIER { 'and' IDENTIFIER }
 
 type_ref      = 'bool'
               | 'Self'
-              | 'cstring'
               | IDENTIFIER
               | function_type
               | tuple_type

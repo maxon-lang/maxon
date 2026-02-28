@@ -23,7 +23,7 @@ export typealias ByteArray = Array with Byte
 export type File
   /// Open file for reading, throwing if not found
   static function openForRead(path String) returns FileHandle throws FileReadError
-    let handle = __file_open_read(path.cstr())
+    let handle = __file_open_read(path.managed)
     if handle < 0 'notFound'
       throw FileReadError.notFound
     end 'notFound'
@@ -46,7 +46,7 @@ export type File
     var managed = try readFileData(path, extraBytes: 1)
     let len = managed.length()
     managed.setByte(len, 0)
-    return String{_managed: managed, _iterPos: 0}
+    return String{managed: managed, _iterPos: 0}
   end 'readText'
 
   /// Read file content as raw bytes
@@ -57,7 +57,7 @@ export type File
 
   /// Write string content to a text file
   export static function writeText(path String, content String) throws FileWriteError
-    let res = __write_file(path.cstr(), content.cstr())
+    let res = __write_file(path.managed, content.managed)
     if res != 0 'failed'
       throw FileWriteError.failed
     end 'failed'
@@ -65,7 +65,7 @@ export type File
 
   /// Write binary content to a file
   export static function writeBinary(path String, content ByteArray) throws FileWriteError
-    let res = __write_file_binary(path.cstr(), content)
+    let res = __write_file_binary(path.managed, content)
     if res != 0 'failed'
       throw FileWriteError.failed
     end 'failed'
@@ -73,7 +73,7 @@ export type File
 
   /// Check if a file exists at the given path
   export static function exists(path String) returns bool
-    let handle = __file_open_read(path.cstr())
+    let handle = __file_open_read(path.managed)
     if handle < 0 'notFound'
       return false
     end 'notFound'
@@ -83,7 +83,7 @@ export type File
 
   /// Delete a file at the given path
   export static function delete(path String) throws FileDeleteError
-    let res = __file_delete(path.cstr())
+    let res = __file_delete(path.managed)
     if res != 0 'failed'
       throw FileDeleteError.notFound
     end 'failed'

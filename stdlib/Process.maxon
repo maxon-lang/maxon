@@ -32,9 +32,8 @@ export type Process
   /// @param timeoutMs Timeout in milliseconds (0 = wait forever)
   /// @returns The process exit code, or -1 on error
   export static function execute(command String, timeoutMs Duration) returns Offset
-    var cmdCstr = command.cstr()
-    var cwdCstr = "".cstr()
-    let handle = __process_create(cmdCstr, cwdCstr)
+    var empty = ""
+    let handle = __process_create(command.managed, empty.managed)
     let waitResult = __process_wait(handle, timeoutMs)
     // waitResult: 0 = completed, 1 = timeout, -1 = error
     if waitResult != 0 'check'
@@ -49,25 +48,20 @@ export type Process
   /// Start a process with stdout/stderr capture, returning a capture handle.
   /// Use captureStdout/captureStderr to read output, then captureWait to finish.
   export static function captureStart(command String) returns ProcessHandle
-    var cmdCstr = command.cstr()
-    var cwdCstr = "".cstr()
-    return __process_create_with_capture(cmdCstr, cwdCstr)
+    var empty = ""
+    return __process_create_with_capture(command.managed, empty.managed)
   end 'captureStart'
 
   /// Read all stdout from a capture handle as a String. Must call before captureWait.
   export static function captureStdout(capturePtr ProcessHandle) returns String
-    let cstr = __process_read_stdout(capturePtr)
-    let s = String.from(cstr)
-    __free_cstring(cstr)
-    return s
+    let managed = __process_read_stdout(capturePtr)
+    return String{managed: managed, _iterPos: 0}
   end 'captureStdout'
 
   /// Read all stderr from a capture handle as a String. Must call before captureWait.
   export static function captureStderr(capturePtr ProcessHandle) returns String
-    let cstr = __process_read_stderr(capturePtr)
-    let s = String.from(cstr)
-    __free_cstring(cstr)
-    return s
+    let managed = __process_read_stderr(capturePtr)
+    return String{managed: managed, _iterPos: 0}
   end 'captureStderr'
 
   /// Wait for a captured process to complete and return its exit code.

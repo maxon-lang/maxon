@@ -12,21 +12,20 @@ export type Directory
   /// List files and directories in a path
   export static function list(path String) returns StringArray throws DirectoryListError
     var pattern = "{path}\\*"
-    var cs = pattern.cstr()
-    var handle = __find_first_file(cs)
+    var handle = __find_first_file(pattern.managed)
     if handle == 0 'notFound'
       throw DirectoryListError.notFound
     end 'notFound'
     var result = StringArray{}
-    var filename = __find_filename(handle)
-    var name = String.from(filename)
+    var managed = __find_filename(handle)
+    var name = String{managed: managed, _iterPos: 0}
     if name != "." and name != ".." 'notDot1'
       result.push(name)
     end 'notDot1'
     var nextResult = __find_next_file(handle)
     while nextResult != 0 'loop'
-      filename = __find_filename(handle)
-      name = String.from(filename)
+      managed = __find_filename(handle)
+      name = String{managed: managed, _iterPos: 0}
       if name != "." and name != ".." 'notDot2'
         result.push(name)
       end 'notDot2'
@@ -38,8 +37,7 @@ export type Directory
 
   /// Check if a path exists and is a directory
   export static function exists(path String) returns bool
-    var cs = path.cstr()
-    return __directory_exists(cs)
+    return __directory_exists(path.managed)
   end 'exists'
 
   /// Alias for exists
@@ -49,15 +47,12 @@ export type Directory
 
   /// Create a directory at the given path. Returns true on success.
   export static function create(path String) returns bool
-    var cs = path.cstr()
-    return __create_directory(cs)
+    return __create_directory(path.managed)
   end 'create'
 
   /// Get the current working directory
   export static function currentDirectory() returns String
-    let cstr = __get_current_directory()
-    let s = String.from(cstr)
-    __free_cstring(cstr)
-    return s
+    let managed = __get_current_directory()
+    return String{managed: managed, _iterPos: 0}
   end 'currentDirectory'
 end 'Directory'

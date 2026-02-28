@@ -1807,7 +1807,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       "float" => MlirType.F64.Name,
       "bool" => MlirType.I1.Name,
       "byte" => MlirType.I8.Name,
-      "cstring" => MlirType.I64.Name,
       _ => sourceTypeName
     };
   }
@@ -4664,7 +4663,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             "Cannot use bare 'byte' as a type. Define a typealias with range constraints, e.g., typealias MyByte = byte(0 to u8.max)",
             _tokens[typeNamePos].Line, _tokens[typeNamePos].Column),
       "bool" => MlirType.I1,
-      "cstring" => MlirType.I64, // raw pointer type for FFI
       _ => _resolvingTypeAliases.Contains(typeName)
         ? throw new CompileError(ErrorCode.ParserCircularDependency,
             $"Circular typealias dependency: {typeName}",
@@ -6003,7 +6001,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseCallStatement() {
     var token = Advance(); // consume identifier
 
-    // Handle stdlib-only compiler builtins (__cstring_*, __file_*, __process_*, __map_*, etc.)
+    // Handle stdlib-only compiler builtins (__managed_*, __file_*, __process_*, __map_*, etc.)
     if (IsCompilerBuiltin(token.Value)) {
       if (!_isStdlib)
         throw new CompileError(ErrorCode.ParserCompilerBuiltinNotInStdlib,
@@ -6043,39 +6041,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   public record BuiltinInfo(string HelpText, Func<Parser, MaxonValue?> Handler);
 
   public static readonly Dictionary<string, BuiltinInfo> CompilerBuiltins = new() {
-    ["__cstring_write_stdout"] = new(
-      "Writes a null-terminated C string to stdout.\n\n`__cstring_write_stdout(cstring_ptr) returns int`",
+    ["__managed_write_stdout"] = new(
+      "Writes a __ManagedMemory buffer to stdout.\n\n`__managed_write_stdout(managed) returns int`",
       p => {
-        var cstrPtr = p.ResolveExprValue(p.ParseExpression());
+        var managed = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
-        var op = new MaxonCStringWriteStdoutOp(cstrPtr);
+        var op = new MaxonManagedWriteStdoutOp(managed);
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
-    ["__cstring_write_stderr"] = new(
-      "Writes a null-terminated C string to stderr.\n\n`__cstring_write_stderr(cstring_ptr) returns int`",
+    ["__managed_write_stderr"] = new(
+      "Writes a __ManagedMemory buffer to stderr.\n\n`__managed_write_stderr(managed) returns int`",
       p => {
-        var cstrPtr = p.ResolveExprValue(p.ParseExpression());
+        var managed = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
-        var op = new MaxonCStringWriteStderrOp(cstrPtr);
+        var op = new MaxonManagedWriteStderrOp(managed);
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
-    // === Memory management intrinsics ===
-    ["__free_cstring"] = RuntimeCallIntrinsic(
-      "Frees a heap-allocated C string. Use after converting owned cstrings to managed strings.\n\n`__free_cstring(cstr)`",
-      "mm_free", 1, false),
     // === Command Line intrinsics ===
     ["__command_line_count"] = RuntimeCallIntrinsic(
       "Returns the number of command line arguments.\n\n`__command_line_count() returns int`",
       "maxon_command_line_count", 0, true),
-    ["__command_line_arg"] = RuntimeCallIntrinsic(
-      "Returns a C string pointer for the command line argument at the given index.\n\n`__command_line_arg(index) returns int`",
-      "maxon_command_line_arg", 1, true),
+    ["__command_line_arg"] = RuntimeCallToManaged(
+      "Returns a __ManagedMemory for the command line argument at the given index.\n\n`__command_line_arg(index) returns __ManagedMemory`",
+      "maxon_command_line_arg", 1, freeCString: true),
     // === File I/O intrinsics ===
-    ["__file_open_read"] = RuntimeCallIntrinsic(
-      "Opens a file for reading, returns handle or -1.\n\n`__file_open_read(cstring_path) returns int`",
-      "maxon_file_open_read", 1, true),
+    ["__file_open_read"] = ManagedToCStringRuntimeCall(
+      "Opens a file for reading, returns handle or -1.\n\n`__file_open_read(managed) returns int`",
+      "maxon_file_open_read"),
     ["__file_size"] = RuntimeCallIntrinsic(
       "Returns the size of an open file handle.\n\n`__file_size(handle) returns int`",
       "maxon_file_size", 1, true),
@@ -6085,76 +6079,58 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["__file_close"] = RuntimeCallIntrinsic(
       "Closes a file handle.\n\n`__file_close(handle)`",
       "maxon_file_close", 1, false),
-    ["__file_delete"] = RuntimeCallIntrinsic(
-      "Deletes a file. Returns 0 on success, non-zero on failure.\n\n`__file_delete(cstring_path) returns int`",
-      "maxon_file_delete", 1, true),
-    ["__write_file"] = RuntimeCallIntrinsic(
-      "Writes text content to a file. Returns 0 on success.\n\n`__write_file(cstring_path, cstring_content) returns int`",
-      "maxon_write_file", 2, true),
+    ["__file_delete"] = ManagedToCStringRuntimeCall(
+      "Deletes a file. Returns 0 on success, non-zero on failure.\n\n`__file_delete(managed) returns int`",
+      "maxon_file_delete"),
+    ["__write_file"] = TwoManagedToCStringRuntimeCall(
+      "Writes text content to a file. Returns 0 on success.\n\n`__write_file(path_managed, content_managed) returns int`",
+      "maxon_write_file"),
     ["__write_file_binary"] = new(
-      "Writes binary content to a file. Returns 0 on success.\n\n`__write_file_binary(cstring_path, array) returns int`",
+      "Writes binary content to a file. Returns 0 on success.\n\n`__write_file_binary(path_managed, array) returns int`",
       p => {
-        var path = p.ResolveExprValue(p.ParseExpression());
+        var pathManaged = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.Comma);
         var arrayVal = p.ResolveExprValue(p.ParseExpression());
         p.Expect(TokenType.RightParen);
-        // Extract managed.buffer and managed.length from the Array struct
+        var pathCstr = new MaxonManagedToCStringOp(pathManaged);
+        p._currentBlock!.AddOp(pathCstr);
+        // Runtime expects raw buffer+length for binary content, not a managed struct
         var managedRef = new MaxonFieldAccessOp(arrayVal, "Array", "managed", MaxonValueKind.Struct, "__ManagedMemory");
         p._currentBlock!.AddOp(managedRef);
         var bufferRef = new MaxonFieldAccessOp(managedRef.Result, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
         p._currentBlock!.AddOp(bufferRef);
         var lengthRef = new MaxonFieldAccessOp(managedRef.Result, "__ManagedMemory", "length", MaxonValueKind.Integer);
         p._currentBlock!.AddOp(lengthRef);
-        var op = new MaxonCallRuntimeOp("maxon_write_file_binary", [path, bufferRef.Result, lengthRef.Result], true);
+        var op = new MaxonCallRuntimeOp("maxon_write_file_binary", [pathCstr.Result, bufferRef.Result, lengthRef.Result], true);
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
     // === Directory intrinsics ===
-    ["__find_first_file"] = RuntimeCallIntrinsic(
-      "Opens a file search. Returns handle or 0.\n\n`__find_first_file(cstring_pattern) returns int`",
-      "maxon_find_first_file", 1, true),
-    ["__find_filename"] = RuntimeCallIntrinsic(
-      "Gets the current filename from a search handle as a C string.\n\n`__find_filename(handle) returns int`",
-      "maxon_find_filename", 1, true),
+    ["__find_first_file"] = ManagedToCStringRuntimeCall(
+      "Opens a file search. Returns handle or 0.\n\n`__find_first_file(managed) returns int`",
+      "maxon_find_first_file"),
+    ["__find_filename"] = RuntimeCallToManaged(
+      "Gets the current filename from a search handle as __ManagedMemory.\n\n`__find_filename(handle) returns __ManagedMemory`",
+      "maxon_find_filename", 1, freeCString: false),
     ["__find_next_file"] = RuntimeCallIntrinsic(
       "Advances to next file. Returns non-zero if found.\n\n`__find_next_file(handle) returns int`",
       "maxon_find_next_file", 1, true),
     ["__find_close"] = RuntimeCallIntrinsic(
       "Closes a file search handle.\n\n`__find_close(handle)`",
       "maxon_find_close", 1, false),
-    ["__directory_exists"] = new(
-      "Checks if a directory exists. Returns true/false.\n\n`__directory_exists(cstring_path) returns bool`",
-      p => {
-        var path = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonCallRuntimeOp("maxon_directory_exists", [path], true);
-        p._currentBlock!.AddOp(op);
-        var zeroOp = new MaxonLiteralOp(0L);
-        p._currentBlock!.AddOp(zeroOp);
-        var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(cmpOp);
-        return cmpOp.Result;
-      }),
-    ["__create_directory"] = new(
-      "Creates a directory. Returns true on success, false on failure.\n\n`__create_directory(cstring_path) returns bool`",
-      p => {
-        var path = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonCallRuntimeOp("maxon_create_directory", [path], true);
-        p._currentBlock!.AddOp(op);
-        var zeroOp = new MaxonLiteralOp(0L);
-        p._currentBlock!.AddOp(zeroOp);
-        var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(cmpOp);
-        return cmpOp.Result;
-      }),
-    ["__get_current_directory"] = RuntimeCallIntrinsic(
-      "Gets the current working directory as a C string.\n\n`__get_current_directory() returns int`",
-      "maxon_get_current_directory", 0, true),
+    ["__directory_exists"] = ManagedToCStringRuntimeCallBool(
+      "Checks if a directory exists. Returns true/false.\n\n`__directory_exists(managed) returns bool`",
+      "maxon_directory_exists"),
+    ["__create_directory"] = ManagedToCStringRuntimeCallBool(
+      "Creates a directory. Returns true on success, false on failure.\n\n`__create_directory(managed) returns bool`",
+      "maxon_create_directory"),
+    ["__get_current_directory"] = RuntimeCallToManaged(
+      "Gets the current working directory as __ManagedMemory.\n\n`__get_current_directory() returns __ManagedMemory`",
+      "maxon_get_current_directory", 0, freeCString: true),
     // === Process intrinsics ===
-    ["__process_create"] = RuntimeCallIntrinsic(
-      "Creates a process. Returns handle.\n\n`__process_create(cstring_cmd, cstring_cwd) returns int`",
-      "maxon_process_create", 2, true),
+    ["__process_create"] = TwoManagedToCStringRuntimeCall(
+      "Creates a process. Returns handle.\n\n`__process_create(cmd_managed, cwd_managed) returns int`",
+      "maxon_process_create"),
     ["__process_wait"] = RuntimeCallIntrinsic(
       "Waits for process. Returns 0=completed, 1=timeout, -1=error.\n\n`__process_wait(handle, timeoutMs) returns int`",
       "maxon_process_wait", 2, true),
@@ -6164,18 +6140,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["__process_close"] = RuntimeCallIntrinsic(
       "Closes a process handle.\n\n`__process_close(handle)`",
       "maxon_process_close", 1, false),
-    ["__process_create_with_capture"] = RuntimeCallIntrinsic(
-      "Creates a process with stdout/stderr capture. Returns capture struct pointer.\n\n`__process_create_with_capture(cstring_cmd, cstring_cwd) returns int`",
-      "maxon_process_create_with_capture", 2, true),
+    ["__process_create_with_capture"] = TwoManagedToCStringRuntimeCall(
+      "Creates a process with stdout/stderr capture. Returns capture struct pointer.\n\n`__process_create_with_capture(cmd_managed, cwd_managed) returns int`",
+      "maxon_process_create_with_capture"),
     ["__process_get_handle"] = RuntimeCallIntrinsic(
       "Gets hProcess from capture struct.\n\n`__process_get_handle(capture_ptr) returns int`",
       "maxon_process_get_handle", 1, true),
-    ["__process_read_stdout"] = RuntimeCallIntrinsic(
-      "Reads stdout from capture struct. Returns cstring pointer.\n\n`__process_read_stdout(capture_ptr) returns int`",
-      "maxon_process_read_stdout", 1, true),
-    ["__process_read_stderr"] = RuntimeCallIntrinsic(
-      "Reads stderr from capture struct. Returns cstring pointer.\n\n`__process_read_stderr(capture_ptr) returns int`",
-      "maxon_process_read_stderr", 1, true),
+    ["__process_read_stdout"] = RuntimeCallToManaged(
+      "Reads stdout from capture struct. Returns __ManagedMemory.\n\n`__process_read_stdout(capture_ptr) returns __ManagedMemory`",
+      "maxon_process_read_stdout", 1, freeCString: true),
+    ["__process_read_stderr"] = RuntimeCallToManaged(
+      "Reads stderr from capture struct. Returns __ManagedMemory.\n\n`__process_read_stderr(capture_ptr) returns __ManagedMemory`",
+      "maxon_process_read_stderr", 1, freeCString: true),
     // === Primitive type intrinsics ===
     ["__float_to_bits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__float_to_bits(value) returns int`",
@@ -6251,6 +6227,74 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// <summary>
   /// Creates a CompilerBuiltinInfo that parses N arguments and emits a MaxonCallRuntimeOp.
   /// </summary>
+  /// Converts a single managed arg to cstring, calls a runtime function, returns its result.
+  private static BuiltinInfo ManagedToCStringRuntimeCall(string doc, string runtimeName) {
+    return new(doc, p => {
+      var managed = p.ResolveExprValue(p.ParseExpression());
+      p.Expect(TokenType.RightParen);
+      var toCstrOp = new MaxonManagedToCStringOp(managed);
+      p._currentBlock!.AddOp(toCstrOp);
+      var op = new MaxonCallRuntimeOp(runtimeName, [toCstrOp.Result], true);
+      p._currentBlock!.AddOp(op);
+      return op.Result;
+    });
+  }
+
+  /// Converts two managed args to cstrings, calls a runtime function, returns its result.
+  private static BuiltinInfo TwoManagedToCStringRuntimeCall(string doc, string runtimeName) {
+    return new(doc, p => {
+      var arg1 = p.ResolveExprValue(p.ParseExpression());
+      p.Expect(TokenType.Comma);
+      var arg2 = p.ResolveExprValue(p.ParseExpression());
+      p.Expect(TokenType.RightParen);
+      var cstr1 = new MaxonManagedToCStringOp(arg1);
+      p._currentBlock!.AddOp(cstr1);
+      var cstr2 = new MaxonManagedToCStringOp(arg2);
+      p._currentBlock!.AddOp(cstr2);
+      var op = new MaxonCallRuntimeOp(runtimeName, [cstr1.Result, cstr2.Result], true);
+      p._currentBlock!.AddOp(op);
+      return op.Result;
+    });
+  }
+
+  /// Calls a runtime function returning a cstring, converts to managed, optionally frees the cstring.
+  private static BuiltinInfo RuntimeCallToManaged(string doc, string runtimeName, int argCount, bool freeCString) {
+    return new(doc, p => {
+      var args = new List<MaxonValue>();
+      for (int i = 0; i < argCount; i++) {
+        if (i > 0) p.Expect(TokenType.Comma);
+        args.Add(p.ResolveExprValue(p.ParseExpression()));
+      }
+      p.Expect(TokenType.RightParen);
+      var rtOp = new MaxonCallRuntimeOp(runtimeName, args, true);
+      p._currentBlock!.AddOp(rtOp);
+      var toManagedOp = new MaxonCStringToManagedOp(rtOp.Result!);
+      p._currentBlock!.AddOp(toManagedOp);
+      if (freeCString) {
+        var freeOp = new MaxonCallRuntimeOp("mm_free", [rtOp.Result!], false);
+        p._currentBlock!.AddOp(freeOp);
+      }
+      return toManagedOp.Result;
+    });
+  }
+
+  /// Converts a single managed arg to cstring, calls runtime, compares result != 0 for bool.
+  private static BuiltinInfo ManagedToCStringRuntimeCallBool(string doc, string runtimeName) {
+    return new(doc, p => {
+      var managed = p.ResolveExprValue(p.ParseExpression());
+      p.Expect(TokenType.RightParen);
+      var toCstrOp = new MaxonManagedToCStringOp(managed);
+      p._currentBlock!.AddOp(toCstrOp);
+      var op = new MaxonCallRuntimeOp(runtimeName, [toCstrOp.Result], true);
+      p._currentBlock!.AddOp(op);
+      var zeroOp = new MaxonLiteralOp(0L);
+      p._currentBlock!.AddOp(zeroOp);
+      var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
+      p._currentBlock!.AddOp(cmpOp);
+      return cmpOp.Result;
+    });
+  }
+
   private static BuiltinInfo RuntimeCallIntrinsic(string doc, string runtimeName, int argCount, bool hasResult) {
     return new(doc, p => {
       var args = new List<MaxonValue>();

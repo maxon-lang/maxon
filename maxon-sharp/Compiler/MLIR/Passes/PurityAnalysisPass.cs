@@ -62,8 +62,8 @@ public static class PurityAnalysisPass {
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         switch (op) {
-          case MaxonCStringWriteStdoutOp:
-          case MaxonCStringWriteStderrOp:
+          case MaxonManagedWriteStdoutOp:
+          case MaxonManagedWriteStderrOp:
           case MaxonGlobalStoreOp:
           case MaxonCallRuntimeOp:
             return true;
