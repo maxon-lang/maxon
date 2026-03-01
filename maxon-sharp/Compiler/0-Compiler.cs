@@ -35,6 +35,9 @@ public class Compiler {
   [ThreadStatic] private static bool _mmTrace;
   public static bool MmTrace { get => _mmTrace; set => _mmTrace = value; }
 
+  [ThreadStatic] private static bool _mmDebug;
+  public static bool MmDebug { get => _mmDebug; set => _mmDebug = value; }
+
   public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 

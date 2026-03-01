@@ -73,7 +73,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes) {
+	  Dictionary<int, string> structValueTypes,
+	  HashSet<string>? parentOwnedVarNames = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
@@ -84,14 +85,15 @@ public static partial class MaxonToStandardConversion {
 
 		if (op.IsStructElement) {
 			// Struct elements are heap pointers stored in the buffer (8 bytes each).
-			// Return a reference to the element — it's parent-owned by the array's
-			// ManagedMemory, so mm_incref/mm_decref are no-ops at runtime.
+			// Return a borrowed reference — it's parent-owned by the array's
+			// ManagedMemory. The element stays owned by the array.
 			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(loadOp);
 
 			var tempName = $"__callret_{MlirContext.Current.NextId()}";
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
+			parentOwnedVarNames?.Add(tempName);
 			if (op.StructElementTypeName != null)
 				structValueTypes[op.Result.Id] = op.StructElementTypeName;
 			valueMap[op.Result] = loadOp.Result;

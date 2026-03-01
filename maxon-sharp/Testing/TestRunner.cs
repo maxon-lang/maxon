@@ -274,6 +274,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
             irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
           }
           Compiler.Compiler.MmTrace = false;
+          Compiler.Compiler.MmDebug = false;
           var irResult = new Compiler.Compiler().Compile(irSources, exePath, returnIr: true);
           if (irTempDir != null) {
             try { Directory.Delete(irTempDir, recursive: true); } catch { }

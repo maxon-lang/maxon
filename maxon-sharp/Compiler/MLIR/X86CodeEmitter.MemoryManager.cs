@@ -8,6 +8,13 @@ public partial class X86CodeEmitter {
   // Memory Manager — scope-based allocation tracking with hierarchical ownership
   // ==========================================================================
   //
+  // Debug mode constants (--mm-debug):
+  private const long MmDebugAllocEntryMagic = unchecked((long)0xA10CDEADA10CDEAD);
+  private const long MmDebugScopeFrameMagic = unchecked((long)0x5C0FEDEA5C0FEDEA);
+  private const long MmDebugCanaryValue     = unchecked((long)0xCAFEBABEDEADC0DE);
+  private int AllocEntrySize => Compiler.MmDebug ? 88 : 80;
+  private int ScopeFrameSize => Compiler.MmDebug ? 64 : 56;
+  //
   // ScopeFrame (56 bytes):
   //   +0   scope_id        (u64)
   //   +8   parent_scope    (ptr)
@@ -123,6 +130,26 @@ public partial class X86CodeEmitter {
       "__ManagedMemory: setLength exceeds capacity\n\0"u8.ToArray());
     DefineSymdata("__mm_panic_grow_shrink",
       "__ManagedMemory: grow cannot shrink capacity\n\0"u8.ToArray());
+
+    if (Compiler.MmDebug) {
+      DefineSymdata("__mm_panic_entry_magic",
+        "mm_debug: AllocEntry magic corrupted (use-after-free or heap corruption)\n\0"u8.ToArray());
+      DefineSymdata("__mm_panic_scope_magic",
+        "mm_debug: ScopeFrame magic corrupted\n\0"u8.ToArray());
+      DefineSymdata("__mm_panic_canary",
+        "mm_debug: heap canary overwritten (buffer overrun detected)\n\0"u8.ToArray());
+      DefineSymdata("__mm_panic_double_free",
+        "mm_debug: double-free detected (AllocEntry magic already cleared)\n\0"u8.ToArray());
+      DefineSymdata("__mm_panic_heap_null",
+        "mm_debug: HeapAlloc returned NULL (out of memory)\n\0"u8.ToArray());
+      DefineSymdata("__mm_panic_realloc_null",
+        "mm_debug: HeapReAlloc returned NULL (out of memory)\n\0"u8.ToArray());
+      DefineSymdata("__mm_panic_entry_selfcheck",
+        "mm_debug: entry.user_ptr backpointer mismatch (entry corrupted)\n\0"u8.ToArray());
+      DefineSymdata("__mm_panic_canary_tag", "mm_debug canary fail ptr=\0"u8.ToArray());
+      DefineSymdata("__mm_panic_magic_tag", "mm_debug magic fail entry=\0"u8.ToArray());
+      DefineSymdata("__mm_debug_tag_size", " size=\0"u8.ToArray());
+    }
 
     EmitMmTracePrintTag();
     EmitMmTracePrintHex();
@@ -278,6 +305,63 @@ public partial class X86CodeEmitter {
   }
 
   // -------------------------------------------------------------------------
+  // Debug helpers — inline check sequences emitted when Compiler.MmDebug is true.
+  // These must be called within an Emit* function body (they emit code inline,
+  // not as separate functions).
+  // -------------------------------------------------------------------------
+
+  /// <summary>
+  /// Emit inline code to validate AllocEntry magic at [RAX + 0x50].
+  /// RAX must contain the entry pointer. Uses RCX and RDX as scratch.
+  /// labelPrefix must be unique within the calling function.
+  /// </summary>
+  private void EmitMmDebugCheckEntryMagic(string labelPrefix) {
+    // Print diagnostics before panicking so we know which entry failed
+    // MOV rcx, [rax+0x50] — entry.magic
+    EmitBytes(0x48, 0x8B, 0x88, 0x50, 0x00, 0x00, 0x00);
+    EmitMovRegImm(X86Register.Rdx, MmDebugAllocEntryMagic);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("e", labelPrefix + "_magic_ok");
+    // Print "mm_debug magic fail entry=0xHEX\n" then panic
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save entry ptr (may already be there)
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_magic_tag");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // entry ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_entry_magic");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel(labelPrefix + "_magic_ok");
+  }
+
+  /// <summary>
+  /// Emit inline code to validate ScopeFrame magic at [RAX + 0x38].
+  /// RAX must contain the scope pointer. Uses RCX and RDX as scratch.
+  /// </summary>
+  private void EmitMmDebugCheckScopeMagic(string labelPrefix) {
+    EmitBytes(0x48, 0x8B, 0x48, 0x38); // MOV rcx, [rax+0x38] — scope.magic
+    EmitMovRegImm(X86Register.Rdx, MmDebugScopeFrameMagic);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("e", labelPrefix + "_scope_magic_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_scope_magic");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel(labelPrefix + "_scope_magic_ok");
+  }
+
+  /// <summary>
+  /// Emit inline code to check that RAX (HeapAlloc result) is not NULL.
+  /// panicLabel is the symdata label for the panic message.
+  /// </summary>
+  private void EmitMmDebugCheckHeapAllocNull(string labelPrefix, string panicLabel) {
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", labelPrefix + "_heap_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, panicLabel);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel(labelPrefix + "_heap_ok");
+  }
+
+  // -------------------------------------------------------------------------
   // mm_trace_print_indent() — print 2*depth spaces based on __mm_current_scope
   // Args: none
   // -------------------------------------------------------------------------
@@ -353,10 +437,11 @@ public partial class X86CodeEmitter {
     EmitSymdataStoreI64(X86Register.Rax, "__mm_scope_id_counter");
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new scope_id
 
-    // HeapAlloc(56) with HEAP_ZERO_MEMORY for ScopeFrame
-    EmitMovRegImm(X86Register.Rax, 56);
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = 56 (size for HeapAlloc R8)
+    // HeapAlloc(ScopeFrameSize) with HEAP_ZERO_MEMORY for ScopeFrame
+    EmitMovRegImm(X86Register.Rax, ScopeFrameSize);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = size (for HeapAlloc R8)
     EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x28);
+    if (Compiler.MmDebug) EmitMmDebugCheckHeapAllocNull("mm_scope_enter_alloc", "__mm_panic_heap_null");
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = new scope ptr
 
     // Set scope_id at [scope+0]
@@ -390,6 +475,13 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = scope ptr
     EmitBytes(0x48, 0x89, 0x41, 0x30); // MOV [rcx+48], rax — scope.depth = computed depth
 
+    // Write scope magic (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = scope ptr
+      EmitMovRegImm(X86Register.Rcx, MmDebugScopeFrameMagic);
+      EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+0x38], rcx — scope.magic
+    }
+
     // Set __mm_current_scope = new scope
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitSymdataStoreI64(X86Register.Rax, "__mm_current_scope");
@@ -414,6 +506,12 @@ public partial class X86CodeEmitter {
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_scope_exit_mismatch");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_scope_exit_scope_valid");
+
+    // Validate scope magic (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
+      EmitMmDebugCheckScopeMagic("mm_scope_exit");
+    }
 
     // Walk alloc_head: for each entry, call mm_free_entry(entry)
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
@@ -477,6 +575,13 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] — scope.parent_scope
     EmitSymdataStoreI64(X86Register.Rax, "__mm_current_scope");
 
+    // Zero scope magic before HeapFree (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = scope_ptr
+      EmitMovRegImm(X86Register.Rcx, 0);
+      EmitBytes(0x48, 0x89, 0x48, 0x38); // MOV [rax+0x38], rcx — zero scope magic
+    }
+
     // HeapFree the scope frame itself
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // reuse slot for HeapFree R8
@@ -497,17 +602,19 @@ public partial class X86CodeEmitter {
     EmitSymdataLoadI64(X86Register.Rax, "__mm_current_scope");
     EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = scope_ptr
 
-    // HeapAlloc(size + 8) for payload with backpointer header
+    // HeapAlloc(size + 8 [+ 8 canary]) for payload with backpointer header
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
-    EmitAddRegImm(X86Register.Rax, 8);
-    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = size + 8
+    EmitAddRegImm(X86Register.Rax, Compiler.MmDebug ? 16 : 8);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = alloc size
     EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    if (Compiler.MmDebug) EmitMmDebugCheckHeapAllocNull("mm_alloc_payload", "__mm_panic_heap_null");
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = raw_ptr
 
-    // HeapAlloc(80) for AllocEntry
-    EmitMovRegImm(X86Register.Rax, 80);
-    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = 80
+    // HeapAlloc(AllocEntrySize) for AllocEntry
+    EmitMovRegImm(X86Register.Rax, AllocEntrySize);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = AllocEntrySize
     EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    if (Compiler.MmDebug) EmitMmDebugCheckHeapAllocNull("mm_alloc_entry", "__mm_panic_heap_null");
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = entry_ptr
 
     // entry.user_ptr = raw_ptr + 8
@@ -538,6 +645,21 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = raw_ptr
     EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = entry_ptr
     EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — [raw_ptr] = entry
+
+    // Write entry magic and canary (MmDebug only)
+    if (Compiler.MmDebug) {
+      // entry.magic = AllocEntryMagic at [entry+0x50]
+      EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = entry
+      EmitMovRegImm(X86Register.Rcx, MmDebugAllocEntryMagic);
+      EmitBytes(0x48, 0x89, 0x88, 0x50, 0x00, 0x00, 0x00); // MOV [rax+0x50], rcx
+
+      // Canary at [user_ptr + size]
+      EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = user_ptr
+      EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = size
+      EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx — rax = user_ptr + size
+      EmitMovRegImm(X86Register.Rcx, MmDebugCanaryValue);
+      EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — write canary
+    }
 
     // Append entry to scope's linked list
     // Check if scope.alloc_tail != NULL
@@ -609,17 +731,25 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_alloc_in_parent_entry_ok");
 
-    // HeapAlloc(size + 8) for payload
+    // Validate parent entry magic (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = parent_entry
+      EmitMmDebugCheckEntryMagic("mm_alloc_in_parent");
+    }
+
+    // HeapAlloc(size + 8 [+ 8 canary]) for payload
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
-    EmitAddRegImm(X86Register.Rax, 8);
-    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = size + 8
+    EmitAddRegImm(X86Register.Rax, Compiler.MmDebug ? 16 : 8);
+    EmitMovMemReg(-0x48, X86Register.Rax, 8); // [rbp-72] = alloc size
     EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    if (Compiler.MmDebug) EmitMmDebugCheckHeapAllocNull("mm_alloc_in_payload", "__mm_panic_heap_null");
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = raw_ptr
 
-    // HeapAlloc(80) for AllocEntry
-    EmitMovRegImm(X86Register.Rax, 80);
+    // HeapAlloc(AllocEntrySize) for AllocEntry
+    EmitMovRegImm(X86Register.Rax, AllocEntrySize);
     EmitMovMemReg(-0x48, X86Register.Rax, 8);
     EmitHeapCall("HeapAlloc", 0x08, rbpSlotR8: -0x48);
+    if (Compiler.MmDebug) EmitMmDebugCheckHeapAllocNull("mm_alloc_in_entry", "__mm_panic_heap_null");
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = entry_ptr
 
     // entry.user_ptr = raw_ptr + 8
@@ -650,6 +780,21 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitMovRegMem(X86Register.Rcx, -0x30, 8);
     EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — [raw_ptr] = entry
+
+    // Write entry magic and canary (MmDebug only)
+    if (Compiler.MmDebug) {
+      // entry.magic = AllocEntryMagic at [entry+0x50]
+      EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = entry
+      EmitMovRegImm(X86Register.Rcx, MmDebugAllocEntryMagic);
+      EmitBytes(0x48, 0x89, 0x88, 0x50, 0x00, 0x00, 0x00); // MOV [rax+0x50], rcx
+
+      // Canary at [user_ptr + size]
+      EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = user_ptr
+      EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = size
+      EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx — rax = user_ptr + size
+      EmitMovRegImm(X86Register.Rcx, MmDebugCanaryValue);
+      EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — write canary
+    }
 
     // Append entry to parent_entry's child list
     EmitMovRegMem(X86Register.Rax, -0x40, 8); // RAX = parent_entry
@@ -732,16 +877,35 @@ public partial class X86CodeEmitter {
 
     DefineLabel("mm_realloc_managed");
 
-    // Managed path: HeapReAlloc(user_ptr - 8, new_size + 8)
+    // Validate entry magic (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+      EmitMmDebugCheckEntryMagic("mm_realloc");
+
+      // Verify old canary at [user_ptr + entry.size]
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+      EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] — entry.size (old size)
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
+      EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx — rax = user_ptr + old_size
+      EmitMovRegImm(X86Register.Rcx, MmDebugCanaryValue);
+      EmitBytes(0x48, 0x39, 0x08); // CMP [rax], rcx
+      EmitJcc("e", "mm_realloc_canary_ok");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_canary");
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+      DefineLabel("mm_realloc_canary_ok");
+    }
+
+    // Managed path: HeapReAlloc(user_ptr - 8, new_size + 8 [+ 8 canary])
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // user_ptr
     EmitSubRegImm(X86Register.Rax, 8);
     EmitMovMemReg(-0x40, X86Register.Rax, 8); // [rbp-64] = old_raw (ptr - 8)
 
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // new_size
-    EmitAddRegImm(X86Register.Rax, 8);
-    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = new_size + 8
+    EmitAddRegImm(X86Register.Rax, Compiler.MmDebug ? 16 : 8);
+    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-56] = realloc size
 
     EmitHeapCall("HeapReAlloc", 0x08, rbpSlotR8: -0x40, rbpSlotR9: -0x38);
+    if (Compiler.MmDebug) EmitMmDebugCheckHeapAllocNull("mm_realloc_heap", "__mm_panic_realloc_null");
     EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-48] = new_raw
 
     // Update entry.user_ptr = new_raw + 8
@@ -759,6 +923,17 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = new_raw
     EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = entry
     EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — [new_raw] = entry
+
+    // Write new canary (MmDebug only)
+    if (Compiler.MmDebug) {
+      // canary at [new_user_ptr + new_size]
+      EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = new_raw
+      EmitAddRegImm(X86Register.Rax, 8); // RAX = new_user_ptr
+      EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = new_size
+      EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx — rax = new_user_ptr + new_size
+      EmitMovRegImm(X86Register.Rcx, MmDebugCanaryValue);
+      EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — write canary
+    }
 
     // Return new_raw + 8
     EmitMovRegMem(X86Register.Rax, -0x30, 8); // new_raw
@@ -812,6 +987,12 @@ public partial class X86CodeEmitter {
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_move_unmanaged");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_move_entry_ok");
+
+    // Validate entry magic (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+      EmitMmDebugCheckEntryMagic("mm_move");
+    }
 
     // Mode 0 (scope transfer): skip for parent-owned allocations — they stay
     // owned by their parent (e.g., Array.get returns a reference, not a detached copy)
@@ -1006,6 +1187,58 @@ public partial class X86CodeEmitter {
     //        [rbp-56]=user_ptr, [rbp-64]=heap_free_arg
     EmitRuntimeFunctionStart("mm_free_entry", 1, 0x80);
 
+    // Debug checks (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+
+      // Double-free check: if magic == 0, entry was already freed
+      EmitBytes(0x48, 0x8B, 0x88, 0x50, 0x00, 0x00, 0x00); // MOV rcx, [rax+0x50] — entry.magic
+      EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+      EmitJcc("nz", "mm_free_entry_not_double_free");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_double_free");
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+      DefineLabel("mm_free_entry_not_double_free");
+
+      // Magic validation
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+      EmitMmDebugCheckEntryMagic("mm_free_entry");
+
+      // Self-consistency: [entry.user_ptr - 8] should == entry
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+      EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — entry.user_ptr
+      EmitBytes(0x48, 0x8B, 0x49, 0xF8); // MOV rcx, [rcx-8] — backpointer
+      EmitCmpRegReg(X86Register.Rcx, X86Register.Rax); // backpointer == entry?
+      EmitJcc("e", "mm_free_entry_selfcheck_ok");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_entry_selfcheck");
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+      DefineLabel("mm_free_entry_selfcheck_ok");
+
+      // Canary check: [user_ptr + size] == canary
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+      EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] — entry.size
+      EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry.user_ptr
+      EmitBytes(0x48, 0x01, 0xC8); // ADD rax, rcx — rax = user_ptr + size
+      EmitMovRegImm(X86Register.Rcx, MmDebugCanaryValue);
+      EmitBytes(0x48, 0x39, 0x08); // CMP [rax], rcx
+      EmitJcc("e", "mm_free_entry_canary_ok");
+      // Print diagnostic: "mm_debug canary fail ptr=0xHEX size=N\n"
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_canary_tag");
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // entry
+      EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — entry.user_ptr
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_debug_tag_size");
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // entry
+      EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] — entry.size
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_canary");
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+      DefineLabel("mm_free_entry_canary_ok");
+    }
+
     // Walk entry.child_head: for each child, check refcount before freeing
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
     EmitBytes(0x48, 0x8B, 0x40, 0x20); // MOV rax, [rax+32] — entry.child_head
@@ -1062,6 +1295,23 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0xFF, 0xC8); // DEC rax
     EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_count");
 
+    // Poison user memory and zero magic (MmDebug only)
+    if (Compiler.MmDebug) {
+      // Poison fill: memset(entry.user_ptr, 0xDE, entry.size)
+      EmitPushReg(X86Register.Rdi); // save RDI (callee-saved on Win64)
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+      EmitBytes(0x48, 0x8B, 0x38); // MOV rdi, [rax] — rdi = entry.user_ptr
+      EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] — rcx = entry.size
+      EmitMovRegImm(X86Register.Rax, 0xDE); // AL = 0xDE
+      EmitBytes(0xF3, 0xAA); // REP STOSB — fill [rdi..rdi+rcx) with 0xDE
+      EmitPopReg(X86Register.Rdi); // restore RDI
+
+      // Zero entry magic (for double-free detection)
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
+      EmitMovRegImm(X86Register.Rcx, 0);
+      EmitBytes(0x48, 0x89, 0x88, 0x50, 0x00, 0x00, 0x00); // MOV [rax+0x50], rcx — zero magic
+    }
+
     // HeapFree the payload: entry.user_ptr - 8
     // Zero the backpointer first so double-free is detected as "unmanaged pointer"
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
@@ -1112,6 +1362,12 @@ public partial class X86CodeEmitter {
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_free_unmanaged");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_free_entry_ok");
+
+    // Validate entry magic (MmDebug only)
+    if (Compiler.MmDebug) {
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = entry
+      EmitMmDebugCheckEntryMagic("mm_free");
+    }
 
     // Load prev and next
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
@@ -1245,6 +1501,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — child_entry
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_free_child_of_skip"); // unmanaged
+    if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_free_child_of");
     EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = child_entry
 
     // Load parent_entry = [parent_ptr - 8]
@@ -1289,6 +1546,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — child_entry
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_reparent_if_scope_owned_skip"); // unmanaged
+    if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_reparent_scope_owned");
 
     // Check if scope-owned: entry.owner_entry (+48) == 0 means scope-owned
     EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0 — entry.owner_entry
@@ -1320,6 +1578,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_reparent_if_nonnull_skip");
+    if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_reparent_nonnull");
     // mm_move(child_ptr, parent_ptr, mode=1)
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // child_ptr
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // parent_ptr
@@ -1407,6 +1666,9 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_incref_done");
 
+    // Validate entry magic (MmDebug only)
+    if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_incref");
+
     // Increment refcount: entry.refcount += 1
     EmitBytes(0x48, 0xFF, 0x40, 0x48); // INC qword [rax+72] — entry.refcount++
 
@@ -1439,6 +1701,9 @@ public partial class X86CodeEmitter {
     // Unmanaged check
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_decref_done");
+
+    // Validate entry magic (MmDebug only)
+    if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_decref");
 
     // Parent-owned with refcount 0: skip (never incref'd, nothing to decrement)
     EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0 — entry.owner_entry
@@ -1579,6 +1844,9 @@ public partial class X86CodeEmitter {
     // Unmanaged check
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_set_owner_done");
+
+    // Validate entry magic (MmDebug only)
+    if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_set_owner");
 
     // Parent-owned check: entry.owner_entry != 0
     EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0 — entry.owner_entry
@@ -1733,10 +2001,13 @@ public partial class X86CodeEmitter {
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
 
-    // If non-zero, skip (valid)
+    // If non-zero, entry exists — do magic check if MmDebug, then skip
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_validate_done");
+    EmitJcc("z", "mm_validate_no_entry");
+    if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_validate");
+    EmitJmp("mm_validate_done");
 
+    DefineLabel("mm_validate_no_entry");
     // FAILED: print "MM VALIDATE ptr=0xHEX\n" then panic
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_validate_tag");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);

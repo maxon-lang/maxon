@@ -259,6 +259,11 @@ public static partial class MaxonToStandardConversion {
       // Tracks parameter names (used to distinguish params from locals in some paths)
       var structParamNames = new HashSet<string>();
 
+      // Tracks variable names that hold parent-owned (borrowed) references from managed
+      // memory get. These references must NOT be reparented by struct field init or mm_move —
+      // instead, mm_incref is used to keep them alive without stealing from the container.
+      var parentOwnedVarNames = new HashSet<string>();
+
       // Cache self-field loads: maps "fieldName" → temp var name for struct-typed self fields.
       // Avoids redundant load_indirect from self's heap pointer for the same field within a block.
       // Reset per-block since a cached var stored in one branch may not be defined in another.
@@ -723,8 +728,15 @@ public static partial class MaxonToStandardConversion {
                   // when the wrapper goes out of scope (even though the chain still needs it).
                   bool isChainNodeData = structValueTypes.TryGetValue(fieldVal.Id, out var nestedTypeName)
                     && IsChainNodeType(nestedTypeName, module.TypeDefs);
-                  if (!isChainNodeData)
+                  // Parent-owned references (from array.get) and function parameters
+                  // must not be reparented — they are borrowed, not owned. The struct
+                  // field holds a raw pointer; the value stays owned by its current owner.
+                  // This matches Chain's borrowed pointer pattern for navigation results.
+                  bool isBorrowed = parentOwnedVarNames.Contains(nestedStructName)
+                    || structParamNames.Contains(nestedStructName);
+                  if (!isBorrowed && !isChainNodeData) {
                     EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
+                  }
                 } else {
                   var mappedVal = valueMap[fieldVal];
                   var litFieldStoreType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
@@ -934,6 +946,9 @@ public static partial class MaxonToStandardConversion {
                 structVarNames[assignOp.Value.Id] = dstName;
                 structValueTypes[assignOp.Value.Id] = structTypeName;
                 varNameToStructPrefix[assignOp.VarName] = dstName;
+                // Propagate parent-owned flag through assignments
+                if (parentOwnedVarNames.Contains(srcName))
+                  parentOwnedVarNames.Add(assignOp.VarName);
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 // Widen I32/U32 to I64 when the variable was previously stored as I64
@@ -1304,6 +1319,11 @@ public static partial class MaxonToStandardConversion {
               if (!varNameToStructPrefix.ContainsKey(moveOp.VarName)
                   && !varNameToStructType.ContainsKey(moveOp.VarName))
                 break;
+              // Skip move for parent-owned references (borrowed from container).
+              // mm_move mode=0 is already a no-op for parent-owned, but we skip
+              // entirely to avoid the runtime call overhead.
+              if (parentOwnedVarNames.Contains(moveOp.VarName))
+                break;
               // CanStaticReturn: scope frame is elided, so mm_alloc registers the return value
               // directly in the caller's scope via __mm_current_scope — no mm_move needed
               if (moveOp.Tag == "return_move") {
@@ -1666,7 +1686,7 @@ public static partial class MaxonToStandardConversion {
               LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
               break;
             case MaxonManagedMemGetOp memGetOp:
-              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
+              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, parentOwnedVarNames);
               break;
             case MaxonManagedMemSetOp memSetOp:
               LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
