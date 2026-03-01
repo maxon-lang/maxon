@@ -74,6 +74,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Populated by ScopeAnalysisPass, consumed by MaxonToStandardConversion
   public Dictionary<string, Dictionary<string, ScopeInfo>> ScopeAnalysis { get; } = [];
 
+  // Per-block scope stacks: funcName -> blockName -> list of active scope var names at block entry
+  // Populated by ScopeAnalysisPass, consumed by MaxonToStandardConversion
+  public Dictionary<string, Dictionary<string, List<string>>> BlockScopeStacks { get; } = [];
+
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
   }
@@ -125,6 +129,7 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
     foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
     foreach (var (k, v) in ScopeAnalysis) clone.ScopeAnalysis[k] = v;
+    foreach (var (k, v) in BlockScopeStacks) clone.BlockScopeStacks[k] = v;
     return clone;
   }
 

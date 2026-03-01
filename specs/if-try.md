@@ -496,3 +496,37 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: if-try-elseif-scope-cleanup -->
+Else-if containing try where the inner scope has no block_exit (all paths return).
+The else path must not segfault when cleaning up the else-if scope.
+
+```maxon
+union MyError implements Error
+  failed
+end 'MyError'
+
+typealias Int = int(i64.min to i64.max)
+
+function mayFail() returns Int throws MyError
+  throw MyError.failed
+end 'mayFail'
+
+function helper(x Int) returns Int throws MyError
+  if x == 1 'case1'
+    return 10
+  end 'case1' else if x == 2 'case2'
+    let r = try mayFail()
+    return r
+  end 'case2' else 'default'
+    return 30
+  end 'default'
+end 'helper'
+
+function main() returns ExitCode
+  return try helper(3) otherwise 99
+end 'main'
+```
+```exitcode
+30
+```

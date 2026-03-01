@@ -316,11 +316,6 @@ public static partial class MaxonToStandardConversion {
 
     // Resolve the current scope for reparenting allocations.
     var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-    // Fallback: scope stack may be depleted by branch-sibling scope_exits in try/otherwise
-    if (currentScopeInfo == null && _funcScopeAnalysis != null) {
-      currentScopeInfo = _funcScopeAnalysis.Values
-        .FirstOrDefault(s => s.ScopeVar != null && varTypes.ContainsKey(s.ScopeVar));
-    }
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs) && currentScopeInfo != null) {
       // Struct value: force-detach from node's child list and move to current scope.
@@ -429,10 +424,6 @@ public static partial class MaxonToStandardConversion {
       // Detach old value from node to current scope via mm_move mode=2.
       // Scope exit will free it (rc=0) or decref it (rc>0 from node.value()).
       var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-      if (currentScopeInfo == null && _funcScopeAnalysis != null) {
-        currentScopeInfo = _funcScopeAnalysis.Values
-          .FirstOrDefault(s => s.ScopeVar != null && varTypes.ContainsKey(s.ScopeVar));
-      }
       if (currentScopeInfo != null) {
         var scopePtr = (StdI64)EmitLoad(block, currentScopeInfo.ScopeVar, varTypes);
         var detachMode = new StdConstI64Op(2);

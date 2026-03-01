@@ -50,8 +50,6 @@ public static class ScopeAnalysisPass {
     var producingOps = new Dictionary<int, MaxonOp>();
     // All ScopeInfos for this function, keyed by scope var name
     var scopeInfos = new Dictionary<string, ScopeInfo>();
-    // Stack tracking the currently active scope (innermost last)
-    var scopeStack = new List<string>();
     // Function lookup for purity checks — pure functions can't reparent/free allocations
     var funcByName = new Dictionary<string, MlirFunction<MaxonOp>>();
     foreach (var f in module.Functions) funcByName[f.Name] = f;
@@ -64,18 +62,51 @@ public static class ScopeAnalysisPass {
     var structVarRefNames = new Dictionary<int, string>();
     // Map var name → source var name when assigned from a struct var ref (alias tracking)
     var aliasSourceVar = new Dictionary<string, string>();
-    // Pre-scan: identify scopes that have a block_exit somewhere in the function.
-    // Scopes without any block_exit (only cleanup exits like return_cleanup) need
-    // to be popped on their first cleanup exit, since all paths through them terminate.
-    var scopesWithBlockExit = new HashSet<string>();
-    foreach (var b in func.Body.Blocks) {
-      foreach (var o in b.Operations) {
-        if (o is MaxonScopeExitOp { Tag: "block_exit" } be)
-          scopesWithBlockExit.Add(be.ScopeVar);
+
+    // Build CFG and compute per-block scope stacks. Each block's entry scope stack
+    // is derived from its predecessor in the CFG, not from linear block order. This
+    // prevents scope_exit ops in one control flow branch from corrupting the scope
+    // stack seen by sibling branches.
+    var cfg = CfgBuilder<MaxonOp>.Build(func.Body.Blocks, GetSuccessors, BlockEndsWithTerminator);
+    var blockEntryScopeStack = new Dictionary<string, List<string>>();
+    var blockExitScopeStack = new Dictionary<string, List<string>>();
+    for (int bi = 0; bi < func.Body.Blocks.Count; bi++) {
+      var b = func.Body.Blocks[bi];
+      List<string> entryStack;
+      if (bi == 0) {
+        entryStack = [];
+      } else {
+        entryStack = [];
+        foreach (var pred in cfg.Predecessors[b.Name]) {
+          if (blockExitScopeStack.TryGetValue(pred, out var predExit)) {
+            entryStack = [.. predExit];
+            break;
+          }
+        }
       }
+      blockEntryScopeStack[b.Name] = entryStack;
+      var exitStack = new List<string>(entryStack);
+      foreach (var op in b.Operations) {
+        switch (op) {
+          case MaxonScopeEnterOp enterOp:
+            exitStack.Add(enterOp.ResultVar);
+            break;
+          case MaxonScopeExitOp { Tag: "block_exit" } exitOp:
+            for (int i = exitStack.Count - 1; i >= 0; i--) {
+              if (exitStack[i] == exitOp.ScopeVar) {
+                exitStack.RemoveAt(i);
+                break;
+              }
+            }
+            break;
+        }
+      }
+      blockExitScopeStack[b.Name] = exitStack;
     }
 
     foreach (var block in func.Body.Blocks) {
+      var currentScopeStack = new List<string>(blockEntryScopeStack[block.Name]);
+
       foreach (var op in block.Operations) {
         // Track producing ops for value tracing
         switch (op) {
@@ -147,36 +178,25 @@ public static class ScopeAnalysisPass {
           case MaxonScopeEnterOp enterOp: {
             var info = new ScopeInfo(enterOp.ResultVar);
             scopeInfos[enterOp.ResultVar] = info;
-            scopeStack.Add(enterOp.ResultVar);
-            Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: scope_enter {enterOp.ResultVar} (depth={scopeStack.Count})");
+            currentScopeStack.Add(enterOp.ResultVar);
+            Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: scope_enter {enterOp.ResultVar} (depth={currentScopeStack.Count})");
             break;
           }
 
           case MaxonScopeExitOp exitOp when exitOp.Tag == "block_exit": {
-            // Only pop on normal block exits — cleanup exits (return_cleanup,
-            // break_cleanup, continue_cleanup) appear in alternate control flow
-            // blocks and must not disturb the scope stack for subsequent blocks
-            for (int i = scopeStack.Count - 1; i >= 0; i--) {
-              if (scopeStack[i] == exitOp.ScopeVar) {
-                scopeStack.RemoveAt(i);
+            for (int i = currentScopeStack.Count - 1; i >= 0; i--) {
+              if (currentScopeStack[i] == exitOp.ScopeVar) {
+                currentScopeStack.RemoveAt(i);
                 break;
               }
             }
             break;
           }
 
-          case MaxonScopeExitOp cleanupOp when cleanupOp.Tag != "block_exit": {
-            // Cleanup exits for scopes that have NO block_exit anywhere — all paths
-            // through the scope terminate (return/break/continue/throw), so pop it.
-            // Never pop the function root scope (index 0) — it spans the entire function.
-            if (!scopesWithBlockExit.Contains(cleanupOp.ScopeVar)) {
-              for (int i = scopeStack.Count - 1; i >= 1; i--) {
-                if (scopeStack[i] == cleanupOp.ScopeVar) {
-                  scopeStack.RemoveAt(i);
-                  break;
-                }
-              }
-            }
+          case MaxonScopeExitOp: {
+            // Cleanup exits (return_cleanup, break_cleanup, continue_cleanup) do not
+            // modify the scope stack — each block computes its own entry scope stack
+            // from CFG predecessors, so sibling branches are unaffected.
             break;
           }
 
@@ -208,8 +228,8 @@ public static class ScopeAnalysisPass {
             if (structVarRefNames.TryGetValue(assignOp.Value.Id, out var srcVarName))
               nestedInStructField.Add(srcVarName);
 
-            if (scopeStack.Count == 0) break;
-            var currentScope = scopeStack[^1];
+            if (currentScopeStack.Count == 0) break;
+            var currentScope = currentScopeStack[^1];
             if (!scopeInfos.TryGetValue(currentScope, out var scopeInfo)) break;
 
             bool isFromCall = false;
@@ -303,8 +323,8 @@ public static class ScopeAnalysisPass {
           }
 
           case MaxonMoveOp moveOp: {
-            if (scopeStack.Count > 0) {
-              var currentScope = scopeStack[^1];
+            if (currentScopeStack.Count > 0) {
+              var currentScope = currentScopeStack[^1];
               if (scopeInfos.TryGetValue(currentScope, out var srcInfo)) {
                 srcInfo.EscapingVars.Add(moveOp.VarName);
                 Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: escape '{moveOp.VarName}' from scope {currentScope} -> {moveOp.DestScopeVar} (tag={moveOp.Tag})");
@@ -312,10 +332,10 @@ public static class ScopeAnalysisPass {
                   srcInfo.ReturnMoveVars.Add(moveOp.VarName);
                   // Also mark in all enclosing scopes up to the dest scope, since
                   // each scope_exit on the return path must skip decreffing this var
-                  for (int si = scopeStack.Count - 2; si >= 0; si--) {
-                    if (scopeInfos.TryGetValue(scopeStack[si], out var enclosingInfo))
+                  for (int si = currentScopeStack.Count - 2; si >= 0; si--) {
+                    if (scopeInfos.TryGetValue(currentScopeStack[si], out var enclosingInfo))
                       enclosingInfo.ReturnMoveVars.Add(moveOp.VarName);
-                    if (scopeStack[si] == moveOp.DestScopeVar) break;
+                    if (currentScopeStack[si] == moveOp.DestScopeVar) break;
                   }
                 }
               }
@@ -333,11 +353,11 @@ public static class ScopeAnalysisPass {
             // Only track vars passed to functions that might call mm_move on their
             // parameters — such functions are unsafe for mm_alloc_simple allocations
             // because mm_move reads the backpointer at [ptr-8]
-            if (callOp.ArgVarNames != null && scopeStack.Count > 0) {
+            if (callOp.ArgVarNames != null && currentScopeStack.Count > 0) {
               bool calleeSafe = funcByName.TryGetValue(callOp.Callee, out var callee)
                 && callee.IsPure && !HasMoveOnParams(callee);
               if (!calleeSafe) {
-                var currentScope = scopeStack[^1];
+                var currentScope = currentScopeStack[^1];
                 if (scopeInfos.TryGetValue(currentScope, out var scopeInfo)) {
                   foreach (var argVarName in callOp.ArgVarNames) {
                     if (argVarName != null)
@@ -352,8 +372,8 @@ public static class ScopeAnalysisPass {
           case MaxonChainClearOp: {
             // chain.clear() frees nodes and their children at runtime — the scope
             // needs a runtime frame so freed allocations are tracked correctly
-            if (scopeStack.Count > 0) {
-              var currentScope = scopeStack[^1];
+            if (currentScopeStack.Count > 0) {
+              var currentScope = currentScopeStack[^1];
               if (scopeInfos.TryGetValue(currentScope, out var scopeInfo))
                 scopeInfo.ReceivesMovedAllocs = true;
             }
@@ -493,8 +513,10 @@ public static class ScopeAnalysisPass {
     }
 
     // Skip storing results for __module_init's root scope — not safe to optimize
-    if (scopeInfos.Count > 0)
+    if (scopeInfos.Count > 0) {
       module.ScopeAnalysis[func.Name] = scopeInfos;
+      module.BlockScopeStacks[func.Name] = blockEntryScopeStack;
+    }
   }
 
   /// <summary>
@@ -514,6 +536,24 @@ public static class ScopeAnalysisPass {
     if (structTypeName == null) return 0;
     if (!module.TypeDefs.TryGetValue(structTypeName, out var typeDef)) return 0;
     return typeDef.SizeInBytes;
+  }
+
+  private static List<string> GetSuccessors(MlirBlock<MaxonOp> block) {
+    if (block.Operations.Count == 0) return [];
+    var lastOp = block.Operations[^1];
+    return lastOp switch {
+      MaxonBrOp br => [br.Target],
+      MaxonCondBrOp condBr => [condBr.ThenBlock, condBr.ElseBlock],
+      MaxonReturnOp => [],
+      MaxonThrowOp => [],
+      _ => [],
+    };
+  }
+
+  private static bool BlockEndsWithTerminator(MlirBlock<MaxonOp> block) {
+    if (block.Operations.Count == 0) return false;
+    var lastOp = block.Operations[^1];
+    return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonThrowOp;
   }
 
   /// <summary>

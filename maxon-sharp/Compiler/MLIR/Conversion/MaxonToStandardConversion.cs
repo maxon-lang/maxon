@@ -141,6 +141,7 @@ public static partial class MaxonToStandardConversion {
       module.ScopeAnalysis.TryGetValue(func.Name, out Dictionary<string, ScopeInfo>? funcScopeAnalysis);
       _funcScopeAnalysis = funcScopeAnalysis;
       _scopeAnalysisStack = [];
+      module.BlockScopeStacks.TryGetValue(func.Name, out var funcBlockScopeStacks);
 
       // Collect stack-allocable struct literal IDs and return alloc IDs from scope analysis
       var returnAllocIds = new HashSet<int>();
@@ -265,6 +266,17 @@ public static partial class MaxonToStandardConversion {
 
 
       foreach (var block in func.Body.Blocks) {
+        // Reset scope analysis stack from pre-computed per-block data. Each block's
+        // entry scope stack is derived from CFG predecessors, preventing scope_exit
+        // ops in one branch from corrupting the stack seen by sibling branches.
+        if (funcBlockScopeStacks != null
+            && funcBlockScopeStacks.TryGetValue(block.Name, out var blockScopeVars)) {
+          _scopeAnalysisStack = [..blockScopeVars
+            .Select(sv => funcScopeAnalysis?.GetValueOrDefault(sv))];
+        } else {
+          _scopeAnalysisStack = [];
+        }
+
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
 

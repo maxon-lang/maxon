@@ -70,17 +70,9 @@ public static class DeadStoreEliminationPass {
     // variables must never be eliminated by liveness analysis.
     var escapedVars = CollectEscapedVars(func, fieldVarMap);
 
-    // Build CFG: block name → successor block names
-    var successors = new Dictionary<string, List<string>>();
-    for (int bi = 0; bi < blocks.Count; bi++) {
-      var succs = GetSuccessors(blocks[bi]);
-      // Blocks with no terminator (empty or non-branch last op) fall through
-      // to the next physical block
-      if (succs.Count == 0 && bi + 1 < blocks.Count && !EndsWithTerminator(blocks[bi])) {
-        succs = [blocks[bi + 1].Name];
-      }
-      successors[blocks[bi].Name] = succs;
-    }
+    // Build CFG: block name → successor/predecessor block names
+    var cfg = CfgBuilder<StandardOp>.Build(blocks, GetSuccessors, EndsWithTerminator);
+    var successors = cfg.Successors;
 
     // Compute GEN and KILL for each block
     var gen = new Dictionary<string, HashSet<string>>();
