@@ -129,20 +129,29 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     chain.clear()
   end 'clear'
 
-  /// Get next element in iteration (front to back), throws when exhausted
+  /// Reset iteration state for a fresh traversal
+  export function createIterator()
+    iterIndex = 0
+  end 'createIterator'
+
+  /// Get next element in iteration (front to back), throws when exhausted.
+  /// Uses the chain's cursor for O(1) per-step iteration instead of re-walking from head.
   export function next() returns Element throws IterationError
     if iterIndex >= chain.count() 'done'
       throw IterationError.exhausted
     end 'done'
-    var current = try chain.head() otherwise 'err'
-      throw IterationError.exhausted
-    end 'err'
-    for i in 0 upto iterIndex 'walk'
-      current = try current.next() otherwise 'err2'
+    if iterIndex == 0 'first'
+      try chain.cursorStart() otherwise 'err'
+        throw IterationError.exhausted
+      end 'err'
+    end 'first'
+    var value = chain.cursorValue()
+    iterIndex = iterIndex + 1
+    if iterIndex < chain.count() 'has_next'
+      try chain.cursorAdvance() otherwise 'err2'
         throw IterationError.exhausted
       end 'err2'
-    end 'walk'
-    iterIndex = iterIndex + 1
-    return current.value()
+    end 'has_next'
+    return value
   end 'next'
 end 'List'

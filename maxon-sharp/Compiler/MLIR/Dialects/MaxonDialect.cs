@@ -1132,3 +1132,22 @@ public class MaxonChainClearOp(MaxonValue chain) : MaxonOp {
   public MaxonValue Chain { get; } = chain;
   public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
 }
+
+// Resets the chain's iteration cursor to null (0)
+public class MaxonChainCursorResetOp(MaxonValue chain) : MaxonOp {
+  public override string Mnemonic => "maxon.chain_cursor_reset";
+  public MaxonValue Chain { get; } = chain;
+  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
+}
+
+// Reads the value at the chain's current cursor position
+public class MaxonChainCursorValueOp(MaxonValue chain, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.chain_cursor_value";
+  public MaxonValue Chain { get; } = chain;
+  public string ValueKind { get; } = valueKind;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
+    ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
+}

@@ -930,6 +930,29 @@ end 'main'
 1160
 ```
 
+<!-- test: string-double-iteration -->
+Iterating the same string twice yields the same count both times.
+```maxon
+function main() returns ExitCode
+  var s = "Hello"
+  var count1 = 0
+  for ch in s 'loop1'
+    count1 = count1 + 1
+  end 'loop1'
+  var count2 = 0
+  for ch in s 'loop2'
+    count2 = count2 + 1
+  end 'loop2'
+  if count1 == 5 and count2 == 5 'ok'
+    return 0
+  end 'ok'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: heap-string-byteview -->
 ```maxon
 function main() returns ExitCode

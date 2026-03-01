@@ -637,7 +637,7 @@ try c.asciiValue()                   // throws CharacterError
 | `Cloneable` | `clone() -> Self` |
 | `Stringable` | `toString() -> String` |
 | `FormattedStringable` | `toString(format) -> String` |
-| `Iterable uses E` | `next() -> E throws IterationError` |
+| `Iterable uses E` | `createIterator()`, `next() -> E throws IterationError` |
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
 | `Error` | (marker for throwable unions) |
 

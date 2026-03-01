@@ -515,43 +515,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var module = new MlirModule<MaxonOp>();
     _currentModule = module;
 
-    // Register __ManagedMemory opaque struct type (buffer pointer, length, capacity, element_size)
-    if (!_typeRegistry.ContainsKey("__ManagedMemory")) {
-      var mmType = new MlirStructType("__ManagedMemory", [
-        new MlirStructField("buffer", MlirType.I64, false, true),
-        new MlirStructField("length", MlirType.I64, false, true),
-        new MlirStructField("capacity", MlirType.I64, false, true),
-        new MlirStructField("element_size", MlirType.I64, false, true),
-      ]);
-      mmType.AssociatedTypeNames.Add("Element");
-      mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
-      _typeRegistry["__ManagedMemory"] = mmType;
-    }
-
-    // Register Chain as builtin type: [head:i64, tail:i64, count:i64]
-    if (!_typeRegistry.ContainsKey("__Chain")) {
-      var chainType = new MlirStructType("__Chain", [
-        new MlirStructField("head", MlirType.I64, false, true),
-        new MlirStructField("tail", MlirType.I64, false, true),
-        new MlirStructField("count", MlirType.I64, false, true),
-      ]);
-      chainType.AssociatedTypeNames.Add("Element");
-      chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, and element count.\n\nSee the `chain` stdlib module for operations.";
-      _typeRegistry["__Chain"] = chainType;
-    }
-
-    // Register ChainNode as builtin type: [next:i64, prev:i64, chain:i64, value:i64]
-    if (!_typeRegistry.ContainsKey("__ChainNode")) {
-      var nodeType = new MlirStructType("__ChainNode", [
-        new MlirStructField("next", MlirType.I64, false, true),
-        new MlirStructField("prev", MlirType.I64, false, true),
-        new MlirStructField("chain", MlirType.I64, false, true),
-        new MlirStructField("value", MlirType.I64, false, true),
-      ]);
-      nodeType.AssociatedTypeNames.Add("Element");
-      nodeType.DocString = "Compiler builtin node for a `Chain` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning chain, and the element value.";
-      _typeRegistry["__ChainNode"] = nodeType;
-    }
+    EnsureManagedMemoryType();
 
     SeedFromModule(seedModule, module);
 
@@ -644,9 +608,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("head", MlirType.I64, false, true),
         new MlirStructField("tail", MlirType.I64, false, true),
         new MlirStructField("count", MlirType.I64, false, true),
+        new MlirStructField("cursor", MlirType.I64, false, true),
       ]);
       chainType.AssociatedTypeNames.Add("Element");
-      chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, and element count.\n\nSee the `chain` stdlib module for operations.";
+      chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, element count, and iteration cursor.\n\nSee the `chain` stdlib module for operations.";
       _typeRegistry["__Chain"] = chainType;
     }
     if (!_typeRegistry.ContainsKey("__ChainNode")) {
@@ -4948,6 +4913,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             ParseInstanceMethodCallStatement(nameToken.Value, resolved!, resolvedName);
             return;
           }
+
+          // Type parameter: resolve method through where-constrained interfaces
+          if (_typeRegistry.TryGetValue(structTypeName, out var regType2) && regType2 is MlirTypeParameterType) {
+            var ifaceMethod = FindInterfaceMethod(methodFieldName, structTypeName);
+            if (ifaceMethod != null) {
+              ParseTypeParamMethodCallStatement(nameToken.Value, resolved!, structTypeName, methodFieldName, ifaceMethod);
+              return;
+            }
+          }
         }
       }
     }
@@ -6501,6 +6475,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           _currentBlock!.AddOp(op);
           return (true, null);
         }
+        case "cursorReset": {
+          // cursorReset() — reset iteration cursor to null (before head)
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainCursorResetOp(selfValue);
+          _currentBlock!.AddOp(op);
+          return (true, null);
+        }
+        case "cursorValue": {
+          // cursorValue() returns Element — read value at current cursor position
+          Expect(TokenType.RightParen);
+          var op = new MaxonChainCursorValueOp(selfValue, valueKind, elementKind);
+          _currentBlock!.AddOp(op);
+          return (true, op.Result);
+        }
+        case "cursorAdvance": {
+          // cursorAdvance() — advance cursor to next node, throws if at end
+          Expect(TokenType.RightParen);
+          var callOp = new MaxonCallOp("__chain_cursor_advance", [selfValue], (MaxonValueKind?)null, null);
+          _currentBlock!.AddOp(callOp);
+          return (true, null);
+        }
+        case "cursorStart": {
+          // cursorStart() — set cursor to head node, throws if empty
+          Expect(TokenType.RightParen);
+          var callOp = new MaxonCallOp("__chain_cursor_start", [selfValue], (MaxonValueKind?)null, null);
+          _currentBlock!.AddOp(callOp);
+          return (true, null);
+        }
       }
     }
 
@@ -6808,6 +6810,60 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (args, callee) = ParseInstanceMethodCallArgs(qualifiedToken, structVal);
     var callOp = CreateFunctionCall(qualifiedToken, args, callee);
     MarkDiscardedResult(callOp, methodToken);
+  }
+
+  /// Resolve the return type of an interface method signature to a ValueKind and optional struct type name.
+  /// Self (which resolves to the interface name during parsing) maps to the concrete userTypeName.
+  private (MaxonValueKind? Kind, string? StructTypeName) ResolveInterfaceMethodReturn(MlirInterfaceMethodSignature ifaceMethod, string userTypeName, string fieldName, Token errorToken) {
+    var resultKind = ifaceMethod.ReturnTypeName switch {
+      null => (MaxonValueKind?)null,
+      "int" => MaxonValueKind.Integer,
+      "float" => MaxonValueKind.Float,
+      "f32" => MaxonValueKind.Float32,
+      "bool" => MaxonValueKind.Bool,
+      "byte" => MaxonValueKind.Byte,
+      "Self" => MaxonValueKind.Struct,
+      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is MlirInterfaceType => MaxonValueKind.Struct,
+      { } n when IsAssociatedTypeName(n) => MaxonValueKind.TypeParameter,
+      { } n when _typeRegistry.TryGetValue(n, out var rType) && rType is MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
+      { } n => throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Unsupported return type '{n}' in interface method '{fieldName}'", errorToken.Line, errorToken.Column)
+    };
+    bool isSelfReturn = ifaceMethod.ReturnTypeName == "Self"
+      || (_typeRegistry.TryGetValue(ifaceMethod.ReturnTypeName ?? "", out var retType) && retType is MlirInterfaceType);
+    string? resultStructTypeName = isSelfReturn ? userTypeName : null;
+    return (resultKind, resultStructTypeName);
+  }
+
+  private void ParseTypeParamMethodCallStatement(string name, ResolvedVar resolved, string userTypeName, string fieldName, MlirInterfaceMethodSignature ifaceMethod) {
+    Advance(); // consume variable name
+    Advance(); // consume '.'
+    var methodToken = Advance(); // consume method name
+    Advance(); // consume '('
+
+    MaxonValue structVal = resolved switch {
+      ResolvedVar.Local(var info) => info.Value,
+      ResolvedVar.Global(var info) => EmitGlobalLoad(name, info).Value,
+      _ => throw new InvalidOperationException()
+    };
+
+    var qualifiedMethodName = $"{userTypeName}.{fieldName}";
+    var args = new List<MaxonValue> { structVal };
+    if (!Check(TokenType.RightParen)) {
+      while (true) {
+        if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
+          Advance(); // consume label
+          Advance(); // consume ':'
+        }
+        args.Add(ResolveExprValue(ParseExpression()));
+        if (!Check(TokenType.Comma)) break;
+        Advance(); // consume ','
+      }
+    }
+    Expect(TokenType.RightParen);
+
+    var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, methodToken);
+    var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
+    _currentBlock!.AddOp(callOp);
   }
 
   private void ParseIf() {
@@ -7164,6 +7220,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ? regType as MlirStructType : null;
 
     string nextMethodName;
+    string createIteratorMethodName;
     MlirType? elementMlirType;
 
     if (iterableType is { IsInterfaceAlias: true }) {
@@ -7187,18 +7244,29 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           $"Cannot resolve element type for interface '{ifaceName}' iterator", forToken.Line, forToken.Column);
       }
 
-      // Create stub function so calls can reference it (monomorphization rewrites later)
+      // Only emit createIterator if the interface defines it
+      var hasCreateIterator = ifaceType?.Methods.Any(m => m.Name == "createIterator") == true;
+      createIteratorMethodName = hasCreateIterator ? $"{iterableTypeName}.createIterator" : "";
+
+      // Create stub functions so calls can reference them (monomorphization rewrites later)
       if (!_currentModule!.Functions.Any(f => f.Name == nextMethodName)) {
         var stubFunc = new MlirFunction<MaxonOp>(nextMethodName,
           ["self"], [iterableType], elementMlirType,
           _typeRegistry.TryGetValue("IterationError", out var iterErrType) ? iterErrType : null);
         _currentModule.Functions.Add(stubFunc);
       }
+      if (hasCreateIterator && !_currentModule!.Functions.Any(f => f.Name == $"{iterableTypeName}.createIterator")) {
+        var stubFunc = new MlirFunction<MaxonOp>($"{iterableTypeName}.createIterator",
+          ["self"], [iterableType], null, null);
+        _currentModule.Functions.Add(stubFunc);
+      }
     } else {
-      // Concrete type: resolve next() from the module's functions
+      // Concrete type: resolve next() and createIterator() from the module's functions
       nextMethodName = ResolveMethodName($"{iterableTypeName}.next") ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
           $"Type '{iterableTypeName}' does not implement Iterable (missing next() method)",
           forToken.Line, forToken.Column);
+      createIteratorMethodName = ResolveMethodName($"{iterableTypeName}.createIterator")
+          ?? "";
 
       var nextFunc = _currentModule!.Functions.FirstOrDefault(f => f.Name == nextMethodName)
         ?? _currentModule!.Functions.First(f => UnmangleName(f.Name) == nextMethodName);
@@ -7242,10 +7310,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyLabel = loopLabel;
     var exitLabel = $"{loopLabel}.exit";
 
-    // Create a mutable copy of the iterable so next() can update iteration state
+    // Copy the iterable into a mutable iterator variable (heap-pointer semantics: shares backing data)
     var iterVarName = $"__for_iter_{_blockCounter}";
     _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
     _variables[iterVarName] = new VarInfo(MaxonValueKind.Struct, true, iterableValue, _currentBlock!, CurrentScopeVar, iterableTypeName);
+
+    // Call createIterator() on the copy to zero iteration state for a fresh traversal.
+    // createIterator() is void — it mutates the iterator in place via heap-pointer semantics.
+    if (createIteratorMethodName != "") {
+      var iterVar = _variables[iterVarName];
+      var createIterCallOp = new MaxonCallOp(createIteratorMethodName, [iterVar.Value], null, null);
+      _currentBlock!.AddOp(createIterCallOp);
+    }
 
     // Branch from entry to header
     _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
@@ -9597,18 +9673,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               }
             }
             Expect(TokenType.RightParen);
-            var resultKind = ifaceMethod.ReturnTypeName switch {
-              "int" => MaxonValueKind.Integer,
-              "float" => MaxonValueKind.Float,
-              "f32" => MaxonValueKind.Float32,
-              "bool" => MaxonValueKind.Bool,
-              "byte" => MaxonValueKind.Byte,
-              null => (MaxonValueKind?)null,
-              { } name when IsAssociatedTypeName(name) => MaxonValueKind.TypeParameter,
-              { } name when _typeRegistry.TryGetValue(name, out var rType) && rType is MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
-              { } name => throw new CompileError(ErrorCode.MlirInvalidFieldAccess, $"Unsupported return type '{name}' in interface method '{fieldName}'", fieldToken.Line, fieldToken.Column)
-            };
-            var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, null);
+            var (resultKind, resultStructTypeName) = ResolveInterfaceMethodReturn(ifaceMethod, userTypeName, fieldName, fieldToken);
+            var callOp = new MaxonCallOp(qualifiedMethodName, args, resultKind, resultStructTypeName);
             _currentBlock!.AddOp(callOp);
             result = new ExprResult.Direct(callOp.Result ?? selfVal);
             continue;

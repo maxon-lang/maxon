@@ -179,23 +179,20 @@ end 'splitLines'
 
 // Parse a spec file and extract tests.
 function parseSpecFile(content String, specName String) returns SpecTestArray
-  print("PARSE: enter\n")
   var tests = SpecTestArray{}
-  print("PARSE: created tests\n")
   let lines = splitLines(content)
-  print("PARSE: split lines\n")
   var i = 0
   let lineCount = lines.count()
-  print("PARSE: lineCount ready\n")
 
   while i < lineCount 'scan'
     let line = try lines.get(i) otherwise 'skip'
       i = i + 1
       continue
     end 'skip'
+    let containsResult = line.contains("<!-- test:")
 
     // Look for test markers: <!-- test: name -->
-    if line.contains("<!-- test:") 'isTestMarker'
+    if containsResult 'isTestMarker'
       try line.findFirst("<!-- test:") otherwise 'skipMarker'
         i = i + 1
         continue
@@ -428,17 +425,12 @@ export function runAllSpecTests(filter String, target TargetTriple) returns Exit
 
   for specName in whitelist 'eachSpec'
     let specPath = "{root}/specs/{specName}.md"
-    print("PATH: ")
-    print(specPath)
-    print("\n")
     let content = try File.readText(specPath) otherwise 'readErr'
       logError(LogCategory.testing, message: "Could not read spec: {specPath}")
       continue
     end 'readErr'
-    print("READ OK\n")
 
     let tests = parseSpecFile(content, specName: specName)
-    print("PARSED OK\n")
 
     for test in tests 'eachTest'
       // Apply filter

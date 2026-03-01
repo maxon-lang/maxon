@@ -1878,6 +1878,7 @@ This works on all iterable types (Array, String, Map, Set, List, etc.). The `Enu
 - Loop variable is immutable (like `let`)
 - Ranges use `to` for inclusive end and `upto` for exclusive end
 - Desugars to while loop with iterator interface
+- The compiler calls `createIterator()` before each loop to reset iteration state, enabling safe re-iteration of the same collection
 
 ### Match Statement
 
@@ -2682,6 +2683,7 @@ end 'loop'
 | `removeLast` | O(1) |
 | `get`, `insert`, `remove(at:)` | O(n) |
 | `first`, `last`, `count`, `isEmpty` | O(1) |
+| iteration (for-in) | O(n) total |
 
 ---
 

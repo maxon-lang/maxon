@@ -762,25 +762,31 @@ public static partial class MaxonToStandardConversion {
 		var startBytesOp = new StdMulI64Op(start, srcElemSize);
 		block.AddOp(startBytesOp);
 
-		// Slice buffer points into the existing allocation at byte offset
-		var sliceBufferOp = new StdAddI64Op(srcBuffer, startBytesOp.Result);
-		block.AddOp(sliceBufferOp);
+		// Source address for the slice data
+		var srcAddrOp = new StdAddI64Op(srcBuffer, startBytesOp.Result);
+		block.AddOp(srcAddrOp);
 
 		// Slice length in elements is end - start
 		var sliceLenOp = new StdSubI64Op(end, start);
 		block.AddOp(sliceLenOp);
 
-		// capacity=0 marks the slice as read-only so COW triggers on mutation
-		var zeroOp = new StdConstI64Op(0);
-		block.AddOp(zeroOp);
+		// Byte count for the copy
+		var sliceBytesOp = new StdMulI64Op(sliceLenOp.Result, srcElemSize);
+		block.AddOp(sliceBytesOp);
 
-		// Heap-allocate __ManagedMemory result (32 bytes)
+		// Heap-allocate __ManagedMemory struct, then a new owned buffer as its child
 		var tempName = $"__slice_{op.Result.Id}";
 		var slicePtr = EmitAlloc(block, 32, "Slice");
 		EmitStore(block, slicePtr, tempName, varTypes);
-		EmitStructFieldStore(block, sliceBufferOp.Result, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
+
+		var newBuffer = EmitAllocIn(block, sliceBytesOp.Result, slicePtr, "Buffer");
+
+		// Copy data from source into the new buffer
+		block.AddOp(new StdMemCopyOp(srcAddrOp.Result, newBuffer, sliceBytesOp.Result));
+
+		EmitStructFieldStore(block, newBuffer, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
-		EmitStructFieldStore(block, zeroOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		structVarNames[op.Result.Id] = tempName;
 	}

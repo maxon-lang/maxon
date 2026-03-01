@@ -354,6 +354,12 @@ internal class FunctionCloner {
       }
       case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(MapValue(cns.Node), MapValue(cns.Value), SubName(cns.ValueKind));
       case MaxonChainClearOp ccl: return new MaxonChainClearOp(MapValue(ccl.Chain));
+      case MaxonChainCursorResetOp ccr: return new MaxonChainCursorResetOp(MapValue(ccr.Chain));
+      case MaxonChainCursorValueOp ccv: {
+        var newRK = _typeSubstitution.TryGetValue(ccv.ValueKind, out var cvt) ? cvt.ToValueKind() : ccv.ResultKind;
+        var c = new MaxonChainCursorValueOp(MapValue(ccv.Chain), SubName(ccv.ValueKind), newRK);
+        RegisterResult(ccv.Result, c.Result); return c;
+      }
 
       default:
         throw new InvalidOperationException($"Monomorphization: unhandled op type {op.GetType().Name}");

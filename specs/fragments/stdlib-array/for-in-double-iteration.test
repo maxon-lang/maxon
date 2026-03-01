@@ -1,28 +1,35 @@
-// Test: push-self-assignment
+// Test: for-in-double-iteration
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
   var arr = IntArray{}
-  arr = arr.push(1)
-  arr = arr.push(2)
-  arr = arr.push(3)
+  arr.push(10)
+  arr.push(20)
+  arr.push(30)
 
-  var sum = 0
-  for n in arr 'loop'
-    sum = sum + n
-  end 'loop'
+  var sum1 = 0
+  for item in arr 'loop1'
+    sum1 = sum1 + item
+  end 'loop1'
 
-  // 1 + 2 + 3 = 6
-  return sum
+  var sum2 = 0
+  for item in arr 'loop2'
+    sum2 = sum2 + item
+  end 'loop2'
+
+  if sum1 == 60 and sum2 == 60 'check'
+    return 0
+  end 'check'
+  return 1
 end 'main'
 ---
-ExitCode: 6
+ExitCode: 0
 ---
 module {
   func @stdlib-array.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=80
     x86.xor rcx, rcx
     x86.call mm_scope_enter
     x86.mov [rbp-8], eax
@@ -65,15 +72,15 @@ module {
     x86.call mm_incref
     x86.mov eax, [rbp-24]
     x86.mov rcx, [rbp-24]
-    x86.mov rdx, 1
+    x86.mov rdx, 10
     x86.call IntArray.push
     x86.mov eax, [rbp-24]
     x86.mov rcx, [rbp-24]
-    x86.mov rdx, 2
+    x86.mov rdx, 20
     x86.call IntArray.push
     x86.mov eax, [rbp-24]
     x86.mov rcx, [rbp-24]
-    x86.mov rdx, 3
+    x86.mov rdx, 30
     x86.call IntArray.push
     x86.xor eax, eax
     x86.mov [rbp-32], eax
@@ -85,49 +92,89 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov rcx, [rbp-40]
     x86.call IntArray.createIterator
-    x86.jmp stdlib-array.main.loop_0.header
-  loop_0.header:
+    x86.jmp stdlib-array.main.loop1_0.header
+  loop1_0.header:
     x86.mov eax, [rbp-40]
     x86.mov rcx, [rbp-40]
     x86.call IntArray.next
     x86.mov [rbp-48], eax
     x86.xor ecx, ecx
     x86.cmp edx, ecx
-    x86.jne stdlib-array.main.loop_0.exit
-  loop_0:
+    x86.jne stdlib-array.main.loop1_0.exit
+  loop1_0:
     x86.mov eax, [rbp-48]
     x86.mov ecx, [rbp-32]
     x86.add ecx, eax
     x86.mov [rbp-32], ecx
-    x86.jmp stdlib-array.main.loop_0.header
-  loop_0.exit:
-    x86.mov eax, [rbp-32]
+    x86.jmp stdlib-array.main.loop1_0.header
+  loop1_0.exit:
+    x86.xor eax, eax
     x86.mov [rbp-56], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
-    x86.je stdlib-array.main.__range_ok_3
-  __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_31]
-    x86.mov rcx, rax
-    x86.call maxon_panic
-  __range_ok_3:
-    x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-24]
+    x86.mov [rbp-64], ecx
+    x86.mov edx, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_incref
+    x86.mov ebx, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call IntArray.createIterator
+    x86.jmp stdlib-array.main.loop2_3.header
+  loop2_3.header:
+    x86.mov eax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call IntArray.next
+    x86.mov [rbp-72], eax
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.jne stdlib-array.main.loop2_3.exit
+  loop2_3:
+    x86.mov eax, [rbp-72]
+    x86.mov ecx, [rbp-56]
+    x86.add ecx, eax
+    x86.mov [rbp-56], ecx
+    x86.jmp stdlib-array.main.loop2_3.header
+  loop2_3.exit:
+    x86.mov eax, 60
+    x86.mov ecx, [rbp-32]
+    x86.cmp ecx, eax
+    x86.sete edx
+    x86.movzx edx, edxb
+    x86.mov ebx, 60
+    x86.mov esi, [rbp-56]
+    x86.cmp esi, ebx
+    x86.sete edi
+    x86.movzx edi, edib
+    x86.and edx, edi
+    x86.test edx, edx
+    x86.je stdlib-array.main.check_6.after
+  check_6:
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.mov eax, [rbp-40]
-    x86.mov rcx, [rbp-40]
+    x86.mov ecx, [rbp-40]
     x86.call mm_decref
-    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_scope_exit
-    x86.mov eax, [rbp-56]
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  check_6.after:
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-40]
+    x86.call mm_decref
+    x86.mov edx, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_scope_exit
+    x86.mov eax, 1
     x86.epilogue
     x86.ret
   }

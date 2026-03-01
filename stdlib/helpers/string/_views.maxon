@@ -8,6 +8,10 @@ export type ByteView implements Iterable with Byte
   var _managed __ManagedMemory
   var _pos Index
 
+  export function createIterator()
+    _pos = 0
+  end 'createIterator'
+
   export function next() returns Byte throws IterationError
     if _pos >= _managed.length() 'at_end'
       throw IterationError.exhausted
@@ -30,6 +34,10 @@ end 'ByteView'
 export type CodepointView implements Iterable with Codepoint
   var _managed __ManagedMemory
   var _pos Index
+
+  export function createIterator()
+    _pos = 0
+  end 'createIterator'
 
   export function next() returns Codepoint throws IterationError
     if _pos >= _managed.length() 'at_end'
@@ -63,6 +71,11 @@ export type UTF16View implements Iterable with CodeUnit16
   var _managed __ManagedMemory
   var _bytePos Index
   var _pendingCodepoint Codepoint  // Codepoint pending its low surrogate (0 if none)
+
+  export function createIterator()
+    _bytePos = 0
+    _pendingCodepoint = 0
+  end 'createIterator'
 
   export function next() returns CodeUnit16 throws IterationError
     // If we have a pending codepoint, return its low surrogate

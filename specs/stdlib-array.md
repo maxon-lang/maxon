@@ -342,6 +342,39 @@ end 'main'
 0
 ```
 
+<!-- test: for-in-double-iteration -->
+Iterating the same array twice produces the same results.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(10)
+  arr.push(20)
+  arr.push(30)
+
+  var sum1 = 0
+  for item in arr 'loop1'
+    sum1 = sum1 + item
+  end 'loop1'
+
+  var sum2 = 0
+  for item in arr 'loop2'
+    sum2 = sum2 + item
+  end 'loop2'
+
+  if sum1 == 60 and sum2 == 60 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: isEmpty-transitions -->
 Verify isEmpty changes with push/pop.
 

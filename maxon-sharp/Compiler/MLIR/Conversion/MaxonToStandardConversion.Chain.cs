@@ -5,11 +5,12 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 public static partial class MaxonToStandardConversion {
-  // Chain data layout: [head:i64 @ 0, tail:i64 @ 8, count:i64 @ 16]
+  // Chain data layout: [head:i64 @ 0, tail:i64 @ 8, count:i64 @ 16, cursor:i64 @ 24]
   private const int ChainHeadOffset = 0;
   private const int ChainTailOffset = 8;
   private const int ChainCountOffset = 16;
-  private const int ChainDataSize = 24;
+  private const int ChainCursorOffset = 24;
+  private const int ChainDataSize = 32;
 
   // ChainNode data layout: [next:i64 @ 0, prev:i64 @ 8, chain:i64 @ 16, value:i64 @ 24]
   private const int NodeNextOffset = 0;
@@ -23,8 +24,9 @@ public static partial class MaxonToStandardConversion {
     if (typeName == "__Chain") return true;
     if (typeDefs != null && typeDefs.TryGetValue(typeName, out var resolved)
         && resolved is MlirStructType st && st.Name == typeName
-        && st.Fields.Count == 3
-        && st.Fields[0].Name == "head" && st.Fields[1].Name == "tail" && st.Fields[2].Name == "count")
+        && st.Fields.Count == 4
+        && st.Fields[0].Name == "head" && st.Fields[1].Name == "tail"
+        && st.Fields[2].Name == "count" && st.Fields[3].Name == "cursor")
       return true;
     return false;
   }
@@ -67,12 +69,13 @@ public static partial class MaxonToStandardConversion {
 
     var chainPtr = EmitAlloc(block, ChainDataSize, "__Chain");
 
-    // Zero-initialize head, tail, count
+    // Zero-initialize head, tail, count, cursor
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
     block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainHeadOffset, MlirType.I64));
     block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainTailOffset, MlirType.I64));
     block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainCountOffset, MlirType.I64));
+    block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainCursorOffset, MlirType.I64));
 
     var tempName = $"__chain_{op.Result.Id}";
     EmitStore(block, chainPtr, tempName, varTypes);
@@ -469,11 +472,69 @@ public static partial class MaxonToStandardConversion {
     var chainVarName = structVarNames[op.Chain.Id];
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     block.AddOp(new StdCallRuntimeOp("maxon_chain_clear", [chainPtr], null));
+
+    // Reset cursor to null after clearing
+    var chainPtrReload = (StdI64)EmitLoad(block, chainVarName, varTypes);
+    var zero = new StdConstI64Op(0);
+    block.AddOp(zero);
+    block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtrReload, ChainCursorOffset, MlirType.I64));
+  }
+
+  /// <summary>
+  /// Lowers MaxonChainCursorResetOp: sets the cursor field to 0 (null).
+  /// </summary>
+  private static void LowerChainCursorReset(
+    MaxonChainCursorResetOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames) {
+
+    var chainVarName = structVarNames[op.Chain.Id];
+    var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
+    var zero = new StdConstI64Op(0);
+    block.AddOp(zero);
+    block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainCursorOffset, MlirType.I64));
+  }
+
+  /// <summary>
+  /// Lowers MaxonChainCursorValueOp: loads the value from the node currently pointed
+  /// to by the chain's cursor field. The cursor must be non-null.
+  /// </summary>
+  private static void LowerChainCursorValue(
+    MaxonChainCursorValueOp op,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    Dictionary<int, string> structValueTypes,
+    Dictionary<string, MlirType> typeDefs) {
+
+    var chainVarName = structVarNames[op.Chain.Id];
+    var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
+
+    // Load cursor (node pointer) from chain
+    var cursorLoad = new StdLoadIndirectOp(chainPtr, ChainCursorOffset, MlirType.I64);
+    block.AddOp(cursorLoad);
+    var cursorPtr = (StdI64)cursorLoad.Result;
+
+    // Load value from the cursor node
+    var valueLoad = new StdLoadIndirectOp(cursorPtr, NodeValueOffset, MlirType.I64);
+    block.AddOp(valueLoad);
+
+    if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
+      var tempName = $"__chain_cursor_val_{op.Result.Id}";
+      EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
+      structVarNames[op.Result.Id] = tempName;
+      structValueTypes[op.Result.Id] = op.ValueKind;
+    } else {
+      valueMap[op.Result] = valueLoad.Result;
+    }
   }
 
   /// <summary>
   /// Intercepts synthetic chain navigation calls (__chain_head, __chain_tail,
-  /// __chain_node_next, __chain_node_prev) during lowering.
+  /// __chain_node_next, __chain_node_prev, __chain_cursor_start, __chain_cursor_advance)
+  /// during lowering.
   /// These load a pointer from the chain/node and set an error flag if null.
   /// Returns true if the callee was handled.
   /// </summary>
@@ -488,6 +549,16 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     MaxonValue? errorFlagValue) {
+
+    // Handle cursor operations that read from/write to the chain's cursor field
+    if (callee == "__chain_cursor_start") {
+      return LowerChainCursorStart(args, isTryCall, block, valueMap, varTypes,
+        structVarNames, errorFlagValue);
+    }
+    if (callee == "__chain_cursor_advance") {
+      return LowerChainCursorAdvance(args, isTryCall, block, valueMap, varTypes,
+        structVarNames, errorFlagValue);
+    }
 
     int fieldOffset;
     bool isNodeNav; // true for node_next/node_prev, false for chain head/tail
@@ -520,27 +591,9 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(ptrLoad);
     var loadedPtr = (StdI64)ptrLoad.Result;
 
-    // Check if null (0 = no node)
-    var zeroConst = new StdConstI64Op(0);
-    block.AddOp(zeroConst);
-    var isNull = new StdCmpI64Op("eq", loadedPtr, zeroConst.Result);
-    block.AddOp(isNull);
-
-    // Compute error flag: 0 on success, or the error ordinal+1 on null.
     // ChainError.empty (ordinal 0) -> flag 1, ChainError.endOfChain (ordinal 1) -> flag 2.
     var errorOrdinal = isNodeNav ? 2 : 1;
-    var errorConst = new StdConstI64Op(errorOrdinal);
-    block.AddOp(errorConst);
-    var successConst = new StdConstI64Op(0);
-    block.AddOp(successConst);
-    var selectFlag = new StdSelectI64Op(isNull.Result, errorConst.Result, successConst.Result);
-    block.AddOp(selectFlag);
-    EmitStore(block, selectFlag.Result, "__error_flag", varTypes);
-
-    // For try-calls, also expose the error flag through the valueMap
-    if (isTryCall && errorFlagValue != null) {
-      valueMap[errorFlagValue] = selectFlag.Result;
-    }
+    EmitNullCheckErrorFlag(block, loadedPtr, errorOrdinal, isTryCall, valueMap, varTypes, errorFlagValue);
 
     // Register result as a ChainNode (even if null — the error path handles that)
     if (result != null) {
@@ -557,5 +610,101 @@ public static partial class MaxonToStandardConversion {
     }
 
     return true;
+  }
+
+  /// <summary>
+  /// Lowers __chain_cursor_start: sets cursor to chain.head and sets error flag.
+  /// No refcounting — cursor is a borrowed pointer; the chain owns the nodes.
+  /// </summary>
+  private static bool LowerChainCursorStart(
+    List<MaxonValue> args,
+    bool isTryCall,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    MaxonValue? errorFlagValue) {
+
+    var chainVarName = structVarNames[args[0].Id];
+    var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
+
+    // Load head pointer
+    var headLoad = new StdLoadIndirectOp(chainPtr, ChainHeadOffset, MlirType.I64);
+    block.AddOp(headLoad);
+    var headPtr = (StdI64)headLoad.Result;
+
+    // Store head as cursor
+    var chainPtrReload = (StdI64)EmitLoad(block, chainVarName, varTypes);
+    block.AddOp(new StdStoreIndirectOp(headPtr, chainPtrReload, ChainCursorOffset, MlirType.I64));
+
+    EmitNullCheckErrorFlag(block, headPtr, 1, isTryCall, valueMap, varTypes, errorFlagValue);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Lowers __chain_cursor_advance: loads cursor->next, stores it as the new cursor.
+  /// Sets error flag if the new cursor is null (at end of chain).
+  /// No refcounting — cursor is a borrowed pointer; the chain owns the nodes.
+  /// </summary>
+  private static bool LowerChainCursorAdvance(
+    List<MaxonValue> args,
+    bool isTryCall,
+    MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string> structVarNames,
+    MaxonValue? errorFlagValue) {
+
+    var chainVarName = structVarNames[args[0].Id];
+    var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
+
+    // Load current cursor
+    var cursorLoad = new StdLoadIndirectOp(chainPtr, ChainCursorOffset, MlirType.I64);
+    block.AddOp(cursorLoad);
+    var cursorPtr = (StdI64)cursorLoad.Result;
+
+    // Load cursor->next
+    var nextLoad = new StdLoadIndirectOp(cursorPtr, NodeNextOffset, MlirType.I64);
+    block.AddOp(nextLoad);
+    var nextPtr = (StdI64)nextLoad.Result;
+
+    // Store next as new cursor
+    var chainPtrReload = (StdI64)EmitLoad(block, chainVarName, varTypes);
+    block.AddOp(new StdStoreIndirectOp(nextPtr, chainPtrReload, ChainCursorOffset, MlirType.I64));
+
+    EmitNullCheckErrorFlag(block, nextPtr, 2, isTryCall, valueMap, varTypes, errorFlagValue);
+
+    return true;
+  }
+
+  /// <summary>
+  /// Emits null-check + error flag for chain operations.
+  /// Sets __error_flag to errorOrdinal if ptr is null, 0 otherwise.
+  /// </summary>
+  private static void EmitNullCheckErrorFlag(
+    MlirBlock<StandardOp> block,
+    StdI64 ptr,
+    int errorOrdinal,
+    bool isTryCall,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    MaxonValue? errorFlagValue) {
+
+    var zeroConst = new StdConstI64Op(0);
+    block.AddOp(zeroConst);
+    var isNull = new StdCmpI64Op("eq", ptr, zeroConst.Result);
+    block.AddOp(isNull);
+    var errorConst = new StdConstI64Op(errorOrdinal);
+    block.AddOp(errorConst);
+    var successConst = new StdConstI64Op(0);
+    block.AddOp(successConst);
+    var selectFlag = new StdSelectI64Op(isNull.Result, errorConst.Result, successConst.Result);
+    block.AddOp(selectFlag);
+    EmitStore(block, selectFlag.Result, "__error_flag", varTypes);
+
+    if (isTryCall && errorFlagValue != null) {
+      valueMap[errorFlagValue] = selectFlag.Result;
+    }
   }
 }

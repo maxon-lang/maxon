@@ -240,6 +240,42 @@ end 'main'
 File not found
 ```
 
+<!-- test: write-and-read-text -->
+```maxon
+function main() returns ExitCode
+  // Write a text file
+  try File.writeText("test_readtext.txt", content: "Hello World") otherwise 'write_err'
+    print("Write failed")
+    return 1
+  end 'write_err'
+
+  // Read it back with readText
+  var content = try File.readText("test_readtext.txt") otherwise 'read_err'
+    print("Read failed")
+    return 2
+  end 'read_err'
+
+  // Clean up
+  try File.delete("test_readtext.txt") otherwise 'del_err'
+    print("Delete failed")
+  end 'del_err'
+
+  // Verify content
+  print("{content}")
+  if content.count() != 11 'len_check'
+    print("\nWrong length: {content.count()}")
+    return 3
+  end 'len_check'
+  return 42
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+Hello World
+```
+
 <!-- test: write-and-read-binary -->
 ```maxon
 

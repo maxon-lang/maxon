@@ -72,9 +72,8 @@ public partial class X86CodeEmitter() {
   // --- Data section management ---
 
   public void DefineRdata(string label, byte[] bytes, int alignment = 1) {
-    if (_rdataLabels.ContainsKey(label)) {
-      var oldOffset = _rdataLabels[label];
-      var oldBytes = System.Text.Encoding.UTF8.GetString(_rdata.ToArray(), oldOffset, Math.Min(64, _rdata.Count - oldOffset)).TrimEnd('\0');
+    if (_rdataLabels.TryGetValue(label, out int oldOffset)) {
+      var oldBytes = System.Text.Encoding.UTF8.GetString([.. _rdata], oldOffset, Math.Min(64, _rdata.Count - oldOffset)).TrimEnd('\0');
       var newBytes = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(64, bytes.Length)).TrimEnd('\0');
       Logger.Debug(LogCategory.Codegen, $"WARNING: Duplicate rdata label '{label}' - old[{oldOffset}]='{oldBytes}' new[{_rdata.Count}]='{newBytes}'");
     }

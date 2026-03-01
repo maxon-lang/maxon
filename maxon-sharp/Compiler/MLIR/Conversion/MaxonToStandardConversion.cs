@@ -1775,6 +1775,12 @@ public static partial class MaxonToStandardConversion {
             case MaxonChainClearOp chainClearOp:
               LowerChainClear(chainClearOp, newBlock, varTypes, structVarNames);
               break;
+            case MaxonChainCursorResetOp cursorResetOp:
+              LowerChainCursorReset(cursorResetOp, newBlock, varTypes, structVarNames);
+              break;
+            case MaxonChainCursorValueOp cursorValueOp:
+              LowerChainCursorValue(cursorValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
           }

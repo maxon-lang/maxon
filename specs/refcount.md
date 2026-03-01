@@ -407,6 +407,41 @@ end 'main'
 77
 ```
 
+<!-- test: return-move-nested-scopes -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Item
+    export var name String
+    export var id Integer
+end 'Item'
+
+function findItem(a Integer, b Integer, target Integer) returns Item
+    if a == target 'check_a'
+        var result = Item{name: "first", id: a}
+        return result
+    end 'check_a'
+    if b == target 'check_b'
+        if true 'inner'
+            var result = Item{name: "second", id: b}
+            return result
+        end 'inner'
+    end 'check_b'
+    return Item{name: "default", id: 0}
+end 'findItem'
+
+function main() returns ExitCode
+    var item = findItem(10, b: 20, target: 20)
+    print("{item.name}\n")
+    return item.id
+end 'main'
+```
+```exitcode
+20
+```
+```stdout
+second
+```
+
 <!-- test: field-access-reference -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

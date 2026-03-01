@@ -88,7 +88,7 @@ for item in list 'loop'
 end 'loop'
 ```
 
-Elements are iterated front to back.
+Elements are iterated front to back. Iteration uses a cached cursor on the underlying chain for O(n) total traversal (O(1) per element).
 
 ## Tests
 
@@ -447,6 +447,49 @@ end 'main'
 10
 20
 30
+```
+
+<!-- test: iteration.large-list -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+  var list = IntList{}
+  for i in 1 to 100 'build'
+    list.append(i)
+  end 'build'
+  var sum = 0
+  for item in list 'loop'
+    sum = sum + item
+  end 'loop'
+  return sum - 5050
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: iteration.two-loops -->
+```maxon
+function main() returns ExitCode
+  var list = List from [1, 2, 3]
+  var sum1 = 0
+  for item in list 'loop1'
+    sum1 = sum1 + item
+  end 'loop1'
+  var sum2 = 0
+  for item in list 'loop2'
+    sum2 = sum2 + item
+  end 'loop2'
+  if sum1 == sum2 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
 ```
 
 <!-- test: mixed-operations -->
