@@ -383,7 +383,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars, string ScopeVar,
-    string? IterVarName = null, string? NextMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null);
+    string? IterVarName = null, string? NextMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null,
+    string? RangeCounterVarName = null, MaxonValueKind? RangeElementKind = null, string? RangeStructTypeName = null);
   private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars, string ScopeVar);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
@@ -7480,7 +7481,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // continue jumps to the increment block (not the header) so the counter
     // still advances.
     var incrLabel = $"{loopLabel}.incr";
-    _loopStack.Push(new LoopContext(loopSourceLabel, incrLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek()));
+    _loopStack.Push(new LoopContext(loopSourceLabel, incrLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek(),
+        RangeCounterVarName: counterVarName, RangeElementKind: elementKind, RangeStructTypeName: structTypeName));
 
     // Bind loop variable: let i = __range_current
     var loadedCurrent = EmitVarRefOp(counterVarName, elementKind, structTypeName);
@@ -7502,27 +7504,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var incrBlock = _currentFunction!.Body.AddBlock(incrLabel);
     _currentBlock = incrBlock;
 
-    var preIncrementVal = EmitVarRefOp(counterVarName, elementKind, structTypeName);
-    if (elementKind == MaxonValueKind.Struct && structTypeName != null) {
-      // Use Strideable.advancedBy(1)
-      var advancedByName = $"{structTypeName}.advancedBy";
-      var advToken = new Token(TokenType.Identifier, advancedByName, forToken.Line, forToken.Column);
-      var oneLit = new MaxonLiteralOp(1L);
-      _currentBlock!.AddOp(oneLit);
-      var advCall = CreateFunctionCall(advToken, [preIncrementVal, oneLit.Result]);
-      _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, advCall.Result!, isDeclaration: false, isMutable: true, elementKind));
-      // Counter is declared in outer scope; move the new value there
-      var counterInfo = _variables[counterVarName];
-      if (CurrentScopeVar != counterInfo.DeclScopeVar) {
-        _currentBlock!.AddOp(new MaxonMoveOp(counterVarName, counterInfo.DeclScopeVar, "range_counter_move"));
-      }
-    } else {
-      var oneLit = new MaxonLiteralOp(1L);
-      _currentBlock!.AddOp(oneLit);
-      var addOp = new MaxonBinOp(MaxonBinOperator.Add, preIncrementVal, oneLit.Result, elementKind);
-      _currentBlock!.AddOp(addOp);
-      _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, addOp.Result, isDeclaration: false, isMutable: true, elementKind));
-    }
+    var oneLit = new MaxonLiteralOp(1L);
+    _currentBlock!.AddOp(oneLit);
+    EmitRangeCounterAdvance(counterVarName, elementKind, structTypeName, oneLit.Result, forToken);
 
     _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
 
@@ -7563,9 +7547,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     var loop = _loopStack.Peek();
 
+    if (loop.RangeCounterVarName != null) {
+      EmitRangeSkip(token, skipCountValue, loop);
+      return;
+    }
+
     if (loop.IterVarName == null) {
       throw new CompileError(ErrorCode.ParserSkipOutsideIteratorLoop,
-        "'skip' can only be used inside an iterator-based for loop", token.Line, token.Column);
+        "'skip' can only be used inside a for loop", token.Line, token.Column);
     }
 
     // Exit scopes above the loop body scope (handles nested if/match/etc)
@@ -7650,6 +7639,34 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var skipDoneBlock = _currentFunction!.Body.AddBlock(skipDoneLabel);
     _currentBlock = skipDoneBlock;
     skipDoneBlock.AddOp(new MaxonBrOp(loop.HeaderLabel));
+  }
+
+  private void EmitRangeSkip(Token token, MaxonValue skipCountValue, LoopContext loop) {
+    EmitReleaseForScopesAbove(loop.ScopeVar);
+    _currentBlock!.AddOp(new MaxonScopeExitOp(loop.ScopeVar, "skip_cleanup"));
+
+    EmitRangeCounterAdvance(loop.RangeCounterVarName!, loop.RangeElementKind!.Value, loop.RangeStructTypeName, skipCountValue, token);
+
+    _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
+  }
+
+  private void EmitRangeCounterAdvance(string counterVarName, MaxonValueKind elementKind, string? structTypeName, MaxonValue stepValue, Token token) {
+    var currentVal = EmitVarRefOp(counterVarName, elementKind, structTypeName);
+
+    if (elementKind == MaxonValueKind.Struct && structTypeName != null) {
+      var advancedByName = $"{structTypeName}.advancedBy";
+      var advToken = new Token(TokenType.Identifier, advancedByName, token.Line, token.Column);
+      var advCall = CreateFunctionCall(advToken, [currentVal, stepValue]);
+      _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, advCall.Result!, isDeclaration: false, isMutable: true, elementKind));
+      var counterInfo = _variables[counterVarName];
+      if (CurrentScopeVar != counterInfo.DeclScopeVar) {
+        _currentBlock!.AddOp(new MaxonMoveOp(counterVarName, counterInfo.DeclScopeVar, "range_counter_move"));
+      }
+    } else {
+      var addOp = new MaxonBinOp(MaxonBinOperator.Add, currentVal, stepValue, elementKind);
+      _currentBlock!.AddOp(addOp);
+      _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, addOp.Result, isDeclaration: false, isMutable: true, elementKind));
+    }
   }
 
   private (string ExitLabel, string ScopeVar, bool IsLoop) ResolveBreakTarget(Token keyword) {

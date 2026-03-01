@@ -191,8 +191,8 @@ for c in 'a' to 'z' 'loop' ... end 'loop'   // character range
 // Enumerated (index + value)
 for (i, item) in array.enumerated() 'loop' ... end 'loop'
 
-// Skip: advance iterator by n positions and continue
-skip 2             // skip 2 elements in innermost iterator loop
+// Skip: advance loop by n positions and continue
+skip 2             // skip 2 elements in innermost for loop
 ```
 
 ### Match Statement

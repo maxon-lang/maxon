@@ -9,14 +9,14 @@ category: control-flow
 
 # skip
 
-The `skip n` statement is used inside iterator-based `for` loops to skip the current element and the next `n` elements, then continue with the next iteration.
+The `skip n` statement is used inside `for` loops to skip the current element and the next `n` elements, then continue with the next iteration.
 
-It works like `continue` but additionally advances the iterator by `n` positions before resuming the loop. If the iterator becomes exhausted during the skip, the loop exits normally.
+It works like `continue` but additionally advances the loop by `n` positions before resuming. If skipping past the end, the loop exits normally.
 
 ## Syntax
 
 ```text
-skip n            // Skip next n elements in innermost iterator loop
+skip n            // Skip next n elements in innermost for loop
 ```
 
 ## Examples
@@ -36,9 +36,9 @@ end 'loop'
 
 - `skip 0` is equivalent to `continue` — it skips only the rest of the current iteration
 - `n` can be any non-negative integer expression
-- `skip` is only valid inside iterator-based `for` loops (not `while` loops or range-based `for` loops)
-- `skip` always applies to the innermost iterator loop
-- If skipping past the end of the iterator, the loop exits gracefully
+- `skip` is only valid inside `for` loops (not `while` loops)
+- `skip` always applies to the innermost `for` loop
+- If skipping past the end, the loop exits gracefully
 
 ## Tests
 
@@ -205,21 +205,67 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2047: specs/fragments/skip/skip.error-while-loop.test:5:9: 'skip' can only be used inside an iterator-based for loop
+error E2047: specs/fragments/skip/skip.error-while-loop.test:5:9: 'skip' can only be used inside a for loop
 ```
 
-<!-- test: skip.error-range-loop -->
-Error: skip in range for loop produces a compile error.
+<!-- test: skip.range-basic -->
+Basic skip in range loop: skip 2 skips rest of current iteration and next two values.
 ```maxon
 function main() returns ExitCode
+    var sum = 0
     for i in 1 to 10 'loop'
-        skip 1
+        if i == 3 'check'
+            skip 2
+        end 'check'
+        sum = sum + i
     end 'loop'
-    return 0
+    return sum
 end 'main'
 ```
-```maxoncstderr
-error E2047: specs/fragments/skip/skip.error-range-loop.test:4:9: 'skip' can only be used inside an iterator-based for loop
+```exitcode
+43
+```
+```stdout
+```
+
+<!-- test: skip.range-zero -->
+Skip 0 in range loop behaves like continue.
+```maxon
+function main() returns ExitCode
+    var sum = 0
+    for i in 1 to 5 'loop'
+        if i == 3 'check'
+            skip 0
+        end 'check'
+        sum = sum + i
+    end 'loop'
+    return sum
+end 'main'
+```
+```exitcode
+12
+```
+```stdout
+```
+
+<!-- test: skip.range-past-end -->
+Skip past end in range loop exits the loop gracefully.
+```maxon
+function main() returns ExitCode
+    var sum = 0
+    for i in 1 to 5 'loop'
+        if i == 3 'check'
+            skip 100
+        end 'check'
+        sum = sum + i
+    end 'loop'
+    return sum
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
 ```
 
 <!-- test: skip.error-outside-loop -->

@@ -1,6 +1,6 @@
 # Performance Analysis: Maxon List vs C Doubly Linked List
 
-Date: 2026-02-28
+Date: 2026-02-28 (updated after cursor-based iterator fix)
 
 ## Overview
 
@@ -136,8 +136,8 @@ cmd //c "C:\\Users\\Eric\\Dev\\maxon\\temp\\compile_c.bat"
 | Property | Maxon | C (MSVC /O2) |
 |----------|-------|-------------|
 | Total file size | 15,872 bytes | 108,032 bytes |
-| .text section size | 0x3126 (12,582 bytes) | 0xE110 (57,616 bytes) |
-| Code bytes (from compiler) | 12,582 code + 1,283 symdata | n/a |
+| .text section size | 0x3035 (12,341 bytes) | 0xE110 (57,616 bytes) |
+| Code bytes (from compiler) | 12,341 code + 1,314 symdata | n/a |
 | Imports | 27 | n/a |
 | Runtime dependencies | None (self-contained runtime) | CRT (LIBCMT) |
 
@@ -153,7 +153,7 @@ offset 8:  next   (8 bytes, pointer)
 offset 16: value  (8 bytes, i64)
 ```
 
-### Maxon `__ChainNode` Layout (32 bytes)
+### Maxon `__ChainNode` Layout (32 bytes data + 8 bytes ref-count header = 40 bytes heap)
 
 ```
 offset 0:  next   (8 bytes, pointer)
@@ -161,8 +161,6 @@ offset 8:  prev   (8 bytes, pointer)
 offset 16: chain  (8 bytes, back-pointer to owning chain — enables auto-detach)
 offset 24: value  (8 bytes, i64)
 ```
-
-Plus an 8-byte ref-count header prepended by `mm_alloc_in`, making the actual heap allocation 40 bytes per node.
 
 ### C List Layout (20 bytes, stack-allocated)
 
@@ -172,19 +170,20 @@ offset 8:  tail   (8 bytes, pointer)
 offset 16: count  (4 bytes, int)
 ```
 
-### Maxon `__Chain` Layout (24 bytes, heap-allocated + ref-counted)
+### Maxon `__Chain` Layout (24 bytes data + 8 bytes ref-count header + cursor)
 
 ```
-offset 0:  head   (8 bytes, pointer)
-offset 8:  tail   (8 bytes, pointer)
-offset 16: count  (8 bytes, i64)
+offset 0:  head    (8 bytes, pointer)
+offset 8:  tail    (8 bytes, pointer)
+offset 16: count   (8 bytes, i64)
+offset 24: cursor  (8 bytes, pointer — current iteration node)
 ```
 
-### Maxon `IntList` Layout (16 bytes, heap-allocated + ref-counted)
+### Maxon `IntList` Layout (16 bytes data + 8 bytes ref-count header)
 
 ```
-offset 0:  chain  (8 bytes, pointer to __Chain)
-offset 8:  iterIndex (8 bytes, i64 — current iteration position)
+offset 0:  chain      (8 bytes, pointer to __Chain)
+offset 8:  iterIndex  (8 bytes, i64 — current iteration position)
 ```
 
 ## Compiled Output Analysis
@@ -206,7 +205,7 @@ mov  [rdi+8], rax          ; tail = node
 
 1 runtime call (malloc). All pointer linkage is inline.
 
-**Maxon `IntList.append`** — separate function, 14 instructions + call into runtime:
+**Maxon `IntList.append`** — separate function (25 instructions + 2 calls):
 
 ```
 prologue stack_size=32
@@ -214,36 +213,37 @@ mov  [rbp-8], ecx          ; save self_ptr
 mov  ebx, [eax+0]          ; load chain ptr from List wrapper
 mov  rcx, 32               ; sizeof(__ChainNode)
 call mm_alloc_in            ; managed alloc in chain's scope
-; zero out next/prev/chain fields
+; zero out next/prev/chain fields (3 mov instructions)
 mov  [eax+24], edx          ; node.value = value
-call maxon_chain_insert_last ; link into chain (~25 more instructions)
+call maxon_chain_insert_last ; link into chain
 epilogue + ret
 ```
 
-`maxon_chain_insert_last` is a hand-written runtime function (~25 instructions):
+`maxon_chain_insert_last` is a hand-written runtime function (~17 instructions on happy path):
 
 ```
-; auto-detach: if node.chain != 0, call maxon_chain_unlink first
+; auto-detach check: if node.chain != 0, call maxon_chain_unlink first
 mov  rax, [node+16]        ; node.chain
 test rax, rax
-jz   no_detach
-call maxon_chain_unlink    ; potential 3rd runtime call
+jz   no_detach              ; always taken for fresh nodes
 no_detach:
-; old_tail = chain.tail
-; node.next = 0
-; node.prev = old_tail
-; node.chain = chain_ptr
-; if old_tail != 0: old_tail.next = node
-; chain.tail = node
-; if chain.head == 0: chain.head = node
-; chain.count++
+mov  rax, [chain+8]         ; old_tail = chain.tail
+mov  [node+0], 0            ; node.next = 0
+mov  [node+8], old_tail     ; node.prev = old_tail
+mov  [node+16], chain_ptr   ; node.chain = chain_ptr
+test rcx, rcx               ; if old_tail != 0
+mov  [old_tail+0], node     ;   old_tail.next = node
+mov  [chain+8], node        ; chain.tail = node
+cmp  [chain+0], 0           ; if chain.head == 0
+mov  [chain+0], node        ;   chain.head = node (first append only)
+inc  [chain+16]             ; chain.count++
 ```
 
-Total for Maxon append: 2-3 runtime calls (`mm_alloc_in` + `maxon_chain_insert_last`, potentially + `maxon_chain_unlink`) and ~40 instructions. The auto-detach check is a safety feature that has no C equivalent — it allows nodes to be safely moved between chains.
+Total per append: `mm_alloc_in` + `IntList.append` body + `maxon_chain_insert_last` = ~42 instructions + prologue/epilogue overhead.
 
 ### Iteration Loop
 
-**C (MSVC /O2)** — 4 instructions, 0 calls:
+**C (MSVC /O2)** — 4 instructions per iteration, 0 calls:
 
 ```asm
 $LL2@main:
@@ -253,72 +253,128 @@ $LL2@main:
   jne  $LL2@main
 ```
 
-**Maxon** — the main loop body (in `list_bench.main`) is:
+**Maxon** — the main loop calls `IntList.next()` which now uses a cursor (no re-walking):
 
+Loop driver in `main` (8 instructions per iteration):
 ```
 loop_0.header:
+  mov  eax, [rbp-40]       ; load iterator ref
   mov  rcx, [rbp-40]
-  call IntList.next         ; ~180 instructions inside
-  ; check error flag
-  cmp  edx, ecx
-  jne  loop_0.exit
+  call IntList.next         ; get next value
+  mov  [rbp-48], eax        ; save result
+  cmp  edx, ecx             ; check error flag
+  jne  loop_0.exit          ; exit if exhausted
 loop_0:
-  mov  eax, [rbp-48]       ; item (returned from next())
-  add  ecx, eax            ; sum += item
+  mov  eax, [rbp-48]        ; item
+  add  ecx, [rbp-32]        ; sum += item (2 instructions due to no add-from-mem)
   mov  [rbp-32], ecx
   jmp  loop_0.header
 ```
 
-`IntList.next()` (180 instructions, ~10 runtime calls per invocation):
+`IntList.next()` — now **0 runtime calls**, pure register/memory work:
 
-1. `mm_scope_enter`
-2. Check `iterIndex >= chain.count` — if exhausted, `mm_scope_exit` + return error
-3. Get head node via `try_call @__chain_head` + `mm_incref` on result
-4. **Walk loop** — advance `iterIndex` steps from the head each time. Per step:
-   - `mm_scope_enter`
-   - `try_call @__chain_node_next`
-   - `mm_incref` (new node)
-   - `mm_decref` (old node)
-   - `mm_move`
-   - `mm_scope_exit`
-5. Increment `iterIndex`
-6. Extract `node.value` at offset 24
-7. `mm_decref` x2 + `mm_scope_exit`
-8. Return value
+First call (iterIndex == 0) takes the `first_1` path (~42 instructions):
+```
+; check iterIndex >= count → exhausted
+; cursorStart: chain.cursor = chain.head
+; load cursor.value
+; iterIndex++
+; cursorAdvance: chain.cursor = cursor.next
+; return value
+```
 
-**This makes iteration O(n²)** — it re-walks from head on every call:
+Subsequent calls take the `first_1.merge` fast path (~22 instructions):
+```
+; check iterIndex >= count → exhausted (10 instructions)
+; check iterIndex != 0 → skip cursorStart (4 instructions)
+; load chain.cursor → cursor.value (5 instructions through 3 pointer chases)
+; iterIndex++ (5 instructions)
+; cursorAdvance: cursor = cursor.next (conditional, ~10 instructions when not last)
+; return value (3 instructions)
+```
 
-| Call | C cost | Maxon cost |
-|------|--------|------------|
-| 1st item | 1 pointer load | head + 0 walk steps |
-| 2nd item | 1 pointer load | head + 1 walk step |
-| 3rd item | 1 pointer load | head + 2 walk steps |
-| nth item | 1 pointer load | head + (n-1) walk steps |
+Final call (exhausted) takes the `done_0` early-exit path (~8 instructions).
+
+### Estimated Instruction Counts (Full Program Execution)
+
+**C (Maxon code only, not counting malloc/free/CRT):**
+
+| Phase | Instructions |
+|-------|-------------|
+| list_init (inlined) | 3 |
+| 3x list_append (inlined) | ~30 |
+| Iteration (3 items) | 4 x 3 + 2 (setup+final test) = 14 |
+| list_free (3 nodes) | ~12 |
+| main overhead | ~5 |
+| **Total (app code)** | **~64** |
+
+**Maxon (user-written code only, not counting mm_* runtime):**
+
+| Phase | Instructions |
+|-------|-------------|
+| main setup (alloc chain+list, zero-init, mm calls) | ~40 |
+| 3x IntList.append body (excl mm_alloc_in) | 3 x 25 = 75 |
+| 3x maxon_chain_insert_last | 3 x 17 = 51 |
+| createIterator | 7 (incl prologue/epilogue) |
+| IntList.next (1st call, iterIndex==0 path) | ~42 |
+| IntList.next (2nd call, fast path) | ~22 |
+| IntList.next (3rd call, fast path) | ~22 |
+| IntList.next (4th call, exhausted) | ~8 |
+| main cleanup (range check, decref, scope_exit) | ~25 |
+| **Total (app code)** | **~292** |
+
+**Maxon runtime calls made:**
+
+| Runtime function | Call count | Purpose |
+|-----------------|-----------|---------|
+| mm_scope_enter | 1 | main scope |
+| mm_alloc | 2 | chain + list struct |
+| mm_move | 1 | ownership transfer |
+| mm_incref | 2 | list ref + iterator ref |
+| mm_alloc_in | 3 | 3 chain nodes |
+| maxon_chain_insert_last | 3 | link nodes |
+| mm_decref | 2 | list + iterator cleanup |
+| mm_scope_exit | 1 | main scope |
+| **Total runtime calls** | **15** | |
+
+C makes 3 calls to `malloc` + 3 calls to `free` = 6 runtime calls.
 
 ## Summary
 
 | Metric | C (MSVC /O2) | Maxon |
 |--------|-------------|-------|
-| Iteration complexity | O(n) | O(n²) |
-| Loop body | 4 instructions, 0 calls | ~180 instructions, ~10 calls |
-| Append cost | ~10 inlined instructions, 1 call | ~40 instructions, 2-3 calls |
+| Iteration complexity | O(n) | O(n) |
+| Iteration per-step | 4 instructions, 0 calls | ~30 instructions, 1 call (non-inlined IntList.next) |
+| Append per-call | ~10 inlined instructions, 1 call | ~42 instructions, 2 calls (non-inlined) |
+| Total app instructions | ~64 | ~292 (~4.6x) |
+| Total runtime calls | 6 (malloc+free) | 15 (mm_*) |
 | Node heap size | 24 bytes | 40 bytes (32 data + 8 refcount header) |
-| List struct | 20 bytes, stack-allocated | 16+24 = 40 bytes across 2 heap objects |
-| Inlining | Full (append inlined into main) | None |
+| List struct | 20 bytes, stack-allocated | 24+16 = 40 bytes across 2 heap objects + ref-count headers |
+| Inlining | Full (all functions inlined into main) | None |
 | Memory management | Manual (malloc/free) | Automatic (ref-counted, scoped) |
+| Safety features | None | Auto-detach, bounds checking, exhaustion detection |
 
-## Actionable Improvements
+## What Maxon Gets in Exchange
+
+The ~4.6x instruction count overhead buys:
+- **Automatic memory management** — no manual free, no use-after-free, no leaks
+- **Safe iteration** — exhaustion detected and reported as a typed error
+- **ExitCode range checking** — runtime panic if return value overflows u32
+- **Auto-detach** — nodes can be safely moved between chains without manual unlink
+- **Scoped cleanup** — all allocations freed automatically on scope exit
+
+## Remaining Improvements
 
 ### High impact
 
-1. **Cache the iterator cursor** — store the current `__ChainNode*` in the List struct instead of re-walking from head using `iterIndex`. Fixes O(n²) → O(n) and eliminates the walk loop plus all its per-step ref-counting calls.
+1. **Inlining pass** — `IntList.append` (25 instructions) and `IntList.next` (~22 on fast path) are small enough to inline. This would eliminate call/ret overhead and enable register allocation across the inlined code.
 
 ### Medium impact
 
-2. **Inlining pass** — small leaf functions like `IntList.append` and `maxon_chain_insert_last` could be inlined at the MLIR level.
-3. **Elide ref-counting for non-escaping values** — the iterator's temporary node pointers don't escape the function; their incref/decref pairs are provably unnecessary.
+2. **Elide redundant loads** — `IntList.next` reloads `[rbp-8]` (self_ptr) repeatedly. Keeping it in a register across the function would save ~5 instructions.
+3. **Elide ref-counting for non-escaping values** — the iterator ref's incref/decref pair is provably unnecessary since it doesn't escape main.
 
 ### Lower priority
 
-4. **Eliminate scope_enter/scope_exit in the iteration loop body** — the for-in body in this program doesn't allocate, so the inner scope operations are no-ops.
-5. **Stack-allocate small structs** — the List and Chain headers could live on the stack when they don't escape, avoiding 2 heap allocations on creation.
+4. **Stack-allocate small structs** — the List and Chain headers could live on the stack when they don't escape, avoiding 2 heap allocations + ref-count overhead.
+5. **Combine the chain+list into one allocation** — the List wrapper is just a pointer to chain + an iterIndex. Flattening would eliminate one heap object and one indirection.

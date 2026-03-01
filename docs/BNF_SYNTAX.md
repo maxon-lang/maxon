@@ -489,7 +489,7 @@ continue_stmt = 'continue' [ LABEL ]
 skip_stmt     = 'skip' expression
 ```
 
-Only valid inside iterator-based `for` loops. Advances the iterator by the
+Only valid inside `for` loops (not `while` loops). Advances the loop by the
 given number of positions and continues to the next iteration.
 
 ### 5.10 Throw

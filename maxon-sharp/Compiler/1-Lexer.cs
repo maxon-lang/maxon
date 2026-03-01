@@ -167,7 +167,7 @@ public class Lexer(string source) {
     { "in", new(TokenType.In, "Used in for loops to specify the range or collection to iterate over.", false) },
     { "break", new(TokenType.Break, "Exits the current loop or match statement.", false) },
     { "continue", new(TokenType.Continue, "Skips the rest of the current loop iteration and continues with the next iteration.", false) },
-    { "skip", new(TokenType.Skip, "Skips the current iteration and the next n elements in an iterator-based for loop.", false) },
+    { "skip", new(TokenType.Skip, "Skips the current iteration and the next n elements in a for loop.", false) },
     { "true", new(TokenType.True, "Boolean literal representing true.", false) },
     { "false", new(TokenType.False, "Boolean literal representing false.", false) },
     { "and", new(TokenType.And, "AND operator. Logical AND on bools, bitwise AND on integers.", false) },

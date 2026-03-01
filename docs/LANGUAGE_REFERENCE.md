@@ -2148,12 +2148,12 @@ Skips to next iteration of the innermost loop, or continues to a specific labele
 
 ### Skip Statement
 ```maxon
-skip n            // Skip n elements in innermost iterator loop
+skip n            // Skip n elements in innermost for loop
 ```
-Advances the iterator by `n` positions and continues to the next iteration. Only valid inside iterator-based `for` loops (not `while` loops or range-based `for` loops). Like `continue`, `skip` abandons the rest of the current iteration body before advancing.
+Advances the loop by `n` positions and continues to the next iteration. Valid inside iterator-based and range-based `for` loops (not `while` loops). Like `continue`, `skip` abandons the rest of the current iteration body before advancing.
 
 - `skip 0` is equivalent to `continue`
-- If the iterator is exhausted during the skip, the loop exits normally
+- If skipping past the end, the loop exits normally
 - `n` can be any non-negative integer expression
 
 ---
