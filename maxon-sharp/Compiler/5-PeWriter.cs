@@ -9,7 +9,7 @@ public class PeWriter {
   private const uint SectionAlignment = 0x1000;  // 4096 bytes
   private const ulong ImageBase = 0x140000000;   // Default for 64-bit
 
-  public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null, IReadOnlyList<ImportEntry>? imports = null, byte[]? symdata = null) {
+  public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null, IReadOnlyList<ImportEntry>? imports = null, byte[]? symdata = null, IReadOnlyList<CoffSymbol>? coffSymbols = null) {
     Logger.Debug(LogCategory.Pe, $"Writing PE file: {path}");
     using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
     using var writer = new BinaryWriter(fs);
@@ -243,7 +243,121 @@ public class PeWriter {
       }
     }
 
+    // COFF symbol table — appended after all sections, referenced by COFF header
+    if (coffSymbols != null && coffSymbols.Count > 0) {
+      WriteCoffSymbolTable(fs, writer, coffSymbols, codeSize,
+        hasRdata, rdataSize, hasData, dataSize, hasSymdata, symdataSize, hasImports, idataSize);
+    }
+
     Logger.Debug(LogCategory.Pe, "PE write complete");
+  }
+
+  /// <summary>
+  /// Writes the COFF symbol table and string table after all sections, then backpatches
+  /// PointerToSymbolTable and NumberOfSymbols in the COFF header.
+  /// </summary>
+  private static void WriteCoffSymbolTable(FileStream fs, BinaryWriter writer,
+    IReadOnlyList<CoffSymbol> coffSymbols, uint codeSize,
+    bool hasRdata, uint rdataSize, bool hasData, uint dataSize,
+    bool hasSymdata, uint symdataSize, bool hasImports, uint idataSize) {
+
+    var symbolTableOffset = (uint)fs.Position;
+
+    // COFF string table holds names that don't fit in the 8-byte inline field
+    var stringTableEntries = new List<byte>();
+    // Reserve space for the 4-byte size prefix (patched after all names are added)
+    stringTableEntries.AddRange(new byte[4]);
+
+    // Must match the order sections were written so section numbers are correct
+    var sectionNames = new List<string> { ".text" };
+    if (hasRdata) sectionNames.Add(".rdata");
+    if (hasData) sectionNames.Add(".data");
+    if (hasSymdata) sectionNames.Add(".symtab");
+    if (hasImports) sectionNames.Add(".idata");
+
+    var sectionSizes = new List<uint> { codeSize };
+    if (hasRdata) sectionSizes.Add(rdataSize);
+    if (hasData) sectionSizes.Add(dataSize);
+    if (hasSymdata) sectionSizes.Add(symdataSize);
+    if (hasImports) sectionSizes.Add(idataSize);
+
+    var totalSymbolCount = 0u;
+
+    // Write section symbols (one per section, each with one auxiliary record)
+    for (int i = 0; i < sectionNames.Count; i++) {
+      WriteCoffSymbolEntry(writer, stringTableEntries, sectionNames[i],
+        value: 0,
+        sectionNumber: (ushort)(i + 1),
+        type: 0x0000,
+        storageClass: 3,  // IMAGE_SYM_CLASS_STATIC
+        numAux: 1);
+      totalSymbolCount++;
+
+      // Auxiliary format 5: section definition
+      writer.Write(sectionSizes[i]);    // Length
+      writer.Write((ushort)0);          // NumberOfRelocations
+      writer.Write((ushort)0);          // NumberOfLinenumbers
+      writer.Write((uint)0);            // CheckSum
+      writer.Write((ushort)0);          // Number (COMDAT)
+      writer.Write((byte)0);            // Selection
+      writer.Write(new byte[3]);        // Unused
+      totalSymbolCount++;
+    }
+
+    // Write function symbols (all in .text section = section 1)
+    foreach (var sym in coffSymbols) {
+      WriteCoffSymbolEntry(writer, stringTableEntries, sym.Name,
+        value: (uint)sym.CodeOffset,
+        sectionNumber: 1,               // .text section
+        type: 0x0020,                    // IMAGE_SYM_DTYPE_FUNCTION
+        storageClass: 2,                 // IMAGE_SYM_CLASS_EXTERNAL
+        numAux: 0);
+      totalSymbolCount++;
+    }
+
+    // Write the COFF string table (must immediately follow symbol entries)
+    var stringTableBytes = stringTableEntries.ToArray();
+    BitConverter.GetBytes((uint)stringTableBytes.Length).CopyTo(stringTableBytes, 0);
+    writer.Write(stringTableBytes);
+
+    // Backpatch COFF header: PointerToSymbolTable (offset 76) and NumberOfSymbols (offset 80)
+    // COFF header layout: DOS(64) + PE_sig(4) + Machine(2) + NumSections(2) + TimeDateStamp(4) + PointerToSymbolTable(4)
+    const long pointerToSymbolTableOffset = 64 + 4 + 8;   // = 76
+    const long numberOfSymbolsOffset = 64 + 4 + 12;       // = 80
+
+    var endPos = fs.Position;
+    fs.Seek(pointerToSymbolTableOffset, SeekOrigin.Begin);
+    writer.Write(symbolTableOffset);
+    fs.Seek(numberOfSymbolsOffset, SeekOrigin.Begin);
+    writer.Write(totalSymbolCount);
+    fs.Seek(endPos, SeekOrigin.Begin);
+
+    Logger.Debug(LogCategory.Pe, $"COFF symbol table: {totalSymbolCount} entries at file offset 0x{symbolTableOffset:X}");
+  }
+
+  /// <summary>
+  /// Writes one 18-byte COFF symbol table entry. Names longer than 8 bytes are added to the string table.
+  /// </summary>
+  private static void WriteCoffSymbolEntry(BinaryWriter writer, List<byte> stringTable,
+    string name, uint value, ushort sectionNumber, ushort type, byte storageClass, byte numAux) {
+    var nameBytes = Encoding.ASCII.GetBytes(name);
+    if (nameBytes.Length <= 8) {
+      // Short name: inline in the 8-byte field, null-padded
+      var buf = new byte[8];
+      Array.Copy(nameBytes, buf, nameBytes.Length);
+      writer.Write(buf);
+    } else {
+      // Long name: 4 zero bytes + 4-byte offset into string table
+      writer.Write((uint)0);
+      writer.Write((uint)stringTable.Count);
+      stringTable.AddRange(nameBytes);
+      stringTable.Add(0);  // null terminator
+    }
+    writer.Write(value);
+    writer.Write(sectionNumber);
+    writer.Write(type);
+    writer.Write(storageClass);
+    writer.Write(numAux);
   }
 
   private static void WriteSectionHeader(BinaryWriter writer, string name, uint virtualSize, uint virtualAddress,

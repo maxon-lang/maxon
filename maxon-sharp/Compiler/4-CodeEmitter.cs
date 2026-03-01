@@ -5,6 +5,11 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler;
 
 /// <summary>
+/// A function symbol for the COFF symbol table (name + code offset within .text).
+/// </summary>
+public record CoffSymbol(string Name, int CodeOffset);
+
+/// <summary>
 /// Result of code emission.
 /// </summary>
 public record CodeEmitResult(
@@ -12,7 +17,8 @@ public record CodeEmitResult(
   byte[] Rdata,
   byte[] Data,
   byte[] Symdata,
-  IReadOnlyList<ImportEntry> Imports
+  IReadOnlyList<ImportEntry> Imports,
+  IReadOnlyList<CoffSymbol> CoffSymbols
 );
 
 /// <summary>
@@ -142,9 +148,15 @@ public class CodeEmitter {
     var symdata = emitter.GetSymdata();
     var imports = emitter.Imports;
 
-    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {symdata.Length} bytes symdata, {imports.Count} imports");
+    // Build COFF symbol list sorted by offset so tools can binary-search by address
+    var coffSymbols = symbolEntries
+      .OrderBy(e => e.codeOffset)
+      .Select(e => new CoffSymbol(e.name, e.codeOffset))
+      .ToList();
 
-    return new CodeEmitResult(code, rdata, data, symdata, imports);
+    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {symdata.Length} bytes symdata, {imports.Count} imports, {coffSymbols.Count} COFF symbols");
+
+    return new CodeEmitResult(code, rdata, data, symdata, imports, coffSymbols);
   }
 
   /// <summary>
