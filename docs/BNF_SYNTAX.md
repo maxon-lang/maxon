@@ -48,7 +48,7 @@ KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
               | 'match' | 'not' | 'of' | 'or' | 'otherwise'
               | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
-              | 'static' | 'then' | 'throw' | 'throws' | 'to'
+              | 'skip' | 'static' | 'then' | 'throw' | 'throws' | 'to'
               | 'true' | 'try' | 'type' | 'typealias' | 'union' | 'upto'
               | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
 ```
@@ -352,6 +352,7 @@ statement     = return_stmt
               | match_stmt
               | break_stmt
               | continue_stmt
+              | skip_stmt
               | throw_stmt
               | try_stmt
               | assignment_stmt
@@ -482,13 +483,22 @@ break_stmt    = 'break' [ LABEL ]
 continue_stmt = 'continue' [ LABEL ]
 ```
 
-### 5.9 Throw
+### 5.9 Skip
+
+```
+skip_stmt     = 'skip' expression
+```
+
+Only valid inside iterator-based `for` loops. Advances the iterator by the
+given number of positions and continues to the next iteration.
+
+### 5.10 Throw
 
 ```
 throw_stmt    = 'throw' expression
 ```
 
-### 5.10 Try Statement
+### 5.11 Try Statement
 
 ```
 try_stmt      = 'try' expression 'otherwise' otherwise_clause

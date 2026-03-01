@@ -217,7 +217,7 @@ function main() returns ExitCode
         var c = Counter{val: i}
         if i == 3 'brk'
             total = total + c.val
-            break 'loop'
+            break
         end 'brk'
         total = total + c.val
         i = i + 1

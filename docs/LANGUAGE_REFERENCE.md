@@ -86,7 +86,7 @@ identifier = [a-zA-Z_][a-zA-Z0-9_]*
 and, as, bool, break, byte, continue, default, else, end, enum, export,
 extends, extension, fallthrough, false, float, for, from, function, gives, if,
 ignore, implements, in, int, interface, is, let, match, not, of, or, otherwise,
-return, returns, self, Self, shl, shr, static, then, throw, throws, to,
+return, returns, self, Self, shl, shr, skip, static, then, throw, throws, to,
 true, try, type, typealias, union, upto, uses, var, where, while, with, xor
 ```
 
@@ -2144,6 +2144,16 @@ continue           // Continue innermost loop
 continue 'label'   // Continue loop with specified label
 ```
 Skips to next iteration of the innermost loop, or continues to a specific labeled loop.
+
+### Skip Statement
+```maxon
+skip n            // Skip n elements in innermost iterator loop
+```
+Advances the iterator by `n` positions and continues to the next iteration. Only valid inside iterator-based `for` loops (not `while` loops or range-based `for` loops). Like `continue`, `skip` abandons the rest of the current iteration body before advancing.
+
+- `skip 0` is equivalent to `continue`
+- If the iterator is exhausted during the skip, the loop exits normally
+- `n` can be any non-negative integer expression
 
 ---
 

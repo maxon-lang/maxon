@@ -42,6 +42,8 @@ public enum ErrorCode {
   ParserMatchDefaultWithEnum = 2044,
   ParserNonConstantInitializer = 2045,
   ParserMatchDefaultUnionMustThrow = 2046,
+  ParserSkipOutsideIteratorLoop = 2047,
+  ParserRedundantLoopLabel = 2048,
 
   // Semantic errors (3xxx) - Stage 3
   SemanticNoMain = 3001,

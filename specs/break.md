@@ -127,7 +127,7 @@ function main() returns ExitCode
       if x == 3 'check'
         break 'outer'
       end 'check'
-      break 'inner'
+      break
     end 'inner'
   end 'outer'
   return x
@@ -147,7 +147,7 @@ function main() returns ExitCode
     while y < 10 'inner'
       y = y + 1
       if y == 3 'check'
-        break 'inner'
+        break
       end 'check'
     end 'inner'
   end 'outer'
@@ -213,7 +213,7 @@ function main() returns ExitCode
     while y < 5 'inner'
       y = y + 1
       if y == 3 'check'
-        continue 'inner'
+        continue
       end 'check'
       sum = sum + 1
     end 'inner'
@@ -250,4 +250,34 @@ end 'main'
 ```
 ```exitcode
 12
+```
+
+<!-- test: break.error-break-own-label -->
+Error: break with the label of its own loop is redundant.
+```maxon
+function main() returns ExitCode
+  while true 'loop'
+    break 'loop'
+  end 'loop'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E2048: specs/fragments/break/break.error-break-own-label.test:4:11: 'break' with label 'loop' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop
+```
+
+<!-- test: break.error-continue-own-label -->
+Error: continue with the label of its own loop is redundant.
+```maxon
+function main() returns ExitCode
+  var x = 0
+  while x < 10 'loop'
+    x = x + 1
+    continue 'loop'
+  end 'loop'
+  return x
+end 'main'
+```
+```maxoncstderr
+error E2048: specs/fragments/break/break.error-continue-own-label.test:6:14: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
 ```

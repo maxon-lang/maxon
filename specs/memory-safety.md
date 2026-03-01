@@ -901,7 +901,7 @@ function main() returns ExitCode
     var c = Counter{n: i}
     if c.n == 1 'check'
       result = c.n
-      break 'loop'
+      break
     end 'check'
     i = i + 1
   end 'loop'
@@ -1326,7 +1326,7 @@ function main() returns ExitCode
     i = i + 1
     var c = Counter{n: i}
     if c.n == 3 'skip'
-      continue 'loop'
+      continue
     end 'skip'
     total = total + c.n
   end 'loop'
@@ -1396,7 +1396,7 @@ function main() returns ExitCode
     var wrapped = Item{val: item}
     if wrapped.val == 30 'found'
       result = wrapped.val
-      break 'search'
+      break
     end 'found'
   end 'search'
   return result

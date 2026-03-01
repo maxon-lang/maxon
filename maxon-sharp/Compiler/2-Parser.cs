@@ -382,7 +382,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return null;
   }
 
-  private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars, string ScopeVar);
+  private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars, string ScopeVar,
+    string? IterVarName = null, string? NextMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null);
   private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars, string ScopeVar);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
@@ -4825,6 +4826,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ParseBreak();
     } else if (Check(TokenType.Continue)) {
       ParseContinue();
+    } else if (Check(TokenType.Skip)) {
+      ParseSkip();
     } else if (TryRewritePrimitiveStaticMethod()) {
       ParseCallStatement();
     } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
@@ -7283,7 +7286,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     PushScope("for_in");
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek()));
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek(),
+      iterVarName, nextMethodName, elementKind, elementStructTypeName, iterableTypeName));
 
     if (resultVar != null) {
       var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
@@ -7471,6 +7475,107 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
+  private void ParseSkip() {
+    var token = Advance(); // consume 'skip'
+
+    var skipCountExpr = ParseExpression();
+    var skipCountValue = ResolveExprValue(skipCountExpr);
+
+    if (_loopStack.Count == 0) {
+      throw new CompileError(ErrorCode.ParserUnexpectedToken,
+        "'skip' can only be used inside a loop", token.Line, token.Column);
+    }
+    var loop = _loopStack.Peek();
+
+    if (loop.IterVarName == null) {
+      throw new CompileError(ErrorCode.ParserSkipOutsideIteratorLoop,
+        "'skip' can only be used inside an iterator-based for loop", token.Line, token.Column);
+    }
+
+    // Exit scopes above the loop body scope (handles nested if/match/etc)
+    EmitReleaseForScopesAbove(loop.ScopeVar);
+    _currentBlock!.AddOp(new MaxonScopeExitOp(loop.ScopeVar, "skip_cleanup"));
+
+    // Generate the skip loop: call next() n times, exiting the for loop if exhausted
+    var skipLabel = UniqueLabel("skip");
+    var skipHeaderLabel = $"{skipLabel}.header";
+    var skipBodyLabel = $"{skipLabel}.body";
+    var skipDoneLabel = $"{skipLabel}.done";
+
+    // Store skip count in a mutable counter variable
+    var skipCounterVar = $"__skip_counter_{_blockCounter++}";
+    _currentBlock!.AddOp(new MaxonAssignOp(skipCounterVar, skipCountValue, isDeclaration: true, isMutable: true, MaxonValueKind.Integer));
+    _variables[skipCounterVar] = new VarInfo(MaxonValueKind.Integer, true, skipCountValue, _currentBlock!, CurrentScopeVar, null);
+
+    _currentBlock!.AddOp(new MaxonBrOp(skipHeaderLabel));
+
+    // Skip header: check if counter > 0
+    var skipHeaderBlock = _currentFunction!.Body.AddBlock(skipHeaderLabel);
+    _currentBlock = skipHeaderBlock;
+
+    var counterVal = EmitVarRefOp(skipCounterVar, MaxonValueKind.Integer, null);
+    var zeroLit = new MaxonLiteralOp(0L);
+    skipHeaderBlock.AddOp(zeroLit);
+    var cmpOp = new MaxonBinOp(MaxonBinOperator.Gt, counterVal, zeroLit.Result, MaxonValueKind.Integer);
+    skipHeaderBlock.AddOp(cmpOp);
+    skipHeaderBlock.AddOp(new MaxonCondBrOp(cmpOp.Result, skipBodyLabel, skipDoneLabel));
+
+    // Skip body: call try next() on the iterator, decrement counter
+    var skipBodyBlock = _currentFunction!.Body.AddBlock(skipBodyLabel);
+    _currentBlock = skipBodyBlock;
+
+    // Scope to track and release the discarded next() result (e.g. tuples from enumerated())
+    var skipScopeVar = $"__scope_{MlirContext.Current.NextId()}";
+    skipBodyBlock.AddOp(new MaxonScopeEnterOp(skipScopeVar, "skip_discard"));
+    _mmScopeStack.Push(skipScopeVar);
+
+    // Load the iterator struct ref
+    var iterRef = new MaxonStructVarRefOp(loop.IterVarName, loop.IterableTypeName!);
+    skipBodyBlock.AddOp(iterRef);
+
+    // Call try next(self) to advance the iterator
+    var tryCallOp = new MaxonTryCallOp(loop.NextMethodName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
+    skipBodyBlock.AddOp(tryCallOp);
+
+    // Store result so the scope can track and release managed allocations
+    if (tryCallOp.Result != null) {
+      var discardVar = $"__skip_discard_{_blockCounter++}";
+      skipBodyBlock.AddOp(new MaxonAssignOp(discardVar, tryCallOp.Result, true, true, loop.ElementKind!.Value));
+      _variables[discardVar] = new VarInfo(loop.ElementKind!.Value, true, tryCallOp.Result, skipBodyBlock, skipScopeVar, loop.ElementStructTypeName);
+    }
+
+    // Release the discarded result
+    skipBodyBlock.AddOp(new MaxonScopeExitOp(skipScopeVar, "skip_discard_exit"));
+    _mmScopeStack.Pop();
+
+    // Check if iterator is exhausted
+    var zeroLit2 = new MaxonLiteralOp(0L);
+    skipBodyBlock.AddOp(zeroLit2);
+    var errCmp = new MaxonBinOp(MaxonBinOperator.Eq, tryCallOp.ErrorFlag, zeroLit2.Result, MaxonValueKind.Integer);
+    skipBodyBlock.AddOp(errCmp);
+
+    // Create a block for the "still has elements" path
+    var skipDecrLabel = $"{skipLabel}.decr";
+    skipBodyBlock.AddOp(new MaxonCondBrOp(errCmp.Result, skipDecrLabel, loop.ExitLabel));
+
+    // Decrement counter and loop back
+    var skipDecrBlock = _currentFunction!.Body.AddBlock(skipDecrLabel);
+    _currentBlock = skipDecrBlock;
+
+    var currentCount = EmitVarRefOp(skipCounterVar, MaxonValueKind.Integer, null);
+    var oneLit = new MaxonLiteralOp(1L);
+    skipDecrBlock.AddOp(oneLit);
+    var subOp = new MaxonBinOp(MaxonBinOperator.Sub, currentCount, oneLit.Result, MaxonValueKind.Integer);
+    skipDecrBlock.AddOp(subOp);
+    skipDecrBlock.AddOp(new MaxonAssignOp(skipCounterVar, subOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
+    skipDecrBlock.AddOp(new MaxonBrOp(skipHeaderLabel));
+
+    // Skip done: branch to the loop header (like continue)
+    var skipDoneBlock = _currentFunction!.Body.AddBlock(skipDoneLabel);
+    _currentBlock = skipDoneBlock;
+    skipDoneBlock.AddOp(new MaxonBrOp(loop.HeaderLabel));
+  }
+
   private (string ExitLabel, string ScopeVar, bool IsLoop) ResolveBreakTarget(Token keyword) {
     if (_matchStack.Count == 0 && _loopStack.Count == 0) {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"'{keyword.Value}' can only be used inside a loop or match", keyword.Line, keyword.Column);
@@ -7481,7 +7586,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (ctx.SourceLabel == labelToken.Value) return (ctx.MergeLabel, ctx.ScopeVar, false);
       }
       foreach (var ctx in _loopStack) {
-        if (ctx.SourceLabel == labelToken.Value) return (ctx.ExitLabel, ctx.ScopeVar, true);
+        if (ctx.SourceLabel == labelToken.Value) {
+          // Only redundant if it's the innermost loop AND there's no intervening match
+          // (with a match on the stack, unlabeled break would target the match, not the loop)
+          if (_loopStack.Peek() == ctx && _matchStack.Count == 0)
+            throw new CompileError(ErrorCode.ParserRedundantLoopLabel,
+              $"'break' with label '{labelToken.Value}' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop",
+              labelToken.Line, labelToken.Column);
+          return (ctx.ExitLabel, ctx.ScopeVar, true);
+        }
       }
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"No enclosing loop or match with label '{labelToken.Value}'", labelToken.Line, labelToken.Column);
     }
@@ -7498,7 +7611,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.CharacterLiteral)) {
       var labelToken = Advance();
       foreach (var ctx in _loopStack) {
-        if (ctx.SourceLabel == labelToken.Value) return ctx;
+        if (ctx.SourceLabel == labelToken.Value) {
+          if (_loopStack.Peek() == ctx)
+            throw new CompileError(ErrorCode.ParserRedundantLoopLabel,
+              $"'continue' with label '{labelToken.Value}' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop",
+              labelToken.Line, labelToken.Column);
+          return ctx;
+        }
       }
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"No enclosing loop with label '{labelToken.Value}'", labelToken.Line, labelToken.Column);
     }
