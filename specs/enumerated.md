@@ -152,3 +152,22 @@ end 'main'
 0:(1,2)
 1:(3,4)
 ```
+
+<!-- test: enumerated.codepoints -->
+```maxon
+function main() returns ExitCode
+  var s = "abc"
+  for (i, cp) in s.codepoints().enumerated() 'loop'
+    print("{i}:{cp}\n")
+  end 'loop'
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0:97
+1:98
+2:99
+```

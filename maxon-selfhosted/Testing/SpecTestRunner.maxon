@@ -93,12 +93,10 @@ end 'trimWhitespace'
 function parseInteger(s String) returns ParsedInt throws CompileError
   var result = 0
   var negative = false
-  var i = 0
-  for cp in s.codepoints() 'chars'
+  for (i, cp) in s.codepoints().enumerated() 'chars'
     if cp == 45 'minus'
       if i == 0 'first'
         negative = true
-        i = i + 1
         continue
       end 'first'
       throw CompileError.readError
@@ -106,7 +104,6 @@ function parseInteger(s String) returns ParsedInt throws CompileError
     if cp >= 48 'digit'
       if cp <= 57 'isDigit'
         result = result * 10 + cp - 48
-        i = i + 1
         continue
       end 'isDigit'
     end 'digit'
@@ -326,9 +323,8 @@ end 'parseSpecFile'
 // Read lines from startLine until a closing ``` is found, joining with newlines.
 function readCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNumber) returns String
   var result = ""
-  var i = startLine
   var first = true
-  while i < lineCount 'read'
+  for i in startLine upto lineCount 'read'
     let line = try lines.get(i) otherwise 'done'
       break
     end 'done'
@@ -341,24 +337,21 @@ function readCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNu
     end 'isFirst' else 'notFirst'
       result = "{result}\n{line}"
     end 'notFirst'
-    i = i + 1
   end 'read'
   return result
 end 'readCodeBlock'
 
 // Skip past a code block's closing ```.
 function skipCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
-  var i = startLine
-  while i < lineCount 'skip'
+  for i in startLine upto lineCount 'scan'
     let line = try lines.get(i) otherwise 'done'
       break
     end 'done'
     if line.startsWith("```") 'endBlock'
       return i + 1
     end 'endBlock'
-    i = i + 1
-  end 'skip'
-  return i
+  end 'scan'
+  return lineCount
 end 'skipCodeBlock'
 
 

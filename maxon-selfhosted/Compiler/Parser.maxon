@@ -385,12 +385,6 @@ function parseVarAssignment(project Project, tokens TokenArray, startPos TokenIn
     return pos
 end 'parseVarAssignment'
 
-function appendBytes(dst ByteArray, src ByteArray)
-    for b in src 'copy'
-        dst.push(b)
-    end 'copy'
-end 'appendBytes'
-
 function appendIntBytes(dst ByteArray, n ParsedInt)
     if n == 0 'zero'
         dst.push(48)
@@ -946,10 +940,8 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 
     // Compute fracDivisor = 10^fracDigits
     var fracDivisor = 1
-    var fd = 0
-    while fd < fracDigits 'powLoop'
+    for fd in 0 upto fracDigits 'powLoop'
         fracDivisor = fracDivisor * 10
-        fd = fd + 1
     end 'powLoop'
 
     // Build the mantissa by scaling: value = intPart + fracPart/fracDivisor
@@ -959,16 +951,13 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 
     // Apply scientific notation exponent: multiply or divide by 10^sciExp
     if sciExp > 0 'applySciExp'
-        var ei = 0
         if sciExpNeg 'divByTen'
-            while ei < sciExp 'divLoop'
+            for ei in 0 upto sciExp 'divLoop'
                 denominator = denominator * 10
-                ei = ei + 1
             end 'divLoop'
         end 'divByTen' else 'mulByTen'
-            while ei < sciExp 'mulLoop'
+            for ei in 0 upto sciExp 'mulLoop'
                 numerator = numerator * 10
-                ei = ei + 1
             end 'mulLoop'
         end 'mulByTen'
     end 'applySciExp'
@@ -1033,22 +1022,19 @@ function parseInt(s ByteArray) returns ParsedInt
 
     // Decimal with underscore support
     var result = 0
-    var pi = 0
-    while pi < sLen 'digits'
+    for pi in 0 upto sLen 'digits'
         let b = try s.get(pi) otherwise 0
         if b >= 48 and b <= 57 'digit'
             result = result * 10 + (b - 48)
         end 'digit'
         // Underscores are silently skipped
-        pi = pi + 1
     end 'digits'
     return result
 end 'parseInt'
 
 function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt
     var result = 0
-    var pi = startIndex
-    while pi < s.count() 'hexDigits'
+    for pi in startIndex upto s.count() 'hexDigits'
         let b = try s.get(pi) otherwise 0
         if b >= 48 and b <= 57 'decDigit'
             result = result * 16 + (b - 48)
@@ -1058,15 +1044,13 @@ function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt
             result = result * 16 + (b - 55)
         end 'upperHex'
         // Underscores are silently skipped
-        pi = pi + 1
     end 'hexDigits'
     return result
 end 'parseHexInt'
 
 function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt
     var result = 0
-    var pi = startIndex
-    while pi < s.count() 'binDigits'
+    for pi in startIndex upto s.count() 'binDigits'
         let b = try s.get(pi) otherwise 0
         if b == 48 'zeroBit'
             result = result * 2
@@ -1074,21 +1058,18 @@ function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt
             result = result * 2 + 1
         end 'oneBit'
         // Underscores are silently skipped
-        pi = pi + 1
     end 'binDigits'
     return result
 end 'parseBinaryInt'
 
 function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt
     var result = 0
-    var pi = startIndex
-    while pi < s.count() 'octDigits'
+    for pi in startIndex upto s.count() 'octDigits'
         let b = try s.get(pi) otherwise 0
         if b >= 48 and b <= 55 'octDigit'
             result = result * 8 + (b - 48)
         end 'octDigit'
         // Underscores are silently skipped
-        pi = pi + 1
     end 'octDigits'
     return result
 end 'parseOctalInt'

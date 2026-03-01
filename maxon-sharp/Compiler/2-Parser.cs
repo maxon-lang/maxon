@@ -11885,6 +11885,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var resolved = ResolveStructReturnTypeThroughSelf(returnStruct, selfStruct.TypeName);
         if (resolved != null) return (MaxonValueKind.Struct, resolved);
       }
+
+      // When return type is a type alias with already-resolved params (e.g., EnumSelf with
+      // Source=CodepointView, Element=Codepoint from extension on a non-alias Iterable type),
+      // find or create the concrete specialization alias for monomorphization.
+      // Only applies when self is a non-alias concrete type — alias types are handled by
+      // the hasUnresolved path above.
+      if (!hasUnresolved && returnStruct.TypeParams.Count > 0
+          && !_typeAliasSources.ContainsKey(selfStruct.TypeName)
+          && _typeAliasSources.TryGetValue(returnStruct.Name, out var returnSourceName)
+          && _typeRegistry.TryGetValue(returnSourceName, out var returnSourceReg)
+          && returnSourceReg is MlirStructType returnSourceStruct
+          && !returnStruct.TypeParams.Values.Any(t => t is MlirTypeParameterType)) {
+        var mangledName = $"__{returnSourceName}_{string.Join("_", returnStruct.TypeParams.Values.Select(t => t.Name))}";
+        if (!_typeRegistry.ContainsKey(mangledName)) {
+          RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(returnStruct.TypeParams));
+        }
+        return (MaxonValueKind.Struct, mangledName);
+      }
     }
 
     var kind = returnType.ToValueKind();
@@ -11904,16 +11922,33 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private string? ResolveStructReturnTypeThroughSelf(MlirStructType returnStruct, string selfTypeName) {
     // Get the source type for the self (e.g., __Map_String_i64 -> Map)
-    if (!_typeAliasSources.TryGetValue(selfTypeName, out var sourceTypeName)) return null;
-    if (!_typeRegistry.TryGetValue(sourceTypeName, out var sourceRegType)) return null;
-    if (sourceRegType is not MlirStructType sourceStruct) return null;
-    if (!_typeRegistry.TryGetValue(selfTypeName, out var selfRegType)) return null;
-    if (selfRegType is not MlirStructType selfStruct) return null;
+    MlirStructType sourceStruct;
+    MlirStructType selfStruct;
+    if (_typeAliasSources.TryGetValue(selfTypeName, out var sourceTypeName)) {
+      if (!_typeRegistry.TryGetValue(sourceTypeName, out var sourceRegType)) return null;
+      if (sourceRegType is not MlirStructType ss) return null;
+      sourceStruct = ss;
+      if (!_typeRegistry.TryGetValue(selfTypeName, out var selfRegType)) return null;
+      if (selfRegType is not MlirStructType self) return null;
+      selfStruct = self;
+    } else {
+      // Non-alias types (e.g., CodepointView implementing Iterable with Codepoint):
+      // the type is its own source, and its TypeParams come from the conformance clause
+      if (!_typeRegistry.TryGetValue(selfTypeName, out var selfRegType)) return null;
+      if (selfRegType is not MlirStructType self) return null;
+      sourceStruct = self;
+      selfStruct = self;
+    }
 
     // Build the resolution map from return type's unresolved params to concrete types.
     var resolvedReturnParams = new Dictionary<string, MlirType>();
     foreach (var (paramName, paramType) in returnStruct.TypeParams) {
       if (paramType is MlirTypeParameterType tp) {
+        // Self type parameter resolves to the concrete self type
+        if (tp.ParameterName == "Self") {
+          resolvedReturnParams[paramName] = selfStruct;
+          continue;
+        }
         // Direct type parameter (e.g., Element -> Element(tp)): look up in source type
         if (sourceStruct.TypeParams.TryGetValue(tp.ParameterName, out var sourceBinding)) {
           if (sourceBinding is MlirStructType innerAlias) {
