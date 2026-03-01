@@ -45,7 +45,11 @@ export type File
   export static function readText(path String) returns String throws FileReadError
     var managed = try readFileData(path, extraBytes: 1)
     let len = managed.length()
+    // Write null terminator: len is within capacity (extraBytes=1) but at the
+    // length boundary, so temporarily extend length to allow setByte at that index
+    managed.setLength(len + 1)
     managed.setByte(len, 0)
+    managed.setLength(len)
     return String{managed: managed, _iterPos: 0}
   end 'readText'
 

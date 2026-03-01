@@ -308,8 +308,16 @@ public static class ScopeAnalysisPass {
               if (scopeInfos.TryGetValue(currentScope, out var srcInfo)) {
                 srcInfo.EscapingVars.Add(moveOp.VarName);
                 Logger.Debug(LogCategory.Mlir, $"  ScopeAnalysis: escape '{moveOp.VarName}' from scope {currentScope} -> {moveOp.DestScopeVar} (tag={moveOp.Tag})");
-                if (moveOp.Tag == "return_move")
+                if (moveOp.Tag == "return_move") {
                   srcInfo.ReturnMoveVars.Add(moveOp.VarName);
+                  // Also mark in all enclosing scopes up to the dest scope, since
+                  // each scope_exit on the return path must skip decreffing this var
+                  for (int si = scopeStack.Count - 2; si >= 0; si--) {
+                    if (scopeInfos.TryGetValue(scopeStack[si], out var enclosingInfo))
+                      enclosingInfo.ReturnMoveVars.Add(moveOp.VarName);
+                    if (scopeStack[si] == moveOp.DestScopeVar) break;
+                  }
+                }
               }
             }
             // Mark the destination scope as receiving moved allocs

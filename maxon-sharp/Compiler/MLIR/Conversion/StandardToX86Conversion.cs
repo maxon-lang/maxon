@@ -92,6 +92,12 @@ public static class StandardToX86Conversion {
       }
     }
 
+    if (func.Name.Contains("runAllSpecTests")) {
+      Logger.Debug(LogCategory.Codegen, $"Stack layout for {func.Name} (varStackSize={varStackSize}):");
+      foreach (var (name, offset) in varOffsets.OrderBy(kv => kv.Value))
+        Logger.Debug(LogCategory.Codegen, $"  [{offset}] {name}");
+    }
+
     // Pre-scan: detect tail calls (StdCallOp immediately followed by StdReturnOp
     // whose return value is the call's result). Excludes runtime calls, throwing
     // functions, and calls with more args than register slots.

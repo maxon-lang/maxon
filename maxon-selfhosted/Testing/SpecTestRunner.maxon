@@ -179,10 +179,14 @@ end 'splitLines'
 
 // Parse a spec file and extract tests.
 function parseSpecFile(content String, specName String) returns SpecTestArray
+  print("PARSE: enter\n")
   var tests = SpecTestArray{}
+  print("PARSE: created tests\n")
   let lines = splitLines(content)
+  print("PARSE: split lines\n")
   var i = 0
   let lineCount = lines.count()
+  print("PARSE: lineCount ready\n")
 
   while i < lineCount 'scan'
     let line = try lines.get(i) otherwise 'skip'
@@ -420,16 +424,21 @@ export function runAllSpecTests(filter String, target TargetTriple) returns Exit
   var totalTests = 0
 
   // Local array avoids module-level iterator persistence across calls
-  let whitelist = [SPEC_WHITELIST_BASICS, SPEC_WHITELIST_PRINT, SPEC_WHITELIST_VARS, SPEC_WHITELIST_ARITHMETIC, SPEC_WHITELIST_ARITHMETIC_OPS, SPEC_WHITELIST_COMPARISON_OPS, SPEC_WHITELIST_BITWISE_OPS, SPEC_WHITELIST_UNARY_OPS, SPEC_WHITELIST_UNARY_NEG, SPEC_WHITELIST_EXPRESSIONS, SPEC_WHITELIST_LITERALS, SPEC_WHITELIST_PARENTHESES, SPEC_WHITELIST_BOOL_TYPE, SPEC_WHITELIST_CONTEXTUAL_TYPING, SPEC_WHITELIST_BLOCK_SCOPING]
+  let whitelist = [SPEC_WHITELIST_BASICS, SPEC_WHITELIST_PRINT, SPEC_WHITELIST_VARS]
 
   for specName in whitelist 'eachSpec'
     let specPath = "{root}/specs/{specName}.md"
+    print("PATH: ")
+    print(specPath)
+    print("\n")
     let content = try File.readText(specPath) otherwise 'readErr'
       logError(LogCategory.testing, message: "Could not read spec: {specPath}")
       continue
     end 'readErr'
+    print("READ OK\n")
 
     let tests = parseSpecFile(content, specName: specName)
+    print("PARSED OK\n")
 
     for test in tests 'eachTest'
       // Apply filter

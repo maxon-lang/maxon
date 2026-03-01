@@ -11,22 +11,10 @@ export function setSourceFile(project Project, path String, content ByteArray)
         let existing = try project.db.sourceFiles.get(path) otherwise 'skip'
             return
         end 'skip'
-        // Compare content byte-by-byte to avoid unnecessary revision bumps
-        let existingContent = existing.content
-        if existingContent.count() == content.count() 'sameLen'
-            var same = true
-            for (i, b) in content.enumerated() 'cmp'
-                let a = try existingContent.get(i) otherwise 0
-                if a != b 'diff'
-                    same = false
-                    break
-                end 'diff'
-            end 'cmp'
-            if same 'unchanged'
-                logTrace(LogCategory.compiler, message: "  unchanged, skipping")
-                return
-            end 'unchanged'
-        end 'sameLen'
+        if bytesEqual(existing.content, b: content) 'unchanged'
+            logTrace(LogCategory.compiler, message: "  unchanged, skipping")
+            return
+        end 'unchanged'
     end 'exists' else 'newFile'
         project.db.sourcePaths.push(path)
     end 'newFile'

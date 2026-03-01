@@ -14,11 +14,17 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static List<ScopeInfo?>? _scopeAnalysisStack;
   [ThreadStatic] private static Dictionary<string, ScopeInfo>? _funcScopeAnalysis;
   [ThreadStatic] private static int _nextRdataId;
-  private static int NextRdataId() => _nextRdataId++;
+  [ThreadStatic] private static int _nextStdlibRdataId;
+  [ThreadStatic] private static bool _rdataStdlibPhase;
+  private static string NextRdataId() =>
+    _rdataStdlibPhase ? $"s{_nextStdlibRdataId++}" : $"{_nextRdataId++}";
 
   public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
     _rdataStringCache = [];
     _symdataTagCache = [];
+    _rdataStdlibPhase = true;
+    _nextStdlibRdataId = 0;
+    _nextRdataId = 0;
     var result = new MlirModule<StandardOp>();
     _resultModule = result;
     result.RdataEntries.AddRange(module.RdataEntries);
@@ -103,6 +109,7 @@ public static partial class MaxonToStandardConversion {
       // Reset IDs after stdlib for stable test output
       if (!hasResetAfterStdlib && !func.IsStdlib) {
         MlirContext.Current.ResetIds();
+        _rdataStdlibPhase = false;
         _nextRdataId = 0;
         _rdataStringCache = [];
         hasResetAfterStdlib = true;

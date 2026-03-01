@@ -57,6 +57,8 @@ public partial class X86CodeEmitter() {
 
   public void DefineLabel(string name) {
     _labels[name] = _code.Count;
+    if (name.Contains("runAllSpecTests"))
+      Logger.Debug(LogCategory.Codegen, $"LABEL: {name} at code offset {_code.Count} (0x{_code.Count:X})");
   }
 
   public void SetCurrentFunction(string name) {
@@ -70,6 +72,12 @@ public partial class X86CodeEmitter() {
   // --- Data section management ---
 
   public void DefineRdata(string label, byte[] bytes, int alignment = 1) {
+    if (_rdataLabels.ContainsKey(label)) {
+      var oldOffset = _rdataLabels[label];
+      var oldBytes = System.Text.Encoding.UTF8.GetString(_rdata.ToArray(), oldOffset, Math.Min(64, _rdata.Count - oldOffset)).TrimEnd('\0');
+      var newBytes = System.Text.Encoding.UTF8.GetString(bytes, 0, Math.Min(64, bytes.Length)).TrimEnd('\0');
+      Logger.Debug(LogCategory.Codegen, $"WARNING: Duplicate rdata label '{label}' - old[{oldOffset}]='{oldBytes}' new[{_rdata.Count}]='{newBytes}'");
+    }
     if (alignment > 1) {
       var padding = (alignment - (_rdata.Count % alignment)) % alignment;
       for (var i = 0; i < padding; i++) _rdata.Add(0);
