@@ -1,0 +1,131 @@
+// Test: rc-global-struct-outlives-local
+typealias Integer = int(i64.min to i64.max)
+
+type Cfg
+  export var level Integer
+end 'Cfg'
+
+var globalCfg = Cfg{level: 0}
+
+function setup()
+  globalCfg = Cfg{level: 42}
+end 'setup'
+
+function main() returns ExitCode
+  setup()
+  return globalCfg.level
+end 'main'
+---
+MmTrace: true
+ExitCode: 42
+Stderr: ```
+alloc Cfg #1 rc=0 [ownership-edge-cases.__module_init]
+incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
+alloc Cfg #2 rc=0 [ownership-edge-cases.setup]
+decref Cfg #1 rc=0 [ownership-edge-cases.setup]
+free Cfg #1
+incref Cfg #2 rc=1 [ownership-edge-cases.setup]
+incref Cfg #2 rc=2 [ownership-edge-cases.main]
+decref Cfg #2 rc=1 [ownership-edge-cases.main]
+decref Cfg #2 rc=0 [__maxon_global_cleanup]
+free Cfg #2
+```
+---
+module {
+  func @ownership-edge-cases.setup() {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, 42
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, 42
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, qword [rip+globalCfg]
+    x86.mov [rbp-16], esi
+    x86.test esi, esi
+    x86.jz __nonnull_skip_28
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_28
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov edi, [rbp-8]
+    x86.mov qword [rip+globalCfg], edi
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call ownership-edge-cases.setup
+    x86.mov eax, qword [rip+globalCfg]
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.call mm_incref
+    x86.mov edx, [rbp-8]
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-16], ebx
+    x86.xor esi, esi
+    x86.cmp ebx, esi
+    x86.setl edi
+    x86.movzx edi, edib
+    x86.mov r8, 4294967295
+    x86.cmp rbx, r8
+    x86.setg r9
+    x86.movzx r9, r9b
+    x86.or edi, r9
+    x86.test edi, edi
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_20]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_29
+    x86.call mm_decref
+    x86.label __nonnull_skip_29
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership-edge-cases.__module_init() {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor eax, eax
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov esi, [rbp-8]
+    x86.mov qword [rip+globalCfg], esi
+    x86.epilogue
+    x86.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov eax, qword [rip+globalCfg]
+    x86.mov [rbp-8], eax
+    x86.test eax, eax
+    x86.jz __nonnull_skip_30
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_30
+    x86.epilogue
+    x86.ret
+  }
+}
+---

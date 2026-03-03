@@ -1,0 +1,100 @@
+// Test: rc-multiple-aliases-freed-once
+typealias Integer = int(i64.min to i64.max)
+
+type Data
+  export var n Integer
+end 'Data'
+
+function main() returns ExitCode
+  var a = Data{n: 7}
+  var b = a
+  var c = a
+  return a.n + b.n + c.n
+end 'main'
+---
+MmTrace: true
+ExitCode: 21
+Stderr: ```
+alloc Data #1 rc=0 [ownership-edge-cases.main]
+incref Data #1 rc=1 [ownership-edge-cases.main]
+incref Data #1 rc=2 [ownership-edge-cases.main]
+incref Data #1 rc=3 [ownership-edge-cases.main]
+decref Data #1 rc=2 [ownership-edge-cases.main]
+decref Data #1 rc=1 [ownership-edge-cases.main]
+decref Data #1 rc=0 [ownership-edge-cases.main]
+free Data #1
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 7
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, 7
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov esi, [rbp-8]
+    x86.mov [rbp-16], esi
+    x86.mov edi, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov r8, [rbp-16]
+    x86.mov [rbp-24], r8
+    x86.mov r9, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov eax, [rbp-16]
+    x86.mov edx, [eax+0]
+    x86.add ecx, edx
+    x86.mov eax, [rbp-24]
+    x86.mov edx, [eax+0]
+    x86.add ecx, edx
+    x86.mov [rbp-32], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_26]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_35
+    x86.call mm_decref
+    x86.label __nonnull_skip_35
+    x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_36
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_36
+    x86.mov ecx, [rbp-24]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_37
+    x86.call mm_decref
+    x86.label __nonnull_skip_37
+    x86.mov eax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

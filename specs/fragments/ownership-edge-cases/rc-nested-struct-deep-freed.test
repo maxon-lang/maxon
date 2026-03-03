@@ -1,0 +1,127 @@
+// Test: rc-nested-struct-deep-freed
+typealias Integer = int(i64.min to i64.max)
+
+type A
+  export var n Integer
+end 'A'
+
+type B
+  export var a A
+end 'B'
+
+type C
+  export var b B
+end 'C'
+
+function main() returns ExitCode
+  var c = C{b: B{a: A{n: 7}}}
+  return c.b.a.n
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+alloc A #1 rc=0 [ownership-edge-cases.main]
+alloc B #2 rc=0 [ownership-edge-cases.main]
+incref A #1 rc=1 [ownership-edge-cases.main]
+alloc C #3 rc=0 [ownership-edge-cases.main]
+incref B #2 rc=1 [ownership-edge-cases.main]
+incref C #3 rc=1 [ownership-edge-cases.main]
+decref C #3 rc=0 [ownership-edge-cases.main]
+free A #1
+free B #2
+free C #3
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=80
+    x86.mov eax, 7
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, 7
+    x86.mov [ecx+0], edx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-16]
+    x86.mov [esi+0], ebx
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov edi, [rbp-16]
+    x86.mov r8, [rbp-24]
+    x86.mov [r8+0], edi
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov r9, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-32], ecx
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-40], ecx
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-48], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_42]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-24]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_33
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_34
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [ecx+0]
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], edx
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_36
+    x86.mov ecx, [rbp-64]
+    x86.mov edx, [ecx+0]
+    x86.mov [rbp-72], eax
+    x86.mov [rbp-80], edx
+    x86.mov rcx, [rbp-80]
+    x86.call mm_decref
+    x86.mov rcx, [rbp-64]
+    x86.call mm_free
+    x86.label __destruct_skip_36
+    x86.mov rcx, [rbp-24]
+    x86.call mm_free
+    x86.label __destruct_skip_34
+    x86.label __destruct_nullguard_33
+    x86.mov eax, [rbp-48]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

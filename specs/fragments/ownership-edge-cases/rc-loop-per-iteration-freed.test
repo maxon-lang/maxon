@@ -1,0 +1,106 @@
+// Test: rc-loop-per-iteration-freed
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+  export var n Integer
+end 'Counter'
+
+function main() returns ExitCode
+  var total = 0
+  var i = 0
+  while i < 4 'loop'
+    var c = Counter{n: i}
+    total = total + c.n
+    i = i + 1
+  end 'loop'
+  return total
+end 'main'
+---
+MmTrace: true
+ExitCode: 6
+Stderr: ```
+alloc Counter #1 rc=0 [ownership-edge-cases.main]
+incref Counter #1 rc=1 [ownership-edge-cases.main]
+decref Counter #1 rc=0 [ownership-edge-cases.main]
+free Counter #1
+alloc Counter #2 rc=0 [ownership-edge-cases.main]
+incref Counter #2 rc=1 [ownership-edge-cases.main]
+decref Counter #2 rc=0 [ownership-edge-cases.main]
+free Counter #2
+alloc Counter #3 rc=0 [ownership-edge-cases.main]
+incref Counter #3 rc=1 [ownership-edge-cases.main]
+decref Counter #3 rc=0 [ownership-edge-cases.main]
+free Counter #3
+alloc Counter #4 rc=0 [ownership-edge-cases.main]
+incref Counter #4 rc=1 [ownership-edge-cases.main]
+decref Counter #4 rc=0 [ownership-edge-cases.main]
+free Counter #4
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.xor ecx, ecx
+    x86.mov [rbp-16], ecx
+    x86.jmp ownership-edge-cases.main.loop_0.header
+  loop_0.header:
+    x86.mov eax, 4
+    x86.mov ecx, [rbp-16]
+    x86.cmp ecx, eax
+    x86.jge ownership-edge-cases.main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, [rbp-16]
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov esi, [rbp-24]
+    x86.mov edi, [esi+0]
+    x86.mov r8, [rbp-8]
+    x86.add r8, edi
+    x86.mov [rbp-8], r8
+    x86.mov r9, 1
+    x86.mov eax, [rbp-16]
+    x86.add eax, r9
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-24]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_30
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_30
+    x86.jmp ownership-edge-cases.main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-32], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je ownership-edge-cases.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_29]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov eax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

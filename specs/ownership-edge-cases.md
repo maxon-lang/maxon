@@ -1083,7 +1083,7 @@ decref Cfg #2 rc=0 [__maxon_global_cleanup]
 free Cfg #2
 ```
 
-<!-- disabled-test: rc-global-reassign-decrefs-old -->
+<!-- test: rc-global-reassign-decrefs-old -->
 <!-- MmTrace -->
 Reassigning a global struct var decrefs the old object and increfs the new one.
 ```maxon
@@ -1110,10 +1110,27 @@ end 'main'
 30
 ```
 ```stderr
-fill me in
+alloc State #1 rc=0 [ownership-edge-cases.__module_init]
+incref State #1 rc=1 [ownership-edge-cases.__module_init]
+alloc State #2 rc=0 [ownership-edge-cases.step]
+decref State #1 rc=0 [ownership-edge-cases.step]
+free State #1
+incref State #2 rc=1 [ownership-edge-cases.step]
+alloc State #3 rc=0 [ownership-edge-cases.step]
+decref State #2 rc=0 [ownership-edge-cases.step]
+free State #2
+incref State #3 rc=1 [ownership-edge-cases.step]
+alloc State #4 rc=0 [ownership-edge-cases.step]
+decref State #3 rc=0 [ownership-edge-cases.step]
+free State #3
+incref State #4 rc=1 [ownership-edge-cases.step]
+incref State #4 rc=2 [ownership-edge-cases.main]
+decref State #4 rc=1 [ownership-edge-cases.main]
+decref State #4 rc=0 [__maxon_global_cleanup]
+free State #4
 ```
 
-<!-- disabled-test: rc-union-no-struct-payload-freed -->
+<!-- test: rc-union-no-struct-payload-freed -->
 <!-- MmTrace -->
 A simple enum union (no struct payload) is freed correctly at scope exit.
 ```maxon
@@ -1126,11 +1143,12 @@ union Color
 end 'Color'
 
 function colorCode(c Color) returns Integer
-  match c 'pick'
+  let result = match c 'pick'
     Color.red   gives 1
     Color.green gives 2
     Color.blue  gives 3
   end 'pick'
+  return result
 end 'colorCode'
 
 function main() returns ExitCode
@@ -1142,10 +1160,9 @@ end 'main'
 2
 ```
 ```stderr
-fill me in
 ```
 
-<!-- disabled-test: rc-union-struct-payload-freed -->
+<!-- test: rc-union-struct-payload-freed -->
 <!-- MmTrace -->
 A union case with a struct-typed associated value; when the enum is freed its payload must be decref'd.
 ```maxon
@@ -1162,13 +1179,13 @@ end 'Shape'
 
 function massOf(s Shape) returns Integer
   match s 'check'
-    Shape.empty gives 0
-    Shape.solid(body) gives body.mass
+    Shape.empty then return 0
+    solid(b) then return b.mass
   end 'check'
 end 'massOf'
 
 function main() returns ExitCode
-  var s = Shape.solid(body: Body{mass: 5})
+  var s = Shape.solid(Body{mass: 5})
   return massOf(s)
 end 'main'
 ```
@@ -1176,10 +1193,20 @@ end 'main'
 5
 ```
 ```stderr
-fill me in
+alloc Body #1 rc=0 [ownership-edge-cases.main]
+alloc Shape #2 rc=0 [ownership-edge-cases.main]
+incref Body #1 rc=1 [ownership-edge-cases.main]
+incref Shape #2 rc=1 [ownership-edge-cases.main]
+incref Shape #2 rc=2 [ownership-edge-cases.massOf]
+incref Body #1 rc=2 [ownership-edge-cases.massOf]
+decref Shape #2 rc=1 [ownership-edge-cases.massOf]
+decref Body #1 rc=1 [ownership-edge-cases.massOf]
+decref Shape #2 rc=0 [ownership-edge-cases.main]
+free Body #1
+free Shape #2
 ```
 
-<!-- disabled-test: rc-closure-env-freed -->
+<!-- test: rc-closure-env-freed -->
 <!-- MmTrace -->
 Closure environment block is allocated as a struct and freed when the closure variable goes out of scope.
 ```maxon
@@ -1199,10 +1226,13 @@ end 'main'
 15
 ```
 ```stderr
-fill me in
+alloc ClosureEnv #1 rc=0 [ownership-edge-cases.main]
+incref ClosureEnv #1 rc=1 [ownership-edge-cases.main]
+decref ClosureEnv #1 rc=0 [ownership-edge-cases.main]
+free ClosureEnv #1
 ```
 
-<!-- disabled-test: rc-closure-captures-struct -->
+<!-- test: rc-closure-captures-struct -->
 <!-- MmTrace -->
 Closure captures a struct variable by address; the closure env is freed at scope exit but the original struct lives on.
 ```maxon
@@ -1226,10 +1256,17 @@ end 'main'
 3
 ```
 ```stderr
-fill me in
+alloc Config #1 rc=0 [ownership-edge-cases.main]
+incref Config #1 rc=1 [ownership-edge-cases.main]
+alloc ClosureEnv #2 rc=0 [ownership-edge-cases.main]
+incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
+decref Config #1 rc=0 [ownership-edge-cases.main]
+free Config #1
+decref ClosureEnv #2 rc=0 [ownership-edge-cases.main]
+free ClosureEnv #2
 ```
 
-<!-- disabled-test: rc-error-path-cleanup -->
+<!-- test: rc-error-path-cleanup -->
 <!-- MmTrace -->
 On the error path of a try expression the locally allocated struct must still be freed.
 ```maxon
@@ -1251,7 +1288,19 @@ end 'main'
 99
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+alloc Item #3 rc=0 [ownership-edge-cases.main]
+incref Item #3 rc=1 [ownership-edge-cases.main]
+incref Item #3 rc=2 [ownership-edge-cases.main]
+decref ItemArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free ItemArray #2
+decref Item #3 rc=1 [ownership-edge-cases.main]
+decref Item #3 rc=0 [ownership-edge-cases.main]
+free Item #3
 ```
 
 <!-- disabled-test: rc-chain-insert-incref -->
@@ -1360,7 +1409,7 @@ end 'main'
 fill me in
 ```
 
-<!-- disabled-test: rc-for-in-elem-decrefed -->
+<!-- test: rc-for-in-elem-decrefed -->
 <!-- MmTrace -->
 In a for-in loop over a struct array each element reference is decref'd at the end of the loop body.
 ```maxon
@@ -1388,10 +1437,37 @@ end 'main'
 60
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ScoreArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ScoreArray #2 rc=1 [ownership-edge-cases.main]
+alloc Score #3 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Score #3 rc=1 [ScoreArray.push]
+alloc Score #5 rc=0 [ownership-edge-cases.main]
+incref Score #5 rc=1 [ScoreArray.push]
+alloc Score #6 rc=0 [ownership-edge-cases.main]
+incref Score #6 rc=1 [ScoreArray.push]
+incref ScoreArray #2 rc=2 [ownership-edge-cases.main]
+incref Score #3 rc=2 [ScoreArray.next]
+transfer Score #3 rc=2 [ScoreArray.next]
+decref Score #3 rc=1 [ownership-edge-cases.main]
+incref Score #5 rc=2 [ScoreArray.next]
+transfer Score #5 rc=2 [ScoreArray.next]
+decref Score #5 rc=1 [ownership-edge-cases.main]
+incref Score #6 rc=2 [ScoreArray.next]
+transfer Score #6 rc=2 [ScoreArray.next]
+decref Score #6 rc=1 [ownership-edge-cases.main]
+decref ScoreArray #2 rc=1 [ownership-edge-cases.main]
+decref ScoreArray #2 rc=0 [ownership-edge-cases.main]
+free Score #3
+free Score #5
+free Score #6
+free ElementMemory #1
+free ScoreArray #2
 ```
 
-<!-- disabled-test: rc-multiple-aliases-freed-once -->
+<!-- test: rc-multiple-aliases-freed-once -->
 <!-- MmTrace -->
 Three aliases to the same object; the object is freed exactly once when the last alias leaves scope.
 ```maxon
@@ -1412,10 +1488,17 @@ end 'main'
 21
 ```
 ```stderr
-fill me in
+alloc Data #1 rc=0 [ownership-edge-cases.main]
+incref Data #1 rc=1 [ownership-edge-cases.main]
+incref Data #1 rc=2 [ownership-edge-cases.main]
+incref Data #1 rc=3 [ownership-edge-cases.main]
+decref Data #1 rc=2 [ownership-edge-cases.main]
+decref Data #1 rc=1 [ownership-edge-cases.main]
+decref Data #1 rc=0 [ownership-edge-cases.main]
+free Data #1
 ```
 
-<!-- disabled-test: rc-deep-container-of-containers -->
+<!-- test: rc-deep-container-of-containers -->
 <!-- MmTrace -->
 An array of arrays of structs; freeing the outer array cascades through all levels.
 ```maxon
@@ -1444,10 +1527,44 @@ end 'main'
 2
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc Grid #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref Grid #2 rc=1 [ownership-edge-cases.main]
+alloc ElementMemory #3 rc=0 [ownership-edge-cases.main]
+alloc CellArray #4 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #3 rc=1 [ownership-edge-cases.main]
+incref CellArray #4 rc=1 [ownership-edge-cases.main]
+alloc Cell #5 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Cell #5 rc=1 [CellArray.push]
+alloc Cell #7 rc=0 [ownership-edge-cases.main]
+incref Cell #7 rc=1 [CellArray.push]
+alloc ElementMemory #8 rc=0 [ownership-edge-cases.main]
+alloc CellArray #9 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #8 rc=1 [ownership-edge-cases.main]
+incref CellArray #9 rc=1 [ownership-edge-cases.main]
+alloc Cell #10 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Cell #10 rc=1 [CellArray.push]
+alloc_in Buffer
+incref CellArray #4 rc=2 [Grid.push]
+incref CellArray #9 rc=2 [Grid.push]
+decref Grid #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free Grid #2
+decref CellArray #4 rc=0 [ownership-edge-cases.main]
+free Cell #5
+free Cell #7
+free ElementMemory #3
+free CellArray #4
+decref CellArray #9 rc=0 [ownership-edge-cases.main]
+free Cell #10
+free ElementMemory #8
+free CellArray #9
 ```
 
-<!-- disabled-test: rc-struct-with-array-field-freed -->
+<!-- test: rc-struct-with-array-field-freed -->
 <!-- MmTrace -->
 A struct that owns an array field; when the struct is freed the array (and its elements) are freed too.
 ```maxon
@@ -1476,6 +1593,23 @@ end 'main'
 ```
 ```exitcode
 2
-``````stderr
-fill me in
+```
+```stderr
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.fill]
+alloc EntryArray #2 rc=0 [ownership-edge-cases.fill]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.fill]
+alloc Bucket #3 rc=0 [ownership-edge-cases.fill]
+incref EntryArray #2 rc=1 [ownership-edge-cases.fill]
+incref Bucket #3 rc=1 [ownership-edge-cases.fill]
+alloc Entry #4 rc=0 [ownership-edge-cases.fill]
+alloc_in Buffer
+incref Entry #4 rc=1 [EntryArray.push]
+alloc Entry #6 rc=0 [ownership-edge-cases.fill]
+incref Entry #6 rc=1 [EntryArray.push]
+decref Bucket #3 rc=0 [ownership-edge-cases.fill]
+free Entry #4
+free Entry #6
+free ElementMemory #1
+free EntryArray #2
+free Bucket #3
 ```

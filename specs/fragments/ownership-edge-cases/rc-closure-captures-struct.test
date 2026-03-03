@@ -1,0 +1,121 @@
+// Test: rc-closure-captures-struct
+typealias Integer = int(i64.min to i64.max)
+
+type Config
+  export var level Integer
+end 'Config'
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+  return f(x)
+end 'apply'
+
+function main() returns ExitCode
+  var cfg = Config{level: 3}
+  var result = apply(f: (_ Integer) gives cfg.level, x: 0)
+  return result
+end 'main'
+---
+MmTrace: true
+ExitCode: 3
+Stderr: ```
+alloc Config #1 rc=0 [ownership-edge-cases.main]
+incref Config #1 rc=1 [ownership-edge-cases.main]
+alloc ClosureEnv #2 rc=0 [ownership-edge-cases.main]
+incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
+decref Config #1 rc=0 [ownership-edge-cases.main]
+free Config #1
+decref ClosureEnv #2 rc=0 [ownership-edge-cases.main]
+free ClosureEnv #2
+```
+---
+module {
+  func @ownership-edge-cases.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov r10, ecx
+    x86.mov rcx, r8
+    x86.call r10
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 3
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, 3
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.lea_func esi, [__closure_0]
+    x86.mov [rbp-32], esi
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.lea rdi, [rbp-8]
+    x86.mov r8, rdi
+    x86.mov [eax+0], r8
+    x86.mov [rbp-16], eax
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov r9, [rbp-16]
+    x86.mov rcx, [rbp-32]
+    x86.mov rdx, [rbp-16]
+    x86.xor r8, r8
+    x86.call ownership-edge-cases.apply
+    x86.mov [rbp-24], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_26]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_39
+    x86.call mm_decref
+    x86.label __nonnull_skip_39
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-16]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_40
+    x86.call mm_decref
+    x86.label __nonnull_skip_40
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+  func @__closure_0(_: i64, __env: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], edx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov eax, [ebx+0]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ebx, [eax+0]
+    x86.mov eax, ebx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

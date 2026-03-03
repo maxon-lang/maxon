@@ -28,7 +28,7 @@ ExitCode: 42
 module {
   func @mutable-unions.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
+    x86.prologue stack_size=128
     x86.mov eax, 1
     x86.mov ecx, 2
     x86.mov rcx, 16
@@ -99,6 +99,7 @@ module {
     x86.call mm_incref
     x86.mov eax, [rbp-16]
     x86.mov ecx, [eax+8]
+    x86.mov [rbp-80], ecx
     x86.test ecx, ecx
     x86.jz __nonnull_skip_91
     x86.call mm_decref
@@ -123,15 +124,54 @@ module {
   update_0.case1:
     x86.mov eax, [rbp-16]
     x86.test eax, eax
-    x86.jz __nonnull_skip_93
+    x86.jz __destruct_union_nullguard_93
     x86.mov rcx, [rbp-16]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_union_skip_94
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, 1
+    x86.cmp edx, ebx
+    x86.jne __destruct_union_case_skip_94_0
+    x86.mov esi, [ecx+8]
+    x86.mov [rbp-80], eax
+    x86.mov [rbp-88], edx
+    x86.mov [rbp-96], esi
+    x86.mov rcx, [rbp-96]
     x86.call mm_decref
-    x86.label __nonnull_skip_93
-    x86.mov ecx, [rbp-24]
-    x86.test ecx, ecx
-    x86.jz __nonnull_skip_94
+    x86.jmp __destruct_union_free_94
+    x86.label __destruct_union_case_skip_94_0
+    x86.label __destruct_union_free_94
+    x86.mov rcx, [rbp-16]
+    x86.call mm_free
+    x86.label __destruct_union_skip_94
+    x86.label __destruct_union_nullguard_93
+    x86.mov edi, [rbp-24]
+    x86.test edi, edi
+    x86.jz __destruct_union_nullguard_98
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_union_skip_99
+    x86.mov r8, [rbp-24]
+    x86.mov r9, [r8+0]
+    x86.mov ecx, 1
+    x86.cmp r9, ecx
+    x86.jne __destruct_union_case_skip_99_0
+    x86.mov edx, [r8+8]
+    x86.mov [rbp-104], eax
+    x86.mov [rbp-112], edx
+    x86.mov [rbp-120], r9
+    x86.mov rcx, [rbp-112]
     x86.call mm_decref
-    x86.label __nonnull_skip_94
+    x86.jmp __destruct_union_free_99
+    x86.label __destruct_union_case_skip_99_0
+    x86.label __destruct_union_free_99
+    x86.mov rcx, [rbp-24]
+    x86.call mm_free
+    x86.label __destruct_union_skip_99
+    x86.label __destruct_union_nullguard_98
     x86.xor eax, eax
     x86.epilogue
     x86.ret
@@ -184,20 +224,59 @@ module {
     x86.mov eax, [rbp-72]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_95
+    x86.jz __destruct_union_nullguard_103
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_union_skip_104
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, 1
+    x86.cmp edx, ebx
+    x86.jne __destruct_union_case_skip_104_0
+    x86.mov esi, [ecx+8]
+    x86.mov [rbp-80], eax
+    x86.mov [rbp-88], edx
+    x86.mov [rbp-96], esi
+    x86.mov rcx, [rbp-96]
     x86.call mm_decref
-    x86.label __nonnull_skip_95
+    x86.jmp __destruct_union_free_104
+    x86.label __destruct_union_case_skip_104_0
+    x86.label __destruct_union_free_104
+    x86.mov rcx, [rbp-16]
+    x86.call mm_free
+    x86.label __destruct_union_skip_104
+    x86.label __destruct_union_nullguard_103
     x86.mov eax, [rbp-56]
     x86.test eax, eax
-    x86.jz __nonnull_skip_96
+    x86.jz __destruct_union_nullguard_108
     x86.mov rcx, [rbp-56]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_union_skip_109
+    x86.mov ecx, [rbp-56]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, 1
+    x86.cmp edx, ebx
+    x86.jne __destruct_union_case_skip_109_0
+    x86.mov esi, [ecx+8]
+    x86.mov [rbp-104], eax
+    x86.mov [rbp-112], edx
+    x86.mov [rbp-120], esi
+    x86.mov rcx, [rbp-120]
     x86.call mm_decref
-    x86.label __nonnull_skip_96
-    x86.mov ecx, [rbp-40]
-    x86.test ecx, ecx
-    x86.jz __nonnull_skip_97
+    x86.jmp __destruct_union_free_109
+    x86.label __destruct_union_case_skip_109_0
+    x86.label __destruct_union_free_109
+    x86.mov rcx, [rbp-56]
+    x86.call mm_free
+    x86.label __destruct_union_skip_109
+    x86.label __destruct_union_nullguard_108
+    x86.mov edi, [rbp-40]
+    x86.test edi, edi
+    x86.jz __nonnull_skip_113
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.label __nonnull_skip_97
+    x86.label __nonnull_skip_113
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
@@ -209,15 +288,54 @@ module {
   read_1.case1:
     x86.mov eax, [rbp-16]
     x86.test eax, eax
-    x86.jz __nonnull_skip_98
+    x86.jz __destruct_union_nullguard_114
     x86.mov rcx, [rbp-16]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_union_skip_115
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, 1
+    x86.cmp edx, ebx
+    x86.jne __destruct_union_case_skip_115_0
+    x86.mov esi, [ecx+8]
+    x86.mov [rbp-80], eax
+    x86.mov [rbp-88], edx
+    x86.mov [rbp-96], esi
+    x86.mov rcx, [rbp-96]
     x86.call mm_decref
-    x86.label __nonnull_skip_98
-    x86.mov ecx, [rbp-56]
-    x86.test ecx, ecx
-    x86.jz __nonnull_skip_99
+    x86.jmp __destruct_union_free_115
+    x86.label __destruct_union_case_skip_115_0
+    x86.label __destruct_union_free_115
+    x86.mov rcx, [rbp-16]
+    x86.call mm_free
+    x86.label __destruct_union_skip_115
+    x86.label __destruct_union_nullguard_114
+    x86.mov edi, [rbp-56]
+    x86.test edi, edi
+    x86.jz __destruct_union_nullguard_119
+    x86.mov rcx, [rbp-56]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_union_skip_120
+    x86.mov r8, [rbp-56]
+    x86.mov r9, [r8+0]
+    x86.mov ecx, 1
+    x86.cmp r9, ecx
+    x86.jne __destruct_union_case_skip_120_0
+    x86.mov edx, [r8+8]
+    x86.mov [rbp-104], eax
+    x86.mov [rbp-112], edx
+    x86.mov [rbp-120], r9
+    x86.mov rcx, [rbp-112]
     x86.call mm_decref
-    x86.label __nonnull_skip_99
+    x86.jmp __destruct_union_free_120
+    x86.label __destruct_union_case_skip_120_0
+    x86.label __destruct_union_free_120
+    x86.mov rcx, [rbp-56]
+    x86.call mm_free
+    x86.label __destruct_union_skip_120
+    x86.label __destruct_union_nullguard_119
     x86.xor eax, eax
     x86.epilogue
     x86.ret

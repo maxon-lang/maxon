@@ -324,7 +324,11 @@ public static partial class MaxonToStandardConversion {
         var nestedFields = GetManagedFieldsForType(field.Type, typeDefs);
         var nextVisited = visited != null ? new HashSet<string>(visited) : [];
         if (fieldTypeName != null) nextVisited.Add(fieldTypeName);
-        nested = BuildFieldDestructors(nestedFields, typeDefs, nextVisited);
+        // Pass the field's struct type as the outer type so managed-element detection
+        // works for nested container types (e.g. a struct that owns an Array field)
+        var nestedOuterType = field.Type as MlirStructType;
+        nested = BuildFieldDestructors(nestedFields, typeDefs, nextVisited,
+          nestedOuterType, fieldTypeName, typeAliasSources);
       }
       bool isChildOwned = (field.Type as MlirStructType)?.IsChildOwned ?? false;
       // A __ManagedMemory field (or its concrete alias, e.g. "ElementMemory") whose outer type
@@ -440,8 +444,9 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Null-guarded version of EmitDecrefWithFieldCleanup. Skips entire destruction if pointer is null.
-  /// Used for scope-end cleanup where variables may be zero-initialized on untaken code paths.
+  /// Null-guarded scope-end cleanup: decrefs a struct/union variable with recursive field cleanup.
+  /// Skips if the pointer is null (variables may be zero-initialized on untaken code paths).
+  /// For unions with associated values, emits tag-based dispatch to decref the active case's payload.
   /// </summary>
   private static void EmitDecrefWithFieldCleanupIfNonnull(
     MlirBlock<StandardOp> block, string varName,
@@ -449,6 +454,24 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, MlirType> typeDefs, Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
     string? scopeName = null) {
     var typeName = varNameToStructType[varName];
+
+    // Union types need tag-based dispatch to determine which payload fields to decref,
+    // unlike structs where all managed fields are always present
+    if (typeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirUnionType unionType && unionType.HasAssociatedValues) {
+      var caseDestructors = BuildUnionCaseDestructors(unionType, typeDefs, typeAliasSources);
+      if (caseDestructors.Count > 0) {
+        var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
+        if (Compiler.MmTrace) {
+          var unionScopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+          block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, unionScopePtr], null));
+        }
+        block.AddOp(new StdDestructUnionOp(heapPtr, caseDestructors, nullGuarded: true));
+        return;
+      }
+      EmitDecrefIfNonnull(block, varName, varTypes, scopeName);
+      return;
+    }
+
     var managedFields = GetManagedFields(typeName, typeDefs);
 
     if (managedFields.Count == 0) {
@@ -456,15 +479,50 @@ public static partial class MaxonToStandardConversion {
       return;
     }
 
-    var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
+    var structHeapPtr = (StdI64)EmitLoad(block, varName, varTypes);
     if (Compiler.MmTrace) {
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, scopePtr], null));
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [structHeapPtr, scopePtr], null));
     }
 
     var outerType = typeDefs.TryGetValue(typeName, out var t) ? t as MlirStructType : null;
     var fieldInfos = BuildFieldDestructors(managedFields, typeDefs, [typeName], outerType, typeName, typeAliasSources);
-    block.AddOp(new StdDestructStructOp(heapPtr, fieldInfos, nullGuarded: true));
+    block.AddOp(new StdDestructStructOp(structHeapPtr, fieldInfos, nullGuarded: true));
+  }
+
+  /// <summary>
+  /// Builds destructor info for each union case that has heap-allocated payload values.
+  /// Returns only cases that need cleanup (cases with no managed payloads are omitted).
+  /// </summary>
+  private static List<UnionCaseDestructorInfo> BuildUnionCaseDestructors(
+    MlirUnionType unionType, Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, TypeAliasInfo>? typeAliasSources = null) {
+    var result = new List<UnionCaseDestructorInfo>();
+    foreach (var unionCase in unionType.Cases) {
+      if (unionCase.AssociatedValues == null || unionCase.AssociatedValues.Count == 0) continue;
+      var managedPayloads = new List<UnionPayloadDestructorInfo>();
+      for (int i = 0; i < unionCase.AssociatedValues.Count; i++) {
+        var (_, avType) = unionCase.AssociatedValues[i];
+        if (!avType.IsHeapAllocated) continue;
+        int byteOffset = 8 + i * 8;
+        var nestedFields = GetManagedFieldsForType(avType, typeDefs);
+        List<FieldDestructorInfo> nested;
+        if (nestedFields.Count > 0) {
+          var visited = new HashSet<string>();
+          var payloadStructType = avType as MlirStructType;
+          if (payloadStructType?.Name != null) visited.Add(payloadStructType.Name);
+          nested = BuildFieldDestructors(nestedFields, typeDefs, visited,
+            payloadStructType, payloadStructType?.Name, typeAliasSources);
+        } else {
+          nested = [];
+        }
+        managedPayloads.Add(new UnionPayloadDestructorInfo(byteOffset, avType, nested));
+      }
+      if (managedPayloads.Count > 0) {
+        result.Add(new UnionCaseDestructorInfo(unionCase.Ordinal, managedPayloads));
+      }
+    }
+    return result;
   }
 
   private static StdI64 EmitNullPtr(MlirBlock<StandardOp> block) {

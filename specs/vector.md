@@ -251,7 +251,7 @@ module {
   __range_ok_5:
     %42 = memref.load __range_val_5 : i64
     %43 = memref.load v : i64
-    mm.destruct_struct %43 fields=[+8]
+    mm.destruct_struct %43 fields=[+8] null_guarded
     func.return %42
   }
 }
@@ -342,9 +342,11 @@ module {
   __range_ok_5:
     x86.mov eax, [rbp-64]
     x86.mov ecx, [rbp-40]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_74
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_74
+    x86.jnz __destruct_skip_75
     x86.mov ecx, [rbp-40]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-72], eax
@@ -353,7 +355,8 @@ module {
     x86.call mm_decref
     x86.mov rcx, [rbp-40]
     x86.call mm_free
-    x86.label __destruct_skip_74
+    x86.label __destruct_skip_75
+    x86.label __destruct_nullguard_74
     x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret
@@ -518,7 +521,7 @@ module {
   __range_ok_5:
     %45 = memref.load __range_val_5 : i64
     %46 = memref.load v : i64
-    mm.destruct_struct %46 fields=[+8]
+    mm.destruct_struct %46 fields=[+8] null_guarded
     func.return %45
   }
 }
@@ -614,9 +617,11 @@ module {
   __range_ok_5:
     x86.mov eax, [rbp-64]
     x86.mov ecx, [rbp-40]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_116
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_116
+    x86.jnz __destruct_skip_117
     x86.mov ecx, [rbp-40]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-72], eax
@@ -625,7 +630,8 @@ module {
     x86.call mm_decref
     x86.mov rcx, [rbp-40]
     x86.call mm_free
-    x86.label __destruct_skip_116
+    x86.label __destruct_skip_117
+    x86.label __destruct_nullguard_116
     x86.mov eax, [rbp-64]
     x86.epilogue
     x86.ret

@@ -1,0 +1,177 @@
+// Test: rc-field-overwrite-chain
+typealias Integer = int(i64.min to i64.max)
+
+type Val
+  export var n Integer
+end 'Val'
+
+type Holder
+  export var v Val
+
+  export function set(newV Val)
+    v = newV
+  end 'set'
+end 'Holder'
+
+function main() returns ExitCode
+  var h = Holder{v: Val{n: 0}}
+  h.set(Val{n: 10})
+  h.set(Val{n: 20})
+  h.set(Val{n: 30})
+  return h.v.n
+end 'main'
+---
+MmTrace: true
+ExitCode: 30
+Stderr: ```
+alloc Val #1 rc=0 [ownership-edge-cases.main]
+alloc Holder #2 rc=0 [ownership-edge-cases.main]
+incref Val #1 rc=1 [ownership-edge-cases.main]
+incref Holder #2 rc=1 [ownership-edge-cases.main]
+alloc Val #3 rc=0 [ownership-edge-cases.main]
+decref Val #1 rc=0 [Holder.set]
+free Val #1
+incref Val #3 rc=1 [Holder.set]
+alloc Val #4 rc=0 [ownership-edge-cases.main]
+decref Val #3 rc=0 [Holder.set]
+free Val #3
+incref Val #4 rc=1 [Holder.set]
+alloc Val #5 rc=0 [ownership-edge-cases.main]
+decref Val #4 rc=0 [Holder.set]
+free Val #4
+incref Val #5 rc=1 [Holder.set]
+decref Holder #2 rc=0 [ownership-edge-cases.main]
+free Val #5
+free Holder #2
+```
+---
+module {
+  func @Holder.set(__self_ptr: i64, newV: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ebx, [eax+0]
+    x86.mov [rbp-16], ebx
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], edx
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.mov ecx, [rbp-24]
+    x86.mov [rbp-16], ecx
+    x86.mov edx, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, [rbp-8]
+    x86.mov [esi+0], ebx
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=80
+    x86.xor eax, eax
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.xor edx, edx
+    x86.mov [ecx+0], edx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ebx, [rbp-8]
+    x86.mov esi, [rbp-16]
+    x86.mov [esi+0], ebx
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov edi, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov r8, 10
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov r9, [rbp-24]
+    x86.mov eax, 10
+    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-24]
+    x86.call Holder.set
+    x86.mov eax, 20
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 20
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-32]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-32]
+    x86.call Holder.set
+    x86.mov eax, 30
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, 30
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-40]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-40]
+    x86.call Holder.set
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-48], ecx
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-56], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_40]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-56]
+    x86.mov ecx, [rbp-16]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_56
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_57
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+0]
+    x86.mov [rbp-64], eax
+    x86.mov [rbp-72], edx
+    x86.mov rcx, [rbp-72]
+    x86.call mm_decref
+    x86.mov rcx, [rbp-16]
+    x86.call mm_free
+    x86.label __destruct_skip_57
+    x86.label __destruct_nullguard_56
+    x86.mov eax, [rbp-56]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -319,7 +319,9 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<int, string> fnEnvVarNames) {
+    Dictionary<int, string> fnEnvVarNames,
+    Dictionary<string, string> varNameToStructType,
+    List<string> globalStructTemps) {
     // Create function reference
     var refOp = new StdFuncRefOp(closureOp.FunctionName);
     block.AddOp(refOp);
@@ -359,9 +361,12 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(new StdStoreIndirectOp(addressVal, envPtr, i * 8, MlirType.I64));
     }
 
-    // Track the env_ptr for this closure
+    // Track the env_ptr for this closure and register for scope-end cleanup
     var envVarName = $"__env_{refOp.Result.Id}";
     EmitStore(block, envPtr, envVarName, varTypes);
+    EmitIncrefValue(block, envPtr, scopeName: _currentFuncName);
+    varNameToStructType[envVarName] = "ClosureEnv";
+    globalStructTemps.Add(envVarName);
     fnEnvVarNames[refOp.Result.Id] = envVarName;
   }
 

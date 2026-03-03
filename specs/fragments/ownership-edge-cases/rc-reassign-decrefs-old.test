@@ -1,0 +1,108 @@
+// Test: rc-reassign-decrefs-old
+typealias Integer = int(i64.min to i64.max)
+
+type Tag
+  export var id Integer
+end 'Tag'
+
+function main() returns ExitCode
+  var t = Tag{id: 1}
+  t = Tag{id: 2}
+  t = Tag{id: 3}
+  return t.id
+end 'main'
+---
+MmTrace: true
+ExitCode: 3
+Stderr: ```
+alloc Tag #1 rc=0 [ownership-edge-cases.main]
+incref Tag #1 rc=1 [ownership-edge-cases.main]
+alloc Tag #2 rc=0 [ownership-edge-cases.main]
+decref Tag #1 rc=0 [ownership-edge-cases.main]
+free Tag #1
+incref Tag #2 rc=1 [ownership-edge-cases.main]
+alloc Tag #3 rc=0 [ownership-edge-cases.main]
+decref Tag #2 rc=0 [ownership-edge-cases.main]
+free Tag #2
+incref Tag #3 rc=1 [ownership-edge-cases.main]
+decref Tag #3 rc=0 [ownership-edge-cases.main]
+free Tag #3
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov eax, 1
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, 1
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov esi, 2
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov edi, [rbp-16]
+    x86.mov r8, 2
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov eax, 3
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 3
+    x86.mov [ecx+0], edx
+    x86.mov ecx, [rbp-8]
+    x86.call mm_decref
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-32], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_22]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_35
+    x86.call mm_decref
+    x86.label __nonnull_skip_35
+    x86.mov eax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

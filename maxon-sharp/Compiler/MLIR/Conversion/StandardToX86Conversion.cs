@@ -966,6 +966,21 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdDestructUnionOp destructUnionOp: {
+            if (destructUnionOp.NullGuarded) {
+              var nullSkipLabel = $"__destruct_union_nullguard_{MlirContext.Current.NextId()}";
+              regManager.EmitBoolTest(destructUnionOp.HeapPtr, x86Block);
+              x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
+              EmitInlineDestructUnion(regManager, x86Block, destructUnionOp.HeapPtr, destructUnionOp.Cases,
+                ConsumedArgs([destructUnionOp.HeapPtr], lastUseOfValue, currentOpIndex));
+              x86Block.AddOp(new X86LabelDefOp(nullSkipLabel));
+            } else {
+              EmitInlineDestructUnion(regManager, x86Block, destructUnionOp.HeapPtr, destructUnionOp.Cases,
+                ConsumedArgs([destructUnionOp.HeapPtr], lastUseOfValue, currentOpIndex));
+            }
+            break;
+          }
+
           default:
             throw new InvalidOperationException($"No StandardToX86 conversion for: {op.GetType().Name} ({op.Mnemonic})");
         }
@@ -1028,6 +1043,58 @@ public static class StandardToX86Conversion {
         regManager.EmitCall("mm_decref", [fieldPtr], null, x86Block, null);
       }
     }
+    regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
+    x86Block.AddOp(new X86LabelDefOp(skipLabel));
+  }
+
+  /// <summary>
+  /// Emits inline x86 for union destruction: mm_decref_check → if rc==0, load the tag,
+  /// compare against each case with managed payloads, decref the matching payloads, then mm_free.
+  /// </summary>
+  private static void EmitInlineDestructUnion(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    StdI64 heapPtr, List<UnionCaseDestructorInfo> cases,
+    HashSet<StdValue>? consumed) {
+    var newRc = new StdI64(MlirContext.Current.NextId());
+    var skipLabel = $"__destruct_union_skip_{newRc.Id}";
+    regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
+    regManager.EmitBoolTest(newRc, x86Block);
+    x86Block.AddOp(new X86JccOp("nz", skipLabel));
+
+    // Load the tag from offset 0
+    var tagVal = new StdI64(MlirContext.Current.NextId());
+    regManager.EmitLoadIndirect(tagVal, heapPtr, 0, MlirType.I64, x86Block);
+
+    var freeLabel = $"__destruct_union_free_{newRc.Id}";
+
+    // For each case with managed payloads, compare tag and decref payloads
+    for (int ci = 0; ci < cases.Count; ci++) {
+      var unionCase = cases[ci];
+      var caseSkipLabel = $"__destruct_union_case_skip_{newRc.Id}_{ci}";
+
+      // Compare tag with this case's ordinal
+      var ordinalVal = new StdI64(MlirContext.Current.NextId());
+      regManager.EmitLoadImmediate(ordinalVal, unionCase.TagOrdinal, x86Block);
+      regManager.EmitIntegerCompare(tagVal, ordinalVal, x86Block);
+      x86Block.AddOp(new X86JccOp("ne", caseSkipLabel));
+
+      // Tag matches — decref each managed payload
+      foreach (var payload in unionCase.ManagedPayloads) {
+        var payloadPtr = new StdI64(MlirContext.Current.NextId());
+        regManager.EmitLoadIndirect(payloadPtr, heapPtr, payload.Offset, payload.Type, x86Block);
+        if (payload.NestedFields.Count > 0) {
+          EmitInlineDestruct(regManager, x86Block, payloadPtr, payload.NestedFields, null);
+        } else {
+          regManager.EmitCall("mm_decref", [payloadPtr], null, x86Block, null);
+        }
+      }
+
+      // After cleaning up this case's payloads, jump to free
+      x86Block.AddOp(new X86JmpOp(freeLabel));
+      x86Block.AddOp(new X86LabelDefOp(caseSkipLabel));
+    }
+
+    x86Block.AddOp(new X86LabelDefOp(freeLabel));
     regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
     x86Block.AddOp(new X86LabelDefOp(skipLabel));
   }

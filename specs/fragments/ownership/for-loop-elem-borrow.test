@@ -1,0 +1,366 @@
+// Test: for-loop-elem-borrow
+typealias Integer = int(i64.min to i64.max)
+
+type Score
+  export var points Integer
+end 'Score'
+
+typealias ScoreArray = Array with Score
+
+function main() returns ExitCode
+  var scores = ScoreArray{}
+  scores.push(Score{points: 10})
+  scores.push(Score{points: 20})
+  scores.push(Score{points: 30})
+  var total = 0
+  for s in scores 'loop'
+    total = total + s.points
+  end 'loop'
+  print("{total}\n")
+  return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+60
+```
+---
+module {
+  func @Score.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
+    x86.mov [rbp-24], edx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [rbp-24]
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership.main() -> u32 {
+  entry:
+    x86.prologue stack_size=224
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.xor edx, edx
+    x86.xor ebx, ebx
+    x86.mov esi, 8
+    x86.mov rcx, 32
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edi, [rbp-8]
+    x86.xor r8, r8
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-8]
+    x86.xor eax, eax
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
+    x86.xor edx, edx
+    x86.mov [ecx+0], edx
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-16]
+    x86.mov [edx+8], ecx
+    x86.call mm_incref
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov eax, 10
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 10
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-24]
+    x86.call ScoreArray.push
+    x86.mov eax, 20
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 20
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-32]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-32]
+    x86.call ScoreArray.push
+    x86.mov eax, 30
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, 30
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-40]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-40]
+    x86.call ScoreArray.push
+    x86.xor eax, eax
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-56], eax
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, [rbp-56]
+    x86.call mm_incref
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, [rbp-56]
+    x86.call ScoreArray.createIterator
+    x86.jmp ownership.main.loop_0.header
+  loop_0.header:
+    x86.mov eax, [rbp-56]
+    x86.mov rcx, [rbp-56]
+    x86.call ScoreArray.next
+    x86.mov [rbp-64], eax
+    x86.xor ecx, ecx
+    x86.cmp edx, ecx
+    x86.jne ownership.main.loop_0.exit
+  loop_0:
+    x86.mov eax, [rbp-64]
+    x86.mov [rbp-72], eax
+    x86.mov ecx, [rbp-72]
+    x86.mov edx, [ecx+0]
+    x86.mov ebx, [rbp-48]
+    x86.add ebx, edx
+    x86.mov [rbp-48], ebx
+    x86.mov esi, [rbp-72]
+    x86.test esi, esi
+    x86.jz __nonnull_skip_299
+    x86.mov rcx, [rbp-72]
+    x86.call mm_decref
+    x86.label __nonnull_skip_299
+    x86.jmp ownership.main.loop_0.header
+  loop_0.exit:
+    x86.mov eax, [rbp-48]
+    x86.mov rcx, 21
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-80], eax
+    x86.mov rcx, [rbp-48]
+    x86.mov rdx, [rbp-80]
+    x86.call maxon_i64_to_string
+    x86.mov ecx, [rbp-80]
+    x86.lea_rdata rdx, [__interp_lit_0]
+    x86.mov rbx, rdx
+    x86.mov esi, 1
+    x86.lea edi, [eax + esi]
+    x86.mov [rbp-168], eax
+    x86.mov [rbp-176], ebx
+    x86.mov [rbp-184], edi
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-88], eax
+    x86.mov rdx, [rbp-88]
+    x86.mov rcx, 32
+    x86.xor r8, r8
+    x86.call mm_alloc_in
+    x86.mov [rbp-96], eax
+    x86.mov r8, 1
+    x86.mov r9, [rbp-184]
+    x86.lea ecx, [r9 + r8]
+    x86.mov rdx, [rbp-96]
+    x86.xor r8, r8
+    x86.call mm_alloc_in
+    x86.xor ecx, ecx
+    x86.mov [rbp-104], ecx
+    x86.mov [rbp-112], eax
+    x86.mov eax, [rbp-184]
+    x86.mov [rbp-120], eax
+    x86.mov eax, [rbp-80]
+    x86.mov [rbp-128], eax
+    x86.mov eax, [rbp-168]
+    x86.mov [rbp-136], eax
+    x86.mov eax, [rbp-176]
+    x86.mov [rbp-144], eax
+    x86.mov eax, 1
+    x86.mov [rbp-152], eax
+    x86.mov eax, [rbp-112]
+    x86.mov ecx, [rbp-104]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-128]
+    x86.mov edx, [rbp-136]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, [rbp-104]
+    x86.mov ecx, [rbp-136]
+    x86.add eax, ecx
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-112]
+    x86.mov ecx, [rbp-104]
+    x86.add eax, ecx
+    x86.mov ecx, [rbp-144]
+    x86.mov edx, [rbp-152]
+    x86.mov rsi, ecx
+    x86.mov rdi, eax
+    x86.mov rcx, edx
+    x86.rep_movsb
+    x86.mov eax, [rbp-112]
+    x86.mov ecx, [rbp-120]
+    x86.add eax, ecx
+    x86.xor ecx, ecx
+    x86.mov byte ptr [eax+0], ecxb
+    x86.mov eax, [rbp-80]
+    x86.mov rcx, [rbp-80]
+    x86.call mm_free
+    x86.mov eax, [rbp-112]
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-120]
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+8], eax
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+16], eax
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-96]
+    x86.mov [ecx+24], eax
+    x86.mov eax, [rbp-96]
+    x86.mov ecx, [rbp-88]
+    x86.mov [ecx+0], eax
+    x86.xor eax, eax
+    x86.mov ecx, [rbp-88]
+    x86.mov [ecx+8], eax
+    x86.mov eax, [rbp-88]
+    x86.mov [rbp-160], eax
+    x86.mov eax, [rbp-160]
+    x86.mov rcx, [rbp-160]
+    x86.call mm_incref
+    x86.mov eax, [rbp-160]
+    x86.mov rcx, [rbp-160]
+    x86.call stdlib.Print.print
+    x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_300
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_301
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+8]
+    x86.mov [rbp-192], eax
+    x86.mov [rbp-200], edx
+    x86.mov rcx, [rbp-200]
+    x86.call mm_decref_managed_elements
+    x86.mov rcx, [rbp-200]
+    x86.call mm_decref
+    x86.mov rcx, [rbp-16]
+    x86.call mm_free
+    x86.label __destruct_skip_301
+    x86.label __destruct_nullguard_300
+    x86.mov eax, [rbp-56]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_303
+    x86.mov rcx, [rbp-56]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_304
+    x86.mov ecx, [rbp-56]
+    x86.mov edx, [ecx+8]
+    x86.mov [rbp-208], eax
+    x86.mov [rbp-216], edx
+    x86.mov rcx, [rbp-216]
+    x86.call mm_decref_managed_elements
+    x86.mov rcx, [rbp-216]
+    x86.call mm_decref
+    x86.mov rcx, [rbp-56]
+    x86.call mm_free
+    x86.label __destruct_skip_304
+    x86.label __destruct_nullguard_303
+    x86.mov eax, [rbp-64]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_306
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.label __nonnull_skip_306
+    x86.mov eax, [rbp-160]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_307
+    x86.mov rcx, [rbp-160]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_308
+    x86.mov [rbp-224], eax
+    x86.mov rcx, [rbp-160]
+    x86.call mm_free
+    x86.label __destruct_skip_308
+    x86.label __destruct_nullguard_307
+    x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_elements_Character(managed_ptr: i64) {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, [ecx+0]
+    x86.mov edx, [ecx+8]
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.jmp __destruct_elements_Character.loop_header
+  loop_header:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.cmp eax, ecx
+    x86.jae __destruct_elements_Character.done
+  loop_body:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.imul eax, ecx
+    x86.mov edx, [rbp-16]
+    x86.add edx, eax
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-32]
+    x86.test esi, esi
+    x86.jz __destruct_nullguard_310
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_311
+    x86.mov [rbp-40], eax
+    x86.mov rcx, [rbp-32]
+    x86.call mm_free
+    x86.label __destruct_skip_311
+    x86.label __destruct_nullguard_310
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 1
+    x86.add edi, r8
+    x86.mov [rbp-8], edi
+    x86.jmp __destruct_elements_Character.loop_header
+  done:
+    x86.epilogue
+    x86.ret
+  }
+}
+---

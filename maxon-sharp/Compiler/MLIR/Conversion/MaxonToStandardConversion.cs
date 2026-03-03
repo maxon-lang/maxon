@@ -1547,7 +1547,7 @@ public static partial class MaxonToStandardConversion {
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
               break;
             case MaxonClosureCreateOp closureCreateOp:
-              LowerClosureCreate(closureCreateOp, newBlock, valueMap, varTypes, structVarNames, fnEnvVarNames);
+              LowerClosureCreate(closureCreateOp, newBlock, valueMap, varTypes, structVarNames, fnEnvVarNames, varNameToStructType, globalStructTemps);
               break;
             case MaxonClosureEnvLoadOp envLoadOp:
               LowerClosureEnvLoad(envLoadOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);

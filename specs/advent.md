@@ -335,11 +335,11 @@ module {
   guard_8:
     %44 = arith.constant {value = 99 : i64}
     %45 = memref.load args : i64
-    mm.destruct_struct %45 fields=[+8]
+    mm.destruct_struct %45 fields=[+8] null_guarded
     %47 = memref.load __lit_tmp_9 : i64
-    mm.destruct_struct %47 fields=[+0]
+    mm.destruct_struct %47 fields=[+0] null_guarded
     %49 = memref.load __try_result_0 : i64
-    mm.destruct_struct %49 fields=[+0]
+    mm.destruct_struct %49 fields=[+0] null_guarded
     func.return %44
   guard_8.after:
     %51 = arith.constant {value = 3 : i64}
@@ -358,12 +358,78 @@ module {
   __range_ok_9:
     %60 = memref.load __range_val_9 : i64
     %61 = memref.load args : i64
-    mm.destruct_struct %61 fields=[+8]
+    mm.destruct_struct %61 fields=[+8] null_guarded
     %63 = memref.load __lit_tmp_9 : i64
-    mm.destruct_struct %63 fields=[+0]
+    mm.destruct_struct %63 fields=[+0] null_guarded
     %65 = memref.load __try_result_0 : i64
-    mm.destruct_struct %65 fields=[+0]
+    mm.destruct_struct %65 fields=[+0] null_guarded
     func.return %60
+  }
+  func @__destruct_elements_Character(managed_ptr: i64) {
+  entry:
+    %201 = func.param managed_ptr : StdI64
+    %202 = memref.load_indirect %201+0
+    %203 = memref.load_indirect %201+8
+    %204 = arith.constant {value = 0 : i64}
+    memref.store %204, __destr_index
+    memref.store %202, __destr_buffer
+    memref.store %203, __destr_length
+    cf.br loop_header
+  loop_header:
+    %205 = memref.load __destr_index : i64
+    %206 = memref.load __destr_length : i64
+    %207 = arith.cmpui ult %205, %206
+    cf.cond_br %207 [then: loop_body, else: done]
+  loop_body:
+    %208 = memref.load __destr_index : i64
+    %209 = arith.constant {value = 8 : i64}
+    %210 = arith.muli %208, %209
+    %211 = memref.load __destr_buffer : i64
+    %212 = arith.addi %211, %210
+    %213 = memref.load_indirect %212+0
+    memref.store %213, __destr_elem
+    %214 = memref.load __destr_elem : i64
+    mm.destruct_struct %214 fields=[+0] null_guarded
+    %215 = memref.load __destr_index : i64
+    %216 = arith.constant {value = 1 : i64}
+    %217 = arith.addi %215, %216
+    memref.store %217, __destr_index
+    cf.br loop_header
+  done:
+    func.return
+  }
+  func @__destruct_elements_String(managed_ptr: i64) {
+  entry:
+    %218 = func.param managed_ptr : StdI64
+    %219 = memref.load_indirect %218+0
+    %220 = memref.load_indirect %218+8
+    %221 = arith.constant {value = 0 : i64}
+    memref.store %221, __destr_index
+    memref.store %219, __destr_buffer
+    memref.store %220, __destr_length
+    cf.br loop_header
+  loop_header:
+    %222 = memref.load __destr_index : i64
+    %223 = memref.load __destr_length : i64
+    %224 = arith.cmpui ult %222, %223
+    cf.cond_br %224 [then: loop_body, else: done]
+  loop_body:
+    %225 = memref.load __destr_index : i64
+    %226 = arith.constant {value = 8 : i64}
+    %227 = arith.muli %225, %226
+    %228 = memref.load __destr_buffer : i64
+    %229 = arith.addi %228, %227
+    %230 = memref.load_indirect %229+0
+    memref.store %230, __destr_elem
+    %231 = memref.load __destr_elem : i64
+    mm.destruct_struct %231 fields=[+0] null_guarded
+    %232 = memref.load __destr_index : i64
+    %233 = arith.constant {value = 1 : i64}
+    %234 = arith.addi %232, %233
+    memref.store %234, __destr_index
+    cf.br loop_header
+  done:
+    func.return
   }
 }
 === x86
@@ -451,39 +517,48 @@ module {
     x86.jle advent.main.guard_8.after
   guard_8:
     x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_257
     x86.mov rcx, [rbp-16]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_210
+    x86.jnz __destruct_skip_258
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-80], eax
     x86.mov [rbp-88], edx
     x86.mov rcx, [rbp-88]
-    x86.call mm_decref_managed_elements
+    x86.call __destruct_elements_String
     x86.mov rcx, [rbp-88]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_210
+    x86.label __destruct_skip_258
+    x86.label __destruct_nullguard_257
     x86.mov ebx, [rbp-8]
+    x86.test ebx, ebx
+    x86.jz __destruct_nullguard_260
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_212
+    x86.jnz __destruct_skip_261
     x86.mov [rbp-96], eax
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_212
+    x86.label __destruct_skip_261
+    x86.label __destruct_nullguard_260
     x86.mov esi, [rbp-48]
+    x86.test esi, esi
+    x86.jz __destruct_nullguard_262
     x86.mov rcx, [rbp-48]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_213
+    x86.jnz __destruct_skip_263
     x86.mov [rbp-104], eax
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_213
+    x86.label __destruct_skip_263
+    x86.label __destruct_nullguard_262
     x86.mov eax, 99
     x86.epilogue
     x86.ret
@@ -509,38 +584,135 @@ module {
   __range_ok_9:
     x86.mov eax, [rbp-72]
     x86.mov ecx, [rbp-16]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_264
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_214
+    x86.jnz __destruct_skip_265
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-80], eax
     x86.mov [rbp-88], edx
     x86.mov rcx, [rbp-88]
-    x86.call mm_decref_managed_elements
+    x86.call __destruct_elements_String
     x86.mov rcx, [rbp-88]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_214
+    x86.label __destruct_skip_265
+    x86.label __destruct_nullguard_264
     x86.mov eax, [rbp-8]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_267
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_216
+    x86.jnz __destruct_skip_268
     x86.mov [rbp-96], eax
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_216
+    x86.label __destruct_skip_268
+    x86.label __destruct_nullguard_267
     x86.mov ecx, [rbp-48]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_269
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_217
+    x86.jnz __destruct_skip_270
     x86.mov [rbp-104], eax
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_217
+    x86.label __destruct_skip_270
+    x86.label __destruct_nullguard_269
     x86.mov eax, [rbp-72]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_elements_Character(managed_ptr: i64) {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, [ecx+0]
+    x86.mov edx, [ecx+8]
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.jmp __destruct_elements_Character.loop_header
+  loop_header:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.cmp eax, ecx
+    x86.jae __destruct_elements_Character.done
+  loop_body:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.imul eax, ecx
+    x86.mov edx, [rbp-16]
+    x86.add edx, eax
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-32]
+    x86.test esi, esi
+    x86.jz __destruct_nullguard_272
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_273
+    x86.mov [rbp-40], eax
+    x86.mov rcx, [rbp-32]
+    x86.call mm_free
+    x86.label __destruct_skip_273
+    x86.label __destruct_nullguard_272
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 1
+    x86.add edi, r8
+    x86.mov [rbp-8], edi
+    x86.jmp __destruct_elements_Character.loop_header
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_elements_String(managed_ptr: i64) {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, [ecx+0]
+    x86.mov edx, [ecx+8]
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.jmp __destruct_elements_String.loop_header
+  loop_header:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.cmp eax, ecx
+    x86.jae __destruct_elements_String.done
+  loop_body:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.imul eax, ecx
+    x86.mov edx, [rbp-16]
+    x86.add edx, eax
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-32]
+    x86.test esi, esi
+    x86.jz __destruct_nullguard_274
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_275
+    x86.mov [rbp-40], eax
+    x86.mov rcx, [rbp-32]
+    x86.call mm_free
+    x86.label __destruct_skip_275
+    x86.label __destruct_nullguard_274
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 1
+    x86.add edi, r8
+    x86.mov [rbp-8], edi
+    x86.jmp __destruct_elements_String.loop_header
+  done:
     x86.epilogue
     x86.ret
   }
@@ -720,11 +892,11 @@ module {
   guard_8:
     %45 = arith.constant {value = 99 : i64}
     %46 = memref.load args : i64
-    mm.destruct_struct %46 fields=[+8]
+    mm.destruct_struct %46 fields=[+8] null_guarded
     %48 = memref.load __lit_tmp_9 : i64
-    mm.destruct_struct %48 fields=[+0]
+    mm.destruct_struct %48 fields=[+0] null_guarded
     %50 = memref.load __try_result_0 : i64
-    mm.destruct_struct %50 fields=[+0]
+    mm.destruct_struct %50 fields=[+0] null_guarded
     func.return %45
   guard_8.after:
     %52 = arith.constant {value = 3 : i64}
@@ -743,12 +915,78 @@ module {
   __range_ok_9:
     %61 = memref.load __range_val_9 : i64
     %62 = memref.load args : i64
-    mm.destruct_struct %62 fields=[+8]
+    mm.destruct_struct %62 fields=[+8] null_guarded
     %64 = memref.load __lit_tmp_9 : i64
-    mm.destruct_struct %64 fields=[+0]
+    mm.destruct_struct %64 fields=[+0] null_guarded
     %66 = memref.load __try_result_0 : i64
-    mm.destruct_struct %66 fields=[+0]
+    mm.destruct_struct %66 fields=[+0] null_guarded
     func.return %61
+  }
+  func @__destruct_elements_Character(managed_ptr: i64) {
+  entry:
+    %202 = func.param managed_ptr : StdI64
+    %203 = memref.load_indirect %202+0
+    %204 = memref.load_indirect %202+8
+    %205 = arith.constant {value = 0 : i64}
+    memref.store %205, __destr_index
+    memref.store %203, __destr_buffer
+    memref.store %204, __destr_length
+    cf.br loop_header
+  loop_header:
+    %206 = memref.load __destr_index : i64
+    %207 = memref.load __destr_length : i64
+    %208 = arith.cmpui ult %206, %207
+    cf.cond_br %208 [then: loop_body, else: done]
+  loop_body:
+    %209 = memref.load __destr_index : i64
+    %210 = arith.constant {value = 8 : i64}
+    %211 = arith.muli %209, %210
+    %212 = memref.load __destr_buffer : i64
+    %213 = arith.addi %212, %211
+    %214 = memref.load_indirect %213+0
+    memref.store %214, __destr_elem
+    %215 = memref.load __destr_elem : i64
+    mm.destruct_struct %215 fields=[+0] null_guarded
+    %216 = memref.load __destr_index : i64
+    %217 = arith.constant {value = 1 : i64}
+    %218 = arith.addi %216, %217
+    memref.store %218, __destr_index
+    cf.br loop_header
+  done:
+    func.return
+  }
+  func @__destruct_elements_String(managed_ptr: i64) {
+  entry:
+    %219 = func.param managed_ptr : StdI64
+    %220 = memref.load_indirect %219+0
+    %221 = memref.load_indirect %219+8
+    %222 = arith.constant {value = 0 : i64}
+    memref.store %222, __destr_index
+    memref.store %220, __destr_buffer
+    memref.store %221, __destr_length
+    cf.br loop_header
+  loop_header:
+    %223 = memref.load __destr_index : i64
+    %224 = memref.load __destr_length : i64
+    %225 = arith.cmpui ult %223, %224
+    cf.cond_br %225 [then: loop_body, else: done]
+  loop_body:
+    %226 = memref.load __destr_index : i64
+    %227 = arith.constant {value = 8 : i64}
+    %228 = arith.muli %226, %227
+    %229 = memref.load __destr_buffer : i64
+    %230 = arith.addi %229, %228
+    %231 = memref.load_indirect %230+0
+    memref.store %231, __destr_elem
+    %232 = memref.load __destr_elem : i64
+    mm.destruct_struct %232 fields=[+0] null_guarded
+    %233 = memref.load __destr_index : i64
+    %234 = arith.constant {value = 1 : i64}
+    %235 = arith.addi %233, %234
+    memref.store %235, __destr_index
+    cf.br loop_header
+  done:
+    func.return
   }
 }
 === x86
@@ -838,39 +1076,48 @@ module {
     x86.jle advent.main.guard_8.after
   guard_8:
     x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_258
     x86.mov rcx, [rbp-16]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_211
+    x86.jnz __destruct_skip_259
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-80], eax
     x86.mov [rbp-88], edx
     x86.mov rcx, [rbp-88]
-    x86.call mm_decref_managed_elements
+    x86.call __destruct_elements_String
     x86.mov rcx, [rbp-88]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_211
+    x86.label __destruct_skip_259
+    x86.label __destruct_nullguard_258
     x86.mov ebx, [rbp-8]
+    x86.test ebx, ebx
+    x86.jz __destruct_nullguard_261
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_213
+    x86.jnz __destruct_skip_262
     x86.mov [rbp-96], eax
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_213
+    x86.label __destruct_skip_262
+    x86.label __destruct_nullguard_261
     x86.mov esi, [rbp-48]
+    x86.test esi, esi
+    x86.jz __destruct_nullguard_263
     x86.mov rcx, [rbp-48]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_214
+    x86.jnz __destruct_skip_264
     x86.mov [rbp-104], eax
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_214
+    x86.label __destruct_skip_264
+    x86.label __destruct_nullguard_263
     x86.mov eax, 99
     x86.epilogue
     x86.ret
@@ -896,38 +1143,135 @@ module {
   __range_ok_9:
     x86.mov eax, [rbp-72]
     x86.mov ecx, [rbp-16]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_265
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_215
+    x86.jnz __destruct_skip_266
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-80], eax
     x86.mov [rbp-88], edx
     x86.mov rcx, [rbp-88]
-    x86.call mm_decref_managed_elements
+    x86.call __destruct_elements_String
     x86.mov rcx, [rbp-88]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_215
+    x86.label __destruct_skip_266
+    x86.label __destruct_nullguard_265
     x86.mov eax, [rbp-8]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_268
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_217
+    x86.jnz __destruct_skip_269
     x86.mov [rbp-96], eax
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_217
+    x86.label __destruct_skip_269
+    x86.label __destruct_nullguard_268
     x86.mov ecx, [rbp-48]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_270
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_218
+    x86.jnz __destruct_skip_271
     x86.mov [rbp-104], eax
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_218
+    x86.label __destruct_skip_271
+    x86.label __destruct_nullguard_270
     x86.mov eax, [rbp-72]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_elements_Character(managed_ptr: i64) {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, [ecx+0]
+    x86.mov edx, [ecx+8]
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.jmp __destruct_elements_Character.loop_header
+  loop_header:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.cmp eax, ecx
+    x86.jae __destruct_elements_Character.done
+  loop_body:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.imul eax, ecx
+    x86.mov edx, [rbp-16]
+    x86.add edx, eax
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-32]
+    x86.test esi, esi
+    x86.jz __destruct_nullguard_273
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_274
+    x86.mov [rbp-40], eax
+    x86.mov rcx, [rbp-32]
+    x86.call mm_free
+    x86.label __destruct_skip_274
+    x86.label __destruct_nullguard_273
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 1
+    x86.add edi, r8
+    x86.mov [rbp-8], edi
+    x86.jmp __destruct_elements_Character.loop_header
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_elements_String(managed_ptr: i64) {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov eax, [ecx+0]
+    x86.mov edx, [ecx+8]
+    x86.xor ecx, ecx
+    x86.mov [rbp-8], ecx
+    x86.mov [rbp-16], eax
+    x86.mov [rbp-24], edx
+    x86.jmp __destruct_elements_String.loop_header
+  loop_header:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.cmp eax, ecx
+    x86.jae __destruct_elements_String.done
+  loop_body:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.imul eax, ecx
+    x86.mov edx, [rbp-16]
+    x86.add edx, eax
+    x86.mov ebx, [edx+0]
+    x86.mov [rbp-32], ebx
+    x86.mov esi, [rbp-32]
+    x86.test esi, esi
+    x86.jz __destruct_nullguard_275
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_276
+    x86.mov [rbp-40], eax
+    x86.mov rcx, [rbp-32]
+    x86.call mm_free
+    x86.label __destruct_skip_276
+    x86.label __destruct_nullguard_275
+    x86.mov edi, [rbp-8]
+    x86.mov r8, 1
+    x86.add edi, r8
+    x86.mov [rbp-8], edi
+    x86.jmp __destruct_elements_String.loop_header
+  done:
     x86.epilogue
     x86.ret
   }

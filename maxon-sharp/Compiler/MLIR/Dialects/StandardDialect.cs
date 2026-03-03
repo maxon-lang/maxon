@@ -1212,6 +1212,32 @@ public class StdDestructStructOp(StdI64 heapPtr, List<FieldDestructorInfo> manag
   public override int PureResultId => -1;
 }
 
+/// <summary>
+/// Per-case payload slot that holds a heap pointer needing decref during union destruction.
+/// Offset is the byte offset within the union's heap block (8 + slotIndex * 8).
+/// </summary>
+public record UnionPayloadDestructorInfo(int Offset, MlirType Type, List<FieldDestructorInfo> NestedFields);
+
+/// <summary>
+/// Per-union-case destructor info: the tag ordinal and the managed payload slots for that case.
+/// Only cases with heap-allocated payloads need entries.
+/// </summary>
+public record UnionCaseDestructorInfo(int TagOrdinal, List<UnionPayloadDestructorInfo> ManagedPayloads);
+
+/// <summary>
+/// Inline union destructor: decrements the union's refcount and, if it reaches zero,
+/// reads the tag to determine which case is active, decrefs the appropriate managed
+/// payload values, then calls mm_free.
+/// </summary>
+public class StdDestructUnionOp(StdI64 heapPtr, List<UnionCaseDestructorInfo> cases, bool nullGuarded = false) : StandardOp {
+  public override string Mnemonic => $"mm.destruct_union %{HeapPtr.Id} cases=[{string.Join(", ", Cases.Select(c => $"tag={c.TagOrdinal}"))}]{(NullGuarded ? " null_guarded" : "")}";
+  public StdI64 HeapPtr { get; } = heapPtr;
+  public List<UnionCaseDestructorInfo> Cases { get; } = cases;
+  public bool NullGuarded { get; } = nullGuarded;
+  public override List<StdValue> ReadValues => [HeapPtr];
+  public override int PureResultId => -1;
+}
+
 // ============================================================================
 // Memory copy operation (for buffer grow/shift)
 // ============================================================================

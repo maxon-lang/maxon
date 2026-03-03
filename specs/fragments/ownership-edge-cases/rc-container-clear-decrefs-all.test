@@ -1,0 +1,167 @@
+// Test: rc-container-clear-decrefs-all
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var value Integer
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+  var arr = ItemArray{}
+  arr.push(Item{value: 1})
+  arr.push(Item{value: 2})
+  arr.push(Item{value: 3})
+  arr.clear()
+  return arr.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 0
+Stderr: ```
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Item #3 rc=1 [ItemArray.push]
+alloc Item #5 rc=0 [ownership-edge-cases.main]
+incref Item #5 rc=1 [ItemArray.push]
+alloc Item #6 rc=0 [ownership-edge-cases.main]
+incref Item #6 rc=1 [ItemArray.push]
+free Item #3
+free Item #5
+free Item #6
+decref ItemArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free ItemArray #2
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=64
+    x86.xor eax, eax
+    x86.xor ecx, ecx
+    x86.xor edx, edx
+    x86.xor ebx, ebx
+    x86.mov esi, 8
+    x86.mov rcx, 32
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov edi, [rbp-8]
+    x86.xor r8, r8
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-8]
+    x86.xor eax, eax
+    x86.mov [r9+8], eax
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+16], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 8
+    x86.mov [eax+24], ecx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+8], eax
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov eax, 1
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov ecx, 1
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-24]
+    x86.call ItemArray.push
+    x86.mov eax, 2
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, 2
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-32]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-32]
+    x86.call ItemArray.push
+    x86.mov eax, 3
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, 3
+    x86.mov [eax+0], ecx
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-40]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-40]
+    x86.call ItemArray.push
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call ItemArray.clear
+    x86.mov eax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call ItemArray.count
+    x86.mov [rbp-48], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl ecx
+    x86.movzx ecx, ecxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg eax
+    x86.movzx eax, eaxb
+    x86.or ecx, eax
+    x86.test ecx, ecx
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_29]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-16]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_177
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_178
+    x86.mov ecx, [rbp-16]
+    x86.mov edx, [ecx+8]
+    x86.mov [rbp-56], eax
+    x86.mov [rbp-64], edx
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref_managed_elements
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.mov rcx, [rbp-16]
+    x86.call mm_free
+    x86.label __destruct_skip_178
+    x86.label __destruct_nullguard_177
+    x86.mov eax, [rbp-48]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

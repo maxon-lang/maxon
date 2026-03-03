@@ -437,7 +437,7 @@ module {
     %11 = memref.load_indirect %10+0
     memref.store %11, result
     %12 = memref.load p : i64
-    std.call_runtime @mm_decref %12
+    std.call_runtime_if_nonnull @mm_decref %12
     cf.br block_0.merge
   block_0.merge:
     %14 = memref.load result : i64
@@ -487,8 +487,11 @@ module {
     x86.mov eax, [r9+0]
     x86.mov [rbp-8], eax
     x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_24
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
+    x86.label __nonnull_skip_24
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
     x86.mov eax, [rbp-8]
@@ -703,13 +706,13 @@ module {
   __range_ok_4:
     %61 = memref.load __range_val_4 : i64
     %62 = memref.load arr : i64
-    mm.destruct_struct %62 fields=[+8]
+    mm.destruct_struct %62 fields=[+8] null_guarded
     %64 = memref.load item : i64
-    std.call_runtime @mm_decref %64
+    std.call_runtime_if_nonnull @mm_decref %64
     %66 = memref.load got : i64
-    std.call_runtime @mm_decref %66
+    std.call_runtime_if_nonnull @mm_decref %66
     %68 = memref.load __try_result_0 : i64
-    std.call_runtime @mm_decref %68
+    std.call_runtime_if_nonnull @mm_decref %68
     func.return %61
   }
 }
@@ -842,9 +845,11 @@ module {
   __range_ok_4:
     x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-16]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_205
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_204
+    x86.jnz __destruct_skip_206
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
     x86.mov [rbp-64], eax
@@ -855,15 +860,25 @@ module {
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_204
+    x86.label __destruct_skip_206
+    x86.label __destruct_nullguard_205
     x86.mov eax, [rbp-24]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_208
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
+    x86.label __nonnull_skip_208
     x86.mov ecx, [rbp-48]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_209
     x86.call mm_decref
+    x86.label __nonnull_skip_209
     x86.mov edx, [rbp-40]
+    x86.test edx, edx
+    x86.jz __nonnull_skip_210
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
+    x86.label __nonnull_skip_210
     x86.mov eax, [rbp-56]
     x86.epilogue
     x86.ret
@@ -984,7 +999,7 @@ module {
     %16 = memref.load_indirect %15+0
     memref.store %16, result
     %17 = memref.load c : i64
-    std.call_runtime @mm_decref %17
+    std.call_runtime_if_nonnull @mm_decref %17
     cf.br loop_0.exit
   check_1.after:
     %19 = arith.constant {value = 1 : i64}
@@ -992,7 +1007,7 @@ module {
     %21 = arith.addi %20, %19
     memref.store %21, i
     %22 = memref.load c : i64
-    std.call_runtime @mm_decref %22
+    std.call_runtime_if_nonnull @mm_decref %22
     cf.br loop_0.header
   loop_0.exit:
     %24 = memref.load result : i64
@@ -1049,8 +1064,11 @@ module {
     x86.mov ecx, [eax+0]
     x86.mov [rbp-8], ecx
     x86.mov edx, [rbp-24]
+    x86.test edx, edx
+    x86.jz __nonnull_skip_34
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
+    x86.label __nonnull_skip_34
     x86.jmp memory-safety.main.loop_0.exit
   check_1.after:
     x86.mov eax, 1
@@ -1058,8 +1076,11 @@ module {
     x86.add ecx, eax
     x86.mov [rbp-16], ecx
     x86.mov edx, [rbp-24]
+    x86.test edx, edx
+    x86.jz __nonnull_skip_35
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
+    x86.label __nonnull_skip_35
     x86.jmp memory-safety.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
@@ -1177,7 +1198,7 @@ module {
     %11 = arith.constant {value = 1 : i64}
     %12 = arith.addi %10, %11
     %13 = memref.load w : i64
-    std.call_runtime @mm_decref %13
+    std.call_runtime_if_nonnull @mm_decref %13
     func.return %12
   check_0.after:
     %15 = arith.constant {value = 0 : i64}
@@ -1230,8 +1251,11 @@ module {
     x86.add edi, r8
     x86.mov r9, [rbp-16]
     x86.mov [rbp-24], edi
+    x86.test r9, r9
+    x86.jz __nonnull_skip_27
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
+    x86.label __nonnull_skip_27
     x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
