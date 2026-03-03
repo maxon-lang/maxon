@@ -4,6 +4,13 @@ using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
+/// <summary>
+/// Describes a needed per-element-type destructor function: loops over all
+/// buffer elements in a __ManagedMemory and cascades into each element's managed fields.
+/// </summary>
+internal record ElementDestructorRequest(
+  List<FieldDestructorInfo> ElementFieldDestructors);
+
 public static partial class MaxonToStandardConversion {
   /// <summary>
   /// Re-resolves a struct type from typeDefs if the captured instance has no fields
@@ -329,7 +336,26 @@ public static partial class MaxonToStandardConversion {
         && TypeAliasInfo.IsManagedMemoryType(fieldTypeName, typeAliasSources);
       bool hasManagedElements = isManagedMemory
         && HasStructElementType(outerType, outerTypeName, typeAliasSources);
-      result.Add(new FieldDestructorInfo(field.Offset, field.Type, nested, isChildOwned, hasManagedElements));
+      // For elements that are structs with their own managed fields, register a
+      // synthesized destructor function that loops over elements and cascades cleanup
+      string? elementDestructorFunc = null;
+      if (hasManagedElements) {
+        var elemStructType = GetElementStructType(outerType, outerTypeName, typeAliasSources);
+        if (elemStructType != null) {
+          var elemManagedFields = GetManagedFieldsForType(elemStructType, typeDefs);
+          if (elemManagedFields.Count > 0) {
+            var elemVisited = new HashSet<string>();
+            if (elemStructType.Name != null) elemVisited.Add(elemStructType.Name);
+            var elemFieldDestructors = BuildFieldDestructors(elemManagedFields, typeDefs, elemVisited,
+              elemStructType, elemStructType.Name, typeAliasSources);
+            elementDestructorFunc = $"__destruct_elements_{elemStructType.Name}";
+            _elementDestructorRequests ??= [];
+            _elementDestructorRequests.TryAdd(elementDestructorFunc,
+              new ElementDestructorRequest(elemFieldDestructors));
+          }
+        }
+      }
+      result.Add(new FieldDestructorInfo(field.Offset, field.Type, nested, isChildOwned, hasManagedElements, elementDestructorFunc));
     }
     return result;
   }
@@ -342,15 +368,23 @@ public static partial class MaxonToStandardConversion {
   private static bool HasStructElementType(
     MlirStructType? outerType, string? outerTypeName,
     Dictionary<string, TypeAliasInfo>? typeAliasSources) {
-    // First check the concrete struct's TypeParams (populated during monomorphization)
-    if (outerType?.TypeParams.TryGetValue("Element", out var elemType) == true && elemType is MlirStructType)
-      return true;
-    // Fall back to TypeAliasSources which tracks alias -> source type + type params
+    return GetElementStructType(outerType, outerTypeName, typeAliasSources) != null;
+  }
+
+  /// <summary>
+  /// Returns the Element type parameter as an MlirStructType if the outer type is
+  /// parameterized with a struct Element type, or null otherwise.
+  /// </summary>
+  private static MlirStructType? GetElementStructType(
+    MlirStructType? outerType, string? outerTypeName,
+    Dictionary<string, TypeAliasInfo>? typeAliasSources) {
+    if (outerType?.TypeParams.TryGetValue("Element", out var elemType) == true && elemType is MlirStructType est)
+      return est;
     if (outerTypeName != null && typeAliasSources?.TryGetValue(outerTypeName, out var aliasInfo) == true
         && aliasInfo.TypeParams?.TryGetValue("Element", out var aliasElemType) == true
-        && aliasElemType is MlirStructType)
-      return true;
-    return false;
+        && aliasElemType is MlirStructType aest)
+      return aest;
+    return null;
   }
 
   /// <summary>Returns the heap-allocated fields of the named struct type, in field order.</summary>

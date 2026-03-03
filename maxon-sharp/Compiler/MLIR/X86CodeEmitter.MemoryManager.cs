@@ -809,17 +809,6 @@ public partial class X86CodeEmitter {
 
     DefineLabel("mm_free_entry_children_done");
 
-    if (Compiler.MmTrace) {
-      // Trace: "free " + entry.tag_cstr + newline
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
-      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_free");
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-      EmitMovRegMem(X86Register.Rcx, -0x08, 8); // entry_ptr
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_entry_tag")); EmitDword(0);
-      EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    }
-
     // Decrement global alloc counter
     EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
     EmitBytes(0x48, 0xFF, 0xC8); // DEC rax

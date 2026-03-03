@@ -1189,8 +1189,13 @@ public class StdCallRuntimeIfNonnullOp(string callee, List<StdValue> args, StdVa
 /// If HasManagedElements is true (only valid when IsChildOwned is also true), the field is
 /// a __ManagedMemory whose buffer holds struct heap pointers that must be decrefd before
 /// the parent is freed — the elements are reference-counted independently of the buffer.
+/// If ElementDestructorFunc is set, it names a synthesized function that loops over all
+/// buffer elements and cascades into their managed fields (not just plain mm_decref).
 /// </summary>
-public record FieldDestructorInfo(int Offset, MlirType Type, List<FieldDestructorInfo> NestedFields, bool IsChildOwned = false, bool HasManagedElements = false);
+public record FieldDestructorInfo(
+  int Offset, MlirType Type, List<FieldDestructorInfo> NestedFields,
+  bool IsChildOwned = false, bool HasManagedElements = false,
+  string? ElementDestructorFunc = null);
 
 /// <summary>
 /// Inline struct destructor: decrements the struct's refcount and, if it reaches zero,

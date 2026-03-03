@@ -1013,9 +1013,13 @@ public static class StandardToX86Conversion {
       var fieldPtr = new StdI64(MlirContext.Current.NextId());
       regManager.EmitLoadIndirect(fieldPtr, heapPtr, field.Offset, field.Type, x86Block);
       if (field.HasManagedElements) {
-        // Before decreffing this __ManagedMemory field, decref each struct element pointer
-        // stored in its buffer — the buffer free alone doesn't touch element refcounts.
-        regManager.EmitCall("mm_decref_managed_elements", [fieldPtr], null, x86Block, null);
+        if (field.ElementDestructorFunc != null) {
+          // Element type has managed fields — call synthesized destructor that cascades
+          regManager.EmitCall(field.ElementDestructorFunc, [fieldPtr], null, x86Block, null);
+        } else {
+          // Elements are plain structs — decref each without cascading
+          regManager.EmitCall("mm_decref_managed_elements", [fieldPtr], null, x86Block, null);
+        }
       }
       if (field.NestedFields.Count > 0) {
         // Field itself has managed sub-fields — recurse so they get cleaned up too

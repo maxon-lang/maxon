@@ -343,6 +343,9 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(totalOffsetOp);
 			var srcAddr = new StdAddI64Op(buffer, totalOffsetOp.Result);
 			block.AddOp(srcAddr);
+			// Save srcAddr to a local before memcopy (rep movsb clobbers RSI/RDI/RCX)
+			var srcAddrVarName = $"__shift_src_{MlirContext.Current.NextId()}";
+			EmitStore(block, srcAddr.Result, srcAddrVarName, varTypes);
 			// Dest is src + elementSize (one position to the right)
 			var dstAddr = new StdAddI64Op(srcAddr.Result, elemSize);
 			block.AddOp(dstAddr);
@@ -351,6 +354,12 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(bytesOp);
 			// Use memmove-style copy (handles overlapping regions)
 			block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
+			// Zero the source slot at buffer[index] to prevent the subsequent set() from
+			// decrefing a stale duplicate pointer (the original was copied to buffer[index+1])
+			var reloadedSrcAddr = EmitLoad(block, srcAddrVarName, varTypes);
+			var zeroOp = new StdConstI64Op(0);
+			block.AddOp(zeroOp);
+			block.AddOp(new StdStoreIndirectOp(zeroOp.Result, reloadedSrcAddr, 0, MlirType.I64));
 		} else {
 			// Shift left: copy from [index+1] forward, moving each one position left
 			var oneConst = new StdConstI64Op(1);
@@ -367,7 +376,21 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(dstAddr);
 			var bytesOp = new StdMulI64Op(count, elemSize);
 			block.AddOp(bytesOp);
+			// Save dstAddr and byteCount before memcopy (rep movsb clobbers RSI/RDI/RCX)
+			var dstAddrVarName = $"__shift_dst_{MlirContext.Current.NextId()}";
+			EmitStore(block, dstAddr.Result, dstAddrVarName, varTypes);
+			var bytesVarName = $"__shift_bytes_{MlirContext.Current.NextId()}";
+			EmitStore(block, bytesOp.Result, bytesVarName, varTypes);
 			block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
+			// Zero the trailing slot at buffer[index+count] to prevent stale duplicate
+			// pointer from causing double-decref when the buffer is freed or reused
+			var reloadedDstAddr = EmitLoad(block, dstAddrVarName, varTypes);
+			var reloadedBytes = EmitLoad(block, bytesVarName, varTypes);
+			var lastSlotAddr = new StdAddI64Op((StdI64)reloadedDstAddr, (StdI64)reloadedBytes);
+			block.AddOp(lastSlotAddr);
+			var zeroOp = new StdConstI64Op(0);
+			block.AddOp(zeroOp);
+			block.AddOp(new StdStoreIndirectOp(zeroOp.Result, lastSlotAddr.Result, 0, MlirType.I64));
 		}
 	}
 

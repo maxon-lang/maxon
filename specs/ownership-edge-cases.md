@@ -32,10 +32,10 @@ end 'main'
 1
 ```
 ```stderr
-alloc Point @ rc-single-alloc-freed.test:10 #1 rc=0
-incref Point @ rc-single-alloc-freed.test:10 #1 rc=1
-decref Point @ rc-single-alloc-freed.test:10 #1 rc=0
-free Point @ rc-single-alloc-freed.test:10
+alloc Point #1 rc=0 [ownership-edge-cases.main]
+incref Point #1 rc=1 [ownership-edge-cases.main]
+decref Point #1 rc=0 [ownership-edge-cases.main]
+free Point #1
 ```
 
 <!-- test: rc-alias-incref -->
@@ -58,12 +58,12 @@ end 'main'
 42
 ```
 ```stderr
-alloc Box @ rc-alias-incref.test:9 #1 rc=0
-incref Box @ rc-alias-incref.test:9 #1 rc=1
-incref Box @ rc-alias-incref.test:9 #1 rc=2
-decref Box @ rc-alias-incref.test:9 #1 rc=1
-decref Box @ rc-alias-incref.test:9 #1 rc=0
-free Box @ rc-alias-incref.test:9
+alloc Box #1 rc=0 [ownership-edge-cases.main]
+incref Box #1 rc=1 [ownership-edge-cases.main]
+incref Box #1 rc=2 [ownership-edge-cases.main]
+decref Box #1 rc=1 [ownership-edge-cases.main]
+decref Box #1 rc=0 [ownership-edge-cases.main]
+free Box #1
 ```
 
 <!-- test: rc-reassign-decrefs-old -->
@@ -87,18 +87,18 @@ end 'main'
 3
 ```
 ```stderr
-alloc Tag @ rc-reassign-decrefs-old.test:9 #1 rc=0
-incref Tag @ rc-reassign-decrefs-old.test:9 #1 rc=1
-alloc Tag @ rc-reassign-decrefs-old.test:10 #2 rc=0
-decref Tag @ rc-reassign-decrefs-old.test:9 #1 rc=0
-free Tag @ rc-reassign-decrefs-old.test:9
-incref Tag @ rc-reassign-decrefs-old.test:10 #2 rc=1
-alloc Tag @ rc-reassign-decrefs-old.test:11 #3 rc=0
-decref Tag @ rc-reassign-decrefs-old.test:10 #2 rc=0
-free Tag @ rc-reassign-decrefs-old.test:10
-incref Tag @ rc-reassign-decrefs-old.test:11 #3 rc=1
-decref Tag @ rc-reassign-decrefs-old.test:11 #3 rc=0
-free Tag @ rc-reassign-decrefs-old.test:11
+alloc Tag #1 rc=0 [ownership-edge-cases.main]
+incref Tag #1 rc=1 [ownership-edge-cases.main]
+alloc Tag #2 rc=0 [ownership-edge-cases.main]
+decref Tag #1 rc=0 [ownership-edge-cases.main]
+free Tag #1
+incref Tag #2 rc=1 [ownership-edge-cases.main]
+alloc Tag #3 rc=0 [ownership-edge-cases.main]
+decref Tag #2 rc=0 [ownership-edge-cases.main]
+free Tag #2
+incref Tag #3 rc=1 [ownership-edge-cases.main]
+decref Tag #3 rc=0 [ownership-edge-cases.main]
+free Tag #3
 ```
 
 <!-- test: rc-inner-block-freed -->
@@ -124,10 +124,10 @@ end 'main'
 7
 ```
 ```stderr
-alloc Widget @ rc-inner-block-freed.test:11 #1 rc=0
-incref Widget @ rc-inner-block-freed.test:11 #1 rc=1
-decref Widget @ rc-inner-block-freed.test:11 #1 rc=0
-free Widget @ rc-inner-block-freed.test:11
+alloc Widget #1 rc=0 [ownership-edge-cases.main]
+incref Widget #1 rc=1 [ownership-edge-cases.main]
+decref Widget #1 rc=0 [ownership-edge-cases.main]
+free Widget #1
 ```
 
 <!-- test: rc-return-transfers-ownership -->
@@ -154,11 +154,11 @@ end 'main'
 99
 ```
 ```stderr
-alloc Token @ rc-return-transfers-ownership.test:9 #1 rc=0
-incref Token @ rc-return-transfers-ownership.test:9 #1 rc=1
-transfer Token @ rc-return-transfers-ownership.test:9 #1 rc=1
-decref Token @ rc-return-transfers-ownership.test:9 #1 rc=0
-free Token @ rc-return-transfers-ownership.test:9
+alloc Token #1 rc=0 [ownership-edge-cases.makeToken]
+incref Token #1 rc=1 [ownership-edge-cases.makeToken]
+transfer Token #1 rc=1 [ownership-edge-cases.makeToken]
+decref Token #1 rc=0 [ownership-edge-cases.main]
+free Token #1
 ```
 
 <!-- test: rc-alias-survives-reassign -->
@@ -182,16 +182,16 @@ end 'main'
 30
 ```
 ```stderr
-alloc Num @ rc-alias-survives-reassign.test:9 #1 rc=0
-incref Num @ rc-alias-survives-reassign.test:9 #1 rc=1
-incref Num @ rc-alias-survives-reassign.test:9 #1 rc=2
-alloc Num @ rc-alias-survives-reassign.test:11 #2 rc=0
-decref Num @ rc-alias-survives-reassign.test:9 #1 rc=1
-incref Num @ rc-alias-survives-reassign.test:11 #2 rc=1
-decref Num @ rc-alias-survives-reassign.test:11 #2 rc=0
-free Num @ rc-alias-survives-reassign.test:11
-decref Num @ rc-alias-survives-reassign.test:9 #1 rc=0
-free Num @ rc-alias-survives-reassign.test:9
+alloc Num #1 rc=0 [ownership-edge-cases.main]
+incref Num #1 rc=1 [ownership-edge-cases.main]
+incref Num #1 rc=2 [ownership-edge-cases.main]
+alloc Num #2 rc=0 [ownership-edge-cases.main]
+decref Num #1 rc=1 [ownership-edge-cases.main]
+incref Num #2 rc=1 [ownership-edge-cases.main]
+decref Num #2 rc=0 [ownership-edge-cases.main]
+free Num #2
+decref Num #1 rc=0 [ownership-edge-cases.main]
+free Num #1
 ```
 
 <!-- test: rc-loop-per-iteration-freed -->
@@ -219,22 +219,22 @@ end 'main'
 6
 ```
 ```stderr
-alloc Counter @ rc-loop-per-iteration-freed.test:12 #1 rc=0
-incref Counter @ rc-loop-per-iteration-freed.test:12 #1 rc=1
-decref Counter @ rc-loop-per-iteration-freed.test:12 #1 rc=0
-free Counter @ rc-loop-per-iteration-freed.test:12
-alloc Counter @ rc-loop-per-iteration-freed.test:12 #2 rc=0
-incref Counter @ rc-loop-per-iteration-freed.test:12 #2 rc=1
-decref Counter @ rc-loop-per-iteration-freed.test:12 #2 rc=0
-free Counter @ rc-loop-per-iteration-freed.test:12
-alloc Counter @ rc-loop-per-iteration-freed.test:12 #3 rc=0
-incref Counter @ rc-loop-per-iteration-freed.test:12 #3 rc=1
-decref Counter @ rc-loop-per-iteration-freed.test:12 #3 rc=0
-free Counter @ rc-loop-per-iteration-freed.test:12
-alloc Counter @ rc-loop-per-iteration-freed.test:12 #4 rc=0
-incref Counter @ rc-loop-per-iteration-freed.test:12 #4 rc=1
-decref Counter @ rc-loop-per-iteration-freed.test:12 #4 rc=0
-free Counter @ rc-loop-per-iteration-freed.test:12
+alloc Counter #1 rc=0 [ownership-edge-cases.main]
+incref Counter #1 rc=1 [ownership-edge-cases.main]
+decref Counter #1 rc=0 [ownership-edge-cases.main]
+free Counter #1
+alloc Counter #2 rc=0 [ownership-edge-cases.main]
+incref Counter #2 rc=1 [ownership-edge-cases.main]
+decref Counter #2 rc=0 [ownership-edge-cases.main]
+free Counter #2
+alloc Counter #3 rc=0 [ownership-edge-cases.main]
+incref Counter #3 rc=1 [ownership-edge-cases.main]
+decref Counter #3 rc=0 [ownership-edge-cases.main]
+free Counter #3
+alloc Counter #4 rc=0 [ownership-edge-cases.main]
+incref Counter #4 rc=1 [ownership-edge-cases.main]
+decref Counter #4 rc=0 [ownership-edge-cases.main]
+free Counter #4
 ```
 
 <!-- test: rc-break-frees-before-exit -->
@@ -263,22 +263,22 @@ end 'main'
 3
 ```
 ```stderr
-alloc Step @ rc-break-frees-before-exit.test:11 #1 rc=0
-incref Step @ rc-break-frees-before-exit.test:11 #1 rc=1
-decref Step @ rc-break-frees-before-exit.test:11 #1 rc=0
-free Step @ rc-break-frees-before-exit.test:11
-alloc Step @ rc-break-frees-before-exit.test:11 #2 rc=0
-incref Step @ rc-break-frees-before-exit.test:11 #2 rc=1
-decref Step @ rc-break-frees-before-exit.test:11 #2 rc=0
-free Step @ rc-break-frees-before-exit.test:11
-alloc Step @ rc-break-frees-before-exit.test:11 #3 rc=0
-incref Step @ rc-break-frees-before-exit.test:11 #3 rc=1
-decref Step @ rc-break-frees-before-exit.test:11 #3 rc=0
-free Step @ rc-break-frees-before-exit.test:11
-alloc Step @ rc-break-frees-before-exit.test:11 #4 rc=0
-incref Step @ rc-break-frees-before-exit.test:11 #4 rc=1
-decref Step @ rc-break-frees-before-exit.test:11 #4 rc=0
-free Step @ rc-break-frees-before-exit.test:11
+alloc Step #1 rc=0 [ownership-edge-cases.main]
+incref Step #1 rc=1 [ownership-edge-cases.main]
+decref Step #1 rc=0 [ownership-edge-cases.main]
+free Step #1
+alloc Step #2 rc=0 [ownership-edge-cases.main]
+incref Step #2 rc=1 [ownership-edge-cases.main]
+decref Step #2 rc=0 [ownership-edge-cases.main]
+free Step #2
+alloc Step #3 rc=0 [ownership-edge-cases.main]
+incref Step #3 rc=1 [ownership-edge-cases.main]
+decref Step #3 rc=0 [ownership-edge-cases.main]
+free Step #3
+alloc Step #4 rc=0 [ownership-edge-cases.main]
+incref Step #4 rc=1 [ownership-edge-cases.main]
+decref Step #4 rc=0 [ownership-edge-cases.main]
+free Step #4
 ```
 
 <!-- test: rc-continue-frees-before-restart -->
@@ -309,26 +309,26 @@ end 'main'
 8
 ```
 ```stderr
-alloc Item @ rc-continue-frees-before-restart.test:12 #1 rc=0
-incref Item @ rc-continue-frees-before-restart.test:12 #1 rc=1
-decref Item @ rc-continue-frees-before-restart.test:12 #1 rc=0
-free Item @ rc-continue-frees-before-restart.test:12
-alloc Item @ rc-continue-frees-before-restart.test:12 #2 rc=0
-incref Item @ rc-continue-frees-before-restart.test:12 #2 rc=1
-decref Item @ rc-continue-frees-before-restart.test:12 #2 rc=0
-free Item @ rc-continue-frees-before-restart.test:12
-alloc Item @ rc-continue-frees-before-restart.test:12 #3 rc=0
-incref Item @ rc-continue-frees-before-restart.test:12 #3 rc=1
-decref Item @ rc-continue-frees-before-restart.test:12 #3 rc=0
-free Item @ rc-continue-frees-before-restart.test:12
-alloc Item @ rc-continue-frees-before-restart.test:12 #4 rc=0
-incref Item @ rc-continue-frees-before-restart.test:12 #4 rc=1
-decref Item @ rc-continue-frees-before-restart.test:12 #4 rc=0
-free Item @ rc-continue-frees-before-restart.test:12
-alloc Item @ rc-continue-frees-before-restart.test:12 #5 rc=0
-incref Item @ rc-continue-frees-before-restart.test:12 #5 rc=1
-decref Item @ rc-continue-frees-before-restart.test:12 #5 rc=0
-free Item @ rc-continue-frees-before-restart.test:12
+alloc Item #1 rc=0 [ownership-edge-cases.main]
+incref Item #1 rc=1 [ownership-edge-cases.main]
+decref Item #1 rc=0 [ownership-edge-cases.main]
+free Item #1
+alloc Item #2 rc=0 [ownership-edge-cases.main]
+incref Item #2 rc=1 [ownership-edge-cases.main]
+decref Item #2 rc=0 [ownership-edge-cases.main]
+free Item #2
+alloc Item #3 rc=0 [ownership-edge-cases.main]
+incref Item #3 rc=1 [ownership-edge-cases.main]
+decref Item #3 rc=0 [ownership-edge-cases.main]
+free Item #3
+alloc Item #4 rc=0 [ownership-edge-cases.main]
+incref Item #4 rc=1 [ownership-edge-cases.main]
+decref Item #4 rc=0 [ownership-edge-cases.main]
+free Item #4
+alloc Item #5 rc=0 [ownership-edge-cases.main]
+incref Item #5 rc=1 [ownership-edge-cases.main]
+decref Item #5 rc=0 [ownership-edge-cases.main]
+free Item #5
 ```
 
 <!-- test: rc-nested-struct-field-incref -->
@@ -355,15 +355,15 @@ end 'main'
 55
 ```
 ```stderr
-alloc Inner @ rc-nested-struct-field-incref.test:13 #1 rc=0
-incref Inner @ rc-nested-struct-field-incref.test:13 #1 rc=1
-alloc Outer @ rc-nested-struct-field-incref.test:14 #2 rc=0
-incref Inner @ rc-nested-struct-field-incref.test:13 #1 rc=2
-incref Outer @ rc-nested-struct-field-incref.test:14 #2 rc=1
-decref Inner @ rc-nested-struct-field-incref.test:13 #1 rc=1
-decref Outer @ rc-nested-struct-field-incref.test:14 #2 rc=0
-free Inner @ rc-nested-struct-field-incref.test:13
-free Outer @ rc-nested-struct-field-incref.test:14
+alloc Inner #1 rc=0 [ownership-edge-cases.main]
+incref Inner #1 rc=1 [ownership-edge-cases.main]
+alloc Outer #2 rc=0 [ownership-edge-cases.main]
+incref Inner #1 rc=2 [ownership-edge-cases.main]
+incref Outer #2 rc=1 [ownership-edge-cases.main]
+decref Inner #1 rc=1 [ownership-edge-cases.main]
+decref Outer #2 rc=0 [ownership-edge-cases.main]
+free Inner #1
+free Outer #2
 ```
 
 <!-- test: rc-nested-struct-deep-freed -->
@@ -393,16 +393,16 @@ end 'main'
 7
 ```
 ```stderr
-alloc A @ rc-nested-struct-deep-freed.test:17 #1 rc=0
-alloc B @ rc-nested-struct-deep-freed.test:17 #2 rc=0
-incref A @ rc-nested-struct-deep-freed.test:17 #1 rc=1
-alloc C @ rc-nested-struct-deep-freed.test:17 #3 rc=0
-incref B @ rc-nested-struct-deep-freed.test:17 #2 rc=1
-incref C @ rc-nested-struct-deep-freed.test:17 #3 rc=1
-decref C @ rc-nested-struct-deep-freed.test:17 #3 rc=0
-free A @ rc-nested-struct-deep-freed.test:17
-free B @ rc-nested-struct-deep-freed.test:17
-free C @ rc-nested-struct-deep-freed.test:17
+alloc A #1 rc=0 [ownership-edge-cases.main]
+alloc B #2 rc=0 [ownership-edge-cases.main]
+incref A #1 rc=1 [ownership-edge-cases.main]
+alloc C #3 rc=0 [ownership-edge-cases.main]
+incref B #2 rc=1 [ownership-edge-cases.main]
+incref C #3 rc=1 [ownership-edge-cases.main]
+decref C #3 rc=0 [ownership-edge-cases.main]
+free A #1
+free B #2
+free C #3
 ```
 
 <!-- test: rc-field-overwrite-decrefs-old -->
@@ -434,19 +434,19 @@ end 'main'
 2
 ```
 ```stderr
-alloc Payload @ rc-field-overwrite-decrefs-old.test:17 #1 rc=0
-incref Payload @ rc-field-overwrite-decrefs-old.test:17 #1 rc=1
-alloc Container @ rc-field-overwrite-decrefs-old.test:18 #2 rc=0
-incref Payload @ rc-field-overwrite-decrefs-old.test:17 #1 rc=2
-incref Container @ rc-field-overwrite-decrefs-old.test:18 #2 rc=1
-alloc Payload @ rc-field-overwrite-decrefs-old.test:19 #3 rc=0
-decref Payload @ rc-field-overwrite-decrefs-old.test:17 #1 rc=1
-incref Payload @ rc-field-overwrite-decrefs-old.test:19 #3 rc=1
-decref Payload @ rc-field-overwrite-decrefs-old.test:17 #1 rc=0
-free Payload @ rc-field-overwrite-decrefs-old.test:17
-decref Container @ rc-field-overwrite-decrefs-old.test:18 #2 rc=0
-free Payload @ rc-field-overwrite-decrefs-old.test:19
-free Container @ rc-field-overwrite-decrefs-old.test:18
+alloc Payload #1 rc=0 [ownership-edge-cases.main]
+incref Payload #1 rc=1 [ownership-edge-cases.main]
+alloc Container #2 rc=0 [ownership-edge-cases.main]
+incref Payload #1 rc=2 [ownership-edge-cases.main]
+incref Container #2 rc=1 [ownership-edge-cases.main]
+alloc Payload #3 rc=0 [ownership-edge-cases.main]
+decref Payload #1 rc=1 [Container.setPayload]
+incref Payload #3 rc=1 [Container.setPayload]
+decref Payload #1 rc=0 [ownership-edge-cases.main]
+free Payload #1
+decref Container #2 rc=0 [ownership-edge-cases.main]
+free Payload #3
+free Container #2
 ```
 
 <!-- test: rc-field-overwrite-chain -->
@@ -479,25 +479,25 @@ end 'main'
 30
 ```
 ```stderr
-alloc Val @ rc-field-overwrite-chain.test:17 #1 rc=0
-alloc Holder @ rc-field-overwrite-chain.test:17 #2 rc=0
-incref Val @ rc-field-overwrite-chain.test:17 #1 rc=1
-incref Holder @ rc-field-overwrite-chain.test:17 #2 rc=1
-alloc Val @ rc-field-overwrite-chain.test:18 #3 rc=0
-decref Val @ rc-field-overwrite-chain.test:17 #1 rc=0
-free Val @ rc-field-overwrite-chain.test:17
-incref Val @ rc-field-overwrite-chain.test:18 #3 rc=1
-alloc Val @ rc-field-overwrite-chain.test:19 #4 rc=0
-decref Val @ rc-field-overwrite-chain.test:18 #3 rc=0
-free Val @ rc-field-overwrite-chain.test:18
-incref Val @ rc-field-overwrite-chain.test:19 #4 rc=1
-alloc Val @ rc-field-overwrite-chain.test:20 #5 rc=0
-decref Val @ rc-field-overwrite-chain.test:19 #4 rc=0
-free Val @ rc-field-overwrite-chain.test:19
-incref Val @ rc-field-overwrite-chain.test:20 #5 rc=1
-decref Holder @ rc-field-overwrite-chain.test:17 #2 rc=0
-free Val @ rc-field-overwrite-chain.test:20
-free Holder @ rc-field-overwrite-chain.test:17
+alloc Val #1 rc=0 [ownership-edge-cases.main]
+alloc Holder #2 rc=0 [ownership-edge-cases.main]
+incref Val #1 rc=1 [ownership-edge-cases.main]
+incref Holder #2 rc=1 [ownership-edge-cases.main]
+alloc Val #3 rc=0 [ownership-edge-cases.main]
+decref Val #1 rc=0 [Holder.set]
+free Val #1
+incref Val #3 rc=1 [Holder.set]
+alloc Val #4 rc=0 [ownership-edge-cases.main]
+decref Val #3 rc=0 [Holder.set]
+free Val #3
+incref Val #4 rc=1 [Holder.set]
+alloc Val #5 rc=0 [ownership-edge-cases.main]
+decref Val #4 rc=0 [Holder.set]
+free Val #4
+incref Val #5 rc=1 [Holder.set]
+decref Holder #2 rc=0 [ownership-edge-cases.main]
+free Val #5
+free Holder #2
 ```
 
 <!-- test: rc-container-push-incref -->
@@ -526,24 +526,23 @@ end 'main'
 10
 ```
 ```stderr
-alloc ElementMemory #1 rc=0
-alloc NodeArray @ rc-container-push-incref.test:11 #2 rc=0
-incref ElementMemory #1 rc=1
-incref NodeArray @ rc-container-push-incref.test:11 #2 rc=1
-alloc Node @ rc-container-push-incref.test:13 #3 rc=0
-incref Node @ rc-container-push-incref.test:13 #3 rc=1
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc NodeArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref NodeArray #2 rc=1 [ownership-edge-cases.main]
+alloc Node #3 rc=0 [ownership-edge-cases.main]
+incref Node #3 rc=1 [ownership-edge-cases.main]
 alloc_in Buffer
-incref Node @ rc-container-push-incref.test:13 #3 rc=2
-decref Node @ rc-container-push-incref.test:13 #3 rc=1
-incref Node @ rc-container-push-incref.test:13 #3 rc=2
-incref Node @ rc-container-push-incref.test:13 #3 rc=3
-decref NodeArray @ rc-container-push-incref.test:11 #2 rc=0
-free Buffer
-free ElementMemory
-free NodeArray @ rc-container-push-incref.test:11
-decref Node @ rc-container-push-incref.test:13 #3 rc=1
-decref Node @ rc-container-push-incref.test:13 #3 rc=0
-free Node @ rc-container-push-incref.test:13
+incref Node #3 rc=2 [NodeArray.push]
+decref Node #3 rc=1 [ownership-edge-cases.main]
+incref Node #3 rc=2 [NodeArray.get]
+incref Node #3 rc=3 [ownership-edge-cases.main]
+decref NodeArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free NodeArray #2
+decref Node #3 rc=1 [ownership-edge-cases.main]
+decref Node #3 rc=0 [ownership-edge-cases.main]
+free Node #3
 ```
 
 <!-- test: rc-container-pop-decrefs -->
@@ -572,25 +571,24 @@ end 'main'
 1
 ```
 ```stderr
-alloc ElementMemory #1 rc=0
-alloc NodeArray @ rc-container-pop-decrefs.test:11 #2 rc=0
-incref ElementMemory #1 rc=1
-incref NodeArray @ rc-container-pop-decrefs.test:11 #2 rc=1
-alloc Node @ rc-container-pop-decrefs.test:12 #3 rc=0
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc NodeArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref NodeArray #2 rc=1 [ownership-edge-cases.main]
+alloc Node #3 rc=0 [ownership-edge-cases.main]
 alloc_in Buffer
-incref Node @ rc-container-pop-decrefs.test:12 #3 rc=1
-alloc Node @ rc-container-pop-decrefs.test:13 #5 rc=0
-incref Node @ rc-container-pop-decrefs.test:13 #5 rc=1
-transfer Node @ rc-container-pop-decrefs.test:13 #5 rc=1
-incref Node @ rc-container-pop-decrefs.test:13 #5 rc=2
-decref NodeArray @ rc-container-pop-decrefs.test:11 #2 rc=0
-free Node @ rc-container-pop-decrefs.test:12
-free Buffer
-free ElementMemory
-free NodeArray @ rc-container-pop-decrefs.test:11
-decref Node @ rc-container-pop-decrefs.test:13 #5 rc=1
-decref Node @ rc-container-pop-decrefs.test:13 #5 rc=0
-free Node @ rc-container-pop-decrefs.test:13
+incref Node #3 rc=1 [NodeArray.push]
+alloc Node #5 rc=0 [ownership-edge-cases.main]
+incref Node #5 rc=1 [NodeArray.push]
+transfer Node #5 rc=1 [NodeArray.remove]
+incref Node #5 rc=2 [ownership-edge-cases.main]
+decref NodeArray #2 rc=0 [ownership-edge-cases.main]
+free Node #3
+free ElementMemory #1
+free NodeArray #2
+decref Node #5 rc=1 [ownership-edge-cases.main]
+decref Node #5 rc=0 [ownership-edge-cases.main]
+free Node #5
 ```
 
 <!-- test: rc-container-overwrite-decrefs-old -->
@@ -617,29 +615,28 @@ end 'main'
 200
 ```
 ```stderr
-alloc ElementMemory #1 rc=0
-alloc ItemArray @ rc-container-overwrite-decrefs-old.test:11 #2 rc=0
-incref ElementMemory #1 rc=1
-incref ItemArray @ rc-container-overwrite-decrefs-old.test:11 #2 rc=1
-alloc Item @ rc-container-overwrite-decrefs-old.test:12 #3 rc=0
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+alloc Item #3 rc=0 [ownership-edge-cases.main]
 alloc_in Buffer
-incref Item @ rc-container-overwrite-decrefs-old.test:12 #3 rc=1
-alloc Item @ rc-container-overwrite-decrefs-old.test:13 #5 rc=0
-decref Item @ rc-container-overwrite-decrefs-old.test:12 #3 rc=0
-free Item @ rc-container-overwrite-decrefs-old.test:12
-incref Item @ rc-container-overwrite-decrefs-old.test:13 #5 rc=1
-incref Item @ rc-container-overwrite-decrefs-old.test:13 #5 rc=2
-incref Item @ rc-container-overwrite-decrefs-old.test:13 #5 rc=3
-decref ItemArray @ rc-container-overwrite-decrefs-old.test:11 #2 rc=0
-free Buffer
-free ElementMemory
-free ItemArray @ rc-container-overwrite-decrefs-old.test:11
-decref Item @ rc-container-overwrite-decrefs-old.test:13 #5 rc=1
-decref Item @ rc-container-overwrite-decrefs-old.test:13 #5 rc=0
-free Item @ rc-container-overwrite-decrefs-old.test:13
+incref Item #3 rc=1 [ItemArray.push]
+alloc Item #5 rc=0 [ownership-edge-cases.main]
+decref Item #3 rc=0 [ItemArray.set]
+free Item #3
+incref Item #5 rc=1 [ItemArray.set]
+incref Item #5 rc=2 [ItemArray.get]
+incref Item #5 rc=3 [ownership-edge-cases.main]
+decref ItemArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free ItemArray #2
+decref Item #5 rc=1 [ownership-edge-cases.main]
+decref Item #5 rc=0 [ownership-edge-cases.main]
+free Item #5
 ```
 
-<!-- disabled-test: rc-container-clear-decrefs-all -->
+<!-- test: rc-container-clear-decrefs-all -->
 <!-- MmTrace -->
 Clearing an array decrefs every element; all elements freed when rc hits 0.
 ```maxon
@@ -664,10 +661,26 @@ end 'main'
 0
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Item #3 rc=1 [ItemArray.push]
+alloc Item #5 rc=0 [ownership-edge-cases.main]
+incref Item #5 rc=1 [ItemArray.push]
+alloc Item #6 rc=0 [ownership-edge-cases.main]
+incref Item #6 rc=1 [ItemArray.push]
+free Item #3
+free Item #5
+free Item #6
+decref ItemArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free ItemArray #2
 ```
 
-<!-- disabled-test: rc-container-scope-exit-decrefs-elements -->
+<!-- test: rc-container-scope-exit-decrefs-elements -->
 <!-- MmTrace -->
 When a container holding struct elements goes out of scope, all elements are decref'd.
 ```maxon
@@ -696,10 +709,26 @@ end 'main'
 3
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.fill]
+alloc ItemArray #2 rc=0 [ownership-edge-cases.fill]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.fill]
+incref ItemArray #2 rc=1 [ownership-edge-cases.fill]
+alloc Item #3 rc=0 [ownership-edge-cases.fill]
+alloc_in Buffer
+incref Item #3 rc=1 [ItemArray.push]
+alloc Item #5 rc=0 [ownership-edge-cases.fill]
+incref Item #5 rc=1 [ItemArray.push]
+alloc Item #6 rc=0 [ownership-edge-cases.fill]
+incref Item #6 rc=1 [ItemArray.push]
+decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
+free Item #3
+free Item #5
+free Item #6
+free ElementMemory #1
+free ItemArray #2
 ```
 
-<!-- disabled-test: rc-insert-then-remove-no-leak -->
+<!-- test: rc-insert-then-remove-no-leak -->
 <!-- MmTrace -->
 Insert many structs then remove them all; zero elements remain in memory.
 ```maxon
@@ -732,10 +761,52 @@ end 'main'
 10
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc EntryArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref EntryArray #2 rc=1 [ownership-edge-cases.main]
+alloc Entry #3 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Entry #3 rc=1 [EntryArray.push]
+alloc Entry #5 rc=0 [ownership-edge-cases.main]
+incref Entry #5 rc=1 [EntryArray.push]
+alloc Entry #6 rc=0 [ownership-edge-cases.main]
+incref Entry #6 rc=1 [EntryArray.push]
+alloc Entry #7 rc=0 [ownership-edge-cases.main]
+incref Entry #7 rc=1 [EntryArray.push]
+alloc Entry #8 rc=0 [ownership-edge-cases.main]
+incref Entry #8 rc=1 [EntryArray.push]
+transfer Entry #3 rc=1 [EntryArray.remove]
+incref Entry #3 rc=2 [ownership-edge-cases.main]
+decref Entry #3 rc=1 [ownership-edge-cases.main]
+decref Entry #3 rc=0 [ownership-edge-cases.main]
+free Entry #3
+transfer Entry #5 rc=1 [EntryArray.remove]
+incref Entry #5 rc=2 [ownership-edge-cases.main]
+decref Entry #5 rc=1 [ownership-edge-cases.main]
+decref Entry #5 rc=0 [ownership-edge-cases.main]
+free Entry #5
+transfer Entry #6 rc=1 [EntryArray.remove]
+incref Entry #6 rc=2 [ownership-edge-cases.main]
+decref Entry #6 rc=1 [ownership-edge-cases.main]
+decref Entry #6 rc=0 [ownership-edge-cases.main]
+free Entry #6
+transfer Entry #7 rc=1 [EntryArray.remove]
+incref Entry #7 rc=2 [ownership-edge-cases.main]
+decref Entry #7 rc=1 [ownership-edge-cases.main]
+decref Entry #7 rc=0 [ownership-edge-cases.main]
+free Entry #7
+transfer Entry #8 rc=1 [EntryArray.remove]
+incref Entry #8 rc=2 [ownership-edge-cases.main]
+decref Entry #8 rc=1 [ownership-edge-cases.main]
+decref Entry #8 rc=0 [ownership-edge-cases.main]
+free Entry #8
+decref EntryArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free EntryArray #2
 ```
 
-<!-- disabled-test: rc-insert-in-middle-no-leak -->
+<!-- test: rc-insert-in-middle-no-leak -->
 <!-- MmTrace -->
 Insert at index 0 into an existing array; shiftRight zeroes the gap so no double-free occurs.
 ```maxon
@@ -762,10 +833,38 @@ end 'main'
 60
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ValArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ValArray #2 rc=1 [ownership-edge-cases.main]
+alloc Val #3 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Val #3 rc=1 [ValArray.push]
+alloc Val #5 rc=0 [ownership-edge-cases.main]
+incref Val #5 rc=1 [ValArray.push]
+alloc Val #6 rc=0 [ownership-edge-cases.main]
+incref Val #6 rc=1 [ValArray.insert]
+incref Val #3 rc=2 [ValArray.get]
+incref Val #3 rc=3 [ownership-edge-cases.main]
+incref Val #6 rc=2 [ValArray.get]
+incref Val #6 rc=3 [ownership-edge-cases.main]
+incref Val #5 rc=2 [ValArray.get]
+incref Val #5 rc=3 [ownership-edge-cases.main]
+decref ValArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free ValArray #2
+decref Val #3 rc=1 [ownership-edge-cases.main]
+decref Val #6 rc=1 [ownership-edge-cases.main]
+decref Val #5 rc=1 [ownership-edge-cases.main]
+decref Val #3 rc=0 [ownership-edge-cases.main]
+free Val #3
+decref Val #6 rc=0 [ownership-edge-cases.main]
+free Val #6
+decref Val #5 rc=0 [ownership-edge-cases.main]
+free Val #5
 ```
 
-<!-- disabled-test: rc-remove-middle-no-double-free -->
+<!-- test: rc-remove-middle-no-double-free -->
 <!-- MmTrace -->
 Removing the middle element from an array; shiftLeft zeroes the trailing slot so setLength does not double-decref.
 ```maxon
@@ -792,10 +891,30 @@ end 'main'
 4
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ValArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ValArray #2 rc=1 [ownership-edge-cases.main]
+alloc Val #3 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Val #3 rc=1 [ValArray.push]
+alloc Val #5 rc=0 [ownership-edge-cases.main]
+incref Val #5 rc=1 [ValArray.push]
+alloc Val #6 rc=0 [ownership-edge-cases.main]
+incref Val #6 rc=1 [ValArray.push]
+transfer Val #5 rc=1 [ValArray.remove]
+incref Val #5 rc=2 [ownership-edge-cases.main]
+decref ValArray #2 rc=0 [ownership-edge-cases.main]
+free Val #3
+free Val #6
+free ElementMemory #1
+free ValArray #2
+decref Val #5 rc=1 [ownership-edge-cases.main]
+decref Val #5 rc=0 [ownership-edge-cases.main]
+free Val #5
 ```
 
-<!-- disabled-test: rc-nested-container-freed -->
+<!-- test: rc-nested-container-freed -->
 <!-- MmTrace -->
 An array whose element type itself contains a struct field; freeing the outer array frees all nested objects.
 ```maxon
@@ -822,10 +941,29 @@ end 'main'
 2
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc WrapperArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref WrapperArray #2 rc=1 [ownership-edge-cases.main]
+alloc Inner #3 rc=0 [ownership-edge-cases.main]
+alloc Wrapper #4 rc=0 [ownership-edge-cases.main]
+incref Inner #3 rc=1 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Wrapper #4 rc=1 [WrapperArray.push]
+alloc Inner #6 rc=0 [ownership-edge-cases.main]
+alloc Wrapper #7 rc=0 [ownership-edge-cases.main]
+incref Inner #6 rc=1 [ownership-edge-cases.main]
+incref Wrapper #7 rc=1 [WrapperArray.push]
+decref WrapperArray #2 rc=0 [ownership-edge-cases.main]
+free Inner #3
+free Wrapper #4
+free Inner #6
+free Wrapper #7
+free ElementMemory #1
+free WrapperArray #2
 ```
 
-<!-- disabled-test: rc-return-from-inner-block-cleanup -->
+<!-- test: rc-return-from-inner-block-cleanup -->
 <!-- MmTrace -->
 Returning from inside a nested block must decref all locals in every enclosing block before returning.
 ```maxon
@@ -852,10 +990,17 @@ end 'main'
 3
 ```
 ```stderr
-fill me in
+alloc Step #1 rc=0 [ownership-edge-cases.compute]
+incref Step #1 rc=1 [ownership-edge-cases.compute]
+alloc Step #2 rc=0 [ownership-edge-cases.compute]
+incref Step #2 rc=1 [ownership-edge-cases.compute]
+decref Step #1 rc=0 [ownership-edge-cases.compute]
+free Step #1
+decref Step #2 rc=0 [ownership-edge-cases.compute]
+free Step #2
 ```
 
-<!-- disabled-test: rc-return-container-element -->
+<!-- test: rc-return-container-element -->
 <!-- MmTrace -->
 Getting an element from a container and returning it; element rc stays above 0 while container is freed.
 ```maxon
@@ -883,10 +1028,25 @@ end 'main'
 77
 ```
 ```stderr
-fill me in
+alloc ElementMemory #1 rc=0 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
+incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc_in Buffer
+incref Item #3 rc=1 [ItemArray.push]
+incref Item #3 rc=2 [ItemArray.get]
+incref Item #3 rc=3 [ownership-edge-cases.getFirst]
+transfer Item #3 rc=3 [ownership-edge-cases.getFirst]
+decref Item #3 rc=2 [ownership-edge-cases.getFirst]
+decref ItemArray #2 rc=0 [ownership-edge-cases.main]
+free ElementMemory #1
+free ItemArray #2
+decref Item #3 rc=0 [ownership-edge-cases.main]
+free Item #3
 ```
 
-<!-- disabled-test: rc-global-struct-outlives-local -->
+<!-- test: rc-global-struct-outlives-local -->
 <!-- MmTrace -->
 A global variable holds a struct that outlives the function that created it.
 ```maxon
@@ -911,7 +1071,16 @@ end 'main'
 42
 ```
 ```stderr
-fill me in
+alloc Cfg #1 rc=0 [ownership-edge-cases.__module_init]
+incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
+alloc Cfg #2 rc=0 [ownership-edge-cases.setup]
+decref Cfg #1 rc=0 [ownership-edge-cases.setup]
+free Cfg #1
+incref Cfg #2 rc=1 [ownership-edge-cases.setup]
+incref Cfg #2 rc=2 [ownership-edge-cases.main]
+decref Cfg #2 rc=1 [ownership-edge-cases.main]
+decref Cfg #2 rc=0 [__maxon_global_cleanup]
+free Cfg #2
 ```
 
 <!-- disabled-test: rc-global-reassign-decrefs-old -->

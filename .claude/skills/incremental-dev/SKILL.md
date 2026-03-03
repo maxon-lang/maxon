@@ -8,10 +8,10 @@ Run the spec tests and fix any failures by modifying the compiler code.
 
 ## Steps
 
-1. Run the spec tests: `maxon.exe spec-test`
+1. Run the spec tests: `bin/maxon.exe spec-test`
 2. Ensure the currently enabled tests pass. If not fix them.
 3. Find the next disabled test in this spec file (labeled with 'disabled-test') and enable it by removing 'disabled-'.
-4. Run the spec tests: `maxon.exe spec-test`
+4. Run the specified spec tests: `maxon.exe spec-test --filter=<spec name>`
 5. Analyze the output to identify which tests are failing and why.
 6. Fix the compiler code in `maxon-sharp/` to make the failing tests pass.
 7. Rebuild and re-run spec tests to verify the fixes.

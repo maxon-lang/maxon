@@ -16,6 +16,9 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static bool _rdataStdlibPhase;
   [ThreadStatic] private static string? _currentFuncName;
   [ThreadStatic] private static Dictionary<string, string>? _symdataContextCache;
+  // Tracks element destructor functions that need to be generated.
+  // Key: function name, Value: (element struct type, managed fields, element type name)
+  [ThreadStatic] private static Dictionary<string, ElementDestructorRequest>? _elementDestructorRequests;
   private static string NextRdataId() =>
     _rdataStdlibPhase ? $"s{_nextStdlibRdataId++}" : $"{_nextRdataId++}";
 
@@ -23,6 +26,7 @@ public static partial class MaxonToStandardConversion {
     _rdataStringCache = [];
     _symdataTagCache = [];
     _symdataContextCache = [];
+    _elementDestructorRequests = [];
     _rdataStdlibPhase = true;
     _nextStdlibRdataId = 0;
     _nextRdataId = 0;
@@ -235,6 +239,8 @@ public static partial class MaxonToStandardConversion {
       var varNameToStructPrefix = new Dictionary<string, string>();
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
       var varNameToStructType = new Dictionary<string, string>();
+      // Global struct temps created during lowering that need decref at scope exit
+      var globalStructTemps = new List<string>();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
 
@@ -1222,6 +1228,14 @@ public static partial class MaxonToStandardConversion {
                 newBlock.AddOp(zeroOp);
                 newBlock.AddOp(new StdStoreI64Op(zeroOp.Result, v));
               }
+              // Decref global struct temps created during lowering (not in parser scope tracking)
+              foreach (var tempName in globalStructTemps) {
+                EmitDecrefWithFieldCleanupIfNonnull(newBlock, tempName, varTypes,
+                  varNameToStructType, module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
+                var zeroGlobal = new StdConstI64Op(0);
+                newBlock.AddOp(zeroGlobal);
+                newBlock.AddOp(new StdStoreI64Op(zeroGlobal.Result, tempName));
+              }
               break;
             }
             case MaxonTruncOp truncOp: {
@@ -1444,8 +1458,11 @@ public static partial class MaxonToStandardConversion {
                 EmitStore(newBlock, valueMap[globalLoad.Result], tempName, varTypes);
                 EmitIncref(newBlock, tempName, varTypes, scopeName: func.Name);
                 structVarNames[globalLoad.Result.Id] = tempName;
-                if (globalLoad.StructTypeName != null)
+                globalStructTemps.Add(tempName);
+                if (globalLoad.StructTypeName != null) {
                   structValueTypes[globalLoad.Result.Id] = globalLoad.StructTypeName;
+                  varNameToStructType[tempName] = globalLoad.StructTypeName;
+                }
               }
               break;
             }
@@ -1725,6 +1742,10 @@ public static partial class MaxonToStandardConversion {
     // Generate __maxon_global_cleanup to release module-level struct variables at exit
     GenerateGlobalCleanup(module, result);
 
+    // Generate per-element-type destructor functions for containers whose elements
+    // have managed fields (e.g. Array with Wrapper where Wrapper contains Inner)
+    GenerateElementDestructorFunctions(result);
+
     return result;
   }
 
@@ -1748,6 +1769,87 @@ public static partial class MaxonToStandardConversion {
 
     block.AddOp(new StdReturnOp(null));
     result.AddFunction(cleanupFunc);
+  }
+
+  /// <summary>
+  /// Generate standard IR functions that loop over a __ManagedMemory buffer and
+  /// destruct each element using inline field cascading. Called once after all
+  /// user functions are lowered; requests are accumulated by BuildFieldDestructors.
+  /// </summary>
+  private static void GenerateElementDestructorFunctions(MlirModule<StandardOp> result) {
+    if (_elementDestructorRequests == null || _elementDestructorRequests.Count == 0) return;
+
+    foreach (var (funcName, request) in _elementDestructorRequests) {
+      var func = new MlirFunction<StandardOp>(funcName, ["managed_ptr"], [MlirType.I64], null, null);
+
+      // entry: load buffer and length, branch to loop header
+      var entry = func.Body.AddBlock("entry");
+      var paramOp = new StdParamOp(0, "managed_ptr", new StdI64(MlirContext.Current.NextId()));
+      entry.AddOp(paramOp);
+      var managedPtr = (StdI64)paramOp.Result;
+
+      var bufferLoad = new StdLoadIndirectOp(managedPtr, ManagedFieldBuffer, MlirType.I64);
+      entry.AddOp(bufferLoad);
+      var buffer = (StdI64)bufferLoad.Result;
+
+      var lengthLoad = new StdLoadIndirectOp(managedPtr, ManagedFieldLength, MlirType.I64);
+      entry.AddOp(lengthLoad);
+      var length = (StdI64)lengthLoad.Result;
+
+      var zeroConst = new StdConstI64Op(0);
+      entry.AddOp(zeroConst);
+      entry.AddOp(new StdStoreI64Op(zeroConst.Result, "__destr_index"));
+      entry.AddOp(new StdStoreI64Op(buffer, "__destr_buffer"));
+      entry.AddOp(new StdStoreI64Op(length, "__destr_length"));
+      entry.AddOp(new StdBrOp("loop_header"));
+
+      // loop_header: if index >= length, done
+      var header = func.Body.AddBlock("loop_header");
+      var idxLoad = new StdLoadI64Op("__destr_index");
+      header.AddOp(idxLoad);
+      var lenLoad = new StdLoadI64Op("__destr_length");
+      header.AddOp(lenLoad);
+      var cmp = new StdCmpU64Op("ult", idxLoad.Result, lenLoad.Result);
+      header.AddOp(cmp);
+      header.AddOp(new StdCondBrOp(cmp.Result, "loop_body", "done"));
+
+      // loop_body: load element pointer, destruct, increment index
+      var body = func.Body.AddBlock("loop_body");
+      var idxLoad2 = new StdLoadI64Op("__destr_index");
+      body.AddOp(idxLoad2);
+      var eightConst = new StdConstI64Op(8);
+      body.AddOp(eightConst);
+      var byteOffset = new StdMulI64Op(idxLoad2.Result, eightConst.Result);
+      body.AddOp(byteOffset);
+      var bufLoad = new StdLoadI64Op("__destr_buffer");
+      body.AddOp(bufLoad);
+      var elemAddr = new StdAddI64Op(bufLoad.Result, byteOffset.Result);
+      body.AddOp(elemAddr);
+      // Load the element pointer from buffer[index * 8] and store to a variable
+      // so it has a stack home (EmitInlineDestruct's internal calls evict registers)
+      var elemPtrLoad = new StdLoadIndirectOp(elemAddr.Result, 0, MlirType.I64);
+      body.AddOp(elemPtrLoad);
+      body.AddOp(new StdStoreI64Op((StdI64)elemPtrLoad.Result, "__destr_elem"));
+      var elemPtr = new StdLoadI64Op("__destr_elem");
+      body.AddOp(elemPtr);
+      // Destruct the element (null-guarded: slots may be zeroed after remove operations)
+      body.AddOp(new StdDestructStructOp(elemPtr.Result, request.ElementFieldDestructors, nullGuarded: true));
+      // index++
+      var idxLoad3 = new StdLoadI64Op("__destr_index");
+      body.AddOp(idxLoad3);
+      var oneConst = new StdConstI64Op(1);
+      body.AddOp(oneConst);
+      var nextIdx = new StdAddI64Op(idxLoad3.Result, oneConst.Result);
+      body.AddOp(nextIdx);
+      body.AddOp(new StdStoreI64Op(nextIdx.Result, "__destr_index"));
+      body.AddOp(new StdBrOp("loop_header"));
+
+      // done: return
+      var done = func.Body.AddBlock("done");
+      done.AddOp(new StdReturnOp(null));
+
+      result.AddFunction(func);
+    }
   }
 
 }
