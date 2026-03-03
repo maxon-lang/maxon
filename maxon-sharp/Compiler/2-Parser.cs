@@ -4690,7 +4690,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // Statement parsing
   // ============================================================================
 
-  private void PushScope(string tag = "") {
+  private void PushScope() {
     _scopeStack.Push([.. _variables.Keys]);
   }
 
@@ -6557,6 +6557,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
+      case "clear": {
+        Expect(TokenType.RightParen);
+        var (_, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonManagedMemClearOp(selfValue) {
+          TypeParamName = typeParamName
+        };
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
       case "setLength": {
         TrySkipArgLabel();
         var newLen = ResolveExprValue(ParseExpression());
@@ -6873,7 +6882,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
     _currentBlock = thenBlock;
     var thenOuterScope = _variables.Keys.ToHashSet();
-    PushScope("if_then");
+    PushScope();
     ParseBodyUntilEnd();
     var thenInnerScope = _variables.Keys.Where(k => !thenOuterScope.Contains(k)).ToList();
     PopScope();
@@ -6895,9 +6904,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
         var elseIfOuterScope = _variables.Keys.ToHashSet();
-        PushScope("else_if");
+        PushScope();
         ParseIf();
-        elseInnerScope = _variables.Keys.Where(k => !elseIfOuterScope.Contains(k)).ToList();
+        elseInnerScope = [.. _variables.Keys.Where(k => !elseIfOuterScope.Contains(k))];
         PopScope();
         elseEndBlock = _currentBlock;
       } else {
@@ -6908,9 +6917,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
         var elseOuterScope = _variables.Keys.ToHashSet();
-        PushScope("else");
+        PushScope();
         ParseBodyUntilEnd();
-        elseInnerScope = _variables.Keys.Where(k => !elseOuterScope.Contains(k)).ToList();
+        elseInnerScope = [.. _variables.Keys.Where(k => !elseOuterScope.Contains(k))];
         PopScope();
         elseEndBlock = _currentBlock;
         ExpectEndLabel(elseSourceLabel);
@@ -7031,7 +7040,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
     _currentBlock = thenBlock;
     var ifTryThenOuterScope = _variables.Keys.ToHashSet();
-    PushScope("if_try");
+    PushScope();
 
     // For binding form, load the result and create a let-binding inside the then-block
     if (bindingName != null && resultVar != null) {
@@ -7083,7 +7092,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
       _currentBlock = elseBlock;
       var ifTryElseOuterScope = _variables.Keys.ToHashSet();
-      PushScope("if_try_else");
+      PushScope();
 
       // If error binding requested, emit a typed error binding in the else block
       if (errorBindingToken != null) {
@@ -7091,7 +7100,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       ParseBodyUntilEnd();
-      ifTryElseInnerScope = _variables.Keys.Where(k => !ifTryElseOuterScope.Contains(k)).ToList();
+      ifTryElseInnerScope = [.. _variables.Keys.Where(k => !ifTryElseOuterScope.Contains(k))];
       PopScope();
       elseEndBlock = _currentBlock;
       ExpectEndLabel(elseSourceLabel);
@@ -7144,7 +7153,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     var loopOuterScope = _variables.Keys.ToHashSet();
-    PushScope("while");
+    PushScope();
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, loopOuterScope));
     ParseBodyUntilEnd();
     var loopInnerScope = _variables.Keys.Where(k => !loopOuterScope.Contains(k)).ToList();
@@ -7367,7 +7376,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     var forInOuterScope = _variables.Keys.ToHashSet();
-    PushScope("for_in");
+    PushScope();
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, forInOuterScope,
       iterVarName, nextMethodName, elementKind, elementStructTypeName, iterableTypeName));
 
@@ -7482,7 +7491,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
     var rangeOuterScope = _variables.Keys.ToHashSet();
-    PushScope("for_range");
+    PushScope();
 
     // Increment happens in a separate block after the body so that the loop
     // variable's stack slot is not overwritten before the body uses it.
@@ -7652,7 +7661,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var advToken = new Token(TokenType.Identifier, advancedByName, token.Line, token.Column);
       var advCall = CreateFunctionCall(advToken, [currentVal, stepValue]);
       _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, advCall.Result!, isDeclaration: false, isMutable: true, elementKind));
-      var counterInfo = _variables[counterVarName];
     } else {
       var addOp = new MaxonBinOp(MaxonBinOperator.Add, currentVal, stepValue, elementKind);
       _currentBlock!.AddOp(addOp);
@@ -8612,7 +8620,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       _currentBlock = caseBodyBlock;
       var caseOuterScope = _variables.Keys.ToHashSet();
-      PushScope("match_case");
+      PushScope();
 
       // Emit payload bindings for associated-value enum patterns
       if (origEnumTempName != null) {

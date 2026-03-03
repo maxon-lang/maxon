@@ -854,6 +854,16 @@ public class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonValue new
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewLength.ToString()];
 }
 
+// Clear all elements from managed memory, decrementing struct element refcounts
+public class MaxonManagedMemClearOp(MaxonValue managedStruct) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_clear";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public bool IsStructElement { get; init; }
+  public string? StructElementTypeName { get; init; }
+  public string? TypeParamName { get; init; }
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString()];
+}
+
 // Shift elements right/left in managed buffer
 // Element size is read from the managed struct's element_size field at runtime.
 public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, MaxonValue count, bool shiftRight) : MaxonOp {

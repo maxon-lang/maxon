@@ -421,6 +421,31 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Spill all live register values to stack before a conditional branch.
+  /// Values that only exist in registers get a stack home so they survive
+  /// code paths that skip the guarded block.
+  /// </summary>
+  public void SpillAllLiveRegisters(MlirBlock<X86Op> block) {
+    foreach (var reg in CallerSavedRegisters) {
+      if (_registerContents.TryGetValue(reg, out var value)
+        && !_valueStackHome.ContainsKey(value)
+        && !_constantValues.ContainsKey(value)) {
+        _nextSpillOffset -= 8;
+        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg, 8));
+        _valueStackHome[value] = _nextSpillOffset;
+      }
+    }
+    foreach (var xmm in CallerSavedXmmRegisters) {
+      if (_xmmContents.TryGetValue(xmm, out var value)
+        && !_valueXmmStackHome.ContainsKey(value)) {
+        _nextSpillOffset -= 8;
+        block.AddOp(new X86MovMemXmmOp(_nextSpillOffset, xmm, FloatPrecision.F64));
+        _valueXmmStackHome[value] = _nextSpillOffset;
+      }
+    }
+  }
+
+  /// <summary>
   /// Store a GPR value to a stack offset and record the stack home.
   /// </summary>
   public void EmitStoreToStack(StdValue value, int offset, int sizeInBytes, MlirBlock<X86Op> block) {

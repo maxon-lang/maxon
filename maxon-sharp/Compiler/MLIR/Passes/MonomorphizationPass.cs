@@ -664,6 +664,12 @@ public static class MonomorphizationPass {
         return new MaxonManagedMemGrowOp(mapValue(mg.ManagedStruct), mapValue(mg.NewCapacity));
       case MaxonManagedMemSetLengthOp sl:
         return new MaxonManagedMemSetLengthOp(mapValue(sl.ManagedStruct), mapValue(sl.NewLength));
+      case MaxonManagedMemClearOp memClear:
+        return new MaxonManagedMemClearOp(mapValue(memClear.ManagedStruct)) {
+          IsStructElement = memClear.IsStructElement,
+          StructElementTypeName = memClear.StructElementTypeName,
+          TypeParamName = memClear.TypeParamName
+        };
       case MaxonManagedMemShiftOp ms:
         return new MaxonManagedMemShiftOp(mapValue(ms.ManagedStruct), mapValue(ms.Index), mapValue(ms.Count), ms.ShiftRight);
       case MaxonManagedMemConcatOp mc: {

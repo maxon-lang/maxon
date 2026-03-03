@@ -912,7 +912,10 @@ public static class StandardToX86Conversion {
           }
 
           case StdCallRuntimeIfNonnullOp guardedCallOp: {
-            // Null-guarded runtime call: skip if first arg is null
+            // Null-guarded runtime call: skip if first arg is null.
+            // Spill all live register values before the branch so values
+            // remain accessible when the branch skips the call body.
+            regManager.SpillAllLiveRegisters(x86Block);
             var skipLabel = $"__nonnull_skip_{MlirContext.Current.NextId()}";
             regManager.EmitBoolTest(guardedCallOp.Args[0], x86Block);
             x86Block.AddOp(new X86JccOp("z", skipLabel));

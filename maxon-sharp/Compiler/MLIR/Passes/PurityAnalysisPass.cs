@@ -78,6 +78,7 @@ public static class PurityAnalysisPass {
           case MaxonManagedMemConcatOp:
           case MaxonManagedMemSetLengthOp:
           case MaxonManagedMemRemoveOp:
+          case MaxonManagedMemClearOp:
             return true;
           // Chain mutation operations modify the chain data structure in-place
           case MaxonChainInsertValueOp:

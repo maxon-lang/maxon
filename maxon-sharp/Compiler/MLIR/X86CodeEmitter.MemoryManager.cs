@@ -147,6 +147,7 @@ public partial class X86CodeEmitter {
     EmitMmDecref();
     EmitMmDecrefCheck();
     EmitMmDecrefManagedElements();
+    EmitMmClearManagedElements();
     EmitMmLeakCheck();
     EmitMmValidatePtr();
     EmitChainInsertFirst();
@@ -1216,6 +1217,72 @@ public partial class X86CodeEmitter {
     EmitJmp("mm_decref_managed_elements_loop");
 
     DefineLabel("mm_decref_managed_elements_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_clear_managed_elements(managed_ptr_in_rcx) -> void
+  // Decrefs every struct element pointer and zeroes each slot in the buffer.
+  // Called by Array.clear() to safely decref all elements while keeping the
+  // buffer alive. Zeroing prevents stale pointers from being double-decref'd
+  // when new elements are pushed into the reused slots.
+  // Args: rcx = heap pointer to __ManagedMemory struct
+  // -------------------------------------------------------------------------
+  private void EmitMmClearManagedElements() {
+    // Stack: [rbp-8]=managed_ptr, [rbp-16]=buffer, [rbp-24]=length, [rbp-32]=index (loop counter)
+    EmitRuntimeFunctionStart("mm_clear_managed_elements", 1, 0x50);
+
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = managed_ptr
+
+    // Load buffer pointer from managed_ptr[0]
+    EmitBytes(0x48, 0x8B, 0x01); // MOV rax, [rcx] — managed_ptr->buffer
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
+
+    // Load length from managed_ptr[8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // rax = managed_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] — managed_ptr->length
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = length
+
+    // If length == 0, nothing to do
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_clear_managed_elements_done");
+
+    // index = 0
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // [rbp-32] = 0
+
+    DefineLabel("mm_clear_managed_elements_loop");
+    // if index >= length, done
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // rax = index
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // rcx = length
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", "mm_clear_managed_elements_done"); // unsigned >=
+
+    // Load element ptr: buffer[index * 8]
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // rax = index
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // rcx = buffer
+    // element_ptr = buffer + index * 8
+    EmitBytes(0x48, 0x8B, 0x0C, 0xC1); // MOV rcx, [rcx + rax*8]
+    // Null guard: buffer slots can be null (zeroed after remove operations)
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "mm_clear_managed_elements_zero");
+    // mm_decref(element_ptr)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
+    DefineLabel("mm_clear_managed_elements_zero");
+
+    // Zero the slot: buffer[index * 8] = 0
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // rax = index
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // rcx = buffer
+    // MOV qword [rcx + rax*8], 0
+    EmitBytes(0x48, 0xC7, 0x04, 0xC1, 0x00, 0x00, 0x00, 0x00);
+
+    // index++
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitJmp("mm_clear_managed_elements_loop");
+
+    DefineLabel("mm_clear_managed_elements_done");
     EmitRuntimeFunctionEnd();
   }
 

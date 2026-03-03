@@ -602,6 +602,31 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, newLength, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 	}
 
+	/// <summary>
+	/// Clear all elements: decref each struct element, then set length to 0.
+	/// For primitive elements, simply sets length to 0.
+	/// </summary>
+	private static void LowerManagedMemClear(
+	  MaxonManagedMemClearOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<int, string> structVarNames) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+
+		if (op.IsStructElement) {
+			// Decref each struct element and zero the buffer slots — uses the runtime
+			// loop that walks the buffer, decrefs each non-null 8-byte heap pointer,
+			// and zeroes the slot to prevent stale-pointer double-decref on reuse.
+			var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
+			block.AddOp(new StdCallRuntimeOp("mm_clear_managed_elements", [managedPtr], null));
+		}
+
+		// Mark array as empty after element cleanup
+		var zeroConst = new StdConstI64Op(0);
+		block.AddOp(zeroConst);
+		EmitStructFieldStore(block, zeroConst.Result, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
+	}
+
 	private static void LowerPanic(
 	  MaxonPanicOp op,
 	  MlirBlock<StandardOp> block,
