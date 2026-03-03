@@ -73,8 +73,7 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes,
-	  HashSet<string>? parentOwnedVarNames = null) {
+	  Dictionary<int, string> structValueTypes) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
@@ -85,15 +84,16 @@ public static partial class MaxonToStandardConversion {
 
 		if (op.IsStructElement) {
 			// Struct elements are heap pointers stored in the buffer (8 bytes each).
-			// Return a borrowed reference — it's parent-owned by the array's
-			// ManagedMemory. The element stays owned by the array.
+			// Load the pointer and incref — the caller gets their own reference.
+			// The buffer retains its reference; mm_decref_managed_elements handles
+			// the buffer's copy when the array is freed.
 			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(loadOp);
+			EmitIncrefValue(block, (StdI64)loadOp.Result);
 
 			var tempName = $"__callret_{MlirContext.Current.NextId()}";
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
-			parentOwnedVarNames?.Add(tempName);
 			if (op.StructElementTypeName != null)
 				structValueTypes[op.Result.Id] = op.StructElementTypeName;
 			valueMap[op.Result] = loadOp.Result;
@@ -108,10 +108,95 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
+	/// __managed_memory_remove(managed, index): remove element at index with ownership transfer.
+	/// Loads the element (without incref — the buffer's reference is transferred to the caller),
+	/// zeroes the slot, shifts remaining elements left, and decrements length.
+	/// </summary>
+	private static void LowerManagedMemRemove(
+	  MaxonManagedMemRemoveOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  Dictionary<int, string> structVarNames,
+	  Dictionary<int, string> structValueTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
+		var index = (StdI64)valueMap[op.Index];
+		EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
+		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+		// COW check before mutation
+		EmitCowCheck(block, managedVarName, varTypes, elemSize);
+
+		// Reload buffer/length after COW (COW may change the buffer pointer)
+		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
+		var lengthAfterCow = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
+		var addr = ComputeElementAddress(block, buffer, index, elemSize);
+
+		if (op.IsStructElement) {
+			// Load the struct pointer — ownership transfer, NO incref.
+			// The buffer's reference is handed to the caller.
+			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
+			block.AddOp(loadOp);
+
+			// Zero the slot to prevent mm_decref_managed_elements from touching it
+			var zeroOp = new StdConstI64Op(0);
+			block.AddOp(zeroOp);
+			block.AddOp(new StdStoreIndirectOp(zeroOp.Result, addr, 0, MlirType.I64));
+
+			var tempName = $"__callret_{MlirContext.Current.NextId()}";
+			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
+			structVarNames[op.Result.Id] = tempName;
+			if (op.StructElementTypeName != null)
+				structValueTypes[op.Result.Id] = op.StructElementTypeName;
+			valueMap[op.Result] = loadOp.Result;
+		} else {
+			var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemRemove");
+			var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
+			block.AddOp(loadOp);
+			valueMap[op.Result] = loadOp.Result;
+		}
+
+		// Shift elements left: move [index+1..length-1] to [index..length-2]
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var newLength = new StdSubI64Op(lengthAfterCow, oneConst.Result);
+		block.AddOp(newLength);
+
+		// Only shift if there are elements after the removed one (index < newLength)
+		var shiftCount = new StdSubI64Op(newLength.Result, index);
+		block.AddOp(shiftCount);
+
+		// Compute src/dst addresses for memmove
+		var srcIndex = new StdAddI64Op(index, oneConst.Result);
+		block.AddOp(srcIndex);
+		var srcOffset = new StdMulI64Op(srcIndex.Result, elemSize);
+		block.AddOp(srcOffset);
+		var srcAddr = new StdAddI64Op(buffer, srcOffset.Result);
+		block.AddOp(srcAddr);
+		var dstOffset = new StdMulI64Op(index, elemSize);
+		block.AddOp(dstOffset);
+		var dstAddr = new StdAddI64Op(buffer, dstOffset.Result);
+		block.AddOp(dstAddr);
+		var bytesToMove = new StdMulI64Op(shiftCount.Result, elemSize);
+		block.AddOp(bytesToMove);
+		block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesToMove.Result));
+
+		// Zero the last slot (now a stale duplicate from the shift)
+		if (op.IsStructElement) {
+			var lastAddr = ComputeElementAddress(block, buffer, newLength.Result, elemSize);
+			var zeroOp2 = new StdConstI64Op(0);
+			block.AddOp(zeroOp2);
+			block.AddOp(new StdStoreIndirectOp(zeroOp2.Result, lastAddr, 0, MlirType.I64));
+		}
+
+		// Update length
+		EmitStructFieldStore(block, newLength.Result, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
+	}
+
+	/// <summary>
 	/// __managed_memory_set_at(managed, index, value): store element into heap buffer.
-	/// Element size is read from the managed struct's element_size field.
-	/// For struct elements, copies the full struct data inline into the buffer
-	/// (not just a pointer) so elements survive stack frame reuse in loops.
+	/// For struct elements, decrefs the old occupant before storing the new pointer.
 	/// </summary>
 	private static void LowerManagedMemSet(
 	  MaxonManagedMemSetOp op,
@@ -130,17 +215,15 @@ public static partial class MaxonToStandardConversion {
 		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
 		if (op.IsStructElement) {
-			// Struct elements are heap pointers — store the pointer value (i64) into the buffer.
+			// Struct elements are heap pointers — release the old reference before overwriting.
+			// mm_decref is null-safe, so this handles both occupied and zeroed slots.
+			var oldElemLoad = new StdLoadIndirectOp(addr, 0, MlirType.I64);
+			block.AddOp(oldElemLoad);
+			EmitDecrefValue(block, (StdI64)oldElemLoad.Result);
 			var srcName = structVarNames[op.Value.Id];
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));
-			// Move the stored element under the ManagedMemory so it moves with the array
-			var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
-			var moveMode = new StdConstI64Op(1);
-			block.AddOp(moveMode);
-			block.AddOp(new StdCallRuntimeOp("mm_move", [(StdI64)srcHeapPtr, managedPtr, moveMode.Result], null));
-			if (Compiler.MmTrace)
-				block.AddOp(new StdCallRuntimeOp("mm_trace_move", [(StdI64)srcHeapPtr], null));
+			EmitIncrefValue(block, (StdI64)srcHeapPtr);
 		} else {
 			// Scalar elements: store directly
 			var value = valueMap[op.Value];

@@ -81,54 +81,52 @@ end 'main'
 module {
   func @basics.getValue() -> i64 {
   entry:
-    __scope_0 = maxon.scope_enter {tag = basics.getValue}
-    %1 = maxon.literal {value = 42 : i64}
-    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
-    maxon.return %1
+    %0 = maxon.literal {value = 42 : i64}
+    maxon.scope_end []
+    maxon.return %0
   }
   func @basics.main() -> i64 {
   entry:
-    __scope_2 = maxon.scope_enter {tag = basics.main}
-    %3 = maxon.call @basics.getValue
-    maxon.assign %3 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 0 : i64}
-    %5 = maxon.binop %3, %4 {op = lt}
-    %6 = maxon.literal {value = 4294967295 : i64}
-    %7 = maxon.binop %3, %6 {op = gt}
-    %8 = maxon.binop %5, %7 {op = or}
-    maxon.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
+    %1 = maxon.call @basics.getValue
+    maxon.assign %1 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.binop %1, %2 {op = lt}
+    %4 = maxon.literal {value = 4294967295 : i64}
+    %5 = maxon.binop %1, %4 {op = gt}
+    %6 = maxon.binop %3, %5 {op = or}
+    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at return-function-call.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %10 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_exit {scope = __scope_2} {tag = return_cleanup}
-    maxon.return %10
+    %8 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [__range_val_0]
+    maxon.return %8
   }
 }
 === standard
 module {
   func @basics.getValue() -> i64 {
   entry:
-    %1 = arith.constant {value = 42 : i64}
-    func.return %1
+    %0 = arith.constant {value = 42 : i64}
+    func.return %0
   }
   func @basics.main() -> u32 {
   entry:
-    %3 = func.call @basics.getValue
-    memref.store %3, __range_val_0
-    %4 = arith.constant {value = 0 : i64}
-    %5 = arith.cmpi lt %3, %4
-    %6 = arith.constant {value = 4294967295 : i64}
-    %7 = arith.cmpi gt %3, %6
-    %8 = arith.ori1 %5, %7
-    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
+    %1 = func.call @basics.getValue
+    memref.store %1, __range_val_0
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.cmpi lt %1, %2
+    %4 = arith.constant {value = 4294967295 : i64}
+    %5 = arith.cmpi gt %1, %4
+    %6 = arith.ori1 %3, %5
+    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %9 = memref.lea_symdata __panic_msg_9
-    %10 = std.ptr_to_i64 %9
-    std.call_runtime @maxon_panic %10
+    %7 = memref.lea_symdata __panic_msg_7
+    %8 = std.ptr_to_i64 %7
+    std.call_runtime @maxon_panic %8
   __range_ok_0:
-    %11 = memref.load __range_val_0 : i64
-    func.return %11
+    %9 = memref.load __range_val_0 : i64
+    func.return %9
   }
 }
 === x86
@@ -155,7 +153,7 @@ module {
     x86.test ecx, ecx
     x86.je basics.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_9]
+    x86.lea_symdata rax, [__panic_msg_7]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -188,40 +186,35 @@ f64 3.14
 module {
   func @basics.main() -> i64 {
   entry:
-    __scope_0 = maxon.scope_enter {tag = basics.main}
+    %0 = maxon.literal {value = 3.14 : f64}
+    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
     %1 = maxon.literal {value = 3.14 : f64}
-    maxon.assign %1 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 3.14 : f64}
-    %3 = maxon.binop %1, %2 {op = eq} {kind = f64}
-    maxon.cond_br %3 [then: check_0, else: other_1]
+    %2 = maxon.binop %0, %1 {op = eq} {kind = f64}
+    maxon.cond_br %2 [then: check_0, else: other_1]
   check_0:
-    __scope_4 = maxon.scope_enter {tag = if_then}
-    %5 = maxon.literal {value = 1 : i64}
-    maxon.scope_exit {scope = __scope_4} {tag = return_cleanup}
-    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
-    maxon.return %5
+    %3 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [x]
+    maxon.return %3
   other_1:
-    __scope_6 = maxon.scope_enter {tag = else}
-    %7 = maxon.literal {value = 0 : i64}
-    maxon.scope_exit {scope = __scope_6} {tag = return_cleanup}
-    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
-    maxon.return %7
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [x]
+    maxon.return %4
   }
 }
 === standard
 module {
   func @basics.main() -> u32 {
   entry:
+    %0 = arith.float_constant {value = 3.14 : f64}
     %1 = arith.float_constant {value = 3.14 : f64}
-    %2 = arith.float_constant {value = 3.14 : f64}
-    %3 = arith.cmpf eq %1, %2
-    cf.cond_br %3 [then: check_0, else: other_1]
+    %2 = arith.cmpf eq %0, %1
+    cf.cond_br %2 [then: check_0, else: other_1]
   check_0:
-    %5 = arith.constant {value = 1 : i64}
-    func.return %5
+    %3 = arith.constant {value = 1 : i64}
+    func.return %3
   other_1:
-    %7 = arith.constant {value = 0 : i64}
-    func.return %7
+    %4 = arith.constant {value = 0 : i64}
+    func.return %4
   }
 }
 === x86

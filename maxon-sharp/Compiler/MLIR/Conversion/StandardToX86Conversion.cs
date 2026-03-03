@@ -936,6 +936,11 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdDestructStructOp destructOp: {
+            EmitInlineDestruct(regManager, x86Block, destructOp.HeapPtr, destructOp.ManagedFields,
+              ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex));
+            break;
+          }
 
           default:
             throw new InvalidOperationException($"No StandardToX86 conversion for: {op.GetType().Name} ({op.Mnemonic})");
@@ -960,6 +965,43 @@ public static class StandardToX86Conversion {
     }
 
     return newFunc;
+  }
+
+  /// <summary>
+  /// Emits inline x86 for struct destruction: mm_decref_check → if rc==0, recursively destruct
+  /// each managed field, then mm_free. Fields with their own managed sub-fields are recursively
+  /// destructed the same way rather than plain mm_decref.
+  /// </summary>
+  private static void EmitInlineDestruct(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    StdI64 heapPtr, List<FieldDestructorInfo> managedFields,
+    HashSet<StdValue>? consumed) {
+    var newRc = new StdI64(MlirContext.Current.NextId());
+    var skipLabel = $"__destruct_skip_{newRc.Id}";
+    regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
+    regManager.EmitBoolTest(newRc, x86Block);
+    x86Block.AddOp(new X86JccOp("nz", skipLabel));
+    foreach (var field in managedFields) {
+      if (field.IsChildOwned) {
+        // mm_free(parent) frees the child-owned buffer automatically; no explicit decref needed.
+        continue;
+      }
+      var fieldPtr = new StdI64(MlirContext.Current.NextId());
+      regManager.EmitLoadIndirect(fieldPtr, heapPtr, field.Offset, field.Type, x86Block);
+      if (field.HasManagedElements) {
+        // Before decreffing this __ManagedMemory field, decref each struct element pointer
+        // stored in its buffer — the buffer free alone doesn't touch element refcounts.
+        regManager.EmitCall("mm_decref_managed_elements", [fieldPtr], null, x86Block, null);
+      }
+      if (field.NestedFields.Count > 0) {
+        // Field itself has managed sub-fields — recurse so they get cleaned up too
+        EmitInlineDestruct(regManager, x86Block, fieldPtr, field.NestedFields, null);
+      } else {
+        regManager.EmitCall("mm_decref", [fieldPtr], null, x86Block, null);
+      }
+    }
+    regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
+    x86Block.AddOp(new X86LabelDefOp(skipLabel));
   }
 
   private static bool IsLastUse(Dictionary<StdValue, int> lastUseOfValue, StdValue value, int currentOpIndex) {

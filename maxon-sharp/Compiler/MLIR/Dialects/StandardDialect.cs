@@ -1160,6 +1160,33 @@ public class StdCallRuntimeOp(string callee, List<StdValue> args, StdValue? resu
   public override int PureResultId => -1;
 }
 
+/// <summary>
+/// Describes a managed field that needs recursive destruction when a struct is freed.
+/// If NestedFields is non-empty, the field is itself a struct with managed fields
+/// and must be recursively destructed (mm_decref_check + field cleanup + mm_free).
+/// If NestedFields is empty, a plain mm_decref suffices.
+/// If IsChildOwned is true, the field was allocated via mm_alloc_in and must be skipped —
+/// mm_free(parent) handles it automatically.
+/// If HasManagedElements is true (only valid when IsChildOwned is also true), the field is
+/// a __ManagedMemory whose buffer holds struct heap pointers that must be decrefd before
+/// the parent is freed — the elements are reference-counted independently of the buffer.
+/// </summary>
+public record FieldDestructorInfo(int Offset, MlirType Type, List<FieldDestructorInfo> NestedFields, bool IsChildOwned = false, bool HasManagedElements = false);
+
+/// <summary>
+/// Inline struct destructor: decrements the struct's refcount and, if it reaches zero,
+/// decrefs each managed (heap-allocated) field (recursively if needed) and calls mm_free.
+/// Emitted as inline x86 code with a conditional skip — no block split required, so
+/// SSA values live across the cleanup remain valid in the enclosing block.
+/// </summary>
+public class StdDestructStructOp(StdI64 heapPtr, List<FieldDestructorInfo> managedFields) : StandardOp {
+  public override string Mnemonic => $"mm.destruct_struct %{HeapPtr.Id} fields=[{string.Join(", ", ManagedFields.Select(f => $"+{f.Offset}"))}]";
+  public StdI64 HeapPtr { get; } = heapPtr;
+  public List<FieldDestructorInfo> ManagedFields { get; } = managedFields;
+  public override List<StdValue> ReadValues => [HeapPtr];
+  public override int PureResultId => -1;
+}
+
 // ============================================================================
 // Memory copy operation (for buffer grow/shift)
 // ============================================================================

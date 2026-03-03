@@ -99,6 +99,7 @@ public enum ErrorCode {
   MlirOwnershipMoveFromImmutable = 4011,
   MlirOwnershipBranchConflict = 4012,
   MlirOwnershipMoveInLoop = 4013,
+  MlirTypeCycle = 4014,
 
   // Code emitter errors (5xxx) - Stage 5
   CodeEmitterNoMain = 5001,

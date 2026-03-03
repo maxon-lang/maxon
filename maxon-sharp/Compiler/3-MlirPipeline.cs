@@ -32,12 +32,11 @@ public class MlirPipeline {
     // Analyze constant array literals for .rdata placement (after monomorphization)
     ConstantArrayAnalysisPass.Run(module);
 
-    // Re-run purity analysis after monomorphization — monomorphized functions
-    // (e.g. NodeArray.push from Array.push) need purity flags for scope analysis
+    // Re-run purity analysis after monomorphization
     PurityAnalysisPass.Run(module);
 
-    // Analyze scope lifetimes for compile-time memory management
-    ScopeAnalysisPass.Run(module);
+    // Detect reference cycles in type definitions (compile error if found)
+    TypeCycleCheckPass.Run(module);
 
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {

@@ -154,9 +154,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
     if len == 0 'empty'
       throw ArrayError.indexOutOfBounds
     end 'empty'
-    var newLen = len - 1
-    var value = managed.get(newLen)
-    managed.setLength(newLen)
+    var value = managed.remove(len - 1)
     return value
   end 'pop'
 
@@ -185,22 +183,7 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with Ele
 
   /// Remove and return element at index, shifting elements to the left (throws if out of bounds)
   export function remove(at Index) returns Element throws ArrayError
-    var len = managed.length()
-
-    // Check bounds
-    if at >= len 'upper'
-      throw ArrayError.indexOutOfBounds
-    end 'upper'
-
-    // Save element before shifting
-    var value = managed.get(at)
-
-    // Shift elements left to fill gap
-    if at < len - 1 'shift'
-      managed.shiftLeft(at, 1)
-    end 'shift'
-
-    managed.setLength(len - 1)
+    var value = managed.remove(at)
     return value
   end 'remove'
 

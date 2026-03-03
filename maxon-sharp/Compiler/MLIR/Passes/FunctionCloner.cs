@@ -157,14 +157,6 @@ internal class FunctionCloner {
       PatchManagedMemoryElementSizes(newFunc);
     }
 
-    // When a generic function's return type resolves to a heap-allocated type
-    // (struct or associated-value enum), inject return_move ops so the return
-    // value survives scope cleanup on function exit.
-    if (newReturnType is MlirStructType
-        || newReturnType is MlirUnionType { HasAssociatedValues: true }) {
-      InjectReturnMoveForHeapReturns(newFunc, newReturnType);
-    }
-
     return newFunc;
   }
 
@@ -244,6 +236,7 @@ internal class FunctionCloner {
       case MaxonIndirectCallOp indirect: return CloneIndirectCallOp(indirect);
       case MaxonStructLiteralOp structLit: return CloneStructLiteralOp(structLit, extraOps);
       case MaxonManagedMemGetOp memGet: return CloneManagedMemGetOp(memGet);
+      case MaxonManagedMemRemoveOp memRemove: return CloneManagedMemRemoveOp(memRemove);
       case MaxonManagedMemSetOp memSet: return CloneManagedMemSetOp(memSet);
 
       // Literal
@@ -272,6 +265,8 @@ internal class FunctionCloner {
       case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName);
       case MaxonPanicOp p: return new MaxonPanicOp(p.Message);
       case MaxonRefEqOp req: { var c = new MaxonRefEqOp(MapValue(req.Lhs), MapValue(req.Rhs), req.Negate); RegisterResult(req.Result, c.Result); return c; }
+      // Variable names reference, not values — copy as-is
+      case MaxonScopeEndOp se: return new MaxonScopeEndOp(se.VarsToClean, se.KeepVars);
 
       // Unary math
       case MaxonTruncOp t: { var c = new MaxonTruncOp(MapValue(t.Input)); RegisterResult(t.Result, c.Result); return c; }
@@ -328,11 +323,6 @@ internal class FunctionCloner {
       case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); RegisterResult(fp.Result, c.Result); return c; }
       case MaxonFunctionRefOp fr: { var c = new MaxonFunctionRefOp(fr.FunctionName, fr.FunctionType); RegisterResult(fr.Result, c.Result); return c; }
       case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, (MlirFunctionType)_typeSubstitution.SubstituteType(fv.FunctionType)); RegisterResult(fv.Result, c.Result); return c; }
-
-      // Memory manager scope ops
-      case MaxonScopeEnterOp se: { var c = new MaxonScopeEnterOp(se.ResultVar, se.Tag); return c; }
-      case MaxonScopeExitOp sx: return new MaxonScopeExitOp(sx.ScopeVar, sx.Tag);
-      case MaxonMoveOp mo: return new MaxonMoveOp(mo.VarName, mo.DestScopeVar, mo.Tag);
 
       // Chain (doubly-linked list) ops
       case MaxonChainCreateOp: { var c = new MaxonChainCreateOp(); RegisterResult(((MaxonChainCreateOp)op).Result, c.Result); return c; }
@@ -653,6 +643,24 @@ internal class FunctionCloner {
     return cloned;
   }
 
+  private MaxonManagedMemRemoveOp CloneManagedMemRemoveOp(MaxonManagedMemRemoveOp memRemove) {
+    var resultKind = _typeSubstitution.SubstituteValueKind(memRemove.ResultKind, memRemove.TypeParamName);
+    var paramKey = memRemove.TypeParamName ?? "Element";
+    var isHeapPtrElem = _typeSubstitution.TryGetValue(paramKey, out var removeElemType)
+      && (removeElemType is MlirStructType || removeElemType is MlirUnionType { HasAssociatedValues: true });
+    string? elemTypeName = null;
+    if (isHeapPtrElem && removeElemType is MlirType named) {
+      elemTypeName = named.Name;
+    }
+    var cloned = new MaxonManagedMemRemoveOp(MapValue(memRemove.ManagedStruct), MapValue(memRemove.Index), resultKind) {
+      IsStructElement = isHeapPtrElem,
+      StructElementTypeName = elemTypeName,
+      TypeParamName = memRemove.TypeParamName
+    };
+    RegisterResult(memRemove.Result, cloned.Result);
+    return cloned;
+  }
+
   private MaxonManagedMemSetOp CloneManagedMemSetOp(MaxonManagedMemSetOp memSet) {
     var elementKind = _typeSubstitution.SubstituteValueKind(memSet.ElementKind, memSet.TypeParamName);
     var paramKey = memSet.TypeParamName ?? "Element";
@@ -755,52 +763,4 @@ internal class FunctionCloner {
     return null;
   }
 
-  /// <summary>
-  /// When a generic function's return type parameter resolves to a heap-allocated
-  /// type (struct or associated-value enum), the original generic IR has no
-  /// return_move. Inject assign + return_move before each return's scope cleanup
-  /// so the return value survives mm_scope_exit.
-  /// </summary>
-  private static void InjectReturnMoveForHeapReturns(MlirFunction<MaxonOp> func, MlirType returnType) {
-    // Find the function-level scope variable (first scope_enter in entry block)
-    string? funcScopeVar = null;
-    if (func.Body.Blocks.Count > 0) {
-      foreach (var op in func.Body.Blocks[0].Operations) {
-        if (op is MaxonScopeEnterOp se) {
-          funcScopeVar = se.ResultVar;
-          break;
-        }
-      }
-    }
-    if (funcScopeVar == null) return;
-
-    foreach (var block in func.Body.Blocks) {
-      var ops = block.Operations;
-
-      // Check if this block has a return with a value and no preceding return_move
-      bool hasReturnMove = ops.Any(o => o is MaxonMoveOp mo && mo.Tag == "return_move");
-      if (hasReturnMove) continue;
-
-      for (int i = 0; i < ops.Count; i++) {
-        if (ops[i] is not MaxonReturnOp { Value: not null } ret) continue;
-
-        // Find the first return_cleanup scope_exit before this return
-        int insertIdx = i;
-        while (insertIdx > 0 && ops[insertIdx - 1] is MaxonScopeExitOp sx && sx.Tag == "return_cleanup") {
-          insertIdx--;
-        }
-
-        // Inject: assign to temp var, then move to function scope
-        var retVarName = $"__retval_{MlirContext.Current.NextId()}";
-        var assignKind = returnType is MlirUnionType ? MaxonValueKind.Enum : MaxonValueKind.Struct;
-        var assignOp = new MaxonAssignOp(retVarName, ret.Value,
-          isDeclaration: true, isMutable: false, assignKind);
-        var moveOp = new MaxonMoveOp(retVarName, funcScopeVar, "return_move");
-
-        ops.Insert(insertIdx, assignOp);
-        ops.Insert(insertIdx + 1, moveOp);
-        break; // Only one return per block
-      }
-    }
-  }
 }

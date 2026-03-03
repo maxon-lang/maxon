@@ -27,8 +27,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private MlirRangedPrimitiveType? _lastCastRangedType;
   private readonly Dictionary<string, VarInfo> _variables = [];
   private readonly Stack<HashSet<string>> _scopeStack = new();
-  private readonly Stack<string> _mmScopeStack = new();
-  private string? _functionScopeVar;
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
   private int _closureCounter;
@@ -382,10 +380,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return null;
   }
 
-  private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars, string ScopeVar,
+  private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars,
     string? IterVarName = null, string? NextMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null,
     string? RangeCounterVarName = null, MaxonValueKind? RangeElementKind = null, string? RangeStructTypeName = null);
-  private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars, string ScopeVar);
+  private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
     { TokenType.Or, (MaxonBinOperator.Or, 0) },
@@ -420,13 +418,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     { "max", (a, b) => { var op = new MaxonMaxOp(a, b); return (op, op.Result); } },
   };
 
-  // VarInfo now tracks struct type name for struct variables, or function type for function variables
-  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string DeclScopeVar, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false, bool IsSelfField = false, EnumPayloadBinding? PayloadBinding = null);
+  // VarInfo tracks struct type name for struct variables, or function type for function variables
+  private record VarInfo(MaxonValueKind Kind, bool Mutable, MaxonValue Value, MlirBlock<MaxonOp> DefinedInBlock, string? StructTypeName = null, MlirFunctionType? FnTypeName = null, bool IsCaptured = false, bool IsSelfField = false, EnumPayloadBinding? PayloadBinding = null);
 
   // Tracks a match binding's origin so assignments can write back to the union heap block
   private record EnumPayloadBinding(string EnumVarName, string EnumTypeName, int PayloadIndex);
-
-  private string CurrentScopeVar => _mmScopeStack.Peek();
 
   private MlirType? GetOptimalType(MaxonValue value) {
     // Look up the variable's ranged type to get the optimal type for codegen
@@ -601,6 +597,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
       mmType.AssociatedTypeNames.Add("Element");
+      mmType.IsChildOwned = true;
       mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
       _typeRegistry["__ManagedMemory"] = mmType;
     }
@@ -1089,36 +1086,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Save current parsing state
     var savedFunction = _currentFunction;
     var savedBlock = _currentBlock;
-    var savedScopeStack = new Stack<string>(_mmScopeStack.Reverse());
-    var savedFunctionScopeVar = _functionScopeVar;
 
-    // Create __module_init function with NO function scope
+    // Create __module_init function
     var namespace_ = DeriveNamespace();
     var initFuncName = string.IsNullOrEmpty(namespace_) ? "__module_init" : $"{namespace_}.__module_init";
     var initFunc = new MlirFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
     module.AddFunction(initFunc);
     _currentFunction = initFunc;
     _currentBlock = initFunc.Body.AddBlock("entry");
-    _mmScopeStack.Clear();
-    // Push a synthetic scope name for the root scope (already entered in _start).
-    // No MaxonScopeEnterOp is emitted — this is just for DeclScopeVar tracking.
-    _mmScopeStack.Push("__root_scope");
-    _functionScopeVar = null;
 
-    // Emit deferred global inits (allocations go into root scope)
+    // Emit deferred global inits
     EmitDeferredExprDecls(_deferredExprLets, isMutable: false);
     EmitDeferredExprDecls(_deferredExprVars, isMutable: true);
     EmitCrossFileDeferredGlobalInits();
 
+    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()));
     _currentBlock.AddOp(new MaxonReturnOp());
 
     // Restore parsing state
     _currentFunction = savedFunction;
     _currentBlock = savedBlock;
-    _mmScopeStack.Clear();
-    foreach (var s in savedScopeStack.Reverse())
-      _mmScopeStack.Push(s);
-    _functionScopeVar = savedFunctionScopeVar;
   }
 
   /// <summary>
@@ -1477,6 +1464,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       SkipToEndOfLine();
       SkipNewlines();
+    }
+
+    // Reject self-referential field layouts: a struct cannot embed itself by value
+    // because the type would have infinite size. Pointer-typed fields (i64) are fine;
+    // this check only fires when the concrete struct type appears as a field type.
+    foreach (var field in fields) {
+      if (ContainsTypeCycle(field.Type, typeName)) {
+        throw new CompileError(ErrorCode.MlirTypeCycle,
+          $"type '{typeName}' cannot contain a field of its own type (infinite size); use a pointer-based container instead",
+          typeNameToken.Line, typeNameToken.Column);
+      }
     }
 
     // Replace temporary entry with complete struct type
@@ -3757,7 +3755,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var backingKind = GetUnionBackingKind(enumType);
     var selfParamOp = new MaxonEnumParamOp(0, "self", enumName, backingKind);
     _currentBlock!.AddOp(selfParamOp);
-    _variables["self"] = new VarInfo(MaxonValueKind.Enum, false, selfParamOp.Result, _currentBlock!, CurrentScopeVar, enumName);
+    _variables["self"] = new VarInfo(MaxonValueKind.Enum, false, selfParamOp.Result, _currentBlock!, enumName);
 
     // Emit remaining params (offset by 1 for 'self')
     EmitParameters(paramNames, paramTypes, paramTokens, paramOffset: 1);
@@ -3818,19 +3816,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       fieldValues.Add((field.Name, fieldValue));
     }
 
-    // Scope management: scope_enter → struct literal → assign (triggers incref) →
-    // return_move → scope_exit → return. This ensures the return value has rc=1,
-    // matching the convention that call returns carry one reference.
-    var scopeVar = $"__scope_{MlirContext.Current.NextId()}";
-    block.AddOp(new MaxonScopeEnterOp(scopeVar, cloneName));
-
     var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
     block.AddOp(structLit);
 
     var retvalName = $"__retval_{MlirContext.Current.NextId()}";
     block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
-    block.AddOp(new MaxonMoveOp(retvalName, scopeVar, "return_move"));
-    block.AddOp(new MaxonScopeExitOp(scopeVar, "return_cleanup"));
+    block.AddOp(new MaxonScopeEndOp([retvalName], [retvalName]));
     block.AddOp(new MaxonReturnOp(structLit.Result));
   }
 
@@ -3907,6 +3898,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       accumulator = trueOp.Result;
     }
 
+    block.AddOp(new MaxonScopeEndOp([]));
     block.AddOp(new MaxonReturnOp(accumulator));
   }
 
@@ -3946,6 +3938,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Call backingType.hash(rawValue)
     var hashCall = new MaxonCallOp($"{backingTypeName}.hash", [rawValue], MaxonValueKind.Integer);
     hashBlock.AddOp(hashCall);
+    hashBlock.AddOp(new MaxonScopeEndOp([]));
     hashBlock.AddOp(new MaxonReturnOp(hashCall.Result));
 
     // --- equals() ---
@@ -3969,6 +3962,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Call backingType.equals(selfRaw, otherRaw)
     var equalsCall = new MaxonCallOp($"{backingTypeName}.equals", [selfRaw, otherRaw], MaxonValueKind.Bool);
     equalsBlock.AddOp(equalsCall);
+    equalsBlock.AddOp(new MaxonScopeEndOp([]));
     equalsBlock.AddOp(new MaxonReturnOp(equalsCall.Result));
   }
 
@@ -4293,14 +4287,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // Primitive type: emit simple param op for 'self'
       var selfParamOp = new MaxonParamOp(0, "self", primInfo.Kind);
       _currentBlock!.AddOp(selfParamOp);
-      _variables["self"] = new VarInfo(primInfo.Kind, false, selfParamOp.Result, _currentBlock!, CurrentScopeVar);
+      _variables["self"] = new VarInfo(primInfo.Kind, false, selfParamOp.Result, _currentBlock!);
     } else {
       var structType = (MlirStructType)_typeRegistry[typeName];
 
       // Emit self param (struct) and register fields as accessible variables
       var selfParamOp = new MaxonStructParamOp(0, "self", typeName);
       _currentBlock!.AddOp(selfParamOp);
-      _variables["self"] = new VarInfo(MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, CurrentScopeVar, typeName);
+      _variables["self"] = new VarInfo(MaxonValueKind.Struct, false, selfParamOp.Result, _currentBlock!, typeName);
 
       // Register all fields of 'self' as directly accessible variables
       foreach (var field in structType.Fields) {
@@ -4317,7 +4311,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
         var fieldAccessOp = new MaxonFieldAccessOp(selfParamOp.Result, typeName, field.Name, fieldKind, fieldStructName);
         _currentBlock!.AddOp(fieldAccessOp);
-        _variables[field.Name] = new VarInfo(fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, CurrentScopeVar, fieldStructName, IsSelfField: true);
+        _variables[field.Name] = new VarInfo(fieldKind, field.IsMutable, fieldAccessOp.Result, _currentBlock!, fieldStructName, IsSelfField: true);
       }
     }
 
@@ -4379,14 +4373,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _paramLocations.Clear();
     _localVarLocations.Clear();
     _blockCounter = 0;
-    _mmScopeStack.Clear();
-
-    // Create function-level scope — all allocations in this function are owned by this scope.
-    // On return, struct return values are mm_move'd to the caller's scope before this scope exits.
-    var funcScopeVar = $"__scope_{MlirContext.Current.NextId()}";
-    _currentBlock.AddOp(new MaxonScopeEnterOp(funcScopeVar, funcName));
-    _mmScopeStack.Push(funcScopeVar);
-    _functionScopeVar = funcScopeVar;
 
     return func;
   }
@@ -4404,30 +4390,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (paramType is MlirStructType structType) {
         var structParamOp = new MaxonStructParamOp(i + paramOffset, paramNames[i], structType.Name);
         _currentBlock!.AddOp(structParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, true, structParamOp.Result, _currentBlock!, CurrentScopeVar, structType.Name);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, true, structParamOp.Result, _currentBlock!, structType.Name);
       } else if (paramType is MlirUnionType enumType) {
         var backingKind = GetUnionBackingKind(enumType);
         var enumParamOp = new MaxonEnumParamOp(i + paramOffset, paramNames[i], enumType.Name, backingKind);
         _currentBlock!.AddOp(enumParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, true, enumParamOp.Result, _currentBlock!, CurrentScopeVar, enumType.Name);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, true, enumParamOp.Result, _currentBlock!, enumType.Name);
       } else if (paramType is MlirFunctionType fnType) {
         var fnParamOp = new MaxonFunctionParamOp(i + paramOffset, paramNames[i], fnType);
         _currentBlock!.AddOp(fnParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, true, fnParamOp.Result, _currentBlock!, CurrentScopeVar, FnTypeName: fnType);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Function, true, fnParamOp.Result, _currentBlock!, FnTypeName: fnType);
       } else if (paramType is MlirRangedPrimitiveType rangedParam) {
         var kind = rangedParam.BaseType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
         _currentBlock!.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(kind, true, paramOp.Result, _currentBlock!, CurrentScopeVar, rangedParam.Name);
+        _variables[paramNames[i]] = new VarInfo(kind, true, paramOp.Result, _currentBlock!, rangedParam.Name);
       } else if (paramType is MlirTypeParameterType tp) {
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], MaxonValueKind.TypeParameter);
         _currentBlock!.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.TypeParameter, true, paramOp.Result, _currentBlock!, CurrentScopeVar, tp.ParameterName);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.TypeParameter, true, paramOp.Result, _currentBlock!, tp.ParameterName);
       } else {
         var kind = paramType.ToValueKind();
         var paramOp = new MaxonParamOp(i + paramOffset, paramNames[i], kind);
         _currentBlock!.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(kind, true, paramOp.Result, _currentBlock!, CurrentScopeVar);
+        _variables[paramNames[i]] = new VarInfo(kind, true, paramOp.Result, _currentBlock!);
       }
     }
   }
@@ -4453,11 +4439,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     if (returnType == null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
-      EmitBlockScopedReleaseBeforeReturn(null);
+      _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()));
       _currentBlock.AddOp(new MaxonReturnOp());
     }
 
-    _functionScopeVar = null;
     _currentFunction = null;
     _currentBlock = null;
   }
@@ -4707,50 +4692,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void PushScope(string tag = "") {
     _scopeStack.Push([.. _variables.Keys]);
-    var scopeVar = $"__scope_{MlirContext.Current.NextId()}";
-    _currentBlock!.AddOp(new MaxonScopeEnterOp(scopeVar, tag));
-    _mmScopeStack.Push(scopeVar);
   }
 
   private void PopScope() {
     var parentKeys = _scopeStack.Pop();
     var toRemove = _variables.Keys.Where(k => !parentKeys.Contains(k)).ToList();
-    // Emit scope exit instead of per-variable releases
-    if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock) && _mmScopeStack.Count > 0) {
-      var scopeVar = _mmScopeStack.Peek();
-      _currentBlock.AddOp(new MaxonScopeExitOp(scopeVar, "block_exit"));
-    }
-    if (_mmScopeStack.Count > 0) _mmScopeStack.Pop();
     foreach (var name in toRemove) {
       _variables.Remove(name);
-    }
-  }
-
-  /// Emits MaxonScopeExitOp for all scopes between the current innermost and the target scope.
-  /// Used before break/continue to clean up intermediate block scopes.
-  private void EmitReleaseForScopesAbove(string targetScopeVar) {
-    if (_currentBlock == null) return;
-    // Must exit innermost scopes first to free their allocations before outer scopes
-    var scopes = _mmScopeStack.ToArray();
-    foreach (var scope in scopes) {
-      if (scope == targetScopeVar) break;
-      _currentBlock.AddOp(new MaxonScopeExitOp(scope, "break_cleanup"));
-    }
-  }
-
-  /// Emits scope cleanup before a return statement.
-  /// For struct returns, moves the return value to the caller's scope first,
-  /// then exits all scopes (block scopes + function scope) innermost to outermost.
-  private void EmitBlockScopedReleaseBeforeReturn(string? returnVarName) {
-    if (_currentBlock == null) return;
-    // Move struct return value to caller's scope before exiting any scopes
-    if (returnVarName != null && _functionScopeVar != null) {
-      _currentBlock.AddOp(new MaxonMoveOp(returnVarName, _functionScopeVar, "return_move"));
-    }
-    // Must exit innermost scopes first to free their allocations before outer scopes
-    var scopes = _mmScopeStack.ToArray();
-    for (int i = 0; i < scopes.Length; i++) {
-      _currentBlock.AddOp(new MaxonScopeExitOp(scopes[i], "return_cleanup"));
     }
   }
 
@@ -5183,13 +5131,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       CheckReturnType(value, returnToken);
       value = CheckReturnRange(value, returnToken);
       // For heap-allocated returns (structs and associated-value enums),
-      // mm_move the return value to the caller's scope.
-      // Self-fields are children of the struct, not scope-owned — don't move them.
+      // incref the return value so it survives the caller.
+      // Self-fields are children of the struct, not independently owned — don't incref them.
       bool isAssocEnum = value is MaxonEnum me
         && _typeRegistry.TryGetValue(me.TypeName, out var retEnumTd)
         && retEnumTd is MlirUnionType { HasAssociatedValues: true };
       if (value is MaxonStruct || isAssocEnum) {
-        // Self and self-fields are borrowed references — don't mm_move them
+        // Self and self-fields are borrowed references — mark ReturnsSelf for downstream
         bool isSelfOrSelfField = returnVarName == "self"
           || (returnVarName != null
             && _variables.TryGetValue(returnVarName, out var retVarInfo)
@@ -5197,19 +5145,32 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (isSelfOrSelfField) {
           if (expr is ExprResult.VarRef { VarName: "self" })
             _currentFunction!.ReturnsSelf = true;
-          returnVarName = null;
-        } else if (returnVarName == null) {
-          var assignKind = isAssocEnum ? MaxonValueKind.Enum : MaxonValueKind.Struct;
-          returnVarName = $"__retval_{MlirContext.Current.NextId()}";
-          _currentBlock!.AddOp(new MaxonAssignOp(returnVarName, value, isDeclaration: true, isMutable: false, assignKind));
         }
-      } else {
-        returnVarName = null; // Only move heap-allocated values
       }
-      EmitBlockScopedReleaseBeforeReturn(returnVarName);
+      // Emit scope end — cleans all tracked vars except the returned one.
+      // When returning a managed value that was not directly named (e.g. `return foo()` or
+      // `return try foo() otherwise bar`), find its backing variable so scope cleanup skips it —
+      // the caller takes ownership of the returned reference.
+      HashSet<string>? keepVars = null;
+      if (returnVarName != null) {
+        keepVars = [returnVarName];
+      } else if (expr is ExprResult.Direct) {
+        // For `return foo()`: last op is a MaxonAssignOp for __call_tmp_X.
+        // For `return try foo() otherwise bar`: last op is a MaxonStructVarRefOp/__MaxonEnumVarRefOp for __try_result_X.
+        var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock.Operations[^1] : null;
+        string? backedByVar = lastOp switch {
+          MaxonStructVarRefOp sv => sv.VarName,
+          MaxonEnumVarRefOp ev => ev.VarName,
+          MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
+          _ => null
+        };
+        if (backedByVar != null && _variables.ContainsKey(backedByVar))
+          keepVars = [backedByVar];
+      }
+      _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), keepVars));
       _currentBlock!.AddOp(new MaxonReturnOp(value));
     } else {
-      EmitBlockScopedReleaseBeforeReturn(null);
+      _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()));
       _currentBlock!.AddOp(new MaxonReturnOp());
     }
   }
@@ -5286,8 +5247,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (errorValue is not MaxonEnum enumVal) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "throw requires an error enum value", throwToken.Line, throwToken.Column);
     }
-    // Clean up all scopes before throwing (no return value to move)
-    EmitBlockScopedReleaseBeforeReturn(null);
+    _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()));
     _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
   }
 
@@ -5400,14 +5360,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private (string errorFlagVar, string? resultVar) StoreTryValuesForCrossBlockAccess(MaxonTryCallOp tryCallOp) {
     var errorFlagVar = $"__try_error_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(errorFlagVar, tryCallOp.ErrorFlag, true, true, MaxonValueKind.Integer));
-    _variables[errorFlagVar] = new VarInfo(MaxonValueKind.Integer, true, tryCallOp.ErrorFlag, _currentBlock!, CurrentScopeVar, null);
+    _variables[errorFlagVar] = new VarInfo(MaxonValueKind.Integer, true, tryCallOp.ErrorFlag, _currentBlock!, null);
 
     string? resultVar = null;
     if (tryCallOp.Result != null) {
       resultVar = $"__try_result_{_blockCounter++}";
       var resultKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
       _currentBlock!.AddOp(new MaxonAssignOp(resultVar, tryCallOp.Result, true, true, resultKind));
-      _variables[resultVar] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, CurrentScopeVar, null);
+      _variables[resultVar] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, null);
     }
     return (errorFlagVar, resultVar);
   }
@@ -5466,12 +5426,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (errorFlagVar, resultVar) = StoreTryValuesForCrossBlockAccess(tryCallOp);
     EmitErrorFlagCheck(tryCallOp.ErrorFlag, propagateErrorBlock, continueBlock);
 
-    // Propagation block: must exit scopes before re-throwing so allocations are freed
+    // Propagation block: re-throw the error
     var propBlock = _currentFunction!.Body.AddBlock(propagateErrorBlock);
     _currentBlock = propBlock;
     var loadErrorOp = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
     _currentBlock!.AddOp(loadErrorOp);
-    EmitBlockScopedReleaseBeforeReturn(null);
+    _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()));
     _currentBlock!.AddOp(new MaxonReturnOp(loadErrorOp.Result, isErrorPropagation: true));
 
     return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
@@ -5519,9 +5479,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var toEnumOp = new MaxonErrorFlagToEnumOp(loadErrorOp.Result, enumType.Name, backingKind, enumType.HasAssociatedValues);
       _currentBlock!.AddOp(toEnumOp);
       _currentBlock!.AddOp(new MaxonAssignOp(bindingName, toEnumOp.Result, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
-      _variables[bindingName] = new VarInfo(MaxonValueKind.Enum, false, toEnumOp.Result, _currentBlock!, CurrentScopeVar, enumType.Name);
+      _variables[bindingName] = new VarInfo(MaxonValueKind.Enum, false, toEnumOp.Result, _currentBlock!, enumType.Name);
     } else {
-      _variables[bindingName] = new VarInfo(MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!, CurrentScopeVar, null);
+      _variables[bindingName] = new VarInfo(MaxonValueKind.Integer, false, loadErrorOp.Result, _currentBlock!, null);
     }
   }
 
@@ -5571,11 +5531,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // For non-struct results: the original eager pattern is fine (no refcounting involved)
     var defaultVarName = $"__try_default_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
-    _variables[defaultVarName] = new VarInfo(resultKind, true, defaultValue, _currentBlock!, CurrentScopeVar, structTypeName);
+    _variables[defaultVarName] = new VarInfo(resultKind, true, defaultValue, _currentBlock!, structTypeName);
 
     if (tryCallOp.Result != null) {
       _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, tryCallOp.Result, true, true, resultKind));
-      _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, CurrentScopeVar, structTypeName);
+      _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result, _currentBlock!, structTypeName);
     }
 
     var errorBlock = UniqueLabel("otherwise_default_error");
@@ -5658,7 +5618,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
 
     // Register variable from entry scope for later lookups
-    _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result ?? defaultValue, entryBlock, CurrentScopeVar, structTypeName);
+    _variables[resultVarName] = new VarInfo(resultKind, true, tryCallOp.Result ?? defaultValue, entryBlock, structTypeName);
 
     // Continue block: load result
     var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
@@ -5719,19 +5679,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (initValue is MaxonStruct structVal) {
       var kind = MaxonValueKind.Struct;
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, structVal.TypeName);
+      if (!isDiscard) {
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, structVal.TypeName);
+        // Fix temp ownership AFTER adding named var so __try_result_ ends up after it in the dict.
+        FixupTempOwnership();
+      }
     } else if (initValue is MaxonEnum enumVal) {
       var kind = MaxonValueKind.Enum;
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, enumVal.TypeName);
+      if (!isDiscard) {
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, enumVal.TypeName);
+        FixupTempOwnership();
+      }
     } else if (initValue is MaxonFunctionPtr) {
       var kind = MaxonValueKind.Function;
       var fnType = GetFunctionTypeFromLastOp();
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, FnTypeName: fnType);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, FnTypeName: fnType);
     } else {
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
@@ -5744,7 +5709,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       if (!isDiscard)
-        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, CurrentScopeVar, StructTypeName: rangedTypeName);
+        _variables[name] = new VarInfo(kind, isMutable, initValue, _currentBlock!, StructTypeName: rangedTypeName);
     }
   }
 
@@ -5789,7 +5754,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Assign the tuple to a temp variable
     var tempName = $"__destruct_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(tempName, initValue, true, false, MaxonValueKind.Struct));
-    _variables[tempName] = new VarInfo(MaxonValueKind.Struct, false, initValue, _currentBlock!, CurrentScopeVar, tupleType.Name);
+    _variables[tempName] = new VarInfo(MaxonValueKind.Struct, false, initValue, _currentBlock!, tupleType.Name);
 
     EmitTupleFieldBindings(tempName, tupleType, names, isMutable);
   }
@@ -5807,7 +5772,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var accessOp = new MaxonFieldAccessOp(refOp.Result, tupleType.Name, field.Name, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);
       _currentBlock!.AddOp(new MaxonAssignOp(names[i], accessOp.Result, isDeclaration: true, isMutable: isMutable, fieldKind));
-      _variables[names[i]] = new VarInfo(fieldKind, isMutable, accessOp.Result, _currentBlock!, CurrentScopeVar, fieldStructName);
+      _variables[names[i]] = new VarInfo(fieldKind, isMutable, accessOp.Result, _currentBlock!, fieldStructName);
     }
   }
 
@@ -5868,21 +5833,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var varInfo = ((ResolvedVar.Local)resolved).Info;
       var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
-      // When reassigning a managed variable from an inner scope, move it to the
-      // variable's declaring scope so it survives the current scope's exit.
-      // This applies to both fresh allocations and existing variable refs, because
-      // the referenced value may be in a scope that will be destroyed.
-      // Skip self-fields: the lowering handles those with mm_move under self.
-      if (varInfo.Kind == MaxonValueKind.Struct && !varInfo.IsSelfField && CurrentScopeVar != varInfo.DeclScopeVar) {
-        _currentBlock!.AddOp(new MaxonMoveOp(name, varInfo.DeclScopeVar, "reassign_move"));
-      }
       // Write back to union heap block when assigning to a mutable payload binding
       if (varInfo.PayloadBinding is { } pb) {
         _currentBlock!.AddOp(new MaxonEnumPayloadAssignOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex, newVal));
       }
       _variables[name] = fnType != null
-        ? new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.DeclScopeVar, FnTypeName: fnType)
-        : new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.DeclScopeVar, varInfo.StructTypeName, PayloadBinding: varInfo.PayloadBinding);
+        ? new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, FnTypeName: fnType)
+        : new VarInfo(varInfo.Kind, true, newVal, _currentBlock!, varInfo.StructTypeName, PayloadBinding: varInfo.PayloadBinding);
     }
   }
 
@@ -5940,6 +5897,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, structTypeName, fieldToken.Value, newValue));
+  }
+
+  // Returns true if fieldType directly or transitively embeds typeName by value (infinite-size cycle).
+  // Pointer-sized fields (i64, the storage type for heap-allocated structs) are not followed.
+  private bool ContainsTypeCycle(MlirType fieldType, string typeName) {
+    if (fieldType is not MlirStructType structType) return false;
+    if (structType.Name == typeName) return true;
+    // Recurse into non-heap-allocated (inline/value-type) struct fields only.
+    // Heap-allocated structs are stored as i64 pointers, so they cannot cause infinite size.
+    if (fieldType.IsHeapAllocated) return false;
+    if (!_typeRegistry.TryGetValue(structType.Name, out var resolved) || resolved is not MlirStructType resolvedStruct) return false;
+    foreach (var nested in resolvedStruct.Fields) {
+      if (ContainsTypeCycle(nested.Type, typeName)) return true;
+    }
+    return false;
   }
 
   // Checks if the last op emitted is a field access on the same variable and field as the LHS
@@ -6604,6 +6576,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
+      case "remove": {
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var op = new MaxonManagedMemRemoveOp(selfValue, index, elementKind) {
+          TypeParamName = typeParamName
+        };
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
       case "set": {
         TrySkipArgLabel();
         var index = ResolveExprValue(ParseExpression());
@@ -6889,8 +6872,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Create and parse the then block
     var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
     _currentBlock = thenBlock;
+    var thenOuterScope = _variables.Keys.ToHashSet();
     PushScope("if_then");
     ParseBodyUntilEnd();
+    var thenInnerScope = _variables.Keys.Where(k => !thenOuterScope.Contains(k)).ToList();
     PopScope();
     var thenEndBlock = _currentBlock; // may differ from thenBlock after nested if/else
 
@@ -6901,6 +6886,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     MlirBlock<MaxonOp>? elseBlock = null;
     MlirBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
+    List<string>? elseInnerScope = null;
     if (Check(TokenType.Else)) {
       Advance(); // consume 'else'
       if (Check(TokenType.If)) {
@@ -6908,8 +6894,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         elseLabel = $"{thenLabel}.elseif";
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
+        var elseIfOuterScope = _variables.Keys.ToHashSet();
         PushScope("else_if");
         ParseIf();
+        elseInnerScope = _variables.Keys.Where(k => !elseIfOuterScope.Contains(k)).ToList();
         PopScope();
         elseEndBlock = _currentBlock;
       } else {
@@ -6919,15 +6907,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
         _currentBlock = elseBlock;
+        var elseOuterScope = _variables.Keys.ToHashSet();
         PushScope("else");
         ParseBodyUntilEnd();
+        elseInnerScope = _variables.Keys.Where(k => !elseOuterScope.Contains(k)).ToList();
         PopScope();
         elseEndBlock = _currentBlock;
         ExpectEndLabel(elseSourceLabel);
       }
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, elseLabel, elseBlock, elseEndBlock);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, thenInnerScope, elseLabel, elseBlock, elseEndBlock, elseInnerScope);
   }
 
   /// <summary>
@@ -6936,7 +6926,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// thenEndBlock/elseEndBlock are the final blocks after parsing each branch body
   /// (may differ from initial blocks due to nested if/else creating merge blocks).
   /// </summary>
-  private void EmitConditionalBranch(MlirBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, MlirBlock<MaxonOp> thenBlock, MlirBlock<MaxonOp>? thenEndBlock, string? elseLabel, MlirBlock<MaxonOp>? elseBlock, MlirBlock<MaxonOp>? elseEndBlock) {
+  private void EmitConditionalBranch(MlirBlock<MaxonOp> entryBlock, MaxonValue condition, string thenLabel, MlirBlock<MaxonOp> thenBlock, MlirBlock<MaxonOp>? thenEndBlock, List<string>? thenInnerScope, string? elseLabel, MlirBlock<MaxonOp>? elseBlock, MlirBlock<MaxonOp>? elseEndBlock, List<string>? elseInnerScope) {
     // Use the end blocks for merge decisions — the end block is where control flow
     // actually is after parsing each branch (may be a merge block from nested if/else)
     bool thenTerminated = thenEndBlock == null || BlockEndsWithTerminator(thenEndBlock);
@@ -6949,10 +6939,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var mergeLabel = $"{thenLabel}.merge";
       var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
 
-      if (thenNeedsMerge)
-        (thenEndBlock ?? thenBlock).AddOp(new MaxonBrOp(mergeLabel));
-      if (elseNeedsMerge)
-        (elseEndBlock ?? elseBlock!).AddOp(new MaxonBrOp(mergeLabel));
+      if (thenNeedsMerge) {
+        var tb = thenEndBlock ?? thenBlock;
+        if (thenInnerScope != null) tb.AddOp(new MaxonScopeEndOp(thenInnerScope));
+        tb.AddOp(new MaxonBrOp(mergeLabel));
+      }
+      if (elseNeedsMerge) {
+        var eb = elseEndBlock ?? elseBlock!;
+        if (elseInnerScope != null) eb.AddOp(new MaxonScopeEndOp(elseInnerScope));
+        eb.AddOp(new MaxonBrOp(mergeLabel));
+      }
 
       entryBlock.AddOp(new MaxonCondBrOp(condition, thenLabel, elseLabel ?? mergeLabel));
       _currentBlock = mergeBlock;
@@ -7034,6 +7030,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Create the then-block
     var thenBlock = _currentFunction!.Body.AddBlock(thenLabel);
     _currentBlock = thenBlock;
+    var ifTryThenOuterScope = _variables.Keys.ToHashSet();
     PushScope("if_try");
 
     // For binding form, load the result and create a let-binding inside the then-block
@@ -7054,10 +7051,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       _currentBlock!.AddOp(new MaxonAssignOp(bindingName, loadedValue, isDeclaration: true, isMutable: false, resultKind));
-      _variables[bindingName] = new VarInfo(resultKind, false, loadedValue, _currentBlock!, CurrentScopeVar, bindingStructTypeName);
+      _variables[bindingName] = new VarInfo(resultKind, false, loadedValue, _currentBlock!, bindingStructTypeName);
     }
 
     ParseBodyUntilEnd();
+    var ifTryThenInnerScope = _variables.Keys.Where(k => !ifTryThenOuterScope.Contains(k)).ToList();
     PopScope();
     var thenEndBlock = _currentBlock;
     ExpectEndLabel(thenSourceLabel);
@@ -7066,6 +7064,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     MlirBlock<MaxonOp>? elseBlock = null;
     MlirBlock<MaxonOp>? elseEndBlock = null;
     string? elseLabel = null;
+    List<string>? ifTryElseInnerScope = null;
     if (Check(TokenType.Else)) {
       Advance(); // consume 'else'
 
@@ -7083,6 +7082,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       elseBlock = _currentFunction!.Body.AddBlock(elseLabel);
       _currentBlock = elseBlock;
+      var ifTryElseOuterScope = _variables.Keys.ToHashSet();
       PushScope("if_try_else");
 
       // If error binding requested, emit a typed error binding in the else block
@@ -7091,12 +7091,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       ParseBodyUntilEnd();
+      ifTryElseInnerScope = _variables.Keys.Where(k => !ifTryElseOuterScope.Contains(k)).ToList();
       PopScope();
       elseEndBlock = _currentBlock;
       ExpectEndLabel(elseSourceLabel);
     }
 
-    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, elseLabel, elseBlock, elseEndBlock);
+    EmitConditionalBranch(entryBlock, condition, thenLabel, thenBlock, thenEndBlock, ifTryThenInnerScope, elseLabel, elseBlock, elseEndBlock, ifTryElseInnerScope);
   }
 
   private void ParseWhile() {
@@ -7142,9 +7143,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Create and parse the body block
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
+    var loopOuterScope = _variables.Keys.ToHashSet();
     PushScope("while");
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek()));
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, loopOuterScope));
     ParseBodyUntilEnd();
+    var loopInnerScope = _variables.Keys.Where(k => !loopOuterScope.Contains(k)).ToList();
     PopScope();
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
@@ -7153,6 +7156,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // _currentBlock may differ from bodyBlock (e.g. if/else merge block)
     // _currentBlock can be null if all paths in the body terminated
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonScopeEndOp(loopInnerScope));
       _currentBlock.AddOp(new MaxonBrOp(headerLabel));
     }
 
@@ -7314,7 +7318,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Copy the iterable into a mutable iterator variable (heap-pointer semantics: shares backing data)
     var iterVarName = $"__for_iter_{_blockCounter}";
     _currentBlock!.AddOp(new MaxonAssignOp(iterVarName, iterableValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
-    _variables[iterVarName] = new VarInfo(MaxonValueKind.Struct, true, iterableValue, _currentBlock!, CurrentScopeVar, iterableTypeName);
+    _variables[iterVarName] = new VarInfo(MaxonValueKind.Struct, true, iterableValue, _currentBlock!, iterableTypeName);
 
     // Call createIterator() on the copy to zero iteration state for a fresh traversal.
     // createIterator() is void — it mutates the iterator in place via heap-pointer semantics.
@@ -7342,13 +7346,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Store error flag and result for cross-block access
     var errorFlagVar = $"__try_error_{_blockCounter++}";
     headerBlock.AddOp(new MaxonAssignOp(errorFlagVar, tryCallOp.ErrorFlag, true, true, MaxonValueKind.Integer));
-    _variables[errorFlagVar] = new VarInfo(MaxonValueKind.Integer, true, tryCallOp.ErrorFlag, headerBlock, CurrentScopeVar, null);
+    _variables[errorFlagVar] = new VarInfo(MaxonValueKind.Integer, true, tryCallOp.ErrorFlag, headerBlock, null);
 
     string? resultVar = null;
     if (tryCallOp.Result != null) {
       resultVar = $"__forin_result_{_blockCounter++}";
       headerBlock.AddOp(new MaxonAssignOp(resultVar, tryCallOp.Result, true, true, elementKind));
-      _variables[resultVar] = new VarInfo(elementKind, true, tryCallOp.Result, headerBlock, CurrentScopeVar, elementStructTypeName);
+      _variables[resultVar] = new VarInfo(elementKind, true, tryCallOp.Result, headerBlock, elementStructTypeName);
     }
 
     // Check error flag: zero means success → continue to body, non-zero → exit
@@ -7362,14 +7366,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Body block: load the result as the loop variable
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
+    var forInOuterScope = _variables.Keys.ToHashSet();
     PushScope("for_in");
-    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek(),
+    _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, forInOuterScope,
       iterVarName, nextMethodName, elementKind, elementStructTypeName, iterableTypeName));
 
     if (resultVar != null) {
       var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
       _currentBlock!.AddOp(new MaxonAssignOp(itemName, loadedValue, isDeclaration: true, isMutable: false, elementKind));
-      _variables[itemName] = new VarInfo(elementKind, false, loadedValue, bodyBlock, CurrentScopeVar, elementStructTypeName);
+      _variables[itemName] = new VarInfo(elementKind, false, loadedValue, bodyBlock, elementStructTypeName);
 
       // Destructure tuple into individual variables
       if (destructureNames != null) {
@@ -7387,12 +7392,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Parse the body
     ParseBodyUntilEnd();
+    var forInInnerScope = _variables.Keys.Where(k => !forInOuterScope.Contains(k)).ToList();
     PopScope();
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
     // Branch back to header (skip if all paths in the body terminated)
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonScopeEndOp(forInInnerScope));
       _currentBlock.AddOp(new MaxonBrOp(headerLabel));
     }
 
@@ -7437,12 +7444,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Store end bound for comparison in header
     var endVarName = $"__range_end_{_blockCounter}";
     _currentBlock!.AddOp(new MaxonAssignOp(endVarName, endValue, isDeclaration: true, isMutable: false, elementKind));
-    _variables[endVarName] = new VarInfo(elementKind, false, endValue, _currentBlock!, CurrentScopeVar, structTypeName);
+    _variables[endVarName] = new VarInfo(elementKind, false, endValue, _currentBlock!, structTypeName);
 
     // Create mutable counter initialized to start
     var counterVarName = $"__range_current_{_blockCounter}";
     _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, startValue, isDeclaration: true, isMutable: true, elementKind));
-    _variables[counterVarName] = new VarInfo(elementKind, true, startValue, _currentBlock!, CurrentScopeVar, structTypeName);
+    _variables[counterVarName] = new VarInfo(elementKind, true, startValue, _currentBlock!, structTypeName);
 
     // Branch to header
     _currentBlock!.AddOp(new MaxonBrOp(headerLabel));
@@ -7474,6 +7481,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Body block
     var bodyBlock = _currentFunction!.Body.AddBlock(bodyLabel);
     _currentBlock = bodyBlock;
+    var rangeOuterScope = _variables.Keys.ToHashSet();
     PushScope("for_range");
 
     // Increment happens in a separate block after the body so that the loop
@@ -7481,22 +7489,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // continue jumps to the increment block (not the header) so the counter
     // still advances.
     var incrLabel = $"{loopLabel}.incr";
-    _loopStack.Push(new LoopContext(loopSourceLabel, incrLabel, exitLabel, [.. _variables.Keys], _mmScopeStack.Peek(),
+    _loopStack.Push(new LoopContext(loopSourceLabel, incrLabel, exitLabel, rangeOuterScope,
         RangeCounterVarName: counterVarName, RangeElementKind: elementKind, RangeStructTypeName: structTypeName));
 
     // Bind loop variable: let i = __range_current
     var loadedCurrent = EmitVarRefOp(counterVarName, elementKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(itemName, loadedCurrent, isDeclaration: true, isMutable: false, elementKind));
-    _variables[itemName] = new VarInfo(elementKind, false, loadedCurrent, bodyBlock, CurrentScopeVar, structTypeName);
+    _variables[itemName] = new VarInfo(elementKind, false, loadedCurrent, bodyBlock, structTypeName);
 
     // Parse the body statements
     ParseBodyUntilEnd();
+    var rangeInnerScope = _variables.Keys.Where(k => !rangeOuterScope.Contains(k)).ToList();
     PopScope();
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
     // Branch to increment block (unless body ended with a terminator)
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
+      _currentBlock.AddOp(new MaxonScopeEndOp(rangeInnerScope));
       _currentBlock.AddOp(new MaxonBrOp(incrLabel));
     }
 
@@ -7517,21 +7527,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private void ParseBreak() {
     var token = Advance(); // consume 'break'
-    var (exitLabel, scopeVar, isLoop) = ResolveBreakTarget(token);
-    EmitReleaseForScopesAbove(scopeVar);
-    // For loops, also exit the loop body scope since break jumps past it
-    // For match, scopeVar is the parent scope (not match-owned), so don't exit it
-    if (isLoop)
-      _currentBlock!.AddOp(new MaxonScopeExitOp(scopeVar, "break_cleanup"));
+    var (exitLabel, scopeVars, _) = ResolveBreakTarget(token);
+    var breakInnerScope = _variables.Keys.Where(k => !scopeVars.Contains(k)).ToList();
+    _currentBlock!.AddOp(new MaxonScopeEndOp(breakInnerScope));
     _currentBlock!.AddOp(new MaxonBrOp(exitLabel));
   }
 
   private void ParseContinue() {
     var token = Advance(); // consume 'continue'
     var loop = ResolveLoopTarget(token);
-    EmitReleaseForScopesAbove(loop.ScopeVar);
-    // Also exit the loop body scope since header is before scope_enter
-    _currentBlock!.AddOp(new MaxonScopeExitOp(loop.ScopeVar, "continue_cleanup"));
+    var continueInnerScope = _variables.Keys.Where(k => !loop.ScopeVars.Contains(k)).ToList();
+    _currentBlock!.AddOp(new MaxonScopeEndOp(continueInnerScope));
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
@@ -7557,10 +7563,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         "'skip' can only be used inside a for loop", token.Line, token.Column);
     }
 
-    // Exit scopes above the loop body scope (handles nested if/match/etc)
-    EmitReleaseForScopesAbove(loop.ScopeVar);
-    _currentBlock!.AddOp(new MaxonScopeExitOp(loop.ScopeVar, "skip_cleanup"));
-
     // Generate the skip loop: call next() n times, exiting the for loop if exhausted
     var skipLabel = UniqueLabel("skip");
     var skipHeaderLabel = $"{skipLabel}.header";
@@ -7570,7 +7572,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Store skip count in a mutable counter variable
     var skipCounterVar = $"__skip_counter_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(skipCounterVar, skipCountValue, isDeclaration: true, isMutable: true, MaxonValueKind.Integer));
-    _variables[skipCounterVar] = new VarInfo(MaxonValueKind.Integer, true, skipCountValue, _currentBlock!, CurrentScopeVar, null);
+    _variables[skipCounterVar] = new VarInfo(MaxonValueKind.Integer, true, skipCountValue, _currentBlock!, null);
 
     _currentBlock!.AddOp(new MaxonBrOp(skipHeaderLabel));
 
@@ -7589,11 +7591,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var skipBodyBlock = _currentFunction!.Body.AddBlock(skipBodyLabel);
     _currentBlock = skipBodyBlock;
 
-    // Scope to track and release the discarded next() result (e.g. tuples from enumerated())
-    var skipScopeVar = $"__scope_{MlirContext.Current.NextId()}";
-    skipBodyBlock.AddOp(new MaxonScopeEnterOp(skipScopeVar, "skip_discard"));
-    _mmScopeStack.Push(skipScopeVar);
-
     // Load the iterator struct ref
     var iterRef = new MaxonStructVarRefOp(loop.IterVarName, loop.IterableTypeName!);
     skipBodyBlock.AddOp(iterRef);
@@ -7602,16 +7599,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var tryCallOp = new MaxonTryCallOp(loop.NextMethodName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
     skipBodyBlock.AddOp(tryCallOp);
 
-    // Store result so the scope can track and release managed allocations
+    // Store discarded result
     if (tryCallOp.Result != null) {
       var discardVar = $"__skip_discard_{_blockCounter++}";
       skipBodyBlock.AddOp(new MaxonAssignOp(discardVar, tryCallOp.Result, true, true, loop.ElementKind!.Value));
-      _variables[discardVar] = new VarInfo(loop.ElementKind!.Value, true, tryCallOp.Result, skipBodyBlock, skipScopeVar, loop.ElementStructTypeName);
+      _variables[discardVar] = new VarInfo(loop.ElementKind!.Value, true, tryCallOp.Result, skipBodyBlock, loop.ElementStructTypeName);
     }
-
-    // Release the discarded result
-    skipBodyBlock.AddOp(new MaxonScopeExitOp(skipScopeVar, "skip_discard_exit"));
-    _mmScopeStack.Pop();
 
     // Check if iterator is exhausted
     var zeroLit2 = new MaxonLiteralOp(0L);
@@ -7638,15 +7631,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Skip done: branch to the loop header (like continue)
     var skipDoneBlock = _currentFunction!.Body.AddBlock(skipDoneLabel);
     _currentBlock = skipDoneBlock;
+    var skipInnerScope = _variables.Keys.Where(k => !loop.ScopeVars.Contains(k)).ToList();
+    skipDoneBlock.AddOp(new MaxonScopeEndOp(skipInnerScope));
     skipDoneBlock.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
   private void EmitRangeSkip(Token token, MaxonValue skipCountValue, LoopContext loop) {
-    EmitReleaseForScopesAbove(loop.ScopeVar);
-    _currentBlock!.AddOp(new MaxonScopeExitOp(loop.ScopeVar, "skip_cleanup"));
-
     EmitRangeCounterAdvance(loop.RangeCounterVarName!, loop.RangeElementKind!.Value, loop.RangeStructTypeName, skipCountValue, token);
 
+    var rangeSkipInnerScope = _variables.Keys.Where(k => !loop.ScopeVars.Contains(k)).ToList();
+    _currentBlock!.AddOp(new MaxonScopeEndOp(rangeSkipInnerScope));
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
@@ -7659,9 +7653,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var advCall = CreateFunctionCall(advToken, [currentVal, stepValue]);
       _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, advCall.Result!, isDeclaration: false, isMutable: true, elementKind));
       var counterInfo = _variables[counterVarName];
-      if (CurrentScopeVar != counterInfo.DeclScopeVar) {
-        _currentBlock!.AddOp(new MaxonMoveOp(counterVarName, counterInfo.DeclScopeVar, "range_counter_move"));
-      }
     } else {
       var addOp = new MaxonBinOp(MaxonBinOperator.Add, currentVal, stepValue, elementKind);
       _currentBlock!.AddOp(addOp);
@@ -7669,14 +7660,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
-  private (string ExitLabel, string ScopeVar, bool IsLoop) ResolveBreakTarget(Token keyword) {
+  private (string ExitLabel, HashSet<string> ScopeVars, bool IsLoop) ResolveBreakTarget(Token keyword) {
     if (_matchStack.Count == 0 && _loopStack.Count == 0) {
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"'{keyword.Value}' can only be used inside a loop or match", keyword.Line, keyword.Column);
     }
     if (Check(TokenType.CharacterLiteral)) {
       var labelToken = Advance();
       foreach (var ctx in _matchStack) {
-        if (ctx.SourceLabel == labelToken.Value) return (ctx.MergeLabel, ctx.ScopeVar, false);
+        if (ctx.SourceLabel == labelToken.Value) return (ctx.MergeLabel, ctx.ScopeVars, false);
       }
       foreach (var ctx in _loopStack) {
         if (ctx.SourceLabel == labelToken.Value) {
@@ -7686,15 +7677,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             throw new CompileError(ErrorCode.ParserRedundantLoopLabel,
               $"'break' with label '{labelToken.Value}' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop",
               labelToken.Line, labelToken.Column);
-          return (ctx.ExitLabel, ctx.ScopeVar, true);
+          return (ctx.ExitLabel, ctx.ScopeVars, true);
         }
       }
       throw new CompileError(ErrorCode.ParserUnexpectedToken, $"No enclosing loop or match with label '{labelToken.Value}'", labelToken.Line, labelToken.Column);
     }
     // Unlabeled break: prefer match if we're inside one, otherwise loop
-    if (_matchStack.Count > 0) { var m = _matchStack.Peek(); return (m.MergeLabel, m.ScopeVar, false); }
+    if (_matchStack.Count > 0) { var m = _matchStack.Peek(); return (m.MergeLabel, m.ScopeVars, false); }
     var l = _loopStack.Peek();
-    return (l.ExitLabel, l.ScopeVar, true);
+    return (l.ExitLabel, l.ScopeVars, true);
   }
 
   private LoopContext ResolveLoopTarget(Token keyword) {
@@ -8197,7 +8188,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
         _currentBlock!.AddOp(new MaxonAssignOp(bindingName, payloadOp.Result,
           isDeclaration: true, isMutable: scrutineeMutable, bindingKind));
-        _variables[bindingName] = new VarInfo(bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, CurrentScopeVar, StructTypeName: structTypeName, PayloadBinding: payloadBinding);
+        _variables[bindingName] = new VarInfo(bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, StructTypeName: structTypeName, PayloadBinding: payloadBinding);
       }
     }
   }
@@ -8402,7 +8393,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (compareVal, compareKind, enumTypeName, enumType, structTypeName) = ResolveScrutinee(scrutineeVal);
     if (origEnumTempName != null) {
       _currentBlock!.AddOp(new MaxonAssignOp(origEnumTempName, scrutineeVal, isDeclaration: true, isMutable: false, MaxonValueKind.Enum));
-      _variables[origEnumTempName] = new VarInfo(MaxonValueKind.Enum, false, scrutineeVal, _currentBlock!, CurrentScopeVar);
+      _variables[origEnumTempName] = new VarInfo(MaxonValueKind.Enum, false, scrutineeVal, _currentBlock!);
     }
     return (origEnumTempName, compareVal, compareKind, enumTypeName, enumType, structTypeName);
   }
@@ -8438,7 +8429,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void ParseDefaultThrowsCase(
       Token defaultToken, string matchLabel, int caseIndex,
       List<MlirBlock<MaxonOp>?> cmpBlocks, List<MlirBlock<MaxonOp>> caseBlocks,
-      List<bool> caseIsDefault, List<bool>? caseFallthrough) {
+      List<bool> caseIsDefault, List<bool>? caseFallthrough, List<List<string>>? caseOuterScopes) {
     Advance(); // consume 'throws'
     var throwLabel = $"{matchLabel}.case{caseIndex}";
     cmpBlocks.Add(null);
@@ -8449,10 +8440,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (errorValue is not MaxonEnum enumVal) {
       throw new CompileError(ErrorCode.SemanticTypeMismatch, "throws requires an error enum value", defaultToken.Line, defaultToken.Column);
     }
+    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()));
     _currentBlock.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
     caseBlocks.Add(throwBlock);
     caseIsDefault.Add(true);
     caseFallthrough?.Add(false);
+    caseOuterScopes?.Add([]);
   }
 
   /// <summary>
@@ -8544,12 +8537,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Store scrutinee in a temp var so comparison blocks can reference it across blocks
     var scrutTempName = $"__match_{matchLabel}";
     entryBlock.AddOp(new MaxonAssignOp(scrutTempName, compareVal, isDeclaration: true, isMutable: false, compareKind));
-    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock, CurrentScopeVar, StructTypeName: structTypeName);
+    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock, StructTypeName: structTypeName);
 
     var mergeLabel = $"{matchLabel}.merge";
     var caseBlocks = new List<MlirBlock<MaxonOp>>();
     var caseIsDefault = new List<bool>();
     var caseFallthrough = new List<bool>();
+    var caseOuterScopes = new List<List<string>>();
     // One entry per case: non-default cases have their comparison block, default has null
     var cmpBlocks = new List<MlirBlock<MaxonOp>?>();
     var seenPatternKeys = new HashSet<string>();
@@ -8557,7 +8551,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     bool hasDefault = false;
     bool defaultSeen = false;
 
-    _matchStack.Push(new MatchContext(sourceLabel, mergeLabel, [.. _variables.Keys], _mmScopeStack.Peek()));
+    _matchStack.Push(new MatchContext(sourceLabel, mergeLabel, [.. _variables.Keys]));
     int caseIndex = 0;
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
@@ -8582,7 +8576,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               $"'default' in a match on union '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
               defaultToken.Line, defaultToken.Column);
           }
-          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough);
+          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
           caseIndex++;
           SkipNewlines();
           continue;
@@ -8617,6 +8611,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
 
       _currentBlock = caseBodyBlock;
+      var caseOuterScope = _variables.Keys.ToHashSet();
       PushScope("match_case");
 
       // Emit payload bindings for associated-value enum patterns
@@ -8626,6 +8621,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       bool caseHasReturn = Check(TokenType.Return);
       ParseStatement();
+      var caseInnerScope = _variables.Keys.Where(k => !caseOuterScope.Contains(k)).ToList();
       PopScope();
 
       bool hasFallthrough = false;
@@ -8643,6 +8639,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       caseBlocks.Add(caseBodyBlock);
       caseIsDefault.Add(isDefault);
       caseFallthrough.Add(hasFallthrough);
+      caseOuterScopes.Add(caseInnerScope);
 
       caseIndex++;
       SkipNewlines();
@@ -8663,6 +8660,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var caseBlock = caseBlocks[i];
       if (!BlockEndsWithTerminator(caseBlock)) {
         allTerminate = false;
+        caseBlock.AddOp(new MaxonScopeEndOp(caseOuterScopes[i]));
         if (caseFallthrough[i] && i + 1 < caseBlocks.Count) {
           caseBlock.AddOp(new MaxonBrOp($"{matchLabel}.case{i + 1}"));
         } else {
@@ -8704,12 +8702,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var zeroLit = new MaxonLiteralOp(0L);
     entryBlock.AddOp(zeroLit);
     entryBlock.AddOp(new MaxonAssignOp(resultVarName, zeroLit.Result, isDeclaration: true, isMutable: true, resultKind));
-    _variables[resultVarName] = new VarInfo(resultKind, true, zeroLit.Result, entryBlock, CurrentScopeVar);
+    _variables[resultVarName] = new VarInfo(resultKind, true, zeroLit.Result, entryBlock);
 
     // Store scrutinee for cross-block access
     var scrutTempName = $"__match_{matchLabel}";
     entryBlock.AddOp(new MaxonAssignOp(scrutTempName, compareVal, isDeclaration: true, isMutable: false, compareKind));
-    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock, CurrentScopeVar, StructTypeName: structTypeName);
+    _variables[scrutTempName] = new VarInfo(compareKind, false, compareVal, entryBlock, StructTypeName: structTypeName);
 
     var mergeLabel = $"{matchLabel}.merge";
     var caseBlocks = new List<MlirBlock<MaxonOp>>();
@@ -8745,7 +8743,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               $"'default' in a match on union '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
               defaultToken.Line, defaultToken.Column);
           }
-          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null);
+          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
           caseIndex++;
           SkipNewlines();
           continue;
@@ -8791,7 +8789,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // Update variable info to reflect the actual result type (may differ from initial Integer placeholder)
       resultStructTypeName = caseValue is MaxonEnum me ? me.TypeName
         : caseValue is MaxonStruct ms ? ms.TypeName : null;
-      _variables[resultVarName] = new VarInfo(resultKind, true, caseValue, entryBlock, CurrentScopeVar, StructTypeName: resultStructTypeName);
+      _variables[resultVarName] = new VarInfo(resultKind, true, caseValue, entryBlock, StructTypeName: resultStructTypeName);
 
       if (Check(TokenType.And)) {
         throw new CompileError(ErrorCode.ParserUnexpectedToken,
@@ -9132,6 +9130,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.StringLiteral) || Check(TokenType.StringInterp)) {
       var token = Advance();
       var result = EmitStringLiteralWithInterpolation(token);
+      EmitLiteralTempAssign((MaxonStruct)result);
       if (Check(TokenType.Dot)) {
         return ParseFieldAccessChain(new ExprResult.Direct(result), token);
       }
@@ -9141,6 +9140,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.ByteStringLiteral)) {
       var token = Advance();
       var result = EmitByteStringLiteral(token);
+      EmitLiteralTempAssign((MaxonStruct)result);
       if (Check(TokenType.Dot)) {
         return ParseFieldAccessChain(new ExprResult.Direct(result), token);
       }
@@ -9150,6 +9150,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (Check(TokenType.CharacterLiteral)) {
       var token = Advance();
       var result = EmitCharLiteral(token);
+      EmitLiteralTempAssign((MaxonStruct)result);
       if (Check(TokenType.Dot)) {
         return ParseFieldAccessChain(new ExprResult.Direct(result), token);
       }
@@ -9240,6 +9241,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               Expect(TokenType.RightParen);
             }
             var constructOp = new MaxonEnumConstructOp(token.Value, kwMemberName, kwEnumCase.Ordinal, args);
+            if (_sourceFilePath != null)
+              constructOp.SourceLocation = $"{Path.GetFileName(_sourceFilePath)}:{token.Line}";
             _currentBlock!.AddOp(constructOp);
             return ParseFieldAccessChain(new ExprResult.Direct(constructOp.Result), token);
           }
@@ -9362,6 +9365,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               }
               // Cases with no associated values and no parens: just tag, no payload
               var constructOp = new MaxonEnumConstructOp(token.Value, memberName, enumCase.Ordinal, args);
+              if (_sourceFilePath != null)
+                constructOp.SourceLocation = $"{Path.GetFileName(_sourceFilePath)}:{token.Line}";
               _currentBlock!.AddOp(constructOp);
               return ParseFieldAccessChain(new ExprResult.Direct(constructOp.Result), token);
             }
@@ -9866,7 +9871,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var tempName = $"__interp_tostr_{callOp.Result!.Id}";
           var assignOp = new MaxonAssignOp(tempName, callOp.Result, true, false, resultKind ?? MaxonValueKind.Struct);
           _currentBlock!.AddOp(assignOp);
-          _variables[tempName] = new VarInfo(resultKind ?? MaxonValueKind.Struct, false, callOp.Result, _currentBlock!, CurrentScopeVar, resultStructTypeName);
+          _variables[tempName] = new VarInfo(resultKind ?? MaxonValueKind.Struct, false, callOp.Result, _currentBlock!, resultStructTypeName);
           exprValue = callOp.Result;
         }
 
@@ -10413,7 +10418,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Store value into temp variable for cross-block access
     _currentBlock!.AddOp(new MaxonAssignOp(tempVarName, value, true, true, kind));
-    _variables[tempVarName] = new VarInfo(kind, true, value, _currentBlock!, CurrentScopeVar, null);
+    _variables[tempVarName] = new VarInfo(kind, true, value, _currentBlock!, null);
 
     // For comparisons, use the appropriate float kind or Integer for int/byte
     var cmpKind = kind is MaxonValueKind.Float or MaxonValueKind.Float32 ? kind : MaxonValueKind.Integer;
@@ -10477,6 +10482,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private ExprResult.Direct ParseStructLiteral(string typeName) {
+    var literalLine = Current().Line;
     Advance(); // consume '{'
 
     // Builtin Chain creation: emit MaxonChainCreateOp for zero-init Chain literals
@@ -10652,6 +10658,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       structLiteral.ArrayLiteralCount = arrayLiteralCount;
       structLiteral.SkipZeroInit = skipZeroInit;
     }
+    if (_sourceFilePath != null)
+      structLiteral.SourceLocation = $"{Path.GetFileName(_sourceFilePath)}:{literalLine}";
     _currentBlock!.AddOp(structLiteral);
     return new ExprResult.Direct(structLiteral.Result);
   }
@@ -11800,7 +11808,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // Insert store in the original block, right after the arg was evaluated
       var storeOp = new MaxonAssignOp(pinName, args[i]!, true, true, kind);
       argLocations[i].block!.Operations.Insert(argLocations[i].opIndex, storeOp);
-      _variables[pinName] = new VarInfo(kind, true, args[i]!, argLocations[i].block!, CurrentScopeVar, null);
+      _variables[pinName] = new VarInfo(kind, true, args[i]!, argLocations[i].block!, null);
       // Reload in the current (final) block
       var reloadOp = new MaxonVarRefOp(pinName, kind);
       finalBlock.AddOp(reloadOp);
@@ -12189,6 +12197,61 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Returns the variables to clean at scope end, with user-declared variables listed before
+  /// internal temp variables (__call_tmp_, __try_result_). This ensures user vars are decreffed
+  /// first, which matches the expected cleanup order in specs.
+  /// </summary>
+  private List<string> GetScopeEndVars() {
+    var userVars = new List<string>();
+    var tempVars = new List<string>();
+    foreach (var k in _variables.Keys) {
+      if (k.StartsWith("__call_tmp_") || k.StartsWith("__try_result_") || k.StartsWith("__lit_tmp_"))
+        tempVars.Add(k);
+      else
+        userVars.Add(k);
+    }
+    var result = new List<string>(userVars.Count + tempVars.Count);
+    result.AddRange(userVars);
+    result.AddRange(tempVars);
+    return result;
+  }
+
+  /// <summary>
+  /// When a named variable takes ownership of a value previously held by a __call_tmp_ or
+  /// __try_result_ variable, fix up _variables to prevent double-decref or incorrect
+  /// scope_end ordering.
+  ///
+  /// Called AFTER adding the named variable to _variables and its assign op to the block.
+  ///
+  /// For __call_tmp_: remove it entirely — the named var is the sole owner.
+  /// For __try_result_: re-insert it at the end (after the named var) so the named var is
+  ///   cleaned first at scope end (GetScopeEndVars orders user vars before temps anyway).
+  /// </summary>
+  private void FixupTempOwnership() {
+    // The last op is the named var's assign — look one op back for the backing temp.
+    var ops = _currentBlock!.Operations;
+    var prevOp = ops.Count >= 2 ? ops[^2] : null;
+    string? backedByVar = prevOp switch {
+      MaxonStructVarRefOp sv => sv.VarName,
+      MaxonEnumVarRefOp ev => ev.VarName,
+      MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
+      MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__lit_tmp_") => av.VarName,
+      _ => null
+    };
+    if (backedByVar == null || !_variables.ContainsKey(backedByVar)) return;
+    if (backedByVar.StartsWith("__call_tmp_") || backedByVar.StartsWith("__lit_tmp_")) {
+      // ownership fully transferred to named var — remove the temp entirely.
+      _variables.Remove(backedByVar);
+    } else if (backedByVar.StartsWith("__try_result_")) {
+      // __try_result_ must stay (inner scope_end already lists it), but re-insert it
+      // AFTER the named variable in _variables so scope_end cleans the named variable first.
+      var info = _variables[backedByVar];
+      _variables.Remove(backedByVar);
+      _variables[backedByVar] = info;
+    }
+  }
+
+  /// <summary>
   /// Assigns a struct call return to a temp variable so refcounting can track the intermediate.
   /// Without this, chained method calls like a.foo().bar() create untracked struct references.
   /// </summary>
@@ -12196,7 +12259,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var tempName = $"__call_tmp_{callOp.Result!.Id}";
     var assignOp = new MaxonAssignOp(tempName, callOp.Result, true, false, resultKind);
     _currentBlock!.AddOp(assignOp);
-    _variables[tempName] = new VarInfo(resultKind, false, callOp.Result, _currentBlock!, CurrentScopeVar, resultStructTypeName);
+    _variables[tempName] = new VarInfo(resultKind, false, callOp.Result, _currentBlock!, resultStructTypeName);
+  }
+
+  /// <summary>
+  /// Assigns a struct literal (string/char/byte-string) to a temp variable so the scope
+  /// cleanup can decref it at block exit. Without this, literals used as arguments or in
+  /// expressions without being assigned to a named var are leaked.
+  /// </summary>
+  private void EmitLiteralTempAssign(MaxonStruct litResult) {
+    var tempName = $"__lit_tmp_{litResult.Id}";
+    var assignOp = new MaxonAssignOp(tempName, litResult, true, false, MaxonValueKind.Struct);
+    _currentBlock!.AddOp(assignOp);
+    _variables[tempName] = new VarInfo(MaxonValueKind.Struct, false, litResult, _currentBlock!, litResult.TypeName);
   }
 
   private static void MarkDiscardedResult(MaxonCallOp callOp, Token callToken) {
@@ -12463,7 +12538,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var savedFunction = _currentFunction;
     var savedReferencedVars = new HashSet<string>(_referencedVars);
     var savedClosureCaptures = _closureCaptures;
-    var savedMmScopeStack = new Stack<string>(new Stack<string>(_mmScopeStack));
 
     // Use inferred return type if available, so struct literal syntax works in body
     MlirType? inferredReturnType = inferredFnType?.ReturnType;
@@ -12485,17 +12559,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (paramTypes[i] is MlirStructType structType) {
         var structParamOp = new MaxonStructParamOp(i, paramNames[i], structType.Name);
         _currentBlock.AddOp(structParamOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock, CurrentScopeVar, structType.Name);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Struct, false, structParamOp.Result, _currentBlock, structType.Name);
       } else if (paramTypes[i] is MlirUnionType enumType) {
         var backingKind = GetUnionBackingKind(enumType);
         var paramOp = new MaxonParamOp(i, paramNames[i], backingKind);
         _currentBlock.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, false, paramOp.Result, _currentBlock, CurrentScopeVar, enumType.Name);
+        _variables[paramNames[i]] = new VarInfo(MaxonValueKind.Enum, false, paramOp.Result, _currentBlock, enumType.Name);
       } else {
         var pKind = paramTypes[i].ToValueKind();
         var paramOp = new MaxonParamOp(i, paramNames[i], pKind);
         _currentBlock.AddOp(paramOp);
-        _variables[paramNames[i]] = new VarInfo(pKind, false, paramOp.Result, _currentBlock, CurrentScopeVar);
+        _variables[paramNames[i]] = new VarInfo(pKind, false, paramOp.Result, _currentBlock);
       }
     }
 
@@ -12511,6 +12585,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyValue = ResolveExprValue(bodyExpr);
 
     // Emit return
+    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()));
     var returnOp = new MaxonReturnOp(bodyValue);
     _currentBlock.AddOp(returnOp);
 
@@ -12561,9 +12636,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Captured variables are used by the outer function (passed into the closure environment)
     foreach (var c in captures) _referencedVars.Add(c.Name);
     _closureCaptures = savedClosureCaptures;
-    _mmScopeStack.Clear();
-    // Restore in reverse order (savedMmScopeStack iterates top-to-bottom, but Push would reverse)
-    foreach (var s in savedMmScopeStack.Reverse()) _mmScopeStack.Push(s);
 
     // Create a function reference or closure create op
     var fnType = new MlirFunctionType(paramTypes, returnType);

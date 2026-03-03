@@ -24,18 +24,22 @@ Assign to a struct field on self and verify the new value is stored.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
+type Inner
+  export var value Integer
+end 'Inner'
+
 type Container
   export var value Integer
-  export var child Container
+  export var child Inner
 
-  export function replaceChild(newChild Container)
+  export function replaceChild(newChild Inner)
     child = newChild
   end 'replaceChild'
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container{value: 1, child: Container{value: 10, child: Container{}}}
-  c.replaceChild(Container{value: 20, child: Container{}})
+  var c = Container{value: 1, child: Inner{value: 10}}
+  c.replaceChild(Inner{value: 20})
   if c.child.value == 20 'check'
     return 0
   end 'check'
@@ -51,14 +55,18 @@ Assign to a field on a variable via qualified access.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
+type Right
+  export var left Integer
+end 'Right'
+
 type Pair
   export var left Integer
-  export var right Pair
+  export var right Right
 end 'Pair'
 
 function main() returns ExitCode
-  var p = Pair{left: 5, right: Pair{left: 10, right: Pair{}}}
-  p.right = Pair{left: 20, right: Pair{}}
+  var p = Pair{left: 5, right: Right{left: 10}}
+  p.right = Right{left: 20}
   if p.right.left == 20 'check'
     return 0
   end 'check'
@@ -101,11 +109,15 @@ Overwrite a self field in a method and verify all allocations are freed properly
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
+type Inner
+  export var value Integer
+end 'Inner'
+
 type Container
   export var value Integer
-  export var child Container
+  export var child Inner
 
-  export function replaceChild(newChild Container)
+  export function replaceChild(newChild Inner)
     child = newChild
   end 'replaceChild'
 
@@ -115,8 +127,8 @@ type Container
 end 'Container'
 
 function testAssign()
-  var c = Container{value: 1, child: Container{value: 10, child: Container{}}}
-  c.replaceChild(Container{value: 20, child: Container{}})
+  var c = Container{value: 1, child: Inner{value: 10}}
+  c.replaceChild(Inner{value: 20})
   print("{c.childValue()}\n")
 end 'testAssign'
 
@@ -132,46 +144,6 @@ end 'main'
 20
 ```
 ```stderr
-  scope_enter heap-field-assignment.testAssign (depth=1)
-  alloc Container rc=0
-  alloc Container rc=0
-  move Container
-  alloc Container rc=0
-  move Container
-  alloc Container rc=0
-  move Container
-  alloc Container rc=0
-  move Container
-  incref Container rc=1
-  alloc Container rc=0
-  alloc Container rc=0
-  move Container
-  alloc Container rc=0
-  move Container
-  alloc Container rc=0
-  move Container
-  decref Container rc=0
-  incref Container rc=1
-  move Container
-  alloc ToStringBuf rc=0
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  free ToStringBuf
-  decref Container rc=0
-  scope_exit heap-field-assignment.testAssign (2 owned)
-  free Container
-  free Container
-  free Container
-  free Container
-  free Container
-  free Container
-  free Container
-  free Container
-  free Container
-  free Buffer
-  free __ManagedMemory
-  free String
 ```
 
 <!-- test: memory.qualified-field-overwrite-frees-old -->
@@ -180,14 +152,18 @@ Overwrite a qualified field and verify all allocations are freed properly.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
+type Right
+  export var left Integer
+end 'Right'
+
 type Pair
   export var left Integer
-  export var right Pair
+  export var right Right
 end 'Pair'
 
 function testAssign()
-  var p = Pair{left: 5, right: Pair{left: 10, right: Pair{}}}
-  p.right = Pair{left: 20, right: Pair{}}
+  var p = Pair{left: 5, right: Right{left: 10}}
+  p.right = Right{left: 20}
   print("{p.right.left}\n")
 end 'testAssign'
 
@@ -203,42 +179,4 @@ end 'main'
 20
 ```
 ```stderr
-  scope_enter heap-field-assignment.testAssign (depth=1)
-  alloc Pair rc=0
-  alloc Pair rc=0
-  move Pair
-  alloc Pair rc=0
-  move Pair
-  alloc Pair rc=0
-  move Pair
-  alloc Pair rc=0
-  move Pair
-  incref Pair rc=1
-  alloc Pair rc=0
-  alloc Pair rc=0
-  move Pair
-  alloc Pair rc=0
-  move Pair
-  alloc Pair rc=0
-  move Pair
-  move Pair
-  alloc ToStringBuf rc=0
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  free ToStringBuf
-  decref Pair rc=0
-  scope_exit heap-field-assignment.testAssign (2 owned)
-  free Pair
-  free Pair
-  free Pair
-  free Pair
-  free Pair
-  free Pair
-  free Pair
-  free Pair
-  free Pair
-  free Buffer
-  free __ManagedMemory
-  free String
 ```

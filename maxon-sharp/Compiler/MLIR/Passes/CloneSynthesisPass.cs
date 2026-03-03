@@ -86,17 +86,12 @@ public static class CloneSynthesisPass {
       fieldValues.Add((field.Name, fieldValue));
     }
 
-    // Scope management: ensures the return value has rc=1
-    var scopeVar = $"__scope_{MlirContext.Current.NextId()}";
-    block.AddOp(new MaxonScopeEnterOp(scopeVar, cloneName));
-
     var structLit = new MaxonStructLiteralOp(typeName, fieldValues);
     block.AddOp(structLit);
 
     var retvalName = $"__retval_{MlirContext.Current.NextId()}";
     block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
-    block.AddOp(new MaxonMoveOp(retvalName, scopeVar, "return_move"));
-    block.AddOp(new MaxonScopeExitOp(scopeVar, "return_cleanup"));
+    block.AddOp(new MaxonScopeEndOp([retvalName], keepVars: [retvalName]));
     block.AddOp(new MaxonReturnOp(structLit.Result));
 
     module.AddFunction(cloneFunc);

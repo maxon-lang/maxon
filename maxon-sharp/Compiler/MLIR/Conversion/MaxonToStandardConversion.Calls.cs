@@ -184,7 +184,6 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Associated-value enum return: the enum is already a heap pointer.
-    // Return it the same way as struct returns — mm_move is handled by MaxonMoveOp.
     if (retOp.Value != null
         && structVarNames.TryGetValue(retOp.Value.Id, out var enumRetPrefix)
         && structValueTypes.TryGetValue(retOp.Value.Id, out var enumRetTypeName)
@@ -197,7 +196,6 @@ public static partial class MaxonToStandardConversion {
 
     if (retStructType != null && retOp.Value != null) {
       // Struct return: return the heap pointer as i64
-      // mm_move is handled by MaxonMoveOp emitted before scope exits in the parser
       StdValue retHeapPtr;
       if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
         retHeapPtr = EmitLoad(block, srcName, varTypes);
@@ -225,8 +223,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<string, string> varTypes,
     Dictionary<string, MlirType> typeDefs) {
-    // No scope cleanup needed — the parser emits MaxonScopeExitOp before throws,
-    // and the memory manager handles all cleanup via mm_scope_exit.
+    // Scope cleanup is handled by MaxonScopeEndOp lowering before throw ops.
 
     // Check if this is an associated-value error enum
     if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)

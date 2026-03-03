@@ -177,10 +177,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       bool needsCleanup;
       string? compileError = null;
 
-      if (File.Exists(precompiledExe)) {
+      if (!fragment.MmTrace && File.Exists(precompiledExe)) {
         var exeFile = new FileInfo(precompiledExe);
         if (exeFile.LastWriteTimeUtc >= fragmentFile.LastWriteTimeUtc) {
-          // Use pre-compiled executable
+          // Use pre-compiled executable (only safe when MmTrace is off — we can't verify
+          // a pre-compiled exe was built with --mm-trace, so always recompile trace tests)
           exePath = precompiledExe;
           needsCleanup = false;
         } else {
@@ -258,7 +259,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
         var successExpectation = (SuccessExpectation)fragment.Expectation;
 
-        // Check Required MLIR by compiling fresh with all pipeline stages
+        // Check Required MLIR by compiling fresh with all pipeline stages.
+        // Use a dedicated temp exe so we never overwrite the runtime exe (exePath).
         if (successExpectation.RequiredMLIR != null) {
           Compiler.SourceFile[] irSources;
           string? irTempDir = null;
@@ -273,12 +275,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           } else {
             irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
           }
+          var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir.exe");
           Compiler.Compiler.MmTrace = false;
           Compiler.Compiler.MmDebug = false;
-          var irResult = new Compiler.Compiler().Compile(irSources, exePath, returnIr: true);
+          var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true);
           if (irTempDir != null) {
             try { Directory.Delete(irTempDir, recursive: true); } catch { }
           }
+          try { if (File.Exists(irExePath)) File.Delete(irExePath); } catch { }
           if (!irResult.Success || irResult.AllStagesIr == null) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -327,12 +331,6 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
               FilePath = fragment.FilePath
             };
           }
-        }
-
-        // Recompile with MmTrace if RequiredMLIR check overwrote the exe without it
-        if (fragment.MmTrace && successExpectation.RequiredMLIR != null) {
-          Compiler.Compiler.MmTrace = true;
-          CompileToExecutable(fragment, exePath);
         }
 
         // Run the executable if we have runtime expectations

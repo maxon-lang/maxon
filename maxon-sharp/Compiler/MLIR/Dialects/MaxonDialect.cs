@@ -525,37 +525,18 @@ public class MaxonBrOp(string target) : MaxonOp {
   public string Target { get; } = target;
 }
 
-// ============================================================================
-// Memory manager scope operations
-// ============================================================================
-
-// Enters a new scope. The result is a scope pointer stored in a variable.
-public class MaxonScopeEnterOp(string resultVar, string tag) : MaxonOp {
-  public override string Mnemonic => "maxon.scope_enter";
-  public string ResultVar { get; } = resultVar;
-  public string Tag { get; } = tag;
-  public override IReadOnlyList<string> PrintableResults => [ResultVar];
-  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
-    new Dictionary<string, MlirAttribute> { ["tag"] = new StringAttr(Tag) };
-}
-
-// Exits a scope, freeing all allocations owned by it.
-public class MaxonScopeExitOp(string scopeVar, string tag) : MaxonOp {
-  public override string Mnemonic => "maxon.scope_exit";
-  public string ScopeVar { get; } = scopeVar;
-  public string Tag { get; } = tag;
-  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
-    new Dictionary<string, MlirAttribute> { ["scope"] = new StringAttr(ScopeVar), ["tag"] = new StringAttr(Tag) };
-}
-
-// Moves an allocation from its current scope to a destination scope.
-public class MaxonMoveOp(string varName, string destScopeVar, string tag) : MaxonOp {
-  public override string Mnemonic => "maxon.move";
-  public string VarName { get; } = varName;
-  public string DestScopeVar { get; } = destScopeVar;
-  public string Tag { get; } = tag;
-  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
-    new Dictionary<string, MlirAttribute> { ["var"] = new StringAttr(VarName), ["dest"] = new StringAttr(DestScopeVar), ["tag"] = new StringAttr(Tag) };
+/// <summary>
+/// Emitted at every scope exit, before the terminating branch/return/throw.
+/// Emitted at every scope exit, before the terminating branch/return/throw.
+/// VarsToClean = managed struct vars introduced in this scope that the converter must decref.
+/// KeepVars = vars to skip (e.g. the returned value that the caller takes ownership of).
+/// The converter decrefs each var in VarsToClean that is actually managed (in varTypes),
+/// zeros its stack slot (so other paths see NULL), and that's it — no external tracking needed.
+/// </summary>
+public class MaxonScopeEndOp(IReadOnlyList<string> varsToClean, HashSet<string>? keepVars = null) : MaxonOp {
+  public override string Mnemonic => $"maxon.scope_end [{string.Join(", ", VarsToClean)}]";
+  public IReadOnlyList<string> VarsToClean { get; } = varsToClean;
+  public HashSet<string>? KeepVars { get; } = keepVars;
 }
 
 public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
@@ -594,6 +575,8 @@ public class MaxonStructLiteralOp(string typeName, List<(string FieldName, Maxon
   public int ArrayLiteralCount { get; set; }
   // Skip element zero-initialization (stack space reserved but not cleared)
   public bool SkipZeroInit { get; set; }
+  // Source location for trace output (e.g. "main.maxon:12")
+  public string? SourceLocation { get; set; }
 }
 
 // Reads a field: p.x
@@ -683,6 +666,8 @@ public class MaxonEnumConstructOp(string enumTypeName, string caseName, int ordi
   public MaxonEnum Result { get; } = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+  // Source location for trace output (e.g. "main.maxon:12")
+  public string? SourceLocation { get; set; }
 }
 
 // Extracts the tag (ordinal) from an associated-value enum
@@ -878,6 +863,24 @@ public class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue index, 
   public MaxonValue Count { get; } = count;
   public bool ShiftRight { get; } = shiftRight;
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
+}
+
+// Remove element at index: load element (ownership transfer), shift left, shrink length.
+// For struct elements the loaded pointer is NOT incref'd — the buffer's reference is
+// transferred to the caller. The slot is zeroed after loading to prevent double-free
+// if mm_decref_managed_elements walks the buffer before the shift completes.
+public class MaxonManagedMemRemoveOp(MaxonValue managedStruct, MaxonValue index, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_mem_remove";
+  public MaxonValue ManagedStruct { get; } = managedStruct;
+  public MaxonValue Index { get; } = index;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public bool IsStructElement { get; init; }
+  public string? StructElementTypeName { get; init; }
+  public string? TypeParamName { get; init; }
+  public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
+    ? new MaxonInteger(MlirContext.Current.NextId()) : resultKind.CreateValue();
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
 }
 
 // Get byte at index in managed buffer: managed.byteAt(index)

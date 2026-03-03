@@ -605,12 +605,6 @@ public static class MonomorphizationPass {
         return new MaxonCondBrOp(mapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
       case MaxonBrOp br:
         return new MaxonBrOp(br.Target);
-      case MaxonScopeEnterOp se:
-        return new MaxonScopeEnterOp(se.ResultVar, se.Tag);
-      case MaxonScopeExitOp sx:
-        return new MaxonScopeExitOp(sx.ScopeVar, sx.Tag);
-      case MaxonMoveOp mo:
-        return new MaxonMoveOp(mo.VarName, mo.DestScopeVar, mo.Tag);
       case MaxonPanicOp p:
         return new MaxonPanicOp(p.Message);
       case MaxonRefEqOp req: {
@@ -646,6 +640,15 @@ public static class MonomorphizationPass {
           TypeParamName = memGet.TypeParamName
         };
         valueMap[memGet.Result.Id] = cloned.Result;
+        return cloned;
+      }
+      case MaxonManagedMemRemoveOp memRemove: {
+        var cloned = new MaxonManagedMemRemoveOp(mapValue(memRemove.ManagedStruct), mapValue(memRemove.Index), memRemove.ResultKind) {
+          IsStructElement = memRemove.IsStructElement,
+          StructElementTypeName = memRemove.StructElementTypeName,
+          TypeParamName = memRemove.TypeParamName
+        };
+        valueMap[memRemove.Result.Id] = cloned.Result;
         return cloned;
       }
       case MaxonManagedMemSetOp memSet:

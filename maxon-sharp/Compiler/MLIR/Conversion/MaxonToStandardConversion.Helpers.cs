@@ -233,7 +233,8 @@ public static partial class MaxonToStandardConversion {
     var result = new StdI64(MlirContext.Current.NextId());
     block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, tagPtr], result));
     if (Compiler.MmTrace) {
-      block.AddOp(new StdCallRuntimeOp("mm_trace_alloc", [result], null));
+      // Pass the alloc-site tag as loc_cstr (tag already embeds source location)
+      block.AddOp(new StdCallRuntimeOp("mm_trace_alloc", [result, tagPtr], null));
     }
     return result;
   }
@@ -245,50 +246,8 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Allocates untracked heap memory (no AllocEntry, no scope registration).
-  /// Used when the compiler will emit explicit mm_free_simple at scope exit.
-  /// </summary>
-  private static StdI64 EmitAllocSimple(MlirBlock<StandardOp> block, StdI64 size) {
-    var result = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("mm_alloc_simple", [size], result));
-    return result;
-  }
-
-  private static StdI64 EmitAllocSimple(MlirBlock<StandardOp> block, long constSize) {
-    var sizeOp = new StdConstI64Op(constSize);
-    block.AddOp(sizeOp);
-    return EmitAllocSimple(block, sizeOp.Result);
-  }
-
-  /// <summary>
-  /// Returns true if the current scope uses static free (compile-time cleanup).
-  /// When true, allocations should use mm_alloc_simple instead of mm_alloc.
-  /// </summary>
-  private static bool IsCurrentScopeStaticFree() {
-    if (_scopeAnalysisStack == null || _scopeAnalysisStack.Count == 0) return false;
-    var current = _scopeAnalysisStack[^1];
-    return current is { CanStaticFree: true } or { CanStaticReturn: true };
-  }
-
-  /// <summary>
-  /// Emits mm_free_simple for each compile-time-managed allocation in reverse order.
-  /// Skips stack-allocated structs (reclaimed by epilogue) and the return value
-  /// in CanStaticReturn scopes (owned by caller's scope via mm_alloc).
-  /// </summary>
-  private static void EmitStaticFree(
-      MlirBlock<StandardOp> block, ScopeInfo scopeInfo, Dictionary<string, string> varTypes) {
-    for (int ai = scopeInfo.Allocations.Count - 1; ai >= 0; ai--) {
-      var alloc = scopeInfo.Allocations[ai];
-      if (scopeInfo.StackAllocIds.Contains(alloc.StructLiteralResultId)) continue;
-      if (scopeInfo.CanStaticReturn && scopeInfo.ReturnMoveVars.Contains(alloc.VarName)) continue;
-      var allocPtr = (StdI64)EmitLoad(block, alloc.VarName, varTypes);
-      block.AddOp(new StdCallRuntimeOp("mm_free_simple", [allocPtr], null));
-    }
-  }
-
-  /// <summary>
   /// Allocates memory as a child of a parent allocation. When the parent is freed
-  /// via mm_free or mm_scope_exit, children are freed recursively.
+  /// via mm_free, children are freed recursively.
   /// </summary>
   private static StdI64 EmitAllocIn(MlirBlock<StandardOp> block, StdI64 size, StdI64 parentPtr, string? tag = null) {
     StdI64 tagPtr;
@@ -311,36 +270,160 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation.</summary>
-  private static void EmitIncref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes) {
+  private static void EmitIncref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? sourceLoc = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
     block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
     if (Compiler.MmTrace) {
       var tracePtr = EmitLoad(block, varName, varTypes);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [tracePtr], null));
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [tracePtr, locPtr], null));
     }
   }
 
   /// <summary>Emit mm_decref(heap_ptr) — decrements reference count, reclaims ownership when zero.</summary>
-  private static void EmitDecref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes) {
+  private static void EmitDecref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? sourceLoc = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
-    block.AddOp(new StdCallRuntimeOp("mm_decref", [heapPtr], null));
+    // Trace BEFORE decref: mm_decref may free the object, invalidating the pointer
     if (Compiler.MmTrace) {
       var tracePtr = EmitLoad(block, varName, varTypes);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [tracePtr], null));
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [tracePtr, locPtr], null));
     }
+    block.AddOp(new StdCallRuntimeOp("mm_decref", [heapPtr], null));
   }
 
   /// <summary>
-  /// Moves a heap allocation to be a child of newParent (mm_move with mode=1).
-  /// Used when storing a struct into an array element or struct field.
+  /// Emits cleanup for a managed struct variable, handling field decrefs if the struct type
+  /// has heap-allocated fields. If the struct has no managed fields, emits a plain mm_decref.
+  /// If it has managed fields, emits StdDestructStructOp which handles conditional field cleanup
+  /// inline at the x86 level (no block splitting — avoids cross-block SSA lifetime issues).
   /// </summary>
-  private static void EmitReparent(MlirBlock<StandardOp> block, StdI64 childPtr, string parentVarName, Dictionary<string, string> varTypes) {
-    var parentPtr = (StdI64)EmitLoad(block, parentVarName, varTypes);
-    var modeOp = new StdConstI64Op(1);
-    block.AddOp(modeOp);
-    block.AddOp(new StdCallRuntimeOp("mm_move", [childPtr, parentPtr, modeOp.Result], null));
-    if (Compiler.MmTrace)
-      block.AddOp(new StdCallRuntimeOp("mm_trace_move", [childPtr], null));
+  private static void EmitDecrefWithFieldCleanup(
+    MlirBlock<StandardOp> block, string varName,
+    Dictionary<string, string> varTypes, Dictionary<string, string> varNameToStructType,
+    Dictionary<string, MlirType> typeDefs, Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
+    string? sourceLoc = null) {
+    var typeName = varNameToStructType[varName];
+    var managedFields = GetManagedFields(typeName, typeDefs);
+
+    if (managedFields.Count == 0) {
+      EmitDecref(block, varName, varTypes, sourceLoc);
+      return;
+    }
+
+    // Load heap pointer (trace before decref, since the object may be freed)
+    var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
+    if (Compiler.MmTrace) {
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [heapPtr, locPtr], null));
+    }
+
+    // Emit a StdDestructStructOp that handles the conditional field cleanup inline:
+    //   mm_decref_check(ptr) → if rc==0: recursively destruct each managed field, then mm_free(ptr)
+    // This generates x86 inline without requiring a new block (avoids cross-block SSA issues).
+    var outerType = typeDefs.TryGetValue(typeName, out var t) ? t as MlirStructType : null;
+    var fieldInfos = BuildFieldDestructors(managedFields, typeDefs, [typeName], outerType, typeName, typeAliasSources);
+    block.AddOp(new StdDestructStructOp(heapPtr, fieldInfos));
+  }
+
+  /// <summary>
+  /// Builds recursive FieldDestructorInfo for a list of managed struct fields.
+  /// Fields whose types themselves have managed fields get nested destructors.
+  /// The visited set breaks cycles for self-referential types (e.g. linked-list nodes):
+  /// a cyclic field gets an empty nested list so the runtime mm_decref handles cleanup
+  /// via the type's own destructor chain rather than infinitely inlining it.
+  /// outerType and outerTypeName are the containing struct — used to detect when a
+  /// child-owned __ManagedMemory holds struct element pointers that need per-element
+  /// decref before the buffer is freed.
+  /// </summary>
+  private static List<FieldDestructorInfo> BuildFieldDestructors(
+    List<MlirStructField> fields, Dictionary<string, MlirType> typeDefs,
+    HashSet<string>? visited = null, MlirStructType? outerType = null,
+    string? outerTypeName = null, Dictionary<string, TypeAliasInfo>? typeAliasSources = null) {
+    var result = new List<FieldDestructorInfo>();
+    foreach (var field in fields) {
+      var fieldTypeName = (field.Type as MlirStructType)?.Name;
+      bool isCycle = fieldTypeName != null && (visited?.Contains(fieldTypeName) ?? false);
+      List<FieldDestructorInfo> nested;
+      if (isCycle) {
+        nested = [];
+      } else {
+        var nestedFields = GetManagedFieldsForType(field.Type, typeDefs);
+        var nextVisited = visited != null ? new HashSet<string>(visited) : [];
+        if (fieldTypeName != null) nextVisited.Add(fieldTypeName);
+        nested = BuildFieldDestructors(nestedFields, typeDefs, nextVisited);
+      }
+      bool isChildOwned = (field.Type as MlirStructType)?.IsChildOwned ?? false;
+      // A __ManagedMemory field (or its concrete alias, e.g. "ElementMemory") whose outer type
+      // has a struct Element type parameter stores heap pointers in its buffer. Each pointer
+      // must be decrefd before mm_decref frees the ElementMemory struct (and its buffer child),
+      // because the buffer free alone does not touch element refcounts.
+      bool isManagedMemory = fieldTypeName != null
+        && typeAliasSources != null
+        && TypeAliasInfo.IsManagedMemoryType(fieldTypeName, typeAliasSources);
+      bool hasManagedElements = isManagedMemory
+        && HasStructElementType(outerType, outerTypeName, typeAliasSources);
+      result.Add(new FieldDestructorInfo(field.Offset, field.Type, nested, isChildOwned, hasManagedElements));
+    }
+    return result;
+  }
+
+  /// <summary>
+  /// Returns true if the outer type is parameterized with a struct Element type —
+  /// meaning its __ManagedMemory buffer holds heap pointers that need per-element decref.
+  /// Checks both the concrete struct's TypeParams and the TypeAliasSources table.
+  /// </summary>
+  private static bool HasStructElementType(
+    MlirStructType? outerType, string? outerTypeName,
+    Dictionary<string, TypeAliasInfo>? typeAliasSources) {
+    // First check the concrete struct's TypeParams (populated during monomorphization)
+    if (outerType?.TypeParams.TryGetValue("Element", out var elemType) == true && elemType is MlirStructType)
+      return true;
+    // Fall back to TypeAliasSources which tracks alias -> source type + type params
+    if (outerTypeName != null && typeAliasSources?.TryGetValue(outerTypeName, out var aliasInfo) == true
+        && aliasInfo.TypeParams?.TryGetValue("Element", out var aliasElemType) == true
+        && aliasElemType is MlirStructType)
+      return true;
+    return false;
+  }
+
+  /// <summary>Returns the heap-allocated fields of the named struct type, in field order.</summary>
+  private static List<MlirStructField> GetManagedFields(string typeName, Dictionary<string, MlirType> typeDefs) {
+    if (!typeDefs.TryGetValue(typeName, out var typeDef) || typeDef is not MlirStructType structType)
+      return [];
+    var resolved = ResolveStructType(structType, typeDefs);
+    return resolved.Fields.Where(f => f.Type.IsHeapAllocated).ToList();
+  }
+
+  private static List<MlirStructField> GetManagedFieldsForType(MlirType type, Dictionary<string, MlirType> typeDefs) {
+    if (type is not MlirStructType structType) return [];
+    var resolved = ResolveStructType(structType, typeDefs);
+    return resolved.Fields.Where(f => f.Type.IsHeapAllocated).ToList();
+  }
+
+  /// <summary>Emit mm_decref on a raw heap pointer (StdI64). Used when the pointer is already loaded.</summary>
+  private static void EmitDecrefValue(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
+    // Trace BEFORE decref: mm_decref may free the object, invalidating the pointer
+    if (Compiler.MmTrace) {
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [heapPtr, locPtr], null));
+    }
+    block.AddOp(new StdCallRuntimeOp("mm_decref", [heapPtr], null));
+  }
+
+  /// <summary>Emit mm_incref on a raw heap pointer (StdI64). Used when the pointer is already loaded.</summary>
+  private static void EmitIncrefValue(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
+    block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
+    if (Compiler.MmTrace) {
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [heapPtr, locPtr], null));
+    }
+  }
+
+  private static StdI64 EmitNullPtr(MlirBlock<StandardOp> block) {
+    var op = new StdConstI64Op(0);
+    block.AddOp(op);
+    return op.Result;
   }
 
   /// <summary>

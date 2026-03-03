@@ -370,20 +370,11 @@ public partial class X86CodeEmitter() {
   public void EmitStartWrapper(string mainFunctionName, string? globalCleanupFunctionName = null, string? moduleInitFunctionName = null) {
     DefineLabel("_start");
 
-    // sub rsp, 0x38 (0x20 shadow space + 0x18 local storage, keeps 16-byte alignment)
-    // [rsp+0x28] = root scope ptr, [rsp+0x30] = main return value
-    EmitBytes(0x48, 0x83, 0xEC, 0x38);
+    // sub rsp, 0x28 (0x20 shadow space + 0x8 local storage, keeps 16-byte alignment)
+    // [rsp+0x20] = main return value
+    EmitBytes(0x48, 0x83, 0xEC, 0x28);
 
-    // mm_scope_enter(tag=NULL) — create root scope before main
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx); // tag = NULL
-    EmitByte(0xE8);
-    _relCallFixups.Add((_code.Count, "mm_scope_enter"));
-    EmitDword(0);
-    // Save root scope pointer at [rsp+0x28] and in global __mm_root_scope
-    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x28); // MOV [rsp+0x28], rax
-    EmitSymdataStoreI64(X86Register.Rax, "__mm_root_scope");
-
-    // call __module_init (initializes globals in root scope)
+    // call __module_init (initializes globals)
     if (!string.IsNullOrEmpty(moduleInitFunctionName)) {
       EmitByte(0xE8);
       _relCallFixups.Add((_code.Count, moduleInitFunctionName));
@@ -394,8 +385,8 @@ public partial class X86CodeEmitter() {
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, mainFunctionName));
     EmitDword(0);
-    // Save main's return value at [rsp+0x30]
-    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x30); // MOV [rsp+0x30], rax
+    // Save main's return value at [rsp+0x20]
+    EmitBytes(0x48, 0x89, 0x44, 0x24, 0x20); // MOV [rsp+0x20], rax
 
     // Optionally clean up globals
     if (!string.IsNullOrEmpty(globalCleanupFunctionName)) {
@@ -404,19 +395,13 @@ public partial class X86CodeEmitter() {
       EmitDword(0);
     }
 
-    // mm_scope_exit(root_scope_ptr) — clean up root scope
-    EmitBytes(0x48, 0x8B, 0x4C, 0x24, 0x28); // MOV rcx, [rsp+0x28]
-    EmitByte(0xE8);
-    _relCallFixups.Add((_code.Count, "mm_scope_exit"));
-    EmitDword(0);
-
     // mm_leak_check() — report any leaked allocations
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, "mm_leak_check"));
     EmitDword(0);
 
     // Restore main's return value for ExitProcess
-    EmitBytes(0x48, 0x8B, 0x4C, 0x24, 0x30); // MOV rcx, [rsp+0x30]
+    EmitBytes(0x48, 0x8B, 0x4C, 0x24, 0x20); // MOV rcx, [rsp+0x20]
 
     // call [rip+disp32] ExitProcess (indirect through IAT)
     EmitBytes(0xFF, 0x15);

@@ -111,15 +111,10 @@ public static partial class MaxonToStandardConversion {
 
     // Store value at offset 24
     if (IsChainHeapValueKind(op.ValueKind, typeDefs) && structVarNames.TryGetValue(op.Value.Id, out var valueSrcName)) {
-      // Struct/heap value: load pointer and reparent under node
+      // Struct/heap value: store pointer and incref — node holds a reference
       var valueHeapPtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
-      // Reparent value under the node so it moves with the chain
-      var moveMode = new StdConstI64Op(1);
-      block.AddOp(moveMode);
-      block.AddOp(new StdCallRuntimeOp("mm_move", [valueHeapPtr, nodePtr, moveMode.Result], null));
-      if (Compiler.MmTrace)
-        block.AddOp(new StdCallRuntimeOp("mm_trace_move", [valueHeapPtr], null));
+      EmitIncrefValue(block, valueHeapPtr);
     } else {
       // Primitive value: store directly
       var valueStd = (StdI64)valueMap[op.Value];
@@ -169,13 +164,10 @@ public static partial class MaxonToStandardConversion {
 
     // Store value at offset 24
     if (IsChainHeapValueKind(op.ValueKind, typeDefs) && structVarNames.TryGetValue(op.Value.Id, out var valueSrcName)) {
+      // Struct/heap value: store pointer and incref — node holds a reference
       var valueHeapPtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
-      var moveMode = new StdConstI64Op(1);
-      block.AddOp(moveMode);
-      block.AddOp(new StdCallRuntimeOp("mm_move", [valueHeapPtr, nodePtr, moveMode.Result], null));
-      if (Compiler.MmTrace)
-        block.AddOp(new StdCallRuntimeOp("mm_trace_move", [valueHeapPtr], null));
+      EmitIncrefValue(block, valueHeapPtr);
     } else {
       var valueStd = (StdI64)valueMap[op.Value];
       block.AddOp(new StdStoreIndirectOp(valueStd, nodePtr, NodeValueOffset, MlirType.I64));
@@ -211,25 +203,15 @@ public static partial class MaxonToStandardConversion {
     var chainVarName = structVarNames[op.Chain.Id];
     var nodeVarName = structVarNames[op.Node.Id];
 
-    // Reparent node under the new chain (force mode)
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
-    var moveMode = new StdConstI64Op(1);
-    block.AddOp(moveMode);
-    block.AddOp(new StdCallRuntimeOp("mm_move", [nodePtr, chainPtr, moveMode.Result], null));
-    if (Compiler.MmTrace)
-      block.AddOp(new StdCallRuntimeOp("mm_trace_move", [nodePtr], null));
-
-    // Reload for runtime call
-    var chainPtrReload = (StdI64)EmitLoad(block, chainVarName, varTypes);
-    var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
     var rtName = op.AtHead ? "maxon_chain_insert_first" : "maxon_chain_insert_last";
-    block.AddOp(new StdCallRuntimeOp(rtName, [chainPtrReload, nodePtrReload], null));
+    block.AddOp(new StdCallRuntimeOp(rtName, [chainPtr, nodePtr], null));
   }
 
   /// <summary>
-  /// Lowers MaxonChainReinsertRelativeOp: reparents node and inserts relative to target.
+  /// Lowers MaxonChainReinsertRelativeOp: inserts node relative to target.
   /// </summary>
   private static void LowerChainReinsertRelative(
     MaxonChainReinsertRelativeOp op,
@@ -240,23 +222,13 @@ public static partial class MaxonToStandardConversion {
     var chainVarName = structVarNames[op.Chain.Id];
     var nodeVarName = structVarNames[op.Node.Id];
 
-    // Reparent node under the new chain (force mode)
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
-    var moveMode = new StdConstI64Op(1);
-    block.AddOp(moveMode);
-    block.AddOp(new StdCallRuntimeOp("mm_move", [nodePtr, chainPtr, moveMode.Result], null));
-    if (Compiler.MmTrace)
-      block.AddOp(new StdCallRuntimeOp("mm_trace_move", [nodePtr], null));
-
-    // Reload for runtime call
-    var chainPtrReload = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var targetVarName = structVarNames[op.Target.Id];
     var targetPtr = (StdI64)EmitLoad(block, targetVarName, varTypes);
-    var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
     var rtName = op.After ? "maxon_chain_insert_after" : "maxon_chain_insert_before";
-    block.AddOp(new StdCallRuntimeOp(rtName, [chainPtrReload, targetPtr, nodePtrReload], null));
+    block.AddOp(new StdCallRuntimeOp(rtName, [chainPtr, targetPtr, nodePtr], null));
   }
 
   /// <summary>
@@ -310,32 +282,16 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(valueLoad);
     var extractedValue = (StdI64)valueLoad.Result;
 
-    // Save the extracted value
-    var valueTempName = $"__chain_removed_{op.Result.Id}";
+    // Save the extracted value. Use __chain_nav_ prefix so assignment skips incref
+    // (transfer: the node held an incref'd reference, caller inherits it).
+    var valueTempName = $"__chain_nav_{op.Result.Id}";
     EmitStore(block, extractedValue, valueTempName, varTypes);
 
-    // Resolve the current scope for reparenting allocations.
-    var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-
-    if (IsChainHeapValueKind(op.ValueKind, typeDefs) && currentScopeInfo != null) {
-      // Struct value: force-detach from node's child list and move to current scope.
-      // Must use mode=2 (force to scope) because the value is parent-owned (child
-      // of the chain node), and mode=0 is a no-op for parent-owned allocations.
-      var scopePtr = (StdI64)EmitLoad(block, currentScopeInfo.ScopeVar, varTypes);
-      var valueReload = (StdI64)EmitLoad(block, valueTempName, varTypes);
-      var moveMode = new StdConstI64Op(2);
-      block.AddOp(moveMode);
-      block.AddOp(new StdCallRuntimeOp("mm_move", [valueReload, scopePtr, moveMode.Result], null));
-      if (Compiler.MmTrace)
-        block.AddOp(new StdCallRuntimeOp("mm_trace_move", [valueReload], null));
-    }
-
-    // Release the node: decref instead of force-free so that any outstanding
-    // navigation references keep the node alive until their scope exit.
-    var nodePtrForDecref = (StdI64)EmitLoad(block, nodeVarName, varTypes);
-    block.AddOp(new StdCallRuntimeOp("mm_decref", [nodePtrForDecref], null));
+    // Free the node. The value's refcount is unchanged — caller inherits the node's reference.
+    var nodePtrForFree = (StdI64)EmitLoad(block, nodeVarName, varTypes);
+    block.AddOp(new StdCallRuntimeOp("mm_free", [nodePtrForFree], null));
     if (Compiler.MmTrace)
-      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [nodePtrForDecref], null));
+      block.AddOp(new StdCallRuntimeOp("mm_trace_free", [nodePtrForFree], null));
 
     // Register the extracted value
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
@@ -343,8 +299,8 @@ public static partial class MaxonToStandardConversion {
       structValueTypes[op.Result.Id] = op.ValueKind;
     } else {
       // Primitive value: only register in valueMap, NOT in structVarNames.
-      // Registering in structVarNames would cause downstream assign/move ops
-      // to treat the primitive as a heap pointer (incref, mm_move).
+      // Registering in structVarNames would cause downstream assign ops
+      // to treat the primitive as a heap pointer and emit incref.
       var valReload = EmitLoad(block, valueTempName, varTypes);
       valueMap[op.Result] = valReload;
     }
@@ -421,28 +377,15 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(oldValueLoad);
       var oldValue = (StdI64)oldValueLoad.Result;
 
-      // Detach old value from node to current scope via mm_move mode=2.
-      // Scope exit will free it (rc=0) or decref it (rc>0 from node.value()).
-      var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-      if (currentScopeInfo != null) {
-        var scopePtr = (StdI64)EmitLoad(block, currentScopeInfo.ScopeVar, varTypes);
-        var detachMode = new StdConstI64Op(2);
-        block.AddOp(detachMode);
-        block.AddOp(new StdCallRuntimeOp("mm_move", [oldValue, scopePtr, detachMode.Result], null));
-        if (Compiler.MmTrace)
-          block.AddOp(new StdCallRuntimeOp("mm_trace_move", [oldValue], null));
-      }
+      // Decref old value — node no longer holds a reference
+      EmitDecrefValue(block, oldValue);
 
-      // Store new value and reparent under node
+      // Store new value and incref — node now holds a reference
       var valueSrcName = structVarNames[op.Value.Id];
       var newValuePtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
       block.AddOp(new StdStoreIndirectOp(newValuePtr, nodePtrReload, NodeValueOffset, MlirType.I64));
-      var moveMode = new StdConstI64Op(1);
-      block.AddOp(moveMode);
-      block.AddOp(new StdCallRuntimeOp("mm_move", [newValuePtr, nodePtrReload, moveMode.Result], null));
-      if (Compiler.MmTrace)
-        block.AddOp(new StdCallRuntimeOp("mm_trace_move", [newValuePtr], null));
+      EmitIncrefValue(block, newValuePtr);
     } else {
       // Primitive: just store new value
       var newValue = (StdI64)valueMap[op.Value];

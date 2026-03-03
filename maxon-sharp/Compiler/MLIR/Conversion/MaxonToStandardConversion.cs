@@ -1,6 +1,5 @@
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
-using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
@@ -10,18 +9,20 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static Dictionary<string, HashSet<string>>? _mutatingParams;
   // Maps param name -> ref pointer var name for the current function being lowered
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
-  // Scope analysis stack for the current function being lowered
-  [ThreadStatic] private static List<ScopeInfo?>? _scopeAnalysisStack;
-  [ThreadStatic] private static Dictionary<string, ScopeInfo>? _funcScopeAnalysis;
+  // Tracks struct parameter names for the current function (not owned by us, no cleanup needed)
+  [ThreadStatic] private static HashSet<string>? _structParamNames;
   [ThreadStatic] private static int _nextRdataId;
   [ThreadStatic] private static int _nextStdlibRdataId;
   [ThreadStatic] private static bool _rdataStdlibPhase;
+  [ThreadStatic] private static string? _currentFuncName;
+  [ThreadStatic] private static Dictionary<string, string>? _symdataContextCache;
   private static string NextRdataId() =>
     _rdataStdlibPhase ? $"s{_nextStdlibRdataId++}" : $"{_nextRdataId++}";
 
   public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
     _rdataStringCache = [];
     _symdataTagCache = [];
+    _symdataContextCache = [];
     _rdataStdlibPhase = true;
     _nextStdlibRdataId = 0;
     _nextRdataId = 0;
@@ -116,8 +117,8 @@ public static partial class MaxonToStandardConversion {
       }
 
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
+      _currentFuncName = func.Name;
       var escapingArrayLiterals = FindEscapingArrayLiterals(func);
-      var stackAllocIds = new HashSet<int>();
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
@@ -135,23 +136,6 @@ public static partial class MaxonToStandardConversion {
         }
         if (refParamPtrVars.Count > 0)
           Logger.Trace(LogCategory.Mlir, $"Pass-by-ref: {func.Name} receives ref params: {string.Join(", ", refParamPtrVars.Keys)}");
-      }
-
-      // Scope analysis for this function (if available)
-      module.ScopeAnalysis.TryGetValue(func.Name, out Dictionary<string, ScopeInfo>? funcScopeAnalysis);
-      _funcScopeAnalysis = funcScopeAnalysis;
-      _scopeAnalysisStack = [];
-      module.BlockScopeStacks.TryGetValue(func.Name, out var funcBlockScopeStacks);
-
-      // Collect stack-allocable struct literal IDs and return alloc IDs from scope analysis
-      var returnAllocIds = new HashSet<int>();
-      if (funcScopeAnalysis != null) {
-        foreach (var scopeInfo in funcScopeAnalysis.Values) {
-          foreach (var id in scopeInfo.StackAllocIds)
-            stackAllocIds.Add(id);
-          if (scopeInfo is { CanStaticReturn: true, ReturnAllocResultId: >= 0 })
-            returnAllocIds.Add(scopeInfo.ReturnAllocResultId);
-        }
       }
 
       // Build the new function signature:
@@ -255,14 +239,10 @@ public static partial class MaxonToStandardConversion {
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
 
       _refParamPtrVars = refParamPtrVars;
+      _structParamNames = [];
 
       // Tracks parameter names (used to distinguish params from locals in some paths)
       var structParamNames = new HashSet<string>();
-
-      // Tracks variable names that hold parent-owned (borrowed) references from managed
-      // memory get. These references must NOT be reparented by struct field init or mm_move —
-      // instead, mm_incref is used to keep them alive without stealing from the container.
-      var parentOwnedVarNames = new HashSet<string>();
 
       // Cache self-field loads: maps "fieldName" → temp var name for struct-typed self fields.
       // Avoids redundant load_indirect from self's heap pointer for the same field within a block.
@@ -271,17 +251,6 @@ public static partial class MaxonToStandardConversion {
 
 
       foreach (var block in func.Body.Blocks) {
-        // Reset scope analysis stack from pre-computed per-block data. Each block's
-        // entry scope stack is derived from CFG predecessors, preventing scope_exit
-        // ops in one branch from corrupting the stack seen by sibling branches.
-        if (funcBlockScopeStacks != null
-            && funcBlockScopeStacks.TryGetValue(block.Name, out var blockScopeVars)) {
-          _scopeAnalysisStack = [..blockScopeVars
-            .Select(sv => funcScopeAnalysis?.GetValueOrDefault(sv))];
-        } else {
-          _scopeAnalysisStack = [];
-        }
-
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
 
@@ -408,6 +377,7 @@ public static partial class MaxonToStandardConversion {
                 structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
               }
               structParamNames.Add(structParamOp.Name);
+              _structParamNames?.Add(structParamOp.Name);
               break;
             }
             case MaxonEnumLiteralOp enumLitOp: {
@@ -430,7 +400,10 @@ public static partial class MaxonToStandardConversion {
               var enumTypeDef = (MlirUnionType)module.TypeDefs[enumConstructOp.EnumTypeName];
               int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
               int heapSize = 8 + maxPayload * 8;
-              var enumPtr = EmitAlloc(newBlock, heapSize, enumConstructOp.EnumTypeName);
+              var enumAllocTag = enumConstructOp.SourceLocation != null
+                ? $"{enumConstructOp.EnumTypeName} @ {enumConstructOp.SourceLocation}"
+                : enumConstructOp.EnumTypeName;
+              var enumPtr = EmitAlloc(newBlock, heapSize, enumAllocTag);
               EmitStore(newBlock, enumPtr, tempName, varTypes);
 
               // Store tag at offset 0
@@ -443,12 +416,10 @@ public static partial class MaxonToStandardConversion {
               for (int ai = 0; ai < enumConstructOp.Args.Count; ai++) {
                 int byteOffset = 8 + slotIdx * 8;
                 if (structVarNames.TryGetValue(enumConstructOp.Args[ai].Id, out var structSrcName)) {
-                  // Heap-pointer payload: store and reparent only if scope-owned.
-                  // Parent-owned values (e.g. existing nodes passed as prev pointers)
-                  // stay owned by their current parent — avoids circular ownership.
+                  // Heap-pointer payload: store and incref — enum holds a reference
                   var childHeapPtr = (StdI64)EmitLoad(newBlock, structSrcName, varTypes);
                   newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumPtr, byteOffset, MlirType.I64));
-                  newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [childHeapPtr, enumPtr], null));
+                  EmitIncrefValue(newBlock, childHeapPtr);
                   slotIdx++;
                 } else {
                   // Scalar payload: store directly
@@ -536,6 +507,7 @@ public static partial class MaxonToStandardConversion {
 
                 structVarNames[enumParamOp.Result.Id] = enumParamOp.Name;
                 structValueTypes[enumParamOp.Result.Id] = enumParamOp.EnumTypeName;
+                _structParamNames?.Add(enumParamOp.Name);
               } else if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                 // Mutated simple enum: receive i64 pointer, dereference for local copy
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
@@ -590,10 +562,14 @@ public static partial class MaxonToStandardConversion {
               int byteOffset = 8 + payloadAssign.PayloadIndex * 8;
 
               if (structVarNames.TryGetValue(payloadAssign.NewValue.Id, out var newStructSrc)) {
-                // Heap-pointer payload: store and reparent only if scope-owned
+                // Heap-pointer payload: decref old value, store new, incref new
+                var oldPayloadLoad = new StdLoadIndirectOp(enumHeapPtr, byteOffset, MlirType.I64);
+                newBlock.AddOp(oldPayloadLoad);
+                EmitDecrefValue(newBlock, (StdI64)oldPayloadLoad.Result);
                 var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrc, varTypes);
-                newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtr, byteOffset, MlirType.I64));
-                newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [childHeapPtr, enumHeapPtr], null));
+                var enumHeapPtrReload = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
+                newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtrReload, byteOffset, MlirType.I64));
+                EmitIncrefValue(newBlock, childHeapPtr);
               } else {
                 var newStdVal = valueMap[payloadAssign.NewValue];
                 newBlock.AddOp(new StdStoreIndirectOp(newStdVal, enumHeapPtr, byteOffset, MlirType.I64));
@@ -706,15 +682,11 @@ public static partial class MaxonToStandardConversion {
                 : $"__struct_{structLitOp.Result.Id}";
               var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
 
-              // Allocate memory for the struct (stack for eligible, simple for static-free, heap otherwise)
-              // Return allocs in CanStaticReturn scopes use mm_alloc so callers can mm_move them
-              bool useStackAlloc = stackAllocIds.Contains(structLitOp.Result.Id);
-              bool isReturnAlloc = returnAllocIds.Contains(structLitOp.Result.Id);
-              var structPtr = useStackAlloc
-                ? EmitStackAlloc(newBlock, structType.SizeInBytes)
-                : (IsCurrentScopeStaticFree() && !isReturnAlloc)
-                  ? EmitAllocSimple(newBlock, structType.SizeInBytes)
-                  : EmitAlloc(newBlock, structType.SizeInBytes, structLitOp.TypeName);
+              // Allocate memory for the struct on the heap
+              var allocTag = structLitOp.SourceLocation != null
+                ? $"{structLitOp.TypeName} @ {structLitOp.SourceLocation}"
+                : structLitOp.TypeName;
+              var structPtr = EmitAlloc(newBlock, structType.SizeInBytes, allocTag);
               EmitStore(newBlock, structPtr, tempName, varTypes);
 
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
@@ -723,20 +695,10 @@ public static partial class MaxonToStandardConversion {
                   // Struct or associated-value enum field: both are heap pointers now
                   var nestedHeapPtr = EmitLoad(newBlock, nestedStructName, varTypes);
                   EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
-                  // ChainNode data stays owned by its chain — the wrapper holds a borrowed pointer.
-                  // Reparenting would steal ownership from the chain, causing the node to be freed
-                  // when the wrapper goes out of scope (even though the chain still needs it).
-                  bool isChainNodeData = structValueTypes.TryGetValue(fieldVal.Id, out var nestedTypeName)
-                    && IsChainNodeType(nestedTypeName, module.TypeDefs);
-                  // Parent-owned references (from array.get) and function parameters
-                  // must not be reparented — they are borrowed, not owned. The struct
-                  // field holds a raw pointer; the value stays owned by its current owner.
-                  // This matches Chain's borrowed pointer pattern for navigation results.
-                  bool isBorrowed = parentOwnedVarNames.Contains(nestedStructName)
-                    || structParamNames.Contains(nestedStructName);
-                  if (!isBorrowed && !isChainNodeData) {
-                    EmitReparent(newBlock, (StdI64)nestedHeapPtr, tempName, varTypes);
-                  }
+                  // Incref — the struct holds a reference to this nested value
+                  EmitIncrefValue(newBlock, (StdI64)nestedHeapPtr);
+                  // If the nested value is a raw struct-literal temp (__struct_N), its only
+                  // reference is now from this parent's field store incref (rc went 0->1).
                 } else {
                   var mappedVal = valueMap[fieldVal];
                   var litFieldStoreType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
@@ -809,12 +771,12 @@ public static partial class MaxonToStandardConversion {
                   var copyResult = new StdI64(MlirContext.Current.NextId());
                   newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
 
-                  // Reparent struct elements under the array wrapper so they survive scope exit
+                  // Incref struct elements — the array holds references to them
                   var firstElemVar = $"{structLitOp.ArrayLiteralTag}.0";
                   if (varNameToStructType.ContainsKey(firstElemVar)) {
                     for (int ei = 0; ei < structLitOp.ArrayLiteralCount; ei++) {
                       var elemVar = $"{structLitOp.ArrayLiteralTag}.{ei}";
-                      EmitReparent(newBlock, (StdI64)EmitLoad(newBlock, elemVar, varTypes), tempName, varTypes);
+                      EmitIncrefValue(newBlock, (StdI64)EmitLoad(newBlock, elemVar, varTypes));
                     }
                   }
 
@@ -831,13 +793,12 @@ public static partial class MaxonToStandardConversion {
                   newBlock.AddOp(castOp);
                   rdataPtr = castOp.Result;
 
-                  // Reparent struct elements under the array wrapper so Array.get
-                  // returns parent-owned references (mm_incref/mm_decref are no-ops)
+                  // Incref struct elements — the array holds references to them
                   var firstElemVarStack = $"{structLitOp.ArrayLiteralTag}.0";
                   if (varNameToStructType.ContainsKey(firstElemVarStack)) {
                     for (int ei = 0; ei < structLitOp.ArrayLiteralCount; ei++) {
                       var elemVar = $"{structLitOp.ArrayLiteralTag}.{ei}";
-                      EmitReparent(newBlock, (StdI64)EmitLoad(newBlock, elemVar, varTypes), tempName, varTypes);
+                      EmitIncrefValue(newBlock, (StdI64)EmitLoad(newBlock, elemVar, varTypes));
                     }
                   }
                 }
@@ -910,15 +871,14 @@ public static partial class MaxonToStandardConversion {
                 // Skip incref when source is a call return — callee's rc=1 IS our reference.
                 bool isFromCallReturn = srcName.StartsWith("__callret_")
                   || srcName.StartsWith("__call_tmp_")
+                  || srcName.StartsWith("__lit_tmp_")
                   || srcName.StartsWith("__interp_tostr_")
                   || srcName.StartsWith("__forin_result_")
                   || srcName.StartsWith("__chain_nav_");
                 if (isFromCallReturn
                     && !assignOp.VarName.StartsWith("__call_tmp_")
                     && !assignOp.VarName.StartsWith("__callret_")) {
-                  var currentScopeInfo = _scopeAnalysisStack?.Count > 0 ? _scopeAnalysisStack[^1] : null;
-                  if (currentScopeInfo?.ReturnSelfValueIds.Contains(assignOp.Value.Id) == true)
-                    isFromCallReturn = false;
+                  // ReturnSelf check removed with scope analysis — conservative: always treat as call return
                 }
                 if ((assignOp.IsDeclaration || srcName != dstName) && !isFromCallReturn) {
                   EmitIncref(newBlock, assignOp.VarName, varTypes);
@@ -927,28 +887,16 @@ public static partial class MaxonToStandardConversion {
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
                   var field = selfStructType!.GetField(assignOp.VarName);
                   if (field != null) {
+                    // Self-field write-through: just store the new value to self's heap field.
+                    // The regular assign path above already handled decref/incref for the
+                    // local variable, which aliases the self field.
                     var heapPtr2 = EmitLoad(newBlock, dstName, varTypes);
-                    if (field.Type is MlirStructType
-                        || (field.Type is MlirUnionType fieldUnion && fieldUnion.HasAssociatedValues)) {
-                      // Heap-pointer field: reparent new value under self only if it's
-                      // scope-owned (newly allocated). Parent-owned values (e.g., findLast
-                      // result pointing into existing chain) must not be detached from
-                      // their current owner. Old field values are not eagerly freed —
-                      // they remain in self's child list and are cleaned up at scope exit.
-                      var selfPtr = (StdI64)EmitLoad(newBlock, "self", varTypes);
-                      newBlock.AddOp(new StdCallRuntimeOp("mm_reparent_if_scope_owned", [heapPtr2, selfPtr], null));
-                    }
-                    if (Compiler.MmTrace)
-                      newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [heapPtr2], null));
                     EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
                   }
                 }
                 structVarNames[assignOp.Value.Id] = dstName;
                 structValueTypes[assignOp.Value.Id] = structTypeName;
                 varNameToStructPrefix[assignOp.VarName] = dstName;
-                // Propagate parent-owned flag through assignments
-                if (parentOwnedVarNames.Contains(srcName))
-                  parentOwnedVarNames.Add(assignOp.VarName);
               } else {
                 var mappedValue = valueMap[assignOp.Value];
                 // Widen I32/U32 to I64 when the variable was previously stored as I64
@@ -1144,9 +1092,15 @@ public static partial class MaxonToStandardConversion {
 
               if (faFieldDef != null) {
                 var storeType = faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true } ? MlirType.I64 : faFieldDef.Type;
+                if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
+                  // Decref old field value before overwriting
+                  var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, MlirType.I64, varTypes);
+                  EmitDecrefValue(newBlock, oldFieldVal);
+                }
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
-                  EmitReparent(newBlock, (StdI64)mappedVal, structName, varTypes);
+                  // Incref new value — the struct field holds a reference
+                  EmitIncrefValue(newBlock, (StdI64)mappedVal);
                 }
               } else {
                 EmitStore(newBlock, mappedVal, $"{structName}.{fieldAssign.FieldName}", varTypes);
@@ -1244,111 +1198,36 @@ public static partial class MaxonToStandardConversion {
               newBlock.AddOp(new StdBrOp(br.Target));
               break;
             }
-            case MaxonScopeEnterOp scopeEnterOp: {
-              var scopeInfo = funcScopeAnalysis?.GetValueOrDefault(scopeEnterOp.ResultVar);
-              _scopeAnalysisStack?.Add(scopeInfo);
-              if (scopeInfo is { NeedsRuntimeFrame: false }
-                  or { CanStaticFree: true }
-                  or { CanStaticReturn: true }) {
-                // All allocations are compile-time managed — elide runtime scope frame
-                var sentinel = new StdConstI64Op(0);
-                newBlock.AddOp(sentinel);
-                EmitStore(newBlock, sentinel.Result, scopeEnterOp.ResultVar, varTypes);
-              } else {
-                var tagPtr = EmitTagPtr(newBlock, scopeEnterOp.Tag);
-                var scopeResult = new StdI64(MlirContext.Current.NextId());
-                newBlock.AddOp(new StdCallRuntimeOp("mm_scope_enter", [tagPtr], scopeResult));
-                EmitStore(newBlock, scopeResult, scopeEnterOp.ResultVar, varTypes);
-                if (Compiler.MmTrace) {
-                  newBlock.AddOp(new StdCallRuntimeOp("mm_trace_scope_enter", [scopeResult], null));
-                }
-              }
-              varTypes[scopeEnterOp.ResultVar] = "i64";
-              break;
-            }
-            case MaxonScopeExitOp scopeExitOp: {
-              var scopeInfo = funcScopeAnalysis?.GetValueOrDefault(scopeExitOp.ScopeVar);
-              // Pop scope from analysis stack
-              if (_scopeAnalysisStack != null) {
-                for (int si = _scopeAnalysisStack.Count - 1; si >= 0; si--) {
-                  if (_scopeAnalysisStack[si]?.ScopeVar == scopeExitOp.ScopeVar) {
-                    _scopeAnalysisStack.RemoveAt(si);
-                    break;
+            case MaxonScopeEndOp scopeEnd: {
+              var keep = scopeEnd.KeepVars;
+              foreach (var v in scopeEnd.VarsToClean) {
+                if (keep != null && keep.Contains(v)) {
+                  // Ownership transferred to caller — skip decref but emit trace if enabled.
+                  if (Compiler.MmTrace && varNameToStructType.ContainsKey(v)) {
+                    var transferPtr = EmitLoad(newBlock, v, varTypes);
+                    var transferLocPtr = EmitNullPtr(newBlock);
+                    newBlock.AddOp(new StdCallRuntimeOp("mm_trace_transfer", [transferPtr, transferLocPtr], null));
                   }
+                  continue;
                 }
+                if (_structParamNames != null && _structParamNames.Contains(v)) continue;
+                // Self fields are owned by the heap-allocated struct; the struct destructor
+                // handles their cleanup when self is freed. Decref'ing them here would
+                // double-free after a field reassignment (assign decrefs old, scope_end
+                // would then decref the new value still held by the field).
+                if (IsSelfField(isStructInstanceMethod, selfStructType, v)) continue;
+                // Only decref if this var is actually managed (has a struct type)
+                if (!varNameToStructType.ContainsKey(v)) continue;
+                // Decref the variable, recursively handling managed struct fields if any.
+                // For structs with managed fields, emits StdDestructStructOp which handles
+                // conditional field cleanup inline at x86 level (no block splitting needed).
+                EmitDecrefWithFieldCleanup(newBlock, v, varTypes,
+                  varNameToStructType, module.TypeDefs, module.TypeAliasSources);
+                // Zero the slot so other paths see NULL (mm_decref(0) is a no-op)
+                var zeroOp = new StdConstI64Op(0);
+                newBlock.AddOp(zeroOp);
+                newBlock.AddOp(new StdStoreI64Op(zeroOp.Result, v));
               }
-              // Clear chain variables before decref — unlinks all nodes so they
-              // can be freed cleanly by the scope exit.
-              if (scopeInfo?.RefcountedVars.Count > 0) {
-                foreach (var rcVar in scopeInfo.RefcountedVars) {
-                  if (scopeInfo.ReturnMoveVars.Contains(rcVar)) continue;
-                  if (!varTypes.ContainsKey(rcVar)) continue;
-                  if (varNameToStructType.TryGetValue(rcVar, out var rcStructType) && IsChainType(rcStructType, module.TypeDefs)) {
-                    var chainPtr = (StdI64)EmitLoad(newBlock, rcVar, varTypes);
-                    newBlock.AddOp(new StdCallRuntimeOp("maxon_chain_clear", [chainPtr], null));
-                  }
-                }
-              }
-              // Emit decref for all refcounted vars in this scope
-              if (scopeInfo?.RefcountedVars.Count > 0) {
-                foreach (var rcVar in scopeInfo.RefcountedVars) {
-                  if (scopeInfo.ReturnMoveVars.Contains(rcVar)) continue;
-                  if (!varTypes.ContainsKey(rcVar)) continue;
-                  EmitDecref(newBlock, rcVar, varTypes);
-                }
-              }
-              if (scopeInfo is { NeedsRuntimeFrame: false }) {
-                // Scope was elided — refcounted vars have been decreffed above
-                break;
-              }
-              if (scopeInfo is { CanStaticFree: true } or { CanStaticReturn: true }) {
-                EmitStaticFree(newBlock, scopeInfo, varTypes);
-                break;
-              }
-              var scopePtr = (StdI64)EmitLoad(newBlock, scopeExitOp.ScopeVar, varTypes);
-              if (Compiler.MmTrace) {
-                newBlock.AddOp(new StdCallRuntimeOp("mm_trace_scope_exit", [scopePtr], null));
-              }
-              newBlock.AddOp(new StdCallRuntimeOp("mm_scope_exit", [scopePtr], null));
-              break;
-            }
-            case MaxonMoveOp moveOp: {
-              // Skip move for primitive values: after monomorphization, a generic function
-              // may have move ops for return values that resolved to primitives. Only heap-
-              // allocated values (structs/strings) tracked in varNameToStructPrefix need moves.
-              if (!varNameToStructPrefix.ContainsKey(moveOp.VarName)
-                  && !varNameToStructType.ContainsKey(moveOp.VarName))
-                break;
-              // Skip move for parent-owned references (borrowed from container).
-              // mm_move mode=0 is already a no-op for parent-owned, but we skip
-              // entirely to avoid the runtime call overhead.
-              if (parentOwnedVarNames.Contains(moveOp.VarName))
-                break;
-              // CanStaticReturn: scope frame is elided, so mm_alloc registers the return value
-              // directly in the caller's scope via __mm_current_scope — no mm_move needed
-              if (moveOp.Tag == "return_move") {
-                var moveScopeInfo = funcScopeAnalysis?.GetValueOrDefault(moveOp.DestScopeVar);
-                if (moveScopeInfo is { CanStaticReturn: true })
-                  break;
-              }
-              var varPtr = (StdI64)EmitLoad(newBlock, moveOp.VarName, varTypes);
-              var scopePtr = (StdI64)EmitLoad(newBlock, moveOp.DestScopeVar, varTypes);
-              // For return_move: move to the PARENT scope (caller's scope)
-              // ScopeFrame layout: [+8] = parent_scope
-              StdI64 destScope;
-              if (moveOp.Tag == "return_move") {
-                var scopeAsPtr = new StdPtr(scopePtr.Id);
-                var loadParent = new StdLoadIndirectOp(scopeAsPtr, 8, MlirType.I64);
-                newBlock.AddOp(loadParent);
-                destScope = (StdI64)loadParent.Result;
-              } else {
-                destScope = scopePtr;
-              }
-              var moveTag = new StdConstI64Op(0);
-              newBlock.AddOp(moveTag);
-              newBlock.AddOp(new StdCallRuntimeOp("mm_move", [varPtr, destScope, moveTag.Result], null));
-              if (Compiler.MmTrace)
-                newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [varPtr], null));
               break;
             }
             case MaxonTruncOp truncOp: {
@@ -1590,22 +1469,15 @@ public static partial class MaxonToStandardConversion {
 
                 bool isModuleInit = func.Name == "__module_init" || func.Name.EndsWith(".__module_init");
                 if (!isModuleInit) {
-                  // Free old global value before storing new one.
-                  // Guard against null (global starts as zero before __module_init runs).
+                  // Decref old global value before storing new one.
+                  // mm_decref is null-safe (global starts as zero before __module_init runs).
                   var oldGlobalLoad = new StdGlobalLoadI64Op(globalStore.GlobalName);
                   newBlock.AddOp(oldGlobalLoad);
-                  newBlock.AddOp(new StdCallRuntimeOp("mm_free_if_nonnull", [oldGlobalLoad.Result], null));
-
-                  // Move the new allocation to the root scope so it outlives the current function
-                  var rootScopeResult = new StdI64(MlirContext.Current.NextId());
-                  newBlock.AddOp(new StdCallRuntimeOp("mm_get_root_scope", [], rootScopeResult));
-                  var moveMode = new StdConstI64Op(0); // mode 0 = move to scope
-                  newBlock.AddOp(moveMode);
-                  newBlock.AddOp(new StdCallRuntimeOp("mm_move", [newHeapPtr, rootScopeResult, moveMode.Result], null));
-                  if (Compiler.MmTrace)
-                    newBlock.AddOp(new StdCallRuntimeOp("mm_trace_move", [newHeapPtr], null));
+                  EmitDecrefValue(newBlock, oldGlobalLoad.Result);
                 }
 
+                // Incref the new value — the global holds a reference
+                EmitIncrefValue(newBlock, newHeapPtr);
                 newBlock.AddOp(new StdGlobalStoreI64Op(newHeapPtr, globalStore.GlobalName));
               } else {
                 var mappedValue = valueMap[globalStore.Value];
@@ -1679,14 +1551,19 @@ public static partial class MaxonToStandardConversion {
             case MaxonIndirectCallOp indirectCallOp:
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues);
               break;
-            case MaxonReturnOp retOp:
+            case MaxonReturnOp retOp: {
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
               break;
-            case MaxonThrowOp throwOp:
+            }
+            case MaxonThrowOp throwOp: {
               LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
               break;
+            }
             case MaxonManagedMemGetOp memGetOp:
-              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, parentOwnedVarNames);
+              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
+              break;
+            case MaxonManagedMemRemoveOp memRemoveOp:
+              LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
               break;
             case MaxonManagedMemSetOp memSetOp:
               LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1818,6 +1695,34 @@ public static partial class MaxonToStandardConversion {
           }
         }
       }
+
+      // Zero-initialize stack slots for all vars that scope_end will decref,
+      // so paths that skip the scope (e.g. untaken if-branches) see NULL.
+      var allScopeVars = new HashSet<string>();
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is MaxonScopeEndOp seo) {
+            foreach (var v in seo.VarsToClean)
+              allScopeVars.Add(v);
+          }
+        }
+      }
+      if (allScopeVars.Count > 0 && newFunc.Body.Blocks.Count > 0) {
+        var entryBlock = newFunc.Body.Blocks[0];
+        int insertIdx = 0;
+        foreach (var v in allScopeVars) {
+          if (_structParamNames != null && _structParamNames.Contains(v)) continue;
+          if (IsSelfField(isStructInstanceMethod, selfStructType, v)) continue;
+          if (!varNameToStructType.ContainsKey(v)) continue;  // only managed vars need zeroing
+          var zeroOp = new StdConstI64Op(0);
+          var storeOp = new StdStoreI64Op(zeroOp.Result, v);
+          entryBlock.Operations.Insert(insertIdx, zeroOp);
+          insertIdx++;
+          entryBlock.Operations.Insert(insertIdx, storeOp);
+          insertIdx++;
+        }
+      }
+
       result.AddFunction(newFunc);
     }
 
@@ -1841,7 +1746,8 @@ public static partial class MaxonToStandardConversion {
       if (meta.TypeName == null) continue;
       var globalLoad = new StdGlobalLoadI64Op(varName);
       block.AddOp(globalLoad);
-      block.AddOp(new StdCallRuntimeOp("mm_free_if_nonnull", [globalLoad.Result], null));
+      // Decref the global — mm_decref is null-safe and auto-frees at rc=0
+      EmitDecrefValue(block, globalLoad.Result);
     }
 
     block.AddOp(new StdReturnOp(null));
