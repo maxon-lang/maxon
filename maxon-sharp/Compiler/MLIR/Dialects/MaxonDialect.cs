@@ -1129,10 +1129,12 @@ public class MaxonChainNodeSetValueOp(MaxonValue node, MaxonValue value, string 
   public override IReadOnlyList<string> PrintableOperands => [Node.ToString(), Value.ToString()];
 }
 
-// Removes all nodes from the chain, freeing each node
-public class MaxonChainClearOp(MaxonValue chain) : MaxonOp {
+// Removes all nodes from the chain, freeing each node.
+// ValueKind indicates the element type — used to decide whether node values need decref.
+public class MaxonChainClearOp(MaxonValue chain, string valueKind) : MaxonOp {
   public override string Mnemonic => "maxon.chain_clear";
   public MaxonValue Chain { get; } = chain;
+  public string ValueKind { get; } = valueKind;
   public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
 }
 

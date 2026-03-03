@@ -293,40 +293,6 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Emits cleanup for a managed struct variable, handling field decrefs if the struct type
-  /// has heap-allocated fields. If the struct has no managed fields, emits a plain mm_decref.
-  /// If it has managed fields, emits StdDestructStructOp which handles conditional field cleanup
-  /// inline at the x86 level (no block splitting — avoids cross-block SSA lifetime issues).
-  /// </summary>
-  private static void EmitDecrefWithFieldCleanup(
-    MlirBlock<StandardOp> block, string varName,
-    Dictionary<string, string> varTypes, Dictionary<string, string> varNameToStructType,
-    Dictionary<string, MlirType> typeDefs, Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
-    string? sourceLoc = null) {
-    var typeName = varNameToStructType[varName];
-    var managedFields = GetManagedFields(typeName, typeDefs);
-
-    if (managedFields.Count == 0) {
-      EmitDecref(block, varName, varTypes, sourceLoc);
-      return;
-    }
-
-    // Load heap pointer (trace before decref, since the object may be freed)
-    var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
-    if (Compiler.MmTrace) {
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [heapPtr, locPtr], null));
-    }
-
-    // Emit a StdDestructStructOp that handles the conditional field cleanup inline:
-    //   mm_decref_check(ptr) → if rc==0: recursively destruct each managed field, then mm_free(ptr)
-    // This generates x86 inline without requiring a new block (avoids cross-block SSA issues).
-    var outerType = typeDefs.TryGetValue(typeName, out var t) ? t as MlirStructType : null;
-    var fieldInfos = BuildFieldDestructors(managedFields, typeDefs, [typeName], outerType, typeName, typeAliasSources);
-    block.AddOp(new StdDestructStructOp(heapPtr, fieldInfos));
-  }
-
-  /// <summary>
   /// Builds recursive FieldDestructorInfo for a list of managed struct fields.
   /// Fields whose types themselves have managed fields get nested destructors.
   /// The visited set breaks cycles for self-referential types (e.g. linked-list nodes):
@@ -401,16 +367,6 @@ public static partial class MaxonToStandardConversion {
     return resolved.Fields.Where(f => f.Type.IsHeapAllocated).ToList();
   }
 
-  /// <summary>Emit mm_decref on a raw heap pointer (StdI64). Used when the pointer is already loaded.</summary>
-  private static void EmitDecrefValue(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
-    // Trace BEFORE decref: mm_decref may free the object, invalidating the pointer
-    if (Compiler.MmTrace) {
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [heapPtr, locPtr], null));
-    }
-    block.AddOp(new StdCallRuntimeOp("mm_decref", [heapPtr], null));
-  }
-
   /// <summary>Emit mm_incref on a raw heap pointer (StdI64). Used when the pointer is already loaded.</summary>
   private static void EmitIncrefValue(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
     block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
@@ -420,32 +376,67 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// <summary>Emit null-guarded mm_decref: skips if pointer is null.</summary>
+  private static void EmitDecrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
+    if (Compiler.MmTrace) {
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, locPtr], null));
+    }
+    block.AddOp(new StdCallRuntimeIfNonnullOp("mm_decref", [heapPtr], null));
+  }
+
+  /// <summary>Emit null-guarded mm_incref: skips if pointer is null.</summary>
+  private static void EmitIncrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
+    block.AddOp(new StdCallRuntimeIfNonnullOp("mm_incref", [heapPtr], null));
+    if (Compiler.MmTrace) {
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_incref", [heapPtr, locPtr], null));
+    }
+  }
+
+  /// <summary>Emit null-guarded mm_decref on a variable.</summary>
+  private static void EmitDecrefIfNonnull(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? sourceLoc = null) {
+    var heapPtr = EmitLoad(block, varName, varTypes);
+    if (Compiler.MmTrace) {
+      var tracePtr = EmitLoad(block, varName, varTypes);
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [tracePtr, locPtr], null));
+    }
+    block.AddOp(new StdCallRuntimeIfNonnullOp("mm_decref", [heapPtr], null));
+  }
+
+  /// <summary>
+  /// Null-guarded version of EmitDecrefWithFieldCleanup. Skips entire destruction if pointer is null.
+  /// Used for scope-end cleanup where variables may be zero-initialized on untaken code paths.
+  /// </summary>
+  private static void EmitDecrefWithFieldCleanupIfNonnull(
+    MlirBlock<StandardOp> block, string varName,
+    Dictionary<string, string> varTypes, Dictionary<string, string> varNameToStructType,
+    Dictionary<string, MlirType> typeDefs, Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
+    string? sourceLoc = null) {
+    var typeName = varNameToStructType[varName];
+    var managedFields = GetManagedFields(typeName, typeDefs);
+
+    if (managedFields.Count == 0) {
+      EmitDecrefIfNonnull(block, varName, varTypes, sourceLoc);
+      return;
+    }
+
+    var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
+    if (Compiler.MmTrace) {
+      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, locPtr], null));
+    }
+
+    var outerType = typeDefs.TryGetValue(typeName, out var t) ? t as MlirStructType : null;
+    var fieldInfos = BuildFieldDestructors(managedFields, typeDefs, [typeName], outerType, typeName, typeAliasSources);
+    block.AddOp(new StdDestructStructOp(heapPtr, fieldInfos, nullGuarded: true));
+  }
+
   private static StdI64 EmitNullPtr(MlirBlock<StandardOp> block) {
     var op = new StdConstI64Op(0);
     block.AddOp(op);
     return op.Result;
-  }
-
-  /// <summary>
-  /// Allocates a struct on the stack by creating contiguous field variables and returning
-  /// a LEA address past a NULL sentinel. The sentinel at [base] is always zero so that
-  /// [user_ptr - 8] == 0, which mm_incref/mm_decref use to detect unmanaged allocations.
-  /// </summary>
-  private static StdI64 EmitStackAlloc(MlirBlock<StandardOp> block, int sizeInBytes) {
-    var tag = $"__stk_{MlirContext.Current.NextId()}";
-    // +1 qword for the NULL sentinel at the front
-    int fieldCount = (sizeInBytes / 8) + 1;
-    block.AddOp(new StdBulkZeroOp(tag, fieldCount));
-    var leaOp = new StdLeaOp(tag);
-    block.AddOp(leaOp);
-    var ptrOp = new StdPtrToI64Op(leaOp.Result);
-    block.AddOp(ptrOp);
-    // Offset past the sentinel so user_ptr points to the first real field
-    var offsetOp = new StdConstI64Op(8);
-    block.AddOp(offsetOp);
-    var addOp = new StdAddI64Op(ptrOp.Result, offsetOp.Result);
-    block.AddOp(addOp);
-    return addOp.Result;
   }
 
   // __ManagedMemory field offsets (all fields are 8 bytes)

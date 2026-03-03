@@ -565,7 +565,7 @@ public static partial class MaxonToStandardConversion {
                 // Heap-pointer payload: decref old value, store new, incref new
                 var oldPayloadLoad = new StdLoadIndirectOp(enumHeapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(oldPayloadLoad);
-                EmitDecrefValue(newBlock, (StdI64)oldPayloadLoad.Result);
+                EmitDecrefValueIfNonnull(newBlock, (StdI64)oldPayloadLoad.Result);
                 var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrc, varTypes);
                 var enumHeapPtrReload = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
                 newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtrReload, byteOffset, MlirType.I64));
@@ -1093,9 +1093,9 @@ public static partial class MaxonToStandardConversion {
               if (faFieldDef != null) {
                 var storeType = faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true } ? MlirType.I64 : faFieldDef.Type;
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
-                  // Decref old field value before overwriting
+                  // Decref old field value before overwriting (may be null if field not yet initialized)
                   var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, MlirType.I64, varTypes);
-                  EmitDecrefValue(newBlock, oldFieldVal);
+                  EmitDecrefValueIfNonnull(newBlock, oldFieldVal);
                 }
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
@@ -1221,9 +1221,9 @@ public static partial class MaxonToStandardConversion {
                 // Decref the variable, recursively handling managed struct fields if any.
                 // For structs with managed fields, emits StdDestructStructOp which handles
                 // conditional field cleanup inline at x86 level (no block splitting needed).
-                EmitDecrefWithFieldCleanup(newBlock, v, varTypes,
+                EmitDecrefWithFieldCleanupIfNonnull(newBlock, v, varTypes,
                   varNameToStructType, module.TypeDefs, module.TypeAliasSources);
-                // Zero the slot so other paths see NULL (mm_decref(0) is a no-op)
+                // Zero the slot so other paths see NULL (null-guarded decref skips it)
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
                 newBlock.AddOp(new StdStoreI64Op(zeroOp.Result, v));
@@ -1469,11 +1469,10 @@ public static partial class MaxonToStandardConversion {
 
                 bool isModuleInit = func.Name == "__module_init" || func.Name.EndsWith(".__module_init");
                 if (!isModuleInit) {
-                  // Decref old global value before storing new one.
-                  // mm_decref is null-safe (global starts as zero before __module_init runs).
+                  // Decref old global value before storing new one (may be null if not yet assigned).
                   var oldGlobalLoad = new StdGlobalLoadI64Op(globalStore.GlobalName);
                   newBlock.AddOp(oldGlobalLoad);
-                  EmitDecrefValue(newBlock, oldGlobalLoad.Result);
+                  EmitDecrefValueIfNonnull(newBlock, oldGlobalLoad.Result);
                 }
 
                 // Incref the new value — the global holds a reference
@@ -1682,7 +1681,7 @@ public static partial class MaxonToStandardConversion {
               LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
               break;
             case MaxonChainClearOp chainClearOp:
-              LowerChainClear(chainClearOp, newBlock, varTypes, structVarNames);
+              LowerChainClear(chainClearOp, newBlock, varTypes, structVarNames, module.TypeDefs);
               break;
             case MaxonChainCursorResetOp cursorResetOp:
               LowerChainCursorReset(cursorResetOp, newBlock, varTypes, structVarNames);
@@ -1746,8 +1745,8 @@ public static partial class MaxonToStandardConversion {
       if (meta.TypeName == null) continue;
       var globalLoad = new StdGlobalLoadI64Op(varName);
       block.AddOp(globalLoad);
-      // Decref the global — mm_decref is null-safe and auto-frees at rc=0
-      EmitDecrefValue(block, globalLoad.Result);
+      // Decref the global (may be null if never assigned)
+      EmitDecrefValueIfNonnull(block, globalLoad.Result);
     }
 
     block.AddOp(new StdReturnOp(null));

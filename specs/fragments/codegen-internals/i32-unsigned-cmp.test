@@ -16,41 +16,38 @@ RequiredMLIR: ```
 module {
   func @codegen-internals.main() -> i64 {
   entry:
-    __scope_0 = maxon.scope_enter {tag = codegen-internals.main}
-    %1 = maxon.literal {value = 10 : i64}
-    %2 = maxon.cast %1 {target = i16}
-    maxon.assign %2 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 3 : i64}
-    %4 = maxon.cast %3 {target = i16}
-    maxon.assign %4 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.binop %2, %4 {op = gt}
-    maxon.cond_br %5 [then: check_0, else: check_0.after]
+    %0 = maxon.literal {value = 10 : i64}
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = gt}
+    maxon.cond_br %4 [then: check_0, else: check_0.after]
   check_0:
-    __scope_6 = maxon.scope_enter {tag = if_then}
-    %7 = maxon.literal {value = 1 : i64}
-    maxon.scope_exit {scope = __scope_6} {tag = return_cleanup}
-    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
-    maxon.return %7
+    %5 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [a, b]
+    maxon.return %5
   check_0.after:
-    %8 = maxon.literal {value = 0 : i64}
-    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
-    maxon.return %8
+    %6 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [a, b]
+    maxon.return %6
   }
 }
 === standard
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    %1 = arith.constant {value = 10 : i64}
-    %2 = arith.constant {value = 3 : i64}
-    %3 = arith.cmpi gt %1, %2
-    cf.cond_br %3 [then: check_0, else: check_0.after]
+    %0 = arith.constant {value = 10 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.cmpi gt %0, %1
+    cf.cond_br %2 [then: check_0, else: check_0.after]
   check_0:
-    %5 = arith.constant {value = 1 : i64}
-    func.return %5
+    %3 = arith.constant {value = 1 : i64}
+    func.return %3
   check_0.after:
-    %6 = arith.constant {value = 0 : i64}
-    func.return %6
+    %4 = arith.constant {value = 0 : i64}
+    func.return %4
   }
 }
 === x86

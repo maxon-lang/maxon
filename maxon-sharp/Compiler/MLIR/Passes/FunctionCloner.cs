@@ -343,7 +343,7 @@ internal class FunctionCloner {
         RegisterResult(cnv.Result, c.Result); return c;
       }
       case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(MapValue(cns.Node), MapValue(cns.Value), SubName(cns.ValueKind));
-      case MaxonChainClearOp ccl: return new MaxonChainClearOp(MapValue(ccl.Chain));
+      case MaxonChainClearOp ccl: return new MaxonChainClearOp(MapValue(ccl.Chain), SubName(ccl.ValueKind));
       case MaxonChainCursorResetOp ccr: return new MaxonChainCursorResetOp(MapValue(ccr.Chain));
       case MaxonChainCursorValueOp ccv: {
         var newRK = _typeSubstitution.TryGetValue(ccv.ValueKind, out var cvt) ? cvt.ToValueKind() : ccv.ResultKind;

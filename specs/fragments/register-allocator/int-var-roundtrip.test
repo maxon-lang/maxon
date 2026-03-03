@@ -10,43 +10,42 @@ RequiredMLIR: ```
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    __scope_0 = maxon.scope_enter {tag = register-allocator.main}
-    %1 = maxon.literal {value = 99 : i64}
-    maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    maxon.assign %1 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 0 : i64}
-    %3 = maxon.binop %1, %2 {op = lt}
-    %4 = maxon.literal {value = 4294967295 : i64}
-    %5 = maxon.binop %1, %4 {op = gt}
-    %6 = maxon.binop %3, %5 {op = or}
-    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+    %0 = maxon.literal {value = 99 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    %2 = maxon.binop %0, %1 {op = lt}
+    %3 = maxon.literal {value = 4294967295 : i64}
+    %4 = maxon.binop %0, %3 {op = gt}
+    %5 = maxon.binop %2, %4 {op = or}
+    maxon.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-var-roundtrip.test:4: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %8 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
-    maxon.return %8
+    %7 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [x, __range_val_0]
+    maxon.return %7
   }
 }
 === standard
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    %1 = arith.constant {value = 99 : i64}
-    memref.store %1, __range_val_0
-    %2 = arith.constant {value = 0 : i64}
-    %3 = arith.cmpi lt %1, %2
-    %4 = arith.constant {value = 4294967295 : i64}
-    %5 = arith.cmpi gt %1, %4
-    %6 = arith.ori1 %3, %5
-    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+    %0 = arith.constant {value = 99 : i64}
+    memref.store %0, __range_val_0
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.cmpi lt %0, %1
+    %3 = arith.constant {value = 4294967295 : i64}
+    %4 = arith.cmpi gt %0, %3
+    %5 = arith.ori1 %2, %4
+    cf.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %7 = memref.lea_symdata __panic_msg_7
-    %8 = std.ptr_to_i64 %7
-    std.call_runtime @maxon_panic %8
+    %6 = memref.lea_symdata __panic_msg_6
+    %7 = std.ptr_to_i64 %6
+    std.call_runtime @maxon_panic %7
   __range_ok_0:
-    %9 = memref.load __range_val_0 : i64
-    func.return %9
+    %8 = memref.load __range_val_0 : i64
+    func.return %8
   }
 }
 === x86
@@ -68,7 +67,7 @@ module {
     x86.test edx, edx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_7]
+    x86.lea_symdata rax, [__panic_msg_6]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

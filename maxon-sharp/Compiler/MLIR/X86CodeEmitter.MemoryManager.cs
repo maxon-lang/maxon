@@ -82,6 +82,19 @@ public partial class X86CodeEmitter {
       "mm_realloc called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
     // Debug strings for enhanced panic output
     DefineSymdata("__mm_debug_free_ptr", "mm_free bad ptr=\0"u8.ToArray());
+    // Panic strings for null/unmanaged pointer passed to refcount operations
+    DefineSymdata("__mm_panic_decref_null",
+      "mm_decref called with NULL pointer\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_decref_unmanaged",
+      "mm_decref called on unmanaged pointer (no AllocEntry)\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_incref_null",
+      "mm_incref called with NULL pointer\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_incref_unmanaged",
+      "mm_incref called on unmanaged pointer (no AllocEntry)\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_decref_check_null",
+      "mm_decref_check called with NULL pointer\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_decref_check_unmanaged",
+      "mm_decref_check called on unmanaged pointer (no AllocEntry)\n\0"u8.ToArray());
     // Panic string for decref underflow (refcount already zero = double-free / missing incref)
     DefineSymdata("__mm_panic_decref_underflow",
       "mm_decref: refcount underflow (already zero)\n\0"u8.ToArray());
@@ -142,6 +155,7 @@ public partial class X86CodeEmitter {
     EmitChainInsertBefore();
     EmitChainUnlink();
     EmitChainClear();
+    EmitChainClearManaged();
     if (Compiler.MmTrace) {
       EmitMmTracePrintIndent();
       EmitMmTraceAlloc();
@@ -1003,23 +1017,29 @@ public partial class X86CodeEmitter {
   // -------------------------------------------------------------------------
   // mm_incref(user_ptr_in_rcx) -> void
   // Increments refcount for any managed allocation.
-  // Skips NULL and unmanaged (no backpointer) allocations.
+  // Panics on NULL or unmanaged pointers — callers must guard against null.
   // -------------------------------------------------------------------------
   private void EmitMmIncref() {
     EmitRuntimeFunctionStart("mm_incref", 1, 0x30);
 
-    // NULL check
+    // NULL check — panic
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_incref_done");
+    EmitJcc("nz", "mm_incref_not_null");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_incref_null");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_incref_not_null");
 
     // Load entry = [user_ptr - 8]
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry from backpointer
 
-    // Unmanaged check (stack alloc)
+    // Unmanaged check — panic
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_incref_done");
+    EmitJcc("nz", "mm_incref_managed");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_incref_unmanaged");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_incref_managed");
 
     // Validate entry magic (MmDebug only)
     if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_incref");
@@ -1027,33 +1047,38 @@ public partial class X86CodeEmitter {
     // Increment refcount: entry.refcount += 1 (at +64)
     EmitBytes(0x48, 0xFF, 0x40, 0x40); // INC qword [rax+64] — entry.refcount++
 
-    DefineLabel("mm_incref_done");
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
   // mm_decref(user_ptr_in_rcx) -> void
   // Decrements refcount. If it reaches zero, frees it via mm_free_entry.
-  // Skips NULL and unmanaged allocations.
+  // Panics on NULL or unmanaged pointers — callers must guard against null.
   // Panics if refcount is already zero (underflow = bug).
   // -------------------------------------------------------------------------
   private void EmitMmDecref() {
     // Stack: [rbp-8]=user_ptr, [rbp-16]=entry
     EmitRuntimeFunctionStart("mm_decref", 1, 0x30);
 
-    // NULL check
+    // NULL check — panic
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_decref_done");
+    EmitJcc("nz", "mm_decref_not_null");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_decref_null");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_decref_not_null");
 
     // Load entry = [user_ptr - 8]
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = entry
 
-    // Unmanaged check
+    // Unmanaged check — panic
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_decref_done");
+    EmitJcc("nz", "mm_decref_managed");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_decref_unmanaged");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_decref_managed");
 
     // Validate entry magic (MmDebug only)
     if (Compiler.MmDebug) EmitMmDebugCheckEntryMagic("mm_decref");
@@ -1086,18 +1111,18 @@ public partial class X86CodeEmitter {
   // mm_decref_check(user_ptr_in_rcx) -> new_refcount_in_rax
   // Like mm_decref but returns the new refcount instead of auto-freeing.
   // Caller uses return value to decide if inline destructor + mm_free is needed.
-  // Returns -1 for NULL/unmanaged (caller should skip), or the new refcount.
+  // Panics on NULL or unmanaged pointers — callers must guard against null.
   // -------------------------------------------------------------------------
   private void EmitMmDecrefCheck() {
     // Stack: [rbp-8]=user_ptr, [rbp-16]=entry
     EmitRuntimeFunctionStart("mm_decref_check", 1, 0x30);
 
-    // NULL check — return -1
+    // NULL check — panic
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_decref_check_not_null");
-    EmitMovRegImm(X86Register.Rax, -1); // return -1 (skip)
-    EmitJmp("mm_decref_check_done");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_decref_check_null");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_decref_check_not_null");
 
     // Load entry = [user_ptr - 8]
@@ -1105,11 +1130,11 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = entry
 
-    // Unmanaged check — return -1
+    // Unmanaged check — panic
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_decref_check_managed");
-    EmitMovRegImm(X86Register.Rax, -1); // return -1 (skip)
-    EmitJmp("mm_decref_check_done");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_decref_check_unmanaged");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_decref_check_managed");
 
     // Validate entry magic (MmDebug only)
@@ -1177,8 +1202,12 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // rcx = buffer
     // element_ptr = buffer + index * 8
     EmitBytes(0x48, 0x8B, 0x0C, 0xC1); // MOV rcx, [rcx + rax*8]
+    // Null guard: buffer slots can be null (zeroed after remove operations)
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "mm_decref_managed_elements_skip");
     // mm_decref(element_ptr)
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
+    DefineLabel("mm_decref_managed_elements_skip");
 
     // index++
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
@@ -1801,22 +1830,34 @@ public partial class X86CodeEmitter {
 
   // -------------------------------------------------------------------------
   // maxon_chain_clear(chain_ptr_rcx) -> void
-  // Walk chain head->next, for each node: if refcount == 0 free it,
-  // if refcount > 0 detach it (clear owner_entry) so it stays alive via refcount.
-  // Stack: [rbp-8]=chain_ptr, [rbp-40]=current, [rbp-48]=next, [rbp-56]=entry
+  // Primitive variant: free each node without decref'ing node values.
   // -------------------------------------------------------------------------
-  private void EmitChainClear() {
-    EmitRuntimeFunctionStart("maxon_chain_clear", 1, 0x60);
+  private void EmitChainClear() => EmitChainClearImpl("maxon_chain_clear", managed: false);
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_clear_managed(chain_ptr_rcx) -> void
+  // Managed variant: decref each node's heap value before freeing the node.
+  // -------------------------------------------------------------------------
+  private void EmitChainClearManaged() => EmitChainClearImpl("maxon_chain_clear_managed", managed: true);
+
+  // -------------------------------------------------------------------------
+  // Shared implementation for chain clear (primitive vs managed).
+  // Walks chain head->next, optionally decrefs node values, frees each node,
+  // then zeros the chain metadata.
+  // Stack: [rbp-8]=chain_ptr, [rbp-40]=current, [rbp-48]=next
+  // -------------------------------------------------------------------------
+  private void EmitChainClearImpl(string funcName, bool managed) {
+    EmitRuntimeFunctionStart(funcName, 1, 0x60);
 
     // current = [chain+0] — chain.head
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — chain.head
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current
 
-    DefineLabel("chain_clear_loop");
+    DefineLabel($"{funcName}_loop");
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_clear_loop_done");
+    EmitJcc("z", $"{funcName}_loop_done");
 
     // Save next before modifying: next = [current+0]
     EmitBytes(0x48, 0x8B, 0x48, 0x00); // MOV rcx, [rax+0] — current.next
@@ -1828,27 +1869,30 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — node.prev = 0
     EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — node.chain = 0
 
-    // Decref the value stored in the node (node+24) — null-safe via mm_decref
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
-    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — node.value
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    if (Compiler.MmTrace) {
-      EmitMovRegMem(X86Register.Rax, -0x28, 8);
-      EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24]
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_decref")); EmitDword(0);
+    if (managed) {
+      // Decref the heap value stored in the node (node+24)
+      // Trace before decref: mm_decref may free the object, invalidating the pointer
+      if (Compiler.MmTrace) {
+        EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
+        EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — node.value
+        EmitMovRegImm(X86Register.Rdx, 0); // rdx = NULL (no source location)
+        EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_decref")); EmitDword(0);
+      }
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
+      EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — node.value
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     }
 
     // Free the node via mm_free(user_ptr)
     EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = current (user ptr)
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
 
-    DefineLabel("chain_clear_advance");
     // current = next
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
-    EmitJmp("chain_clear_loop");
+    EmitJmp($"{funcName}_loop");
 
-    DefineLabel("chain_clear_loop_done");
+    DefineLabel($"{funcName}_loop_done");
 
     // Zero chain metadata: head = 0, tail = 0, count = 0
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr

@@ -216,10 +216,10 @@ public static partial class MaxonToStandardConversion {
 
 		if (op.IsStructElement) {
 			// Struct elements are heap pointers — release the old reference before overwriting.
-			// mm_decref is null-safe, so this handles both occupied and zeroed slots.
+			// Old slot may be null (zeroed after remove), so use null-guarded decref.
 			var oldElemLoad = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(oldElemLoad);
-			EmitDecrefValue(block, (StdI64)oldElemLoad.Result);
+			EmitDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result);
 			var srcName = structVarNames[op.Value.Id];
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));

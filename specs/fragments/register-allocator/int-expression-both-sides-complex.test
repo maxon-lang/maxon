@@ -13,58 +13,57 @@ RequiredMLIR: ```
 module {
   func @register-allocator.main() -> i64 {
   entry:
-    __scope_0 = maxon.scope_enter {tag = register-allocator.main}
-    %1 = maxon.literal {value = 3 : i64}
-    maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %2 = maxon.literal {value = 5 : i64}
-    maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.literal {value = 7 : i64}
-    maxon.assign %3 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %4 = maxon.literal {value = 2 : i64}
-    maxon.assign %4 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %5 = maxon.binop %1, %2 {op = add}
-    %6 = maxon.binop %3, %4 {op = sub}
-    %7 = maxon.binop %5, %6 {op = mul}
-    maxon.assign %7 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %8 = maxon.literal {value = 0 : i64}
-    %9 = maxon.binop %7, %8 {op = lt}
-    %10 = maxon.literal {value = 4294967295 : i64}
-    %11 = maxon.binop %7, %10 {op = gt}
-    %12 = maxon.binop %9, %11 {op = or}
-    maxon.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
+    %0 = maxon.literal {value = 3 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 7 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 2 : i64}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %0, %1 {op = add}
+    %5 = maxon.binop %2, %3 {op = sub}
+    %6 = maxon.binop %4, %5 {op = mul}
+    maxon.assign %6 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 0 : i64}
+    %8 = maxon.binop %6, %7 {op = lt}
+    %9 = maxon.literal {value = 4294967295 : i64}
+    %10 = maxon.binop %6, %9 {op = gt}
+    %11 = maxon.binop %8, %10 {op = or}
+    maxon.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
     maxon.panic "panic at int-expression-both-sides-complex.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %14 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_exit {scope = __scope_0} {tag = return_cleanup}
-    maxon.return %14
+    %13 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, c, d, __range_val_0]
+    maxon.return %13
   }
 }
 === standard
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    %1 = arith.constant {value = 3 : i64}
-    %2 = arith.constant {value = 5 : i64}
-    %3 = arith.constant {value = 7 : i64}
-    %4 = arith.constant {value = 2 : i64}
-    %5 = arith.addi %1, %2
-    %6 = arith.subi %3, %4
-    %7 = arith.muli %5, %6
-    memref.store %7, __range_val_0
-    %8 = arith.constant {value = 0 : i64}
-    %9 = arith.cmpi lt %7, %8
-    %10 = arith.constant {value = 4294967295 : i64}
-    %11 = arith.cmpi gt %7, %10
-    %12 = arith.ori1 %9, %11
-    cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
+    %0 = arith.constant {value = 3 : i64}
+    %1 = arith.constant {value = 5 : i64}
+    %2 = arith.constant {value = 7 : i64}
+    %3 = arith.constant {value = 2 : i64}
+    %4 = arith.addi %0, %1
+    %5 = arith.subi %2, %3
+    %6 = arith.muli %4, %5
+    memref.store %6, __range_val_0
+    %7 = arith.constant {value = 0 : i64}
+    %8 = arith.cmpi lt %6, %7
+    %9 = arith.constant {value = 4294967295 : i64}
+    %10 = arith.cmpi gt %6, %9
+    %11 = arith.ori1 %8, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %13 = memref.lea_symdata __panic_msg_13
-    %14 = std.ptr_to_i64 %13
-    std.call_runtime @maxon_panic %14
+    %12 = memref.lea_symdata __panic_msg_12
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
   __range_ok_0:
-    %15 = memref.load __range_val_0 : i64
-    func.return %15
+    %14 = memref.load __range_val_0 : i64
+    func.return %14
   }
 }
 === x86
@@ -92,7 +91,7 @@ module {
     x86.test edi, edi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_13]
+    x86.lea_symdata rax, [__panic_msg_12]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

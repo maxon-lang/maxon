@@ -40,9 +40,6 @@ module {
     x86.mov ecx, [rbp-16]
     x86.mov edx, [rbp-24]
     x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
     x86.mov eax, [rbp-16]
     x86.xor edx, edx
     x86.epilogue
@@ -51,9 +48,6 @@ module {
   func @parsable-interface.main() -> u32 {
   entry:
     x86.prologue stack_size=64
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.mov edx, 5
@@ -61,43 +55,60 @@ module {
     x86.mov rcx, 16
     x86.xor rdx, rdx
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov rdx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov rdx, [rbp-8]
     x86.mov rcx, 32
     x86.xor r8, r8
     x86.call mm_alloc_in
-    x86.mov [rbp-24], eax
-    x86.mov ebx, [rbp-24]
+    x86.mov [rbp-16], eax
+    x86.mov ebx, [rbp-16]
     x86.mov esi, [rbp-56]
     x86.mov [ebx+0], esi
-    x86.mov edi, [rbp-24]
+    x86.mov edi, [rbp-16]
     x86.mov r8, 5
     x86.mov [edi+8], r8
     x86.xor r9, r9
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov [eax+16], r9
     x86.mov eax, 1
-    x86.mov ecx, [rbp-24]
-    x86.mov [ecx+24], eax
-    x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-16]
+    x86.mov [ecx+24], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.mov [ecx+0], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
     x86.call Value.fromString
     x86.mov [rbp-32], eax
     x86.xor eax, eax
     x86.cmp edx, eax
     x86.je parsable-interface.main.otherwise_continue_1
   otherwise_error_0:
-    x86.mov eax, [rbp-32]
-    x86.mov rcx, [rbp-32]
+    x86.mov eax, [rbp-24]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_61
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_62
+    x86.mov [rbp-56], eax
+    x86.mov rcx, [rbp-24]
+    x86.call mm_free
+    x86.label __destruct_skip_62
+    x86.label __destruct_nullguard_61
+    x86.mov ecx, [rbp-32]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_63
     x86.call mm_decref
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
+    x86.label __nonnull_skip_63
     x86.xor eax, eax
     x86.epilogue
     x86.ret
@@ -121,18 +132,33 @@ module {
     x86.test edi, edi
     x86.je parsable-interface.main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_40]
+    x86.lea_symdata rax, [__panic_msg_36]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
     x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-40]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_64
+    x86.call mm_decref
+    x86.label __nonnull_skip_64
+    x86.mov eax, [rbp-24]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_65
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_66
+    x86.mov [rbp-56], eax
+    x86.mov rcx, [rbp-24]
+    x86.call mm_free
+    x86.label __destruct_skip_66
+    x86.label __destruct_nullguard_65
     x86.mov ecx, [rbp-32]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_67
     x86.call mm_decref
-    x86.mov eax, [rbp-40]
-    x86.mov rcx, [rbp-40]
-    x86.call mm_decref
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
+    x86.label __nonnull_skip_67
     x86.mov eax, [rbp-48]
     x86.epilogue
     x86.ret

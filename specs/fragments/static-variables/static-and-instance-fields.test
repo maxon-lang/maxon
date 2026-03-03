@@ -36,9 +36,6 @@ module {
     x86.mov ecx, [rbp-8]
     x86.mov edx, [rbp-16]
     x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
     x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
@@ -46,23 +43,20 @@ module {
   func @static-variables.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.mov rcx, 10
     x86.call Thing.make
-    x86.mov [rbp-16], eax
+    x86.mov [rbp-8], eax
     x86.mov rcx, 20
     x86.call Thing.make
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-16], eax
     x86.mov eax, qword [rip+Thing.created]
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.mov edx, [ecx+0]
     x86.add eax, edx
-    x86.mov ebx, [rbp-24]
+    x86.mov ebx, [rbp-16]
     x86.mov esi, [ebx+0]
     x86.add eax, esi
-    x86.mov [rbp-32], eax
+    x86.mov [rbp-24], eax
     x86.xor edi, edi
     x86.cmp eax, edi
     x86.setl r8
@@ -75,19 +69,23 @@ module {
     x86.test r8, r8
     x86.je static-variables.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_34]
+    x86.lea_symdata rax, [__panic_msg_30]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [rbp-16]
-    x86.call mm_decref
     x86.mov eax, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
     x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-32]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_38
+    x86.call mm_decref
+    x86.label __nonnull_skip_38
+    x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_39
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_39
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

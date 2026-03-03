@@ -19,30 +19,6 @@ public static partial class MaxonToStandardConversion {
   private const int NodeValueOffset = 24;
   private const int ChainNodeDataSize = 32;
 
-  /// Whether a type name refers to a Chain-family type (Chain itself or a concrete alias like EChain).
-  private static bool IsChainType(string typeName, Dictionary<string, MlirType>? typeDefs = null) {
-    if (typeName == "__Chain") return true;
-    if (typeDefs != null && typeDefs.TryGetValue(typeName, out var resolved)
-        && resolved is MlirStructType st && st.Name == typeName
-        && st.Fields.Count == 4
-        && st.Fields[0].Name == "head" && st.Fields[1].Name == "tail"
-        && st.Fields[2].Name == "count" && st.Fields[3].Name == "cursor")
-      return true;
-    return false;
-  }
-
-  /// Whether a type name refers to a ChainNode-family type (ChainNode itself or a concrete alias).
-  private static bool IsChainNodeType(string typeName, Dictionary<string, MlirType>? typeDefs = null) {
-    if (typeName == "__ChainNode") return true;
-    if (typeDefs != null && typeDefs.TryGetValue(typeName, out var resolved)
-        && resolved is MlirStructType st && st.Name == typeName
-        && st.Fields.Count == 4
-        && st.Fields[0].Name == "next" && st.Fields[1].Name == "prev"
-        && st.Fields[2].Name == "chain" && st.Fields[3].Name == "value")
-      return true;
-    return false;
-  }
-
   /// Whether a chain element's valueKind represents a heap-allocated type (struct/string/etc.)
   /// rather than a primitive (int/float/bool/byte).
   /// After monomorphization, valueKind may be a typealias name (e.g., "Integer") for a
@@ -377,8 +353,8 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(oldValueLoad);
       var oldValue = (StdI64)oldValueLoad.Result;
 
-      // Decref old value — node no longer holds a reference
-      EmitDecrefValue(block, oldValue);
+      // Decref old value — node no longer holds a reference (may be null)
+      EmitDecrefValueIfNonnull(block, oldValue);
 
       // Store new value and incref — node now holds a reference
       var valueSrcName = structVarNames[op.Value.Id];
@@ -395,17 +371,20 @@ public static partial class MaxonToStandardConversion {
 
   /// <summary>
   /// Lowers MaxonChainClearOp: calls runtime to unlink and free all nodes.
-  /// The runtime function walks the chain and frees each node.
+  /// Uses maxon_chain_clear_managed for heap-value chains (decrefs node values),
+  /// and maxon_chain_clear for primitive chains (no decref needed).
   /// </summary>
   private static void LowerChainClear(
     MaxonChainClearOp op,
     MlirBlock<StandardOp> block,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<int, string> structVarNames,
+    Dictionary<string, MlirType> typeDefs) {
 
     var chainVarName = structVarNames[op.Chain.Id];
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
-    block.AddOp(new StdCallRuntimeOp("maxon_chain_clear", [chainPtr], null));
+    var clearFunc = IsChainHeapValueKind(op.ValueKind, typeDefs) ? "maxon_chain_clear_managed" : "maxon_chain_clear";
+    block.AddOp(new StdCallRuntimeOp(clearFunc, [chainPtr], null));
 
     // Reset cursor to null after clearing
     var chainPtrReload = (StdI64)EmitLoad(block, chainVarName, varTypes);
@@ -534,11 +513,9 @@ public static partial class MaxonToStandardConversion {
       var tempName = $"__chain_nav_{result.Id}";
       EmitStore(block, loadedPtr, tempName, varTypes);
       // Incref the ChainNode so it survives until scope exit decref.
-      // mm_incref is a no-op for NULL, so safe even on the error path.
+      // Null-guarded: on the error path the node pointer is null.
       var nodeForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
-      block.AddOp(new StdCallRuntimeOp("mm_incref", [nodeForIncref], null));
-      if (Compiler.MmTrace)
-        block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [nodeForIncref], null));
+      EmitIncrefValueIfNonnull(block, nodeForIncref);
       structVarNames[result.Id] = tempName;
       structValueTypes[result.Id] = result is MaxonStruct ms ? ms.TypeName : "__ChainNode";
     }

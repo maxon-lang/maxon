@@ -133,7 +133,7 @@ public static class StandardToX86Conversion {
       foreach (var op in block.Operations) {
         foreach (var val in op.ReadValues) {
           lastUseOfValue[val] = scanIdx;
-          if (op is StdReturnOp or StdCallOp or StdCallRuntimeOp or StdTryCallOp)
+          if (op is StdReturnOp or StdCallOp or StdCallRuntimeOp or StdCallRuntimeIfNonnullOp or StdTryCallOp)
             sinkOnlyValues.Add(val);
           else
             usedByNonSink.Add(val);
@@ -911,6 +911,17 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdCallRuntimeIfNonnullOp guardedCallOp: {
+            // Null-guarded runtime call: skip if first arg is null
+            var skipLabel = $"__nonnull_skip_{MlirContext.Current.NextId()}";
+            regManager.EmitBoolTest(guardedCallOp.Args[0], x86Block);
+            x86Block.AddOp(new X86JccOp("z", skipLabel));
+            regManager.EmitCall(guardedCallOp.Callee, guardedCallOp.Args, guardedCallOp.Result, x86Block,
+              ConsumedArgs(guardedCallOp.Args, lastUseOfValue, currentOpIndex));
+            x86Block.AddOp(new X86LabelDefOp(skipLabel));
+            break;
+          }
+
           case StdPtrToI64Op ptrToI64Op: {
             // Pointer is already in a GPR, just alias it as i64
             regManager.EmitMovValueToValue(ptrToI64Op.Input, ptrToI64Op.Result, x86Block);
@@ -937,8 +948,18 @@ public static class StandardToX86Conversion {
           }
 
           case StdDestructStructOp destructOp: {
-            EmitInlineDestruct(regManager, x86Block, destructOp.HeapPtr, destructOp.ManagedFields,
-              ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex));
+            if (destructOp.NullGuarded) {
+              // Null-guarded: skip entire destruction if pointer is null
+              var nullSkipLabel = $"__destruct_nullguard_{MlirContext.Current.NextId()}";
+              regManager.EmitBoolTest(destructOp.HeapPtr, x86Block);
+              x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
+              EmitInlineDestruct(regManager, x86Block, destructOp.HeapPtr, destructOp.ManagedFields,
+                ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex));
+              x86Block.AddOp(new X86LabelDefOp(nullSkipLabel));
+            } else {
+              EmitInlineDestruct(regManager, x86Block, destructOp.HeapPtr, destructOp.ManagedFields,
+                ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex));
+            }
             break;
           }
 

@@ -76,66 +76,52 @@ module {
   }
   func @method-call-on-parameter.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
+    x86.prologue stack_size=48
     x86.mov eax, 5
-    x86.lea rdi, [rbp-16]
-    x86.xor eax, eax
-    x86.mov ecx, 2
-    x86.rep_stosq
-    x86.lea rcx, [rbp-16]
-    x86.mov rdx, rcx
-    x86.mov ebx, 8
-    x86.add edx, ebx
-    x86.mov [rbp-24], edx
-    x86.mov esi, [rbp-24]
-    x86.mov edi, 5
-    x86.mov [esi+0], edi
-    x86.mov r8, [rbp-24]
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, 5
+    x86.mov [ecx+0], edx
+    x86.mov ebx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov r9, 3
-    x86.lea rdi, [rbp-40]
-    x86.xor eax, eax
-    x86.mov ecx, 2
-    x86.rep_stosq
-    x86.lea rax, [rbp-40]
-    x86.mov rcx, rax
-    x86.mov eax, 8
-    x86.add ecx, eax
-    x86.mov [rbp-48], ecx
-    x86.mov eax, [rbp-48]
-    x86.mov [eax+0], r9
-    x86.mov eax, [rbp-48]
-    x86.mov rcx, [rbp-48]
+    x86.mov esi, 3
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov edi, [rbp-16]
+    x86.mov r8, 3
+    x86.mov [edi+0], r8
+    x86.mov r9, [rbp-16]
+    x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.mov eax, 2
-    x86.lea rdi, [rbp-64]
-    x86.xor eax, eax
-    x86.mov ecx, 2
-    x86.rep_stosq
-    x86.lea rax, [rbp-64]
-    x86.mov rcx, rax
-    x86.mov eax, 8
-    x86.add ecx, eax
-    x86.mov [rbp-72], ecx
-    x86.mov eax, [rbp-72]
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
     x86.mov ecx, 2
     x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-72]
-    x86.mov rcx, [rbp-72]
-    x86.call mm_incref
     x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-48]
     x86.mov rcx, [rbp-24]
-    x86.mov rdx, [rbp-48]
+    x86.call mm_incref
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-16]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
     x86.call Value.add
-    x86.mov ecx, [rbp-24]
-    x86.mov edx, [rbp-72]
-    x86.mov [rbp-88], eax
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [rbp-24]
+    x86.mov [rbp-40], eax
     x86.call Value.multiply
-    x86.mov ecx, [rbp-88]
+    x86.mov ecx, [rbp-40]
     x86.add ecx, eax
-    x86.mov [rbp-80], ecx
+    x86.mov [rbp-32], ecx
     x86.xor eax, eax
     x86.cmp ecx, eax
     x86.setl eax
@@ -148,19 +134,28 @@ module {
     x86.test eax, eax
     x86.je method-call-on-parameter.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_46]
+    x86.lea_symdata rax, [__panic_msg_41]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-80]
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_59
+    x86.call mm_decref
+    x86.label __nonnull_skip_59
+    x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_60
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_60
     x86.mov ecx, [rbp-24]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_61
     x86.call mm_decref
-    x86.mov eax, [rbp-48]
-    x86.mov rcx, [rbp-48]
-    x86.call mm_decref
-    x86.mov ecx, [rbp-72]
-    x86.call mm_decref
-    x86.mov eax, [rbp-80]
+    x86.label __nonnull_skip_61
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   }

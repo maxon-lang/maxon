@@ -14,7 +14,7 @@ a > b: true
 module {
   func @string-interpolation.main() -> u32 {
   entry:
-    x86.prologue stack_size=144
+    x86.prologue stack_size=160
     x86.mov eax, 5
     x86.mov ecx, 3
     x86.cmp eax, ecx
@@ -23,13 +23,13 @@ module {
     x86.lea_rdata rbx, [__interp_lit_0]
     x86.mov rsi, rbx
     x86.mov edi, 7
-    x86.mov [rbp-104], edx
-    x86.mov [rbp-112], esi
+    x86.mov [rbp-112], edx
+    x86.mov [rbp-120], esi
     x86.mov rcx, 6
     x86.xor rdx, rdx
     x86.call mm_alloc
     x86.mov [rbp-8], eax
-    x86.mov rcx, [rbp-104]
+    x86.mov rcx, [rbp-112]
     x86.mov rdx, [rbp-8]
     x86.call maxon_bool_to_string
     x86.mov r8, [rbp-8]
@@ -39,9 +39,9 @@ module {
     x86.mov ebx, 7
     x86.lea esi, [ebx + eax]
     x86.add esi, edx
-    x86.mov [rbp-120], eax
-    x86.mov [rbp-128], ecx
-    x86.mov [rbp-136], esi
+    x86.mov [rbp-128], eax
+    x86.mov [rbp-136], ecx
+    x86.mov [rbp-144], esi
     x86.mov rcx, 16
     x86.xor rdx, rdx
     x86.call mm_alloc
@@ -52,7 +52,7 @@ module {
     x86.call mm_alloc_in
     x86.mov [rbp-24], eax
     x86.mov ecx, 1
-    x86.mov edx, [rbp-136]
+    x86.mov edx, [rbp-144]
     x86.lea ebx, [edx + ecx]
     x86.mov rcx, rbx
     x86.mov rdx, [rbp-24]
@@ -61,17 +61,17 @@ module {
     x86.xor ecx, ecx
     x86.mov [rbp-32], ecx
     x86.mov [rbp-40], eax
-    x86.mov eax, [rbp-136]
+    x86.mov eax, [rbp-144]
     x86.mov [rbp-48], eax
-    x86.mov eax, [rbp-112]
+    x86.mov eax, [rbp-120]
     x86.mov [rbp-56], eax
     x86.mov eax, 7
     x86.mov [rbp-64], eax
     x86.mov eax, [rbp-8]
     x86.mov [rbp-72], eax
-    x86.mov eax, [rbp-120]
-    x86.mov [rbp-80], eax
     x86.mov eax, [rbp-128]
+    x86.mov [rbp-80], eax
+    x86.mov eax, [rbp-136]
     x86.mov [rbp-88], eax
     x86.mov eax, 1
     x86.mov [rbp-96], eax
@@ -136,8 +136,25 @@ module {
     x86.mov ecx, [rbp-16]
     x86.mov [ecx+8], eax
     x86.mov eax, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov [rbp-104], eax
+    x86.mov eax, [rbp-104]
+    x86.mov rcx, [rbp-104]
+    x86.call mm_incref
+    x86.mov eax, [rbp-104]
+    x86.mov rcx, [rbp-104]
     x86.call stdlib.Print.print
+    x86.mov eax, [rbp-104]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_74
+    x86.mov rcx, [rbp-104]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_75
+    x86.mov [rbp-152], eax
+    x86.mov rcx, [rbp-104]
+    x86.call mm_free
+    x86.label __destruct_skip_75
+    x86.label __destruct_nullguard_74
     x86.xor eax, eax
     x86.epilogue
     x86.ret

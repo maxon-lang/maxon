@@ -6444,7 +6444,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         case "clear": {
           // clear()
           Expect(TokenType.RightParen);
-          var op = new MaxonChainClearOp(selfValue);
+          var op = new MaxonChainClearOp(selfValue, valueKind);
           _currentBlock!.AddOp(op);
           return (true, null);
         }

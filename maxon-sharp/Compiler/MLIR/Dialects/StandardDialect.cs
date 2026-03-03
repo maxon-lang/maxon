@@ -1161,6 +1161,25 @@ public class StdCallRuntimeOp(string callee, List<StdValue> args, StdValue? resu
 }
 
 /// <summary>
+/// Like StdCallRuntimeOp but guards the first argument against null.
+/// If the first arg is null, the call is skipped entirely.
+/// Used for decref/incref on values that may legitimately be null
+/// (e.g., zero-initialized scope variables, uninitialized globals).
+/// </summary>
+public class StdCallRuntimeIfNonnullOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
+  public override string Mnemonic => $"std.call_runtime_if_nonnull @{Callee}";
+  public string Callee { get; } = callee;
+  public List<StdValue> Args { get; } = args;
+  public StdValue? Result { get; } = result;
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString()] : [];
+  public override IReadOnlyList<string> PrintableOperands =>
+    [.. Args.Select(a => a.ToString())];
+  public override List<StdValue> ReadValues => Args;
+  public override int PureResultId => -1;
+}
+
+/// <summary>
 /// Describes a managed field that needs recursive destruction when a struct is freed.
 /// If NestedFields is non-empty, the field is itself a struct with managed fields
 /// and must be recursively destructed (mm_decref_check + field cleanup + mm_free).
@@ -1179,10 +1198,11 @@ public record FieldDestructorInfo(int Offset, MlirType Type, List<FieldDestructo
 /// Emitted as inline x86 code with a conditional skip — no block split required, so
 /// SSA values live across the cleanup remain valid in the enclosing block.
 /// </summary>
-public class StdDestructStructOp(StdI64 heapPtr, List<FieldDestructorInfo> managedFields) : StandardOp {
-  public override string Mnemonic => $"mm.destruct_struct %{HeapPtr.Id} fields=[{string.Join(", ", ManagedFields.Select(f => $"+{f.Offset}"))}]";
+public class StdDestructStructOp(StdI64 heapPtr, List<FieldDestructorInfo> managedFields, bool nullGuarded = false) : StandardOp {
+  public override string Mnemonic => $"mm.destruct_struct %{HeapPtr.Id} fields=[{string.Join(", ", ManagedFields.Select(f => $"+{f.Offset}"))}]{(NullGuarded ? " null_guarded" : "")}";
   public StdI64 HeapPtr { get; } = heapPtr;
   public List<FieldDestructorInfo> ManagedFields { get; } = managedFields;
+  public bool NullGuarded { get; } = nullGuarded;
   public override List<StdValue> ReadValues => [HeapPtr];
   public override int PureResultId => -1;
 }

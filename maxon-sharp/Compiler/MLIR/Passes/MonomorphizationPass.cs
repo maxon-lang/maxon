@@ -731,7 +731,7 @@ public static class MonomorphizationPass {
         valueMap[cnv.Result.Id] = c.Result; return c;
       }
       case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(mapValue(cns.Node), mapValue(cns.Value), sub.SubstituteName(cns.ValueKind));
-      case MaxonChainClearOp ccl: return new MaxonChainClearOp(mapValue(ccl.Chain));
+      case MaxonChainClearOp ccl: return new MaxonChainClearOp(mapValue(ccl.Chain), sub.SubstituteName(ccl.ValueKind));
 
       default:
         throw new InvalidOperationException($"Interface alias specialization: unhandled op type {op.GetType().Name}");

@@ -61,9 +61,6 @@ module {
     x86.mov esi, [rbp-16]
     x86.mov edi, [rbp-32]
     x86.mov [esi+8], edi
-    x86.mov r8, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
     x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
@@ -91,34 +88,31 @@ module {
   func @interface-extensions.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.mov eax, 10
     x86.mov ecx, 32
     x86.mov rcx, 16
     x86.xor rdx, rdx
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov edx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov edx, [rbp-8]
     x86.mov ebx, 10
     x86.mov [edx+0], ebx
-    x86.mov esi, [rbp-16]
+    x86.mov esi, [rbp-8]
     x86.mov edi, 32
     x86.mov [esi+8], edi
-    x86.mov r8, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov r8, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov r9, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov r9, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call Coord.asSimple
-    x86.mov [rbp-24], eax
-    x86.mov eax, [rbp-24]
+    x86.mov [rbp-16], eax
+    x86.mov eax, [rbp-16]
     x86.mov ecx, [eax+0]
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov edx, [eax+8]
     x86.add ecx, edx
-    x86.mov [rbp-32], ecx
+    x86.mov [rbp-24], ecx
     x86.xor eax, eax
     x86.cmp ecx, eax
     x86.setl eax
@@ -131,19 +125,23 @@ module {
     x86.test eax, eax
     x86.je interface-extensions.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_64]
+    x86.lea_symdata rax, [__panic_msg_57]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [rbp-16]
-    x86.call mm_decref
     x86.mov eax, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
     x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-32]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_56
+    x86.call mm_decref
+    x86.label __nonnull_skip_56
+    x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_57
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_57
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }

@@ -21,9 +21,6 @@ module {
   func @union-full.main() -> u32 {
   entry:
     x86.prologue stack_size=128
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
     x86.mov edx, 5
@@ -31,31 +28,36 @@ module {
     x86.mov rcx, 16
     x86.xor rdx, rdx
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov rdx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov rdx, [rbp-8]
     x86.mov rcx, 32
     x86.xor r8, r8
     x86.call mm_alloc_in
-    x86.mov [rbp-24], eax
-    x86.mov ebx, [rbp-24]
+    x86.mov [rbp-16], eax
+    x86.mov ebx, [rbp-16]
     x86.mov esi, [rbp-80]
     x86.mov [ebx+0], esi
-    x86.mov edi, [rbp-24]
+    x86.mov edi, [rbp-16]
     x86.mov r8, 5
     x86.mov [edi+8], r8
     x86.xor r9, r9
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov [eax+16], r9
     x86.mov eax, 1
-    x86.mov ecx, [rbp-24]
-    x86.mov [ecx+24], eax
-    x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-16]
+    x86.mov [ecx+24], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.mov [ecx+0], eax
     x86.xor eax, eax
-    x86.mov ecx, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov eax, [rbp-24]
     x86.mov ecx, [eax+0]
     x86.mov [rbp-32], ecx
     x86.mov eax, [rbp-32]
@@ -158,19 +160,40 @@ module {
     x86.jne union-full.main.check_4.cmp1
   check_4.case0:
     x86.mov eax, [rbp-40]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_102
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.mov ecx, [rbp-48]
+    x86.label __nonnull_skip_102
+    x86.mov ecx, [rbp-56]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_103
     x86.call mm_decref
-    x86.mov edx, [rbp-56]
-    x86.mov rcx, [rbp-56]
-    x86.call mm_decref
-    x86.mov ebx, [rbp-64]
+    x86.label __nonnull_skip_103
+    x86.mov edx, [rbp-64]
+    x86.test edx, edx
+    x86.jz __nonnull_skip_104
     x86.mov rcx, [rbp-64]
     x86.call mm_decref
-    x86.mov esi, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
+    x86.label __nonnull_skip_104
+    x86.mov ebx, [rbp-24]
+    x86.test ebx, ebx
+    x86.jz __destruct_nullguard_105
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_106
+    x86.mov [rbp-80], eax
+    x86.mov rcx, [rbp-24]
+    x86.call mm_free
+    x86.label __destruct_skip_106
+    x86.label __destruct_nullguard_105
+    x86.mov esi, [rbp-48]
+    x86.test esi, esi
+    x86.jz __nonnull_skip_107
+    x86.mov rcx, [rbp-48]
+    x86.call mm_decref
+    x86.label __nonnull_skip_107
     x86.mov eax, 1
     x86.epilogue
     x86.ret
@@ -181,19 +204,40 @@ module {
     x86.jne union-full.main.check_4.merge
   check_4.case1:
     x86.mov eax, [rbp-40]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_108
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.mov ecx, [rbp-48]
+    x86.label __nonnull_skip_108
+    x86.mov ecx, [rbp-56]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_109
     x86.call mm_decref
-    x86.mov edx, [rbp-56]
-    x86.mov rcx, [rbp-56]
-    x86.call mm_decref
-    x86.mov ebx, [rbp-64]
+    x86.label __nonnull_skip_109
+    x86.mov edx, [rbp-64]
+    x86.test edx, edx
+    x86.jz __nonnull_skip_110
     x86.mov rcx, [rbp-64]
     x86.call mm_decref
-    x86.mov esi, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
+    x86.label __nonnull_skip_110
+    x86.mov ebx, [rbp-24]
+    x86.test ebx, ebx
+    x86.jz __destruct_nullguard_111
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_112
+    x86.mov [rbp-80], eax
+    x86.mov rcx, [rbp-24]
+    x86.call mm_free
+    x86.label __destruct_skip_112
+    x86.label __destruct_nullguard_111
+    x86.mov esi, [rbp-48]
+    x86.test esi, esi
+    x86.jz __nonnull_skip_113
+    x86.mov rcx, [rbp-48]
+    x86.call mm_decref
+    x86.label __nonnull_skip_113
     x86.xor eax, eax
     x86.epilogue
     x86.ret

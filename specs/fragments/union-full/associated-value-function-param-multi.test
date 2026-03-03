@@ -24,65 +24,58 @@ ExitCode: 30
 module {
   func @union-full.sum(p: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+0]
     x86.mov [rbp-16], ecx
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [eax+0]
-    x86.mov edx, [rbp-16]
-    x86.mov [rbp-24], edx
-    x86.mov ebx, [rbp-24]
-    x86.mov [rbp-40], ecx
-    x86.mov rcx, [rbp-24]
+    x86.mov ecx, [rbp-16]
+    x86.mov [rbp-32], edx
     x86.call mm_incref
-    x86.mov esi, [rbp-40]
-    x86.mov [rbp-32], esi
+    x86.mov edx, [rbp-32]
+    x86.mov [rbp-24], edx
     x86.jmp union-full.sum.handle_0.cmp0
   handle_0.cmp0:
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-24]
     x86.xor ecx, ecx
     x86.cmp eax, ecx
     x86.jne union-full.sum.handle_0.cmp1
   handle_0.case0:
-    x86.mov eax, [rbp-24]
-    x86.mov rcx, [rbp-24]
+    x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_43
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
+    x86.label __nonnull_skip_43
     x86.xor eax, eax
     x86.epilogue
     x86.ret
   handle_0.cmp1:
-    x86.mov eax, [rbp-32]
+    x86.mov eax, [rbp-24]
     x86.mov ecx, 1
     x86.cmp eax, ecx
     x86.jne union-full.sum.handle_0.merge
   handle_0.case1:
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.mov ecx, [eax+8]
-    x86.mov edx, [rbp-24]
+    x86.mov edx, [rbp-16]
     x86.mov ebx, [edx+16]
     x86.add ecx, ebx
-    x86.mov esi, [rbp-24]
-    x86.mov [rbp-40], ecx
-    x86.mov rcx, [rbp-24]
+    x86.mov esi, [rbp-16]
+    x86.test esi, esi
+    x86.jz __nonnull_skip_44
+    x86.mov [rbp-32], ecx
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
-    x86.mov edi, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-40]
+    x86.label __nonnull_skip_44
+    x86.mov eax, [rbp-32]
     x86.epilogue
     x86.ret
   handle_0.merge:
   }
   func @union-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
+    x86.prologue stack_size=16
     x86.mov eax, 10
     x86.mov ecx, 20
     x86.mov rcx, 24
@@ -94,14 +87,14 @@ module {
     x86.mov [eax+8], ebx
     x86.mov esi, 20
     x86.mov [eax+16], esi
-    x86.mov [rbp-16], eax
-    x86.mov edi, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov edi, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov r8, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov r8, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call union-full.sum
-    x86.mov [rbp-24], eax
+    x86.mov [rbp-16], eax
     x86.xor r9, r9
     x86.cmp eax, r9
     x86.setl ecx
@@ -114,17 +107,17 @@ module {
     x86.test ecx, ecx
     x86.je union-full.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_28]
+    x86.lea_symdata rax, [__panic_msg_24]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_45
     x86.call mm_decref
-    x86.mov eax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.label __nonnull_skip_45
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

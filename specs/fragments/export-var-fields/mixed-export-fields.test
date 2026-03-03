@@ -38,9 +38,6 @@ module {
     x86.mov edx, [rbp-8]
     x86.mov ebx, [rbp-24]
     x86.mov [edx+8], ebx
-    x86.mov esi, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
     x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
@@ -58,22 +55,19 @@ module {
   func @export-var-fields.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.mov rcx, 20
     x86.mov rdx, 22
     x86.call Box.create
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
     x86.mov ecx, [eax+0]
-    x86.mov edx, [rbp-16]
-    x86.mov [rbp-32], ecx
-    x86.mov rcx, [rbp-16]
+    x86.mov edx, [rbp-8]
+    x86.mov [rbp-24], ecx
+    x86.mov rcx, [rbp-8]
     x86.call Box.getSecret
-    x86.mov ebx, [rbp-32]
+    x86.mov ebx, [rbp-24]
     x86.add ebx, eax
-    x86.mov [rbp-24], ebx
+    x86.mov [rbp-16], ebx
     x86.xor esi, esi
     x86.cmp ebx, esi
     x86.setl edi
@@ -86,17 +80,17 @@ module {
     x86.test edi, edi
     x86.je export-var-fields.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_38]
+    x86.lea_symdata rax, [__panic_msg_33]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_34
     x86.call mm_decref
-    x86.mov eax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-24]
+    x86.label __nonnull_skip_34
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

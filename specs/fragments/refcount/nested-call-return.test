@@ -28,9 +28,6 @@ module {
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
     x86.mov [eax+0], ecx
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
     x86.mov eax, [rbp-8]
     x86.epilogue
     x86.ret
@@ -51,9 +48,6 @@ module {
     x86.mov ecx, [rbp-16]
     x86.mov edx, [rbp-24]
     x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
     x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
@@ -61,19 +55,16 @@ module {
   func @refcount.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.xor rcx, rcx
-    x86.call mm_scope_enter
-    x86.mov [rbp-8], eax
     x86.mov rcx, 10
     x86.call refcount.makeNum
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call refcount.addOne
-    x86.mov [rbp-24], eax
-    x86.mov ecx, [rbp-24]
+    x86.mov [rbp-16], eax
+    x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+0]
-    x86.mov [rbp-32], edx
+    x86.mov [rbp-24], edx
     x86.xor ebx, ebx
     x86.cmp edx, ebx
     x86.setl esi
@@ -86,19 +77,23 @@ module {
     x86.test esi, esi
     x86.je refcount.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_33]
+    x86.lea_symdata rax, [__panic_msg_27]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, [rbp-16]
-    x86.call mm_decref
     x86.mov eax, [rbp-24]
-    x86.mov rcx, [rbp-24]
+    x86.mov ecx, [rbp-16]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_39
     x86.call mm_decref
-    x86.mov ecx, [rbp-8]
-    x86.call mm_scope_exit
-    x86.mov eax, [rbp-32]
+    x86.label __nonnull_skip_39
+    x86.mov eax, [rbp-8]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_40
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_40
+    x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret
   }
