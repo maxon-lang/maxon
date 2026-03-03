@@ -70,7 +70,7 @@ public static partial class MaxonToStandardConversion {
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(value, rdataLabel, block, result);
 
 		var tempName = $"__{tempPrefix}_{resultId}";
-		var outerPtr = EmitAlloc(block, 16, allocTag);
+		var outerPtr = EmitAlloc(block, 16, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		var managedName = $"__{tempPrefix}_managed_{resultId}";
@@ -106,7 +106,7 @@ public static partial class MaxonToStandardConversion {
 		  System.Text.Encoding.Latin1);
 
 		var tempName = $"__bstrtmp_{op.Result.Id}";
-		var outerPtr = EmitAlloc(block, 16, "ByteArray");
+		var outerPtr = EmitAlloc(block, 16, "ByteArray", scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		// Store iterIndex = 0 at offset 0
@@ -235,7 +235,7 @@ public static partial class MaxonToStandardConversion {
 		// Allocate outer String struct first, then ManagedMemory as child,
 		// then buffer as child of ManagedMemory — establishes parent-child hierarchy
 		var tempName2 = $"__interptmp_{op.Result.Id}";
-		var interpOuterPtr = EmitAlloc(block, 16, "String");
+		var interpOuterPtr = EmitAlloc(block, 16, "String", scopeName: _currentFuncName);
 		EmitStore(block, interpOuterPtr, tempName2, varTypes);
 
 		var interpManagedName = $"__interp_managed_{op.Result.Id}";
@@ -341,7 +341,7 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes) {
 
-		var bufResult = EmitAlloc(block, bufferSize, "ToStringBuf");
+		var bufResult = EmitAlloc(block, bufferSize, "ToStringBuf", scopeName: _currentFuncName);
 
 		// Store buffer pointer so it survives the runtime call
 		var bufVarName = $"__tostr_buf_{bufResult.Id}";
@@ -379,7 +379,7 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  MlirModule<StandardOp> result) {
 
-		var bufResult = EmitAlloc(block, bufferSize, "ToStringBuf");
+		var bufResult = EmitAlloc(block, bufferSize, "ToStringBuf", scopeName: _currentFuncName);
 
 		// Store buffer pointer so it survives the runtime call
 		var bufVarName = $"__tostr_buf_{bufResult.Id}";
@@ -585,7 +585,7 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes, Dictionary<int, string> structVarNames, int resultId,
 	  string? allocTag = null) {
 		int outerSize = hasIterPos ? 16 : 8;
-		var outerPtr = EmitAlloc(block, outerSize, allocTag);
+		var outerPtr = EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		var managedName = $"{tempName}__managed";
@@ -710,7 +710,7 @@ public static partial class MaxonToStandardConversion {
 
 		// Heap-allocate __ManagedMemory first, then buffer as child
 		var tempName = $"__concat_{op.Result.Id}";
-		var concatPtr = EmitAlloc(block, 32, "__ManagedMemory");
+		var concatPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, concatPtr, tempName, varTypes);
 
 		var allocResult = EmitAllocIn(block, allocSizeOp.Result, concatPtr, "Buffer");
@@ -776,7 +776,7 @@ public static partial class MaxonToStandardConversion {
 
 		// Heap-allocate __ManagedMemory struct, then a new owned buffer as its child
 		var tempName = $"__slice_{op.Result.Id}";
-		var slicePtr = EmitAlloc(block, 32, "Slice");
+		var slicePtr = EmitAlloc(block, 32, "Slice", scopeName: _currentFuncName);
 		EmitStore(block, slicePtr, tempName, varTypes);
 
 		var newBuffer = EmitAllocIn(block, sliceBytesOp.Result, slicePtr, "Buffer");
@@ -820,7 +820,7 @@ public static partial class MaxonToStandardConversion {
 		// Allocate outer Character struct first, then ManagedMemory as child,
 		// then buffer as child of ManagedMemory
 		var charVarName = $"__char_{op.Result.Id}";
-		var charOuterPtr = EmitAlloc(block, 8, "Character");
+		var charOuterPtr = EmitAlloc(block, 8, "Character", scopeName: _currentFuncName);
 		EmitStore(block, charOuterPtr, charVarName, varTypes);
 
 		var charManagedName = $"__char_managed_{op.Result.Id}";

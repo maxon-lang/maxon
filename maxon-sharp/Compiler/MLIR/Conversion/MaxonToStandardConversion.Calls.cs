@@ -138,7 +138,7 @@ public static partial class MaxonToStandardConversion {
           // by substituting a dummy allocation when the pointer is null
           int maxPayloadForSize = GetMaxFlatPayloadSlots(retEnumType);
           int heapSize = 8 + maxPayloadForSize * 8;
-          var dummyPtr = EmitAlloc(block, heapSize, "EnumDummy");
+          var dummyPtr = EmitAlloc(block, heapSize, "EnumDummy", scopeName: _currentFuncName);
           var zeroConst = new StdConstI64Op(0);
           block.AddOp(zeroConst);
           var isNull = new StdCmpI64Op("eq", (StdI64)callResult, zeroConst.Result);

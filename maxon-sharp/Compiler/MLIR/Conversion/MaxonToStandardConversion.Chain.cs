@@ -43,7 +43,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes) {
 
-    var chainPtr = EmitAlloc(block, ChainDataSize, "__Chain");
+    var chainPtr = EmitAlloc(block, ChainDataSize, "__Chain", scopeName: _currentFuncName);
 
     // Zero-initialize head, tail, count, cursor
     var zero = new StdConstI64Op(0);
@@ -90,7 +90,7 @@ public static partial class MaxonToStandardConversion {
       // Struct/heap value: store pointer and incref — node holds a reference
       var valueHeapPtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
-      EmitIncrefValue(block, valueHeapPtr);
+      EmitIncrefValue(block, valueHeapPtr, scopeName: _currentFuncName);
     } else {
       // Primitive value: store directly
       var valueStd = (StdI64)valueMap[op.Value];
@@ -143,7 +143,7 @@ public static partial class MaxonToStandardConversion {
       // Struct/heap value: store pointer and incref — node holds a reference
       var valueHeapPtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
-      EmitIncrefValue(block, valueHeapPtr);
+      EmitIncrefValue(block, valueHeapPtr, scopeName: _currentFuncName);
     } else {
       var valueStd = (StdI64)valueMap[op.Value];
       block.AddOp(new StdStoreIndirectOp(valueStd, nodePtr, NodeValueOffset, MlirType.I64));
@@ -266,8 +266,6 @@ public static partial class MaxonToStandardConversion {
     // Free the node. The value's refcount is unchanged — caller inherits the node's reference.
     var nodePtrForFree = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     block.AddOp(new StdCallRuntimeOp("mm_free", [nodePtrForFree], null));
-    if (Compiler.MmTrace)
-      block.AddOp(new StdCallRuntimeOp("mm_trace_free", [nodePtrForFree], null));
 
     // Register the extracted value
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
@@ -354,14 +352,14 @@ public static partial class MaxonToStandardConversion {
       var oldValue = (StdI64)oldValueLoad.Result;
 
       // Decref old value — node no longer holds a reference (may be null)
-      EmitDecrefValueIfNonnull(block, oldValue);
+      EmitDecrefValueIfNonnull(block, oldValue, scopeName: _currentFuncName);
 
       // Store new value and incref — node now holds a reference
       var valueSrcName = structVarNames[op.Value.Id];
       var newValuePtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
       block.AddOp(new StdStoreIndirectOp(newValuePtr, nodePtrReload, NodeValueOffset, MlirType.I64));
-      EmitIncrefValue(block, newValuePtr);
+      EmitIncrefValue(block, newValuePtr, scopeName: _currentFuncName);
     } else {
       // Primitive: just store new value
       var newValue = (StdI64)valueMap[op.Value];
@@ -515,7 +513,7 @@ public static partial class MaxonToStandardConversion {
       // Incref the ChainNode so it survives until scope exit decref.
       // Null-guarded: on the error path the node pointer is null.
       var nodeForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
-      EmitIncrefValueIfNonnull(block, nodeForIncref);
+      EmitIncrefValueIfNonnull(block, nodeForIncref, scopeName: _currentFuncName);
       structVarNames[result.Id] = tempName;
       structValueTypes[result.Id] = result is MaxonStruct ms ? ms.TypeName : "__ChainNode";
     }

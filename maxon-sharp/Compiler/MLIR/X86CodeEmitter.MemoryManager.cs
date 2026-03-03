@@ -56,7 +56,8 @@ public partial class X86CodeEmitter {
       DefineSymdata("__mm_tag_transfer", "transfer \0"u8.ToArray());
       DefineSymdata("__mm_tag_rc_eq", " rc=\0"u8.ToArray());
       DefineSymdata("__mm_tag_hash", " #\0"u8.ToArray());
-      DefineSymdata("__mm_tag_at", " @ \0"u8.ToArray());
+      DefineSymdata("__mm_tag_lbracket", " [\0"u8.ToArray());
+      DefineSymdata("__mm_tag_rbracket", "]\0"u8.ToArray());
       DefineSymdata("__mm_trace_depth", new byte[8]);
       DefineSymdata("__mm_tag_indent", "  \0"u8.ToArray());
       // Runtime allocation tags — only needed for trace output
@@ -898,6 +899,13 @@ public partial class X86CodeEmitter {
       EmitMmDebugCheckEntryMagic("mm_free");
     }
 
+    // Trace free — emit before unlinking/freeing while entry is still valid
+    if (Compiler.MmTrace) {
+      EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
+      EmitMovRegImm(X86Register.Rdx, 0); // scope_cstr = NULL (free is triggered internally)
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_free")); EmitDword(0);
+    }
+
     // Check if parent-owned: entry.owner_entry (+48) != 0
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitBytes(0x48, 0x8B, 0x40, 0x30); // MOV rax, [rax+48] — entry.owner_entry
@@ -1369,15 +1377,32 @@ public partial class X86CodeEmitter {
   // Called from compiler-generated code, not from runtime functions.
   // ==========================================================================
 
+  /// <summary>
+  /// Emit the scope annotation suffix: prints " [scope]" if [rbp-16] (scope_cstr) is non-null,
+  /// then prints a newline. Used at the end of every mm_trace_* function.
+  /// </summary>
+  private void EmitMmTraceScopeAndNewline(string skipLabel) {
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // scope_cstr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", skipLabel);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_lbracket");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rbracket");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel(skipLabel);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+  }
+
   // -------------------------------------------------------------------------
-  // mm_trace_alloc(user_ptr_in_rcx, loc_cstr_in_rdx) -> void
-  // Prints: indent + "alloc " + entry_tag + " #N rc=0\n"
-  // The entry_tag already encodes the alloc site (e.g. "Point @ file:line"),
-  // so loc_cstr is ignored for alloc — the tag itself is the alloc location.
+  // mm_trace_alloc(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
+  // Prints: indent + "alloc " + entry_tag + " #N rc=0 [scope]\n"
   // -------------------------------------------------------------------------
   private void EmitMmTraceAlloc() {
     EmitRuntimeFunctionStart("mm_trace_alloc", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=loc_cstr (unused here — tag is the alloc loc)
+    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_alloc");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
@@ -1403,18 +1428,17 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitBytes(0x48, 0x8B, 0x48, 0x40); // MOV rcx, [rax+64] — entry.refcount
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMmTraceScopeAndNewline("mm_trace_alloc_no_scope");
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // mm_trace_free(user_ptr_in_rcx, loc_cstr_in_rdx) -> void
-  // Prints: indent + "free " + tag + " #N\n"
+  // mm_trace_free(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
+  // Prints: indent + "free " + tag + " #N [scope]\n"
   // -------------------------------------------------------------------------
   private void EmitMmTraceFree() {
     EmitRuntimeFunctionStart("mm_trace_free", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=loc_cstr
+    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_free");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
@@ -1432,19 +1456,18 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMmTraceScopeAndNewline("mm_trace_free_no_scope");
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // mm_trace_incref(user_ptr_in_rcx, loc_cstr_in_rdx) -> void
-  // Prints: indent + "incref " + tag + " #N @ loc rc=N\n"
+  // mm_trace_incref(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
+  // Prints: indent + "incref " + tag + " #N rc=N [scope]\n"
   // Called AFTER mm_incref so refcount is already incremented.
   // -------------------------------------------------------------------------
   private void EmitMmTraceIncref() {
     EmitRuntimeFunctionStart("mm_trace_incref", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=loc_cstr
+    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
     // Skip trace if user_ptr is null (mm_incref is a no-op on null)
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
@@ -1465,15 +1488,6 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    // Print " @ loc" if loc_cstr != NULL
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // loc_cstr
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_trace_incref_no_loc");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_at");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    DefineLabel("mm_trace_incref_no_loc");
     // Print " rc=N"
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
@@ -1482,22 +1496,21 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitBytes(0x48, 0x8B, 0x48, 0x40); // MOV rcx, [rax+64] — entry.refcount
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMmTraceScopeAndNewline("mm_trace_incref_no_scope");
     DefineLabel("mm_trace_incref_null");
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // mm_trace_decref(user_ptr_in_rcx, loc_cstr_in_rdx) -> void
-  // Prints: indent + "decref " + tag + " #N @ loc rc=N\n"
+  // mm_trace_decref(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
+  // Prints: indent + "decref " + tag + " #N rc=N [scope]\n"
   // Called BEFORE mm_decref so the entry is still valid (mm_decref may free at rc=0).
   // Prints rc-1 (the value after the upcoming decrement) so the output is consistent
   // with mm_trace_incref which prints the value after increment.
   // -------------------------------------------------------------------------
   private void EmitMmTraceDecref() {
     EmitRuntimeFunctionStart("mm_trace_decref", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=loc_cstr
+    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
     // Skip trace if user_ptr is null (mm_decref is a no-op on null)
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
@@ -1518,15 +1531,6 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    // Print " @ loc" if loc_cstr != NULL
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // loc_cstr
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_trace_decref_no_loc");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_at");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    DefineLabel("mm_trace_decref_no_loc");
     // Print " rc=N" (rc-1: value after the upcoming decrement)
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
@@ -1536,21 +1540,20 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x48, 0x40); // MOV rcx, [rax+64] — entry.refcount
     EmitSubRegImm(X86Register.Rcx, 1);  // print rc-1 (value after the upcoming decrement)
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMmTraceScopeAndNewline("mm_trace_decref_no_scope");
     DefineLabel("mm_trace_decref_null");
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // mm_trace_transfer(user_ptr_in_rcx, loc_cstr_in_rdx) -> void
-  // Prints: indent + "transfer " + tag + " #N @ loc rc=N\n"
+  // mm_trace_transfer(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
+  // Prints: indent + "transfer " + tag + " #N rc=N [scope]\n"
   // Called when ownership is transferred to a caller (scope-end keepVars).
   // The refcount is unchanged; prints the current value.
   // -------------------------------------------------------------------------
   private void EmitMmTraceTransfer() {
     EmitRuntimeFunctionStart("mm_trace_transfer", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=loc_cstr
+    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
     // Skip trace if user_ptr is null
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
@@ -1571,15 +1574,6 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    // Print " @ loc" if loc_cstr != NULL
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // loc_cstr
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_trace_transfer_no_loc");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_at");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    DefineLabel("mm_trace_transfer_no_loc");
     // Print " rc=N"
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
@@ -1588,8 +1582,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
     EmitBytes(0x48, 0x8B, 0x48, 0x40); // MOV rcx, [rax+64] — entry.refcount
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMmTraceScopeAndNewline("mm_trace_transfer_no_scope");
     DefineLabel("mm_trace_transfer_null");
     EmitRuntimeFunctionEnd();
   }

@@ -262,7 +262,7 @@ public static partial class MaxonToStandardConversion {
     var tempName = $"__enum_{tryCallOp.Result!.Id}";
     int maxPayload = GetMaxFlatPayloadSlots(enumType);
     int heapSize = 8 + maxPayload * 8;
-    var enumPtr = EmitAlloc(block, heapSize, enumType.Name);
+    var enumPtr = EmitAlloc(block, heapSize, enumType.Name, scopeName: _currentFuncName);
     EmitStore(block, enumPtr, tempName, varTypes);
 
     // Initialize tag=0 and zero payload slots on the heap

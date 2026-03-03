@@ -221,7 +221,7 @@ public static partial class MaxonToStandardConversion {
     return ptrOp.Result;
   }
 
-  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, StdI64 size, string? tag = null) {
+  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, StdI64 size, string? tag = null, string? scopeName = null) {
     StdI64 tagPtr;
     if (tag != null) {
       tagPtr = EmitTagPtr(block, tag);
@@ -233,16 +233,16 @@ public static partial class MaxonToStandardConversion {
     var result = new StdI64(MlirContext.Current.NextId());
     block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, tagPtr], result));
     if (Compiler.MmTrace) {
-      // Pass the alloc-site tag as loc_cstr (tag already embeds source location)
-      block.AddOp(new StdCallRuntimeOp("mm_trace_alloc", [result, tagPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_alloc", [result, scopePtr], null));
     }
     return result;
   }
 
-  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, long constSize, string? tag = null) {
+  private static StdI64 EmitAlloc(MlirBlock<StandardOp> block, long constSize, string? tag = null, string? scopeName = null) {
     var sizeOp = new StdConstI64Op(constSize);
     block.AddOp(sizeOp);
-    return EmitAlloc(block, sizeOp.Result, tag);
+    return EmitAlloc(block, sizeOp.Result, tag, scopeName);
   }
 
   /// <summary>
@@ -270,24 +270,24 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation.</summary>
-  private static void EmitIncref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? sourceLoc = null) {
+  private static void EmitIncref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? scopeName = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
     block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
     if (Compiler.MmTrace) {
       var tracePtr = EmitLoad(block, varName, varTypes);
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [tracePtr, locPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [tracePtr, scopePtr], null));
     }
   }
 
   /// <summary>Emit mm_decref(heap_ptr) — decrements reference count, reclaims ownership when zero.</summary>
-  private static void EmitDecref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? sourceLoc = null) {
+  private static void EmitDecref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? scopeName = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
     // Trace BEFORE decref: mm_decref may free the object, invalidating the pointer
     if (Compiler.MmTrace) {
       var tracePtr = EmitLoad(block, varName, varTypes);
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [tracePtr, locPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [tracePtr, scopePtr], null));
     }
     block.AddOp(new StdCallRuntimeOp("mm_decref", [heapPtr], null));
   }
@@ -368,39 +368,39 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>Emit mm_incref on a raw heap pointer (StdI64). Used when the pointer is already loaded.</summary>
-  private static void EmitIncrefValue(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
+  private static void EmitIncrefValue(MlirBlock<StandardOp> block, StdI64 heapPtr, string? scopeName = null) {
     block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
     if (Compiler.MmTrace) {
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [heapPtr, locPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [heapPtr, scopePtr], null));
     }
   }
 
   /// <summary>Emit null-guarded mm_decref: skips if pointer is null.</summary>
-  private static void EmitDecrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
+  private static void EmitDecrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? scopeName = null) {
     if (Compiler.MmTrace) {
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, locPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, scopePtr], null));
     }
     block.AddOp(new StdCallRuntimeIfNonnullOp("mm_decref", [heapPtr], null));
   }
 
   /// <summary>Emit null-guarded mm_incref: skips if pointer is null.</summary>
-  private static void EmitIncrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? sourceLoc = null) {
+  private static void EmitIncrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? scopeName = null) {
     block.AddOp(new StdCallRuntimeIfNonnullOp("mm_incref", [heapPtr], null));
     if (Compiler.MmTrace) {
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_incref", [heapPtr, locPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_incref", [heapPtr, scopePtr], null));
     }
   }
 
   /// <summary>Emit null-guarded mm_decref on a variable.</summary>
-  private static void EmitDecrefIfNonnull(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? sourceLoc = null) {
+  private static void EmitDecrefIfNonnull(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? scopeName = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
     if (Compiler.MmTrace) {
       var tracePtr = EmitLoad(block, varName, varTypes);
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [tracePtr, locPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [tracePtr, scopePtr], null));
     }
     block.AddOp(new StdCallRuntimeIfNonnullOp("mm_decref", [heapPtr], null));
   }
@@ -413,19 +413,19 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block, string varName,
     Dictionary<string, string> varTypes, Dictionary<string, string> varNameToStructType,
     Dictionary<string, MlirType> typeDefs, Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
-    string? sourceLoc = null) {
+    string? scopeName = null) {
     var typeName = varNameToStructType[varName];
     var managedFields = GetManagedFields(typeName, typeDefs);
 
     if (managedFields.Count == 0) {
-      EmitDecrefIfNonnull(block, varName, varTypes, sourceLoc);
+      EmitDecrefIfNonnull(block, varName, varTypes, scopeName);
       return;
     }
 
     var heapPtr = (StdI64)EmitLoad(block, varName, varTypes);
     if (Compiler.MmTrace) {
-      var locPtr = sourceLoc != null ? EmitTagPtr(block, sourceLoc) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, locPtr], null));
+      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, scopePtr], null));
     }
 
     var outerType = typeDefs.TryGetValue(typeName, out var t) ? t as MlirStructType : null;

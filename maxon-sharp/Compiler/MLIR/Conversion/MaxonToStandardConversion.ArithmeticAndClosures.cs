@@ -327,7 +327,7 @@ public static partial class MaxonToStandardConversion {
 
     // Allocate environment to hold captured values (each 8 bytes)
     int envSize = closureOp.CapturedValues.Count * 8;
-    var envPtr = EmitAlloc(block, envSize, "ClosureEnv");
+    var envPtr = EmitAlloc(block, envSize, "ClosureEnv", scopeName: _currentFuncName);
 
     // Store the ADDRESS of each captured variable into the environment
     // so that closures capture by reference (reads see mutations after capture)

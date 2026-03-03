@@ -89,7 +89,7 @@ public static partial class MaxonToStandardConversion {
 			// the buffer's copy when the array is freed.
 			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(loadOp);
-			EmitIncrefValue(block, (StdI64)loadOp.Result);
+			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
 
 			var tempName = $"__callret_{MlirContext.Current.NextId()}";
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
@@ -219,11 +219,11 @@ public static partial class MaxonToStandardConversion {
 			// Old slot may be null (zeroed after remove), so use null-guarded decref.
 			var oldElemLoad = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(oldElemLoad);
-			EmitDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result);
+			EmitDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result, scopeName: _currentFuncName);
 			var srcName = structVarNames[op.Value.Id];
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));
-			EmitIncrefValue(block, (StdI64)srcHeapPtr);
+			EmitIncrefValue(block, (StdI64)srcHeapPtr, scopeName: _currentFuncName);
 		} else {
 			// Scalar elements: store directly
 			var value = valueMap[op.Value];
@@ -250,7 +250,7 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(byteSizeOp);
 		// Allocate __ManagedMemory struct first, then buffer as child
 		var tempName = $"__managed_create_{op.Result.Id}";
-		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory");
+		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 		var allocResult = EmitAllocIn(block, byteSizeOp.Result, managedPtr, "Buffer");
 		// Store fields via indirect access on the heap object
@@ -486,7 +486,7 @@ public static partial class MaxonToStandardConversion {
 		// Allocate strlen+1 bytes so the null terminator is within the allocation,
 		// preventing out-of-bounds reads in maxon_to_cstring.
 		var tempName = $"__from_cstring_{op.Result.Id}";
-		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory");
+		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 
 		var lenReload1 = (StdI64)EmitLoad(block, lenVar, varTypes);
