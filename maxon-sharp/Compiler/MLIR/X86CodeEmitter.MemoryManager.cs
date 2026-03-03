@@ -10,8 +10,8 @@ public partial class X86CodeEmitter {
   //
   // Debug mode constants (--mm-debug):
   private const long MmDebugAllocEntryMagic = unchecked((long)0xA10CDEADA10CDEAD);
-  private const long MmDebugCanaryValue     = unchecked((long)0xCAFEBABEDEADC0DE);
-  private int AllocEntrySize => Compiler.MmDebug ? 88 : 80;
+  private const long MmDebugCanaryValue = unchecked((long)0xCAFEBABEDEADC0DE);
+  private static int AllocEntrySize => Compiler.MmDebug ? 88 : 80;
   //
   // AllocEntry (80 bytes):
   //   +0   user_ptr        (ptr)

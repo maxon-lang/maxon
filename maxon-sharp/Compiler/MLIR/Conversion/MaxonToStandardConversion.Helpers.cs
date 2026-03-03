@@ -358,13 +358,13 @@ public static partial class MaxonToStandardConversion {
     if (!typeDefs.TryGetValue(typeName, out var typeDef) || typeDef is not MlirStructType structType)
       return [];
     var resolved = ResolveStructType(structType, typeDefs);
-    return resolved.Fields.Where(f => f.Type.IsHeapAllocated).ToList();
+    return [.. resolved.Fields.Where(f => f.Type.IsHeapAllocated)];
   }
 
   private static List<MlirStructField> GetManagedFieldsForType(MlirType type, Dictionary<string, MlirType> typeDefs) {
     if (type is not MlirStructType structType) return [];
     var resolved = ResolveStructType(structType, typeDefs);
-    return resolved.Fields.Where(f => f.Type.IsHeapAllocated).ToList();
+    return [.. resolved.Fields.Where(f => f.Type.IsHeapAllocated)];
   }
 
   /// <summary>Emit mm_incref on a raw heap pointer (StdI64). Used when the pointer is already loaded.</summary>
