@@ -472,6 +472,21 @@ public static partial class MaxonToStandardConversion {
       return;
     }
 
+    // Chain types with heap-allocated element values need node cleanup before freeing:
+    // each node holds an incref'd reference to its value that must be decref'd.
+    if (typeAliasSources != null && TypeAliasInfo.IsChainType(typeName, typeAliasSources)
+        && HasStructElementType(
+            typeDefs.TryGetValue(typeName, out var chainDef) ? chainDef as MlirStructType : null,
+            typeName, typeAliasSources)) {
+      var chainHeapPtr = (StdI64)EmitLoad(block, varName, varTypes);
+      if (Compiler.MmTrace) {
+        var chainScopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+        block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [chainHeapPtr, chainScopePtr], null));
+      }
+      block.AddOp(new StdDestructChainOp(chainHeapPtr, nullGuarded: true));
+      return;
+    }
+
     var managedFields = GetManagedFields(typeName, typeDefs);
 
     if (managedFields.Count == 0) {

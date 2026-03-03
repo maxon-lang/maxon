@@ -1303,7 +1303,7 @@ decref Item #3 rc=0 [ownership-edge-cases.main]
 free Item #3
 ```
 
-<!-- disabled-test: rc-chain-insert-incref -->
+<!-- test: rc-chain-insert-incref -->
 <!-- MmTrace -->
 Inserting a struct into a chain increfs the value; the node holds the reference.
 ```maxon
@@ -1326,10 +1326,23 @@ end 'main'
 7
 ```
 ```stderr
-fill me in
+alloc __Chain #1 rc=0 [ownership-edge-cases.main]
+incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc Token #2 rc=0 [ownership-edge-cases.main]
+incref Token #2 rc=1 [ownership-edge-cases.main]
+alloc_in __ChainNode
+incref Token #2 rc=2 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+decref __Chain #1 rc=0 [ownership-edge-cases.main]
+decref Token #2 rc=1
+free __Chain #1
+decref Token #2 rc=0 [ownership-edge-cases.main]
+free Token #2
+decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
+free __ChainNode #3
 ```
 
-<!-- disabled-test: rc-chain-remove-decrefs -->
+<!-- test: rc-chain-remove-decrefs -->
 <!-- MmTrace -->
 Removing a node from a chain transfers ownership; value is freed when the result var leaves scope.
 ```maxon
@@ -1352,10 +1365,20 @@ end 'main'
 9
 ```
 ```stderr
-fill me in
+alloc __Chain #1 rc=0 [ownership-edge-cases.main]
+incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc_in __ChainNode
+incref Token #2 rc=1 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+free __ChainNode #3
+decref __Chain #1 rc=0 [ownership-edge-cases.main]
+free __Chain #1
+decref Token #2 rc=0 [ownership-edge-cases.main]
+free Token #2
 ```
 
-<!-- disabled-test: rc-chain-clear-decrefs-all -->
+<!-- test: rc-chain-clear-decrefs-all -->
 <!-- MmTrace -->
 Clearing a chain decrefs every node value; all values freed when rc hits 0.
 ```maxon
@@ -1380,10 +1403,31 @@ end 'main'
 0
 ```
 ```stderr
-fill me in
+alloc __Chain #1 rc=0 [ownership-edge-cases.main]
+incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc_in __ChainNode
+incref Token #2 rc=1 [ownership-edge-cases.main]
+alloc Token #4 rc=0 [ownership-edge-cases.main]
+alloc_in __ChainNode
+incref Token #4 rc=1 [ownership-edge-cases.main]
+alloc Token #6 rc=0 [ownership-edge-cases.main]
+alloc_in __ChainNode
+incref Token #6 rc=1 [ownership-edge-cases.main]
+decref Token #2 rc=0
+free Token #2
+free __ChainNode #3
+decref Token #4 rc=0
+free Token #4
+free __ChainNode #5
+decref Token #6 rc=0
+free Token #6
+free __ChainNode #7
+decref __Chain #1 rc=0 [ownership-edge-cases.main]
+free __Chain #1
 ```
 
-<!-- disabled-test: rc-chain-node-set-value-decrefs-old -->
+<!-- test: rc-chain-node-set-value-decrefs-old -->
 <!-- MmTrace -->
 Calling `setValue` on a chain node decrefs the old value and increfs the new one.
 ```maxon
@@ -1406,7 +1450,22 @@ end 'main'
 99
 ```
 ```stderr
-fill me in
+alloc __Chain #1 rc=0 [ownership-edge-cases.main]
+incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc_in __ChainNode
+incref Token #2 rc=1 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+alloc Token #4 rc=0 [ownership-edge-cases.main]
+decref Token #2 rc=0 [ownership-edge-cases.main]
+free Token #2
+incref Token #4 rc=1 [ownership-edge-cases.main]
+decref __Chain #1 rc=0 [ownership-edge-cases.main]
+decref Token #4 rc=0
+free Token #4
+free __Chain #1
+decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
+free __ChainNode #3
 ```
 
 <!-- test: rc-for-in-elem-decrefed -->

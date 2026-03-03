@@ -158,6 +158,7 @@ public partial class X86CodeEmitter {
     EmitChainUnlink();
     EmitChainClear();
     EmitChainClearManaged();
+    EmitChainDecrefValues();
     if (Compiler.MmTrace) {
       EmitMmTracePrintIndent();
       EmitMmTraceAlloc();
@@ -1949,6 +1950,51 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx — chain.head = 0
     EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx — chain.tail = 0
     EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx — chain.count = 0
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // maxon_chain_decref_values(chain_ptr_rcx) -> void
+  // Walks chain nodes and decrefs each node's heap value without freeing the
+  // nodes. Used during chain destruction: mm_free will free the child-owned
+  // nodes, but their values need explicit decref first.
+  // Stack: [rbp-8]=chain_ptr, [rbp-40]=current
+  // -------------------------------------------------------------------------
+  private void EmitChainDecrefValues() {
+    EmitRuntimeFunctionStart("maxon_chain_decref_values", 1, 0x60);
+
+    // current = [chain+0] — chain.head
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — chain.head
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current
+
+    DefineLabel("maxon_chain_decref_values_loop");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "maxon_chain_decref_values_done");
+
+    // Save next before any calls: next = [current+0]
+    EmitBytes(0x48, 0x8B, 0x48, 0x00); // MOV rcx, [rax+0] — current.next
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = next
+
+    // Decref the heap value stored in the node (node+24)
+    if (Compiler.MmTrace) {
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
+      EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — node.value
+      EmitMovRegImm(X86Register.Rdx, 0); // rdx = NULL (no source location)
+      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_decref")); EmitDword(0);
+    }
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
+    EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] — node.value
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
+
+    // current = next
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitJmp("maxon_chain_decref_values_loop");
+
+    DefineLabel("maxon_chain_decref_values_done");
 
     EmitRuntimeFunctionEnd();
   }

@@ -17,6 +17,12 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
     if (typeName == "__ManagedMemory") return true;
     return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__ManagedMemory";
   }
+
+  /// Checks if a type name refers to __Chain, either directly or via a type alias.
+  public static bool IsChainType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
+    if (typeName == "__Chain") return true;
+    return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__Chain";
+  }
 }
 
 // Metadata for constant array literals that can be placed in .rdata

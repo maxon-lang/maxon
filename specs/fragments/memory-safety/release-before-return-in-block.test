@@ -85,7 +85,7 @@ module {
     %11 = arith.constant {value = 1 : i64}
     %12 = arith.addi %10, %11
     %13 = memref.load w : i64
-    std.call_runtime @mm_decref %13
+    std.call_runtime_if_nonnull @mm_decref %13
     func.return %12
   check_0.after:
     %15 = arith.constant {value = 0 : i64}
@@ -138,8 +138,11 @@ module {
     x86.add edi, r8
     x86.mov r9, [rbp-16]
     x86.mov [rbp-24], edi
+    x86.test r9, r9
+    x86.jz __nonnull_skip_27
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
+    x86.label __nonnull_skip_27
     x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret

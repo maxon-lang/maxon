@@ -981,6 +981,21 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdDestructChainOp destructChainOp: {
+            if (destructChainOp.NullGuarded) {
+              var nullSkipLabel = $"__destruct_chain_nullguard_{MlirContext.Current.NextId()}";
+              regManager.EmitBoolTest(destructChainOp.HeapPtr, x86Block);
+              x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
+              EmitInlineDestructChain(regManager, x86Block, destructChainOp.HeapPtr,
+                ConsumedArgs([destructChainOp.HeapPtr], lastUseOfValue, currentOpIndex));
+              x86Block.AddOp(new X86LabelDefOp(nullSkipLabel));
+            } else {
+              EmitInlineDestructChain(regManager, x86Block, destructChainOp.HeapPtr,
+                ConsumedArgs([destructChainOp.HeapPtr], lastUseOfValue, currentOpIndex));
+            }
+            break;
+          }
+
           default:
             throw new InvalidOperationException($"No StandardToX86 conversion for: {op.GetType().Name} ({op.Mnemonic})");
         }
@@ -1095,6 +1110,24 @@ public static class StandardToX86Conversion {
     }
 
     x86Block.AddOp(new X86LabelDefOp(freeLabel));
+    regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
+    x86Block.AddOp(new X86LabelDefOp(skipLabel));
+  }
+
+  /// <summary>
+  /// Emits inline x86 for chain destruction: mm_decref_check → if rc==0,
+  /// call maxon_chain_decref_values to decref all node values, then mm_free.
+  /// </summary>
+  private static void EmitInlineDestructChain(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    StdI64 heapPtr, HashSet<StdValue>? consumed) {
+    var newRc = new StdI64(MlirContext.Current.NextId());
+    var skipLabel = $"__destruct_chain_skip_{newRc.Id}";
+    regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
+    regManager.EmitBoolTest(newRc, x86Block);
+    x86Block.AddOp(new X86JccOp("nz", skipLabel));
+    // Decref all node values without freeing nodes — mm_free frees child-owned nodes
+    regManager.EmitCall("maxon_chain_decref_values", [heapPtr], null, x86Block, null);
     regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
     x86Block.AddOp(new X86LabelDefOp(skipLabel));
   }

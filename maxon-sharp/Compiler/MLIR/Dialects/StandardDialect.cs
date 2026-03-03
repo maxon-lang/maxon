@@ -1238,6 +1238,19 @@ public class StdDestructUnionOp(StdI64 heapPtr, List<UnionCaseDestructorInfo> ca
   public override int PureResultId => -1;
 }
 
+/// <summary>
+/// Inline chain destructor: decrements the chain's refcount and, if it reaches zero,
+/// calls maxon_chain_decref_values to decref all node values, then mm_free.
+/// Used when a chain with heap-allocated element values goes out of scope.
+/// </summary>
+public class StdDestructChainOp(StdI64 heapPtr, bool nullGuarded = false) : StandardOp {
+  public override string Mnemonic => $"mm.destruct_chain %{HeapPtr.Id}{(NullGuarded ? " null_guarded" : "")}";
+  public StdI64 HeapPtr { get; } = heapPtr;
+  public bool NullGuarded { get; } = nullGuarded;
+  public override List<StdValue> ReadValues => [HeapPtr];
+  public override int PureResultId => -1;
+}
+
 // ============================================================================
 // Memory copy operation (for buffer grow/shift)
 // ============================================================================

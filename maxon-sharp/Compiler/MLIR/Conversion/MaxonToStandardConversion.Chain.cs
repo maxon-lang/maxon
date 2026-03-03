@@ -267,6 +267,11 @@ public static partial class MaxonToStandardConversion {
     var nodePtrForFree = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     block.AddOp(new StdCallRuntimeOp("mm_free", [nodePtrForFree], null));
 
+    // Zero the node variable so scope-end cleanup skips it (node memory is already freed)
+    var zeroNode = new StdConstI64Op(0);
+    block.AddOp(zeroNode);
+    EmitStore(block, zeroNode.Result, nodeVarName, varTypes);
+
     // Register the extracted value
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
       structVarNames[op.Result.Id] = valueTempName;

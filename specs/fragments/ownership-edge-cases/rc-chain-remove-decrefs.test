@@ -1,0 +1,150 @@
+// Test: rc-chain-remove-decrefs
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+  export var id Integer
+end 'Token'
+
+typealias TokenChain = __Chain with Token
+
+function main() returns ExitCode
+  var chain = TokenChain{}
+  var node = chain.insertFirst(Token{id: 9})
+  var removed = chain.remove(node)
+  return removed.id + chain.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 9
+Stderr: ```
+alloc __Chain #1 rc=0 [ownership-edge-cases.main]
+incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc_in __ChainNode
+incref Token #2 rc=1 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+free __ChainNode #3
+decref __Chain #1 rc=0 [ownership-edge-cases.main]
+free __Chain #1
+decref Token #2 rc=0 [ownership-edge-cases.main]
+free Token #2
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov rcx, 32
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.xor ecx, ecx
+    x86.mov [eax+0], ecx
+    x86.mov [eax+8], ecx
+    x86.mov [eax+16], ecx
+    x86.mov [eax+24], ecx
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov ecx, 9
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-16], eax
+    x86.mov edx, [rbp-16]
+    x86.mov ebx, 9
+    x86.mov [edx+0], ebx
+    x86.mov esi, [rbp-8]
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, 32
+    x86.xor r8, r8
+    x86.call mm_alloc_in
+    x86.xor edi, edi
+    x86.mov [eax+0], edi
+    x86.mov [eax+8], edi
+    x86.mov [eax+16], edi
+    x86.mov r8, [rbp-16]
+    x86.mov [eax+24], r8
+    x86.mov [rbp-56], eax
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov r9, [rbp-56]
+    x86.mov [rbp-24], r9
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-24]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-24]
+    x86.call maxon_chain_insert_first
+    x86.mov eax, [rbp-24]
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [rbp-32]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-32]
+    x86.call maxon_chain_unlink
+    x86.mov eax, [rbp-32]
+    x86.mov ecx, [eax+24]
+    x86.mov eax, [rbp-32]
+    x86.mov [rbp-64], ecx
+    x86.mov rcx, [rbp-32]
+    x86.call mm_free
+    x86.xor eax, eax
+    x86.mov [rbp-32], eax
+    x86.mov eax, [rbp-64]
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-40]
+    x86.mov ecx, [eax+0]
+    x86.mov eax, [rbp-8]
+    x86.mov edx, [eax+16]
+    x86.add ecx, edx
+    x86.mov [rbp-48], ecx
+    x86.xor eax, eax
+    x86.cmp ecx, eax
+    x86.setl eax
+    x86.movzx eax, eaxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg ecx
+    x86.movzx ecx, ecxb
+    x86.or eax, ecx
+    x86.test eax, eax
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_27]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-48]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __destruct_chain_nullguard_50
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_chain_skip_51
+    x86.mov [rbp-56], eax
+    x86.mov rcx, [rbp-8]
+    x86.call maxon_chain_decref_values
+    x86.mov rcx, [rbp-8]
+    x86.call mm_free
+    x86.label __destruct_chain_skip_51
+    x86.label __destruct_chain_nullguard_50
+    x86.mov eax, [rbp-32]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_52
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_52
+    x86.mov ecx, [rbp-40]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_53
+    x86.call mm_decref
+    x86.label __nonnull_skip_53
+    x86.mov eax, [rbp-48]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

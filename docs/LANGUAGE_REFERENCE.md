@@ -2914,6 +2914,20 @@ function makePoint() returns Point
 end 'makePoint'
 ```
 
+**Container cleanup:** Containers with heap-allocated elements (e.g., `List with MyStruct`) perform deep cleanup when freed. Each element's refcount is decremented, and elements whose refcount reaches zero are freed recursively. For `List`, the compiler walks all chain nodes and decrefs their stored values before freeing the chain itself.
+
+```maxon
+typealias TokenList = List with Token
+
+function example() returns int
+  var list = TokenList{}
+  list.append(Token{id: 1})   // Token incref'd by the chain node
+  list.append(Token{id: 2})   // Token incref'd by the chain node
+  return 0                     // list freed: each Token decref'd (rc→0→freed),
+                               // then chain nodes freed, then chain freed
+end 'example'
+```
+
 ### Ownership System
 
 Maxon implements a compile-time ownership system that tracks value ownership and prevents use-after-move errors without runtime overhead.
