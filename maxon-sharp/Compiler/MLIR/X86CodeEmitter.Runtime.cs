@@ -1977,6 +1977,7 @@ public partial class X86CodeEmitter {
     EmitJcc("ne", "rt_fff_found");
     // Not found: free block, return 0
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitJmp("rt_fff_done");
@@ -2044,6 +2045,7 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "FindClose");
     // Free block
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
     DefineLabel("rt_fc_done");
     EmitRuntimeFunctionEnd();

@@ -1563,7 +1563,7 @@ public static partial class MaxonToStandardConversion {
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues);
               break;
             case MaxonReturnOp retOp: {
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, func.Name);
               break;
             }
             case MaxonThrowOp throwOp: {
@@ -1655,6 +1655,12 @@ public static partial class MaxonToStandardConversion {
                 }
                 throw new InvalidOperationException($"MaxonCallRuntimeOp arg {a} not found in valueMap or structVarNames");
               }).ToList();
+              // When tracing, mm_free takes 2 params (ptr, scope) — add NULL scope if caller only passes ptr
+              if (Compiler.MmTrace && callRtOp.FunctionName == "mm_free" && stdArgs.Count == 1) {
+                var nullScope = new StdConstI64Op(0);
+                newBlock.AddOp(nullScope);
+                stdArgs.Add(nullScope.Result);
+              }
               if (callRtOp.Result != null) {
                 var rtResult = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdCallRuntimeOp(callRtOp.FunctionName, stdArgs, rtResult));

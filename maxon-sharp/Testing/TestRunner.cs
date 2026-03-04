@@ -9,13 +9,13 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequiredMLIR = false) {
+public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false) {
   private readonly string _specDir = specDir;
   private readonly string _fragmentDir = fragmentDir;
   private readonly string _tempDir = tempDir;
   private readonly string? _filter = filter;
   private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount / 2);
-  private readonly bool _updateRequiredMLIR = updateRequiredMLIR;
+  private readonly bool _updateRequired = updateRequired;
 
   /// <summary>
   /// Run all tests and return summary.
@@ -23,13 +23,13 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
   public TestSummary RunAllSpecTests() {
     var sw = Stopwatch.StartNew();
 
-    // Update RequiredMLIR in spec files if requested
-    if (_updateRequiredMLIR) {
-      UpdateRequiredMLIRInSpecFiles();
+    // Update required blocks in spec files if requested
+    if (_updateRequired) {
+      UpdateRequiredInSpecFiles();
     }
 
     // Regenerate fragments if specs changed
-    var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir, _updateRequiredMLIR, _filter);
+    var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir, _updateRequired, _filter);
     if (genResult.Generated > 0) {
       Logger.Info(LogCategory.Testing, $"Generated {genResult.Generated} fragment(s)");
     }
@@ -734,50 +734,94 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
   }
 
   /// <summary>
-  /// Update RequiredMLIR sections in spec files with newly generated MLIR from fragments.
+  /// Update required blocks (RequiredMLIR, MmTrace stderr) in spec files with freshly generated output.
   /// </summary>
-  private void UpdateRequiredMLIRInSpecFiles() {
+  private void UpdateRequiredInSpecFiles() {
     var specs = SpecParser.ParseDirectory(_specDir);
     var updatedSpecs = 0;
+
+    Directory.CreateDirectory(_tempDir);
 
     foreach (var spec in specs) {
       var specContent = File.ReadAllText(spec.FilePath);
       var updated = false;
+      var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
 
       foreach (var test in spec.Tests) {
-        if (test.Expectation is SuccessExpectation success && success.RequiredMLIR != null) {
-          // Compile with the same "// Test:" comment prefix and fragment path that fragments use,
-          // so line numbers and filenames in panic messages match between update and verification
-          var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
-          var fragmentPath = Path.GetFullPath(Path.Combine(_fragmentDir, specName, $"{test.Name}.test"));
-          var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
-          var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
-          var exePath = Path.Combine(_tempDir, $"{Path.GetFileNameWithoutExtension(spec.FilePath)}_{test.Name}_temp.exe");
-          var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
+        if (test.Expectation is not SuccessExpectation success) continue;
 
-          if (irResult.Success && irResult.AllStagesIr != null) {
-            var newRequiredMLIR = irResult.AllStagesIr.Trim();
-            var oldNorm = NormalizeIr(success.RequiredMLIR);
-            var newNorm = NormalizeIr(newRequiredMLIR);
-            if (oldNorm == newNorm) continue;
+        var fragmentPath = Path.GetFullPath(Path.Combine(_fragmentDir, specName, $"{test.Name}.test"));
+        var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
+        var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
 
-            // Find the test section by its marker, then replace the RequiredMLIR block within it
-            var markerPattern = $@"<!--\s*test:\s*{Regex.Escape(test.Name)}\s*-->";
-            var markerMatch = Regex.Match(specContent, markerPattern);
-            if (!markerMatch.Success) continue;
+        // Find the test marker once (shared by both RequiredMLIR and stderr updates)
+        var markerPattern = $@"<!--\s*test:\s*{Regex.Escape(test.Name)}\s*-->";
+        var markerMatch = Regex.Match(specContent, markerPattern);
+        if (!markerMatch.Success) continue;
 
-            // Find the first RequiredMLIR block after this test marker
-            var searchStart = markerMatch.Index + markerMatch.Length;
-            var blockPattern = @"```RequiredMLIR\s*\n(.*?)```";
-            var candidate = Regex.Match(specContent[searchStart..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
-            if (!candidate.Success) continue;
+        // Update RequiredMLIR
+        if (success.RequiredMLIR != null) {
+          var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_ir.exe");
+          try {
+            Compiler.Compiler.MmTrace = false;
+            Compiler.Compiler.MmDebug = false;
+            var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 
-            var absoluteStart = searchStart + candidate.Index;
-            var absoluteEnd = absoluteStart + candidate.Length;
-            var replacement = $"```RequiredMLIR\n{newRequiredMLIR}\n```";
-            specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
-            updated = true;
-            Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+            if (irResult.Success && irResult.AllStagesIr != null) {
+              var newRequiredMLIR = irResult.AllStagesIr.Trim();
+              var oldNorm = NormalizeIr(success.RequiredMLIR);
+              var newNorm = NormalizeIr(newRequiredMLIR);
+              if (oldNorm != newNorm) {
+                var searchStart = markerMatch.Index + markerMatch.Length;
+                var blockPattern = @"```RequiredMLIR\s*\n(.*?)```";
+                var candidate = Regex.Match(specContent[searchStart..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+                if (candidate.Success) {
+                  var absoluteStart = searchStart + candidate.Index;
+                  var absoluteEnd = absoluteStart + candidate.Length;
+                  var replacement = $"```RequiredMLIR\n{newRequiredMLIR}\n```";
+                  specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
+                  updated = true;
+                  Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                }
+              }
+            }
+          } finally {
+            try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
+          }
+        }
+
+        // Update MmTrace stderr
+        if (test.MmTrace && success.Stderr != null) {
+          var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_stderr.exe");
+          try {
+            Compiler.Compiler.MmTrace = true;
+            Compiler.Compiler.MmDebug = false;
+            var result = new Compiler.Compiler().Compile(sources, exePath);
+
+            if (result.Success) {
+              var (_, _, actualStderr) = RunExecutable(exePath, _tempDir);
+              var oldStderr = success.Stderr.Replace("\r\n", "\n").Trim();
+              var newStderr = actualStderr.Replace("\r\n", "\n").Trim();
+              if (oldStderr != newStderr) {
+                // Re-find marker since specContent may have shifted from RequiredMLIR update
+                var markerMatch2 = Regex.Match(specContent, markerPattern);
+                if (markerMatch2.Success) {
+                  var searchStart = markerMatch2.Index + markerMatch2.Length;
+                  var blockPattern = @"```stderr\s*\n(.*?)```";
+                  var candidate = Regex.Match(specContent[searchStart..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+                  if (candidate.Success) {
+                    var absoluteStart = searchStart + candidate.Index;
+                    var absoluteEnd = absoluteStart + candidate.Length;
+                    var replacement = $"```stderr\n{newStderr}\n```";
+                    specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
+                    updated = true;
+                    Logger.Debug(LogCategory.Testing, $"Updated stderr for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                  }
+                }
+              }
+            }
+          } finally {
+            try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
           }
         }
       }
@@ -789,7 +833,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
 
     if (updatedSpecs > 0) {
-      Logger.Info(LogCategory.Testing, $"Updated RequiredMLIR in {updatedSpecs} spec file(s)");
+      Logger.Info(LogCategory.Testing, $"Updated required blocks in {updatedSpecs} spec file(s)");
     }
   }
 }

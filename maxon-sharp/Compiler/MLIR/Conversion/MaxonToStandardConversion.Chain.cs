@@ -265,7 +265,9 @@ public static partial class MaxonToStandardConversion {
 
     // Free the node. The value's refcount is unchanged — caller inherits the node's reference.
     var nodePtrForFree = (StdI64)EmitLoad(block, nodeVarName, varTypes);
-    block.AddOp(new StdCallRuntimeOp("mm_free", [nodePtrForFree], null));
+    List<StdValue> freeArgs = [nodePtrForFree];
+    if (Compiler.MmTrace) freeArgs.Add(EmitNullPtr(block));
+    block.AddOp(new StdCallRuntimeOp("mm_free", freeArgs, null));
 
     // Zero the node variable so scope-end cleanup skips it (node memory is already freed)
     var zeroNode = new StdConstI64Op(0);

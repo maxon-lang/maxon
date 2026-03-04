@@ -965,11 +965,11 @@ public static class StandardToX86Conversion {
               regManager.EmitBoolTest(destructOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
               EmitInlineDestruct(regManager, x86Block, destructOp.HeapPtr, destructOp.ManagedFields,
-                ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex));
+                ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex), destructOp.ScopeName);
               x86Block.AddOp(new X86LabelDefOp(nullSkipLabel));
             } else {
               EmitInlineDestruct(regManager, x86Block, destructOp.HeapPtr, destructOp.ManagedFields,
-                ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex));
+                ConsumedArgs([destructOp.HeapPtr], lastUseOfValue, currentOpIndex), destructOp.ScopeName);
             }
             break;
           }
@@ -980,11 +980,11 @@ public static class StandardToX86Conversion {
               regManager.EmitBoolTest(destructUnionOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
               EmitInlineDestructUnion(regManager, x86Block, destructUnionOp.HeapPtr, destructUnionOp.Cases,
-                ConsumedArgs([destructUnionOp.HeapPtr], lastUseOfValue, currentOpIndex));
+                ConsumedArgs([destructUnionOp.HeapPtr], lastUseOfValue, currentOpIndex), destructUnionOp.ScopeName);
               x86Block.AddOp(new X86LabelDefOp(nullSkipLabel));
             } else {
               EmitInlineDestructUnion(regManager, x86Block, destructUnionOp.HeapPtr, destructUnionOp.Cases,
-                ConsumedArgs([destructUnionOp.HeapPtr], lastUseOfValue, currentOpIndex));
+                ConsumedArgs([destructUnionOp.HeapPtr], lastUseOfValue, currentOpIndex), destructUnionOp.ScopeName);
             }
             break;
           }
@@ -995,11 +995,11 @@ public static class StandardToX86Conversion {
               regManager.EmitBoolTest(destructChainOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
               EmitInlineDestructChain(regManager, x86Block, destructChainOp.HeapPtr,
-                ConsumedArgs([destructChainOp.HeapPtr], lastUseOfValue, currentOpIndex));
+                ConsumedArgs([destructChainOp.HeapPtr], lastUseOfValue, currentOpIndex), destructChainOp.ScopeName);
               x86Block.AddOp(new X86LabelDefOp(nullSkipLabel));
             } else {
               EmitInlineDestructChain(regManager, x86Block, destructChainOp.HeapPtr,
-                ConsumedArgs([destructChainOp.HeapPtr], lastUseOfValue, currentOpIndex));
+                ConsumedArgs([destructChainOp.HeapPtr], lastUseOfValue, currentOpIndex), destructChainOp.ScopeName);
             }
             break;
           }
@@ -1030,6 +1030,34 @@ public static class StandardToX86Conversion {
   }
 
   /// <summary>
+  /// Emits a symdata pointer for a scope tag, or an immediate 0 for no scope.
+  /// The returned value is spilled so it survives across calls.
+  /// </summary>
+  private static StdValue EmitScopeTag(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    string? scopeName, RegisterManager.SyntheticScope scope) {
+    if (scopeName != null) {
+      var scopePtr = scope.CreatePtr();
+      regManager.EmitLeaSymdataRelative(scopePtr, MaxonToStandardConversion.SanitizeTagLabel(scopeName), x86Block);
+      regManager.EnsureSpilled(scopePtr, x86Block);
+      return scopePtr;
+    }
+    var nullScope = scope.CreateValue();
+    regManager.EmitLoadImmediate(nullScope, 0, x86Block);
+    regManager.EnsureSpilled(nullScope, x86Block);
+    return nullScope;
+  }
+
+  /// <summary>
+  /// Emits mm_free(heapPtr, scopeTag) — passes the scope through to mm_free's internal trace.
+  /// </summary>
+  private static void EmitFreeWithTrace(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    StdI64 heapPtr, StdValue? scopeTag) {
+    regManager.EmitCall("mm_free", scopeTag != null ? [heapPtr, scopeTag] : [heapPtr], null, x86Block, null);
+  }
+
+  /// <summary>
   /// Emits inline x86 for struct destruction: mm_decref_check → if rc==0, recursively destruct
   /// each managed field, then mm_free. Fields with their own managed sub-fields are recursively
   /// destructed the same way rather than plain mm_decref.
@@ -1037,7 +1065,7 @@ public static class StandardToX86Conversion {
   private static void EmitInlineDestruct(
     RegisterManager regManager, MlirBlock<X86Op> x86Block,
     StdI64 heapPtr, List<FieldDestructorInfo> managedFields,
-    HashSet<StdValue>? consumed) {
+    HashSet<StdValue>? consumed, string? scopeName = null) {
     using var scope = regManager.BeginSyntheticScope();
     // heapPtr is used across multiple calls — ensure it has a stack home
     // so it can be reloaded after register invalidation (handles both
@@ -1048,6 +1076,23 @@ public static class StandardToX86Conversion {
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);
     x86Block.AddOp(new X86JccOp("nz", skipLabel));
+    StdValue? scopeTag = null;
+    if (Compiler.MmTrace)
+      scopeTag = EmitScopeTag(regManager, x86Block, scopeName, scope);
+    EmitFieldDecrefs(regManager, x86Block, heapPtr, managedFields, scope, scopeTag);
+    EmitFreeWithTrace(regManager, x86Block, heapPtr, scopeTag);
+    x86Block.AddOp(new X86LabelDefOp(skipLabel));
+  }
+
+  /// <summary>
+  /// Emits decref calls for each managed field of a struct whose refcount just hit zero.
+  /// For fields with managed sub-fields, recurses via EmitInlineDestructField.
+  /// For simple fields, emits mm_decref (with mm_trace_decref when tracing is enabled).
+  /// </summary>
+  private static void EmitFieldDecrefs(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    StdI64 heapPtr, List<FieldDestructorInfo> managedFields,
+    RegisterManager.SyntheticScope scope, StdValue? scopeTag) {
     foreach (var field in managedFields) {
       if (field.IsChildOwned) {
         // mm_free(parent) frees the child-owned buffer automatically; no explicit decref needed.
@@ -1068,14 +1113,63 @@ public static class StandardToX86Conversion {
           regManager.EmitCall("mm_decref_managed_elements", [fieldPtr], null, x86Block, null);
         }
       }
-      if (field.NestedFields.Count > 0) {
-        // Field itself has managed sub-fields — recurse so they get cleaned up too
-        EmitInlineDestruct(regManager, x86Block, fieldPtr, field.NestedFields, null);
+      if (field.IsChainWithManagedElements) {
+        // Chain field with heap-allocated element values — walk nodes and decref values
+        EmitInlineDestructChainField(regManager, x86Block, fieldPtr, scope, scopeTag);
+      } else if (field.NestedFields.Count > 0) {
+        // Field itself has managed sub-fields — trace the decref, then recurse
+        EmitInlineDestructField(regManager, x86Block, fieldPtr, field.NestedFields, scope, scopeTag);
       } else {
+        if (scopeTag != null) {
+          // fieldPtr is used across trace + decref calls — needs stack home
+          regManager.EnsureSpilled(fieldPtr, x86Block);
+          regManager.EmitCall("mm_trace_decref", [fieldPtr, scopeTag], null, x86Block, null);
+        }
         regManager.EmitCall("mm_decref", [fieldPtr], null, x86Block, null);
       }
     }
-    regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
+  }
+
+  /// <summary>
+  /// Destructs a managed field that has its own managed sub-fields.
+  /// Emits trace, then mm_decref_check + field cleanup + mm_free.
+  /// </summary>
+  private static void EmitInlineDestructField(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    StdI64 heapPtr, List<FieldDestructorInfo> nestedFields,
+    RegisterManager.SyntheticScope scope, StdValue? scopeTag) {
+    regManager.EnsureSpilled(heapPtr, x86Block);
+    if (scopeTag != null) {
+      regManager.EmitCall("mm_trace_decref", [heapPtr, scopeTag], null, x86Block, null);
+    }
+    var newRc = scope.CreateValue();
+    var skipLabel = $"__destruct_skip_{_labelCounter++}";
+    regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, null);
+    regManager.EmitBoolTest(newRc, x86Block);
+    x86Block.AddOp(new X86JccOp("nz", skipLabel));
+    EmitFieldDecrefs(regManager, x86Block, heapPtr, nestedFields, scope, scopeTag);
+    EmitFreeWithTrace(regManager, x86Block, heapPtr, scopeTag);
+    x86Block.AddOp(new X86LabelDefOp(skipLabel));
+  }
+
+  /// <summary>
+  /// Destructs a chain field within a struct: trace decref, then mm_decref_check →
+  /// if rc==0, decref all node values via maxon_chain_decref_values, then mm_free.
+  /// </summary>
+  private static void EmitInlineDestructChainField(
+    RegisterManager regManager, MlirBlock<X86Op> x86Block,
+    StdI64 heapPtr, RegisterManager.SyntheticScope scope, StdValue? scopeTag) {
+    regManager.EnsureSpilled(heapPtr, x86Block);
+    if (scopeTag != null) {
+      regManager.EmitCall("mm_trace_decref", [heapPtr, scopeTag], null, x86Block, null);
+    }
+    var newRc = scope.CreateValue();
+    var skipLabel = $"__destruct_chain_skip_{_labelCounter++}";
+    regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, null);
+    regManager.EmitBoolTest(newRc, x86Block);
+    x86Block.AddOp(new X86JccOp("nz", skipLabel));
+    regManager.EmitCall("maxon_chain_decref_values", [heapPtr], null, x86Block, null);
+    EmitFreeWithTrace(regManager, x86Block, heapPtr, scopeTag);
     x86Block.AddOp(new X86LabelDefOp(skipLabel));
   }
 
@@ -1086,7 +1180,7 @@ public static class StandardToX86Conversion {
   private static void EmitInlineDestructUnion(
     RegisterManager regManager, MlirBlock<X86Op> x86Block,
     StdI64 heapPtr, List<UnionCaseDestructorInfo> cases,
-    HashSet<StdValue>? consumed) {
+    HashSet<StdValue>? consumed, string? scopeName = null) {
     using var scope = regManager.BeginSyntheticScope();
     // heapPtr is used across multiple calls — ensure it has a stack home
     regManager.EnsureSpilled(heapPtr, x86Block);
@@ -1096,6 +1190,10 @@ public static class StandardToX86Conversion {
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);
     x86Block.AddOp(new X86JccOp("nz", skipLabel));
+
+    StdValue? scopeTag = null;
+    if (Compiler.MmTrace)
+      scopeTag = EmitScopeTag(regManager, x86Block, scopeName, scope);
 
     // Load the tag from offset 0
     var tagVal = scope.CreateValue();
@@ -1122,8 +1220,12 @@ public static class StandardToX86Conversion {
         if (payload.NestedFields.Count > 0) {
           // payloadPtr passed to recursive destruct needs a stack home for internal calls
           regManager.EnsureSpilled(payloadPtr, x86Block);
-          EmitInlineDestruct(regManager, x86Block, payloadPtr, payload.NestedFields, null);
+          EmitInlineDestructField(regManager, x86Block, payloadPtr, payload.NestedFields, scope, scopeTag);
         } else {
+          if (scopeTag != null) {
+            regManager.EnsureSpilled(payloadPtr, x86Block);
+            regManager.EmitCall("mm_trace_decref", [payloadPtr, scopeTag], null, x86Block, null);
+          }
           regManager.EmitCall("mm_decref", [payloadPtr], null, x86Block, null);
         }
       }
@@ -1137,7 +1239,7 @@ public static class StandardToX86Conversion {
     regManager.NoteValueDead(tagVal);
 
     x86Block.AddOp(new X86LabelDefOp(freeLabel));
-    regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
+    EmitFreeWithTrace(regManager, x86Block, heapPtr, scopeTag);
     x86Block.AddOp(new X86LabelDefOp(skipLabel));
   }
 
@@ -1147,7 +1249,7 @@ public static class StandardToX86Conversion {
   /// </summary>
   private static void EmitInlineDestructChain(
     RegisterManager regManager, MlirBlock<X86Op> x86Block,
-    StdI64 heapPtr, HashSet<StdValue>? consumed) {
+    StdI64 heapPtr, HashSet<StdValue>? consumed, string? scopeName = null) {
     using var scope = regManager.BeginSyntheticScope();
     // heapPtr is used across multiple calls — ensure it has a stack home
     regManager.EnsureSpilled(heapPtr, x86Block);
@@ -1156,9 +1258,12 @@ public static class StandardToX86Conversion {
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);
     x86Block.AddOp(new X86JccOp("nz", skipLabel));
+    StdValue? scopeTag = null;
+    if (Compiler.MmTrace)
+      scopeTag = EmitScopeTag(regManager, x86Block, scopeName, scope);
     // Decref all node values without freeing nodes — mm_free frees child-owned nodes
     regManager.EmitCall("maxon_chain_decref_values", [heapPtr], null, x86Block, null);
-    regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
+    EmitFreeWithTrace(regManager, x86Block, heapPtr, scopeTag);
     x86Block.AddOp(new X86LabelDefOp(skipLabel));
   }
 

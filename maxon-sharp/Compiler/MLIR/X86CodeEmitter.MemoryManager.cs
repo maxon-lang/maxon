@@ -11,9 +11,11 @@ public partial class X86CodeEmitter {
   // Debug mode constants (--mm-debug):
   private const long MmDebugAllocEntryMagic = unchecked((long)0xA10CDEADA10CDEAD);
   private const long MmDebugCanaryValue = unchecked((long)0xCAFEBABEDEADC0DE);
+  private const int AllocEntryAllocIdOffset = 0x48; // +72: alloc_id
+  private const int AllocEntryMagicOffset = 0x50;   // +80: magic (MmDebug only)
   private static int AllocEntrySize => Compiler.MmDebug ? 88 : 80;
   //
-  // AllocEntry (80 bytes):
+  // AllocEntry (80 bytes, or 88 with MmDebug):
   //   +0   user_ptr        (ptr)
   //   +8   size            (u64)
   //   +16  next            (ptr)     — next sibling in parent's child list
@@ -24,6 +26,7 @@ public partial class X86CodeEmitter {
   //   +56  tag_cstr        (ptr)     — debug tag
   //   +64  refcount        (u64)     — reference count
   //   +72  alloc_id        (u64)     — unique allocation identity (for trace)
+  //   +80  magic           (u64)     — MmDebug only: 0xA10CDEADA10CDEAD
   //
   // Every managed allocation has an 8-byte header at [ptr-8] = pointer to its AllocEntry.
 
@@ -285,14 +288,14 @@ public partial class X86CodeEmitter {
   // -------------------------------------------------------------------------
 
   /// <summary>
-  /// Emit inline code to validate AllocEntry magic at [RAX + 0x48].
+  /// Emit inline code to validate AllocEntry magic at [RAX + 0x50].
   /// RAX must contain the entry pointer. Uses RCX and RDX as scratch.
   /// labelPrefix must be unique within the calling function.
   /// </summary>
   private void EmitMmDebugCheckEntryMagic(string labelPrefix) {
     // Print diagnostics before panicking so we know which entry failed
-    // MOV rcx, [rax+0x48] — entry.magic
-    EmitBytes(0x48, 0x8B, 0x48, 0x48);
+    // MOV rcx, [rax+AllocEntryMagicOffset] — entry.magic
+    EmitBytes(0x48, 0x8B, 0x48, (byte)AllocEntryMagicOffset);
     EmitMovRegImm(X86Register.Rdx, MmDebugAllocEntryMagic);
     EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
     EmitJcc("e", labelPrefix + "_magic_ok");
@@ -430,10 +433,10 @@ public partial class X86CodeEmitter {
 
     // Write entry magic and canary (MmDebug only)
     if (Compiler.MmDebug) {
-      // entry.magic = AllocEntryMagic at [entry+0x48]
+      // entry.magic = AllocEntryMagic at [entry+0x50]
       EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = entry
       EmitMovRegImm(X86Register.Rcx, MmDebugAllocEntryMagic);
-      EmitBytes(0x48, 0x89, 0x48, 0x48); // MOV [rax+0x48], rcx
+      EmitBytes(0x48, 0x89, 0x48, (byte)AllocEntryMagicOffset); // MOV [rax+magic], rcx
 
       // Canary at [user_ptr + size]
       EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = user_ptr
@@ -448,12 +451,12 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0xFF, 0xC0); // INC rax
     EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_count");
 
-    // Assign alloc_id: ++__mm_alloc_id_counter → entry.alloc_id (+72)
+    // Assign alloc_id: ++__mm_alloc_id_counter → entry.alloc_id
     EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_id_counter");
     EmitBytes(0x48, 0xFF, 0xC0); // INC rax
     EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_id_counter");
     EmitMovRegMem(X86Register.Rcx, -0x30, 8); // entry_ptr
-    EmitBytes(0x48, 0x89, 0x41, 0x48); // MOV [rcx+72], rax — entry.alloc_id
+    EmitBytes(0x48, 0x89, 0x41, (byte)AllocEntryAllocIdOffset); // MOV [rcx+alloc_id], rax
 
     // Return user_ptr (raw_ptr + 8)
     EmitMovRegMem(X86Register.Rax, -0x38, 8);
@@ -541,10 +544,10 @@ public partial class X86CodeEmitter {
 
     // Write entry magic and canary (MmDebug only)
     if (Compiler.MmDebug) {
-      // entry.magic = AllocEntryMagic at [entry+0x48]
+      // entry.magic = AllocEntryMagic
       EmitMovRegMem(X86Register.Rax, -0x30, 8); // RAX = entry
       EmitMovRegImm(X86Register.Rcx, MmDebugAllocEntryMagic);
-      EmitBytes(0x48, 0x89, 0x48, 0x48); // MOV [rax+0x48], rcx
+      EmitBytes(0x48, 0x89, 0x48, (byte)AllocEntryMagicOffset); // MOV [rax+magic], rcx
 
       // Canary at [user_ptr + size]
       EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = user_ptr
@@ -584,12 +587,12 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0xFF, 0xC0); // INC rax
     EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_count");
 
-    // Assign alloc_id: ++__mm_alloc_id_counter → entry.alloc_id (+72)
+    // Assign alloc_id: ++__mm_alloc_id_counter → entry.alloc_id
     EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_id_counter");
     EmitBytes(0x48, 0xFF, 0xC0); // INC rax
     EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_id_counter");
     EmitMovRegMem(X86Register.Rcx, -0x30, 8); // entry_ptr
-    EmitBytes(0x48, 0x89, 0x41, 0x48); // MOV [rcx+72], rax — entry.alloc_id
+    EmitBytes(0x48, 0x89, 0x41, (byte)AllocEntryAllocIdOffset); // MOV [rcx+alloc_id], rax
 
     if (Compiler.MmTrace) {
       // Trace: "alloc_in " + entry.tag_cstr + newline
@@ -723,7 +726,7 @@ public partial class X86CodeEmitter {
       EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
 
       // Double-free check: if magic == 0, entry was already freed
-      EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+0x48] — entry.magic
+      EmitBytes(0x48, 0x8B, 0x48, (byte)AllocEntryMagicOffset); // MOV rcx, [rax+magic]
       EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
       EmitJcc("nz", "mm_free_entry_not_double_free");
       EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_double_free");
@@ -829,7 +832,7 @@ public partial class X86CodeEmitter {
       // Zero entry magic (for double-free detection)
       EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = entry
       EmitMovRegImm(X86Register.Rcx, 0);
-      EmitBytes(0x48, 0x89, 0x48, 0x48); // MOV [rax+0x48], rcx — zero magic
+      EmitBytes(0x48, 0x89, 0x48, (byte)AllocEntryMagicOffset); // MOV [rax+magic], rcx — zero magic
     }
 
     // HeapFree the payload: entry.user_ptr - 8
@@ -854,9 +857,9 @@ public partial class X86CodeEmitter {
   // Unlinks an allocation from its parent (if any), then calls mm_free_entry.
   // -------------------------------------------------------------------------
   private void EmitMmFree() {
-    // Stack: [rbp-8]=user_ptr, [rbp-40]=entry, [rbp-48]=prev, [rbp-56]=next,
-    //        [rbp-64]=owner_entry
-    EmitRuntimeFunctionStart("mm_free", 1, 0x80);
+    // Stack: [rbp-8]=user_ptr, [rbp-16]=scope_cstr (MmTrace only), [rbp-40]=entry, [rbp-48]=prev,
+    //        [rbp-56]=next, [rbp-64]=owner_entry
+    EmitRuntimeFunctionStart("mm_free", Compiler.MmTrace ? 2 : 1, 0x80);
 
     // If ptr == NULL, panic — null should never be passed to mm_free
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
@@ -892,7 +895,7 @@ public partial class X86CodeEmitter {
     // Trace free — emit before unlinking/freeing while entry is still valid
     if (Compiler.MmTrace) {
       EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
-      EmitMovRegImm(X86Register.Rdx, 0); // scope_cstr = NULL (free is triggered internally)
+      EmitMovRegMem(X86Register.Rdx, -0x10, 8); // scope_cstr (from caller, NULL if not provided)
       EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_free")); EmitDword(0);
     }
 
@@ -963,6 +966,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", "mm_free_if_nonnull_skip");
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
     DefineLabel("mm_free_if_nonnull_skip");
     EmitRuntimeFunctionEnd();
@@ -1007,6 +1011,7 @@ public partial class X86CodeEmitter {
 
     // Still a child of parent — free it
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // child_ptr
+    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
 
     DefineLabel("mm_free_child_of_skip");
@@ -1100,6 +1105,7 @@ public partial class X86CodeEmitter {
     // refcount == 0 — free via mm_free(user_ptr) so parent-owned entries are properly unlinked
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = entry
     EmitBytes(0x48, 0x8B, 0x08); // MOV rcx, [rax] — entry.user_ptr
+    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
 
     DefineLabel("mm_decref_done");
@@ -1408,7 +1414,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
-    EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
+    EmitBytes(0x48, 0x8B, 0x48, (byte)AllocEntryAllocIdOffset); // MOV rcx, [rax+alloc_id]
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
     // Print " rc=N"
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
@@ -1430,6 +1436,14 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("mm_trace_free", 2, 0x30);
     // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
+    // When scope is NULL (free triggered internally by mm_decref), add extra indent
+    // to visually show it's a side-effect of the preceding decref
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // scope_cstr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_trace_free_no_extra_indent");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_indent");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel("mm_trace_free_no_extra_indent");
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_free");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     // Load entry from [user_ptr - 8]
@@ -1444,7 +1458,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
-    EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
+    EmitBytes(0x48, 0x8B, 0x48, (byte)AllocEntryAllocIdOffset); // MOV rcx, [rax+alloc_id]
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
     EmitMmTraceScopeAndNewline("mm_trace_free_no_scope");
     EmitRuntimeFunctionEnd();
@@ -1476,7 +1490,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
-    EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
+    EmitBytes(0x48, 0x8B, 0x48, (byte)AllocEntryAllocIdOffset); // MOV rcx, [rax+alloc_id]
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
     // Print " rc=N"
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
@@ -1519,7 +1533,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
-    EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
+    EmitBytes(0x48, 0x8B, 0x48, (byte)AllocEntryAllocIdOffset); // MOV rcx, [rax+alloc_id]
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
     // Print " rc=N" (rc-1: value after the upcoming decrement)
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
@@ -1562,7 +1576,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
-    EmitBytes(0x48, 0x8B, 0x48, 0x48); // MOV rcx, [rax+72] — entry.alloc_id
+    EmitBytes(0x48, 0x8B, 0x48, (byte)AllocEntryAllocIdOffset); // MOV rcx, [rax+alloc_id]
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
     // Print " rc=N"
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
@@ -1935,6 +1949,7 @@ public partial class X86CodeEmitter {
 
     // Free the node via mm_free(user_ptr)
     EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = current (user ptr)
+    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
 
     // current = next

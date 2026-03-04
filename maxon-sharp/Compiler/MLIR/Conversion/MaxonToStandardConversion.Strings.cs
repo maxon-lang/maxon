@@ -302,7 +302,9 @@ public static partial class MaxonToStandardConversion {
 		// Free intermediate toString buffers now that contents are copied
 		foreach (var bufVar in interpTempBufVars) {
 			var bufPtr = (StdI64)EmitLoad(block, bufVar, varTypes);
-			block.AddOp(new StdCallRuntimeOp("mm_free", [bufPtr], null));
+			List<StdValue> freeArgs = [bufPtr];
+			if (Compiler.MmTrace) freeArgs.Add(EmitNullPtr(block));
+			block.AddOp(new StdCallRuntimeOp("mm_free", freeArgs, null));
 		}
 
 		// Store ManagedMemory fields

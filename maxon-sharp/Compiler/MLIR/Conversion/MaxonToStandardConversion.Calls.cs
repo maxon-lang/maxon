@@ -174,7 +174,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    string funcName) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -198,6 +199,13 @@ public static partial class MaxonToStandardConversion {
       // Struct return: return the heap pointer as i64
       StdValue retHeapPtr;
       if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
+        // Direct struct literal return (e.g. `return Pair{a: 1, b: 2}`): the literal
+        // was allocated with rc=0 and never assigned to a user variable, so no incref
+        // has been emitted yet. Incref to establish ownership before transferring to caller.
+        if (srcName.StartsWith("__struct_")) {
+          EmitIncref(block, srcName, varTypes, scopeName: funcName);
+          EmitTransfer(block, srcName, varTypes, funcName);
+        }
         retHeapPtr = EmitLoad(block, srcName, varTypes);
       } else {
         retHeapPtr = valueMap[retOp.Value];

@@ -1191,11 +1191,13 @@ public class StdCallRuntimeIfNonnullOp(string callee, List<StdValue> args, StdVa
 /// the parent is freed — the elements are reference-counted independently of the buffer.
 /// If ElementDestructorFunc is set, it names a synthesized function that loops over all
 /// buffer elements and cascades into their managed fields (not just plain mm_decref).
+/// If IsChainWithManagedElements is true, the field is a chain whose node values are
+/// heap-allocated and need decref — requires chain destruction (node-walk) instead of plain decref.
 /// </summary>
 public record FieldDestructorInfo(
   int Offset, MlirType Type, List<FieldDestructorInfo> NestedFields,
   bool IsChildOwned = false, bool HasManagedElements = false,
-  string? ElementDestructorFunc = null);
+  string? ElementDestructorFunc = null, bool IsChainWithManagedElements = false);
 
 /// <summary>
 /// Inline struct destructor: decrements the struct's refcount and, if it reaches zero,
@@ -1203,11 +1205,12 @@ public record FieldDestructorInfo(
 /// Emitted as inline x86 code with a conditional skip — no block split required, so
 /// SSA values live across the cleanup remain valid in the enclosing block.
 /// </summary>
-public class StdDestructStructOp(StdI64 heapPtr, List<FieldDestructorInfo> managedFields, bool nullGuarded = false) : StandardOp {
+public class StdDestructStructOp(StdI64 heapPtr, List<FieldDestructorInfo> managedFields, bool nullGuarded = false, string? scopeName = null) : StandardOp {
   public override string Mnemonic => $"mm.destruct_struct %{HeapPtr.Id} fields=[{string.Join(", ", ManagedFields.Select(f => $"+{f.Offset}"))}]{(NullGuarded ? " null_guarded" : "")}";
   public StdI64 HeapPtr { get; } = heapPtr;
   public List<FieldDestructorInfo> ManagedFields { get; } = managedFields;
   public bool NullGuarded { get; } = nullGuarded;
+  public string? ScopeName { get; } = scopeName;
   public override List<StdValue> ReadValues => [HeapPtr];
   public override int PureResultId => -1;
 }
@@ -1229,11 +1232,12 @@ public record UnionCaseDestructorInfo(int TagOrdinal, List<UnionPayloadDestructo
 /// reads the tag to determine which case is active, decrefs the appropriate managed
 /// payload values, then calls mm_free.
 /// </summary>
-public class StdDestructUnionOp(StdI64 heapPtr, List<UnionCaseDestructorInfo> cases, bool nullGuarded = false) : StandardOp {
+public class StdDestructUnionOp(StdI64 heapPtr, List<UnionCaseDestructorInfo> cases, bool nullGuarded = false, string? scopeName = null) : StandardOp {
   public override string Mnemonic => $"mm.destruct_union %{HeapPtr.Id} cases=[{string.Join(", ", Cases.Select(c => $"tag={c.TagOrdinal}"))}]{(NullGuarded ? " null_guarded" : "")}";
   public StdI64 HeapPtr { get; } = heapPtr;
   public List<UnionCaseDestructorInfo> Cases { get; } = cases;
   public bool NullGuarded { get; } = nullGuarded;
+  public string? ScopeName { get; } = scopeName;
   public override List<StdValue> ReadValues => [HeapPtr];
   public override int PureResultId => -1;
 }
@@ -1243,10 +1247,11 @@ public class StdDestructUnionOp(StdI64 heapPtr, List<UnionCaseDestructorInfo> ca
 /// calls maxon_chain_decref_values to decref all node values, then mm_free.
 /// Used when a chain with heap-allocated element values goes out of scope.
 /// </summary>
-public class StdDestructChainOp(StdI64 heapPtr, bool nullGuarded = false) : StandardOp {
+public class StdDestructChainOp(StdI64 heapPtr, bool nullGuarded = false, string? scopeName = null) : StandardOp {
   public override string Mnemonic => $"mm.destruct_chain %{HeapPtr.Id}{(NullGuarded ? " null_guarded" : "")}";
   public StdI64 HeapPtr { get; } = heapPtr;
   public bool NullGuarded { get; } = nullGuarded;
+  public string? ScopeName { get; } = scopeName;
   public override List<StdValue> ReadValues => [HeapPtr];
   public override int PureResultId => -1;
 }

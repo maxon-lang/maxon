@@ -38,4 +38,4 @@ Run the spec tests and fix any failures by modifying the compiler code.
 - For memory issues try compiling with "--mm-trace"
 - Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=mlir:debug`).
 - Fix root causes, not symptoms. No workarounds.
-- If any tests that use RequiredMLIR fail you can regenerate the required MLIR by using `--update-requiredmlir`
+- If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`

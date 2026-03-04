@@ -202,25 +202,40 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// Converts a tag name to its symdata label form (e.g. "foo.bar" → "__tag_foo_bar").
+  internal static string SanitizeTagLabel(string tag) =>
+    $"__tag_{tag.Replace('.', '_').Replace(' ', '_')}";
+
+  /// Registers a symdata C string for the given tag if not already cached. Returns the label.
+  [ThreadStatic] private static Dictionary<string, string>? _symdataTagCache;
+  private static string EnsureSymdataTag(string tag) {
+    _symdataTagCache ??= [];
+    if (_symdataTagCache.TryGetValue(tag, out var existingLabel))
+      return existingLabel;
+    var symdataLabel = SanitizeTagLabel(tag);
+    var nullTerminated = new byte[System.Text.Encoding.UTF8.GetByteCount(tag) + 1];
+    System.Text.Encoding.UTF8.GetBytes(tag, nullTerminated);
+    _resultModule!.SymdataEntries.Add((symdataLabel, nullTerminated, 1));
+    _symdataTagCache[tag] = symdataLabel;
+    return symdataLabel;
+  }
+
+  /// Ensures a symdata C string exists for the given tag name.
+  /// Called to pre-register tags that will be referenced at x86 level (e.g., destructor scope tags).
+  private static void EnsureScopeTagSymdata(string tag) {
+    if (!Compiler.MmTrace) return;
+    EnsureSymdataTag(tag);
+  }
+
   /// Returns a tag pointer for memory manager calls. When --mm-trace is enabled,
   /// emits a symdata C string and returns its address; otherwise returns NULL (0).
-  [ThreadStatic] private static Dictionary<string, string>? _symdataTagCache;
   private static StdI64 EmitTagPtr(MlirBlock<StandardOp> block, string tag) {
     if (!Compiler.MmTrace) {
       var nullOp = new StdConstI64Op(0);
       block.AddOp(nullOp);
       return nullOp.Result;
     }
-    _symdataTagCache ??= [];
-    var symdataLabel = $"__tag_{tag.Replace('.', '_').Replace(' ', '_')}";
-    if (!_symdataTagCache.TryGetValue(tag, out var existingLabel)) {
-      var nullTerminated = new byte[System.Text.Encoding.UTF8.GetByteCount(tag) + 1];
-      System.Text.Encoding.UTF8.GetBytes(tag, nullTerminated);
-      _resultModule!.SymdataEntries.Add((symdataLabel, nullTerminated, 1));
-      _symdataTagCache[tag] = symdataLabel;
-    } else {
-      symdataLabel = existingLabel;
-    }
+    var symdataLabel = EnsureSymdataTag(tag);
     var leaOp = new StdLeaSymdataOp(symdataLabel);
     block.AddOp(leaOp);
     var ptrOp = new StdPtrToI64Op(leaOp.Result);
@@ -287,6 +302,15 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  /// <summary>Emit mm_trace_transfer — records ownership transfer to caller (trace-only, no runtime effect).</summary>
+  private static void EmitTransfer(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string scopeName) {
+    if (Compiler.MmTrace) {
+      var transferPtr = EmitLoad(block, varName, varTypes);
+      var scopePtr = EmitTagPtr(block, scopeName);
+      block.AddOp(new StdCallRuntimeOp("mm_trace_transfer", [transferPtr, scopePtr], null));
+    }
+  }
+
   /// <summary>Emit mm_decref(heap_ptr) — decrements reference count, reclaims ownership when zero.</summary>
   private static void EmitDecref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? scopeName = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
@@ -331,20 +355,33 @@ public static partial class MaxonToStandardConversion {
           nestedOuterType, fieldTypeName, typeAliasSources);
       }
       bool isChildOwned = (field.Type as MlirStructType)?.IsChildOwned ?? false;
-      // A __ManagedMemory field (or its concrete alias, e.g. "ElementMemory") whose outer type
-      // has a struct Element type parameter stores heap pointers in its buffer. Each pointer
-      // must be decrefd before mm_decref frees the ElementMemory struct (and its buffer child),
+      // A __ManagedMemory field parameterized with a struct Element type (e.g. "ElementMemory"
+      // which is `__ManagedMemory with Element`) stores heap pointers in its buffer. Each pointer
+      // must be decrefd before mm_free frees the ElementMemory struct (and its buffer child),
       // because the buffer free alone does not touch element refcounts.
+      // Plain __ManagedMemory (e.g. String's `managed` field) stores raw bytes, not element
+      // pointers, even if the outer type has an Element type param (e.g. from Iterable).
       bool isManagedMemory = fieldTypeName != null
         && typeAliasSources != null
         && TypeAliasInfo.IsManagedMemoryType(fieldTypeName, typeAliasSources);
-      bool hasManagedElements = isManagedMemory
-        && HasStructElementType(outerType, outerTypeName, typeAliasSources);
+      // Check the field's own type for Element — only parameterized ManagedMemory
+      // (e.g. `ElementMemory` = `__ManagedMemory with Element`) stores heap pointers.
+      // The field's Element param may be unresolved (MlirTypeParameterType), so if the
+      // field has an Element param at all, fall back to the outer type for resolution.
+      var fieldStructType = field.Type as MlirStructType;
+      bool fieldHasElementParam = fieldStructType?.TypeParams.ContainsKey("Element") == true
+        || (fieldTypeName != null && typeAliasSources != null
+            && typeAliasSources.TryGetValue(fieldTypeName, out var fieldAlias)
+            && fieldAlias.TypeParams?.ContainsKey("Element") == true);
+      bool hasManagedElements = isManagedMemory && fieldHasElementParam
+        && (HasStructElementType(fieldStructType, fieldTypeName, typeAliasSources)
+            || HasStructElementType(outerType, outerTypeName, typeAliasSources));
       // For elements that are structs with their own managed fields, register a
       // synthesized destructor function that loops over elements and cascades cleanup
       string? elementDestructorFunc = null;
       if (hasManagedElements) {
-        var elemStructType = GetElementStructType(outerType, outerTypeName, typeAliasSources);
+        var elemStructType = GetElementStructType(fieldStructType, fieldTypeName, typeAliasSources)
+          ?? GetElementStructType(outerType, outerTypeName, typeAliasSources);
         if (elemStructType != null) {
           var elemManagedFields = GetManagedFieldsForType(elemStructType, typeDefs);
           if (elemManagedFields.Count > 0) {
@@ -359,7 +396,18 @@ public static partial class MaxonToStandardConversion {
           }
         }
       }
-      result.Add(new FieldDestructorInfo(field.Offset, field.Type, nested, isChildOwned, hasManagedElements, elementDestructorFunc));
+      // Chain fields with heap-allocated element values need node-walk destruction.
+      // The chain's own Element type param may be unresolved (MlirTypeParameterType),
+      // so fall back to the parent struct's Element type param for resolution.
+      bool isChainField = fieldTypeName != null
+        && typeAliasSources != null
+        && TypeAliasInfo.IsChainType(fieldTypeName, typeAliasSources);
+      bool isChainWithManagedElements = isChainField
+        && (HasStructElementType(
+              typeDefs.TryGetValue(fieldTypeName!, out var chainFieldDef) ? chainFieldDef as MlirStructType : field.Type as MlirStructType,
+              fieldTypeName, typeAliasSources)
+            || HasStructElementType(outerType, outerTypeName, typeAliasSources));
+      result.Add(new FieldDestructorInfo(field.Offset, field.Type, nested, isChildOwned, hasManagedElements, elementDestructorFunc, isChainWithManagedElements));
     }
     return result;
   }
@@ -453,6 +501,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes, Dictionary<string, string> varNameToStructType,
     Dictionary<string, MlirType> typeDefs, Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
     string? scopeName = null) {
+    // Destruct ops reference scope tags at x86 level via lea_symdata — ensure the tag exists
+    if (scopeName != null) EnsureScopeTagSymdata(scopeName);
     var typeName = varNameToStructType[varName];
 
     // Union types need tag-based dispatch to determine which payload fields to decref,
@@ -465,7 +515,7 @@ public static partial class MaxonToStandardConversion {
           var unionScopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
           block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, unionScopePtr], null));
         }
-        block.AddOp(new StdDestructUnionOp(heapPtr, caseDestructors, nullGuarded: true));
+        block.AddOp(new StdDestructUnionOp(heapPtr, caseDestructors, nullGuarded: true, scopeName: scopeName));
         return;
       }
       EmitDecrefIfNonnull(block, varName, varTypes, scopeName);
@@ -483,7 +533,7 @@ public static partial class MaxonToStandardConversion {
         var chainScopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
         block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [chainHeapPtr, chainScopePtr], null));
       }
-      block.AddOp(new StdDestructChainOp(chainHeapPtr, nullGuarded: true));
+      block.AddOp(new StdDestructChainOp(chainHeapPtr, nullGuarded: true, scopeName: scopeName));
       return;
     }
 
@@ -502,7 +552,7 @@ public static partial class MaxonToStandardConversion {
 
     var outerType = typeDefs.TryGetValue(typeName, out var t) ? t as MlirStructType : null;
     var fieldInfos = BuildFieldDestructors(managedFields, typeDefs, [typeName], outerType, typeName, typeAliasSources);
-    block.AddOp(new StdDestructStructOp(structHeapPtr, fieldInfos, nullGuarded: true));
+    block.AddOp(new StdDestructStructOp(structHeapPtr, fieldInfos, nullGuarded: true, scopeName: scopeName));
   }
 
   /// <summary>

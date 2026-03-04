@@ -1583,6 +1583,13 @@ public class RegisterManager {
       return v;
     }
 
+    public StdPtr CreatePtr() {
+      var v = new StdPtr(MlirContext.Current.NextId());
+      _mgr._syntheticScopes.Peek().Add(v);
+      _mgr._allSyntheticValues.Add(v);
+      return v;
+    }
+
     /// <summary>
     /// Promote a synthetic value to a normal value that survives calls.
     /// Immediately spills it to stack so it has a stack home, then

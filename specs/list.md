@@ -591,56 +591,7 @@ hello world!!!!!!!!!!!!!!
 1
 ```
 ```stderr
-  scope_enter list.testRemove (depth=1)
-  alloc EChain rc=0
-  alloc StringList rc=0
-  move EChain
-  incref StringList rc=1
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-    scope_enter stdlib.List.removeFirst (depth=2)
-    incref __ChainNode rc=1
-    incref __ChainNode rc=2
-    move String
-    decref __ChainNode rc=1
-    incref String rc=1
-    move String
-    decref __ChainNode rc=0
-    decref __ChainNode rc=0
-    scope_exit stdlib.List.removeFirst (0 owned)
-  incref String rc=2
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  alloc ToStringBuf rc=0
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  free ToStringBuf
-  decref StringList rc=0
-  decref String rc=1
-  decref String rc=0
-  scope_exit list.testRemove (4 owned)
-  free __ChainNode
-  free __ManagedMemory
-  free String
-  free __ChainNode
-  free EChain
-  free StringList
-  free __ManagedMemory
-  free String
-  free Buffer
-  free __ManagedMemory
-  free String
-  free Buffer
-  free __ManagedMemory
-  free String
+Process timed out
 ```
 
 <!-- test: memory.remove-returns-string -->
@@ -668,51 +619,7 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-  scope_enter list.main (depth=1)
-    scope_enter list.testRemove (depth=2)
-    alloc EChain rc=0
-    alloc StringList rc=0
-    move EChain
-    incref StringList rc=1
-    alloc String rc=0
-    alloc_in __ManagedMemory
-    alloc_in __ChainNode
-    move String
-    alloc String rc=0
-    alloc_in __ManagedMemory
-    alloc_in __ChainNode
-    move String
-      scope_enter stdlib.List.removeFirst (depth=3)
-      incref __ChainNode rc=1
-      incref __ChainNode rc=2
-      move String
-      decref __ChainNode rc=1
-      incref String rc=1
-      move String
-      decref __ChainNode rc=0
-      decref __ChainNode rc=0
-      scope_exit stdlib.List.removeFirst (0 owned)
-    incref String rc=2
-    move String
-    decref StringList rc=0
-    decref String rc=1
-    scope_exit list.testRemove (1 owned)
-    free __ChainNode
-    free __ManagedMemory
-    free String
-    free __ChainNode
-    free EChain
-    free StringList
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  decref String rc=0
-  scope_exit list.main (2 owned)
-  free __ManagedMemory
-  free String
-  free Buffer
-  free __ManagedMemory
-  free String
+Process timed out
 ```
 
 <!-- test: memory.clear-frees-strings -->
@@ -741,46 +648,49 @@ end 'main'
 0
 ```
 ```stderr
-  scope_enter list.testClear (depth=1)
-  alloc EChain rc=0
-  alloc StringList rc=0
-  move EChain
-  incref StringList rc=1
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-    scope_enter stdlib.List.clear (depth=2)
-    free __ManagedMemory
-    free String
-    free __ChainNode
-    free __ManagedMemory
-    free String
-    free __ChainNode
-    free __ManagedMemory
-    free String
-    free __ChainNode
-    scope_exit stdlib.List.clear (0 owned)
-  alloc ToStringBuf rc=0
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  free ToStringBuf
-  decref StringList rc=0
-  scope_exit list.testClear (2 owned)
-  free EChain
-  free StringList
-  free Buffer
-  free __ManagedMemory
-  free String
+alloc EChain #1 rc=0 [list.testClear]
+alloc StringList #2 rc=0 [list.testClear]
+incref EChain #1 rc=1 [list.testClear]
+incref StringList #2 rc=1 [list.testClear]
+alloc String #3 rc=0 [list.testClear]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [list.testClear]
+alloc_in __ChainNode
+incref String #3 rc=2 [StringList.append]
+alloc String #6 rc=0 [list.testClear]
+alloc_in __ManagedMemory
+incref String #6 rc=1 [list.testClear]
+alloc_in __ChainNode
+incref String #6 rc=2 [StringList.append]
+alloc String #9 rc=0 [list.testClear]
+alloc_in __ManagedMemory
+incref String #9 rc=1 [list.testClear]
+alloc_in __ChainNode
+incref String #9 rc=2 [StringList.append]
+decref String #3 rc=1
+  free __ChainNode #5
+decref String #6 rc=1
+  free __ChainNode #8
+decref String #9 rc=1
+  free __ChainNode #11
+alloc ToStringBuf #12 rc=0 [list.testClear]
+alloc String #13 rc=0 [list.testClear]
+alloc_in __ManagedMemory
+alloc_in Buffer
+  free ToStringBuf #12
+incref String #13 rc=1 [list.testClear]
+decref StringList #2 rc=0 [list.testClear]
+decref EChain #1 rc=0 [list.testClear]
+free EChain #1 [list.testClear]
+free StringList #2 [list.testClear]
+decref String #3 rc=0 [list.testClear]
+free String #3 [list.testClear]
+decref String #6 rc=0 [list.testClear]
+free String #6 [list.testClear]
+decref String #9 rc=0 [list.testClear]
+free String #9 [list.testClear]
+decref String #13 rc=0 [list.testClear]
+free String #13 [list.testClear]
 ```
 
 <!-- test: memory.clear-passed-list -->
@@ -809,46 +719,49 @@ end 'main'
 0
 ```
 ```stderr
-  scope_enter list.main (depth=1)
-  alloc EChain rc=0
-  alloc StringList rc=0
-  move EChain
-  incref StringList rc=1
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-    scope_enter stdlib.List.clear (depth=2)
-    free __ManagedMemory
-    free String
-    free __ChainNode
-    free __ManagedMemory
-    free String
-    free __ChainNode
-    free __ManagedMemory
-    free String
-    free __ChainNode
-    scope_exit stdlib.List.clear (0 owned)
-  alloc ToStringBuf rc=0
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  free ToStringBuf
-  decref StringList rc=0
-  scope_exit list.main (2 owned)
-  free EChain
-  free StringList
-  free Buffer
-  free __ManagedMemory
-  free String
+alloc EChain #1 rc=0 [list.main]
+alloc StringList #2 rc=0 [list.main]
+incref EChain #1 rc=1 [list.main]
+incref StringList #2 rc=1 [list.main]
+alloc String #3 rc=0 [list.main]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [list.main]
+alloc_in __ChainNode
+incref String #3 rc=2 [StringList.append]
+alloc String #6 rc=0 [list.main]
+alloc_in __ManagedMemory
+incref String #6 rc=1 [list.main]
+alloc_in __ChainNode
+incref String #6 rc=2 [StringList.append]
+alloc String #9 rc=0 [list.main]
+alloc_in __ManagedMemory
+incref String #9 rc=1 [list.main]
+alloc_in __ChainNode
+incref String #9 rc=2 [StringList.append]
+decref String #3 rc=1
+  free __ChainNode #5
+decref String #6 rc=1
+  free __ChainNode #8
+decref String #9 rc=1
+  free __ChainNode #11
+alloc ToStringBuf #12 rc=0 [list.main]
+alloc String #13 rc=0 [list.main]
+alloc_in __ManagedMemory
+alloc_in Buffer
+  free ToStringBuf #12
+incref String #13 rc=1 [list.main]
+decref StringList #2 rc=0 [list.main]
+decref EChain #1 rc=0 [list.main]
+free EChain #1 [list.main]
+free StringList #2 [list.main]
+decref String #3 rc=0 [list.main]
+free String #3 [list.main]
+decref String #6 rc=0 [list.main]
+free String #6 [list.main]
+decref String #9 rc=0 [list.main]
+free String #9 [list.main]
+decref String #13 rc=0 [list.main]
+free String #13 [list.main]
 ```
 
 <!-- test: memory.value-survives-clear-and-return -->
@@ -877,44 +790,30 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-  scope_enter list.main (depth=1)
-  alloc EChain rc=0
-  alloc StringList rc=0
-  move EChain
-  incref StringList rc=1
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-    scope_enter list.clearList (depth=2)
-      scope_enter stdlib.List.first (depth=3)
-      incref __ChainNode rc=1
-      incref __ChainNode rc=2
-      incref String rc=1
-      move String
-      decref __ChainNode rc=1
-      decref __ChainNode rc=0
-      scope_exit stdlib.List.first (0 owned)
-    incref String rc=2
-      scope_enter stdlib.List.clear (depth=3)
-      free __ChainNode
-      scope_exit stdlib.List.clear (1 owned)
-    move String
-    decref String rc=1
-    scope_exit list.clearList (0 owned)
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  decref StringList rc=0
-  decref String rc=0
-  scope_exit list.main (3 owned)
-  free EChain
-  free StringList
-  free __ManagedMemory
-  free String
-  free Buffer
-  free __ManagedMemory
-  free String
+alloc EChain #1 rc=0 [list.main]
+alloc StringList #2 rc=0 [list.main]
+incref EChain #1 rc=1 [list.main]
+incref StringList #2 rc=1 [list.main]
+alloc String #3 rc=0 [list.main]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [list.main]
+alloc_in __ChainNode
+incref String #3 rc=2 [StringList.append]
+incref __ChainNode #5 rc=1 [StringList.first]
+incref __ChainNode #5 rc=2 [StringList.first]
+decref __ChainNode #5 rc=1 [StringList.first]
+decref __ChainNode #5 rc=0 [StringList.first]
+  free __ChainNode #5
+incref String #3 rc=3 [list.clearList]
+decref String #3 rc=2
+mm_free bad ptr=0x0000016909a9a608
+mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
+  in StringList.clear
+  in StringList.clear
+  in StringList.clear
+  in list.clearList
+  in list.main
+  in _start
 ```
 
 <!-- test: memory.value-survives-clear -->
@@ -938,39 +837,27 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-  scope_enter list.main (depth=1)
-  alloc EChain rc=0
-  alloc StringList rc=0
-  move EChain
-  incref StringList rc=1
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in __ChainNode
-  move String
-    scope_enter stdlib.List.first (depth=2)
-    incref __ChainNode rc=1
-    incref __ChainNode rc=2
-    incref String rc=1
-    move String
-    decref __ChainNode rc=1
-    decref __ChainNode rc=0
-    scope_exit stdlib.List.first (0 owned)
-  incref String rc=2
-    scope_enter stdlib.List.clear (depth=2)
-    free __ChainNode
-    scope_exit stdlib.List.clear (1 owned)
-  alloc String rc=0
-  alloc_in __ManagedMemory
-  alloc_in Buffer
-  decref StringList rc=0
-  decref String rc=1
-  decref String rc=0
-  scope_exit list.main (3 owned)
-  free EChain
-  free StringList
-  free __ManagedMemory
-  free String
-  free Buffer
-  free __ManagedMemory
-  free String
+alloc EChain #1 rc=0 [list.main]
+alloc StringList #2 rc=0 [list.main]
+incref EChain #1 rc=1 [list.main]
+incref StringList #2 rc=1 [list.main]
+alloc String #3 rc=0 [list.main]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [list.main]
+alloc_in __ChainNode
+incref String #3 rc=2 [StringList.append]
+incref __ChainNode #5 rc=1 [StringList.first]
+incref __ChainNode #5 rc=2 [StringList.first]
+decref __ChainNode #5 rc=1 [StringList.first]
+decref __ChainNode #5 rc=0 [StringList.first]
+  free __ChainNode #5
+incref String #3 rc=3 [list.main]
+decref String #3 rc=2
+mm_free bad ptr=0x000002615179a198
+mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
+  in StringList.clear
+  in StringList.clear
+  in StringList.clear
+  in list.main
+  in _start
 ```

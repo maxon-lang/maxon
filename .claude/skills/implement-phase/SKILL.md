@@ -29,4 +29,4 @@ Implement the specific phase of the ROADMAP.md plan.
 - Use `--log=CATEGORY:LEVEL` for debugging (e.g., `--log=mlir:debug`, `--log=codegen:trace`).
 - Fix root causes, not symptoms. No workarounds.
 - If you find an issue, fix it properly. It doesn't matter if it is pre-existing.
-- If any tests that use RequiredMLIR fail you can regenerate the required MLIR by using `--update-requiredmlir`
+- If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`
