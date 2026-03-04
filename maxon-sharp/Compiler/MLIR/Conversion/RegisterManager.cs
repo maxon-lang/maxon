@@ -1476,7 +1476,7 @@ public class RegisterManager {
     var destReg = AllocateRegister(result, block, protect1: baseReg);
     block.AddOp(new X86XorRegRegOp(destReg, destReg));
     block.AddOp(new X86TestRegRegOp(baseReg, baseReg));
-    var skipLabel = $"__nsload_{result.Id}";
+    var skipLabel = $"__nsload_{StandardToX86Conversion.NextLabelId()}";
     block.AddOp(new X86JccOp("z", skipLabel));
     block.AddOp(new X86MovRegIndirectMemOp(destReg, baseReg, fieldOffset));
     block.AddOp(new X86LabelDefOp(skipLabel));
@@ -1610,6 +1610,13 @@ public class RegisterManager {
   }
 
   private void Assign(X86Register reg, StdValue value) {
+    // Detect value ID collisions: two different StdValue objects sharing the same ID
+    // would silently corrupt register allocation (e.g., from a mid-pipeline NextId reset)
+    if (_valueToRegister.TryGetValue(value, out var existingReg)
+        && _registerContents.TryGetValue(existingReg, out var existingValue)
+        && !ReferenceEquals(existingValue, value))
+      throw new InvalidOperationException(
+        $"RegisterManager: value ID collision — two different StdValue objects share ID {value.Id}");
     _registerContents[reg] = value;
     _valueToRegister[value] = reg;
     _lastUsed[reg] = _currentOpIndex;

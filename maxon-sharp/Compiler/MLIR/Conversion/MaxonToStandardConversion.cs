@@ -113,6 +113,7 @@ public static partial class MaxonToStandardConversion {
     foreach (var func in module.Functions) {
       // Reset IDs after stdlib for stable test output
       if (!hasResetAfterStdlib && !func.IsStdlib) {
+        MlirContext.Current.ClearHighWaterMark();
         MlirContext.Current.ResetIds();
         _rdataStdlibPhase = false;
         _nextRdataId = 0;

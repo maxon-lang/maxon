@@ -51,6 +51,7 @@ public class Compiler {
       var module = StdlibLoader.GetStdlibModule();
 
       // Reset IDs so user code starts at %0
+      _context.ClearHighWaterMark();
       _context.ResetIds();
 
       CompileSources(module, sources, false);
@@ -103,6 +104,7 @@ public class Compiler {
         CompileSources(module, modifiedSources, true);
       } else {
         var module = StdlibLoader.GetStdlibModule();
+        context.ClearHighWaterMark();
         context.ResetIds();
         CompileSources(module, [new SourceFile(filePath, content)], false);
       }

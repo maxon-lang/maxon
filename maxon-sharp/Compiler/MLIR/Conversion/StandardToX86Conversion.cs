@@ -8,6 +8,8 @@ enum ComparisonKind { Integer, UnsignedInteger, Float }
 
 public static class StandardToX86Conversion {
   [ThreadStatic] private static int _floatBranchCounter;
+  [ThreadStatic] private static int _labelCounter;
+  public static int NextLabelId() => _labelCounter++;
   public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
     var result = new MlirModule<X86Op>();
     result.RdataEntries.AddRange(module.RdataEntries);
@@ -15,7 +17,13 @@ public static class StandardToX86Conversion {
     result.Globals.AddRange(module.Globals);
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
+    bool hasResetAfterStdlib = false;
     foreach (var func in module.Functions) {
+      if (!hasResetAfterStdlib && !func.IsStdlib) {
+        _labelCounter = 0;
+        _floatBranchCounter = 0;
+        hasResetAfterStdlib = true;
+      }
       try {
         var newFunc = ConvertFunction(func, result);
         result.AddFunction(newFunc);
@@ -916,7 +924,7 @@ public static class StandardToX86Conversion {
             // Spill all live register values before the branch so values
             // remain accessible when the branch skips the call body.
             regManager.SpillAllLiveRegisters(x86Block);
-            var skipLabel = $"__nonnull_skip_{MlirContext.Current.NextId()}";
+            var skipLabel = $"__nonnull_skip_{_labelCounter++}";
             regManager.EmitBoolTest(guardedCallOp.Args[0], x86Block);
             x86Block.AddOp(new X86JccOp("z", skipLabel));
             regManager.EmitCall(guardedCallOp.Callee, guardedCallOp.Args, guardedCallOp.Result, x86Block,
@@ -953,7 +961,7 @@ public static class StandardToX86Conversion {
           case StdDestructStructOp destructOp: {
             if (destructOp.NullGuarded) {
               // Null-guarded: skip entire destruction if pointer is null
-              var nullSkipLabel = $"__destruct_nullguard_{MlirContext.Current.NextId()}";
+              var nullSkipLabel = $"__destruct_nullguard_{_labelCounter++}";
               regManager.EmitBoolTest(destructOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
               EmitInlineDestruct(regManager, x86Block, destructOp.HeapPtr, destructOp.ManagedFields,
@@ -968,7 +976,7 @@ public static class StandardToX86Conversion {
 
           case StdDestructUnionOp destructUnionOp: {
             if (destructUnionOp.NullGuarded) {
-              var nullSkipLabel = $"__destruct_union_nullguard_{MlirContext.Current.NextId()}";
+              var nullSkipLabel = $"__destruct_union_nullguard_{_labelCounter++}";
               regManager.EmitBoolTest(destructUnionOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
               EmitInlineDestructUnion(regManager, x86Block, destructUnionOp.HeapPtr, destructUnionOp.Cases,
@@ -983,7 +991,7 @@ public static class StandardToX86Conversion {
 
           case StdDestructChainOp destructChainOp: {
             if (destructChainOp.NullGuarded) {
-              var nullSkipLabel = $"__destruct_chain_nullguard_{MlirContext.Current.NextId()}";
+              var nullSkipLabel = $"__destruct_chain_nullguard_{_labelCounter++}";
               regManager.EmitBoolTest(destructChainOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
               EmitInlineDestructChain(regManager, x86Block, destructChainOp.HeapPtr,
@@ -1031,7 +1039,7 @@ public static class StandardToX86Conversion {
     StdI64 heapPtr, List<FieldDestructorInfo> managedFields,
     HashSet<StdValue>? consumed) {
     var newRc = new StdI64(MlirContext.Current.NextId());
-    var skipLabel = $"__destruct_skip_{newRc.Id}";
+    var skipLabel = $"__destruct_skip_{_labelCounter++}";
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);
     x86Block.AddOp(new X86JccOp("nz", skipLabel));
@@ -1071,7 +1079,8 @@ public static class StandardToX86Conversion {
     StdI64 heapPtr, List<UnionCaseDestructorInfo> cases,
     HashSet<StdValue>? consumed) {
     var newRc = new StdI64(MlirContext.Current.NextId());
-    var skipLabel = $"__destruct_union_skip_{newRc.Id}";
+    var labelId = _labelCounter++;
+    var skipLabel = $"__destruct_union_skip_{labelId}";
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);
     x86Block.AddOp(new X86JccOp("nz", skipLabel));
@@ -1080,12 +1089,12 @@ public static class StandardToX86Conversion {
     var tagVal = new StdI64(MlirContext.Current.NextId());
     regManager.EmitLoadIndirect(tagVal, heapPtr, 0, MlirType.I64, x86Block);
 
-    var freeLabel = $"__destruct_union_free_{newRc.Id}";
+    var freeLabel = $"__destruct_union_free_{labelId}";
 
     // For each case with managed payloads, compare tag and decref payloads
     for (int ci = 0; ci < cases.Count; ci++) {
       var unionCase = cases[ci];
-      var caseSkipLabel = $"__destruct_union_case_skip_{newRc.Id}_{ci}";
+      var caseSkipLabel = $"__destruct_union_case_skip_{labelId}_{ci}";
 
       // Compare tag with this case's ordinal
       var ordinalVal = new StdI64(MlirContext.Current.NextId());
@@ -1122,7 +1131,7 @@ public static class StandardToX86Conversion {
     RegisterManager regManager, MlirBlock<X86Op> x86Block,
     StdI64 heapPtr, HashSet<StdValue>? consumed) {
     var newRc = new StdI64(MlirContext.Current.NextId());
-    var skipLabel = $"__destruct_chain_skip_{newRc.Id}";
+    var skipLabel = $"__destruct_chain_skip_{_labelCounter++}";
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);
     x86Block.AddOp(new X86JccOp("nz", skipLabel));
