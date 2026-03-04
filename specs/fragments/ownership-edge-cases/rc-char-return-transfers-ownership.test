@@ -1,0 +1,104 @@
+// Test: rc-char-return-transfers-ownership
+function makeChar() returns Character
+  return 'Z'
+end 'makeChar'
+
+function main() returns ExitCode
+  var c = makeChar()
+  return c.byteLength()
+end 'main'
+---
+MmTrace: true
+ExitCode: 1
+Stderr: ```
+alloc Character #1 rc=0 [ownership-edge-cases.makeChar]
+alloc_in __ManagedMemory
+incref Character #1 rc=1 [ownership-edge-cases.makeChar]
+transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
+decref Character #1 rc=0 [ownership-edge-cases.main]
+free Character #1 [ownership-edge-cases.main]
+```
+---
+module {
+  func @ownership-edge-cases.makeChar() -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.lea_rdata rax, [__chr_0]
+    x86.mov rcx, rax
+    x86.mov edx, 1
+    x86.mov [rbp-32], ecx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, 32
+    x86.xor r8, r8
+    x86.call mm_alloc_in
+    x86.mov [rbp-16], eax
+    x86.mov ebx, [rbp-16]
+    x86.mov esi, [rbp-32]
+    x86.mov [ebx+0], esi
+    x86.mov edi, [rbp-16]
+    x86.mov r8, 1
+    x86.mov [edi+8], r8
+    x86.xor r9, r9
+    x86.mov eax, [rbp-16]
+    x86.mov [eax+16], r9
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-16]
+    x86.mov [ecx+24], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.mov [ecx+0], eax
+    x86.mov eax, [rbp-8]
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call ownership-edge-cases.makeChar
+    x86.mov [rbp-8], eax
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call stdlib.Character.byteLength
+    x86.mov [rbp-16], eax
+    x86.xor ecx, ecx
+    x86.cmp eax, ecx
+    x86.setl edx
+    x86.movzx edx, edxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg esi
+    x86.movzx esi, esib
+    x86.or edx, esi
+    x86.test edx, edx
+    x86.je ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_9]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
+    x86.test ecx, ecx
+    x86.jz __destruct_nullguard_0
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_1
+    x86.mov rcx, [rbp-8]
+    x86.call mm_free
+    x86.label __destruct_skip_1
+    x86.label __destruct_nullguard_0
+    x86.mov eax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

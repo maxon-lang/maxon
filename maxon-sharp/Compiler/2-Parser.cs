@@ -5162,6 +5162,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           MaxonStructVarRefOp sv => sv.VarName,
           MaxonEnumVarRefOp ev => ev.VarName,
           MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
+          MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__lit_tmp_") => av.VarName,
           _ => null
         };
         if (backedByVar != null && _variables.ContainsKey(backedByVar))
@@ -5833,6 +5834,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var varInfo = ((ResolvedVar.Local)resolved).Info;
       var fnType = varInfo.Kind == MaxonValueKind.Function ? GetFunctionTypeFromLastOp() : null;
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
+      FixupTempOwnership();
       // Write back to union heap block when assigning to a mutable payload binding
       if (varInfo.PayloadBinding is { } pb) {
         _currentBlock!.AddOp(new MaxonEnumPayloadAssignOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex, newVal));

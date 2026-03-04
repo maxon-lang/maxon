@@ -1838,3 +1838,290 @@ decref String #1 rc=1 [ownership-edge-cases.main]
 decref String #1 rc=0 [ownership-edge-cases.main]
 free String #1 [ownership-edge-cases.main]
 ```
+
+<!-- test: rc-char-single-alloc-freed -->
+<!-- MmTrace -->
+Single character allocated and freed in the same function scope; Character + child __ManagedMemory both cleaned up.
+```maxon
+function main() returns ExitCode
+  var c = 'A'
+  return c.byteLength()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+alloc Character #1 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref Character #1 rc=1 [ownership-edge-cases.main]
+decref Character #1 rc=0 [ownership-edge-cases.main]
+free Character #1 [ownership-edge-cases.main]
+```
+
+<!-- test: rc-char-alias-incref -->
+<!-- MmTrace -->
+Aliasing a character increfs it; both variables share the same Character object.
+```maxon
+function main() returns ExitCode
+  var a = 'X'
+  let b = a
+  return a.byteLength() + b.byteLength()
+end 'main'
+```
+```exitcode
+2
+```
+```stderr
+alloc Character #1 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref Character #1 rc=1 [ownership-edge-cases.main]
+incref Character #1 rc=2 [ownership-edge-cases.main]
+decref Character #1 rc=1 [ownership-edge-cases.main]
+decref Character #1 rc=0 [ownership-edge-cases.main]
+free Character #1 [ownership-edge-cases.main]
+```
+
+<!-- test: rc-char-reassign-decrefs-old -->
+<!-- MmTrace -->
+Reassigning a character var decrefs and frees the old Character (with its managed child) before storing the new one.
+```maxon
+function main() returns ExitCode
+  var c = 'A'
+  c = 'B'
+  return c.byteLength()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+alloc Character #1 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref Character #1 rc=1 [ownership-edge-cases.main]
+alloc Character #3 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref Character #3 rc=1 [ownership-edge-cases.main]
+decref Character #1 rc=0 [ownership-edge-cases.main]
+  free Character #1
+decref Character #3 rc=0 [ownership-edge-cases.main]
+free Character #3 [ownership-edge-cases.main]
+```
+
+<!-- test: rc-char-return-transfers-ownership -->
+<!-- MmTrace -->
+Returning a character from a function transfers ownership to the caller.
+```maxon
+function makeChar() returns Character
+  return 'Z'
+end 'makeChar'
+
+function main() returns ExitCode
+  var c = makeChar()
+  return c.byteLength()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+alloc Character #1 rc=0 [ownership-edge-cases.makeChar]
+alloc_in __ManagedMemory
+incref Character #1 rc=1 [ownership-edge-cases.makeChar]
+transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
+decref Character #1 rc=0 [ownership-edge-cases.main]
+free Character #1 [ownership-edge-cases.main]
+```
+
+<!-- test: rc-char-inner-block-freed -->
+<!-- MmTrace -->
+A character created in an inner if-block is freed when that block exits.
+```maxon
+function main() returns ExitCode
+  var result = 0
+  if true 'inner'
+    var c = 'Q'
+    result = c.byteLength()
+  end 'inner'
+  return result
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+alloc Character #1 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref Character #1 rc=1 [ownership-edge-cases.main]
+decref Character #1 rc=0 [ownership-edge-cases.main]
+free Character #1 [ownership-edge-cases.main]
+```
+
+<!-- test: rc-tuple-primitive-freed -->
+<!-- MmTrace -->
+A tuple of primitives is heap-allocated and freed at scope exit.
+```maxon
+function main() returns ExitCode
+  var t = (10, 32)
+  return t.0
+end 'main'
+```
+```exitcode
+10
+```
+```stderr
+alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+  free __Tuple_i64_i64 #1
+```
+
+<!-- test: rc-tuple-alias-incref -->
+<!-- MmTrace -->
+Aliasing a tuple increfs it; both variables share the same tuple object.
+```maxon
+function main() returns ExitCode
+  var a = (3, 7)
+  let b = a
+  return b.0 + b.1
+end 'main'
+```
+```exitcode
+10
+```
+```stderr
+alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+  free __Tuple_i64_i64 #1
+```
+
+<!-- test: rc-tuple-reassign-decrefs-old -->
+<!-- MmTrace -->
+Reassigning a tuple var decrefs the old tuple before storing the new one.
+```maxon
+function main() returns ExitCode
+  var t = (1, 2)
+  t = (3, 4)
+  return t.0 + t.1
+end 'main'
+```
+```exitcode
+7
+```
+```stderr
+alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+alloc __Tuple_i64_i64 #2 rc=0 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+  free __Tuple_i64_i64 #1
+incref __Tuple_i64_i64 #2 rc=1 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #2 rc=0 [ownership-edge-cases.main]
+  free __Tuple_i64_i64 #2
+```
+
+<!-- test: rc-tuple-with-string-freed -->
+<!-- MmTrace -->
+A tuple containing a managed type (String); the destructor must cascade to decref the String field.
+```maxon
+function main() returns ExitCode
+  var t = (42, "hello")
+  return t.0
+end 'main'
+```
+```exitcode
+42
+```
+```stderr
+alloc String #1 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref String #1 rc=1 [ownership-edge-cases.main]
+alloc __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
+incref String #1 rc=2 [ownership-edge-cases.main]
+incref __Tuple_i64_String #3 rc=1 [ownership-edge-cases.main]
+decref __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
+decref String #1 rc=1 [ownership-edge-cases.main]
+free __Tuple_i64_String #3 [ownership-edge-cases.main]
+decref String #1 rc=0 [ownership-edge-cases.main]
+free String #1 [ownership-edge-cases.main]
+```
+
+<!-- test: rc-tuple-return-transfers-ownership -->
+<!-- MmTrace -->
+Returning a tuple from a function transfers ownership to the caller.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+  return (a, b)
+end 'makePair'
+
+function main() returns ExitCode
+  var t = makePair(a: 5, b: 3)
+  return t.0 + t.1
+end 'main'
+```
+```exitcode
+8
+```
+```stderr
+alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.makePair]
+incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
+transfer __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
+decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+  free __Tuple_i64_i64 #1
+```
+
+<!-- test: rc-tuple-destructuring-cleanup -->
+<!-- MmTrace -->
+Destructuring a tuple frees the tuple wrapper while the bindings remain live.
+```maxon
+function main() returns ExitCode
+  var t = (10, 20)
+  var (x, y) = t
+  return x + y
+end 'main'
+```
+```exitcode
+30
+```
+```stderr
+alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+  free __Tuple_i64_i64 #1
+```
+
+<!-- test: rc-tuple-with-struct-freed -->
+<!-- MmTrace -->
+A tuple containing a user-defined struct; the destructor cascades through the tuple into the struct.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function main() returns ExitCode
+  var t = (1, Point{x: 10, y: 20})
+  return t.0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+alloc Point #1 rc=0 [ownership-edge-cases.main]
+alloc __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
+incref Point #1 rc=1 [ownership-edge-cases.main]
+incref __Tuple_i64_Point #2 rc=1 [ownership-edge-cases.main]
+decref __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
+decref Point #1 rc=0 [ownership-edge-cases.main]
+  free Point #1
+free __Tuple_i64_Point #2 [ownership-edge-cases.main]
+```
