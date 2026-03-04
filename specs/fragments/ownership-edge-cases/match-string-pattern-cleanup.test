@@ -1,4 +1,4 @@
-// Test: docs-example-6
+// Test: match-string-pattern-cleanup
 function main() returns ExitCode
   var name = "alice"
   match name 'greet'
@@ -7,12 +7,26 @@ function main() returns ExitCode
     default then return 0
   end 'greet'
 end 'main'
-
 ---
+MmTrace: true
 ExitCode: 1
+Stderr: ```
+alloc String #1 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref String #1 rc=1 [ownership-edge-cases.main]
+incref String #1 rc=2 [ownership-edge-cases.main]
+alloc String #3 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [ownership-edge-cases.main]
+decref String #3 rc=0 [ownership-edge-cases.main]
+free String #3 [ownership-edge-cases.main]
+decref String #1 rc=1 [ownership-edge-cases.main]
+decref String #1 rc=0 [ownership-edge-cases.main]
+free String #1 [ownership-edge-cases.main]
+```
 ---
 module {
-  func @match-statements.main() -> u32 {
+  func @ownership-edge-cases.main() -> u32 {
   entry:
     x86.prologue stack_size=112
     x86.lea_rdata rax, [__str_0]
@@ -56,7 +70,7 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov rcx, [rbp-40]
     x86.call mm_incref
-    x86.jmp match-statements.main.greet_0.cmp0
+    x86.jmp ownership-edge-cases.main.greet_0.cmp0
   greet_0.cmp0:
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
@@ -112,7 +126,7 @@ module {
     x86.label __destruct_nullguard_0
     x86.mov eax, [rbp-104]
     x86.test eax, eax
-    x86.je match-statements.main.greet_0.cmp1
+    x86.je ownership-edge-cases.main.greet_0.cmp1
   greet_0.case0:
     x86.mov eax, [rbp-40]
     x86.test eax, eax
@@ -193,7 +207,7 @@ module {
     x86.label __destruct_nullguard_6
     x86.mov eax, [rbp-104]
     x86.test eax, eax
-    x86.je match-statements.main.greet_0.case2
+    x86.je ownership-edge-cases.main.greet_0.case2
   greet_0.case1:
     x86.mov eax, [rbp-40]
     x86.test eax, eax

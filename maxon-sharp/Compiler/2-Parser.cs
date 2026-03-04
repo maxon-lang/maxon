@@ -8244,6 +8244,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(refOp);
         var strLit = new MaxonStringLiteralOp(stringPat.Value, structTypeName!);
         _currentBlock!.AddOp(strLit);
+        EmitLiteralTempAssign((MaxonStruct)strLit.Result);
         var equalsMethodName = $"{structTypeName}.equals";
         var equalsToken = new Token(TokenType.Identifier, equalsMethodName, pattern.Line, pattern.Column);
         var callOp = CreateFunctionCall(equalsToken, [refOp.Result, strLit.Result]);
@@ -8254,6 +8255,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(refOp);
         var charLit = new MaxonCharLiteralOp(charPat.Value, structTypeName!);
         _currentBlock!.AddOp(charLit);
+        EmitLiteralTempAssign((MaxonStruct)charLit.Result);
         var equalsMethodName = $"{structTypeName}.equals";
         var equalsToken = new Token(TokenType.Identifier, equalsMethodName, pattern.Line, pattern.Column);
         var callOp = CreateFunctionCall(equalsToken, [refOp.Result, charLit.Result]);
@@ -8610,7 +8612,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
         caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
         _currentBlock = cmpBlock;
+        var varsBeforeCmp = _variables.Keys.ToHashSet();
         var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind, structTypeName);
+        // Clean up any managed temporaries created during pattern comparison
+        // (e.g. string/char literals) before the conditional branch
+        var cmpTemps = _variables.Keys.Where(k => !varsBeforeCmp.Contains(k)).ToList();
+        if (cmpTemps.Count > 0) {
+          cmpBlock.AddOp(new MaxonScopeEndOp(cmpTemps));
+          foreach (var t in cmpTemps) _variables.Remove(t);
+        }
         cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
         cmpBlocks.Add(cmpBlock);
       } else {
@@ -8677,8 +8687,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       }
     }
 
-    _variables.Remove(scrutTempName);
-    if (origEnumTempName != null) _variables.Remove(origEnumTempName);
+    // Don't remove scrutTempName or origEnumTempName — let the function
+    // scope-end clean them up. Removing them here prevents cleanup when
+    // flow continues past the match (non-terminating case bodies).
 
     // If all cases terminate, there's no reachable code after the match
     _currentBlock = allTerminate ? null : mergeBlock;
@@ -8776,7 +8787,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var cmpBlock = _currentFunction!.Body.AddBlock(cmpLabel);
         caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
         _currentBlock = cmpBlock;
+        var varsBeforeCmp = _variables.Keys.ToHashSet();
         var combinedCmp = EmitPatternComparison(patterns, scrutTempName, compareKind, structTypeName);
+        // Clean up any managed temporaries created during pattern comparison
+        var cmpTemps = _variables.Keys.Where(k => !varsBeforeCmp.Contains(k)).ToList();
+        if (cmpTemps.Count > 0) {
+          cmpBlock.AddOp(new MaxonScopeEndOp(cmpTemps));
+          foreach (var t in cmpTemps) _variables.Remove(t);
+        }
         cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
         cmpBlocks.Add(cmpBlock);
       } else {
@@ -8824,9 +8842,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     _currentBlock = mergeBlock;
 
-    _variables.Remove(scrutTempName);
+    // Don't remove scrutTempName or origEnumTempName — let the function
+    // scope-end clean them up.
     _variables.Remove(resultVarName);
-    if (origEnumTempName != null) _variables.Remove(origEnumTempName);
 
     MaxonValue resultValue;
     if (resultKind == MaxonValueKind.Enum && resultStructTypeName != null) {
@@ -9976,6 +9994,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? "String";
       var strOp = new MaxonStringLiteralOp(strVal, stringTypeName);
       _currentBlock!.AddOp(strOp);
+      EmitLiteralTempAssign((MaxonStruct)strOp.Result);
       return new ExprResult.Direct(strOp.Result);
     }
     if (constValue is EnumConstantValue ec) {

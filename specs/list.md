@@ -591,7 +591,24 @@ hello world!!!!!!!!!!!!!!
 1
 ```
 ```stderr
-Process timed out
+alloc EChain #1 rc=0 [list.testRemove]
+alloc StringList #2 rc=0 [list.testRemove]
+incref EChain #1 rc=1 [list.testRemove]
+incref StringList #2 rc=1 [list.testRemove]
+alloc String #3 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [list.testRemove]
+alloc_in __ChainNode
+incref String #3 rc=2 [StringList.append]
+alloc String #6 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+incref String #6 rc=1 [list.testRemove]
+alloc_in __ChainNode
+incref String #6 rc=2 [StringList.append]
+incref __ChainNode #5 rc=1 [StringList.removeFirst]
+incref __ChainNode #5 rc=2 [StringList.removeFirst]
+  free __ChainNode #5
+decref
 ```
 
 <!-- test: memory.remove-returns-string -->
@@ -619,7 +636,24 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-Process timed out
+alloc EChain #1 rc=0 [list.testRemove]
+alloc StringList #2 rc=0 [list.testRemove]
+incref EChain #1 rc=1 [list.testRemove]
+incref StringList #2 rc=1 [list.testRemove]
+alloc String #3 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [list.testRemove]
+alloc_in __ChainNode
+incref String #3 rc=2 [StringList.append]
+alloc String #6 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+incref String #6 rc=1 [list.testRemove]
+alloc_in __ChainNode
+incref String #6 rc=2 [StringList.append]
+incref __ChainNode #5 rc=1 [StringList.removeFirst]
+incref __ChainNode #5 rc=2 [StringList.removeFirst]
+  free __ChainNode #5
+decref
 ```
 
 <!-- test: memory.clear-frees-strings -->
@@ -806,7 +840,7 @@ decref __ChainNode #5 rc=0 [StringList.first]
   free __ChainNode #5
 incref String #3 rc=3 [list.clearList]
 decref String #3 rc=2
-mm_free bad ptr=0x0000016909a9a608
+mm_free bad ptr=0x00000202a9c6fb08
 mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
   in StringList.clear
   in StringList.clear
@@ -853,7 +887,7 @@ decref __ChainNode #5 rc=0 [StringList.first]
   free __ChainNode #5
 incref String #3 rc=3 [list.main]
 decref String #3 rc=2
-mm_free bad ptr=0x000002615179a198
+mm_free bad ptr=0x000001ee6a51f768
 mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
   in StringList.clear
   in StringList.clear

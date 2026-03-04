@@ -6381,7 +6381,7 @@ module {
     maxon.panic "panic at match-statement-assignment.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
     %18 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, result, __range_val_1]
+    maxon.scope_end [x, result, __match_process_0, __range_val_1]
     maxon.return %18
   }
 }
@@ -6716,7 +6716,7 @@ module {
     maxon.panic "panic at match-statement-fallthrough.test:11: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
     %28 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, result, __range_val_1]
+    maxon.scope_end [x, result, __match_cascade_0, __range_val_1]
     maxon.return %28
   }
 }
@@ -6919,7 +6919,7 @@ module {
     maxon.panic "panic at match-expression-basic.test:9: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
     %18 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, result, __range_val_1]
+    maxon.scope_end [x, result, __match_eval_0, __range_val_1]
     maxon.return %18
   }
 }
@@ -7096,7 +7096,7 @@ module {
     maxon.panic "panic at match-expression-or-patterns.test:9: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
     %26 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, result, __range_val_1]
+    maxon.scope_end [x, result, __match_eval_0, __range_val_1]
     maxon.return %26
   }
 }
@@ -7293,7 +7293,7 @@ module {
     maxon.panic "panic at match-expression-in-arithmetic.test:9: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
     %20 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, doubled, __range_val_1]
+    maxon.scope_end [x, doubled, __match_eval_0, __range_val_1]
     maxon.return %20
   }
 }
@@ -7486,7 +7486,7 @@ module {
     maxon.panic "panic at match-statement-with-function-call.test:17: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
     %23 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, result, __range_val_1]
+    maxon.scope_end [x, result, __match_process_0, __range_val_1]
     maxon.return %23
   }
 }

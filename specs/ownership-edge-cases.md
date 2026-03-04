@@ -1807,3 +1807,34 @@ free StringList #2 [ownership-edge-cases.main]
 decref String #3 rc=0 [ownership-edge-cases.main]
 free String #3 [ownership-edge-cases.main]
 ```
+
+<!-- test: match-string-pattern-cleanup -->
+<!-- MmTrace -->
+Match pattern string literals must be freed after comparison, even when a case matches.
+```maxon
+function main() returns ExitCode
+  var name = "alice"
+  match name 'greet'
+    "alice" then return 1
+    "bob" then return 2
+    default then return 0
+  end 'greet'
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+alloc String #1 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref String #1 rc=1 [ownership-edge-cases.main]
+incref String #1 rc=2 [ownership-edge-cases.main]
+alloc String #3 rc=0 [ownership-edge-cases.main]
+alloc_in __ManagedMemory
+incref String #3 rc=1 [ownership-edge-cases.main]
+decref String #3 rc=0 [ownership-edge-cases.main]
+free String #3 [ownership-edge-cases.main]
+decref String #1 rc=1 [ownership-edge-cases.main]
+decref String #1 rc=0 [ownership-edge-cases.main]
+free String #1 [ownership-edge-cases.main]
+```
