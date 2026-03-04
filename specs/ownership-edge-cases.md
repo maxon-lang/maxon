@@ -2125,3 +2125,308 @@ decref Point #1 rc=0 [ownership-edge-cases.main]
   free Point #1
 free __Tuple_i64_Point #2 [ownership-edge-cases.main]
 ```
+
+<!-- disabled-test: rc-struct-literal-as-function-arg -->
+Passing a struct literal directly as a function argument must still free the struct after use. Currently leaks (exit 101).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function acceptPoint(p Point) returns Integer
+  return p.x + p.y
+end 'acceptPoint'
+
+function main() returns ExitCode
+  return acceptPoint(Point{x: 3, y: 4})
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- disabled-test: rc-tuple-return-destructure-no-crash -->
+Returning a tuple from a function and destructuring it must not crash. Currently the cleanup code attempts to decref the already-freed tuple, causing a segfault.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+  return (a, b)
+end 'makePair'
+
+function main() returns ExitCode
+  var (x, y) = makePair(10, b: 32)
+  return x + y
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: rc-enum-char-rawvalue-from-function -->
+Returning an enum's char rawValue through a function must not underflow the refcount. Currently the returned value is treated as a managed allocation when it's actually a raw constant, causing refcount underflow.
+```maxon
+enum Grade
+  excellent = 'A'
+  good = 'B'
+  average = 'C'
+end 'Grade'
+
+function getLetter(g Grade) returns Character
+  return g.rawValue
+end 'getLetter'
+
+function main() returns ExitCode
+  var grade = Grade.good
+  var letter = getLetter(grade)
+  if letter == 'B' 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-enum-name-from-function -->
+Returning an enum's .name (String) through a function must not underflow the refcount. Currently the returned raw constant string is decremented as if it were a managed allocation.
+```maxon
+enum Direction
+  north
+  south
+  east
+  west
+end 'Direction'
+
+function getName(d Direction) returns String
+  return d.name
+end 'getName'
+
+function main() returns ExitCode
+  var d = Direction.west
+  var n = getName(d)
+  if n == "west" 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-enum-string-rawvalue-from-function -->
+Returning a string-backed enum's rawValue through a function must not underflow the refcount. Same root cause as the char variant: raw constant treated as managed allocation.
+```maxon
+enum Planet
+  earth = "Earth"
+  mars = "Mars"
+  venus = "Venus"
+end 'Planet'
+
+function getName(p Planet) returns String
+  return p.rawValue
+end 'getName'
+
+function main() returns ExitCode
+  var p = Planet.mars
+  var n = getName(p)
+  if n == "Mars" 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-discarded-self-return -->
+When a self-returning method's result is discarded, the refcount must remain balanced. Currently the cleanup code double-decrefs the struct, causing a segfault.
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+type Counter
+  export var value Count
+
+  function increment() returns Counter
+    value = value + 1
+    return self
+  end 'increment'
+end 'Counter'
+
+function main() returns ExitCode
+  var c = Counter{value: 0}
+  c.increment()
+  return c.value
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-borrow-field-from-param -->
+Extracting and returning a struct field from a borrowed parameter must not crash. Currently the cleanup code decrefs the returned borrowed field incorrectly, causing a segfault after printing the correct output.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Data
+  export var value Integer
+end 'Data'
+
+type Wrapper
+  export var data Data
+end 'Wrapper'
+
+function extractData(w Wrapper) returns Data
+  return w.data
+end 'extractData'
+
+function main() returns ExitCode
+  var d = Data{value: 42}
+  var w = Wrapper{data: d}
+  var result = extractData(w)
+  return result.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: rc-char-to-string-interpolation -->
+Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
+```maxon
+function main() returns ExitCode
+  var c = 'A'
+  var s = "{c}"
+  print(s)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A
+```
+
+<!-- disabled-test: rc-match-char-range-cleanup -->
+Using character range patterns in a match statement must clean up all allocated Characters. Currently the range bound Characters leak.
+```maxon
+function main() returns ExitCode
+  var c = 'G'
+  match c 'classify'
+    'a' to 'z' then return 1
+    'A' to 'Z' then return 2
+    '0' to '9' then return 3
+    default then return 0
+  end 'classify'
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- disabled-test: rc-string-backed-enum-compare -->
+Comparing two string-backed enum values must not leak. Currently the Character/String allocations for enum case values are not freed.
+```maxon
+enum ContentType
+  json = "application/json"
+  html = "text/html"
+  plain = "text/plain"
+end 'ContentType'
+
+function main() returns ExitCode
+  var ct = ContentType.json
+  if ct == ContentType.json 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-char-backed-enum-compare -->
+Comparing two char-backed enum values must not leak. Currently the Character allocations for enum case values are not freed.
+```maxon
+enum Escape
+  newline = '\n'
+  tab = '\t'
+end 'Escape'
+
+function main() returns ExitCode
+  var e = Escape.newline
+  if e == Escape.newline 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-nested-struct-clone-no-leak -->
+Cloning a struct with a nested struct field must not leak the inner clone. Currently the cloned Inner's refcount is 1 when freed via Outer cascade, leaving 1 leaked allocation.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+  export var value Integer
+end 'Inner'
+
+type Outer
+  export var a Inner
+  export var b Integer
+end 'Outer'
+
+function main() returns ExitCode
+  var x = Outer{a: Inner{value: 42}, b: 10}
+  var y = x.clone()
+  y.a.value = 99
+  return x.a.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: rc-string-clone-no-leak -->
+Cloning a string must not leak internal Slice/ManagedMemory allocations. Currently String.clone leaks 2 allocations (the Slice and its buffer).
+```maxon
+function main() returns ExitCode
+  var a = "hello"
+  var b = a.clone()
+  print(b)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- disabled-test: rc-string-replace-no-leak -->
+String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
+```maxon
+function main() returns ExitCode
+  var s = "hello world"
+  var result = s.replace("world", with: "there")
+  print(result)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello there
+```
