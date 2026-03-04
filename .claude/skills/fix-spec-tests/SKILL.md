@@ -8,7 +8,7 @@ Run the spec tests and fix any failures by modifying the compiler code.
 Read SPECS.md for more information on the spec tests.
 
 ## Steps
-1. Run the spec tests: `maxon spec-test`
+1. Run the spec tests: `bin/maxon spec-test`
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-sharp/` to make the failing tests pass. If new features need to be implemented you
 can use the maxon-sharp compiler for reference.

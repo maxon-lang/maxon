@@ -488,10 +488,10 @@ module {
     x86.mov [rbp-8], eax
     x86.mov eax, [rbp-16]
     x86.test eax, eax
-    x86.jz __nonnull_skip_24
+    x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
-    x86.label __nonnull_skip_24
+    x86.label __nonnull_skip_0
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
     x86.mov eax, [rbp-8]
@@ -741,7 +741,7 @@ module {
   }
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
@@ -846,39 +846,38 @@ module {
     x86.mov eax, [rbp-56]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_205
+    x86.jz __destruct_nullguard_0
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_206
+    x86.jnz __destruct_skip_1
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-64], eax
-    x86.mov [rbp-72], edx
-    x86.mov rcx, [rbp-72]
+    x86.mov [rbp-64], edx
+    x86.mov rcx, [rbp-64]
     x86.call mm_decref_managed_elements
-    x86.mov rcx, [rbp-72]
+    x86.mov rcx, [rbp-64]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_206
-    x86.label __destruct_nullguard_205
+    x86.label __destruct_skip_1
+    x86.label __destruct_nullguard_0
     x86.mov eax, [rbp-24]
     x86.test eax, eax
-    x86.jz __nonnull_skip_208
+    x86.jz __nonnull_skip_2
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_208
+    x86.label __nonnull_skip_2
     x86.mov ecx, [rbp-48]
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_209
+    x86.jz __nonnull_skip_3
     x86.call mm_decref
-    x86.label __nonnull_skip_209
+    x86.label __nonnull_skip_3
     x86.mov edx, [rbp-40]
     x86.test edx, edx
-    x86.jz __nonnull_skip_210
+    x86.jz __nonnull_skip_4
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.label __nonnull_skip_210
+    x86.label __nonnull_skip_4
     x86.mov eax, [rbp-56]
     x86.epilogue
     x86.ret
@@ -1065,10 +1064,10 @@ module {
     x86.mov [rbp-8], ecx
     x86.mov edx, [rbp-24]
     x86.test edx, edx
-    x86.jz __nonnull_skip_34
+    x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_34
+    x86.label __nonnull_skip_0
     x86.jmp memory-safety.main.loop_0.exit
   check_1.after:
     x86.mov eax, 1
@@ -1077,10 +1076,10 @@ module {
     x86.mov [rbp-16], ecx
     x86.mov edx, [rbp-24]
     x86.test edx, edx
-    x86.jz __nonnull_skip_35
+    x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_35
+    x86.label __nonnull_skip_1
     x86.jmp memory-safety.main.loop_0.header
   loop_0.exit:
     x86.mov eax, [rbp-8]
@@ -1252,10 +1251,10 @@ module {
     x86.mov r9, [rbp-16]
     x86.mov [rbp-24], edi
     x86.test r9, r9
-    x86.jz __nonnull_skip_27
+    x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
-    x86.label __nonnull_skip_27
+    x86.label __nonnull_skip_0
     x86.mov eax, [rbp-24]
     x86.epilogue
     x86.ret

@@ -1038,7 +1038,12 @@ public static class StandardToX86Conversion {
     RegisterManager regManager, MlirBlock<X86Op> x86Block,
     StdI64 heapPtr, List<FieldDestructorInfo> managedFields,
     HashSet<StdValue>? consumed) {
-    var newRc = new StdI64(MlirContext.Current.NextId());
+    using var scope = regManager.BeginSyntheticScope();
+    // heapPtr is used across multiple calls — ensure it has a stack home
+    // so it can be reloaded after register invalidation (handles both
+    // synthetic values from outer scopes and consumed last-use values)
+    regManager.EnsureSpilled(heapPtr, x86Block);
+    var newRc = scope.CreateValue();
     var skipLabel = $"__destruct_skip_{_labelCounter++}";
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);
@@ -1048,8 +1053,12 @@ public static class StandardToX86Conversion {
         // mm_free(parent) frees the child-owned buffer automatically; no explicit decref needed.
         continue;
       }
-      var fieldPtr = new StdI64(MlirContext.Current.NextId());
+      var fieldPtr = scope.CreateValue();
       regManager.EmitLoadIndirect(fieldPtr, heapPtr, field.Offset, field.Type, x86Block);
+      // fieldPtr is used across multiple calls when it has managed elements AND nested fields,
+      // or when passed as heapPtr to a recursive destruct (which makes multiple internal calls)
+      if (field.HasManagedElements || field.NestedFields.Count > 0)
+        regManager.EnsureSpilled(fieldPtr, x86Block);
       if (field.HasManagedElements) {
         if (field.ElementDestructorFunc != null) {
           // Element type has managed fields — call synthesized destructor that cascades
@@ -1078,7 +1087,10 @@ public static class StandardToX86Conversion {
     RegisterManager regManager, MlirBlock<X86Op> x86Block,
     StdI64 heapPtr, List<UnionCaseDestructorInfo> cases,
     HashSet<StdValue>? consumed) {
-    var newRc = new StdI64(MlirContext.Current.NextId());
+    using var scope = regManager.BeginSyntheticScope();
+    // heapPtr is used across multiple calls — ensure it has a stack home
+    regManager.EnsureSpilled(heapPtr, x86Block);
+    var newRc = scope.CreateValue();
     var labelId = _labelCounter++;
     var skipLabel = $"__destruct_union_skip_{labelId}";
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
@@ -1086,8 +1098,9 @@ public static class StandardToX86Conversion {
     x86Block.AddOp(new X86JccOp("nz", skipLabel));
 
     // Load the tag from offset 0
-    var tagVal = new StdI64(MlirContext.Current.NextId());
+    var tagVal = scope.CreateValue();
     regManager.EmitLoadIndirect(tagVal, heapPtr, 0, MlirType.I64, x86Block);
+    scope.KeepAlive(tagVal, x86Block);  // survives across case comparisons
 
     var freeLabel = $"__destruct_union_free_{labelId}";
 
@@ -1097,16 +1110,18 @@ public static class StandardToX86Conversion {
       var caseSkipLabel = $"__destruct_union_case_skip_{labelId}_{ci}";
 
       // Compare tag with this case's ordinal
-      var ordinalVal = new StdI64(MlirContext.Current.NextId());
+      var ordinalVal = scope.CreateValue();
       regManager.EmitLoadImmediate(ordinalVal, unionCase.TagOrdinal, x86Block);
       regManager.EmitIntegerCompare(tagVal, ordinalVal, x86Block);
       x86Block.AddOp(new X86JccOp("ne", caseSkipLabel));
 
       // Tag matches — decref each managed payload
       foreach (var payload in unionCase.ManagedPayloads) {
-        var payloadPtr = new StdI64(MlirContext.Current.NextId());
+        var payloadPtr = scope.CreateValue();
         regManager.EmitLoadIndirect(payloadPtr, heapPtr, payload.Offset, payload.Type, x86Block);
         if (payload.NestedFields.Count > 0) {
+          // payloadPtr passed to recursive destruct needs a stack home for internal calls
+          regManager.EnsureSpilled(payloadPtr, x86Block);
           EmitInlineDestruct(regManager, x86Block, payloadPtr, payload.NestedFields, null);
         } else {
           regManager.EmitCall("mm_decref", [payloadPtr], null, x86Block, null);
@@ -1117,6 +1132,9 @@ public static class StandardToX86Conversion {
       x86Block.AddOp(new X86JmpOp(freeLabel));
       x86Block.AddOp(new X86LabelDefOp(caseSkipLabel));
     }
+
+    // tagVal was promoted out of synthetic tracking by KeepAlive — clean it up explicitly
+    regManager.NoteValueDead(tagVal);
 
     x86Block.AddOp(new X86LabelDefOp(freeLabel));
     regManager.EmitCall("mm_free", [heapPtr], null, x86Block, null);
@@ -1130,7 +1148,10 @@ public static class StandardToX86Conversion {
   private static void EmitInlineDestructChain(
     RegisterManager regManager, MlirBlock<X86Op> x86Block,
     StdI64 heapPtr, HashSet<StdValue>? consumed) {
-    var newRc = new StdI64(MlirContext.Current.NextId());
+    using var scope = regManager.BeginSyntheticScope();
+    // heapPtr is used across multiple calls — ensure it has a stack home
+    regManager.EnsureSpilled(heapPtr, x86Block);
+    var newRc = scope.CreateValue();
     var skipLabel = $"__destruct_chain_skip_{_labelCounter++}";
     regManager.EmitCall("mm_decref_check", [heapPtr], newRc, x86Block, consumed);
     regManager.EmitBoolTest(newRc, x86Block);

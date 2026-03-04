@@ -441,7 +441,7 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
-    x86.prologue stack_size=112
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call stdlib.CommandLine.args
@@ -518,47 +518,44 @@ module {
   guard_8:
     x86.mov eax, [rbp-16]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_257
+    x86.jz __destruct_nullguard_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_258
+    x86.jnz __destruct_skip_1
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-80], eax
-    x86.mov [rbp-88], edx
-    x86.mov rcx, [rbp-88]
+    x86.mov [rbp-80], edx
+    x86.mov rcx, [rbp-80]
     x86.call __destruct_elements_String
-    x86.mov rcx, [rbp-88]
+    x86.mov rcx, [rbp-80]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_258
-    x86.label __destruct_nullguard_257
+    x86.label __destruct_skip_1
+    x86.label __destruct_nullguard_0
     x86.mov ebx, [rbp-8]
     x86.test ebx, ebx
-    x86.jz __destruct_nullguard_260
+    x86.jz __destruct_nullguard_2
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_261
-    x86.mov [rbp-96], eax
+    x86.jnz __destruct_skip_3
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_261
-    x86.label __destruct_nullguard_260
+    x86.label __destruct_skip_3
+    x86.label __destruct_nullguard_2
     x86.mov esi, [rbp-48]
     x86.test esi, esi
-    x86.jz __destruct_nullguard_262
+    x86.jz __destruct_nullguard_4
     x86.mov rcx, [rbp-48]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_263
-    x86.mov [rbp-104], eax
+    x86.jnz __destruct_skip_5
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_263
-    x86.label __destruct_nullguard_262
+    x86.label __destruct_skip_5
+    x86.label __destruct_nullguard_4
     x86.mov eax, 99
     x86.epilogue
     x86.ret
@@ -585,52 +582,49 @@ module {
     x86.mov eax, [rbp-72]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_264
+    x86.jz __destruct_nullguard_6
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_265
+    x86.jnz __destruct_skip_7
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-80], eax
-    x86.mov [rbp-88], edx
-    x86.mov rcx, [rbp-88]
+    x86.mov [rbp-80], edx
+    x86.mov rcx, [rbp-80]
     x86.call __destruct_elements_String
-    x86.mov rcx, [rbp-88]
+    x86.mov rcx, [rbp-80]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_265
-    x86.label __destruct_nullguard_264
+    x86.label __destruct_skip_7
+    x86.label __destruct_nullguard_6
     x86.mov eax, [rbp-8]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_267
+    x86.jz __destruct_nullguard_8
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_268
-    x86.mov [rbp-96], eax
+    x86.jnz __destruct_skip_9
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_268
-    x86.label __destruct_nullguard_267
+    x86.label __destruct_skip_9
+    x86.label __destruct_nullguard_8
     x86.mov ecx, [rbp-48]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_269
+    x86.jz __destruct_nullguard_10
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_270
-    x86.mov [rbp-104], eax
+    x86.jnz __destruct_skip_11
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_270
-    x86.label __destruct_nullguard_269
+    x86.label __destruct_skip_11
+    x86.label __destruct_nullguard_10
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }
   func @__destruct_elements_Character(managed_ptr: i64) {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov eax, [ecx+0]
     x86.mov edx, [ecx+8]
     x86.xor ecx, ecx
@@ -653,16 +647,15 @@ module {
     x86.mov [rbp-32], ebx
     x86.mov esi, [rbp-32]
     x86.test esi, esi
-    x86.jz __destruct_nullguard_272
+    x86.jz __destruct_nullguard_13
     x86.mov rcx, [rbp-32]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_273
-    x86.mov [rbp-40], eax
+    x86.jnz __destruct_skip_14
     x86.mov rcx, [rbp-32]
     x86.call mm_free
-    x86.label __destruct_skip_273
-    x86.label __destruct_nullguard_272
+    x86.label __destruct_skip_14
+    x86.label __destruct_nullguard_13
     x86.mov edi, [rbp-8]
     x86.mov r8, 1
     x86.add edi, r8
@@ -674,7 +667,7 @@ module {
   }
   func @__destruct_elements_String(managed_ptr: i64) {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov eax, [ecx+0]
     x86.mov edx, [ecx+8]
     x86.xor ecx, ecx
@@ -697,16 +690,15 @@ module {
     x86.mov [rbp-32], ebx
     x86.mov esi, [rbp-32]
     x86.test esi, esi
-    x86.jz __destruct_nullguard_274
+    x86.jz __destruct_nullguard_15
     x86.mov rcx, [rbp-32]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_275
-    x86.mov [rbp-40], eax
+    x86.jnz __destruct_skip_16
     x86.mov rcx, [rbp-32]
     x86.call mm_free
-    x86.label __destruct_skip_275
-    x86.label __destruct_nullguard_274
+    x86.label __destruct_skip_16
+    x86.label __destruct_nullguard_15
     x86.mov edi, [rbp-8]
     x86.mov r8, 1
     x86.add edi, r8
@@ -1000,7 +992,7 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
-    x86.prologue stack_size=112
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.mov [rbp-8], eax
     x86.call stdlib.CommandLine.args
@@ -1077,47 +1069,44 @@ module {
   guard_8:
     x86.mov eax, [rbp-16]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_258
+    x86.jz __destruct_nullguard_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_259
+    x86.jnz __destruct_skip_1
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-80], eax
-    x86.mov [rbp-88], edx
-    x86.mov rcx, [rbp-88]
+    x86.mov [rbp-80], edx
+    x86.mov rcx, [rbp-80]
     x86.call __destruct_elements_String
-    x86.mov rcx, [rbp-88]
+    x86.mov rcx, [rbp-80]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_259
-    x86.label __destruct_nullguard_258
+    x86.label __destruct_skip_1
+    x86.label __destruct_nullguard_0
     x86.mov ebx, [rbp-8]
     x86.test ebx, ebx
-    x86.jz __destruct_nullguard_261
+    x86.jz __destruct_nullguard_2
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_262
-    x86.mov [rbp-96], eax
+    x86.jnz __destruct_skip_3
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_262
-    x86.label __destruct_nullguard_261
+    x86.label __destruct_skip_3
+    x86.label __destruct_nullguard_2
     x86.mov esi, [rbp-48]
     x86.test esi, esi
-    x86.jz __destruct_nullguard_263
+    x86.jz __destruct_nullguard_4
     x86.mov rcx, [rbp-48]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_264
-    x86.mov [rbp-104], eax
+    x86.jnz __destruct_skip_5
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_264
-    x86.label __destruct_nullguard_263
+    x86.label __destruct_skip_5
+    x86.label __destruct_nullguard_4
     x86.mov eax, 99
     x86.epilogue
     x86.ret
@@ -1144,52 +1133,49 @@ module {
     x86.mov eax, [rbp-72]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_265
+    x86.jz __destruct_nullguard_6
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_266
+    x86.jnz __destruct_skip_7
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-80], eax
-    x86.mov [rbp-88], edx
-    x86.mov rcx, [rbp-88]
+    x86.mov [rbp-80], edx
+    x86.mov rcx, [rbp-80]
     x86.call __destruct_elements_String
-    x86.mov rcx, [rbp-88]
+    x86.mov rcx, [rbp-80]
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_266
-    x86.label __destruct_nullguard_265
+    x86.label __destruct_skip_7
+    x86.label __destruct_nullguard_6
     x86.mov eax, [rbp-8]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_268
+    x86.jz __destruct_nullguard_8
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_269
-    x86.mov [rbp-96], eax
+    x86.jnz __destruct_skip_9
     x86.mov rcx, [rbp-8]
     x86.call mm_free
-    x86.label __destruct_skip_269
-    x86.label __destruct_nullguard_268
+    x86.label __destruct_skip_9
+    x86.label __destruct_nullguard_8
     x86.mov ecx, [rbp-48]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_270
+    x86.jz __destruct_nullguard_10
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_271
-    x86.mov [rbp-104], eax
+    x86.jnz __destruct_skip_11
     x86.mov rcx, [rbp-48]
     x86.call mm_free
-    x86.label __destruct_skip_271
-    x86.label __destruct_nullguard_270
+    x86.label __destruct_skip_11
+    x86.label __destruct_nullguard_10
     x86.mov eax, [rbp-72]
     x86.epilogue
     x86.ret
   }
   func @__destruct_elements_Character(managed_ptr: i64) {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov eax, [ecx+0]
     x86.mov edx, [ecx+8]
     x86.xor ecx, ecx
@@ -1212,16 +1198,15 @@ module {
     x86.mov [rbp-32], ebx
     x86.mov esi, [rbp-32]
     x86.test esi, esi
-    x86.jz __destruct_nullguard_273
+    x86.jz __destruct_nullguard_13
     x86.mov rcx, [rbp-32]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_274
-    x86.mov [rbp-40], eax
+    x86.jnz __destruct_skip_14
     x86.mov rcx, [rbp-32]
     x86.call mm_free
-    x86.label __destruct_skip_274
-    x86.label __destruct_nullguard_273
+    x86.label __destruct_skip_14
+    x86.label __destruct_nullguard_13
     x86.mov edi, [rbp-8]
     x86.mov r8, 1
     x86.add edi, r8
@@ -1233,7 +1218,7 @@ module {
   }
   func @__destruct_elements_String(managed_ptr: i64) {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov eax, [ecx+0]
     x86.mov edx, [ecx+8]
     x86.xor ecx, ecx
@@ -1256,16 +1241,15 @@ module {
     x86.mov [rbp-32], ebx
     x86.mov esi, [rbp-32]
     x86.test esi, esi
-    x86.jz __destruct_nullguard_275
+    x86.jz __destruct_nullguard_15
     x86.mov rcx, [rbp-32]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_276
-    x86.mov [rbp-40], eax
+    x86.jnz __destruct_skip_16
     x86.mov rcx, [rbp-32]
     x86.call mm_free
-    x86.label __destruct_skip_276
-    x86.label __destruct_nullguard_275
+    x86.label __destruct_skip_16
+    x86.label __destruct_nullguard_15
     x86.mov edi, [rbp-8]
     x86.mov r8, 1
     x86.add edi, r8

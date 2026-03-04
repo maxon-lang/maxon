@@ -26,6 +26,8 @@ public class RegisterManager {
   private readonly Dictionary<StdValue, long> _constantValues = [];
   private readonly Dictionary<StdValue, X86Register> _registerHints = [];
   private HashSet<StdValue>? _deferredValues;
+  private readonly Stack<HashSet<StdValue>> _syntheticScopes = new();
+  private readonly HashSet<StdValue> _allSyntheticValues = [];
   private int _currentOpIndex;
   private int _scratchIdCounter = -1000;
 
@@ -1174,7 +1176,8 @@ public class RegisterManager {
       if (_registerContents.TryGetValue(reg, out var value)
         && !_valueStackHome.ContainsKey(value)
         && !_constantValues.ContainsKey(value)
-        && !(consumedByCall != null && consumedByCall.Contains(value))) {
+        && !(consumedByCall != null && consumedByCall.Contains(value))
+        && !_allSyntheticValues.Contains(value)) {
         _nextSpillOffset -= 8;
         block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg, 8));
         _valueStackHome[value] = _nextSpillOffset;
@@ -1560,6 +1563,60 @@ public class RegisterManager {
   }
 
   /// <summary>
+  /// Tracks synthetic values created within destructor helpers. Synthetic values are
+  /// never spilled by SpillCallerSavedRegisters (they're transient). Values that must
+  /// survive calls can be promoted via KeepAlive(). On Dispose, remaining synthetic
+  /// values are marked dead. Supports nesting for recursive destructor calls.
+  /// </summary>
+  public sealed class SyntheticScope : IDisposable {
+    private readonly RegisterManager _mgr;
+
+    public SyntheticScope(RegisterManager mgr) {
+      _mgr = mgr;
+      _mgr._syntheticScopes.Push([]);
+    }
+
+    public StdI64 CreateValue() {
+      var v = new StdI64(MlirContext.Current.NextId());
+      _mgr._syntheticScopes.Peek().Add(v);
+      _mgr._allSyntheticValues.Add(v);
+      return v;
+    }
+
+    /// <summary>
+    /// Promote a synthetic value to a normal value that survives calls.
+    /// Immediately spills it to stack so it has a stack home, then
+    /// removes it from synthetic tracking.
+    /// </summary>
+    public void KeepAlive(StdValue v, MlirBlock<X86Op> block) {
+      _mgr._syntheticScopes.Peek().Remove(v);
+      _mgr._allSyntheticValues.Remove(v);
+      _mgr.EnsureSpilled(v, block);
+    }
+
+    public void Dispose() {
+      var set = _mgr._syntheticScopes.Pop();
+      foreach (var v in set) {
+        _mgr._allSyntheticValues.Remove(v);
+        _mgr.NoteValueDead(v);
+      }
+    }
+  }
+
+  public SyntheticScope BeginSyntheticScope() => new(this);
+
+  /// <summary>
+  /// Force a value to have a stack home by spilling it immediately.
+  /// </summary>
+  public void EnsureSpilled(StdValue value, MlirBlock<X86Op> block) {
+    if (_valueStackHome.ContainsKey(value)) return;
+    var reg = EnsureInRegister(value, block);
+    _nextSpillOffset -= 8;
+    block.AddOp(new X86MovMemRegOp(_nextSpillOffset, reg, 8));
+    _valueStackHome[value] = _nextSpillOffset;
+  }
+
+  /// <summary>
   /// After an add/sub, the destination register now holds a new result value.
   /// The old value is replaced.
   /// </summary>
@@ -1603,6 +1660,8 @@ public class RegisterManager {
     _valueXmmStackHome.Clear();
     _xmmLastUsed.Clear();
     _registerHints.Clear();
+    _syntheticScopes.Clear();
+    _allSyntheticValues.Clear();
 
     if (_nextSpillOffset < _minSpillOffset)
       _minSpillOffset = _nextSpillOffset;

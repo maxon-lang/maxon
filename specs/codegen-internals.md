@@ -338,7 +338,7 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.prologue stack_size=64
+    x86.prologue stack_size=48
     x86.xor eax, eax
     x86.mov ecx, 1
     x86.xor edx, edx
@@ -421,20 +421,18 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_114
+    x86.jz __destruct_nullguard_0
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_115
+    x86.jnz __destruct_skip_1
     x86.mov ecx, [rbp-16]
     x86.mov edx, [ecx+8]
-    x86.mov [rbp-48], eax
-    x86.mov [rbp-56], edx
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, rdx
     x86.call mm_decref
     x86.mov rcx, [rbp-16]
     x86.call mm_free
-    x86.label __destruct_skip_115
-    x86.label __destruct_nullguard_114
+    x86.label __destruct_skip_1
+    x86.label __destruct_nullguard_0
     x86.mov eax, [rbp-40]
     x86.epilogue
     x86.ret
