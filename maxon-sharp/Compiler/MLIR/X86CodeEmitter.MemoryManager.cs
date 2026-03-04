@@ -150,6 +150,7 @@ public partial class X86CodeEmitter {
     EmitMmIncref();
     EmitMmDecref();
     EmitMmDecrefCheck();
+    EmitMmDecrefIfOwned();
     EmitMmDecrefManagedElements();
     EmitMmClearManagedElements();
     EmitMmLeakCheck();
@@ -1160,6 +1161,58 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x40, 0x40); // MOV rax, [rax+64] — entry.refcount
 
     DefineLabel("mm_decref_check_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // -------------------------------------------------------------------------
+  // mm_decref_if_owned(user_ptr_in_rcx) -> void
+  // Releases one external reference from a child-owned allocation.
+  // Child-owned fields (e.g. __ManagedMemory) start at rc=0 — their parent's
+  // mm_free handles cleanup. When shared with another struct, the child is
+  // incref'd (rc>0). This function decrements only the external references
+  // (rc>0) without freeing, since the parent's mm_free will cascade-free or
+  // detach based on the final refcount.
+  // -------------------------------------------------------------------------
+  private void EmitMmDecrefIfOwned() {
+    EmitRuntimeFunctionStart("mm_decref_if_owned", 1, 0x30);
+
+    // NULL check — just return
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_decref_if_owned_not_null");
+    EmitJmp("mm_decref_if_owned_done");
+    DefineLabel("mm_decref_if_owned_not_null");
+
+    // Load entry = [user_ptr - 8]
+    EmitSubRegImm(X86Register.Rax, 8);
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] — entry
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_decref_if_owned_managed");
+    EmitJmp("mm_decref_if_owned_done");
+    DefineLabel("mm_decref_if_owned_managed");
+
+    // Check refcount at entry+64: if zero, skip (no external references)
+    EmitBytes(0x48, 0x83, 0x78, 0x40, 0x00); // CMP qword [rax+64], 0
+    EmitJcc("ne", "mm_decref_if_owned_has_refs");
+    EmitJmp("mm_decref_if_owned_done");
+    DefineLabel("mm_decref_if_owned_has_refs");
+
+    // Check owner_entry at entry+48: if non-zero, this is a true child allocation
+    // and parent's mm_free cascade will handle it — just decrement rc
+    EmitBytes(0x48, 0x83, 0x78, 0x30, 0x00); // CMP qword [rax+48], 0
+    EmitJcc("ne", "mm_decref_if_owned_is_child");
+
+    // Independent allocation stored in a child-owned field (e.g. from clone/sharing):
+    // use mm_decref for proper cleanup including freeing when rc reaches 0
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = original user_ptr (first arg)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
+    EmitJmp("mm_decref_if_owned_done");
+
+    DefineLabel("mm_decref_if_owned_is_child");
+    // True child: decrement refcount without freeing — parent's mm_free decides the fate
+    EmitBytes(0x48, 0xFF, 0x48, 0x40); // DEC qword [rax+64] — entry.refcount--
+
+    DefineLabel("mm_decref_if_owned_done");
     EmitRuntimeFunctionEnd();
   }
 

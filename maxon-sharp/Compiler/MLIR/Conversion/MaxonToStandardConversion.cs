@@ -275,6 +275,23 @@ public static partial class MaxonToStandardConversion {
           }
         }
 
+        // Pre-scan: find struct literal result IDs consumed as field values of another
+        // struct literal. These get incref'd by the parent field store (line ~700) so they
+        // must NOT receive a second incref or scope cleanup registration.
+        var structLitFieldValueIds = new HashSet<int>();
+        // Pre-scan: find struct literal result IDs directly returned. LowerReturn handles
+        // their incref + transfer, so they must not be incref'd or cleaned up here.
+        var structLitReturnIds = new HashSet<int>();
+        foreach (var op in block.Operations) {
+          if (op is MaxonStructLiteralOp parentLit) {
+            foreach (var (_, fieldVal) in parentLit.FieldValues) {
+              structLitFieldValueIds.Add(fieldVal.Id);
+            }
+          } else if (op is MaxonReturnOp retOp && retOp.Value != null) {
+            structLitReturnIds.Add(retOp.Value.Id);
+          }
+        }
+
         // Pre-scan: detect contiguous zero-init array element sequences that can
         // be replaced with a single StdBulkZeroOp during lowering.
         var bulkZeroSkipOps = new HashSet<MaxonOp>();
@@ -698,8 +715,6 @@ public static partial class MaxonToStandardConversion {
                   EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
                   // Incref — the struct holds a reference to this nested value
                   EmitIncrefValue(newBlock, (StdI64)nestedHeapPtr, scopeName: func.Name);
-                  // If the nested value is a raw struct-literal temp (__struct_N), its only
-                  // reference is now from this parent's field store incref (rc went 0->1).
                 } else {
                   var mappedVal = valueMap[fieldVal];
                   var litFieldStoreType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
@@ -840,6 +855,19 @@ public static partial class MaxonToStandardConversion {
 
               structVarNames[structLitOp.Result.Id] = tempName;
               structValueTypes[structLitOp.Result.Id] = structLitOp.TypeName;
+
+              // Orphan struct literal temps (__struct_N) need incref + scope cleanup when they
+              // are not consumed by another construct that manages their lifetime:
+              //  - structLiteralTargets: inlined into a named variable (parser handles cleanup)
+              //  - structLitFieldValueIds: nested field value (parent field store handles incref)
+              //  - structLitReturnIds: returned directly (LowerReturn handles incref + transfer)
+              if (!structLiteralTargets.ContainsKey(structLitOp.Result.Id)
+                  && !structLitFieldValueIds.Contains(structLitOp.Result.Id)
+                  && !structLitReturnIds.Contains(structLitOp.Result.Id)) {
+                EmitIncrefValue(newBlock, (StdI64)EmitLoad(newBlock, tempName, varTypes), scopeName: func.Name);
+                varNameToStructType[tempName] = structLitOp.TypeName;
+                globalStructTemps.Add(tempName);
+              }
 
               break;
             }
@@ -1223,7 +1251,8 @@ public static partial class MaxonToStandardConversion {
                 // For structs with managed fields, emits StdDestructStructOp which handles
                 // conditional field cleanup inline at x86 level (no block splitting needed).
                 EmitDecrefWithFieldCleanupIfNonnull(newBlock, v, varTypes,
-                  varNameToStructType, module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
+                  varNameToStructType, module.TypeDefs, module.TypeAliasSources,
+                  scopeName: func.Name);
                 // Zero the slot so other paths see NULL (null-guarded decref skips it)
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
@@ -1232,7 +1261,8 @@ public static partial class MaxonToStandardConversion {
               // Decref global struct temps created during lowering (not in parser scope tracking)
               foreach (var tempName in globalStructTemps) {
                 EmitDecrefWithFieldCleanupIfNonnull(newBlock, tempName, varTypes,
-                  varNameToStructType, module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
+                  varNameToStructType, module.TypeDefs, module.TypeAliasSources,
+                  scopeName: func.Name);
                 var zeroGlobal = new StdConstI64Op(0);
                 newBlock.AddOp(zeroGlobal);
                 newBlock.AddOp(new StdStoreI64Op(zeroGlobal.Result, tempName));

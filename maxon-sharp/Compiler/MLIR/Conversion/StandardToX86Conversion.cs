@@ -1095,7 +1095,13 @@ public static class StandardToX86Conversion {
     RegisterManager.SyntheticScope scope, StdValue? scopeTag) {
     foreach (var field in managedFields) {
       if (field.IsChildOwned) {
-        // mm_free(parent) frees the child-owned buffer automatically; no explicit decref needed.
+        // Child-owned fields start at rc=0 and are cascade-freed by mm_free(parent).
+        // But when shared across structs (e.g. Character.toString() reuses _managed),
+        // the field gets incref'd. mm_decref_if_owned safely handles both cases:
+        // rc=0 (normal child) → no-op; rc>0 (shared) → decrement without freeing.
+        var childPtr = scope.CreateValue();
+        regManager.EmitLoadIndirect(childPtr, heapPtr, field.Offset, field.Type, x86Block);
+        regManager.EmitCall("mm_decref_if_owned", [childPtr], null, x86Block, null);
         continue;
       }
       var fieldPtr = scope.CreateValue();

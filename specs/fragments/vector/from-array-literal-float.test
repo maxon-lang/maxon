@@ -42,6 +42,9 @@ module {
     x86.mov [eax+0], ecx
     x86.mov eax, [rbp-24]
     x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov eax, [rbp-24]
+    x86.mov rcx, [rbp-24]
     x86.call __Vector_2_f64.init
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
@@ -113,6 +116,12 @@ module {
     x86.call mm_free
     x86.label __destruct_skip_1
     x86.label __destruct_nullguard_0
+    x86.mov eax, [rbp-24]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_2
     x86.mov eax, [rbp-80]
     x86.epilogue
     x86.ret

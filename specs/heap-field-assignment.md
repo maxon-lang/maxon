@@ -149,9 +149,10 @@ alloc Container #2 rc=0 [heap-field-assignment.testAssign]
 incref Inner #1 rc=1 [heap-field-assignment.testAssign]
 incref Container #2 rc=1 [heap-field-assignment.testAssign]
 alloc Inner #3 rc=0 [heap-field-assignment.testAssign]
+incref Inner #3 rc=1 [heap-field-assignment.testAssign]
 decref Inner #1 rc=0 [Container.replaceChild]
   free Inner #1
-incref Inner #3 rc=1 [Container.replaceChild]
+incref Inner #3 rc=2 [Container.replaceChild]
 alloc ToStringBuf #4 rc=0 [heap-field-assignment.testAssign]
 alloc String #5 rc=0 [heap-field-assignment.testAssign]
 alloc_in __ManagedMemory
@@ -159,11 +160,12 @@ alloc_in Buffer
   free ToStringBuf #4
 incref String #5 rc=1 [heap-field-assignment.testAssign]
 decref Container #2 rc=0 [heap-field-assignment.testAssign]
-decref Inner #3 rc=0 [heap-field-assignment.testAssign]
-  free Inner #3
+decref Inner #3 rc=1 [heap-field-assignment.testAssign]
 free Container #2 [heap-field-assignment.testAssign]
 decref String #5 rc=0 [heap-field-assignment.testAssign]
 free String #5 [heap-field-assignment.testAssign]
+decref Inner #3 rc=0 [heap-field-assignment.testAssign]
+  free Inner #3
 ```
 
 <!-- test: memory.qualified-field-overwrite-frees-old -->
@@ -204,9 +206,10 @@ alloc Pair #2 rc=0 [heap-field-assignment.testAssign]
 incref Right #1 rc=1 [heap-field-assignment.testAssign]
 incref Pair #2 rc=1 [heap-field-assignment.testAssign]
 alloc Right #3 rc=0 [heap-field-assignment.testAssign]
+incref Right #3 rc=1 [heap-field-assignment.testAssign]
 decref Right #1 rc=0 [heap-field-assignment.testAssign]
   free Right #1
-incref Right #3 rc=1 [heap-field-assignment.testAssign]
+incref Right #3 rc=2 [heap-field-assignment.testAssign]
 alloc ToStringBuf #4 rc=0 [heap-field-assignment.testAssign]
 alloc String #5 rc=0 [heap-field-assignment.testAssign]
 alloc_in __ManagedMemory
@@ -214,9 +217,10 @@ alloc_in Buffer
   free ToStringBuf #4
 incref String #5 rc=1 [heap-field-assignment.testAssign]
 decref Pair #2 rc=0 [heap-field-assignment.testAssign]
-decref Right #3 rc=0 [heap-field-assignment.testAssign]
-  free Right #3
+decref Right #3 rc=1 [heap-field-assignment.testAssign]
 free Pair #2 [heap-field-assignment.testAssign]
 decref String #5 rc=0 [heap-field-assignment.testAssign]
 free String #5 [heap-field-assignment.testAssign]
+decref Right #3 rc=0 [heap-field-assignment.testAssign]
+  free Right #3
 ```

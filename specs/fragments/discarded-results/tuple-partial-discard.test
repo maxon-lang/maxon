@@ -38,13 +38,12 @@ module {
   }
   func @discarded-results.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.call discarded-results.makePair
     x86.mov [rbp-8], eax
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
+    x86.mov eax, [rbp-8]
     x86.mov ecx, [eax+0]
-    x86.mov [rbp-24], ecx
+    x86.mov [rbp-16], ecx
     x86.xor edx, edx
     x86.cmp ecx, edx
     x86.setl ebx
@@ -61,19 +60,13 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-16]
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-8]
     x86.test ecx, ecx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov eax, [rbp-8]
-    x86.test eax, eax
-    x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-8]
-    x86.call mm_decref
-    x86.label __nonnull_skip_1
-    x86.mov eax, [rbp-24]
+    x86.mov eax, [rbp-16]
     x86.epilogue
     x86.ret
   }

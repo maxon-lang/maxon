@@ -28,22 +28,26 @@ incref WrapperArray #2 rc=1 [ownership-edge-cases.main]
 alloc Inner #3 rc=0 [ownership-edge-cases.main]
 alloc Wrapper #4 rc=0 [ownership-edge-cases.main]
 incref Inner #3 rc=1 [ownership-edge-cases.main]
+incref Wrapper #4 rc=1 [ownership-edge-cases.main]
 alloc_in Buffer
-incref Wrapper #4 rc=1 [WrapperArray.push]
+incref Wrapper #4 rc=2 [WrapperArray.push]
 alloc Inner #6 rc=0 [ownership-edge-cases.main]
 alloc Wrapper #7 rc=0 [ownership-edge-cases.main]
 incref Inner #6 rc=1 [ownership-edge-cases.main]
-incref Wrapper #7 rc=1 [WrapperArray.push]
+incref Wrapper #7 rc=1 [ownership-edge-cases.main]
+incref Wrapper #7 rc=2 [WrapperArray.push]
 decref WrapperArray #2 rc=0 [ownership-edge-cases.main]
-decref Inner #3 rc=0
-  free Inner #3
-  free Wrapper #4
-decref Inner #6 rc=0
-  free Inner #6
-  free Wrapper #7
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
 free WrapperArray #2 [ownership-edge-cases.main]
+decref Wrapper #4 rc=0 [ownership-edge-cases.main]
+decref Inner #3 rc=0 [ownership-edge-cases.main]
+  free Inner #3
+free Wrapper #4 [ownership-edge-cases.main]
+decref Wrapper #7 rc=0 [ownership-edge-cases.main]
+decref Inner #6 rc=0 [ownership-edge-cases.main]
+  free Inner #6
+free Wrapper #7 [ownership-edge-cases.main]
 ```
 ---
 module {
@@ -103,6 +107,9 @@ module {
     x86.mov [ecx+0], eax
     x86.mov rcx, [rbp-24]
     x86.call mm_incref
+    x86.mov eax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
     x86.mov eax, [rbp-16]
     x86.mov ecx, [rbp-32]
     x86.mov rcx, [rbp-16]
@@ -124,6 +131,9 @@ module {
     x86.mov ecx, [rbp-48]
     x86.mov [ecx+0], eax
     x86.mov rcx, [rbp-40]
+    x86.call mm_incref
+    x86.mov eax, [rbp-48]
+    x86.mov rcx, [rbp-48]
     x86.call mm_incref
     x86.mov eax, [rbp-16]
     x86.mov ecx, [rbp-48]
@@ -168,6 +178,36 @@ module {
     x86.call mm_free
     x86.label __destruct_skip_1
     x86.label __destruct_nullguard_0
+    x86.mov eax, [rbp-32]
+    x86.test eax, eax
+    x86.jz __destruct_nullguard_2
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_3
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, [ecx+0]
+    x86.mov rcx, rdx
+    x86.call mm_decref
+    x86.mov rcx, [rbp-32]
+    x86.call mm_free
+    x86.label __destruct_skip_3
+    x86.label __destruct_nullguard_2
+    x86.mov ebx, [rbp-48]
+    x86.test ebx, ebx
+    x86.jz __destruct_nullguard_4
+    x86.mov rcx, [rbp-48]
+    x86.call mm_decref_check
+    x86.test eax, eax
+    x86.jnz __destruct_skip_5
+    x86.mov esi, [rbp-48]
+    x86.mov edi, [esi+0]
+    x86.mov rcx, rdi
+    x86.call mm_decref
+    x86.mov rcx, [rbp-48]
+    x86.call mm_free
+    x86.label __destruct_skip_5
+    x86.label __destruct_nullguard_4
     x86.mov eax, [rbp-56]
     x86.epilogue
     x86.ret
@@ -197,19 +237,19 @@ module {
     x86.mov [rbp-32], ebx
     x86.mov esi, [rbp-32]
     x86.test esi, esi
-    x86.jz __destruct_nullguard_3
+    x86.jz __destruct_nullguard_7
     x86.mov rcx, [rbp-32]
     x86.call mm_decref_check
     x86.test eax, eax
-    x86.jnz __destruct_skip_4
+    x86.jnz __destruct_skip_8
     x86.mov edi, [rbp-32]
     x86.mov r8, [edi+0]
     x86.mov rcx, r8
     x86.call mm_decref
     x86.mov rcx, [rbp-32]
     x86.call mm_free
-    x86.label __destruct_skip_4
-    x86.label __destruct_nullguard_3
+    x86.label __destruct_skip_8
+    x86.label __destruct_nullguard_7
     x86.mov r9, [rbp-8]
     x86.mov eax, 1
     x86.add r9, eax

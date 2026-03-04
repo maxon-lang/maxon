@@ -3794,6 +3794,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Access each field and clone if needed
     var fieldValues = new List<(string FieldName, MaxonValue Value)>();
+    var cloneTempNames = new List<string>();
     foreach (var field in structType.Fields) {
       var fieldKind = field.Type.ToValueKind();
       string? fieldStructTypeName = null;
@@ -3811,6 +3812,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var nestedCloneCall = new MaxonCallOp(nestedCloneName, [accessOp.Result], MaxonValueKind.Struct, nestedStruct.Name);
         block.AddOp(nestedCloneCall);
         fieldValue = nestedCloneCall.Result!;
+        // Track clone result so it can be cleaned up at scope end
+        var cloneTempName = $"__call_tmp_{nestedCloneCall.Result!.Id}";
+        block.AddOp(new MaxonAssignOp(cloneTempName, fieldValue, true, false, MaxonValueKind.Struct));
+        cloneTempNames.Add(cloneTempName);
       }
       // Primitives have value semantics — assignment is already a copy
       fieldValues.Add((field.Name, fieldValue));
@@ -3821,7 +3826,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var retvalName = $"__retval_{MlirContext.Current.NextId()}";
     block.AddOp(new MaxonAssignOp(retvalName, structLit.Result, true, false, MaxonValueKind.Struct));
-    block.AddOp(new MaxonScopeEndOp([retvalName], [retvalName]));
+    var scopeVars = new List<string>(cloneTempNames) { retvalName };
+    block.AddOp(new MaxonScopeEndOp(scopeVars, [retvalName]));
     block.AddOp(new MaxonReturnOp(structLit.Result));
   }
 
@@ -5756,6 +5762,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var tempName = $"__destruct_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(tempName, initValue, true, false, MaxonValueKind.Struct));
     _variables[tempName] = new VarInfo(MaxonValueKind.Struct, false, initValue, _currentBlock!, tupleType.Name);
+    // Transfer ownership from __call_tmp_ to __destruct_ to prevent double-decref at scope exit
+    FixupTempOwnership();
 
     EmitTupleFieldBindings(tempName, tupleType, names, isMutable);
   }
@@ -8339,6 +8347,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _currentBlock!.AddOp(refOp);
       var charLit = new MaxonCharLiteralOp(lowerBound.Value, structTypeName);
       _currentBlock!.AddOp(charLit);
+      EmitLiteralTempAssign(charLit.Result);
       var compareMethodName = $"{structTypeName}.compare";
       var compareToken = new Token(TokenType.Identifier, compareMethodName, rangePat.Line, rangePat.Column);
       var callOp = CreateFunctionCall(compareToken, [refOp.Result, charLit.Result]);
@@ -8350,6 +8359,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _currentBlock!.AddOp(refOp);
       var charLit = new MaxonCharLiteralOp(upperBound.Value, structTypeName);
       _currentBlock!.AddOp(charLit);
+      EmitLiteralTempAssign(charLit.Result);
       var compareMethodName = $"{structTypeName}.compare";
       var compareToken = new Token(TokenType.Identifier, compareMethodName, rangePat.Line, rangePat.Column);
       var callOp = CreateFunctionCall(compareToken, [refOp.Result, charLit.Result]);
@@ -11172,6 +11182,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (constantsType.BackingType is MlirStringBackingType or MlirCharBackingType) {
       backingKind = MaxonValueKind.Struct;
       raw = EmitUnionRawValueExtraction(_currentBlock!, value, constantsType, me.TypeName, MaxonValueKind.Integer);
+      EmitLiteralTempAssign((MaxonStruct)raw);
     } else {
       backingKind = GetUnionBackingKind(constantsType);
       raw = EmitUnionRawValueExtraction(_currentBlock!, value, constantsType, me.TypeName, backingKind);

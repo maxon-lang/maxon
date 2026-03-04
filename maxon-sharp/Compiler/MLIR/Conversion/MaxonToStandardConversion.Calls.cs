@@ -123,8 +123,10 @@ public static partial class MaxonToStandardConversion {
     // Map results
     if (result != null) {
       if (calleeRetStructType != null && callResult != null) {
-        // Struct return: store the heap pointer in a named variable
-        var retVarName = $"__callret_{result.Id}";
+        // ReturnsSelf: the returned pointer is a borrowed reference (not a new allocation).
+        // Use a non-callret prefix so the caller increfs it like any other alias assignment.
+        var retPrefix = calleeFunc.ReturnsSelf ? "__selfret_" : "__callret_";
+        var retVarName = $"{retPrefix}{result.Id}";
         EmitStore(block, callResult, retVarName, varTypes);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = calleeRetStructType.Name;
@@ -199,10 +201,15 @@ public static partial class MaxonToStandardConversion {
       // Struct return: return the heap pointer as i64
       StdValue retHeapPtr;
       if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
-        // Direct struct literal return (e.g. `return Pair{a: 1, b: 2}`): the literal
-        // was allocated with rc=0 and never assigned to a user variable, so no incref
-        // has been emitted yet. Incref to establish ownership before transferring to caller.
-        if (srcName.StartsWith("__struct_")) {
+        // Freshly allocated struct returned without assignment to a user variable
+        // (struct literals, enum rawValue/name lookups): allocated at rc=0 with no
+        // incref yet. Borrowed field references (__field_) also need incref since
+        // they are pointers into a parent struct without their own reference.
+        // Incref to establish ownership before transferring to caller.
+        if (srcName.StartsWith("__struct_")
+            || srcName.StartsWith("__enum_rawval_")
+            || srcName.StartsWith("__enum_name_")
+            || srcName.StartsWith("__field_")) {
           EmitIncref(block, srcName, varTypes, scopeName: funcName);
           EmitTransfer(block, srcName, varTypes, funcName);
         }
