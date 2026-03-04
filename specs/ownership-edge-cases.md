@@ -555,12 +555,10 @@ alloc_in Buffer
 incref Node #3 rc=2 [NodeArray.push]
 decref Node #3 rc=1 [ownership-edge-cases.main]
 incref Node #3 rc=2 [NodeArray.get]
-incref Node #3 rc=3 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
 free NodeArray #2 [ownership-edge-cases.main]
-decref Node #3 rc=1 [ownership-edge-cases.main]
 decref Node #3 rc=0 [ownership-edge-cases.main]
   free Node #3
 ```
@@ -603,12 +601,10 @@ alloc Node #5 rc=0 [ownership-edge-cases.main]
 incref Node #5 rc=1 [ownership-edge-cases.main]
 incref Node #5 rc=2 [NodeArray.push]
 transfer Node #5 rc=2 [NodeArray.remove]
-incref Node #5 rc=3 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
 free NodeArray #2 [ownership-edge-cases.main]
-decref Node #5 rc=2 [ownership-edge-cases.main]
 decref Node #5 rc=1 [ownership-edge-cases.main]
 decref Node #3 rc=0 [ownership-edge-cases.main]
   free Node #3
@@ -653,12 +649,10 @@ incref Item #5 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=1 [ItemArray.set]
 incref Item #5 rc=2 [ItemArray.set]
 incref Item #5 rc=3 [ItemArray.get]
-incref Item #5 rc=4 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
 free ItemArray #2 [ownership-edge-cases.main]
-decref Item #5 rc=2 [ownership-edge-cases.main]
 decref Item #5 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
@@ -831,28 +825,18 @@ incref Entry #8 rc=1 [ownership-edge-cases.main]
 incref Entry #8 rc=2 [EntryArray.push]
 decref Entry #8 rc=1 [ownership-edge-cases.main]
 transfer Entry #3 rc=1 [EntryArray.remove]
-incref Entry #3 rc=2 [ownership-edge-cases.main]
-decref Entry #3 rc=1 [ownership-edge-cases.main]
 decref Entry #3 rc=0 [ownership-edge-cases.main]
   free Entry #3
 transfer Entry #5 rc=1 [EntryArray.remove]
-incref Entry #5 rc=2 [ownership-edge-cases.main]
-decref Entry #5 rc=1 [ownership-edge-cases.main]
 decref Entry #5 rc=0 [ownership-edge-cases.main]
   free Entry #5
 transfer Entry #6 rc=1 [EntryArray.remove]
-incref Entry #6 rc=2 [ownership-edge-cases.main]
-decref Entry #6 rc=1 [ownership-edge-cases.main]
 decref Entry #6 rc=0 [ownership-edge-cases.main]
   free Entry #6
 transfer Entry #7 rc=1 [EntryArray.remove]
-incref Entry #7 rc=2 [ownership-edge-cases.main]
-decref Entry #7 rc=1 [ownership-edge-cases.main]
 decref Entry #7 rc=0 [ownership-edge-cases.main]
   free Entry #7
 transfer Entry #8 rc=1 [EntryArray.remove]
-incref Entry #8 rc=2 [ownership-edge-cases.main]
-decref Entry #8 rc=1 [ownership-edge-cases.main]
 decref Entry #8 rc=0 [ownership-edge-cases.main]
   free Entry #8
 decref EntryArray #2 rc=0 [ownership-edge-cases.main]
@@ -903,18 +887,12 @@ alloc Val #6 rc=0 [ownership-edge-cases.main]
 incref Val #6 rc=1 [ownership-edge-cases.main]
 incref Val #6 rc=2 [ValArray.insert]
 incref Val #3 rc=3 [ValArray.get]
-incref Val #3 rc=4 [ownership-edge-cases.main]
 incref Val #6 rc=3 [ValArray.get]
-incref Val #6 rc=4 [ownership-edge-cases.main]
 incref Val #5 rc=3 [ValArray.get]
-incref Val #5 rc=4 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
 free ValArray #2 [ownership-edge-cases.main]
-decref Val #3 rc=2 [ownership-edge-cases.main]
-decref Val #6 rc=2 [ownership-edge-cases.main]
-decref Val #5 rc=2 [ownership-edge-cases.main]
 decref Val #3 rc=1 [ownership-edge-cases.main]
 decref Val #6 rc=1 [ownership-edge-cases.main]
 decref Val #5 rc=1 [ownership-edge-cases.main]
@@ -968,12 +946,10 @@ alloc Val #6 rc=0 [ownership-edge-cases.main]
 incref Val #6 rc=1 [ownership-edge-cases.main]
 incref Val #6 rc=2 [ValArray.push]
 transfer Val #5 rc=2 [ValArray.remove]
-incref Val #5 rc=3 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
 free ValArray #2 [ownership-edge-cases.main]
-decref Val #5 rc=2 [ownership-edge-cases.main]
 decref Val #5 rc=1 [ownership-edge-cases.main]
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
@@ -1113,9 +1089,7 @@ incref Item #3 rc=1 [ownership-edge-cases.main]
 alloc_in Buffer
 incref Item #3 rc=2 [ItemArray.push]
 incref Item #3 rc=3 [ItemArray.get]
-incref Item #3 rc=4 [ownership-edge-cases.getFirst]
-transfer Item #3 rc=4 [ownership-edge-cases.getFirst]
-decref Item #3 rc=3 [ownership-edge-cases.getFirst]
+transfer Item #3 rc=3 [ownership-edge-cases.getFirst]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
@@ -1291,8 +1265,8 @@ incref Body #1 rc=2 [ownership-edge-cases.main]
 incref Shape #2 rc=1 [ownership-edge-cases.main]
 incref Shape #2 rc=2 [ownership-edge-cases.massOf]
 incref Body #1 rc=3 [ownership-edge-cases.massOf]
-decref Shape #2 rc=1 [ownership-edge-cases.massOf]
 decref Body #1 rc=2 [ownership-edge-cases.massOf]
+decref Shape #2 rc=1 [ownership-edge-cases.massOf]
 decref Shape #2 rc=0 [ownership-edge-cases.main]
 decref Body #1 rc=1 [ownership-edge-cases.main]
 free Shape #2 [ownership-edge-cases.main]
@@ -1388,12 +1362,10 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 alloc Item #3 rc=0 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
-incref Item #3 rc=2 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
 free ItemArray #2 [ownership-edge-cases.main]
-decref Item #3 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
 ```
@@ -2535,4 +2507,433 @@ end 'main'
 ```
 ```stdout
 hello there
+```
+
+<!-- test: rc-string-replacefirst-no-leak -->
+String.replaceFirst must not leak internal working allocations. The intermediate ManagedMemory and Buffer created during the replacement must be freed.
+```maxon
+function main() returns ExitCode
+  var s = "hello world"
+  var result = s.replaceFirst("o", with: "0")
+  print(result)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hell0 world
+```
+
+<!-- test: rc-string-concat-loop-no-leak -->
+Repeatedly concatenating strings in a loop must free intermediate ManagedMemory/Buffer pairs. Each concat creates a new string; the old one must be fully freed including its managed backing storage.
+```maxon
+function main() returns ExitCode
+  var s = ""
+  var a = "x"
+  var i = 0
+  while i < 5 'loop'
+    s = s.concat(a)
+    i = i + 1
+  end 'loop'
+  return s.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- disabled-test: rc-string-slice-no-leak -->
+String.slice must not leak internal allocations. The slice operation creates managed memory that must be properly tracked and freed.
+```maxon
+function main() returns ExitCode
+  var s = "hello world"
+  var start = s.startIndex()
+  var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
+  var sub = s.slice(start, endIndex: spaceIdx)
+  print(sub)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- disabled-test: rc-enum-name-no-leak -->
+Accessing enum .name must not leak. The getName function allocates a String wrapper around the name data; both the wrapper and its managed memory must be freed.
+```maxon
+enum Color
+  Red
+  Green
+  Blue
+end 'Color'
+
+function main() returns ExitCode
+  var c = Color.Green
+  if c.name == "Green" 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-enum-name-reassign-no-leak -->
+Accessing enum .name after reassignment must not leak. Both the old and new enum name string allocations must be properly freed.
+```maxon
+enum Status
+  pending
+  active
+  done
+end 'Status'
+
+function main() returns ExitCode
+  var s = Status.pending
+  s = Status.done
+  if s.name == "done" 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- disabled-test: rc-array-of-structs-get-no-leak -->
+Getting a struct from an array via try/otherwise must not leak. When the array is freed, its element destructors must decref all contained structs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+  export var first Integer
+  export var second Integer
+end 'Pair'
+
+function main() returns ExitCode
+  var p = Pair{first: 10, second: 20}
+  var arr = [p]
+  var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
+  return elem.first + elem.second
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- disabled-test: rc-array-of-structs-literal-no-leak -->
+Creating an array literal of structs must not leak. All struct elements must be decreffed when the array is freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function main() returns ExitCode
+  var p1 = Point{x: 1, y: 2}
+  var p2 = Point{x: 3, y: 4}
+  var points = [p1, p2]
+  var pt0 = try points.get(0) otherwise Point{x: 0, y: 0}
+  var pt1 = try points.get(1) otherwise Point{x: 0, y: 0}
+  return pt0.x + pt1.y
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- disabled-test: rc-global-array-push-local-no-leak -->
+Pushing a local struct into a global array must not leak. When the global array is cleaned up, all elements (including those pushed from other function scopes) must be freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var value Integer
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+var globalArr = ItemArray{}
+
+function pushLocal()
+  var item = Item{value: 123}
+  globalArr.push(item)
+end 'pushLocal'
+
+function main() returns ExitCode
+  pushLocal()
+  var elem = try globalArr.get(0) otherwise Item{value: -1}
+  return elem.value
+end 'main'
+```
+```exitcode
+123
+```
+
+<!-- disabled-test: rc-global-array-push-remove-loop-no-leak -->
+Pushing many structs into a global array and then removing them all must not leak. Each removed element must be properly decreffed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var value Integer
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+var globalArr = ItemArray{}
+
+function main() returns ExitCode
+  var i = 0
+  while i < 10 'push'
+    globalArr.push(Item{value: i})
+    i = i + 1
+  end 'push'
+  var total = 0
+  while globalArr.count() > 0 'remove'
+    var elem = try globalArr.remove(0) otherwise 'err'
+      return 99
+    end 'err'
+    total = total + elem.value
+    i = i + 1
+  end 'remove'
+  return total
+end 'main'
+```
+```exitcode
+45
+```
+
+<!-- disabled-test: rc-struct-field-overwrite-in-if-no-leak -->
+Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export type Inner
+    export var items IntArray
+    export var value Integer
+end 'Inner'
+
+export type Outer
+    export var inner Inner
+    export var initialized bool
+end 'Outer'
+
+function initOuter(o Outer)
+    if not o.initialized 'init'
+        o.inner = Inner{items: IntArray{}, value: 42}
+        o.initialized = true
+    end 'init'
+end 'initOuter'
+
+function main() returns ExitCode
+    let o = Outer{inner: Inner{items: IntArray{}, value: 0}, initialized: false}
+    initOuter(o)
+    o.inner.items.push(1)
+    o.inner.items.push(2)
+    o.inner.items.push(3)
+    return o.inner.items.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- disabled-test: rc-map-string-keys-no-leak -->
+A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
+```maxon
+function main() returns ExitCode
+    var m = ["hello": 42]
+    return try m.get("hello") otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: rc-map-string-keys-multiple-no-leak -->
+A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
+```maxon
+function main() returns ExitCode
+    var m = ["a": 1, "b": 2, "c": 3]
+    let a = try m.get("a") otherwise 0
+    let b = try m.get("b") otherwise 0
+    let c = try m.get("c") otherwise 0
+    return a + b + c
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: rc-closure-capture-string-no-crash -->
+A closure that captures a string variable must properly manage the string's refcount. The closure environment holds a reference to the string; when the environment is freed, it must decref the string without crashing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns String, x Integer) returns String
+  return f(x)
+end 'apply'
+
+function main() returns ExitCode
+  var prefix = "hello"
+  var result = apply(f: (_ Integer) gives prefix, x: 0)
+  print(result)
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+```
+
+<!-- disabled-test: rc-chain-remove-single-no-leak -->
+Removing a node from a chain must properly decref the node's value. The chain node itself and the stored value must both be freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var value Integer
+end 'Item'
+
+typealias ItemChain = __Chain with Item
+
+function main() returns ExitCode
+  var chain = ItemChain{}
+  var node = chain.insertFirst(Item{value: 50})
+  chain.remove(node)
+  return chain.count()
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- disabled-test: rc-module-level-struct-nested-field-assign -->
+Assigning to a nested field of a module-level struct variable must not leak. The struct access chain must properly manage refcounts for intermediate accesses.
+```maxon
+typealias SmallInt = int(0 to 255)
+
+type Inner
+    export var x SmallInt
+end 'Inner'
+
+type Outer
+    export var inner Inner
+end 'Outer'
+
+var state = Outer{inner: Inner{x: 0}}
+
+function main() returns ExitCode
+    state.inner.x = 99
+    return state.inner.x
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- disabled-test: rc-top-level-array-literal-no-leak -->
+A module-level array literal must not leak. The array and its element storage must be freed during global cleanup.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+var items = [10, 20, 30]
+
+function main() returns ExitCode
+  let a = try items.get(0) otherwise 0
+  let b = try items.get(1) otherwise 0
+  let c = try items.get(2) otherwise 0
+  return a + b + c
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- disabled-test: rc-array-append-no-leak -->
+Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
+```maxon
+function main() returns ExitCode
+  var a = [1, 2, 3]
+  var b = [4, 5, 6]
+  a.append(b)
+  var sum = 0
+  var i = 0
+  while i < a.count() 'loop'
+    sum = sum + (try a.get(i) otherwise 0)
+    i = i + 1
+  end 'loop'
+  return sum
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- disabled-test: rc-struct-with-string-union-in-array -->
+Pushing structs that contain unions with string payloads into an array must not leak. The union destructors must handle string payload cleanup during array destruction.
+```maxon
+export union QueryKey
+    sourceFile(path String)
+    allModule
+end 'QueryKey'
+
+export type Dependency
+    export var key QueryKey
+end 'Dependency'
+
+typealias DependencyArray = Array with Dependency
+
+function main() returns ExitCode
+    var deps = DependencyArray{}
+    deps.push(Dependency{key: QueryKey.sourceFile("test.maxon")})
+    deps.push(Dependency{key: QueryKey.allModule})
+    deps.push(Dependency{key: QueryKey.sourceFile("other.maxon")})
+    return deps.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- disabled-test: rc-custom-hashable-map-key-no-leak -->
+A map using a custom Hashable struct as key must not leak. The map's internal arrays (keys, values, states) and all managed elements must be freed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type MyKey implements Hashable, Equatable
+    var value Integer
+
+    function hash() returns HashValue
+        return self.value * 31
+    end 'hash'
+
+    function equals(other MyKey) returns bool
+        return self.value == other.value
+    end 'equals'
+end 'MyKey'
+
+typealias MyKeyMap = Map with (MyKey, Integer)
+
+function main() returns ExitCode
+    var m = MyKeyMap{}
+    m.insert(key: MyKey{value: 1}, value: 42)
+    return m.count()
+end 'main'
+```
+```exitcode
+1
 ```

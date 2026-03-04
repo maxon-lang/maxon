@@ -321,7 +321,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> fnEnvVarNames,
     Dictionary<string, string> varNameToStructType,
-    List<string> globalStructTemps) {
+    VarRegistry temps) {
     // Create function reference
     var refOp = new StdFuncRefOp(closureOp.FunctionName);
     block.AddOp(refOp);
@@ -362,11 +362,10 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Track the env_ptr for this closure and register for scope-end cleanup
-    var envVarName = $"__env_{refOp.Result.Id}";
+    var envVarName = temps.CreateTemp("env", refOp.Result.Id, "ClosureEnv", OwnershipFlags.Orphan);
     EmitStore(block, envPtr, envVarName, varTypes);
     EmitIncrefValue(block, envPtr, scopeName: _currentFuncName);
     varNameToStructType[envVarName] = "ClosureEnv";
-    globalStructTemps.Add(envVarName);
     fnEnvVarNames[refOp.Result.Id] = envVarName;
   }
 
@@ -376,7 +375,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes) {
+    Dictionary<int, string> structValueTypes,
+    VarRegistry temps) {
     // Load the __env parameter (stored as a variable during function lowering)
     var envBasePtr = EmitLoad(block, "__env", varTypes);
     // Environment stores ADDRESSES, not values — load address then dereference
@@ -403,6 +403,7 @@ public static partial class MaxonToStandardConversion {
     if (envLoadOp.Kind == MaxonValueKind.Struct) {
       // Struct captures: dereferenced value is the heap pointer — track it
       var structVarName = $"__capture_{envLoadOp.Name}";
+      temps.RegisterTemp(structVarName, envLoadOp.StructTypeName ?? "unknown", OwnershipFlags.Borrowed);
       EmitStore(block, derefOp.Result, structVarName, varTypes);
       structVarNames[envLoadOp.Result.Id] = structVarName;
       if (envLoadOp.StructTypeName != null)
@@ -460,7 +461,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<string, MlirType> typeDefs,
     Dictionary<int, string> fnEnvVarNames,
-    Dictionary<int, StdValue> fnEnvDirectValues) {
+    Dictionary<int, StdValue> fnEnvDirectValues,
+    VarRegistry temps) {
     var calleeValue = valueMap[indirectCallOp.Callee];
     var newArgs = new List<StdValue>();
 
@@ -494,7 +496,8 @@ public static partial class MaxonToStandardConversion {
       && typeDefs.TryGetValue(indirectCallOp.ResultStructTypeName, out var retTypeDef) && retTypeDef is MlirStructType) {
       // Struct return: result is a heap pointer (i64)
       resultValue = new StdI64(MlirContext.Current.NextId());
-      sretVarName = $"__icallret_{MlirContext.Current.NextId()}";
+      var icallretId = MlirContext.Current.NextId();
+      sretVarName = temps.CreateTemp("icallret", icallretId, indirectCallOp.ResultStructTypeName!, OwnershipFlags.CallReturn);
     } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
         MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),

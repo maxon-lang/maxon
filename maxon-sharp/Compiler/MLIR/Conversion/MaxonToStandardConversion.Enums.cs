@@ -156,7 +156,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes) {
+    Dictionary<int, string> structValueTypes,
+    VarRegistry temps) {
 
     var nameArg = tryCallOp.Args[0];
     // Name is always a String managed struct - load _managed heap pointer, then buffer and length
@@ -173,7 +174,7 @@ public static partial class MaxonToStandardConversion {
     if (hasAssociatedValues) {
       // For associated-value enums, construct as flat struct (tag + payload)
       LowerUnionFromNameAssociated(tryCallOp, enumType, block, valueMap, varTypes,
-        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs);
+        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs, temps: temps);
     } else {
       // Simple/raw-value enum: result is an ordinal/raw value
       LowerUnionFromNameSimple(tryCallOp, enumType, block, valueMap, varTypes, nameBuf, nameLen);
@@ -256,10 +257,11 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     StdI64 nameBuf, StdI64 nameLen,
-    bool hasExtraArgs) {
+    bool hasExtraArgs,
+    VarRegistry temps) {
 
     // Heap-allocate the enum: [tag:i64 @ 0, payload_0:i64 @ 8, ...]
-    var tempName = $"__enum_{tryCallOp.Result!.Id}";
+    var tempName = temps.CreateTemp("enum", tryCallOp.Result!.Id, enumType.Name, OwnershipFlags.None);
     int maxPayload = GetMaxFlatPayloadSlots(enumType);
     int heapSize = 8 + maxPayload * 8;
     var enumPtr = EmitAlloc(block, heapSize, enumType.Name, scopeName: _currentFuncName);

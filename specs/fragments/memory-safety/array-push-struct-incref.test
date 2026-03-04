@@ -162,34 +162,34 @@ module {
     memref.store %49, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %50 = memref.load __try_result_0 : i64
-    memref.store %50, got
-    %51 = memref.load got : i64
-    std.call_runtime @mm_incref %51
-    %52 = memref.load got : i64
-    %53 = memref.load_indirect %52+0
-    memref.store %53, __range_val_4
-    %54 = arith.constant {value = 0 : i64}
-    %55 = arith.cmpi lt %53, %54
-    %56 = arith.constant {value = 4294967295 : i64}
-    %57 = arith.cmpi gt %53, %56
-    %58 = arith.ori1 %55, %57
-    cf.cond_br %58 [then: __range_panic_4, else: __range_ok_4]
+    %51 = memref.load __try_result_0 : i64
+    memref.store %51, got
+    %52 = arith.constant {value = 0 : i64}
+    memref.store %52, __try_result_0
+    %53 = memref.load got : i64
+    %54 = memref.load_indirect %53+0
+    memref.store %54, __range_val_4
+    %55 = arith.constant {value = 0 : i64}
+    %56 = arith.cmpi lt %54, %55
+    %57 = arith.constant {value = 4294967295 : i64}
+    %58 = arith.cmpi gt %54, %57
+    %59 = arith.ori1 %56, %58
+    cf.cond_br %59 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %59 = memref.lea_symdata __panic_msg_36
-    %60 = std.ptr_to_i64 %59
-    std.call_runtime @maxon_panic %60
+    %60 = memref.lea_symdata __panic_msg_36
+    %61 = std.ptr_to_i64 %60
+    std.call_runtime @maxon_panic %61
   __range_ok_4:
-    %61 = memref.load __range_val_4 : i64
-    %62 = memref.load arr : i64
-    mm.destruct_struct %62 fields=[+8] null_guarded
-    %64 = memref.load item : i64
-    std.call_runtime_if_nonnull @mm_decref %64
-    %66 = memref.load got : i64
-    std.call_runtime_if_nonnull @mm_decref %66
-    %68 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %68
-    func.return %61
+    %62 = memref.load __range_val_4 : i64
+    %63 = memref.load arr : i64
+    mm.destruct_struct %63 fields=[+8] null_guarded
+    %65 = memref.load item : i64
+    std.call_runtime_if_nonnull @mm_decref %65
+    %67 = memref.load got : i64
+    std.call_runtime_if_nonnull @mm_decref %67
+    %69 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %69
+    func.return %62
   }
 }
 === x86
@@ -298,8 +298,8 @@ module {
   otherwise_default_continue_3:
     x86.mov eax, [rbp-40]
     x86.mov [rbp-48], eax
-    x86.mov ecx, [rbp-48]
-    x86.call mm_incref
+    x86.xor ecx, ecx
+    x86.mov [rbp-40], ecx
     x86.mov edx, [rbp-48]
     x86.mov ebx, [edx+0]
     x86.mov [rbp-56], ebx

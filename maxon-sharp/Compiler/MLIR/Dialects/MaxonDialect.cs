@@ -1,3 +1,4 @@
+using MaxonSharp.Compiler;
 using MaxonSharp.Compiler.Mlir.Core;
 
 namespace MaxonSharp.Compiler.Mlir.Dialects;
@@ -151,6 +152,7 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
   public bool IsDeclaration { get; } = isDeclaration;
   public bool IsMutable { get; } = isMutable;
   public MaxonValueKind ValueKind { get; } = valueKind;
+  public OwnershipFlags? OwnerFlags { get; init; }
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes {
     get {
@@ -537,6 +539,13 @@ public class MaxonScopeEndOp(IReadOnlyList<string> varsToClean, HashSet<string>?
   public override string Mnemonic => $"maxon.scope_end [{string.Join(", ", VarsToClean)}]";
   public IReadOnlyList<string> VarsToClean { get; } = varsToClean;
   public HashSet<string>? KeepVars { get; } = keepVars;
+
+  /// <summary>
+  /// Maps var name → (OwnershipFlags, StructTypeName) for each variable in VarsToClean.
+  /// Populated by the parser so the lowering layer has ownership/type metadata
+  /// without needing to infer it from string prefixes.
+  /// </summary>
+  public IReadOnlyDictionary<string, (OwnershipFlags Flags, string? StructTypeName)>? VarMetadata { get; init; }
 }
 
 public class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {

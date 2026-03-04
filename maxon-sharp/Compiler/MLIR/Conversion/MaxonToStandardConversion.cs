@@ -240,8 +240,7 @@ public static partial class MaxonToStandardConversion {
       var varNameToStructPrefix = new Dictionary<string, string>();
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
       var varNameToStructType = new Dictionary<string, string>();
-      // Global struct temps created during lowering that need decref at scope exit
-      var globalStructTemps = new List<string>();
+      var temps = new VarRegistry();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
 
@@ -420,7 +419,7 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonEnumConstructOp enumConstructOp: {
               // Heap-allocate the enum: [tag:i64 @ 0, payload_0:i64 @ 8, payload_1:i64 @ 16, ...]
-              var tempName = $"__enum_{enumConstructOp.Result.Id}";
+              var tempName = temps.CreateTemp("enum", enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, OwnershipFlags.None);
               var enumTypeDef = (MlirUnionType)module.TypeDefs[enumConstructOp.EnumTypeName];
               int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
               int heapSize = 8 + maxPayload * 8;
@@ -482,7 +481,7 @@ public static partial class MaxonToStandardConversion {
 
               if (enumPayloadOp.ResultKind == MaxonValueKind.Struct && enumPayloadOp.ResultStructTypeName != null) {
                 // Struct-typed payload: load heap pointer from payload slot
-                var tempStructName = $"__enum_payload_{enumPayloadOp.Result.Id}";
+                var tempStructName = temps.CreateTemp("enum_payload", enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, OwnershipFlags.Borrowed);
                 var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(loadOp);
                 EmitStore(newBlock, (StdI64)loadOp.Result, tempStructName, varTypes);
@@ -493,7 +492,7 @@ public static partial class MaxonToStandardConversion {
                          && module.TypeDefs.TryGetValue(enumPayloadOp.ResultStructTypeName, out var payloadEnumDef)
                          && payloadEnumDef is MlirUnionType payloadEnumType && payloadEnumType.HasAssociatedValues) {
                 // Associated-value enum payload: load heap pointer (no unpacking needed)
-                var tempName = $"__enum_payload_{enumPayloadOp.Result.Id}";
+                var tempName = temps.CreateTemp("enum_payload", enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, OwnershipFlags.Borrowed);
                 var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(loadOp);
                 EmitStore(newBlock, (StdI64)loadOp.Result, tempName, varTypes);
@@ -607,7 +606,7 @@ public static partial class MaxonToStandardConversion {
               if (errToEnumOp.HasAssociatedValues) {
                 // Associated-value error: the error flag IS the heap pointer
                 var heapPtr = (StdI64)valueMap[errToEnumOp.ErrorFlag];
-                var retVarName = $"__error_enum_{errToEnumOp.Result.Id}";
+                var retVarName = temps.CreateTemp("error_enum", errToEnumOp.Result.Id, errToEnumOp.EnumTypeName, OwnershipFlags.None);
                 EmitStore(newBlock, heapPtr, retVarName, varTypes);
                 // No unpacking — heap pointer IS the enum value
                 structVarNames[errToEnumOp.Result.Id] = retVarName;
@@ -627,7 +626,7 @@ public static partial class MaxonToStandardConversion {
               var enumType = (MlirUnionType)module.TypeDefs[strRawOp.EnumTypeName];
               var ordinalValue = (StdI64)valueMap[strRawOp.EnumValue];
               var (buf, len) = EmitStringUnionToString(enumType, ordinalValue, newBlock, result);
-              var tempName = $"__enum_rawval_{strRawOp.Result.Id}";
+              var tempName = temps.CreateTemp("enum_rawval", strRawOp.Result.Id, "String", OwnershipFlags.None);
               var isString = !strRawOp.IsChar;
               EmitManagedStructFromBufLen(tempName, buf, len,
                 isString, newBlock, varTypes, structVarNames, strRawOp.Result.Id);
@@ -646,7 +645,7 @@ public static partial class MaxonToStandardConversion {
                 ordinalValue = (StdI64)stdValue;
               }
               var (nameBuf, nameLen) = EmitUnionNameLookup(enumType, ordinalValue, newBlock, result);
-              var tempName = $"__enum_name_{enumNameOp.Result.Id}";
+              var tempName = temps.CreateTemp("enum_name", enumNameOp.Result.Id, "String", OwnershipFlags.None);
               EmitManagedStructFromBufLen(tempName, nameBuf, nameLen,
                 true, newBlock, varTypes, structVarNames, enumNameOp.Result.Id);
               break;
@@ -700,7 +699,7 @@ public static partial class MaxonToStandardConversion {
               // If this literal is immediately assigned, use the target variable name for the heap pointer.
               var tempName = structLiteralTargets.TryGetValue(structLitOp.Result.Id, out var inlineTarget)
                 ? inlineTarget
-                : $"__struct_{structLitOp.Result.Id}";
+                : temps.CreateTemp("struct", structLitOp.Result.Id, structLitOp.TypeName, OwnershipFlags.None);
               var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
 
               // Allocate memory for the struct on the heap
@@ -866,7 +865,7 @@ public static partial class MaxonToStandardConversion {
                   && !structLitReturnIds.Contains(structLitOp.Result.Id)) {
                 EmitIncrefValue(newBlock, (StdI64)EmitLoad(newBlock, tempName, varTypes), scopeName: func.Name);
                 varNameToStructType[tempName] = structLitOp.TypeName;
-                globalStructTemps.Add(tempName);
+                temps.MarkTempOrphan(tempName);
               }
 
               break;
@@ -898,19 +897,30 @@ public static partial class MaxonToStandardConversion {
                 }
                 // Adjust refcount for the new reference.
                 // Skip incref when source is a call return — callee's rc=1 IS our reference.
-                bool isFromCallReturn = srcName.StartsWith("__callret_")
-                  || srcName.StartsWith("__call_tmp_")
-                  || srcName.StartsWith("__lit_tmp_")
-                  || srcName.StartsWith("__interp_tostr_")
-                  || srcName.StartsWith("__forin_result_")
-                  || srcName.StartsWith("__chain_nav_");
+                bool isFromCallReturn = temps.IsCallReturnTransfer(srcName);
                 if (isFromCallReturn
                     && !assignOp.VarName.StartsWith("__call_tmp_")
                     && !assignOp.VarName.StartsWith("__callret_")) {
                   // ReturnSelf check removed with scope analysis — conservative: always treat as call return
                 }
+                // Propagate CallReturn status to internal temp destinations so downstream
+                // temp-to-temp transfers also skip the redundant incref.
+                // Only propagate to __-prefixed vars (internal temps). User variables that
+                // receive a CallReturn value own a real reference — aliasing from them must
+                // incref normally.
+                if ((isFromCallReturn || assignOp.OwnerFlags?.HasFlag(OwnershipFlags.CallReturn) == true)
+                    && dstName.StartsWith("__") && !temps.IsTempRegistered(dstName)) {
+                  temps.RegisterTemp(dstName, structTypeName, OwnershipFlags.CallReturn);
+                }
                 if ((assignOp.IsDeclaration || srcName != dstName) && !isFromCallReturn) {
                   EmitIncref(newBlock, assignOp.VarName, varTypes, scopeName: func.Name);
+                } else if (isFromCallReturn && srcName != dstName
+                    && temps.IsTempRegistered(srcName)) {
+                  // Ownership transferred without incref from an internal temp — zero
+                  // the temp slot so scope_end's null-guarded decref becomes a no-op.
+                  var zeroOp = new StdConstI64Op(0);
+                  newBlock.AddOp(zeroOp);
+                  newBlock.AddOp(new StdStoreI64Op(zeroOp.Result, srcName));
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
@@ -990,7 +1000,7 @@ public static partial class MaxonToStandardConversion {
                   resolvedName = cachedName;
                 } else {
                   var field = selfStructType!.GetField(structVarRef.VarName)!;
-                  var tempVarName = $"__selfref_{structVarRef.Result.Id}";
+                  var tempVarName = temps.CreateTemp("selfref", structVarRef.Result.Id, structVarRef.StructTypeName, OwnershipFlags.Borrowed);
                   var nestedPtr = EmitStructFieldLoad(newBlock, "self", field.Offset, MlirType.I64, varTypes);
                   EmitStore(newBlock, nestedPtr, tempVarName, varTypes);
                   resolvedName = tempVarName;
@@ -1038,7 +1048,8 @@ public static partial class MaxonToStandardConversion {
 
               if (fieldAccess.ResultKind == MaxonValueKind.Struct) {
                 // Struct-typed field: load the nested struct's heap pointer and store it in a temp var
-                var tempVarName = $"__field_{fieldAccess.Result.Id}";
+                var fieldTypeName = fieldDef?.Type is MlirStructType fst ? fst.Name : (fieldAccess.ResultStructTypeName ?? "unknown");
+                var tempVarName = temps.CreateTemp("field", fieldAccess.Result.Id, fieldTypeName, OwnershipFlags.Borrowed);
                 if (fieldDef != null) {
                   var nestedPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, MlirType.I64, varTypes);
                   EmitStore(newBlock, nestedPtr, tempVarName, varTypes);
@@ -1069,7 +1080,7 @@ public static partial class MaxonToStandardConversion {
                          && module.TypeDefs.TryGetValue(fieldAccess.ResultStructTypeName, out var faEnumDef)
                          && faEnumDef is MlirUnionType faEnumType && faEnumType.HasAssociatedValues) {
                 // Associated-value enum field: load heap pointer (no unpacking needed)
-                var tempVarName = $"__field_{fieldAccess.Result.Id}";
+                var tempVarName = temps.CreateTemp("field", fieldAccess.Result.Id, fieldAccess.ResultStructTypeName!, OwnershipFlags.Borrowed);
                 if (fieldDef != null) {
                   var enumPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, MlirType.I64, varTypes);
                   EmitStore(newBlock, enumPtr, tempVarName, varTypes);
@@ -1258,8 +1269,8 @@ public static partial class MaxonToStandardConversion {
                 newBlock.AddOp(zeroOp);
                 newBlock.AddOp(new StdStoreI64Op(zeroOp.Result, v));
               }
-              // Decref global struct temps created during lowering (not in parser scope tracking)
-              foreach (var tempName in globalStructTemps) {
+              // Decref orphan temps created during lowering (not in parser scope tracking)
+              foreach (var tempName in temps.OrphanTemps) {
                 EmitDecrefWithFieldCleanupIfNonnull(newBlock, tempName, varTypes,
                   varNameToStructType, module.TypeDefs, module.TypeAliasSources,
                   scopeName: func.Name);
@@ -1486,10 +1497,10 @@ public static partial class MaxonToStandardConversion {
               };
               if (globalLoad.ValueKind == MaxonValueKind.Struct) {
                 var tempName = $"__global_{globalLoad.GlobalName}_{globalLoad.Result.Id}";
+                temps.RegisterTemp(tempName, globalLoad.StructTypeName ?? "unknown", OwnershipFlags.Orphan);
                 EmitStore(newBlock, valueMap[globalLoad.Result], tempName, varTypes);
                 EmitIncref(newBlock, tempName, varTypes, scopeName: func.Name);
                 structVarNames[globalLoad.Result.Id] = tempName;
-                globalStructTemps.Add(tempName);
                 if (globalLoad.StructTypeName != null) {
                   structValueTypes[globalLoad.Result.Id] = globalLoad.StructTypeName;
                   varNameToStructType[tempName] = globalLoad.StructTypeName;
@@ -1543,11 +1554,11 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, fnEnvVarNames);
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, fnEnvVarNames: fnEnvVarNames, temps: temps);
               // After a call that passes variables by reference, reload those variables
               // so subsequent uses see the mutated values instead of stale SSA values
               if (_mutatingParams != null && callOp.ArgVarNames != null
@@ -1578,10 +1589,10 @@ public static partial class MaxonToStandardConversion {
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
               break;
             case MaxonClosureCreateOp closureCreateOp:
-              LowerClosureCreate(closureCreateOp, newBlock, valueMap, varTypes, structVarNames, fnEnvVarNames, varNameToStructType, globalStructTemps);
+              LowerClosureCreate(closureCreateOp, newBlock, valueMap, varTypes, structVarNames, fnEnvVarNames, varNameToStructType, temps);
               break;
             case MaxonClosureEnvLoadOp envLoadOp:
-              LowerClosureEnvLoad(envLoadOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
+              LowerClosureEnvLoad(envLoadOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
               break;
             case MaxonFunctionParamOp fnParamOp:
               LowerFunctionParam(fnParamOp, newBlock, valueMap, varTypes, fnEnvVarNames, fnEnvDirectValues, paramFlatIndex);
@@ -1590,10 +1601,10 @@ public static partial class MaxonToStandardConversion {
               LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap, varTypes, fnEnvVarNames);
               break;
             case MaxonIndirectCallOp indirectCallOp:
-              LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues);
+              LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues, temps);
               break;
             case MaxonReturnOp retOp: {
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, func.Name);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, func.Name, temps);
               break;
             }
             case MaxonThrowOp throwOp: {
@@ -1601,16 +1612,16 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonManagedMemGetOp memGetOp:
-              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
+              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
               break;
             case MaxonManagedMemRemoveOp memRemoveOp:
-              LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes);
+              LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
               break;
             case MaxonManagedMemSetOp memSetOp:
               LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonManagedMemCreateOp memCreateOp:
-              LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames, temps);
               break;
             case MaxonManagedMemGrowOp memGrowOp:
               LowerManagedMemGrow(memGrowOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1631,7 +1642,7 @@ public static partial class MaxonToStandardConversion {
               LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonCStringToManagedOp fromCStringOp:
-              LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, structVarNames, temps);
               break;
             case MaxonManagedToCStringOp toCStringOp:
               LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1646,25 +1657,25 @@ public static partial class MaxonToStandardConversion {
               LowerPanic(panicOp, newBlock, result);
               break;
             case MaxonStringLiteralOp stringLitOp:
-              LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result);
+              LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result, temps);
               break;
             case MaxonByteStringLiteralOp byteStringLitOp:
-              LowerByteStringLiteral(byteStringLitOp, newBlock, varTypes, structVarNames, result);
+              LowerByteStringLiteral(byteStringLitOp, newBlock, varTypes, structVarNames, result, temps);
               break;
             case MaxonCharLiteralOp charLitOp:
-              LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result);
+              LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result, temps);
               break;
             case MaxonStringInterpOp interpOp:
-              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result);
+              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result, temps);
               break;
             case MaxonManagedMemConcatOp concatOp:
-              LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames);
+              LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames, temps);
               break;
             case MaxonManagedMemSliceOp sliceOp:
-              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames, temps);
               break;
             case MaxonMakeCharFromBytesOp makeCharOp:
-              LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames, temps);
               break;
             case MaxonCallRuntimeOp callRtOp: {
               var stdArgs = callRtOp.Args.Select(a => {
@@ -1702,13 +1713,13 @@ public static partial class MaxonToStandardConversion {
             }
             // Chain (doubly-linked list) operations
             case MaxonChainCreateOp chainCreateOp:
-              LowerChainCreate(chainCreateOp, newBlock, varTypes, structVarNames, structValueTypes);
+              LowerChainCreate(chainCreateOp, newBlock, varTypes, structVarNames, structValueTypes, temps);
               break;
             case MaxonChainInsertValueOp chainInsertOp:
-              LowerChainInsertValue(chainInsertOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerChainInsertValue(chainInsertOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             case MaxonChainInsertRelativeValueOp chainInsertRelOp:
-              LowerChainInsertRelativeValue(chainInsertRelOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerChainInsertRelativeValue(chainInsertRelOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             case MaxonChainReinsertOp chainReinsertOp:
               LowerChainReinsert(chainReinsertOp, newBlock, varTypes, structVarNames);
@@ -1720,13 +1731,13 @@ public static partial class MaxonToStandardConversion {
               LowerChainDetach(chainDetachOp, newBlock, varTypes, structVarNames);
               break;
             case MaxonChainRemoveOp chainRemoveOp:
-              LowerChainRemove(chainRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerChainRemove(chainRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             case MaxonChainCountOp chainCountOp:
               LowerChainCount(chainCountOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonChainNodeValueOp chainNodeValueOp:
-              LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             case MaxonChainNodeSetValueOp chainNodeSetValueOp:
               LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
@@ -1738,7 +1749,7 @@ public static partial class MaxonToStandardConversion {
               LowerChainCursorReset(cursorResetOp, newBlock, varTypes, structVarNames);
               break;
             case MaxonChainCursorValueOp cursorValueOp:
-              LowerChainCursorValue(cursorValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs);
+              LowerChainCursorValue(cursorValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
@@ -1763,7 +1774,7 @@ public static partial class MaxonToStandardConversion {
         foreach (var v in allScopeVars) {
           if (_structParamNames != null && _structParamNames.Contains(v)) continue;
           if (IsSelfField(isStructInstanceMethod, selfStructType, v)) continue;
-          if (!varNameToStructType.ContainsKey(v)) continue;  // only managed vars need zeroing
+          if (!varNameToStructType.ContainsKey(v) && !temps.IsTempManaged(v)) continue;  // only managed vars need zeroing
           var zeroOp = new StdConstI64Op(0);
           var storeOp = new StdStoreI64Op(zeroOp.Result, v);
           entryBlock.Operations.Insert(insertIdx, zeroOp);

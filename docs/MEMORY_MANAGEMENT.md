@@ -206,17 +206,17 @@ function main() returns ExitCode
 end 'main'
 ```
 
-The compiler detects call-return patterns (`__callret_` prefix) to avoid an unnecessary incref+decref cycle when the caller receives the return value.
+The compiler marks call-return temps with `OwnershipFlags.CallReturn`. When the caller assigns the return value to a named variable, the registry detects the `CallReturn` flag and skips the incref — the callee already allocated at rc=1, so ownership transfers directly without an unnecessary incref+decref cycle.
 
 ### Function Parameters
 
-Struct parameters are incref'd on entry and decref'd on exit:
+Function parameters are **not owned** by the callee. The caller retains ownership and is responsible for the parameter's lifetime. Parameters are marked with `OwnershipFlags.IsParam` and are skipped during scope-end cleanup — no decref is emitted for them:
 
 ```maxon
 function readLevel(c Config) returns Integer
-  // c was incref'd by caller before the call
+  // c is borrowed from the caller (IsParam flag); no incref on entry
   return c.level
-  // c is decref'd at scope exit
+  // c is NOT decref'd at scope exit — caller still owns it
 end 'readLevel'
 ```
 
@@ -258,8 +258,9 @@ The compiler inserts `MaxonScopeEndOp` at every scope exit point (block end, bre
 
 - **`VarsToClean`**: list of managed variables declared in this scope
 - **`KeepVars`**: variables to skip (e.g., the return value)
+- **`VarMetadata`** (optional): `IReadOnlyDictionary<string, (OwnershipFlags Flags, string? StructTypeName)>` — propagates ownership flags and type information from the parser to the lowering layer
 
-During lowering (Maxon → Standard dialect), each variable in `VarsToClean` that isn't in `KeepVars` gets a decref (or destructor call if the type has managed fields).
+The `VarMetadata` dictionary is populated by `VarRegistry.GetScopeEndVarMetadata()` at parse time. During lowering (Maxon dialect to Standard dialect), the lowering layer reads the flags directly from `VarMetadata` to determine cleanup behavior — variables with `IsParam` are skipped, variables with `Borrowed` skip independent decref, and so on. This replaces the old approach where the lowering layer used string prefix matching to rediscover variable classification.
 
 ### Cleanup on All Exit Paths
 
@@ -271,6 +272,72 @@ Scope cleanup runs on every possible exit path:
 - **Continue** — cleans up the loop body scope before jumping back to the loop header
 - **Return from nested block** — cleans up all enclosing scopes up to the function level
 - **Error propagation** — `try` that throws cleans up the function scope before propagating
+
+## Variable Registry
+
+The `VarRegistry` is the unified system for creating and tracking all managed variables across both the parser and lowering layers. It replaces the previous fragmented approach where the parser and lowering layer independently tracked variables using string prefix matching.
+
+### Design Principles
+
+- **Factory pattern**: The only way to create a variable is through the registry (`Declare()` or `CreateTemp()`), which automatically registers it with ownership metadata. It is impossible to create an untracked managed variable.
+- **Flag-based classification**: Variables carry an `OwnershipFlags` enum instead of being classified by name prefix. This eliminates fragile string matching and makes ownership semantics explicit.
+- **Cross-layer propagation**: The parser attaches ownership metadata to IR ops (`MaxonScopeEndOp.VarMetadata`, `MaxonAssignOp.OwnerFlags`), so the lowering layer reads flags directly instead of rediscovering variable roles.
+
+### `OwnershipFlags`
+
+```csharp
+[Flags]
+enum OwnershipFlags {
+    None       = 0,
+    CallReturn = 1 << 0,  // Callee allocated at rc=1; skip incref on first assign
+    Borrowed   = 1 << 1,  // Borrowed ref from parent struct field; not independently owned
+    Orphan     = 1 << 2,  // Not consumed by parser-tracked var; needs scope-end cleanup
+    SelfReturn = 1 << 3,  // Returned from self-returning method; alias, not fresh alloc
+    IsTemp     = 1 << 4,  // Internal temp variable (cleaned after user vars at scope end)
+    IsParam    = 1 << 5,  // Function parameter (not owned, skip decref at scope end)
+}
+```
+
+### Two Registration Modes
+
+| Mode | Method | Layer | Produces | Use case |
+|------|--------|-------|----------|----------|
+| Parser-level | `Declare()` | Parser | `VarInfo` | User variables, parser temps (`__call_tmp_`, `__lit_tmp_`, etc.) |
+| Lowering-level | `CreateTemp()` | Lowering | `TempVarInfo` | Lowering temps (`__callret_`, `__field_`, `__struct_`, etc.) |
+
+Parser-level variables participate in scope management (`PushScope`/`PopScope`) and appear in `MaxonScopeEndOp.VarsToClean`. Lowering-level temps are tracked separately and cleaned up by the lowering layer itself.
+
+### Scope Management
+
+The registry manages scope boundaries internally:
+
+- **`PushScope()`** — snapshots current variable keys before entering a nested scope.
+- **`PopScope()`** — removes variables declared since the last `PushScope`, restoring the parent scope.
+- **`SnapshotKeys()` / `KeysSince(snapshot)`** — manual scope tracking for constructs like loops and match expressions, where the parser needs to compute cleanup lists without a full push/pop.
+
+### Scope-End Ordering
+
+`GetScopeEndVars()` returns variables in cleanup order: **user variables first, then temps**. This ordering is determined by the `IsTemp` flag rather than string prefix matching. User variables are cleaned before temps because a user variable may alias a temp — if the temp were cleaned first, the user variable's decref would operate on a freed object.
+
+### Ownership Transfer
+
+When a parser-tracked variable takes ownership of a value held by a temp, `TransferTempOwnership()` handles the handoff:
+
+- **`CallReturn` temps**: Removed from tracking entirely. The named variable now owns the value; no additional incref/decref is needed.
+- **Other temps** (e.g., `__try_result_`): Re-inserted at the end of the variable map so they appear after user variables in cleanup order.
+
+### Orphan Temps
+
+A lowering-level temp is marked `Orphan` when it holds a managed value that was never consumed by a parser-tracked variable. For example, a struct literal passed directly to a function argument without being assigned to a named variable. Orphan temps are tracked via `VarRegistry.OrphanTemps` and cleaned up at scope end by the lowering layer.
+
+### Cross-Layer Metadata Propagation
+
+| IR Op | Property | What it carries |
+|-------|----------|----------------|
+| `MaxonScopeEndOp` | `VarMetadata` | Per-variable `(OwnershipFlags, StructTypeName)` for all scope variables |
+| `MaxonAssignOp` | `OwnerFlags` | `OwnershipFlags` of the source value (e.g., `CallReturn` to skip incref) |
+
+This propagation eliminates the need for the lowering layer to maintain its own variable classification lists.
 
 ## Destructors
 
@@ -407,7 +474,7 @@ At program exit, the runtime checks `__mm_alloc_count`. If it is non-zero, it pr
 
 ## Managed Variable Initialization
 
-All managed (heap-allocated) variables are **zero-initialized** at function entry. This ensures that scope cleanup can safely call `mm_decref_if_nonnull` on variables that may not have been assigned yet (e.g., in conditional branches where only one path allocates).
+All managed (heap-allocated) variables are **zero-initialized** at function entry. This includes both parser-level variables and orphan temps from the `VarRegistry`. Zero-initialization ensures that scope cleanup can safely call `mm_decref_if_nonnull` on variables that may not have been assigned yet (e.g., in conditional branches where only one path allocates).
 
 ## Summary of Invariants
 
@@ -416,5 +483,6 @@ All managed (heap-allocated) variables are **zero-initialized** at function entr
 3. Refcount reaches 0 → object is freed (either by `mm_decref` or by `mm_decref_check` + inline destructor + `mm_free`).
 4. Parent-owned children (refcount 0) are freed with the parent. Children with refcount > 0 are detached.
 5. Reference cycles are impossible — they are compile-time errors.
-6. Every scope exit path decrefs all in-scope managed variables (except returned/kept values).
+6. Every scope exit path decrefs all in-scope managed variables (except returned/kept values and parameters).
 7. The global `__mm_alloc_count` tracks live allocations and is checked at exit for leaks.
+8. All managed variables must be created through the `VarRegistry`. Direct variable creation outside the registry is not permitted — creation is registration.

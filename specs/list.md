@@ -606,9 +606,31 @@ incref String #6 rc=1 [list.testRemove]
 alloc_in __ChainNode
 incref String #6 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [StringList.removeFirst]
-incref __ChainNode #5 rc=2 [StringList.removeFirst]
   free __ChainNode #5
-decref
+alloc String #9 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+alloc_in Buffer
+incref String #9 rc=1 [list.testRemove]
+alloc ToStringBuf #12 rc=0 [list.testRemove]
+alloc String #13 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+alloc_in Buffer
+  free ToStringBuf #12
+incref String #13 rc=1 [list.testRemove]
+decref StringList #2 rc=0 [list.testRemove]
+decref EChain #1 rc=0 [list.testRemove]
+decref String #6 rc=1
+free EChain #1 [list.testRemove]
+free StringList #2 [list.testRemove]
+decref String #3 rc=1 [list.testRemove]
+decref String #3 rc=0 [list.testRemove]
+free String #3 [list.testRemove]
+decref String #6 rc=0 [list.testRemove]
+free String #6 [list.testRemove]
+decref String #9 rc=0 [list.testRemove]
+free String #9 [list.testRemove]
+decref String #13 rc=0 [list.testRemove]
+free String #13 [list.testRemove]
 ```
 
 <!-- test: memory.remove-returns-string -->
@@ -651,9 +673,24 @@ incref String #6 rc=1 [list.testRemove]
 alloc_in __ChainNode
 incref String #6 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [StringList.removeFirst]
-incref __ChainNode #5 rc=2 [StringList.removeFirst]
   free __ChainNode #5
-decref
+decref StringList #2 rc=0 [list.testRemove]
+decref EChain #1 rc=0 [list.testRemove]
+decref String #6 rc=1
+free EChain #1 [list.testRemove]
+free StringList #2 [list.testRemove]
+decref String #3 rc=1 [list.testRemove]
+decref String #6 rc=0 [list.testRemove]
+free String #6 [list.testRemove]
+transfer String #3 rc=1 [list.testRemove]
+alloc String #9 rc=0 [list.main]
+alloc_in __ManagedMemory
+alloc_in Buffer
+incref String #9 rc=1 [list.main]
+decref String #3 rc=0 [list.main]
+free String #3 [list.main]
+decref String #9 rc=0 [list.main]
+free String #9 [list.main]
 ```
 
 <!-- test: memory.clear-frees-strings -->
@@ -834,13 +871,12 @@ incref String #3 rc=1 [list.main]
 alloc_in __ChainNode
 incref String #3 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [StringList.first]
-incref __ChainNode #5 rc=2 [StringList.first]
-decref __ChainNode #5 rc=1 [StringList.first]
 decref __ChainNode #5 rc=0 [StringList.first]
   free __ChainNode #5
-incref String #3 rc=3 [list.clearList]
+incref String #3 rc=3 [StringList.first]
+transfer String #3 rc=3 [StringList.first]
 decref String #3 rc=2
-mm_free bad ptr=0x00000274c02ca438
+mm_free bad ptr=0x000001745e568508
 mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
   in StringList.clear
   in StringList.clear
@@ -881,13 +917,12 @@ incref String #3 rc=1 [list.main]
 alloc_in __ChainNode
 incref String #3 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [StringList.first]
-incref __ChainNode #5 rc=2 [StringList.first]
-decref __ChainNode #5 rc=1 [StringList.first]
 decref __ChainNode #5 rc=0 [StringList.first]
   free __ChainNode #5
-incref String #3 rc=3 [list.main]
+incref String #3 rc=3 [StringList.first]
+transfer String #3 rc=3 [StringList.first]
 decref String #3 rc=2
-mm_free bad ptr=0x000001ca58b4a168
+mm_free bad ptr=0x000001e66438a288
 mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
   in StringList.clear
   in StringList.clear

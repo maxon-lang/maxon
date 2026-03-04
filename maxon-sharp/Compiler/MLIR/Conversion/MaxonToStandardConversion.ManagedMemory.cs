@@ -73,7 +73,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes) {
+	  Dictionary<int, string> structValueTypes,
+	  VarRegistry temps) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
@@ -91,7 +92,8 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(loadOp);
 			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
 
-			var tempName = $"__callret_{MlirContext.Current.NextId()}";
+			var tempId = MlirContext.Current.NextId();
+			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.CallReturn);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
 			if (op.StructElementTypeName != null)
@@ -118,7 +120,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes) {
+	  Dictionary<int, string> structValueTypes,
+	  VarRegistry temps) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
@@ -144,7 +147,8 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(zeroOp);
 			block.AddOp(new StdStoreIndirectOp(zeroOp.Result, addr, 0, MlirType.I64));
 
-			var tempName = $"__callret_{MlirContext.Current.NextId()}";
+			var tempId = MlirContext.Current.NextId();
+			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.CallReturn);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
 			if (op.StructElementTypeName != null)
@@ -241,7 +245,8 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
+	  Dictionary<int, string> structVarNames,
+	  VarRegistry temps) {
 		var count = (StdI64)valueMap[op.Count];
 		// Compute byte size = count * elementSize
 		var sizeOp = new StdConstI64Op(op.ElementSize);
@@ -249,7 +254,7 @@ public static partial class MaxonToStandardConversion {
 		var byteSizeOp = new StdMulI64Op(count, sizeOp.Result);
 		block.AddOp(byteSizeOp);
 		// Allocate __ManagedMemory struct first, then buffer as child
-		var tempName = $"__managed_create_{op.Result.Id}";
+		var tempName = temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 		var allocResult = EmitAllocIn(block, byteSizeOp.Result, managedPtr, "Buffer");
@@ -492,7 +497,8 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
+	  Dictionary<int, string> structVarNames,
+	  VarRegistry temps) {
 		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
 
 		// Get string length
@@ -508,7 +514,7 @@ public static partial class MaxonToStandardConversion {
 		// Allocate __ManagedMemory struct first, then buffer as child.
 		// Allocate strlen+1 bytes so the null terminator is within the allocation,
 		// preventing out-of-bounds reads in maxon_to_cstring.
-		var tempName = $"__from_cstring_{op.Result.Id}";
+		var tempName = temps.CreateTemp("from_cstring", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 

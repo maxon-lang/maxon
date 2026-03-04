@@ -47,10 +47,11 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps,
     Dictionary<int, string>? fnEnvVarNames = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
       isTryCall: false, funcLookup, block, valueMap, varTypes, structVarNames,
-      structValueTypes, typeDefs, fnEnvVarNames: fnEnvVarNames,
+      structValueTypes, typeDefs, temps, fnEnvVarNames: fnEnvVarNames,
       argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames);
   }
 
@@ -71,6 +72,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps,
     MaxonValue? errorFlagValue = null,
     Dictionary<int, string>? fnEnvVarNames = null,
     List<bool>? argMutabilities = null,
@@ -79,7 +81,7 @@ public static partial class MaxonToStandardConversion {
     // Intercept synthetic chain navigation calls before resolving the callee
     // (these are not real functions in the module)
     if (TryLowerChainNavigation(callee, args, result, isTryCall, block, valueMap,
-        varTypes, structVarNames, structValueTypes, errorFlagValue))
+        varTypes, structVarNames, structValueTypes, errorFlagValue, temps))
       return;
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
@@ -125,15 +127,16 @@ public static partial class MaxonToStandardConversion {
       if (calleeRetStructType != null && callResult != null) {
         // ReturnsSelf: the returned pointer is a borrowed reference (not a new allocation).
         // Use a non-callret prefix so the caller increfs it like any other alias assignment.
-        var retPrefix = calleeFunc.ReturnsSelf ? "__selfret_" : "__callret_";
-        var retVarName = $"{retPrefix}{result.Id}";
+        var retVarName = calleeFunc.ReturnsSelf
+            ? temps.CreateTemp("selfret", result.Id, calleeRetStructType.Name, OwnershipFlags.SelfReturn)
+            : temps.CreateTemp("callret", result.Id, calleeRetStructType.Name, OwnershipFlags.CallReturn);
         EmitStore(block, callResult, retVarName, varTypes);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = calleeRetStructType.Name;
       } else if (calleeRetAssocEnum && callResult != null) {
         // Associated-value enum return: store heap pointer (no unpacking needed)
         var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;
-        var retVarName = $"__callret_{result.Id}";
+        var retVarName = temps.CreateTemp("callret", result.Id, retEnumType.Name, OwnershipFlags.CallReturn);
 
         if (isTryCall) {
           // try_call returns null (0) on error — guard against null dereference
@@ -177,7 +180,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
-    string funcName) {
+    string funcName,
+    VarRegistry temps) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -206,10 +210,9 @@ public static partial class MaxonToStandardConversion {
         // incref yet. Borrowed field references (__field_) also need incref since
         // they are pointers into a parent struct without their own reference.
         // Incref to establish ownership before transferring to caller.
-        if (srcName.StartsWith("__struct_")
-            || srcName.StartsWith("__enum_rawval_")
-            || srcName.StartsWith("__enum_name_")
-            || srcName.StartsWith("__field_")) {
+        if (temps.IsTempManaged(srcName)
+              && !temps.TempHasFlag(srcName, OwnershipFlags.CallReturn)
+              && !temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn)) {
           EmitIncref(block, srcName, varTypes, scopeName: funcName);
           EmitTransfer(block, srcName, varTypes, funcName);
         }
@@ -266,7 +269,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps) {
     // Intercept synthetic enum static method calls
     if (tryCallOp.Callee.StartsWith("__enum_fromRawValue:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromRawValue:".Length..];
@@ -278,14 +282,15 @@ public static partial class MaxonToStandardConversion {
     if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
       var enumType = (MlirUnionType)typeDefs[enumTypeName];
-      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes);
+      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes, temps: temps);
       // No temp release needed — scope handles cleanup
       return;
     }
     LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
       tryCallOp.ResultKind, isTryCall: true, funcLookup, block, valueMap, varTypes,
       structVarNames, structValueTypes, typeDefs,
-      tryCallOp.ErrorFlag,
+      temps,
+      errorFlagValue: tryCallOp.ErrorFlag,
       argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames);
   }
 }

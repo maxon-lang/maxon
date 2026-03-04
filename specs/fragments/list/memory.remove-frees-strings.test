@@ -37,9 +37,31 @@ incref String #6 rc=1 [list.testRemove]
 alloc_in __ChainNode
 incref String #6 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [StringList.removeFirst]
-incref __ChainNode #5 rc=2 [StringList.removeFirst]
   free __ChainNode #5
-decref
+alloc String #9 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+alloc_in Buffer
+incref String #9 rc=1 [list.testRemove]
+alloc ToStringBuf #12 rc=0 [list.testRemove]
+alloc String #13 rc=0 [list.testRemove]
+alloc_in __ManagedMemory
+alloc_in Buffer
+  free ToStringBuf #12
+incref String #13 rc=1 [list.testRemove]
+decref StringList #2 rc=0 [list.testRemove]
+decref EChain #1 rc=0 [list.testRemove]
+decref String #6 rc=1
+free EChain #1 [list.testRemove]
+free StringList #2 [list.testRemove]
+decref String #3 rc=1 [list.testRemove]
+decref String #3 rc=0 [list.testRemove]
+free String #3 [list.testRemove]
+decref String #6 rc=0 [list.testRemove]
+free String #6 [list.testRemove]
+decref String #9 rc=0 [list.testRemove]
+free String #9 [list.testRemove]
+decref String #13 rc=0 [list.testRemove]
+free String #13 [list.testRemove]
 ```
 ---
 module {
@@ -211,6 +233,8 @@ module {
     x86.call mm_incref
     x86.mov eax, [rbp-8]
     x86.mov [rbp-104], eax
+    x86.xor eax, eax
+    x86.mov [rbp-8], eax
     x86.jmp list.testRemove.otherwise_default_continue_3
   otherwise_default_success_2:
     x86.mov eax, [rbp-80]
@@ -219,8 +243,8 @@ module {
   otherwise_default_continue_3:
     x86.mov eax, [rbp-104]
     x86.mov [rbp-112], eax
-    x86.mov ecx, [rbp-112]
-    x86.call mm_incref
+    x86.xor ecx, ecx
+    x86.mov [rbp-104], ecx
     x86.mov edx, [rbp-112]
     x86.mov ebx, [edx+0]
     x86.mov [rbp-120], ebx

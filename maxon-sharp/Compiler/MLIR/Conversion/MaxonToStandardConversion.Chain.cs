@@ -41,7 +41,8 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes) {
+    Dictionary<int, string> structValueTypes,
+    VarRegistry temps) {
 
     var chainPtr = EmitAlloc(block, ChainDataSize, "__Chain", scopeName: _currentFuncName);
 
@@ -53,7 +54,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainCountOffset, MlirType.I64));
     block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainCursorOffset, MlirType.I64));
 
-    var tempName = $"__chain_{op.Result.Id}";
+    var tempName = temps.CreateTemp("chain", op.Result.Id, op.Result.TypeName, OwnershipFlags.None);
     EmitStore(block, chainPtr, tempName, varTypes);
     structVarNames[op.Result.Id] = tempName;
     structValueTypes[op.Result.Id] = op.Result.TypeName;
@@ -70,7 +71,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps) {
 
     var chainVarName = structVarNames[op.Chain.Id];
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
@@ -98,7 +100,7 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Save nodePtr before runtime call (which may clobber registers)
-    var nodeTempName = $"__chain_node_{op.Result.Id}";
+    var nodeTempName = temps.CreateTemp("chain_node", op.Result.Id, op.Result.TypeName, OwnershipFlags.None);
     EmitStore(block, nodePtr, nodeTempName, varTypes);
 
     // Reload chainPtr for runtime call
@@ -123,7 +125,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps) {
 
     var chainVarName = structVarNames[op.Chain.Id];
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
@@ -150,7 +153,7 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Save nodePtr before runtime calls
-    var nodeTempName = $"__chain_node_{op.Result.Id}";
+    var nodeTempName = temps.CreateTemp("chain_node", op.Result.Id, op.Result.TypeName, OwnershipFlags.None);
     EmitStore(block, nodePtr, nodeTempName, varTypes);
 
     // Reload pointers for runtime call
@@ -241,7 +244,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps) {
 
     var chainVarName = structVarNames[op.Chain.Id];
     var nodeVarName = structVarNames[op.Node.Id];
@@ -258,9 +262,9 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(valueLoad);
     var extractedValue = (StdI64)valueLoad.Result;
 
-    // Save the extracted value. Use __chain_nav_ prefix so assignment skips incref
+    // Save the extracted value. Use CallReturn flag so assignment skips incref
     // (transfer: the node held an incref'd reference, caller inherits it).
-    var valueTempName = $"__chain_nav_{op.Result.Id}";
+    var valueTempName = temps.CreateTemp("chain_nav", op.Result.Id, op.ValueKind, OwnershipFlags.CallReturn);
     EmitStore(block, extractedValue, valueTempName, varTypes);
 
     // Free the node. The value's refcount is unchanged — caller inherits the node's reference.
@@ -315,7 +319,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps) {
 
     var nodeVarName = structVarNames[op.Node.Id];
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
@@ -326,7 +331,7 @@ public static partial class MaxonToStandardConversion {
       // Heap value: return a borrowed pointer. The assignment incref (from
       // MaxonAssignOp) provides the caller's reference. mm_free_entry rescues
       // children with rc > 0, so the value survives container destruction.
-      var tempName = $"__chain_val_{op.Result.Id}";
+      var tempName = temps.CreateTemp("chain_val", op.Result.Id, op.ValueKind, OwnershipFlags.Borrowed);
       EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
       structVarNames[op.Result.Id] = tempName;
       structValueTypes[op.Result.Id] = op.ValueKind;
@@ -425,7 +430,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    VarRegistry temps) {
 
     var chainVarName = structVarNames[op.Chain.Id];
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
@@ -440,7 +446,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(valueLoad);
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
-      var tempName = $"__chain_cursor_val_{op.Result.Id}";
+      var tempName = temps.CreateTemp("chain_cursor_val", op.Result.Id, op.ValueKind, OwnershipFlags.Borrowed);
       EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
       structVarNames[op.Result.Id] = tempName;
       structValueTypes[op.Result.Id] = op.ValueKind;
@@ -466,7 +472,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    MaxonValue? errorFlagValue) {
+    MaxonValue? errorFlagValue,
+    VarRegistry temps) {
 
     // Handle cursor operations that read from/write to the chain's cursor field
     if (callee == "__chain_cursor_start") {
@@ -515,14 +522,15 @@ public static partial class MaxonToStandardConversion {
 
     // Register result as a ChainNode (even if null — the error path handles that)
     if (result != null) {
-      var tempName = $"__chain_nav_{result.Id}";
+      var chainNodeType = result is MaxonStruct ms ? ms.TypeName : "__ChainNode";
+      var tempName = temps.CreateTemp("chain_nav", result.Id, chainNodeType, OwnershipFlags.CallReturn);
       EmitStore(block, loadedPtr, tempName, varTypes);
       // Incref the ChainNode so it survives until scope exit decref.
       // Null-guarded: on the error path the node pointer is null.
       var nodeForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
       EmitIncrefValueIfNonnull(block, nodeForIncref, scopeName: _currentFuncName);
       structVarNames[result.Id] = tempName;
-      structValueTypes[result.Id] = result is MaxonStruct ms ? ms.TypeName : "__ChainNode";
+      structValueTypes[result.Id] = chainNodeType;
     }
 
     return true;
