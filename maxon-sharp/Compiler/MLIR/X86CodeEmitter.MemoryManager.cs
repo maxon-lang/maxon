@@ -84,8 +84,6 @@ public partial class X86CodeEmitter {
       "mm_alloc_in called with unmanaged parent (no AllocEntry)\0"u8.ToArray());
     DefineSymdata("__mm_panic_realloc_unmanaged",
       "mm_realloc called on unmanaged pointer (no AllocEntry)\0"u8.ToArray());
-    // Debug strings for enhanced panic output
-    DefineSymdata("__mm_debug_free_ptr", "mm_free bad ptr=\0"u8.ToArray());
     // Panic strings for null/unmanaged pointer passed to refcount operations
     DefineSymdata("__mm_panic_decref_null",
       "mm_decref called with NULL pointer\n\0"u8.ToArray());
@@ -874,15 +872,9 @@ public partial class X86CodeEmitter {
     EmitSubRegImm(X86Register.Rax, 8);
     EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax]
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = entry
-    // If entry == NULL, print ptr value then panic — mm_free called on unmanaged pointer
+    // If entry == NULL, panic — mm_free called on unmanaged pointer
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_free_entry_ok");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_debug_free_ptr");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_hex")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_free_unmanaged");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_free_entry_ok");
