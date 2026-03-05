@@ -23,6 +23,7 @@ The memory manager provides five core operations:
 | `mm_alloc_in` | Allocate a child object owned by a parent |
 | `mm_incref` | Increment reference count |
 | `mm_decref` | Decrement reference count; free if it reaches zero |
+| `mm_decref_check` | Decrement and return new refcount (caller runs inline destructor if zero) |
 | `mm_free` | Immediately free an object and recursively free its children |
 
 ## Allocation Layout
@@ -174,10 +175,10 @@ Assigning a struct to another variable copies the pointer and increments the ref
 ### Reassignment
 
 ```maxon
-p = Point{x: 3, y: 4}       // decref old (rc→1), alloc new (rc=1)
+p = Point{x: 3, y: 4}       // destruct old (rc→1), alloc new (rc=1)
 ```
 
-The old value is decref'd. If its refcount reaches zero, it is freed. The new value is allocated with rc=1.
+The old value is destructed with full field cleanup (see [Reassignment with Field Cleanup](#reassignment-with-field-cleanup)). If its refcount reaches zero, all managed child fields are decremented and the object is freed. The new value is allocated with rc=1.
 
 ### Scope Exit
 
@@ -220,16 +221,38 @@ function readLevel(c Config) returns Integer
 end 'readLevel'
 ```
 
-### Struct Field Assignment
+### Reassignment with Field Cleanup
 
-Assigning to a struct field decrefs the old field value and increfs the new:
+When a managed variable is reassigned, the old value must be **destructed with full field cleanup** — not just plain `mm_decref`. This ensures that managed child fields (strings, nested structs, arrays, etc.) are properly released before the parent is freed.
 
 ```maxon
-outer.inner = newInner
-// 1. decref old outer.inner
-// 2. store newInner pointer in outer.inner field
-// 3. incref newInner
+p = Point{x: 3, y: 4}
+// 1. destruct old p (mm_decref_check → if rc==0: decref each managed field → mm_free)
+// 2. alloc new, store, incref → rc=1
 ```
+
+The same principle applies everywhere an old managed value is replaced:
+
+| Site | What happens |
+|------|-------------|
+| Variable reassignment | `EmitDecrefWithFieldCleanupIfNonnull` on old value |
+| Struct field assignment | `EmitDestructValueIfNonnull` on old field value |
+| Enum/union payload reassignment | `EmitDestructValueIfNonnull` on old payload |
+| Global variable store | `EmitDestructValueIfNonnull` on old global value |
+| Global cleanup at exit | `EmitDestructValueIfNonnull` on each global |
+| Chain node `setValue` | `EmitDestructValueIfNonnull` on old node value |
+| Array element overwrite (`set`) | `EmitDestructValueIfNonnull` on old element |
+
+Using plain `mm_decref` at these sites would leak managed child fields — the parent's refcount would drop to zero and `mm_free` would run, but the children's refcounts (incremented when stored in the parent) would never be decremented.
+
+#### `EmitDestructValueIfNonnull`
+
+This helper takes a raw `StdI64` heap pointer and a type name, and emits the correct destructor:
+
+- **Struct types with managed fields** → `StdDestructStructOp` (inline field cascade)
+- **Union types with associated values** → `StdDestructUnionOp` (tag-based dispatch)
+- **Chain types with managed elements** → `StdDestructChainOp` (walk and free nodes)
+- **Types with no managed fields** → plain `mm_decref` (no children to clean up)
 
 ### Container Operations
 
@@ -238,7 +261,7 @@ outer.inner = newInner
 | `arr.push(item)` | incref `item`; container holds a reference |
 | `arr.get(index)` | incref the element; caller gets a reference |
 | `arr.remove(index)` | transfers the container's reference to caller (no extra incref) |
-| `arr.set(index, value)` | decref old element, incref new element |
+| `arr.set(index, value)` | destruct old element (with field cleanup), incref new element |
 | `arr.clear()` | decref all elements |
 | Container freed | decref all elements via `mm_decref_managed_elements` |
 

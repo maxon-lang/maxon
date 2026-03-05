@@ -582,10 +582,12 @@ public static partial class MaxonToStandardConversion {
               int byteOffset = 8 + payloadAssign.PayloadIndex * 8;
 
               if (structVarNames.TryGetValue(payloadAssign.NewValue.Id, out var newStructSrc)) {
-                // Heap-pointer payload: decref old value, store new, incref new
+                // Heap-pointer payload: decref old value with field cleanup, store new, incref new
                 var oldPayloadLoad = new StdLoadIndirectOp(enumHeapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(oldPayloadLoad);
-                EmitDecrefValueIfNonnull(newBlock, (StdI64)oldPayloadLoad.Result, scopeName: func.Name);
+                var payloadTypeName = structValueTypes.TryGetValue(payloadAssign.NewValue.Id, out var pt) ? pt : null;
+                EmitDestructOrDecrefValueIfNonnull(newBlock, (StdI64)oldPayloadLoad.Result, payloadTypeName,
+                  module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
                 var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrc, varTypes);
                 var enumHeapPtrReload = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
                 newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtrReload, byteOffset, MlirType.I64));
@@ -888,9 +890,15 @@ public static partial class MaxonToStandardConversion {
                     ? ms.TypeName
                     : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'");
                 if (srcName != dstName) {
-                  // Decref old value before overwriting (reassignment only)
+                  // Decref old value before overwriting (reassignment only).
+                  // Must use field-cleanup decref so managed child fields (e.g. String.managed)
+                  // are also decrefd when the old struct's rc hits 0.
                   if (!assignOp.IsDeclaration) {
-                    EmitDecref(newBlock, dstName, varTypes, scopeName: func.Name);
+                    if (!varNameToStructType.ContainsKey(dstName))
+                      varNameToStructType[dstName] = structTypeName;
+                    EmitDecrefWithFieldCleanupIfNonnull(newBlock, dstName, varTypes,
+                      varNameToStructType, module.TypeDefs, module.TypeAliasSources,
+                      scopeName: func.Name);
                   }
                   var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
                   EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
@@ -1135,7 +1143,8 @@ public static partial class MaxonToStandardConversion {
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
                   // Decref old field value before overwriting (may be null if field not yet initialized)
                   var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, MlirType.I64, varTypes);
-                  EmitDecrefValueIfNonnull(newBlock, oldFieldVal, scopeName: func.Name);
+                  EmitDestructValueIfNonnull(newBlock, oldFieldVal, faFieldDef.Type.Name,
+                    module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
                 }
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
@@ -1271,6 +1280,13 @@ public static partial class MaxonToStandardConversion {
               }
               // Decref orphan temps created during lowering (not in parser scope tracking)
               foreach (var tempName in temps.OrphanTemps) {
+                // Ensure orphan temp's struct type is resolvable for field cleanup.
+                // CallReturn temps auto-orphaned by VarRegistry may not be in
+                // varNameToStructType if they were never assigned to a named variable.
+                if (!varNameToStructType.ContainsKey(tempName)) {
+                  var tempType = temps.GetTempStructType(tempName);
+                  if (tempType != null) varNameToStructType[tempName] = tempType;
+                }
                 EmitDecrefWithFieldCleanupIfNonnull(newBlock, tempName, varTypes,
                   varNameToStructType, module.TypeDefs, module.TypeAliasSources,
                   scopeName: func.Name);
@@ -1525,7 +1541,9 @@ public static partial class MaxonToStandardConversion {
                   // Decref old global value before storing new one (may be null if not yet assigned).
                   var oldGlobalLoad = new StdGlobalLoadI64Op(globalStore.GlobalName);
                   newBlock.AddOp(oldGlobalLoad);
-                  EmitDecrefValueIfNonnull(newBlock, oldGlobalLoad.Result, scopeName: func.Name);
+                  var globalTypeName = module.GlobalVarInfos.TryGetValue(globalStore.GlobalName, out var gMeta) ? gMeta.TypeName : null;
+                  EmitDestructOrDecrefValueIfNonnull(newBlock, oldGlobalLoad.Result, globalTypeName,
+                    module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
                 }
 
                 // Incref the new value — the global holds a reference
@@ -1618,7 +1636,7 @@ public static partial class MaxonToStandardConversion {
               LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
               break;
             case MaxonManagedMemSetOp memSetOp:
-              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, module.TypeAliasSources);
               break;
             case MaxonManagedMemCreateOp memCreateOp:
               LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames, temps);
@@ -1740,7 +1758,7 @@ public static partial class MaxonToStandardConversion {
               LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             case MaxonChainNodeSetValueOp chainNodeSetValueOp:
-              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
+              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, module.TypeAliasSources);
               break;
             case MaxonChainClearOp chainClearOp:
               LowerChainClear(chainClearOp, newBlock, varTypes, structVarNames, module.TypeDefs);
@@ -1811,8 +1829,9 @@ public static partial class MaxonToStandardConversion {
       if (meta.TypeName == null) continue;
       var globalLoad = new StdGlobalLoadI64Op(varName);
       block.AddOp(globalLoad);
-      // Decref the global (may be null if never assigned)
-      EmitDecrefValueIfNonnull(block, globalLoad.Result, scopeName: "__maxon_global_cleanup");
+      // Destruct the global with field cleanup (may be null if never assigned)
+      EmitDestructValueIfNonnull(block, globalLoad.Result, meta.TypeName,
+        module.TypeDefs, module.TypeAliasSources, scopeName: "__maxon_global_cleanup");
     }
 
     block.AddOp(new StdReturnOp(null));

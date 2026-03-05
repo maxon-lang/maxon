@@ -960,7 +960,9 @@ public static class StandardToX86Conversion {
 
           case StdDestructStructOp destructOp: {
             if (destructOp.NullGuarded) {
-              // Null-guarded: skip entire destruction if pointer is null
+              // Spill all live register values before the branch so values
+              // remain accessible when the branch skips the destruct body.
+              regManager.SpillAllLiveRegisters(x86Block);
               var nullSkipLabel = $"__destruct_nullguard_{_labelCounter++}";
               regManager.EmitBoolTest(destructOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
@@ -976,6 +978,9 @@ public static class StandardToX86Conversion {
 
           case StdDestructUnionOp destructUnionOp: {
             if (destructUnionOp.NullGuarded) {
+              // Spill all live register values before the branch so values
+              // remain accessible when the branch skips the destruct body.
+              regManager.SpillAllLiveRegisters(x86Block);
               var nullSkipLabel = $"__destruct_union_nullguard_{_labelCounter++}";
               regManager.EmitBoolTest(destructUnionOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));
@@ -991,6 +996,9 @@ public static class StandardToX86Conversion {
 
           case StdDestructChainOp destructChainOp: {
             if (destructChainOp.NullGuarded) {
+              // Spill all live register values before the branch so values
+              // remain accessible when the branch skips the destruct body.
+              regManager.SpillAllLiveRegisters(x86Block);
               var nullSkipLabel = $"__destruct_chain_nullguard_{_labelCounter++}";
               regManager.EmitBoolTest(destructChainOp.HeapPtr, x86Block);
               x86Block.AddOp(new X86JccOp("z", nullSkipLabel));

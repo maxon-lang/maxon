@@ -13,6 +13,10 @@ public enum OwnershipFlags
     SelfReturn = 1 << 3,  // Returned from self-returning method; alias, not fresh alloc
     IsTemp     = 1 << 4,  // Internal temp variable (cleaned after user vars at scope end)
     IsParam    = 1 << 5,  // Function parameter (not owned, skip decref at scope end)
+    InlineAlloc = 1 << 6, // Inline heap allocation (concat/slice/chain_nav); owns memory like
+                           // CallReturn but allocated locally, not from a function call.
+                           // Always implies Orphan — if not consumed by assignment, scope-end
+                           // cleanup catches it; if consumed, the zeroed slot makes cleanup a no-op.
 }
 
 public record EnumPayloadBinding(string EnumVarName, string EnumTypeName, int PayloadIndex);
@@ -69,6 +73,13 @@ public class VarRegistry
     /// </summary>
     public string CreateTemp(string kind, int id, string structTypeName, OwnershipFlags flags)
     {
+        // InlineAlloc temps own heap allocations that were incref'd at creation (rc=1).
+        // Auto-add Orphan so scope-end cleanup catches them if not consumed by assignment.
+        // When consumed, the CallReturn flag skips incref and zeros the temp slot,
+        // making the orphan decref a null-guarded no-op.
+        if (flags.HasFlag(OwnershipFlags.InlineAlloc))
+            flags |= OwnershipFlags.Orphan;
+
         var name = $"__{kind}_{id}";
         _temps[name] = new TempVarInfo(name, structTypeName, flags);
         return name;

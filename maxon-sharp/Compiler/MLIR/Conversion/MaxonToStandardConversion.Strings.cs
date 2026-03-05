@@ -717,8 +717,9 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(allocSizeOp);
 
 		// Heap-allocate __ManagedMemory first, then buffer as child
-		var tempName = temps.CreateTemp("concat", op.Result.Id, "__ManagedMemory", OwnershipFlags.CallReturn);
+		var tempName = temps.CreateTemp("concat", op.Result.Id, "__ManagedMemory", OwnershipFlags.CallReturn | OwnershipFlags.InlineAlloc);
 		var concatPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+		EmitIncrefValue(block, concatPtr, scopeName: _currentFuncName);
 		EmitStore(block, concatPtr, tempName, varTypes);
 
 		var allocResult = EmitAllocIn(block, allocSizeOp.Result, concatPtr, "Buffer");
@@ -784,8 +785,9 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(sliceBytesOp);
 
 		// Heap-allocate __ManagedMemory struct, then a new owned buffer as its child
-		var tempName = temps.CreateTemp("slice", op.Result.Id, "Slice", OwnershipFlags.CallReturn);
+		var tempName = temps.CreateTemp("slice", op.Result.Id, "Slice", OwnershipFlags.CallReturn | OwnershipFlags.InlineAlloc);
 		var slicePtr = EmitAlloc(block, 32, "Slice", scopeName: _currentFuncName);
+		EmitIncrefValue(block, slicePtr, scopeName: _currentFuncName);
 		EmitStore(block, slicePtr, tempName, varTypes);
 
 		var newBuffer = EmitAllocIn(block, sliceBytesOp.Result, slicePtr, "Buffer");

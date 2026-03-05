@@ -1979,7 +1979,7 @@ alloc Character #3 rc=0 [ownership-edge-cases.main]
 alloc_in __ManagedMemory
 incref Character #3 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
-  free Character #1
+free Character #1 [ownership-edge-cases.main]
 decref Character #3 rc=0 [ownership-edge-cases.main]
 free Character #3 [ownership-edge-cases.main]
 ```

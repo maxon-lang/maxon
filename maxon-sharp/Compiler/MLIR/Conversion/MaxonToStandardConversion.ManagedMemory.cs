@@ -207,7 +207,10 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
+	  Dictionary<int, string> structVarNames,
+	  Dictionary<int, string> structValueTypes,
+	  Dictionary<string, MlirType> typeDefs,
+	  Dictionary<string, TypeAliasInfo>? typeAliasSources = null) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
@@ -219,11 +222,13 @@ public static partial class MaxonToStandardConversion {
 		var addr = ComputeElementAddress(block, buffer, index, elemSize);
 
 		if (op.IsStructElement) {
-			// Struct elements are heap pointers — release the old reference before overwriting.
+			// Struct elements are heap pointers — release the old reference with field cleanup before overwriting.
 			// Old slot may be null (zeroed after remove), so use null-guarded decref.
 			var oldElemLoad = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(oldElemLoad);
-			EmitDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result, scopeName: _currentFuncName);
+			var elemTypeName = structValueTypes.TryGetValue(op.Value.Id, out var et) ? et : null;
+			EmitDestructOrDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result, elemTypeName,
+				typeDefs, typeAliasSources, scopeName: _currentFuncName);
 			var srcName = structVarNames[op.Value.Id];
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));

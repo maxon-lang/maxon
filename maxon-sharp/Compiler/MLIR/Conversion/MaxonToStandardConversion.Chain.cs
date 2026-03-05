@@ -352,7 +352,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<string, MlirType> typeDefs) {
+    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, TypeAliasInfo>? typeAliasSources = null) {
 
     var nodeVarName = structVarNames[op.Node.Id];
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
@@ -363,8 +364,9 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(oldValueLoad);
       var oldValue = (StdI64)oldValueLoad.Result;
 
-      // Decref old value — node no longer holds a reference (may be null)
-      EmitDecrefValueIfNonnull(block, oldValue, scopeName: _currentFuncName);
+      // Destruct old value with field cleanup — node no longer holds a reference (may be null)
+      EmitDestructValueIfNonnull(block, oldValue, op.ValueKind,
+        typeDefs, typeAliasSources, scopeName: _currentFuncName);
 
       // Store new value and incref — node now holds a reference
       var valueSrcName = structVarNames[op.Value.Id];

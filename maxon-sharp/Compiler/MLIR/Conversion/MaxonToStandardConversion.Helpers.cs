@@ -311,16 +311,73 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
-  /// <summary>Emit mm_decref(heap_ptr) — decrements reference count, reclaims ownership when zero.</summary>
-  private static void EmitDecref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? scopeName = null) {
-    var heapPtr = EmitLoad(block, varName, varTypes);
-    // Trace BEFORE decref: mm_decref may free the object, invalidating the pointer
-    if (Compiler.MmTrace) {
-      var tracePtr = EmitLoad(block, varName, varTypes);
-      var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_decref", [tracePtr, scopePtr], null));
+  /// <summary>
+  /// Null-guarded decref with field cleanup on a raw heap pointer whose type is known.
+  /// Emits StdDestructStructOp/StdDestructUnionOp when the type has managed fields,
+  /// falling back to plain mm_decref when there are no managed children.
+  /// </summary>
+  private static void EmitDestructValueIfNonnull(
+    MlirBlock<StandardOp> block, StdI64 heapPtr, string typeName,
+    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
+    string? scopeName = null) {
+    if (scopeName != null) EnsureScopeTagSymdata(scopeName);
+
+    // Union types need tag-based dispatch
+    if (typeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirUnionType unionType && unionType.HasAssociatedValues) {
+      var caseDestructors = BuildUnionCaseDestructors(unionType, typeDefs, typeAliasSources);
+      if (caseDestructors.Count > 0) {
+        if (Compiler.MmTrace) {
+          var sp = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+          block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, sp], null));
+        }
+        block.AddOp(new StdDestructUnionOp(heapPtr, caseDestructors, nullGuarded: true, scopeName: scopeName));
+        return;
+      }
     }
-    block.AddOp(new StdCallRuntimeOp("mm_decref", [heapPtr], null));
+
+    // Chain types with heap-allocated element values
+    if (typeAliasSources != null && TypeAliasInfo.IsChainType(typeName, typeAliasSources)
+        && HasStructElementType(
+            typeDefs.TryGetValue(typeName, out var chainDef) ? chainDef as MlirStructType : null,
+            typeName, typeAliasSources)) {
+      if (Compiler.MmTrace) {
+        var sp = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+        block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, sp], null));
+      }
+      block.AddOp(new StdDestructChainOp(heapPtr, nullGuarded: true, scopeName: scopeName));
+      return;
+    }
+
+    var managedFields = GetManagedFields(typeName, typeDefs);
+    if (managedFields.Count == 0) {
+      EmitDecrefValueIfNonnull(block, heapPtr, scopeName);
+      return;
+    }
+
+    if (Compiler.MmTrace) {
+      var sp = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, sp], null));
+    }
+    var outerType = typeDefs.TryGetValue(typeName, out var t) ? t as MlirStructType : null;
+    var fieldInfos = BuildFieldDestructors(managedFields, typeDefs, [typeName], outerType, typeName, typeAliasSources);
+    block.AddOp(new StdDestructStructOp(heapPtr, fieldInfos, nullGuarded: true, scopeName: scopeName));
+  }
+
+  /// <summary>
+  /// Null-guarded destruct-or-decref: uses <see cref="EmitDestructValueIfNonnull"/> when
+  /// the type name is known, falling back to plain <see cref="EmitDecrefValueIfNonnull"/>
+  /// when the type could not be resolved.
+  /// </summary>
+  private static void EmitDestructOrDecrefValueIfNonnull(
+    MlirBlock<StandardOp> block, StdI64 heapPtr, string? typeName,
+    Dictionary<string, MlirType> typeDefs,
+    Dictionary<string, TypeAliasInfo>? typeAliasSources = null,
+    string? scopeName = null) {
+    if (typeName != null)
+      EmitDestructValueIfNonnull(block, heapPtr, typeName, typeDefs, typeAliasSources, scopeName);
+    else
+      EmitDecrefValueIfNonnull(block, heapPtr, scopeName);
   }
 
   /// <summary>

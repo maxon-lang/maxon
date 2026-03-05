@@ -37,8 +37,11 @@ public class RegisterManager {
   private int _minSpillOffset; // tracks deepest spill across all blocks
 
   /// <summary>
-  /// Total stack frame size including variables and spill slots,
-  /// aligned to 16 bytes. Returns 0 if no stack space is needed.
+  /// Total stack frame size including variables and spill slots.
+  /// Aligned to 16 bytes. Returns 0 if no stack space is needed.
+  /// Does NOT include Windows x64 shadow space — Maxon uses its own
+  /// internal calling convention. Shadow space is only allocated in the
+  /// _start wrapper for Windows API calls (e.g., ExitProcess).
   /// </summary>
   public int TotalStackSize {
     get {
@@ -1381,14 +1384,21 @@ public class RegisterManager {
         }
       }
     }
-    // If there's a cycle (e.g., A→B, B→A), break it with a temp via xchg or stack
+    // If there's a cycle (e.g., A→B, B→A), break it via stack.
+    // Must save ALL sources first, then load ALL targets, to avoid
+    // one move clobbering a source needed by a later move in the cycle.
     if (emitted.Count < moves.Count) {
-      // Remaining moves form a cycle. Just spill to stack and reload.
-      foreach (var i in Enumerable.Range(0, moves.Count).Except(emitted)) {
-        var (target, source) = moves[i];
+      var remaining = Enumerable.Range(0, moves.Count).Except(emitted).ToList();
+      var spillOffsets = new int[moves.Count];
+      // Phase 1: save all cycle sources to stack
+      foreach (var i in remaining) {
         _nextSpillOffset -= 8;
-        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, source, 8));
-        block.AddOp(new X86MovRegMemOp(target, _nextSpillOffset, 8));
+        spillOffsets[i] = _nextSpillOffset;
+        block.AddOp(new X86MovMemRegOp(_nextSpillOffset, moves[i].source, 8));
+      }
+      // Phase 2: load all cycle targets from stack
+      foreach (var i in remaining) {
+        block.AddOp(new X86MovRegMemOp(moves[i].target, spillOffsets[i], 8));
         emitted.Add(i);
       }
     }
