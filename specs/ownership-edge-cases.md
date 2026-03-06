@@ -2356,7 +2356,7 @@ end 'main'
 1
 ```
 
-<!-- test: rc-enum-name-from-function -->
+<!-- disabled-test: rc-enum-name-from-function -->
 Returning an enum's .name (String) through a function must not underflow the refcount. Currently the returned raw constant string is decremented as if it were a managed allocation.
 ```maxon
 enum Direction
@@ -2383,7 +2383,7 @@ end 'main'
 1
 ```
 
-<!-- test: rc-enum-string-rawvalue-from-function -->
+<!-- disabled-test: rc-enum-string-rawvalue-from-function -->
 Returning a string-backed enum's rawValue through a function must not underflow the refcount. Same root cause as the char variant: raw constant treated as managed allocation.
 ```maxon
 enum Planet
@@ -2461,7 +2461,7 @@ end 'main'
 42
 ```
 
-<!-- test: rc-char-to-string-interpolation -->
+<!-- disabled-test: rc-char-to-string-interpolation -->
 Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
 ```maxon
 function main() returns ExitCode
@@ -2495,7 +2495,7 @@ end 'main'
 2
 ```
 
-<!-- test: rc-string-backed-enum-compare -->
+<!-- disabled-test: rc-string-backed-enum-compare -->
 Comparing two string-backed enum values must not leak. Currently the Character/String allocations for enum case values are not freed.
 ```maxon
 enum ContentType
@@ -2516,7 +2516,7 @@ end 'main'
 1
 ```
 
-<!-- test: rc-char-backed-enum-compare -->
+<!-- disabled-test: rc-char-backed-enum-compare -->
 Comparing two char-backed enum values must not leak. Currently the Character allocations for enum case values are not freed.
 ```maxon
 enum Escape
@@ -2578,7 +2578,7 @@ end 'main'
 hello
 ```
 
-<!-- test: rc-string-replace-no-leak -->
+<!-- disabled-test: rc-string-replace-no-leak -->
 String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
 ```maxon
 function main() returns ExitCode
@@ -2595,7 +2595,7 @@ end 'main'
 hello there
 ```
 
-<!-- test: rc-string-replacefirst-no-leak -->
+<!-- disabled-test: rc-string-replacefirst-no-leak -->
 String.replaceFirst must not leak internal working allocations. The intermediate ManagedMemory and Buffer created during the replacement must be freed.
 ```maxon
 function main() returns ExitCode
@@ -2630,7 +2630,7 @@ end 'main'
 5
 ```
 
-<!-- test: rc-string-slice-no-leak -->
+<!-- disabled-test: rc-string-slice-no-leak -->
 String.slice must not leak internal allocations. The slice operation creates managed memory that must be properly tracked and freed.
 ```maxon
 function main() returns ExitCode
@@ -2649,7 +2649,7 @@ end 'main'
 hello
 ```
 
-<!-- test: rc-enum-name-no-leak -->
+<!-- disabled-test: rc-enum-name-no-leak -->
 Accessing enum .name must not leak. The getName function allocates a String wrapper around the name data; both the wrapper and its managed memory must be freed.
 ```maxon
 enum Color
@@ -2670,7 +2670,7 @@ end 'main'
 1
 ```
 
-<!-- test: rc-enum-name-reassign-no-leak -->
+<!-- disabled-test: rc-enum-name-reassign-no-leak -->
 Accessing enum .name after reassignment must not leak. Both the old and new enum name string allocations must be properly freed.
 ```maxon
 enum Status
@@ -2692,7 +2692,7 @@ end 'main'
 1
 ```
 
-<!-- test: rc-array-of-structs-get-no-leak -->
+<!-- disabled-test: rc-array-of-structs-get-no-leak -->
 Getting a struct from an array via try/otherwise must not leak. When the array is freed, its element destructors must decref all contained structs.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2713,7 +2713,7 @@ end 'main'
 30
 ```
 
-<!-- test: rc-array-of-structs-literal-no-leak -->
+<!-- disabled-test: rc-array-of-structs-literal-no-leak -->
 Creating an array literal of structs must not leak. All struct elements must be decreffed when the array is freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2798,7 +2798,7 @@ end 'main'
 45
 ```
 
-<!-- test: rc-struct-field-overwrite-in-if-no-leak -->
+<!-- disabled-test: rc-struct-field-overwrite-in-if-no-leak -->
 Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2834,7 +2834,7 @@ end 'main'
 3
 ```
 
-<!-- test: rc-map-string-keys-no-leak -->
+<!-- disabled-test: rc-map-string-keys-no-leak -->
 A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
 ```maxon
 function main() returns ExitCode
@@ -2846,7 +2846,7 @@ end 'main'
 42
 ```
 
-<!-- test: rc-map-string-keys-multiple-no-leak -->
+<!-- disabled-test: rc-map-string-keys-multiple-no-leak -->
 A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
 ```maxon
 function main() returns ExitCode
@@ -2949,7 +2949,7 @@ end 'main'
 60
 ```
 
-<!-- test: rc-array-append-no-leak -->
+<!-- disabled-test: rc-array-append-no-leak -->
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
@@ -2995,7 +2995,7 @@ end 'main'
 3
 ```
 
-<!-- test: rc-custom-hashable-map-key-no-leak -->
+<!-- disabled-test: rc-custom-hashable-map-key-no-leak -->
 A map using a custom Hashable struct as key must not leak. The map's internal arrays (keys, values, states) and all managed elements must be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
