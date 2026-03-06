@@ -44,7 +44,7 @@ module {
 module {
   func @advent.main() -> u32 {
   entry:
-    x86.xor eax, eax
+    x86.xor rax, rax
     x86.ret
   }
 }
@@ -131,7 +131,7 @@ module {
 module {
   func @advent.add(x: i64, y: i64) -> i64 {
   entry:
-    x86.lea eax, [ecx + edx]
+    x86.lea rax, [rcx + rdx]
     x86.ret
   }
   func @advent.main() -> u32 {
@@ -140,24 +140,24 @@ module {
     x86.mov rcx, 3
     x86.mov rdx, 4
     x86.call advent.add
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl ecx
-    x86.movzx ecx, ecxb
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rcx
+    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or rcx, rax
+    x86.test rcx, rcx
     x86.je advent.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_11]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -454,181 +454,181 @@ module {
 module {
   func @advent.multiply(x: i64) -> i64 {
   entry:
-    x86.mov eax, ecx
+    x86.mov rax, rcx
     x86.ret
   }
   func @advent.main() -> u32 {
   entry:
     x86.prologue stack_size=80
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.mov [rbp-16], rcx
     x86.call stdlib.CommandLine.args
-    x86.mov [rbp-24], eax
-    x86.mov edx, [rbp-24]
+    x86.mov [rbp-24], rax
+    x86.mov rdx, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.xor rdx, rdx
     x86.call StringArray.get
-    x86.mov [rbp-32], eax
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
+    x86.mov [rbp-32], rax
+    x86.xor rbx, rbx
+    x86.cmp rdx, rbx
     x86.je advent.main.otherwise_default_success_2
   otherwise_default_error_1:
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
-    x86.xor edx, edx
-    x86.lea_func ebx, [__destruct_String]
+    x86.xor rdx, rdx
+    x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-72], ecx
+    x86.mov [rbp-72], rcx
     x86.mov rdx, rsi
     x86.mov rcx, 16
     x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-8], eax
-    x86.lea_func edi, [__destruct___ManagedMemory]
+    x86.mov [rbp-8], rax
+    x86.lea_func rdi, [__destruct___ManagedMemory]
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
     x86.mov r8, 3
     x86.call mm_alloc
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-40], rax
     x86.mov r9, [rbp-40]
-    x86.mov eax, [rbp-72]
-    x86.mov [r9+0], eax
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov [eax+8], ecx
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+16], eax
-    x86.mov eax, 1
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+24], eax
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-8]
-    x86.mov [ecx+0], eax
-    x86.mov eax, [rbp-40]
+    x86.mov rax, [rbp-72]
+    x86.mov [r9+0], rax
+    x86.mov rax, [rbp-40]
+    x86.xor rcx, rcx
+    x86.mov [rax+8], rcx
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-40]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-40]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+0], rax
+    x86.mov rax, [rbp-40]
     x86.mov rcx, [rbp-40]
     x86.call mm_incref
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
-    x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-8]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+8], rax
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_success_2:
-    x86.mov eax, [rbp-16]
-    x86.test eax, eax
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov ecx, [rbp-32]
-    x86.mov [rbp-16], ecx
+    x86.mov rcx, [rbp-32]
+    x86.mov [rbp-16], rcx
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call stdlib.Parsing.__int_fromString
-    x86.xor ecx, ecx
-    x86.mov [rbp-48], ecx
-    x86.mov [rbp-56], eax
-    x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.xor rcx, rcx
+    x86.mov [rbp-48], rcx
+    x86.mov [rbp-56], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
     x86.je advent.main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
+    x86.mov rax, [rbp-48]
+    x86.mov [rbp-56], rax
     x86.jmp advent.main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov eax, [rbp-56]
-    x86.mov ecx, 1000
-    x86.cmp eax, ecx
+    x86.mov rax, [rbp-56]
+    x86.mov rcx, 1000
+    x86.cmp rax, rcx
     x86.jle advent.main.guard_8.after
   guard_8:
-    x86.mov eax, [rbp-24]
-    x86.test eax, eax
+    x86.mov rax, [rbp-24]
+    x86.test rax, rax
     x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov ecx, [rbp-8]
-    x86.test ecx, ecx
+    x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_2
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov edx, [rbp-16]
-    x86.test edx, edx
+    x86.mov rdx, [rbp-16]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_3
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.mov eax, 99
+    x86.mov rax, 99
     x86.epilogue
     x86.ret
   guard_8.after:
     x86.mov rcx, 3
     x86.call advent.multiply
-    x86.mov [rbp-64], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl ecx
-    x86.movzx ecx, ecxb
+    x86.mov [rbp-64], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rcx
+    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or rcx, rax
+    x86.test rcx, rcx
     x86.je advent.main.__range_ok_9
   __range_panic_9:
     x86.lea_symdata rax, [__panic_msg_31]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_9:
-    x86.mov eax, [rbp-64]
-    x86.mov ecx, [rbp-24]
-    x86.test ecx, ecx
+    x86.mov rax, [rbp-64]
+    x86.mov rcx, [rbp-24]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_4
     x86.call mm_decref
     x86.label __nonnull_skip_4
-    x86.mov eax, [rbp-8]
-    x86.test eax, eax
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
     x86.jz __nonnull_skip_5
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_5
-    x86.mov ecx, [rbp-16]
-    x86.test ecx, ecx
+    x86.mov rcx, [rbp-16]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_6
     x86.call mm_decref
     x86.label __nonnull_skip_6
-    x86.mov eax, [rbp-64]
+    x86.mov rax, [rbp-64]
     x86.epilogue
     x86.ret
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_managed_elements
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [ecx+16]
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rcx+16]
+    x86.xor rbx, rbx
+    x86.cmp rdx, rbx
     x86.je __destruct___ManagedMemory_String.skip_buf_0
   free_buf_0:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
     x86.call mm_raw_free
     x86.jmp __destruct___ManagedMemory_String.skip_buf_0
   skip_buf_0:
@@ -640,11 +640,11 @@ module {
   func @__destruct_StringArray(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_8
     x86.call mm_decref
     x86.label __nonnull_skip_8
@@ -656,15 +656,15 @@ module {
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+16]
-    x86.xor edx, edx
-    x86.cmp ecx, edx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
     x86.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
     x86.call mm_raw_free
     x86.jmp __destruct___ManagedMemory.skip_buf_0
   skip_buf_0:
@@ -676,11 +676,11 @@ module {
   func @__destruct_String(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_9
     x86.call mm_decref
     x86.label __nonnull_skip_9
@@ -692,11 +692,11 @@ module {
   func @__destruct_CodepointView(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_10
     x86.call mm_decref
     x86.label __nonnull_skip_10
@@ -1000,183 +1000,183 @@ module {
 module {
   func @advent.multiply(x: i64) -> i64 {
   entry:
-    x86.mov eax, 2
-    x86.imul ecx, eax
-    x86.mov eax, ecx
+    x86.mov rax, 2
+    x86.imul rcx, rax
+    x86.mov rax, rcx
     x86.ret
   }
   func @advent.main() -> u32 {
   entry:
     x86.prologue stack_size=80
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.mov [rbp-16], rcx
     x86.call stdlib.CommandLine.args
-    x86.mov [rbp-24], eax
-    x86.mov edx, [rbp-24]
+    x86.mov [rbp-24], rax
+    x86.mov rdx, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.xor rdx, rdx
     x86.call StringArray.get
-    x86.mov [rbp-32], eax
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
+    x86.mov [rbp-32], rax
+    x86.xor rbx, rbx
+    x86.cmp rdx, rbx
     x86.je advent.main.otherwise_default_success_2
   otherwise_default_error_1:
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
-    x86.xor edx, edx
-    x86.lea_func ebx, [__destruct_String]
+    x86.xor rdx, rdx
+    x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-72], ecx
+    x86.mov [rbp-72], rcx
     x86.mov rdx, rsi
     x86.mov rcx, 16
     x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-8], eax
-    x86.lea_func edi, [__destruct___ManagedMemory]
+    x86.mov [rbp-8], rax
+    x86.lea_func rdi, [__destruct___ManagedMemory]
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
     x86.mov r8, 3
     x86.call mm_alloc
-    x86.mov [rbp-40], eax
+    x86.mov [rbp-40], rax
     x86.mov r9, [rbp-40]
-    x86.mov eax, [rbp-72]
-    x86.mov [r9+0], eax
-    x86.mov eax, [rbp-40]
-    x86.xor ecx, ecx
-    x86.mov [eax+8], ecx
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+16], eax
-    x86.mov eax, 1
-    x86.mov ecx, [rbp-40]
-    x86.mov [ecx+24], eax
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-8]
-    x86.mov [ecx+0], eax
-    x86.mov eax, [rbp-40]
+    x86.mov rax, [rbp-72]
+    x86.mov [r9+0], rax
+    x86.mov rax, [rbp-40]
+    x86.xor rcx, rcx
+    x86.mov [rax+8], rcx
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-40]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-40]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+0], rax
+    x86.mov rax, [rbp-40]
     x86.mov rcx, [rbp-40]
     x86.call mm_incref
-    x86.xor eax, eax
-    x86.mov ecx, [rbp-8]
-    x86.mov [ecx+8], eax
-    x86.mov eax, [rbp-8]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+8], rax
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_success_2:
-    x86.mov eax, [rbp-16]
-    x86.test eax, eax
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov ecx, [rbp-32]
-    x86.mov [rbp-16], ecx
+    x86.mov rcx, [rbp-32]
+    x86.mov [rbp-16], rcx
     x86.jmp advent.main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call stdlib.Parsing.__int_fromString
-    x86.xor ecx, ecx
-    x86.mov [rbp-48], ecx
-    x86.mov [rbp-56], eax
-    x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.xor rcx, rcx
+    x86.mov [rbp-48], rcx
+    x86.mov [rbp-56], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
     x86.je advent.main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov eax, [rbp-48]
-    x86.mov [rbp-56], eax
+    x86.mov rax, [rbp-48]
+    x86.mov [rbp-56], rax
     x86.jmp advent.main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov eax, [rbp-56]
-    x86.mov ecx, 1000
-    x86.cmp eax, ecx
+    x86.mov rax, [rbp-56]
+    x86.mov rcx, 1000
+    x86.cmp rax, rcx
     x86.jle advent.main.guard_8.after
   guard_8:
-    x86.mov eax, [rbp-24]
-    x86.test eax, eax
+    x86.mov rax, [rbp-24]
+    x86.test rax, rax
     x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov ecx, [rbp-8]
-    x86.test ecx, ecx
+    x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_2
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov edx, [rbp-16]
-    x86.test edx, edx
+    x86.mov rdx, [rbp-16]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_3
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.mov eax, 99
+    x86.mov rax, 99
     x86.epilogue
     x86.ret
   guard_8.after:
     x86.mov rcx, 3
     x86.call advent.multiply
-    x86.mov [rbp-64], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl ecx
-    x86.movzx ecx, ecxb
+    x86.mov [rbp-64], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rcx
+    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or rcx, rax
+    x86.test rcx, rcx
     x86.je advent.main.__range_ok_9
   __range_panic_9:
     x86.lea_symdata rax, [__panic_msg_31]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_9:
-    x86.mov eax, [rbp-64]
-    x86.mov ecx, [rbp-24]
-    x86.test ecx, ecx
+    x86.mov rax, [rbp-64]
+    x86.mov rcx, [rbp-24]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_4
     x86.call mm_decref
     x86.label __nonnull_skip_4
-    x86.mov eax, [rbp-8]
-    x86.test eax, eax
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
     x86.jz __nonnull_skip_5
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_5
-    x86.mov ecx, [rbp-16]
-    x86.test ecx, ecx
+    x86.mov rcx, [rbp-16]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_6
     x86.call mm_decref
     x86.label __nonnull_skip_6
-    x86.mov eax, [rbp-64]
+    x86.mov rax, [rbp-64]
     x86.epilogue
     x86.ret
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_managed_elements
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [ecx+16]
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rcx+16]
+    x86.xor rbx, rbx
+    x86.cmp rdx, rbx
     x86.je __destruct___ManagedMemory_String.skip_buf_0
   free_buf_0:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
     x86.call mm_raw_free
     x86.jmp __destruct___ManagedMemory_String.skip_buf_0
   skip_buf_0:
@@ -1188,11 +1188,11 @@ module {
   func @__destruct_StringArray(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_8
     x86.call mm_decref
     x86.label __nonnull_skip_8
@@ -1204,15 +1204,15 @@ module {
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+16]
-    x86.xor edx, edx
-    x86.cmp ecx, edx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
     x86.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
     x86.call mm_raw_free
     x86.jmp __destruct___ManagedMemory.skip_buf_0
   skip_buf_0:
@@ -1224,11 +1224,11 @@ module {
   func @__destruct_String(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_9
     x86.call mm_decref
     x86.label __nonnull_skip_9
@@ -1240,11 +1240,11 @@ module {
   func @__destruct_CodepointView(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_10
     x86.call mm_decref
     x86.label __nonnull_skip_10

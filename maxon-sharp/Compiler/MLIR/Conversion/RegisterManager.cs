@@ -10,8 +10,8 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 /// </summary>
 public class RegisterManager {
   private static readonly X86Register[] GprPool = [
-    X86Register.Eax, X86Register.Ecx, X86Register.Edx,
-    X86Register.Ebx, X86Register.Esi, X86Register.Edi,
+    X86Register.Rax, X86Register.Rcx, X86Register.Rdx,
+    X86Register.Rbx, X86Register.Rsi, X86Register.Rdi,
     X86Register.R8, X86Register.R9
   ];
 
@@ -82,19 +82,18 @@ public class RegisterManager {
     X86Register? protect1 = null, X86Register? protect2 = null) {
     // 0. Try the hinted register first
     if (_registerHints.TryGetValue(value, out var hinted)) {
-      var hinted32 = To32Bit(hinted);
-      if (!SamePhysicalRegister(hinted32, protect1) && !SamePhysicalRegister(hinted32, protect2)) {
-        if (!_registerContents.ContainsKey(hinted32)) {
-          Assign(hinted32, value);
-          return hinted32;
+      if (!SamePhysicalRegister(hinted, protect1) && !SamePhysicalRegister(hinted, protect2)) {
+        if (!_registerContents.ContainsKey(hinted)) {
+          Assign(hinted, value);
+          return hinted;
         }
         // If the hinted register holds a rematerializable constant, evict it
-        if (_registerContents.TryGetValue(hinted32, out var occupant) && _constantValues.ContainsKey(occupant)) {
+        if (_registerContents.TryGetValue(hinted, out var occupant) && _constantValues.ContainsKey(occupant)) {
           _valueToRegister.Remove(occupant);
-          _registerContents.Remove(hinted32);
-          _lastUsed.Remove(hinted32);
-          Assign(hinted32, value);
-          return hinted32;
+          _registerContents.Remove(hinted);
+          _lastUsed.Remove(hinted);
+          Assign(hinted, value);
+          return hinted;
         }
       }
     }
@@ -186,8 +185,6 @@ public class RegisterManager {
   private static void EmitImmediateToRegister(X86Register gpr, long immediate, MlirBlock<X86Op> block) {
     if (immediate == 0) {
       block.AddOp(new X86XorRegRegOp(gpr, gpr));
-    } else if (immediate < int.MinValue || immediate > int.MaxValue) {
-      block.AddOp(new X86MovRegImmOp(To64Bit(gpr), immediate));
     } else {
       block.AddOp(new X86MovRegImmOp(gpr, immediate));
     }
@@ -232,30 +229,30 @@ public class RegisterManager {
 
   /// <summary>
   /// Emit a shift instruction (SHL/SAR). x86 shifts require the shift count in CL.
-  /// Ensures the shift count is in ECX, the value to shift is in a different register.
+  /// Ensures the shift count is in RCX, the value to shift is in a different register.
   /// </summary>
   public void EmitShift(StdValue lhs, StdValue rhs, StdValue result,
     MlirBlock<X86Op> block, Func<X86Register, X86Op> makeShiftOp) {
     var lhsReg = EnsureInRegister(lhs, block);
     var rhsReg = EnsureInRegister(rhs, block, protect1: lhsReg);
 
-    // If LHS is in ECX and RHS is not, we need to move LHS out of ECX first
-    // because ECX will be used for the shift count.
-    if (lhsReg == X86Register.Ecx && rhsReg != X86Register.Ecx) {
-      // Allocate result in a register that isn't ECX or rhsReg
-      var resultReg = AllocateRegister(result, block, protect1: X86Register.Ecx, protect2: rhsReg);
+    // If LHS is in RCX and RHS is not, we need to move LHS out of RCX first
+    // because RCX will be used for the shift count.
+    if (lhsReg == X86Register.Rcx && rhsReg != X86Register.Rcx) {
+      // Allocate result in a register that isn't RCX or rhsReg
+      var resultReg = AllocateRegister(result, block, protect1: X86Register.Rcx, protect2: rhsReg);
       block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
-      // Now put shift count in ECX
-      block.AddOp(new X86MovRegRegOp(X86Register.Ecx, rhsReg));
+      // Now put shift count in RCX
+      block.AddOp(new X86MovRegRegOp(X86Register.Rcx, rhsReg));
       block.AddOp(makeShiftOp(resultReg));
     } else {
-      // Move shift count to ECX if needed
-      if (rhsReg != X86Register.Ecx) {
-        SpillRegisterIfOccupied(X86Register.Ecx, block);
-        block.AddOp(new X86MovRegRegOp(X86Register.Ecx, rhsReg));
+      // Move shift count to RCX if needed
+      if (rhsReg != X86Register.Rcx) {
+        SpillRegisterIfOccupied(X86Register.Rcx, block);
+        block.AddOp(new X86MovRegRegOp(X86Register.Rcx, rhsReg));
       }
-      // Allocate result register, protecting LHS and ECX
-      var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: X86Register.Ecx);
+      // Allocate result register, protecting LHS and RCX
+      var resultReg = AllocateRegister(result, block, protect1: lhsReg, protect2: X86Register.Rcx);
       if (resultReg != lhsReg) {
         block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
       }
@@ -264,57 +261,57 @@ public class RegisterManager {
   }
 
   /// <summary>
-  /// Emit IDIV and capture the quotient in EAX.
-  /// Handles register constraints: divisor must not be in EAX/EDX.
+  /// Emit IDIV and capture the quotient in RAX.
+  /// Handles register constraints: divisor must not be in RAX/RDX.
   /// </summary>
   public void EmitDivision(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitIdivOperation(lhs, rhs, result, X86Register.Eax, block);
+    EmitIdivOperation(lhs, rhs, result, X86Register.Rax, block);
   }
 
   /// <summary>
-  /// Emit IDIV and capture the remainder in EDX.
-  /// Handles register constraints: divisor must not be in EAX/EDX.
+  /// Emit IDIV and capture the remainder in RDX.
+  /// Handles register constraints: divisor must not be in RAX/RDX.
   /// </summary>
   public void EmitRemainder(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitIdivOperation(lhs, rhs, result, X86Register.Edx, block);
+    EmitIdivOperation(lhs, rhs, result, X86Register.Rdx, block);
   }
 
   /// <summary>
-  /// Emit unsigned DIV and capture the quotient in EAX.
+  /// Emit unsigned DIV and capture the quotient in RAX.
   /// </summary>
   public void EmitUnsignedDivision(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitDivOperation(lhs, rhs, result, X86Register.Eax, block);
+    EmitDivOperation(lhs, rhs, result, X86Register.Rax, block);
   }
 
   /// <summary>
-  /// Emit unsigned DIV and capture the remainder in EDX.
+  /// Emit unsigned DIV and capture the remainder in RDX.
   /// </summary>
   public void EmitUnsignedRemainder(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitDivOperation(lhs, rhs, result, X86Register.Edx, block);
+    EmitDivOperation(lhs, rhs, result, X86Register.Rdx, block);
   }
 
   /// <summary>
   /// Emit IDIV instruction with proper register allocation.
-  /// IDIV clobbers both EAX (quotient) and EDX (remainder), so caller specifies which to capture.
+  /// IDIV clobbers both RAX (quotient) and RDX (remainder), so caller specifies which to capture.
   /// </summary>
   /// Shared preamble for all DIV/IDIV variants: ensure operands in registers,
-  /// relocate divisor out of EAX/EDX, spill EAX/EDX, move dividend into EAX.
+  /// relocate divisor out of RAX/RDX, spill RAX/RDX, move dividend into RAX.
   private X86Register PrepareDivisionRegisters(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
 
-    if (rhsReg == X86Register.Eax || rhsReg == X86Register.Edx) {
+    if (rhsReg == X86Register.Rax || rhsReg == X86Register.Rdx) {
       var safeReg = FindSafeRegisterForIdiv(lhsReg, rhsReg);
       SpillRegisterIfOccupied(safeReg, block);
       block.AddOp(new X86MovRegRegOp(safeReg, rhsReg));
       rhsReg = safeReg;
     }
 
-    SpillRegisterIfOccupied(X86Register.Eax, block);
-    SpillRegisterIfOccupied(X86Register.Edx, block);
+    SpillRegisterIfOccupied(X86Register.Rax, block);
+    SpillRegisterIfOccupied(X86Register.Rdx, block);
 
-    if (lhsReg != X86Register.Eax) {
-      block.AddOp(new X86MovRegRegOp(X86Register.Eax, lhsReg));
+    if (lhsReg != X86Register.Rax) {
+      block.AddOp(new X86MovRegRegOp(X86Register.Rax, lhsReg));
     }
 
     return rhsReg;
@@ -332,7 +329,7 @@ public class RegisterManager {
   public void EmitSignExtendI32ToI64(StdValue input, StdValue result, MlirBlock<X86Op> block) {
     var srcReg = EnsureInRegister(input, block);
     var destReg = AllocateRegister(result, block);
-    block.AddOp(new X86MovsxdOp(To64Bit(destReg), srcReg));
+    block.AddOp(new X86MovsxdOp(destReg, srcReg));
   }
 
   public void EmitZeroExtendI32ToI64(StdValue input, StdValue result, MlirBlock<X86Op> block) {
@@ -351,24 +348,24 @@ public class RegisterManager {
   // --- 32-bit division variants ---
 
   public void EmitDivision32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitIdivOperation32(lhs, rhs, result, X86Register.Eax, block);
+    EmitIdivOperation32(lhs, rhs, result, X86Register.Rax, block);
   }
 
   public void EmitRemainder32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitIdivOperation32(lhs, rhs, result, X86Register.Edx, block);
+    EmitIdivOperation32(lhs, rhs, result, X86Register.Rdx, block);
   }
 
   public void EmitUnsignedDivision32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitDivOperation32(lhs, rhs, result, X86Register.Eax, block);
+    EmitDivOperation32(lhs, rhs, result, X86Register.Rax, block);
   }
 
   public void EmitUnsignedRemainder32(StdValue lhs, StdValue rhs, StdValue result, MlirBlock<X86Op> block) {
-    EmitDivOperation32(lhs, rhs, result, X86Register.Edx, block);
+    EmitDivOperation32(lhs, rhs, result, X86Register.Rdx, block);
   }
 
   private void EmitIdivOperation32(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
     var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
-    // 32-bit IDIV requires EDX:EAX dividend; CDQ sets up the sign extension
+    // 32-bit IDIV requires RDX:RAX dividend; CDQ sets up the sign extension
     block.AddOp(new X86CdqOp());
     block.AddOp(new X86IdivReg32Op(rhsReg));
     Assign(resultRegister, result);
@@ -376,7 +373,7 @@ public class RegisterManager {
 
   private void EmitDivOperation32(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
     var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
-    block.AddOp(new X86XorRegRegOp(X86Register.Edx, X86Register.Edx));
+    block.AddOp(new X86XorRegRegOp(X86Register.Rdx, X86Register.Rdx));
     block.AddOp(new X86DivReg32Op(rhsReg));
     Assign(resultRegister, result);
   }
@@ -384,20 +381,20 @@ public class RegisterManager {
   private void EmitDivOperation(StdValue lhs, StdValue rhs, StdValue result, X86Register resultRegister, MlirBlock<X86Op> block) {
     var rhsReg = PrepareDivisionRegisters(lhs, rhs, block);
     // Zero RDX for unsigned division (vs CQO for signed)
-    block.AddOp(new X86XorRegRegOp(X86Register.Edx, X86Register.Edx));
+    block.AddOp(new X86XorRegRegOp(X86Register.Rdx, X86Register.Rdx));
     block.AddOp(new X86DivRegOp(rhsReg));
     Assign(resultRegister, result);
   }
 
   /// <summary>
   /// Find a register that is safe to use as a temporary for IDIV divisor relocation.
-  /// Must not be EAX, EDX, the LHS register, or the current divisor register.
+  /// Must not be RAX, RDX, the LHS register, or the current divisor register.
   /// Prefers a free register, but will return an occupied one (caller must spill it).
   /// </summary>
   private X86Register FindSafeRegisterForIdiv(X86Register lhsReg, X86Register divisorReg) {
     X86Register? fallback = null;
     foreach (var reg in GprPool) {
-      if (reg == X86Register.Eax || reg == X86Register.Edx) continue;
+      if (reg == X86Register.Rax || reg == X86Register.Rdx) continue;
       if (reg == lhsReg || reg == divisorReg) continue;
       if (!_registerContents.ContainsKey(reg))
         return reg;
@@ -530,13 +527,6 @@ public class RegisterManager {
   public void EmitIntegerCompare(StdValue lhs, StdValue rhs, MlirBlock<X86Op> block) {
     var rhsReg = EnsureInRegister(rhs, block);
     var lhsReg = EnsureInRegister(lhs, block, protect1: rhsReg);
-    // Use 64-bit registers when either constant exceeds signed 32-bit range
-    bool needsWide = (_constantValues.TryGetValue(rhs, out var rhsImm) && (rhsImm < int.MinValue || rhsImm > int.MaxValue))
-                  || (_constantValues.TryGetValue(lhs, out var lhsImm) && (lhsImm < int.MinValue || lhsImm > int.MaxValue));
-    if (needsWide) {
-      lhsReg = To64Bit(lhsReg);
-      rhsReg = To64Bit(rhsReg);
-    }
     block.AddOp(new X86CmpRegRegOp(lhsReg, rhsReg));
   }
 
@@ -562,7 +552,7 @@ public class RegisterManager {
     block.AddOp(new X86TestRegRegOp(condReg, condReg));
 
     // Start with falseValue in result, then CMOVNE to trueValue if condition != 0
-    var resultReg = AllocateRegister(result, block, protect1: To64Bit(trueReg), protect2: To64Bit(condReg));
+    var resultReg = AllocateRegister(result, block, protect1: trueReg, protect2: condReg);
     block.AddOp(new X86MovRegRegOp(resultReg, falseReg));
     block.AddOp(new X86CmovneRegRegOp(resultReg, trueReg));
   }
@@ -769,15 +759,15 @@ public class RegisterManager {
   public void EnsureInSpecificRegister(StdValue value, X86Register target, MlirBlock<X86Op> block) {
     _registerHints[value] = target;
     var reg = EnsureInRegister(value, block);
-    if (reg != target && reg != To32Bit(target)) {
+    if (reg != target) {
       block.AddOp(new X86MovRegRegOp(target, reg));
     }
   }
 
   // Internal calling convention: pass up to 8 integer parameters in registers
   private static readonly X86Register[] CallConvRegs = [
-    X86Register.Ecx, X86Register.Edx, X86Register.R8, X86Register.R9,
-    X86Register.Esi, X86Register.Edi, X86Register.Eax, X86Register.Ebx
+    X86Register.Rcx, X86Register.Rdx, X86Register.R8, X86Register.R9,
+    X86Register.Rsi, X86Register.Rdi, X86Register.Rax, X86Register.Rbx
   ];
   public static int RegisterParamCount => CallConvRegs.Length;
 
@@ -837,15 +827,14 @@ public class RegisterManager {
     int?[] argStackHomes = new int?[regArgCount];
     long?[] argConstants = new long?[regArgCount];
     foreach (int i in gprArgs) {
-      var target64 = To64Bit(CallConvRegs[i]);
+      var target = CallConvRegs[i];
       if (_valueToRegister.TryGetValue(args[i], out var reg)) {
-        var reg64 = To64Bit(reg);
         // Prefer loading from stack directly into the target register
         // instead of emitting a reg-reg mov from a non-target register
-        if (reg64 != target64 && _valueStackHome.TryGetValue(args[i], out var disp))
+        if (reg != target && _valueStackHome.TryGetValue(args[i], out var disp))
           argStackHomes[i] = disp;
         else
-          argSources[i] = reg64;
+          argSources[i] = reg;
       } else if (_constantValues.TryGetValue(args[i], out var imm)) {
         argConstants[i] = imm;
       } else if (_valueStackHome.TryGetValue(args[i], out var disp)) {
@@ -867,12 +856,9 @@ public class RegisterManager {
       if (args[i] is StdF64 or StdF32) placed[i] = true;
     }
 
-    // x86-64 calling convention always uses 64-bit registers for arguments.
-    // Using 64-bit ensures pointer-sized values (like heap pointers stored
-    // as i64) are not truncated by 32-bit mov instructions.
     var targetRegs = new X86Register[regArgCount];
     for (int i = 0; i < regArgCount; i++) {
-      targetRegs[i] = To64Bit(CallConvRegs[i]);
+      targetRegs[i] = CallConvRegs[i];
     }
 
     // Pass 1: mark GPR args already in their target register,
@@ -949,12 +935,8 @@ public class RegisterManager {
     if (result != null) {
       if (result is StdF64 or StdF32) {
         AssignXmm(X86XmmRegister.Xmm0, result);
-      } else if (result is StdPtr) {
-        // Pointers use 64-bit RAX
+      } else if (result is StdPtr or StdI64 or StdI32 or StdBool) {
         Assign(X86Register.Rax, result);
-      } else if (result is StdI64 or StdI32 or StdBool) {
-        // All integer types use 32-bit EAX (even i64, for compatibility with existing codegen)
-        Assign(X86Register.Eax, result);
       } else {
         throw new InvalidOperationException($"RegisterManager: unsupported result type {result.GetType().Name}");
       }
@@ -1001,7 +983,7 @@ public class RegisterManager {
         xmmArgs.Add(i);
       } else {
         gprArgs.Add(i);
-        argSources[i] = To64Bit(_valueToRegister[args[i]]);
+        argSources[i] = _valueToRegister[args[i]];
       }
     }
 
@@ -1018,7 +1000,7 @@ public class RegisterManager {
 
     var targetRegs = new X86Register[regArgCount];
     for (int i = 0; i < regArgCount; i++)
-      targetRegs[i] = To64Bit(CallConvRegs[i]);
+      targetRegs[i] = CallConvRegs[i];
 
     // Pass 1: mark GPR args already in their target register
     foreach (int i in gprArgs) {
@@ -1076,12 +1058,12 @@ public class RegisterManager {
   public void EmitTryCall(string callee, List<StdValue> args, StdValue? result, StdValue errorFlag, MlirBlock<X86Op> block,
       HashSet<StdValue>? consumedByCall = null) {
     EmitCall(callee, args, result, block, consumedByCall);
-    // After EmitCall, the result is in EAX and RDX holds the error flag.
+    // After EmitCall, the result is in RAX and RDX holds the error flag.
     // But InvalidateCallerSavedRegisters already ran inside EmitCall.
     // We need RDX to have been preserved. Since the call just happened and
-    // Assign(Eax, result) doesn't touch RDX, RDX still holds the callee's value.
+    // Assign(Rax, result) doesn't touch RDX, RDX still holds the callee's value.
     // Re-assign it now.
-    Assign(X86Register.Edx, errorFlag);
+    Assign(X86Register.Rdx, errorFlag);
   }
 
   /// <summary>
@@ -1164,8 +1146,8 @@ public class RegisterManager {
   }
 
   private static readonly X86Register[] CallerSavedRegisters = [
-    X86Register.Eax, X86Register.Ecx, X86Register.Edx,
-    X86Register.Ebx, X86Register.Esi, X86Register.Edi,
+    X86Register.Rax, X86Register.Rcx, X86Register.Rdx,
+    X86Register.Rbx, X86Register.Rsi, X86Register.Rdi,
     X86Register.R8, X86Register.R9, X86Register.R10, X86Register.R11
   ];
 
@@ -1306,7 +1288,7 @@ public class RegisterManager {
   /// </summary>
   public void EmitLeaFromStack(StdPtr result, int offset, MlirBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
-    block.AddOp(new X86LeaRegMemOp(To64Bit(gpr), offset));
+    block.AddOp(new X86LeaRegMemOp(gpr, offset));
   }
 
   /// <summary>
@@ -1315,12 +1297,12 @@ public class RegisterManager {
   /// </summary>
   public void EmitLeaRipRelative(StdPtr result, string rdataLabel, MlirBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
-    block.AddOp(new X86LeaRipRelOp(To64Bit(gpr), rdataLabel));
+    block.AddOp(new X86LeaRipRelOp(gpr, rdataLabel));
   }
 
   public void EmitLeaSymdataRelative(StdPtr result, string symdataLabel, MlirBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
-    block.AddOp(new X86LeaSymdataRelOp(To64Bit(gpr), symdataLabel));
+    block.AddOp(new X86LeaSymdataRelOp(gpr, symdataLabel));
   }
 
   /// <summary>
@@ -1331,7 +1313,7 @@ public class RegisterManager {
     var srcReg = EnsureInRegister(input, block);
     var dstReg = AllocateRegister(result, block, protect1: srcReg);
     if (srcReg != dstReg)
-      block.AddOp(new X86MovRegRegOp(To64Bit(dstReg), To64Bit(srcReg)));
+      block.AddOp(new X86MovRegRegOp(dstReg, srcReg));
   }
 
   /// <summary>
@@ -1342,9 +1324,9 @@ public class RegisterManager {
     // Spill any live values occupying RSI/RDI/RCX that aren't memcopy
     // arguments, so they aren't silently clobbered during argument placement.
     var memCopyArgs = new HashSet<StdValue> { srcPtr, dstPtr, byteCount };
-    SpillRegisterIfNotArg(X86Register.Esi, memCopyArgs, block);
-    SpillRegisterIfNotArg(X86Register.Edi, memCopyArgs, block);
-    SpillRegisterIfNotArg(X86Register.Ecx, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Rsi, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Rdi, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Rcx, memCopyArgs, block);
 
     // Load all three values into registers, avoiding the target fixed registers
     // to prevent conflicts during the subsequent parallel assignment.
@@ -1356,11 +1338,11 @@ public class RegisterManager {
     // The moves must be ordered so no target clobbers a source that hasn't
     // been read yet. We detect conflicts and use a safe ordering.
     var moves = new List<(X86Register target, X86Register source)>();
-    if (!SamePhysReg(srcReg, X86Register.Esi))
+    if (!SamePhysReg(srcReg, X86Register.Rsi))
       moves.Add((X86Register.Rsi, srcReg));
-    if (!SamePhysReg(dstReg, X86Register.Edi))
+    if (!SamePhysReg(dstReg, X86Register.Rdi))
       moves.Add((X86Register.Rdi, dstReg));
-    if (!SamePhysReg(cntReg, X86Register.Ecx))
+    if (!SamePhysReg(cntReg, X86Register.Rcx))
       moves.Add((X86Register.Rcx, cntReg));
 
     // Emit moves in an order that avoids clobbering: if a target overlaps a
@@ -1405,28 +1387,26 @@ public class RegisterManager {
 
     block.AddOp(new X86RepMovsbOp());
     // rep movsb clobbers RSI, RDI, RCX — invalidate them
-    Invalidate(X86Register.Esi);
-    Invalidate(X86Register.Edi);
-    Invalidate(X86Register.Ecx);
+    Invalidate(X86Register.Rsi);
+    Invalidate(X86Register.Rdi);
+    Invalidate(X86Register.Rcx);
   }
 
   public void EmitBulkZero(int baseOffset, int qwordCount, MlirBlock<X86Op> block) {
-    SpillRegisterIfOccupied(X86Register.Eax, block);
-    SpillRegisterIfOccupied(X86Register.Edi, block);
-    SpillRegisterIfOccupied(X86Register.Ecx, block);
+    SpillRegisterIfOccupied(X86Register.Rax, block);
+    SpillRegisterIfOccupied(X86Register.Rdi, block);
+    SpillRegisterIfOccupied(X86Register.Rcx, block);
     block.AddOp(new X86LeaRegMemOp(X86Register.Rdi, baseOffset));
-    block.AddOp(new X86XorRegRegOp(X86Register.Eax, X86Register.Eax));
-    block.AddOp(new X86MovRegImmOp(X86Register.Ecx, qwordCount));
+    block.AddOp(new X86XorRegRegOp(X86Register.Rax, X86Register.Rax));
+    block.AddOp(new X86MovRegImmOp(X86Register.Rcx, qwordCount));
     block.AddOp(new X86RepStosqOp());
-    Invalidate(X86Register.Eax);
-    Invalidate(X86Register.Edi);
-    Invalidate(X86Register.Ecx);
+    Invalidate(X86Register.Rax);
+    Invalidate(X86Register.Rdi);
+    Invalidate(X86Register.Rcx);
   }
 
-  // Check if two register names refer to the same physical register
-  // (e.g., Edi and Rdi, or Eax and Rax).
   private static bool SamePhysReg(X86Register a, X86Register b) {
-    return a == b || To64Bit(a) == To64Bit(b);
+    return a == b;
   }
 
   private void SpillRegisterIfNotArg(X86Register reg, HashSet<StdValue> args, MlirBlock<X86Op> block) {
@@ -1759,23 +1739,11 @@ public class RegisterManager {
   }
 
   private static bool SamePhysicalRegister(X86Register? a, X86Register? b) {
-    if (a == null || b == null) return false;
-    return To64Bit(a.Value) == To64Bit(b.Value);
+    return a != null && b != null && a.Value == b.Value;
   }
 
-  private static X86Register To64Bit(X86Register reg) => reg switch {
-    X86Register.Eax => X86Register.Rax,
-    X86Register.Ecx => X86Register.Rcx,
-    X86Register.Edx => X86Register.Rdx,
-    X86Register.Ebx => X86Register.Rbx,
-    X86Register.Esp => X86Register.Rsp,
-    X86Register.Ebp => X86Register.Rbp,
-    X86Register.Esi => X86Register.Rsi,
-    X86Register.Edi => X86Register.Rdi,
-    _ => reg // R8-R15 and Rax-Rdi are already 64-bit
-  };
-
-  // Normalize a 64-bit register name to its 32-bit form used by the GprPool.
+  // Convert a 64-bit register name to its 32-bit form.
+  // Used for genuinely 32-bit operations (truncation, zero-extension).
   private static X86Register To32Bit(X86Register reg) => reg switch {
     X86Register.Rax => X86Register.Eax,
     X86Register.Rcx => X86Register.Ecx,

@@ -29,7 +29,7 @@ public static class PeepholePass {
           }
           // mov rX, [rbp+off]; mov rY, rX → mov rY, [rbp+off]
           else if (ops[i] is X86MovRegMemOp load
-              && To64Bit(mov.Src) == To64Bit(load.Dest) && mov.Dest != load.Dest
+              && mov.Src == load.Dest && mov.Dest != load.Dest
               && !IsRegReadAfter(ops, i + 2, load.Dest)) {
             ops[i] = new X86MovRegMemOp(mov.Dest, load.Displacement, load.SizeInBytes);
             ops.RemoveAt(i + 1);
@@ -112,9 +112,9 @@ public static class PeepholePass {
       case X86MovzxRegWordIndirectOp movzxWordInd: yield return movzxWordInd.BaseReg; break;
       case X86MovWordIndirectRegOp storeWordInd: yield return storeWordInd.BaseReg; yield return storeWordInd.Src; break;
       // Shift reads dest + implicit ECX
-      case X86ShlRegClOp shl: yield return shl.Dest; yield return X86Register.Ecx; break;
-      case X86SarRegClOp sar: yield return sar.Dest; yield return X86Register.Ecx; break;
-      case X86ShrRegClOp shr: yield return shr.Dest; yield return X86Register.Ecx; break;
+      case X86ShlRegClOp shl: yield return shl.Dest; yield return X86Register.Rcx; break;
+      case X86SarRegClOp sar: yield return sar.Dest; yield return X86Register.Rcx; break;
+      case X86ShrRegClOp shr: yield return shr.Dest; yield return X86Register.Rcx; break;
       // IDIV reads RAX, RDX, and divisor
       case X86CqoOp: yield return X86Register.Rax; break;
       case X86IdivRegOp idiv: yield return X86Register.Rax; yield return X86Register.Rdx; yield return idiv.Divisor; break;

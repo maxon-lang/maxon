@@ -117,7 +117,7 @@ public partial class X86CodeEmitter() {
         EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
         if (prologue.StackSize > 4096) {
           // Large frames need __chkstk to probe guard pages
-          EmitMovRegImm(X86Register.Eax, prologue.StackSize);
+          EmitMovRegImm(X86Register.Rax, prologue.StackSize);
           EmitByte(0xE8); // call rel32
           _chkstkCallSites.Add(_code.Count);
           EmitDword(0); // placeholder, patched by PatchChkstkCalls

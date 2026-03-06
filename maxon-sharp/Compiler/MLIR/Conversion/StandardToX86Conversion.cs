@@ -250,9 +250,9 @@ public static class StandardToX86Conversion {
           if (retHint.ReturnValue is StdPtr)
             regManager.SetRegisterHint(retHint.ReturnValue, X86Register.Rax);
           else if (retHint.ReturnValue is StdI64 or StdI32 or StdBool)
-            regManager.SetRegisterHint(retHint.ReturnValue, X86Register.Eax);
+            regManager.SetRegisterHint(retHint.ReturnValue, X86Register.Rax);
         } else if (op is StdErrorReturnOp errRetHint) {
-          regManager.SetRegisterHint(errRetHint.ErrorFlag, X86Register.Edx);
+          regManager.SetRegisterHint(errRetHint.ErrorFlag, X86Register.Rdx);
         }
       }
 
@@ -882,15 +882,14 @@ public static class StandardToX86Conversion {
                 // Pointers use 64-bit RAX
                 regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Rax, x86Block);
               } else if (retOp.ReturnValue is StdI64 or StdI32 or StdBool) {
-                // All integer types use 32-bit EAX (even i64, for compatibility with existing codegen)
-                regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Eax, x86Block);
+                regManager.EnsureInSpecificRegister(retOp.ReturnValue, X86Register.Rax, x86Block);
               } else {
                 throw new InvalidOperationException($"StandardToX86: unsupported return type {retOp.ReturnValue.GetType().Name}");
               }
             }
             // In throwing functions, a normal return means success: set error flag (RDX) to 0
             if (func.ThrowsType != null) {
-              x86Block.AddOp(new X86XorRegRegOp(X86Register.Edx, X86Register.Edx));
+              x86Block.AddOp(new X86XorRegRegOp(X86Register.Rdx, X86Register.Rdx));
             }
 
             x86Block.AddOp(new X86EpilogueOp());
@@ -900,8 +899,8 @@ public static class StandardToX86Conversion {
 
           case StdErrorReturnOp errRetOp: {
             // Put error flag into RDX, zero into RAX (dummy return value)
-            regManager.EnsureInSpecificRegister(errRetOp.ErrorFlag, X86Register.Edx, x86Block);
-            x86Block.AddOp(new X86XorRegRegOp(X86Register.Eax, X86Register.Eax));
+            regManager.EnsureInSpecificRegister(errRetOp.ErrorFlag, X86Register.Rdx, x86Block);
+            x86Block.AddOp(new X86XorRegRegOp(X86Register.Rax, X86Register.Rax));
             x86Block.AddOp(new X86EpilogueOp());
             x86Block.AddOp(new X86RetOp());
             break;

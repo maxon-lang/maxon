@@ -470,58 +470,58 @@ module {
   func @memory-safety.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.mov ecx, 1
-    x86.test ecx, ecx
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.mov rcx, 1
+    x86.test rcx, rcx
     x86.je memory-safety.main.block_0.merge
   block_0:
-    x86.mov eax, 10
-    x86.mov ecx, 20
+    x86.mov rax, 10
+    x86.mov rcx, 20
     x86.mov rcx, 16
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov edx, [rbp-16]
-    x86.mov ebx, 10
-    x86.mov [edx+0], ebx
-    x86.mov esi, [rbp-16]
-    x86.mov edi, 20
-    x86.mov [esi+8], edi
+    x86.mov [rbp-16], rax
+    x86.mov rdx, [rbp-16]
+    x86.mov rbx, 10
+    x86.mov [rdx+0], rbx
+    x86.mov rsi, [rbp-16]
+    x86.mov rdi, 20
+    x86.mov [rsi+8], rdi
     x86.mov r8, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.mov r9, [rbp-16]
-    x86.mov eax, [r9+0]
-    x86.mov [rbp-8], eax
-    x86.mov eax, [rbp-16]
-    x86.test eax, eax
+    x86.mov rax, [r9+0]
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-24], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-24], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
     x86.mov rbx, 4294967295
     x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
     x86.je memory-safety.main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_27]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov eax, [rbp-24]
+    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }
@@ -786,169 +786,169 @@ module {
   func @Item.clone(__self_ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov edx, [eax+0]
-    x86.mov [rbp-24], edx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rdx, [rax+0]
+    x86.mov [rbp-24], rdx
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [rbp-24]
-    x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-24]
+    x86.mov [rcx+0], rdx
+    x86.mov rbx, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-16]
     x86.epilogue
     x86.ret
   }
   func @memory-safety.main() -> u32 {
   entry:
     x86.prologue stack_size=64
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.xor edx, edx
-    x86.xor ebx, ebx
-    x86.xor esi, esi
-    x86.mov edi, 8
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.xor rdx, rdx
+    x86.xor rbx, rbx
+    x86.xor rsi, rsi
+    x86.mov rdi, 8
     x86.lea_func r8, [__destruct___ManagedMemory_Item]
     x86.mov r9, r8
     x86.mov rdx, r9
     x86.mov rcx, 32
     x86.mov r8, 2
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
-    x86.xor ecx, ecx
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-16]
-    x86.xor ecx, ecx
-    x86.mov [eax+8], ecx
-    x86.mov eax, [rbp-16]
-    x86.xor ecx, ecx
-    x86.mov [eax+16], ecx
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, 8
-    x86.mov [eax+24], ecx
-    x86.lea_func eax, [__destruct_ItemArray]
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.mov [rax+8], rcx
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.mov [rax+16], rcx
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, 8
+    x86.mov [rax+24], rcx
+    x86.lea_func rax, [__destruct_ItemArray]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 16
     x86.mov r8, 3
     x86.call mm_alloc
-    x86.mov [rbp-24], eax
-    x86.mov eax, [rbp-24]
-    x86.xor ecx, ecx
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-16]
-    x86.mov ecx, [rbp-24]
-    x86.mov [ecx+8], eax
+    x86.mov [rbp-24], rax
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-24]
+    x86.mov [rcx+8], rax
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.mov eax, [rbp-24]
+    x86.mov rax, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.call mm_incref
-    x86.mov eax, 7
+    x86.mov rax, 7
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, 7
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-32]
+    x86.mov [rbp-32], rax
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, 7
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-32]
     x86.mov rcx, [rbp-32]
     x86.call mm_incref
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [rbp-32]
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-32]
     x86.mov rcx, [rbp-24]
     x86.mov rdx, [rbp-32]
     x86.call ItemArray.push
-    x86.mov eax, [rbp-24]
+    x86.mov rax, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.xor rdx, rdx
     x86.call ItemArray.get
-    x86.mov [rbp-40], eax
-    x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.mov [rbp-40], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
     x86.je memory-safety.main.otherwise_default_success_2
   otherwise_default_error_1:
-    x86.xor eax, eax
+    x86.xor rax, rax
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-8], eax
-    x86.mov ecx, [rbp-8]
-    x86.xor edx, edx
-    x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-8]
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.xor rdx, rdx
+    x86.mov [rcx+0], rdx
+    x86.mov rbx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
     x86.jmp memory-safety.main.otherwise_default_continue_3
   otherwise_default_success_2:
-    x86.mov eax, [rbp-8]
-    x86.test eax, eax
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov ecx, [rbp-40]
-    x86.mov [rbp-8], ecx
+    x86.mov rcx, [rbp-40]
+    x86.mov [rbp-8], rcx
     x86.jmp memory-safety.main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-48], eax
-    x86.mov ecx, [rbp-48]
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-48], rax
+    x86.mov rcx, [rbp-48]
     x86.call mm_incref
-    x86.mov edx, [rbp-48]
-    x86.mov ebx, [edx+0]
-    x86.mov [rbp-56], ebx
-    x86.xor esi, esi
-    x86.cmp ebx, esi
-    x86.setl edi
-    x86.movzx edi, edib
+    x86.mov rdx, [rbp-48]
+    x86.mov rbx, [rdx+0]
+    x86.mov [rbp-56], rbx
+    x86.xor rsi, rsi
+    x86.cmp rbx, rsi
+    x86.setl rdi
+    x86.movzx rdi, rdib
     x86.mov r8, 4294967295
     x86.cmp rbx, r8
     x86.setg r9
     x86.movzx r9, r9b
-    x86.or edi, r9
-    x86.test edi, edi
+    x86.or rdi, r9
+    x86.test rdi, rdi
     x86.je memory-safety.main.__range_ok_4
   __range_panic_4:
     x86.lea_symdata rax, [__panic_msg_36]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
-    x86.mov eax, [rbp-56]
-    x86.mov ecx, [rbp-24]
-    x86.test ecx, ecx
+    x86.mov rax, [rbp-56]
+    x86.mov rcx, [rbp-24]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_1
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov eax, [rbp-32]
-    x86.test eax, eax
+    x86.mov rax, [rbp-32]
+    x86.test rax, rax
     x86.jz __nonnull_skip_2
     x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov ecx, [rbp-48]
-    x86.test ecx, ecx
+    x86.mov rcx, [rbp-48]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_3
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.mov edx, [rbp-8]
-    x86.test edx, edx
+    x86.mov rdx, [rbp-8]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_4
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_4
-    x86.mov eax, [rbp-56]
+    x86.mov rax, [rbp-56]
     x86.epilogue
     x86.ret
   }
@@ -961,18 +961,18 @@ module {
   func @__destruct___ManagedMemory_Item(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_decref_managed_elements
-    x86.mov ecx, [rbp-8]
-    x86.mov edx, [ecx+16]
-    x86.xor ebx, ebx
-    x86.cmp edx, ebx
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rcx+16]
+    x86.xor rbx, rbx
+    x86.cmp rdx, rbx
     x86.je __destruct___ManagedMemory_Item.skip_buf_0
   free_buf_0:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
     x86.call mm_raw_free
     x86.jmp __destruct___ManagedMemory_Item.skip_buf_0
   skip_buf_0:
@@ -984,11 +984,11 @@ module {
   func @__destruct_ItemArray(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_6
     x86.call mm_decref
     x86.label __nonnull_skip_6
@@ -1154,77 +1154,77 @@ module {
   func @memory-safety.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.xor eax, eax
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-16], ecx
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.mov [rbp-16], rcx
     x86.jmp memory-safety.main.loop_0.header
   loop_0.header:
-    x86.mov eax, 3
-    x86.mov ecx, [rbp-16]
-    x86.cmp ecx, eax
+    x86.mov rax, 3
+    x86.mov rcx, [rbp-16]
+    x86.cmp rcx, rax
     x86.jge memory-safety.main.loop_0.exit
   loop_0:
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-16]
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-24], eax
-    x86.mov ecx, [rbp-24]
-    x86.mov edx, [rbp-16]
-    x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-24]
+    x86.mov [rbp-24], rax
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, [rbp-16]
+    x86.mov [rcx+0], rdx
+    x86.mov rbx, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.call mm_incref
-    x86.mov esi, [rbp-24]
-    x86.mov edi, [esi+0]
+    x86.mov rsi, [rbp-24]
+    x86.mov rdi, [rsi+0]
     x86.mov r8, 1
-    x86.cmp edi, r8
+    x86.cmp rdi, r8
     x86.jne memory-safety.main.check_1.after
   check_1:
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, [eax+0]
-    x86.mov [rbp-8], ecx
-    x86.mov edx, [rbp-24]
-    x86.test edx, edx
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-8], rcx
+    x86.mov rdx, [rbp-24]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_0
     x86.jmp memory-safety.main.loop_0.exit
   check_1.after:
-    x86.mov eax, 1
-    x86.mov ecx, [rbp-16]
-    x86.add ecx, eax
-    x86.mov [rbp-16], ecx
-    x86.mov edx, [rbp-24]
-    x86.test edx, edx
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-16]
+    x86.add rcx, rax
+    x86.mov [rbp-16], rcx
+    x86.mov rdx, [rbp-24]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.jmp memory-safety.main.loop_0.header
   loop_0.exit:
-    x86.mov eax, [rbp-8]
-    x86.mov [rbp-32], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-32], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
     x86.mov rbx, 4294967295
     x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
     x86.je memory-safety.main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_31]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
-    x86.mov eax, [rbp-32]
+    x86.mov rax, [rbp-32]
     x86.epilogue
     x86.ret
   }
@@ -1366,39 +1366,39 @@ module {
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.mov [rbp-8], ecx
-    x86.xor eax, eax
-    x86.cmp ecx, eax
+    x86.mov [rbp-8], rcx
+    x86.xor rax, rax
+    x86.cmp rcx, rax
     x86.jle memory-safety.compute.check_0.after
   check_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [rbp-8]
-    x86.mov [ecx+0], edx
-    x86.mov ebx, [rbp-16]
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-8]
+    x86.mov [rcx+0], rdx
+    x86.mov rbx, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.mov esi, [rbp-16]
-    x86.mov edi, [esi+0]
+    x86.mov rsi, [rbp-16]
+    x86.mov rdi, [rsi+0]
     x86.mov r8, 1
-    x86.add edi, r8
+    x86.add rdi, r8
     x86.mov r9, [rbp-16]
-    x86.mov [rbp-24], edi
+    x86.mov [rbp-24], rdi
     x86.test r9, r9
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov eax, [rbp-24]
+    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   check_0.after:
-    x86.xor eax, eax
+    x86.xor rax, rax
     x86.epilogue
     x86.ret
   }
@@ -1407,24 +1407,24 @@ module {
     x86.prologue stack_size=16
     x86.mov rcx, 5
     x86.call memory-safety.compute
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl ecx
-    x86.movzx ecx, ecxb
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rcx
+    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or ecx, eax
-    x86.test ecx, ecx
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or rcx, rax
+    x86.test rcx, rcx
     x86.je memory-safety.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_26]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }

@@ -373,112 +373,112 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=48
-    x86.xor eax, eax
-    x86.mov ecx, 1
-    x86.xor edx, edx
-    x86.mov ebx, 8
-    x86.lea_func esi, [__destruct___ManagedMemory]
+    x86.xor rax, rax
+    x86.mov rcx, 1
+    x86.xor rdx, rdx
+    x86.mov rbx, 8
+    x86.lea_func rsi, [__destruct___ManagedMemory]
     x86.mov rdi, rsi
     x86.mov rdx, rdi
     x86.mov rcx, 32
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-8], eax
+    x86.mov [rbp-8], rax
     x86.mov r8, [rbp-8]
     x86.xor r9, r9
     x86.mov [r8+0], r9
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, 1
-    x86.mov [eax+8], ecx
-    x86.mov eax, [rbp-8]
-    x86.xor ecx, ecx
-    x86.mov [eax+16], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, 8
-    x86.mov [eax+24], ecx
-    x86.xor eax, eax
-    x86.lea_func ecx, [__destruct_IntArray]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, 1
+    x86.mov [rax+8], rcx
+    x86.mov rax, [rbp-8]
+    x86.xor rcx, rcx
+    x86.mov [rax+16], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, 8
+    x86.mov [rax+24], rcx
+    x86.xor rax, rax
+    x86.lea_func rcx, [__destruct_IntArray]
     x86.mov rdx, rcx
     x86.mov rcx, 16
     x86.mov r8, 2
     x86.call mm_alloc
-    x86.mov [rbp-16], eax
-    x86.mov eax, [rbp-16]
-    x86.xor ecx, ecx
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [rbp-16]
-    x86.mov [ecx+8], eax
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rcx+8], rax
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
     x86.lea_rdata rax, [__const_array_codegen-internals.main_arr]
     x86.mov rcx, rax
-    x86.mov eax, [rbp-16]
-    x86.mov edx, [eax+8]
-    x86.mov [edx+0], ecx
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-16]
+    x86.mov rdx, [rax+8]
+    x86.mov [rdx+0], rcx
+    x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.xor rdx, rdx
     x86.mov r8, 77
     x86.call IntArray.set
-    x86.mov eax, [rbp-16]
+    x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.xor rdx, rdx
     x86.call IntArray.get
-    x86.xor ecx, ecx
-    x86.mov [rbp-24], ecx
-    x86.mov [rbp-32], eax
-    x86.xor eax, eax
-    x86.cmp edx, eax
+    x86.xor rcx, rcx
+    x86.mov [rbp-24], rcx
+    x86.mov [rbp-32], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
     x86.je codegen-internals.main.otherwise_default_continue_4
   otherwise_default_error_3:
-    x86.mov eax, [rbp-24]
-    x86.mov [rbp-32], eax
+    x86.mov rax, [rbp-24]
+    x86.mov [rbp-32], rax
     x86.jmp codegen-internals.main.otherwise_default_continue_4
   otherwise_default_continue_4:
-    x86.mov eax, [rbp-32]
-    x86.mov [rbp-40], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
+    x86.mov rax, [rbp-32]
+    x86.mov [rbp-40], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
     x86.mov rbx, 4294967295
     x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
     x86.je codegen-internals.main.__range_ok_5
   __range_panic_5:
     x86.lea_symdata rax, [__panic_msg_25]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, [rbp-16]
-    x86.test ecx, ecx
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-16]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov eax, [rbp-40]
+    x86.mov rax, [rbp-40]
     x86.epilogue
     x86.ret
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+16]
-    x86.xor edx, edx
-    x86.cmp ecx, edx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
     x86.je __destruct___ManagedMemory.skip_buf_0
   free_buf_0:
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
     x86.call mm_raw_free
     x86.jmp __destruct___ManagedMemory.skip_buf_0
   skip_buf_0:
@@ -490,11 +490,11 @@ module {
   func @__destruct_IntArray(ptr: i64) {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+8]
-    x86.mov [rbp-16], ecx
-    x86.test ecx, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_1
     x86.call mm_decref
     x86.label __nonnull_skip_1
@@ -698,27 +698,27 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 10
-    x86.mov ecx, 3
-    x86.add eax, ecx
-    x86.mov [rbp-8], eax
-    x86.xor edx, edx
-    x86.cmp eax, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
+    x86.mov rax, 10
+    x86.mov rcx, 3
+    x86.add rax, rcx
+    x86.mov [rbp-8], rax
+    x86.xor rdx, rdx
+    x86.cmp rax, rdx
+    x86.setl rbx
+    x86.movzx rbx, rbxb
     x86.mov rsi, 4294967295
     x86.cmp rax, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.setg rdi
+    x86.movzx rdi, rdib
+    x86.or rbx, rdi
+    x86.test rbx, rbx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -793,28 +793,28 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 20
-    x86.mov ecx, 3
+    x86.mov rax, 20
+    x86.mov rcx, 3
     x86.cqo
-    x86.idiv ecx
-    x86.mov [rbp-8], eax
-    x86.xor edx, edx
-    x86.cmp eax, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
+    x86.idiv rcx
+    x86.mov [rbp-8], rax
+    x86.xor rdx, rdx
+    x86.cmp rax, rdx
+    x86.setl rbx
+    x86.movzx rbx, rbxb
     x86.mov rsi, 4294967295
     x86.cmp rax, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.setg rdi
+    x86.movzx rdi, rdib
+    x86.or rbx, rdi
+    x86.test rbx, rbx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -891,26 +891,26 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 20
-    x86.mov ecx, 3
+    x86.mov rax, 20
+    x86.mov rcx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov [rbp-12], edx
-    x86.mov eax, edx
+    x86.mov [rbp-12], rdx
+    x86.mov rax, rdx
     x86.cdq
-    x86.idiv32 ebx
-    x86.mov [rbp-4], eax
-    x86.xor esi, esi
-    x86.movsxd rdi, eax
-    x86.cmp edi, esi
+    x86.idiv32 rbx
+    x86.mov [rbp-4], rax
+    x86.xor rsi, rsi
+    x86.movsxd rdi, rax
+    x86.cmp rdi, rsi
     x86.setl r8
     x86.movzx r8, r8b
     x86.mov r9, 4294967295
-    x86.movsxd rcx, eax
+    x86.movsxd rcx, rax
     x86.cmp rcx, r9
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or r8, eax
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or r8, rax
     x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
@@ -918,7 +918,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-4]
+    x86.mov rax, [rbp-4]
     x86.epilogue
     x86.ret
   }
@@ -984,15 +984,15 @@ module {
 module {
   func @codegen-internals.main() -> u32 {
   entry:
-    x86.mov eax, 10
-    x86.mov ecx, 3
-    x86.cmp eax, ecx
+    x86.mov rax, 10
+    x86.mov rcx, 3
+    x86.cmp rax, rcx
     x86.jle codegen-internals.main.check_0.after
   check_0:
-    x86.mov eax, 1
+    x86.mov rax, 1
     x86.ret
   check_0.after:
-    x86.xor eax, eax
+    x86.xor rax, rax
     x86.ret
   }
 }
@@ -1066,28 +1066,28 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 20
-    x86.mov ecx, 3
+    x86.mov rax, 20
+    x86.mov rcx, 3
     x86.cqo
-    x86.idiv ecx
-    x86.mov [rbp-8], edx
-    x86.xor eax, eax
-    x86.cmp edx, eax
-    x86.setl eax
-    x86.movzx eax, eaxb
+    x86.idiv rcx
+    x86.mov [rbp-8], rdx
+    x86.xor rax, rax
+    x86.cmp rdx, rax
+    x86.setl rax
+    x86.movzx rax, raxb
     x86.mov rcx, 4294967295
     x86.cmp rdx, rcx
-    x86.setg edx
-    x86.movzx edx, edxb
-    x86.or eax, edx
-    x86.test eax, eax
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rax, rdx
+    x86.test rax, rax
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -1160,28 +1160,28 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 20
-    x86.mov ecx, 3
+    x86.mov rax, 20
+    x86.mov rcx, 3
     x86.cqo
-    x86.idiv ecx
-    x86.mov [rbp-8], eax
-    x86.xor edx, edx
-    x86.cmp eax, edx
-    x86.setl ebx
-    x86.movzx ebx, ebxb
+    x86.idiv rcx
+    x86.mov [rbp-8], rax
+    x86.xor rdx, rdx
+    x86.cmp rax, rdx
+    x86.setl rbx
+    x86.movzx rbx, rbxb
     x86.mov rsi, 4294967295
     x86.cmp rax, rsi
-    x86.setg edi
-    x86.movzx edi, edib
-    x86.or ebx, edi
-    x86.test ebx, ebx
+    x86.setg rdi
+    x86.movzx rdi, rdib
+    x86.or rbx, rdi
+    x86.test rbx, rbx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_8]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -1258,26 +1258,26 @@ module {
   func @codegen-internals.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov eax, 21
-    x86.mov ecx, 3
+    x86.mov rax, 21
+    x86.mov rcx, 3
     x86.mov edx, eax
     x86.mov ebx, ecx
-    x86.mov [rbp-12], edx
-    x86.mov eax, edx
-    x86.xor edx, edx
-    x86.div32 ebx
-    x86.mov [rbp-4], eax
-    x86.xor esi, esi
-    x86.mov edi, eax
-    x86.cmp edi, esi
+    x86.mov [rbp-12], rdx
+    x86.mov rax, rdx
+    x86.xor rdx, rdx
+    x86.div32 rbx
+    x86.mov [rbp-4], rax
+    x86.xor rsi, rsi
+    x86.mov edi, rax
+    x86.cmp rdi, rsi
     x86.setl r8
     x86.movzx r8, r8b
     x86.mov r9, 4294967295
-    x86.mov ecx, eax
+    x86.mov ecx, rax
     x86.cmp rcx, r9
-    x86.setg eax
-    x86.movzx eax, eaxb
-    x86.or r8, eax
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or r8, rax
     x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
@@ -1285,7 +1285,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-4]
+    x86.mov rax, [rbp-4]
     x86.epilogue
     x86.ret
   }
@@ -1364,25 +1364,25 @@ module {
     x86.movsd xmm1, [rip+__float_3]
     x86.movsd xmm2, xmm0
     x86.addsd xmm2, xmm1
-    x86.cvttsd2si eax, xmm2
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
+    x86.cvttsd2si rax, xmm2
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
     x86.mov rbx, 4294967295
     x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_9]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -1452,10 +1452,10 @@ module {
     x86.jp codegen-internals.main.less_0.after
     x86.jae codegen-internals.main.less_0.after
   less_0:
-    x86.mov eax, 1
+    x86.mov rax, 1
     x86.ret
   less_0.after:
-    x86.xor eax, eax
+    x86.xor rax, rax
     x86.ret
   }
 }
@@ -1524,25 +1524,25 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_42.9]
-    x86.cvttsd2si eax, xmm0
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
+    x86.cvttsd2si rax, xmm0
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
     x86.mov rbx, 4294967295
     x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_7]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }

@@ -20,8 +20,8 @@ module {
   func @first-class-functions.calculate(f: i64, __env_f: i64, a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], ecx
-    x86.mov r10, ecx
+    x86.mov [rbp-8], rcx
+    x86.mov r10, rcx
     x86.mov rcx, r8
     x86.mov r8, rdx
     x86.mov rdx, r9
@@ -31,36 +31,36 @@ module {
   }
   func @first-class-functions.add(x: i64, y: i64) -> i64 {
   entry:
-    x86.lea eax, [ecx + edx]
+    x86.lea rax, [rcx + rdx]
     x86.ret
   }
   func @first-class-functions.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.lea_func eax, [first-class-functions.add]
+    x86.lea_func rax, [first-class-functions.add]
     x86.mov rcx, rax
     x86.xor rdx, rdx
     x86.mov r8, 15
     x86.mov r9, 27
     x86.call first-class-functions.calculate
-    x86.mov [rbp-8], eax
-    x86.xor ecx, ecx
-    x86.cmp eax, ecx
-    x86.setl edx
-    x86.movzx edx, edxb
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
     x86.mov rbx, 4294967295
     x86.cmp rax, rbx
-    x86.setg esi
-    x86.movzx esi, esib
-    x86.or edx, esi
-    x86.test edx, edx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
     x86.je first-class-functions.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_16]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov eax, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }

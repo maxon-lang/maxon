@@ -2664,7 +2664,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: rc-string-slice-no-leak -->
+<!-- test: rc-string-slice-no-leak -->
 String.slice must not leak internal allocations. The slice operation creates managed memory that must be properly tracked and freed.
 ```maxon
 function main() returns ExitCode
